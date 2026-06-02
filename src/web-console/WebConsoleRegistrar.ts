@@ -811,7 +811,8 @@ export function createProductionRouteDependencies(options: {
     routeDependency('integrations', 'integrationStore', options.stores.integrationStore,
       'integration routes require production user-integration persistence or must be omitted before hosted/shared mount.'),
     routeDependency('integrations', 'githubIntegrationProvider', options.services.githubIntegrationProvider,
-      'integration routes require a production GitHub provider or must be omitted before hosted/shared mount.'),
+      'a configured GitHub integration provider must be a production adapter; absence is allowed and disables only GitHub linking.',
+      true),
     routeDependency('operations', 'telemetryQuery', options.services.telemetryQuery,
       'operator telemetry routes require a production telemetry query backend or must be omitted before hosted/shared mount.'),
     routeDependency('operations', 'operatorConfigStore', options.services.operatorConfigStore,
@@ -834,12 +835,14 @@ function routeDependency(
   dependencyName: string,
   value: unknown,
   detail: string,
+  optional = false,
 ): WebConsoleProductionRouteDependency {
   return {
     moduleId,
     dependencyName,
     value,
     detail,
+    optional,
   };
 }
 
@@ -1034,11 +1037,20 @@ function resolveProductionDatabaseReadiness(
   database: DatabaseInstance | undefined,
 ): IProductionDatabaseReadiness {
   if (options.productionDatabaseReadiness) return options.productionDatabaseReadiness;
-  if (options.productionDatabaseVerification && database) {
-    return createPostgresProductionDatabaseReadiness({
-      db: database,
-      ...options.productionDatabaseVerification,
-    });
+  if (options.productionDatabaseVerification) {
+    // Run the verifier over the APP connection ('DatabaseInstance'), not the
+    // console's system/admin handle. expectedCurrentUser asserts the runtime
+    // queries as the least-privilege NOBYPASSRLS role; checking it on the admin
+    // connection would always observe the superuser and be meaningless.
+    const verifierDb = container.hasRegistration('DatabaseInstance')
+      ? container.resolve<DatabaseInstance>('DatabaseInstance')
+      : database;
+    if (verifierDb) {
+      return createPostgresProductionDatabaseReadiness({
+        db: verifierDb,
+        ...options.productionDatabaseVerification,
+      });
+    }
   }
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.productionDatabaseReadiness)) {
     return container.resolve<IProductionDatabaseReadiness>(WEB_CONSOLE_SERVICE_NAMES.productionDatabaseReadiness);
@@ -1532,10 +1544,16 @@ function resolveOperatorConfigStore(
 ): IOperatorConfigStore {
   if (options.operatorConfigStore !== undefined) return options.operatorConfigStore ?? new InMemoryOperatorConfigStore();
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore)) {
-    return container.resolve<IOperatorConfigStore>(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore);
+    return markResolvedProductionAdapter(
+      container.resolve<IOperatorConfigStore>(WEB_CONSOLE_SERVICE_NAMES.operatorConfigStore),
+      'OperatorConfigStore',
+    );
   }
   if (container.hasRegistration('OperatorConfigStore')) {
-    return container.resolve<IOperatorConfigStore>('OperatorConfigStore');
+    return markResolvedProductionAdapter(
+      container.resolve<IOperatorConfigStore>('OperatorConfigStore'),
+      'OperatorConfigStore',
+    );
   }
   return database
     ? markProductionAdapter(new PostgresOperatorConfigStore({ db: database }), 'PostgresOperatorConfigStore')

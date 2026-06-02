@@ -36,7 +36,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
         LIMIT 1
       `),
     );
-    const row = rows[0];
+    const row = rows.at(0);
     return row ? { state: row.state as TState, version: Number(row.version) } : null;
   }
 
@@ -55,8 +55,11 @@ export class PostgresRateLimitStore implements IRateLimitStore {
           WHERE scope = ${scope} AND key = ${key}
           LIMIT 1
         `) as RateLimitRow[];
-        const current = rows[0];
+        const current = rows.at(0);
         const next = compute((current?.state ?? null) as TState | null);
+        // Raw `tx.execute(sql`...`)` over postgres-js does not serialize a JS
+        // Date param — the expires_at writes below pass an ISO string cast to
+        // timestamptz instead.
         const expiresAt = options.expiresAt === undefined ? null : new Date(options.expiresAt);
 
         if (next.state === null) {
@@ -81,7 +84,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
           // the winner's compute() result with ours.
           const inserted = await tx.execute(sql`
             INSERT INTO rate_limit_state (scope, key, state, expires_at)
-            VALUES (${scope}, ${key}, ${JSON.stringify(next.state)}::jsonb, ${expiresAt})
+            VALUES (${scope}, ${key}, ${JSON.stringify(next.state)}::jsonb, ${expiresAt ? expiresAt.toISOString() : null}::timestamptz)
             ON CONFLICT (scope, key) DO NOTHING
             RETURNING version
           `) as unknown[];
@@ -92,7 +95,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
           UPDATE rate_limit_state
           SET state = ${JSON.stringify(next.state)}::jsonb,
               version = version + 1,
-              expires_at = ${expiresAt},
+              expires_at = ${expiresAt ? expiresAt.toISOString() : null}::timestamptz,
               updated_at = NOW()
           WHERE scope = ${scope} AND key = ${key} AND version = ${current.version}
           RETURNING version

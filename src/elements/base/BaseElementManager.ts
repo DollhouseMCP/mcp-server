@@ -386,16 +386,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     };
 
     // ── Build ElementPersister ────────────────────────────────────────────
-    this._persister = new ElementPersister<T>(
-      persisterHost,
-      this._cache,
-      this._events,
-      this._loader,
-      this.fileLockManager,
-      this.fileOperations,
-      this.storageLayer,
-      ELEMENT_TYPE_TO_CONTEXT,
-    );
+    this._persister = new ElementPersister<T>({
+      host: persisterHost,
+      cache: this._cache,
+      events: this._events,
+      loader: this._loader,
+      fileLockManager: this.fileLockManager,
+      fileOperations: this.fileOperations,
+      storageLayer: this.storageLayer,
+      elementTypeToContext: ELEMENT_TYPE_TO_CONTEXT,
+    });
 
     const listHost = {
       get elementType() { return self.elementType; },

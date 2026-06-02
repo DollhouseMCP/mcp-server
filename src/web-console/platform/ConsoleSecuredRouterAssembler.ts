@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 
+import { logger } from '../../utils/logger.js';
+
 import type { IAdminAuditWriter } from '../audit/IAdminAuditWriter.js';
 import type { IConsoleIdentityResolver } from '../identity/IConsoleIdentityResolver.js';
 import {
@@ -17,7 +19,8 @@ import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
-import type { ConsoleAuthenticatedContext, ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
+import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
+import { isElevationValidForRoute } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
@@ -78,6 +81,16 @@ export function assembleSecuredConsoleRouter(
     if (knownProblem) {
       sendProblemResponse(response, knownProblem, correlationId);
       return;
+    }
+    // Log the unhandled error so a 500 is never silent (otherwise the only
+    // signal is an opaque problem+JSON, which makes prod incidents undebuggable).
+    {
+      const cause = (error as { cause?: unknown }).cause;
+      logger.error(
+        `[ConsoleSecuredRouter] unhandled handler error corr=${correlationId}: ` +
+        (error instanceof Error ? error.message : String(error)) +
+        ' | cause: ' + (cause instanceof Error ? cause.message : JSON.stringify(cause)),
+      );
     }
     try {
       options.reportInternalError?.(error, correlationId);
@@ -279,32 +292,7 @@ async function revalidateConsoleStream(
   if (!authentication.grantedCapabilities.includes(requiredCapability)) return false;
   if (route.audience !== 'admin') return true;
   const authPolicy = options.authPolicyStore ? await options.authPolicyStore.load() : null;
-  return hasValidStreamElevation(authentication, route, now, authPolicy?.maxAdminElevationSeconds);
-}
-
-function hasValidStreamElevation(
-  authentication: ConsoleAuthenticatedContext,
-  route: ConsoleRouteDefinition,
-  now: Date,
-  maxAdminElevationSeconds?: number,
-): boolean {
-  const elevation = authentication.elevation;
-  const freshnessSeconds = elevationPolicySeconds(route.elevation, maxAdminElevationSeconds);
-  if (route.requiredCapability === 'none') return false;
-  return !!elevation &&
-    elevation.capabilities.includes(route.requiredCapability) &&
-    elevation.expiresAt > now &&
-    elevation.acr === 'urn:dollhouse:acr:admin-stepup' &&
-    elevation.amr.includes('otp') &&
-    elevation.authTime.getTime() + freshnessSeconds * 1000 > now.getTime();
-}
-
-function elevationPolicySeconds(
-  policy: ConsoleRouteDefinition['elevation'],
-  maxAdminElevationSeconds = 300,
-): number {
-  const boundedMax = Math.max(60, Math.min(300, Math.trunc(maxAdminElevationSeconds)));
-  return policy === 'admin_5m' ? Math.min(300, boundedMax) : 1800;
+  return isElevationValidForRoute(authentication, route, now, authPolicy?.maxAdminElevationSeconds);
 }
 
 function registerSecuredRoute(

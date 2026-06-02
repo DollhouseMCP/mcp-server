@@ -41,7 +41,7 @@ import type {
   InteractionStep,
 } from '../IAuthMethod.js';
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
-import { finishInteractionWithIdentity } from '../InteractionRouter.js';
+import { beginAdminStepUpProof, finishInteractionWithIdentity, isAdminStepUpRequest } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
@@ -272,11 +272,28 @@ export class GithubSocialMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
           const details = await provider.interactionDetails(req, res);
+          // Admin step-up: a GitHub-backed step-up re-authenticates here, but
+          // elevation requires an OTP factor proof. Route to the TOTP challenge
+          // instead of finishing as a normal login — otherwise the issued token
+          // carries amr=['github'] (no otp) and the BFF rejects the step-up.
+          if (deps.adminStepUp && isAdminStepUpRequest(details)) {
+            logger.info('[GithubSocialMethod] admin step-up: routing github callback to TOTP challenge', {
+              uid: details.uid,
+              prompt: typeof details.prompt.name === 'string' ? details.prompt.name : undefined,
+            });
+            await beginAdminStepUpProof(req, res, deps.storage, details, result.identity, deps.adminStepUp);
+            return;
+          }
           await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, {
             storage: deps.storage,
             defaultResource: deps.defaultResource,
           });
         } catch (err) {
+          logger.error('[GithubSocialMethod] /auth/social/github/callback failed', {
+            url: req.url,
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
           next(err);
         }
       })();

@@ -30,9 +30,9 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
 
     server = new DollhouseMCPServer(container);
 
-    // Manually get the server instance from the server to pass to createHandlers
-    // Access the private server property via type casting
-    const mcpServer = (server as any).server;
+    // Obtain the lazily-initialized low-level MCP server (server creation moved
+    // from the constructor to an async getServer()); await it before wiring handlers.
+    const mcpServer = await (server as any).getServer();
 
     // Get handlers including mcpAqlHandler - reuse these for all tests
     const handlers = await container.createHandlers(mcpServer);

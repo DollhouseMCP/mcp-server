@@ -48,6 +48,13 @@ export async function appendConsoleAdminAuditEventWithTx(
   validateConsoleAdminAuditEvent(event);
   const keyMaterial = await hmacKeyResolver.resolve();
   const argsRedactedJson = stringifyBoundedAdminAuditJson(event.argsRedacted, 'argsRedacted');
+  // drizzle's raw `db.execute(sql`...`)` over postgres-js does not serialize JS
+  // arrays into a Postgres array literal — pass an explicit text[] literal.
+  const amrBackslashEscape = String.raw`\$1`;
+  const elevationAmrItems = event.elevationAmr
+    .map(v => `"${v.replaceAll(/(["\\])/g, amrBackslashEscape)}"`)
+    .join(',');
+  const elevationAmrLiteral = `{${elevationAmrItems}}`;
   const resultDetailRedactedJson = event.resultDetailRedacted
     ? stringifyBoundedAdminAuditJson(event.resultDetailRedacted, 'resultDetailRedacted')
     : null;
@@ -98,7 +105,7 @@ export async function appendConsoleAdminAuditEventWithTx(
           chain_hmac
         )
         VALUES (
-          ${event.occurredAt},
+          ${event.occurredAt.toISOString()}::timestamptz,
           ${event.actorUserId},
           ${event.actorSub},
           ${event.actorRole},
@@ -106,8 +113,8 @@ export async function appendConsoleAdminAuditEventWithTx(
           ${event.actorConsoleSessionHash},
           ${event.capability},
           ${event.elevationAcr},
-          ${event.elevationAmr},
-          ${event.elevationAuthTime},
+          ${elevationAmrLiteral}::text[],
+          ${event.elevationAuthTime ? event.elevationAuthTime.toISOString() : null}::timestamptz,
           ${event.endpoint},
           ${event.operation},
           ${event.resourceKind},

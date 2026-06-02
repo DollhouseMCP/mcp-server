@@ -8,6 +8,7 @@ import { authAccounts, users } from '../../../database/schema/index.js';
 import type { ISigningKeyStore } from '../../../storage/signingKeys/ISigningKeyStore.js';
 import type { ConsoleAdminRole } from '../../stores/IConsoleAccountAdminStore.js';
 import { grantConsoleAdminRoleWithTx } from '../../stores/PostgresConsoleAccountAdminStore.js';
+import { ConsoleStoreConflictError, isUniqueViolation } from '../../stores/ConsoleStoreValidation.js';
 import type {
   ConsoleAccountInviteIssueInput,
   ConsoleAccountInviteIssueResult,
@@ -72,7 +73,8 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
     readonly roles: readonly ConsoleAdminRole[];
     readonly issuedAt: Date;
   }): Promise<string> {
-    return withSystemContext(this.options.db, async tx => {
+    try {
+      return await withSystemContext(this.options.db, async tx => {
       const insertedUsers = await tx.insert(users).values({
         username: input.username,
         email: input.email,
@@ -109,7 +111,14 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
       }
 
       return userId;
-    });
+      });
+    } catch (error) {
+      // Duplicate username/email/sub -> a client conflict, not a server outage.
+      if (isUniqueViolation(error)) {
+        throw new ConsoleStoreConflictError('An account with this username or email already exists.');
+      }
+      throw error;
+    }
   }
 }
 

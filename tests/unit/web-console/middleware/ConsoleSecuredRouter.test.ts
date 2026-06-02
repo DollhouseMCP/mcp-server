@@ -41,6 +41,7 @@ const ADMIN_STREAM_PATH = '/api/v1/admin/audit/stream';
 const ADMIN_FAILURE_PATH = '/api/v1/admin/audit/failure';
 const ADMIN_MUTATION_PATH = '/api/v1/admin/audit/retry';
 const ADMIN_TRANSACTION_MUTATION_PATH = '/api/v1/admin/audit/transaction-retry';
+const ADMIN_FRESH_PATH = '/api/v1/admin/audit/fresh';
 const ADMIN_CORRELATION_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb2';
 const ADMIN_CORRELATION_PATH = `/api/v1/admin/audit/correlations/${ADMIN_CORRELATION_ID}`;
 const INVALID_REQUEST_PATH = '/api/v1/me/invalid-request';
@@ -149,6 +150,7 @@ function fixtureModules(
       { id: 'admin.audit.mutate' },
       { id: 'admin.audit.transaction_mutate' },
       { id: 'admin.audit.correlation' },
+      { id: 'admin.audit.fresh' },
     ],
     routes: [{
       method: 'GET',
@@ -172,6 +174,17 @@ function fixtureModules(
       auditOperation: 'admin.audit.export',
       privacyProjector: value => value,
       handler: () => ({ status: 200, body: { exported: true } }),
+    }, {
+      method: 'GET',
+      path: ADMIN_FRESH_PATH,
+      audience: 'admin',
+      requiredCapability: AUDIT_CAPABILITY,
+      elevation: 'admin_fresh',
+      privacyClass: 'admin_audit',
+      idempotency: 'not_applicable',
+      auditOperation: 'admin.audit.fresh',
+      privacyProjector: value => value,
+      handler: () => ({ status: 200, body: { fresh: true } }),
     }, {
       method: 'GET',
       path: ADMIN_STREAM_PATH,
@@ -288,6 +301,7 @@ async function buildApp(
   reportInternalError?: (error: unknown, correlationId: string) => void,
   protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null = protectedCorrelationLimiter(),
   authPolicyStore = new InMemoryConsoleAuthPolicyStore(),
+  nowProvider: () => Date = () => NOW,
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
   const idempotencyStore = new InMemoryIdempotencyStore();
@@ -310,7 +324,7 @@ async function buildApp(
     authPolicyStore,
     protectedCorrelationRateLimiter,
     idleTimeoutMs: 60 * 60 * 1000,
-    now: () => NOW,
+    now: nowProvider,
     reportInternalError,
   }));
   return {
@@ -1015,6 +1029,97 @@ describe('secured console router elevation', () => {
 
     expect(response.status).toBe(401);
     expect(response.body.max_auth_age_seconds).toBe(120);
+  });
+
+  it('passes an admin_fresh route when the OTP proof is within sixty seconds', async () => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: new Date('2026-05-26T11:59:30.000Z'),
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_FRESH_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(200);
+    expect(response.body.fresh).toBe(true);
+  });
+
+  it('enforces the sixty-second freshness policy for irreversible admin operations', async () => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: new Date('2026-05-26T11:58:00.000Z'),
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_FRESH_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('step_up_required');
+    expect(response.body.max_auth_age_seconds).toBe(60);
+  });
+
+  it('slides the session idle window on an admin action but never refreshes the elevation freshness clock', async () => {
+    const initialIdleExpiry = new Date('2026-05-26T12:10:00.000Z');
+    const elevationAuthTime = new Date('2026-05-26T11:56:00.000Z');
+    const { app, sessionStore } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      idleExpiresAt: initialIdleExpiry,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: ELEVATED_EXPIRES,
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: elevationAuthTime,
+      },
+    }));
+
+    const response = await request(app).get(ADMIN_EXPORT_PATH).set('Cookie', sessionCookie());
+    expect(response.status).toBe(200);
+
+    const stored = await sessionStore.findActiveByIdHash(OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE), NOW);
+    // The action slides the session idle window forward to now + idleTimeoutMs.
+    expect(stored?.idleExpiresAt).toEqual(new Date('2026-05-26T13:00:00.000Z'));
+    expect(stored?.idleExpiresAt.getTime()).toBeGreaterThan(initialIdleExpiry.getTime());
+    // ...but leaves the elevation freshness clock (authTime) untouched — activity
+    // must never extend a step-up proof.
+    expect(stored?.elevation?.authTime).toEqual(elevationAuthTime);
+  });
+
+  it('lets elevation expire on schedule despite an intervening successful action', async () => {
+    let clock = new Date('2026-05-26T12:00:00.000Z');
+    const { app } = await buildApp(
+      freshlyElevatedAuditSession(),
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      () => clock,
+    );
+
+    // The OTP proof (11:56) is within the five-minute window at 12:00.
+    const first = await request(app).get(ADMIN_EXPORT_PATH).set('Cookie', sessionCookie());
+    expect(first.status).toBe(200);
+
+    // Six minutes after the proof the elevation is stale; the earlier success did
+    // not extend it. The session itself is still authenticated (idle slid forward),
+    // so the failure is a step-up requirement, not an unauthenticated rejection.
+    clock = new Date('2026-05-26T12:02:00.000Z');
+    const second = await request(app).get(ADMIN_EXPORT_PATH).set('Cookie', sessionCookie());
+    expect(second.status).toBe(401);
+    expect(second.body.code).toBe('step_up_required');
   });
 
   it('audit-writes an authorized administrative handler failure without private output', async () => {

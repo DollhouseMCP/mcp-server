@@ -506,9 +506,48 @@ describe('WebConsoleRegistrar', () => {
         expect.objectContaining({ code: 'accountAdmin_accountInviteIssuer_missing' }),
         expect.objectContaining({ code: 'accountAdmin_oauthGrantRevocationService_missing' }),
         expect.objectContaining({ code: 'accountAdmin_protectedCorrelationRateLimiter_missing' }),
-        expect.objectContaining({ code: 'integrations_githubIntegrationProvider_missing' }),
       ]),
     });
+  });
+
+  it('does not block hosted/shared activation when the optional GitHub integration provider is absent', async () => {
+    const { assertWebConsoleProductionActivation } = await import('../../../src/web-console/WebConsoleProductionActivation.js');
+
+    const baseInputs = {
+      activationProfile: SHARED_HOSTED_PROFILE,
+      storageBackend: 'postgres' as const,
+      enableAccountAllowlistRoutes: false,
+      readiness: {
+        databaseVerificationReady: true,
+        securityInvalidationProcessorReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      stores: {},
+      services: {
+        authStorage: { name: 'authStorage' },
+        secretEncryption: { name: 'secretEncryption' },
+        consoleOAuthClient: { name: 'consoleOAuthClient' },
+        integrationPublicBaseUrl: 'https://console.example',
+      },
+      registeredRouteModuleIds: ['integrations'],
+    };
+
+    // Absent optional provider → no integrations_githubIntegrationProvider failure.
+    expect(() => assertWebConsoleProductionActivation({
+      ...baseInputs,
+      routeDependencies: [
+        { moduleId: 'integrations', dependencyName: 'githubIntegrationProvider', value: null, optional: true },
+      ],
+    })).not.toThrow();
+
+    // Present-but-non-production provider → still rejected by the adapter check.
+    expect(() => assertWebConsoleProductionActivation({
+      ...baseInputs,
+      requireExplicitProductionAdapterMetadata: true,
+      routeDependencies: [
+        { moduleId: 'integrations', dependencyName: 'githubIntegrationProvider', value: {}, optional: true },
+      ],
+    })).toThrow(/integrations_githubIntegrationProvider_metadata_missing/);
   });
 
   it('derives hosted/shared activation from exposed multi-user deployment signal', async () => {

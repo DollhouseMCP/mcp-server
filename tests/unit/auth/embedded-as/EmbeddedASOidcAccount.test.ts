@@ -5,12 +5,14 @@ import { ADMIN_STEP_UP_CLAIMS_MODEL } from '../../../../src/auth/embedded-as/Int
 import type { IAuthMethod } from '../../../../src/auth/embedded-as/IAuthMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
+const ADMIN_STEPUP_ACR = 'urn:dollhouse:acr:admin-stepup';
+
 describe('EmbeddedASOidcAccount', () => {
   it('emits AS-issued administrative ACR, AMR, and fresh auth_time for the matching grant', async () => {
     const storage = await storageWithAdmin();
     await storage.genericSet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-admin', {
       accountId: 'local_admin',
-      acr: 'urn:dollhouse:acr:admin-stepup',
+      acr: ADMIN_STEPUP_ACR,
       amr: ['otp'],
       authTime: 1779883200,
     });
@@ -18,19 +20,27 @@ describe('EmbeddedASOidcAccount', () => {
 
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-admin' }))
       .resolves.toMatchObject({
-        acr: 'urn:dollhouse:acr:admin-stepup',
+        acr: ADMIN_STEPUP_ACR,
         amr: ['otp'],
         auth_time: 1779883200,
       });
+    // extraTokenClaims runs once per token (access_token AND id_token) of a
+    // single issuance, so a repeated call for the same grant must STILL emit
+    // the admin claims — otherwise the id_token (issued second) would lack
+    // acr/amr and the BFF would reject the step-up.
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-admin' }))
-      .resolves.toEqual({ auth_time: 0 });
+      .resolves.toMatchObject({
+        acr: ADMIN_STEPUP_ACR,
+        amr: ['otp'],
+        auth_time: 1779883200,
+      });
   });
 
   it('does not attach administrative claims from a grant bound to a different account', async () => {
     const storage = await storageWithAdmin();
     await storage.genericSet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-other', {
       accountId: 'local_other',
-      acr: 'urn:dollhouse:acr:admin-stepup',
+      acr: ADMIN_STEPUP_ACR,
       amr: ['otp'],
       authTime: 1779883200,
     });
@@ -50,7 +60,7 @@ describe('EmbeddedASOidcAccount', () => {
     });
     await storage.genericSet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-expired', {
       accountId: 'local_admin',
-      acr: 'urn:dollhouse:acr:admin-stepup',
+      acr: ADMIN_STEPUP_ACR,
       amr: ['otp'],
       authTime: 1779883200,
     }, -1);

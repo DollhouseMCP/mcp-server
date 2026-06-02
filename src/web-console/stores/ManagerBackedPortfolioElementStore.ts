@@ -4,6 +4,7 @@ import yaml from 'js-yaml';
 import type { IElement } from '../../types/elements/IElement.js';
 import type { BaseElementManager } from '../../elements/base/BaseElementManager.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
+import { logger } from '../../utils/logger.js';
 import {
   canonicalizePortfolioElementName,
   clonePortfolioElementDetailRecord,
@@ -60,7 +61,18 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     const records: ConsolePortfolioElementSummaryRecord[] = [];
     for (const type of types) {
       for (const element of await this.manager(type).list()) {
-        const record = await this.toRecord(userId, type, element);
+        let record: ConsolePortfolioElementSummaryRecord;
+        try {
+          record = await this.toRecord(userId, type, element);
+        } catch (error) {
+          // Listing is inert — no element is activated here — so a single
+          // element whose body fails content parsing/validation (e.g. a
+          // security/agent element that legitimately contains injection-like
+          // example text) must NOT 500 the whole portfolio. Surface it as
+          // 'invalid', built from in-memory metadata with the body withheld,
+          // so the user still sees it and knows it needs attention.
+          record = this.toInvalidSummaryFallback(userId, type, element, error);
+        }
         const filterTag = filters.tag;
         if (filterTag && !record.tags.some(tag => tag.toLowerCase() === filterTag.toLowerCase())) {
           continue;
@@ -93,7 +105,12 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     }
     const element = await manager.importElement(rawContentFromInput(input), managerFormatForType(input.type));
     await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
-    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, element));
+    // Re-read the persisted element so the returned record (and its ETag) match
+    // what a subsequent GET produces — the persist/reload round-trip can
+    // normalize content, so hashing the pre-save in-memory element would yield
+    // an ETag the next conditional write rejects with 412.
+    const persisted = (await this.findElement(input.type, canonicalName)) ?? element;
+    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
   }
 
   async update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
@@ -113,7 +130,9 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     });
     const updated = await manager.importElement(updatedRaw, managerFormatForType(input.type));
     await manager.save(updated, elementPath(manager, existingRecord.canonicalName));
-    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, updated));
+    // Re-read so the returned record/ETag match a subsequent GET (see create()).
+    const persisted = (await this.findElement(input.type, existingRecord.canonicalName)) ?? updated;
+    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
   }
 
   async delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null> {
@@ -185,6 +204,43 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     };
     validatePortfolioElementDetailRecord(record);
     return record;
+  }
+
+  /**
+   * Build a degraded summary for an element that could not be parsed/validated
+   * during a list. Uses only the already-loaded in-memory metadata (name/tags/
+   * modified) — never re-parses or exposes the offending body — and marks the
+   * element 'invalid' so the UI can flag it for the user instead of the whole
+   * listing failing.
+   */
+  private toInvalidSummaryFallback(
+    userId: string,
+    type: ConsolePortfolioElementType,
+    element: IElement,
+    error: unknown,
+  ): ConsolePortfolioElementSummaryRecord {
+    const metadata = element.metadata;
+    const name = typeof metadata.name === 'string' && metadata.name.length > 0 ? metadata.name : 'unknown';
+    const rawTags = (metadata as { readonly tags?: unknown }).tags;
+    const tags = Array.isArray(rawTags)
+      ? rawTags.filter((tag): tag is string => typeof tag === 'string')
+      : [];
+    logger.warn(
+      '[ManagerBackedPortfolioElementStore] portfolio element failed validation on list; ' +
+      'surfacing as invalid instead of failing the listing',
+      { type, name, reason: error instanceof Error ? error.message : String(error) },
+    );
+    return {
+      userId,
+      type,
+      name,
+      canonicalName: canonicalizePortfolioElementName(name),
+      displayName: name,
+      version: 1,
+      updatedAt: parseUpdatedAt(typeof metadata.modified === 'string' ? metadata.modified : undefined),
+      validationStatus: 'invalid',
+      tags,
+    };
   }
 
   private async rawContentFor(type: ConsolePortfolioElementType, element: IElement): Promise<string> {

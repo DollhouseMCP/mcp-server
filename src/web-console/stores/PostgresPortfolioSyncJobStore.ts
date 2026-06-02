@@ -79,22 +79,24 @@ export class PostgresPortfolioSyncJobStore implements IPortfolioSyncJobStore {
   }
 
   async claimNext(input: PortfolioSyncJobClaimInput): Promise<PortfolioSyncJobRecord | null> {
+    // Raw `tx.execute(sql`...`)` over postgres-js does not serialize JS Date
+    // params — pass ISO strings cast to timestamptz instead.
     const rows: (typeof portfolioSyncJobs.$inferSelect)[] = await withSystemContext(this.db, tx => tx.execute(sql`
       UPDATE portfolio_sync_jobs
       SET
         status = 'running',
         claim_version = claim_version + 1,
         claimed_by_worker_id = ${input.workerId},
-        lease_until = ${input.leaseUntil},
+        lease_until = ${input.leaseUntil.toISOString()}::timestamptz,
         attempt_count = attempt_count + 1,
-        started_at = COALESCE(started_at, ${input.now}),
+        started_at = COALESCE(started_at, ${input.now.toISOString()}::timestamptz),
         completed_at = NULL,
         operational_error_code = NULL
       WHERE id = (
         SELECT id
         FROM portfolio_sync_jobs
         WHERE status = 'queued'
-          OR (status = 'running' AND lease_until <= ${input.now})
+          OR (status = 'running' AND lease_until <= ${input.now.toISOString()}::timestamptz)
         ORDER BY created_at
         FOR UPDATE SKIP LOCKED
         LIMIT 1

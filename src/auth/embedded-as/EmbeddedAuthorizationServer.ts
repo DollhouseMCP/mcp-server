@@ -458,6 +458,16 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // Cycle 24 fix: pass the AS's resource URL so social/magic-link
       // callbacks can bind resource scopes to it via finishInteractionWithIdentity.
       defaultResource: this.resource,
+      // Admin step-up: social callbacks (GitHub) must route an admin-stepup
+      // interaction through the TOTP challenge rather than completing as a
+      // normal login. Same deps the InteractionRouter POST path uses.
+      adminStepUp: this.adminTotpService && this.consoleIdentityResolver
+        ? {
+          totpService: this.adminTotpService,
+          identityResolver: this.consoleIdentityResolver,
+          rateLimitStore: this.adminTotpRateLimitStore ?? undefined,
+        }
+        : undefined,
     };
     for (const method of this.methods) {
       method.contributeRoutes?.(router, contributeDeps);

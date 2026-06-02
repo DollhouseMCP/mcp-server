@@ -25,6 +25,7 @@ export const CONSOLE_ELEVATION_POLICIES = [
   'none',
   'admin_30m',
   'admin_5m',
+  'admin_fresh',
 ] as const;
 
 export const CONSOLE_HTTP_METHODS = [
@@ -158,6 +159,70 @@ export interface ConsoleRouteDefinition {
   readonly streamEventProjectors?: ConsoleStreamEventProjectors;
   readonly privacyProjector?: ConsolePrivacyProjector;
   readonly handler: ConsoleHandler;
+}
+
+/** ACR value the embedded authorization server stamps on an admin step-up proof. */
+export const CONSOLE_ADMIN_STEPUP_ACR = 'urn:dollhouse:acr:admin-stepup';
+
+const ELEVATION_FRESH_SECONDS = 60;
+const ELEVATION_30M_SECONDS = 1800;
+const ELEVATION_5M_CEILING_SECONDS = 300;
+
+/**
+ * Required OTP freshness (in seconds) for a route's elevation policy.
+ * Re-authentication is graduated by blast radius rather than by read-vs-write:
+ *  - `admin_30m` (30 min): reads + routine, reversible mutations.
+ *  - `admin_5m`  (≤5 min, operator-tightenable down to 60s but never loosenable
+ *    past 5 min): per-user destructive-but-recoverable ops + sensitive reads.
+ *  - `admin_fresh` (60s): near-per-action proof for irreversible/global ops
+ *    (signing-key rotate/retire/delete, auth-policy changes).
+ * The single source of truth for both the request-time authorization gate and
+ * SSE stream revalidation, so the two can never diverge.
+ */
+export function elevationPolicySeconds(
+  policy: ConsoleElevationPolicy | undefined,
+  maxAdminElevationSeconds = ELEVATION_5M_CEILING_SECONDS,
+): number {
+  const boundedMax = Math.max(
+    ELEVATION_FRESH_SECONDS,
+    Math.min(ELEVATION_5M_CEILING_SECONDS, Math.trunc(maxAdminElevationSeconds)),
+  );
+  switch (policy) {
+    case 'admin_fresh':
+      return ELEVATION_FRESH_SECONDS;
+    case 'admin_5m':
+      return boundedMax;
+    case 'none':
+    case 'admin_30m':
+    case undefined:
+      return ELEVATION_30M_SECONDS;
+  }
+}
+
+/**
+ * Whether a session's current elevation satisfies an admin route: the required
+ * capability is held, the elevation has not expired, it carries an admin-ACR OTP
+ * proof, and that proof is within the route's freshness window. Shared by the
+ * request-time gate (`ConsoleAuthorization`) and SSE stream revalidation
+ * (`ConsoleSecuredRouterAssembler`).
+ */
+export function isElevationValidForRoute(
+  authentication: ConsoleAuthenticatedContext,
+  route: ConsoleRouteDefinition,
+  now: Date,
+  maxAdminElevationSeconds?: number,
+): boolean {
+  if (route.requiredCapability === 'none') return false;
+  const elevation = authentication.elevation;
+  if (!elevation) return false;
+  const freshnessSeconds = elevationPolicySeconds(route.elevation, maxAdminElevationSeconds);
+  return (
+    elevation.capabilities.includes(route.requiredCapability) &&
+    elevation.expiresAt > now &&
+    elevation.acr === CONSOLE_ADMIN_STEPUP_ACR &&
+    elevation.amr.includes('otp') &&
+    elevation.authTime.getTime() + freshnessSeconds * 1000 > now.getTime()
+  );
 }
 
 export interface ConsoleAuditOperationDefinition {

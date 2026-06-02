@@ -40,6 +40,8 @@ import type { IAuthMethod } from './embedded-as/IAuthMethod.js';
 import type { InviteTokenStore } from './embedded-as/inviteTokens.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { ISigningKeyStore } from '../storage/signingKeys/ISigningKeyStore.js';
+import type { AdminTotpService } from './embedded-as/totp/AdminTotpService.js';
+import type { IConsoleIdentityResolver } from '../web-console/identity/IConsoleIdentityResolver.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { instrumentAuthMethod } from './embedded-as/instrumentAuthMethod.js';
 import { instrumentAuthProvider } from './instrumentAuthProvider.js';
@@ -93,6 +95,16 @@ export interface AuthConfig {
   signingKeyStore?: ISigningKeyStore;
   /** Shared auth rate-limit state store. Required for multi-replica Postgres deployments. */
   rateLimitStore?: IRateLimitStore;
+  /**
+   * Web-console admin step-up dependencies. When BOTH are present (DB mode
+   * with the web console enabled), EmbeddedAuthorizationServer mounts the
+   * /auth/totp/* enrollment + admin step-up interaction routes. Absent → those
+   * routes are not mounted and admin elevation (acr=admin-stepup, amr=otp) is
+   * unavailable. Forwarded to EmbeddedAuthorizationServer; ignored by other
+   * providers. adminTotpRateLimitStore reuses rateLimitStore.
+   */
+  adminTotpService?: AdminTotpService;
+  consoleIdentityResolver?: IConsoleIdentityResolver;
   /**
    * Replacement sign-in allowlist authority. Hosted/shared console cutover
    * injects this so auth methods read from account_allowlist_entries while
@@ -262,6 +274,10 @@ async function createEmbeddedProvider(
     // in filesystem mode → EmbeddedAuthorizationServer falls back to the
     // legacy persistKeys / cookieSecret file paths.
     signingKeyStore: config.signingKeyStore,
+    // Web-console admin step-up: mounts /auth/totp/* only when both present.
+    adminTotpService: config.adminTotpService,
+    consoleIdentityResolver: config.consoleIdentityResolver,
+    adminTotpRateLimitStore: config.rateLimitStore,
   });
 }
 

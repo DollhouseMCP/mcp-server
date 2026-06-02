@@ -12,19 +12,19 @@
 
 import { randomUUID } from 'node:crypto';
 import * as path from 'node:path';
-import { IElement } from '../../types/elements/IElement.js';
-import { ElementType } from '../../portfolio/types.js';
+import type { IElement } from '../../types/elements/IElement.js';
+import type { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
+import type { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { SecurityError } from '../../security/errors.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
+import type { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ElementTransactionScope } from './ElementTransactionScope.js';
-import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { ElementCache } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
@@ -57,17 +57,37 @@ export interface ElementPersisterHost<T extends IElement> {
   readonly constructor: { name: string };
 }
 
+export interface ElementPersisterDependencies<T extends IElement> {
+  readonly host: ElementPersisterHost<T>;
+  readonly cache: ElementCache<T>;
+  readonly events: ElementEventCoordinator<T>;
+  readonly loader: ElementLoader<T>;
+  readonly fileLockManager: FileLockManager;
+  readonly fileOperations: FileOperationsService;
+  readonly storageLayer: IStorageLayer;
+  readonly elementTypeToContext: ElementTypeToContext;
+}
+
 export class ElementPersister<T extends IElement> {
-  constructor(
-    private readonly host: ElementPersisterHost<T>,
-    private readonly cache: ElementCache<T>,
-    private readonly events: ElementEventCoordinator<T>,
-    private readonly loader: ElementLoader<T>,
-    private readonly fileLockManager: FileLockManager,
-    private readonly fileOperations: FileOperationsService,
-    private readonly storageLayer: IStorageLayer,
-    private readonly elementTypeToContext: ElementTypeToContext,
-  ) {}
+  private readonly host: ElementPersisterHost<T>;
+  private readonly cache: ElementCache<T>;
+  private readonly events: ElementEventCoordinator<T>;
+  private readonly loader: ElementLoader<T>;
+  private readonly fileLockManager: FileLockManager;
+  private readonly fileOperations: FileOperationsService;
+  private readonly storageLayer: IStorageLayer;
+  private readonly elementTypeToContext: ElementTypeToContext;
+
+  constructor(deps: ElementPersisterDependencies<T>) {
+    this.host = deps.host;
+    this.cache = deps.cache;
+    this.events = deps.events;
+    this.loader = deps.loader;
+    this.fileLockManager = deps.fileLockManager;
+    this.fileOperations = deps.fileOperations;
+    this.storageLayer = deps.storageLayer;
+    this.elementTypeToContext = deps.elementTypeToContext;
+  }
 
   /**
    * Save an element to file or database.
@@ -112,7 +132,7 @@ export class ElementPersister<T extends IElement> {
         );
       });
 
-      transaction.addRollback(async (error) => {
+      transaction.addRollback((error) => {
         this.events.eventDispatcher.emitAsync(
           'element:save:error',
           this.events.createEventPayload({ correlationId, filePath: relativePath, element, error }),
@@ -136,14 +156,14 @@ export class ElementPersister<T extends IElement> {
         this.host.validateSerializedContent(content);
 
         if (isDbMode) {
-          const elementId = await (this.storageLayer as IWritableStorageLayer).writeContent( // NOSONAR — narrowing needed, boolean guard doesn't narrow
+          const elementId = await this.storageLayer.writeContent(
             this.host.elementType,
             element.metadata.name,
             content,
             {
               author: element.metadata.author ?? '',
               version: element.metadata.version ?? '1.0.0',
-              description: element.metadata.description ?? '',
+              description: element.metadata.description,
               tags: element.metadata.tags ?? [],
             },
             {
@@ -200,7 +220,7 @@ export class ElementPersister<T extends IElement> {
 
       const isDbMode = isWritableStorageLayer(this.storageLayer);
 
-      transaction.addCommit(async () => {
+      transaction.addCommit(() => {
         this.cache.uncacheByPath(relativePath);
         if (!isDbMode) {
           this.storageLayer.notifyDeleted(relativePath);
@@ -211,7 +231,7 @@ export class ElementPersister<T extends IElement> {
         );
       });
 
-      transaction.addRollback(async (error) => {
+      transaction.addRollback((error) => {
         this.events.eventDispatcher.emitAsync(
           'element:delete:error',
           this.events.createEventPayload({ correlationId, filePath: relativePath, error }),
@@ -219,9 +239,22 @@ export class ElementPersister<T extends IElement> {
       });
 
       await transaction.run(async () => {
+        // In DB mode the storage layer is keyed by element id, but the inbound
+        // relativePath may be an id OR a filename (the web-console portfolio
+        // bridge passes "<name>.<ext>"). Resolve the canonical name and id once
+        // so BOTH the canDelete pre-check snapshot load and the deletion target
+        // the same element — previously the pre-check loaded by filename-as-id
+        // (`readContent(relativePath)` → `WHERE id = '<name>.md'`) and 500'd.
+        const dbName = isDbMode
+          ? (this.storageLayer.getNameById?.(relativePath) ?? this.host.extractNameFromPath(relativePath))
+          : undefined;
+        const dbId = isDbMode
+          ? (this.storageLayer.getPathByName(dbName as string) ?? relativePath)
+          : relativePath;
+
         if (this.host.canDelete) {
           const elementForValidation = isDbMode
-            ? await this.loader.loadElementSnapshotFromDb(relativePath)
+            ? await this.loader.loadElementSnapshotFromDb(dbId)
             : await this.loader.loadElementSnapshot(absolutePath, relativePath);
           const decision = await this.host.canDelete(elementForValidation);
           if (!decision.allowed) {
@@ -230,9 +263,7 @@ export class ElementPersister<T extends IElement> {
         }
 
         if (isDbMode) {
-          const elementName = this.storageLayer.getNameById?.(relativePath)
-            ?? this.host.extractNameFromPath(relativePath);
-          await (this.storageLayer as IWritableStorageLayer).deleteContent(this.host.elementType, elementName); // NOSONAR — narrowing needed, boolean guard doesn't narrow
+          await this.storageLayer.deleteContent(this.host.elementType, dbName as string);
         } else {
           const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath);
           if (!movedToBackup) {
@@ -306,21 +337,19 @@ export class ElementPersister<T extends IElement> {
       const yamlContent = frontmatterMatch[1];
       const bodyContent = content.substring(frontmatterMatch[0].length);
 
-      if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
-        if (!ContentValidator.validateYamlContent(yamlContent)) {
-          SecurityMonitor.logSecurityEvent({
-            type: 'YAML_INJECTION_ATTEMPT',
-            severity: 'CRITICAL',
-            source: `${this.host.constructor.name}.validateSerializedContent`,
-            details: `Malicious YAML pattern detected in serialized output for ${this.host.getElementLabel()}`,
-            metadata: { yamlLength: yamlContent.length },
-          });
-          throw new SecurityError(
-            `Serialized ${this.host.getElementLabel()} contains malicious YAML patterns — write blocked. ` +
-            `Review the element's metadata and instructions for suspicious anchor/alias patterns.`,
-            'critical',
-          );
-        }
+      if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH && !ContentValidator.validateYamlContent(yamlContent)) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'YAML_INJECTION_ATTEMPT',
+          severity: 'CRITICAL',
+          source: `${this.host.constructor.name}.validateSerializedContent`,
+          details: `Malicious YAML pattern detected in serialized output for ${this.host.getElementLabel()}`,
+          metadata: { yamlLength: yamlContent.length },
+        });
+        throw new SecurityError(
+          `Serialized ${this.host.getElementLabel()} contains malicious YAML patterns — write blocked. ` +
+          `Review the element's metadata and instructions for suspicious anchor/alias patterns.`,
+          'critical',
+        );
       }
 
       const frontmatterData = SecureYamlParser.parseRawYaml(yamlContent, SECURITY_LIMITS.MAX_YAML_LENGTH);

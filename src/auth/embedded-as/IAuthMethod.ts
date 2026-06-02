@@ -20,7 +20,7 @@
 
 import type { Router } from 'express';
 import type { AuthMethodId } from './AuthMethodFactory.js';
-import type { OidcProviderForInteractions } from './InteractionRouter.js';
+import type { AdminStepUpInteractionDeps, OidcProviderForInteractions } from './InteractionRouter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 /**
@@ -129,6 +129,15 @@ export interface ContributeRoutesDeps {
    * resource binding).
    */
   defaultResource: string;
+  /**
+   * Admin step-up dependencies. When present and the interaction was an
+   * admin step-up request (acr_values includes the admin-stepup ACR), social/
+   * redirect callbacks must route completion through the TOTP challenge
+   * (beginAdminStepUpProof) instead of finishing as a normal login — otherwise
+   * a GitHub-backed step-up would issue a token without amr=otp and the BFF
+   * would reject the elevation.
+   */
+  adminStepUp?: AdminStepUpInteractionDeps;
 }
 
 export interface IAuthMethod {

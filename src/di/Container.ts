@@ -570,9 +570,19 @@ export class DollhouseContainer {
     const context = tracker.createSessionContext('background-task', stdioSession, {
       source: 'completeSinkSetup',
     });
+    // In the multi-user web console (per-request identity, no single startup
+    // user), the stdio bootstrap user's memory auto-load and activation restore
+    // are meaningless — and run without a resolvable per-user context, so they
+    // log spurious "No session context"/"Failed to list" errors at startup.
+    // Skip these per-user warmups; per-user state is loaded per request instead.
+    const multiUserConsole = env.DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED === true;
     await tracker.runAsync(context, async () => {
-      await this.deferredMemoryAutoload(timer);
-      await this.deferredActivationRestore(timer);
+      if (multiUserConsole) {
+        logger.debug('[Container] Multi-user web console — skipping per-user startup memory auto-load and activation restore.');
+      } else {
+        await this.deferredMemoryAutoload(timer);
+        await this.deferredActivationRestore(timer);
+      }
       await this.deferredPolicyExport();
       this.deferredLogHooks(timer);
       this.deferredMetricsCollectors(timer);

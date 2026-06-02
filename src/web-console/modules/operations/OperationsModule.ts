@@ -101,7 +101,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         path: '/api/v1/admin/operate/config/:key',
         audience: 'admin',
         requiredCapability: OPERATE_CAPABILITY,
-        elevation: 'admin_5m',
+        elevation: 'admin_30m',
         privacyClass: 'operational_allowlist',
         idempotency: 'required',
         auditOperation: 'operate.config.update',

@@ -18,6 +18,7 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
         userId: users.id,
         disabledAt: users.disabledAt,
         authzVersion: users.authzVersion,
+        roles: authAccounts.roles,
       })
         .from(authAccounts)
         .innerJoin(users, eq(authAccounts.userId, users.id))
@@ -31,6 +32,9 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
       userId: principal.userId,
       disabledAt: principal.disabledAt,
       authzVersion: principal.authzVersion,
+      roles: Array.isArray(principal.roles)
+        ? principal.roles.filter((role): role is string => typeof role === 'string')
+        : [],
     };
   }
 }

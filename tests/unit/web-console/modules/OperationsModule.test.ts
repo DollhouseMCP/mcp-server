@@ -174,7 +174,7 @@ describe('OperationsModule', () => {
         method: 'PUT',
         path: '/api/v1/admin/operate/config/:key',
         requiredCapability: OPERATE_CAPABILITY,
-        elevation: 'admin_5m',
+        elevation: 'admin_30m',
         privacyClass: OPERATIONAL_PRIVACY,
         idempotency: 'required',
         auditOperation: 'operate.config.update',

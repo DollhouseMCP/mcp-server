@@ -21,6 +21,9 @@ import type { DatabaseInstance } from '../../database/connection.js';
 import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
 import type { SignInAllowlistAuthority } from '../../auth/embedded-as/allowlistGate.js';
 import type { IRateLimitStore } from '../../auth/embedded-as/storage/IRateLimitStore.js';
+import type { IAuthStorageLayer } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
+import type { AdminTotpService } from '../../auth/embedded-as/totp/AdminTotpService.js';
+import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 
 interface ProtectedResourceMetadataProvider extends IAuthProvider {
   getProtectedResourceMetadataUrl(): string;
@@ -125,6 +128,10 @@ export class AuthServiceRegistrar {
     // backend instead of file-direct in persistKeys/cookieSecret), so the
     // dual-mode behavior is uniform across deployments.
 
+    // Web-console admin step-up (TOTP) dependencies. When present, the
+    // embedded AS mounts the /auth/totp/* enrollment + step-up routes.
+    const adminStepUp = await this.createAdminStepUpDeps(database, authStorage);
+
     const provider = await createAuthProvider({
       enabled: true,
       provider: env.DOLLHOUSE_AUTH_PROVIDER,
@@ -144,6 +151,8 @@ export class AuthServiceRegistrar {
       // selected per DOLLHOUSE_AUTH_STORAGE_BACKEND inside the factory).
       signingKeyStore,
       rateLimitStore,
+      adminTotpService: adminStepUp.adminTotpService,
+      consoleIdentityResolver: adminStepUp.consoleIdentityResolver,
       signInAllowlistAuthority,
       // PerformanceMonitor for auth-flow timing. Optional — when present,
       // each method's three IAuthMethod entry points (beginInteraction /
@@ -190,6 +199,46 @@ export class AuthServiceRegistrar {
     return new ConsoleAccountAllowlistSignInAuthority(
       new PostgresConsoleAccountAllowlistStore(database),
     );
+  }
+
+  /**
+   * Construct the web-console admin step-up (TOTP) dependencies so the embedded
+   * AS mounts the /auth/totp/* enrollment + step-up interaction routes. Requires
+   * embedded provider + DB mode (Postgres factor/identity stores) + the
+   * web-console secret-encryption key (factor secrets share that key with the
+   * console, so the key id/material must match DOLLHOUSE_WEB_CONSOLE_SECRET_*).
+   * Returns empty when any prerequisite is absent → routes stay unmounted.
+   */
+  private async createAdminStepUpDeps(
+    database: DatabaseInstance | undefined,
+    authStorage: IAuthStorageLayer | undefined,
+  ): Promise<{ adminTotpService?: AdminTotpService; consoleIdentityResolver?: IConsoleIdentityResolver }> {
+    if (env.DOLLHOUSE_AUTH_PROVIDER !== 'embedded' || !database || !authStorage) return {};
+    const encryptionKey = env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      logger.debug(
+        '[AuthServiceRegistrar] DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY unset — ' +
+        'admin TOTP step-up routes will not mount',
+      );
+      return {};
+    }
+    const { AdminTotpService } = await import('../../auth/embedded-as/totp/AdminTotpService.js');
+    const { PostgresConsoleFactorStore } = await import('../../web-console/stores/PostgresConsoleFactorStore.js');
+    const { PostgresConsoleIdentityResolver } = await import('../../web-console/identity/PostgresConsoleIdentityResolver.js');
+    const { AeadSecretEncryptionService } = await import('../../web-console/security/SecretEncryption.js');
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID,
+      key: Buffer.from(encryptionKey, 'base64'),
+    });
+    logger.info('[AuthServiceRegistrar] Admin TOTP step-up routes enabled (embedded AS, DB mode)');
+    return {
+      adminTotpService: new AdminTotpService({
+        authStorage,
+        factorStore: new PostgresConsoleFactorStore(database),
+        secretEncryption,
+      }),
+      consoleIdentityResolver: new PostgresConsoleIdentityResolver(database),
+    };
   }
 }
 

@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 import { env, type Env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { AuthMethodId } from '../auth/embedded-as/AuthMethodFactory.js';
 import { WebConsoleRegistrar, type WebConsoleRegistrarOptions, type WebConsoleComposition } from './WebConsoleRegistrar.js';
@@ -23,6 +24,7 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   Env,
   | 'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED'
   | 'DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED'
+  | 'DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED'
   | 'DOLLHOUSE_HTTP_WEB_CONSOLE'
   | 'DOLLHOUSE_PUBLIC_BASE_URL'
   | 'DOLLHOUSE_HTTP_HOST'
@@ -83,6 +85,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
     },
     enableApiV1Mount: true,
     enablePortfolioWriteRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED,
+    enableAccountAllowlistRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED,
     requireExplicitProductionAdapterMetadata: true,
     productionDatabaseVerification: resolveWebConsoleProductionDatabaseVerificationFromEnv(sourceEnv),
     publicBaseUrl: sourceEnv.DOLLHOUSE_PUBLIC_BASE_URL,
@@ -103,6 +106,12 @@ export function resolveWebConsoleHttpBootstrapOptions(
     ),
     githubIntegrationProviderConfig,
     portfolioSyncRepositoryName: sourceEnv.GITHUB_REPOSITORY,
+    reportCleanupError: ({ store, error }) => {
+      logger.error('[WebConsole] Scheduled store cleanup failed', {
+        store,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    },
   };
 }
 

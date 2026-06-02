@@ -74,14 +74,14 @@ describe('SecurityAdminModule', () => {
       expect.objectContaining({
         method: 'POST',
         path: '/api/v1/admin/security/signing-keys/:kind/rotate',
-        elevation: 'admin_5m',
+        elevation: 'admin_fresh',
         idempotency: 'required',
         auditOperation: 'security.signing_keys.rotate',
       }),
       expect.objectContaining({
         method: 'PUT',
         path: '/api/v1/admin/security/auth-policy',
-        elevation: 'admin_5m',
+        elevation: 'admin_fresh',
         idempotency: 'required',
         auditOperation: 'security.auth_policy.update',
       }),

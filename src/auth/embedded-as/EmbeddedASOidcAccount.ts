@@ -22,10 +22,13 @@ export class EmbeddedASOidcAccount {
       ? (token as { grantId: string }).grantId
       : null;
     if (grantId) {
-      const claimed = await this.storage.genericConsume(ADMIN_STEP_UP_CLAIMS_MODEL, grantId);
-      const adminClaims = claimed
-        ? await this.storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, grantId)
-        : null;
+      // extraTokenClaims runs once PER TOKEN (access_token AND id_token) of a
+      // single issuance, so the admin step-up claims must be injected into all
+      // of them. Read (not consume) here: genericConsume returns true only on
+      // the first call, which would leave the id_token (issued second) without
+      // acr/amr and the BFF would reject the elevation. The claims record is
+      // bounded by ADMIN_STEP_UP_TTL_SECONDS, so a non-consuming read is safe.
+      const adminClaims = await this.storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, grantId);
       if (isAdminStepUpClaims(adminClaims, accountId)) {
         extras.acr = adminClaims.acr;
         extras.amr = adminClaims.amr;
@@ -52,13 +55,16 @@ export class EmbeddedASOidcAccount {
       if (!identity) continue;
       return {
         accountId: identity.sub,
-        async claims() {
-          return {
+        claims() {
+          // oidc-provider's Account.claims must return a Promise; there is
+          // nothing to await, so return a resolved promise (avoids an async
+          // method with no await).
+          return Promise.resolve({
             sub: identity.sub,
             name: identity.displayName,
             email: identity.email,
             email_verified: identity.emailVerified,
-          };
+          });
         },
       };
     }

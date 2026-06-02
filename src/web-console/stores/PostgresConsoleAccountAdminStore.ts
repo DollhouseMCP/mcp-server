@@ -229,6 +229,8 @@ export async function disableConsolePrincipalWithTx(
   input: PrincipalDisableInput,
 ): Promise<PrincipalStateChange | null> {
   validatePrincipalDisableInput(input);
+  // Raw `tx.execute(sql`...`)` over postgres-js does not serialize JS Date
+  // params — pass ISO strings cast to timestamptz instead.
   const rows: PrincipalStateChangeRow[] = await tx.execute(sql`
     WITH target_principal AS (
       SELECT u.id,
@@ -258,9 +260,9 @@ export async function disableConsolePrincipalWithTx(
       FOR UPDATE OF u
     )
     UPDATE users
-    SET disabled_at = ${input.disabledAt},
+    SET disabled_at = ${input.disabledAt.toISOString()}::timestamptz,
         authz_version = authz_version + 1,
-        updated_at = ${input.disabledAt}
+        updated_at = ${input.disabledAt.toISOString()}::timestamptz
     WHERE id = ${input.userId}
       AND EXISTS (
         SELECT 1
@@ -344,7 +346,7 @@ async function revokeConsoleAdminRoleRowsWithTx(
       ),
       revoked_role AS (
         UPDATE user_admin_roles
-        SET revoked_at = ${input.revokedAt},
+        SET revoked_at = ${input.revokedAt.toISOString()}::timestamptz,
             revoked_by_user_id = ${input.revokedByUserId}
         WHERE user_id = ${input.userId}
           AND role = ${input.role}
@@ -364,7 +366,7 @@ async function revokeConsoleAdminRoleRowsWithTx(
       )
       UPDATE users
       SET authz_version = authz_version + 1,
-          updated_at = ${input.revokedAt}
+          updated_at = ${input.revokedAt.toISOString()}::timestamptz
       WHERE id = ${input.userId}
         AND EXISTS (SELECT 1 FROM revoked_role)
       RETURNING (

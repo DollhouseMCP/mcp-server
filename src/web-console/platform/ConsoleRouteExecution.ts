@@ -31,7 +31,9 @@ export async function executeConsoleRoute(
   if (result.stream) {
     return attachStreamPolicy(result, route, route.privacyProjector);
   }
-  if (result.body === undefined || !isSuccessStatus(result.status)) return result;
+  // A null/absent body (e.g. 204 No Content from a delete) has nothing to
+  // project — running the projector on it throws (it expects an entity).
+  if (result.body === undefined || result.body === null || !isSuccessStatus(result.status)) return result;
   return {
     ...result,
     body: route.privacyProjector(result.body),
@@ -43,7 +45,7 @@ function attachSelfRoutePolicy(
   route: ConsoleRouteDefinition,
 ): ConsoleHandlerResult {
   if (!result.stream) {
-    if (!route.privacyProjector || result.body === undefined || !isSuccessStatus(result.status)) return result;
+    if (!route.privacyProjector || result.body === undefined || result.body === null || !isSuccessStatus(result.status)) return result;
     return {
       ...result,
       body: route.privacyProjector(result.body),

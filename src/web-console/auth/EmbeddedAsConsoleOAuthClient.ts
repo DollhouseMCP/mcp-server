@@ -76,7 +76,7 @@ export class EmbeddedAsConsoleOAuthClient implements IConsoleOAuthClient {
     if (!response.ok) {
       throw new Error('Console OAuth code exchange failed');
     }
-    const body = await response.json() as { readonly id_token?: unknown };
+    const body = await response.json() as { readonly id_token?: unknown; readonly access_token?: unknown };
     if (typeof body.id_token !== 'string' || body.id_token === '') {
       throw new Error('Console OAuth code exchange did not return an id_token');
     }
@@ -88,15 +88,45 @@ export class EmbeddedAsConsoleOAuthClient implements IConsoleOAuthClient {
     if (typeof payload.sub !== 'string' || payload.sub === '') {
       throw new Error('Console OAuth id_token is missing sub');
     }
+    // Admin step-up acr/amr/auth_time ride on the JWT access token via the AS's
+    // extraTokenClaims; oidc-provider does not surface acr/amr into the id_token
+    // from the login result, so read the step-up assurance from the access token
+    // (verified against the same JWKS), falling back to id_token claims.
+    const stepUp = await this.readStepUpClaims(body.access_token);
     return {
       sub: payload.sub,
       displayName: typeof payload.name === 'string' ? payload.name : undefined,
       email: typeof payload.email === 'string' ? payload.email : undefined,
-      acr: typeof payload.acr === 'string' ? payload.acr : undefined,
-      amr: Array.isArray(payload.amr)
+      acr: stepUp.acr ?? (typeof payload.acr === 'string' ? payload.acr : undefined),
+      amr: stepUp.amr ?? (Array.isArray(payload.amr)
         ? payload.amr.filter((value): value is string => typeof value === 'string')
-        : undefined,
-      authTime: typeof payload.auth_time === 'number' ? new Date(payload.auth_time * 1000) : undefined,
+        : undefined),
+      authTime: stepUp.authTime ??
+        (typeof payload.auth_time === 'number' ? new Date(payload.auth_time * 1000) : undefined),
     };
+  }
+
+  private async readStepUpClaims(accessToken: unknown): Promise<{
+    acr?: string;
+    amr?: readonly string[];
+    authTime?: Date;
+  }> {
+    if (typeof accessToken !== 'string' || accessToken === '') return {};
+    try {
+      const { payload } = await jwtVerify(accessToken, this.jwks, {
+        issuer: this.issuer,
+        algorithms: [ID_TOKEN_ALGORITHM],
+      });
+      return {
+        acr: typeof payload.acr === 'string' ? payload.acr : undefined,
+        amr: Array.isArray(payload.amr)
+          ? payload.amr.filter((value): value is string => typeof value === 'string')
+          : undefined,
+        authTime: typeof payload.auth_time === 'number' ? new Date(payload.auth_time * 1000) : undefined,
+      };
+    } catch {
+      // Access token is not a verifiable JWT (or absent) — fall back to id_token.
+      return {};
+    }
   }
 }

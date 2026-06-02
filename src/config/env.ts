@@ -406,6 +406,13 @@ const envSchema = z.object({
    * the manager-backed authoring path is deliberately exposed.
    */
   DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: envBool(false),
+  /**
+   * Enables the sign-in allowlist admin routes (/api/v1/admin/accounts/allowlist*)
+   * on the replacement console. Defaults on: the console is the operator surface
+   * for managing the sign-in allowlist, and the routes are admin-capability +
+   * step-up gated. Set false to hide them.
+   */
+  DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED: envBool(true),
   /** Base64-encoded 32-byte HMAC key for opaque console browser values. */
   DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),

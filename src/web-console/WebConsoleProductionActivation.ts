@@ -40,6 +40,13 @@ export interface WebConsoleProductionRouteDependency {
   readonly dependencyName: string;
   readonly value: unknown;
   readonly detail?: string;
+  /*
+   * Optional capabilities (e.g. the GitHub integration provider) may be absent
+   * in a valid production deployment: the owning module degrades gracefully and
+   * the operator can configure them later. Absence is not a mount blocker, but
+   * a value that IS present is still held to the production-adapter check.
+   */
+  readonly optional?: boolean;
 }
 
 export class WebConsoleProductionActivationError extends Error {
@@ -166,6 +173,7 @@ function requireRegisteredRouteDependencies(
   }
   for (const dependency of inputs.routeDependencies ?? []) {
     if (!registeredRouteModuleIds.has(dependency.moduleId)) continue;
+    if (dependency.optional && isAbsentDependencyValue(dependency.value)) continue;
     const failure = productionAdapterFailure(
       `${dependency.moduleId}_${dependency.dependencyName}`,
       dependency.value,
@@ -227,6 +235,10 @@ function productionAdapterMetadata(value: unknown): WebConsoleProductionAdapterM
 
 function isAdapterValue(value: unknown): value is object | ((...args: never[]) => unknown) {
   return (typeof value === 'object' && value !== null) || typeof value === 'function';
+}
+
+function isAbsentDependencyValue(value: unknown): boolean {
+  return value === null || value === undefined || value === '';
 }
 
 function requirePresent(

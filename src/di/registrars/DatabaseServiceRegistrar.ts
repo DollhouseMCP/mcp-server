@@ -87,7 +87,12 @@ export class DatabaseServiceRegistrar {
       : result.connection;
     container.register('SystemDatabaseConnection', () => systemConnection);
     container.register('SystemDatabaseInstance', () => systemConnection.db);
-    await this.registerWebConsoleProductionDatabaseReadiness(container, systemConnection.db);
+    // Verify production database readiness over the APP connection (result.db),
+    // not the admin/system connection. The expectedCurrentUser check exists to
+    // prove the runtime queries as the least-privilege, NOBYPASSRLS role so RLS
+    // is actually enforced; running it on the admin connection would always see
+    // the superuser and make that assertion meaningless.
+    await this.registerWebConsoleProductionDatabaseReadiness(container, result.db);
 
     // Storage layer factory + state store classes — loaded here (async context)
     // so drizzle-orm stays out of the static import graph entirely. File-mode

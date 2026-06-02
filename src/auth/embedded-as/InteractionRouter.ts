@@ -417,8 +417,15 @@ export async function finishInteractionWithIdentity(
       logger.warn('[InteractionRouter] no account row to stamp lastAuthAt', { accountId });
     }
 
+    // Admin step-up acr/amr/auth_time must go on the LOGIN RESULT so
+    // oidc-provider stamps them natively into the id_token (which the BFF
+    // reads). extraTokenClaims only populates access tokens, not id_tokens, so
+    // relying on it alone left the id_token without amr=otp and the BFF
+    // rejected the elevation. `ts` is the OIDC auth_time (seconds).
     await provider.interactionFinished(req, res, {
-      login: { accountId },
+      login: adminClaims
+        ? { accountId, acr: adminClaims.acr, amr: [...adminClaims.amr], ts: adminClaims.authTime }
+        : { accountId },
       consent: { grantId },
     });
   } catch (err) {
@@ -444,7 +451,7 @@ interface AdminStepUpProofContext {
   adminStepUp?: AdminStepUpInteractionDeps;
 }
 
-function isAdminStepUpRequest(details: OidcInteractionDetails): boolean {
+export function isAdminStepUpRequest(details: OidcInteractionDetails): boolean {
   return typeof details.params.acr_values === 'string'
     && details.params.acr_values.split(/\s+/).includes(ADMIN_ACR);
 }
@@ -461,7 +468,7 @@ async function readPendingAdminStepUp(
     : null;
 }
 
-async function beginAdminStepUpProof(
+export async function beginAdminStepUpProof(
   req: Request,
   res: Response,
   storage: IAuthStorageLayer,
@@ -552,7 +559,7 @@ async function renderAdminProofStep(
 </head><body><main>
 <h1>Administrative verification</h1>
 ${errorHtml}
-<form method="post">
+<form method="post" action="/interaction/${encodeURIComponent(interactionId)}">
 <label for="code">Authentication code</label>
 <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
 <button type="submit">Continue</button>

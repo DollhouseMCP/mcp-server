@@ -14,13 +14,13 @@ import { DEFAULT_USER_CONFIG, UserConfigConflictError } from './IUserConfigStore
 export class InMemoryUserConfigStore implements IUserConfigStore {
   private readonly configs = new Map<string, UserConfig>();
 
-  load(userId: string): Promise<UserConfig> {
+  async load(userId: string): Promise<UserConfig> {
     assertValidUserId(userId);
     const stored = this.configs.get(userId);
     return Promise.resolve(stored ? cloneConfig(stored) : cloneDefault());
   }
 
-  save(
+  async save(
     userId: string,
     config: Omit<UserConfig, 'updatedAt'> & { updatedAt?: number },
     options: { readonly expectedUpdatedAt?: number } = {},

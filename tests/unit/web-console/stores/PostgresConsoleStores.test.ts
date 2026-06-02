@@ -995,6 +995,7 @@ describe('PostgresConsoleIdentityResolver', () => {
       userId: USER_ID,
       disabledAt: null,
       authzVersion: 4,
+      roles: ['admin'],
     }]));
     const resolver = new PostgresConsoleIdentityResolver({} as DatabaseInstance);
 
@@ -1003,6 +1004,7 @@ describe('PostgresConsoleIdentityResolver', () => {
       userId: USER_ID,
       disabledAt: null,
       authzVersion: 4,
+      roles: ['admin'],
     });
   });
 });

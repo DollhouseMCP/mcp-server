@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 
+import { logger } from '../../utils/logger.js';
+
 import type { IConsoleIdentityResolver } from '../identity/IConsoleIdentityResolver.js';
 import {
   CONSOLE_CSRF_COOKIE,
@@ -19,6 +21,7 @@ import type {
   ConsoleRequest,
 } from '../platform/ConsolePlatformTypes.js';
 import { CONSOLE_CAPABILITIES } from '../platform/ConsolePlatformTypes.js';
+import { capabilitiesForRoles } from '../modules/account-admin/AccountAdminRoleAuthority.js';
 import { normalizeConsoleReturnPath } from '../platform/ConsoleReturnPaths.js';
 import type { IConsoleOAuthClient } from './IConsoleOAuthClient.js';
 
@@ -285,6 +288,9 @@ class ConsoleBffAuthService {
     const code = singleQueryValue(req.query.code);
     const state = singleQueryValue(req.query.state);
     if (!transactionId || !code || !state) {
+      logger.warn('[ConsoleBffAuthModule] step-up rejected: missing params', {
+        hasTransactionId: !!transactionId, hasCode: !!code, hasState: !!state,
+      });
       return failedCallback();
     }
 
@@ -299,6 +305,16 @@ class ConsoleBffAuthService {
         !transaction.requestedCapability ||
         transaction.userId !== authentication.userId ||
         !buffersEqual(transaction.consoleSessionIdHash, authentication.sessionIdHash)) {
+      logger.warn('[ConsoleBffAuthModule] step-up rejected: transaction check', {
+        found: !!transaction,
+        flowKind: transaction?.flowKind,
+        hasUserId: !!transaction?.userId,
+        hasSessionHash: !!transaction?.consoleSessionIdHash,
+        hasCapability: !!transaction?.requestedCapability,
+        userIdMatch: transaction?.userId === authentication.userId,
+        sessionMatch: !!transaction?.consoleSessionIdHash &&
+          buffersEqual(transaction.consoleSessionIdHash, authentication.sessionIdHash),
+      });
       return failedCallback();
     }
 
@@ -313,7 +329,10 @@ class ConsoleBffAuthService {
         codeVerifier: pkceVerifier,
         redirectUri: this.stepUpRedirectUri,
       });
-    } catch {
+    } catch (error) {
+      logger.warn('[ConsoleBffAuthModule] step-up rejected: code exchange failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
       return failedCallback();
     }
     const principal = await this.options.identityResolver.resolveEnabledPrincipal(claims.sub);
@@ -324,10 +343,28 @@ class ConsoleBffAuthService {
         !claims.authTime ||
         claims.authTime > now ||
         claims.authTime.getTime() + AUTH_TIME_FRESHNESS_MAX_MS <= now.getTime()) {
+      logger.warn(
+        `[ConsoleBffAuthModule] step-up rejected: claims check — ` +
+        `principalMatch=${principal?.userId === authentication.userId} ` +
+        `acr=${String(claims.acr)} amr=${JSON.stringify(claims.amr ?? null)} ` +
+        `hasOtp=${claims.amr?.includes('otp') ?? false} ` +
+        `authTime=${claims.authTime?.toISOString() ?? 'none'} now=${now.toISOString()} ` +
+        `inFuture=${claims.authTime ? claims.authTime > now : 'n/a'} ` +
+        `stale=${claims.authTime ? claims.authTime.getTime() + AUTH_TIME_FRESHNESS_MAX_MS <= now.getTime() : 'n/a'}`,
+      );
       return failedCallback();
     }
+    // One step-up elevates the session to the principal's FULL role-entitled
+    // admin capability set (e.g. an `admin` gets operate + accounts + audit +
+    // security at once) instead of only the requested capability — so a single
+    // step-up unlocks all admin surfaces the role allows. Falls back to the
+    // requested capability when the principal carries no recognized roles.
+    const roleCapabilities = capabilitiesForRoles(principal.roles ?? []);
+    const elevationCapabilities = roleCapabilities.length > 0
+      ? roleCapabilities
+      : [transaction.requestedCapability];
     const attached = await this.options.sessionStore.setElevation(authentication.sessionIdHash, {
-      capabilities: [transaction.requestedCapability],
+      capabilities: elevationCapabilities,
       expiresAt: new Date(now.getTime() + ELEVATION_TTL_MAX_MS),
       acr: claims.acr,
       amr: claims.amr,

@@ -7,7 +7,7 @@ import {
   type ConsoleAdminRole,
   assertAdminRole,
 } from '../../stores/IConsoleAccountAdminStore.js';
-import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
+import { ConsoleStoreConflictError, ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountInvite } from './AccountAdminOnboardingDtos.js';
 import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
@@ -101,7 +101,13 @@ export class AccountAdminInviteService {
         actorUserId: actor.userId,
         issuedAt,
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof ConsoleStoreConflictError) {
+        await this.writeAudit(req, route, 'conflict', 'conflict', null, {
+          operation: 'invite',
+        });
+        return problem(409, 'conflict', 'Conflict', 'An account with this username or email already exists.');
+      }
       await this.writeAudit(req, route, 'failed', 'issuer_error', null, {
         operation: 'invite',
         dependency: 'account_invite_issuer',

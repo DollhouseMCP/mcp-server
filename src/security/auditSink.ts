@@ -23,6 +23,8 @@ export class DatabaseAuditSink implements AuditSink {
   constructor(private readonly db: DatabaseInstance) {}
 
   async write(event: DurableAuditEvent): Promise<void> {
+    // Raw `tx.execute(sql`...`)` over postgres-js does not serialize a JS Date
+    // param — pass an ISO string cast to timestamptz instead.
     await withSystemContext(this.db, (tx) =>
       tx.execute(sql`
         INSERT INTO security_audit_events (event_type, actor_id, target_id, metadata, occurred_at)
@@ -31,7 +33,7 @@ export class DatabaseAuditSink implements AuditSink {
           ${event.actorId ?? null},
           ${event.targetId ?? null},
           ${JSON.stringify(event.metadata)}::jsonb,
-          ${event.occurredAt ? new Date(event.occurredAt) : new Date()}
+          ${(event.occurredAt ? new Date(event.occurredAt) : new Date()).toISOString()}::timestamptz
         )
       `),
     );

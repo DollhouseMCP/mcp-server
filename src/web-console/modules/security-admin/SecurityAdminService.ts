@@ -88,7 +88,10 @@ export class SecurityAdminService {
     const parsed = parseSigningKeyKind(kind);
     if (!parsed || !isBoundedIdentifier(kid)) return notFound('Signing key was not found.');
     const key = await this.signingKeyStore.getByKid(kid);
-    if (key?.kind !== parsed || key.active) return conflict('Only retired inactive signing keys can be deleted.');
+    // Not-found and not-deletable are distinct: an unknown kid is a 404 (matching
+    // retireSigningKey), an existing-but-active key is a 409 conflict.
+    if (key?.kind !== parsed) return notFound('Signing key was not found.');
+    if (key.active) return conflict('Only retired inactive signing keys can be deleted.');
     const retiredAt = key.retiredAt;
     if (!retiredAt) return conflict('Signing key must be retired before deletion.');
     const force = requestForceDelete(bodyRecordFromUnknown(body));
