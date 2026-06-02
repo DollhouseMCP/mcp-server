@@ -4,7 +4,11 @@
 describe_render_plan() {
   resolve_public_base_url
   resolve_hostname
+  resolve_allowed_hosts
   validate_render_inputs
+  log "dry-run: deployment mode=${DEPLOY_MODE} instance=${INSTANCE_NAME} proxy_mode=${PROXY_MODE} bind=${BIND_ADDRESS} public_url=${PUBLIC_BASE_URL}"
+  log "dry-run: compose project=${INSTANCE_NAME} image=${IMAGE_TAG}"
+  log "dry-run: auth provider=${AUTH_PROVIDER} methods=${AUTH_METHODS:-none} open_dcr=${OPEN_DCR} allowlist_required=${ALLOWLIST_REQUIRED}"
   log "dry-run: would render deployment files in ${DEPLOY_DIR}"
   log "dry-run: would preserve or create ${ENV_FILE}"
   log "dry-run: would write ${COMPOSE_FILE}"
@@ -57,7 +61,7 @@ dry_run_start_or_update() {
   log "dry-run: would run database migrations"
   describe_bootstrap_plan optional
   if [[ "${service}" == "app" ]]; then
-    log "dry-run: would restart dollhousemcp service"
+    log "dry-run: would restart dollhousemcp service and refresh caddy proxy"
   else
     log "dry-run: would start or update the full compose stack"
   fi

@@ -63,7 +63,7 @@ fi
 
 if [[ "${1:-}" == "compose" ]]; then
   shift
-  while [[ "${1:-}" == "--env-file" || "${1:-}" == "-f" ]]; do
+  while [[ "${1:-}" == "--project-name" || "${1:-}" == "--env-file" || "${1:-}" == "-f" ]]; do
     shift 2
   done
   case "${1:-}" in
@@ -207,6 +207,7 @@ write_fake_commands
 create_source_repo
 
 DEPLOY_DIR="${TMP_ROOT}/deploy"
+COMPOSE_CMD="docker compose --project-name deploy --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml"
 
 log "checking dry-run install workflow"
 DRY_RUN_DEPLOY_DIR="${TMP_ROOT}/dry-run-deploy"
@@ -279,9 +280,9 @@ assert_contains "${BOOTSTRAP_OUTPUT}" "/readyz reports bootstrap_required"
 log "running install workflow"
 run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
-assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml build dollhousemcp dollhousemcp-migrate"
-assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml run --rm dollhousemcp-migrate"
-assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml up -d"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} build dollhousemcp dollhousemcp-migrate"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
 
 log "running update workflow"
@@ -291,7 +292,8 @@ assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v2"
 previous_bundle="$(latest_dir 'server.prev-*')"
 [[ -n "${previous_bundle}" ]] || fail "expected update to retain a previous server bundle"
 assert_file_equals "${previous_bundle}/version.txt" "v1"
-assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml up -d dollhousemcp"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --no-deps --force-recreate caddy"
 
 log "running rollback workflow"
 run_hosted rollback
@@ -299,7 +301,7 @@ assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 rollback_bundle="$(latest_dir 'server.rollback-from-*')"
 [[ -n "${rollback_bundle}" ]] || fail "expected rollback to retain the rolled-back current bundle"
 assert_file_equals "${rollback_bundle}/version.txt" "v2"
-assert_contains "${DOCKER_LOG}" "docker compose --env-file ${DEPLOY_DIR}/.env.production -f ${DEPLOY_DIR}/compose.yml up -d dollhousemcp caddy"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp caddy"
 
 log "checking invalid source error"
 bad_output="${TMP_ROOT}/bad-source.out"

@@ -88,7 +88,9 @@ done
 target="${args[$index]}"
 index=$((index + 1))
 printf 'target=%s\n' "${target}" >> "${DOLLHOUSE_FAKE_SSH_LOG:?}"
-"${args[@]:$index}"
+command_args=("${args[@]:$index}")
+remote_command="${command_args[*]}"
+bash -c "${remote_command}"
 EOF
 
   cat > "${FAKE_BIN}/ssh-keyscan" <<'EOF'
@@ -201,7 +203,13 @@ if [[ "${1:-}" == "clone" ]]; then
 #!/usr/bin/env bash
 set -euo pipefail
 
-printf 'hosted action=%s ref=%s source=%s deploy=%s\n' "${1:-}" "${DOLLHOUSE_HOSTED_GIT_REF:-}" "${DOLLHOUSE_HOSTED_SOURCE_DIR:-}" "${DOLLHOUSE_HOSTED_DEPLOY_DIR:-}" >> "${DOLLHOUSE_FAKE_REMOTE_LOG:?}"
+{
+  printf 'hosted action=%s ref=%s source=%s deploy=%s ' "${1:-}" "${DOLLHOUSE_HOSTED_GIT_REF:-}" "${DOLLHOUSE_HOSTED_SOURCE_DIR:-}" "${DOLLHOUSE_HOSTED_DEPLOY_DIR:-}"
+  printf 'hostname_set=%s hostname=%s public_url_set=%s public_url=%s ' "${DOLLHOUSE_HOSTED_HOSTNAME+x}" "${DOLLHOUSE_HOSTED_HOSTNAME:-}" "${DOLLHOUSE_PUBLIC_BASE_URL+x}" "${DOLLHOUSE_PUBLIC_BASE_URL:-}"
+  printf 'instance_set=%s instance=%s mode_set=%s mode=%s http_port_set=%s http_port=%s ' "${DOLLHOUSE_HOSTED_INSTANCE_NAME+x}" "${DOLLHOUSE_HOSTED_INSTANCE_NAME:-}" "${DOLLHOUSE_HOSTED_MODE+x}" "${DOLLHOUSE_HOSTED_MODE:-}" "${DOLLHOUSE_HOSTED_HTTP_BIND_PORT+x}" "${DOLLHOUSE_HOSTED_HTTP_BIND_PORT:-}"
+  printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' "${DOLLHOUSE_AUTH_PROVIDER+x}" "${DOLLHOUSE_AUTH_PROVIDER:-}" "${DOLLHOUSE_AUTH_ISSUER+x}" "${DOLLHOUSE_AUTH_ISSUER:-}" "${DOLLHOUSE_AUTH_AUDIENCE+x}" "${DOLLHOUSE_AUTH_AUDIENCE:-}"
+  printf 'open_dcr_set=%s open_dcr=%s allowlist_required_set=%s allowlist_required=%s oidc_typ_set=%s oidc_typ=%s\n' "${DOLLHOUSE_AUTH_OPEN_DCR+x}" "${DOLLHOUSE_AUTH_OPEN_DCR:-}" "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED+x}" "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}" "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP+x}" "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}"
+} >> "${DOLLHOUSE_FAKE_REMOTE_LOG:?}"
 mkdir -p "${DOLLHOUSE_HOSTED_DEPLOY_DIR}/portfolio/personas"
 printf '%s\n' "${DOLLHOUSE_HOSTED_GIT_REF:-unknown-ref}" > "${DOLLHOUSE_HOSTED_DEPLOY_DIR}/DEPLOYED_REVISION"
 date -u +%Y-%m-%dT%H:%M:%SZ > "${DOLLHOUSE_HOSTED_DEPLOY_DIR}/DEPLOYED_AT"
@@ -311,7 +319,22 @@ run_remote() {
   DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE="${DOLLHOUSE_TEST_KNOWN_HOSTS_FILE:-${KNOWN_HOSTS_FILE}}" \
   DOLLHOUSE_REMOTE_BACKUP_RETRIES="${DOLLHOUSE_TEST_BACKUP_RETRIES:-3}" \
   DOLLHOUSE_REMOTE_BACKUP_RETRY_DELAY="${DOLLHOUSE_TEST_BACKUP_RETRY_DELAY:-0}" \
-  DOLLHOUSE_HOSTED_DEPLOY_DIR="${DEPLOY_DIR}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${DOLLHOUSE_TEST_DEPLOY_DIR:-${DEPLOY_DIR}}" \
+  DOLLHOUSE_HOSTED_INSTANCE_NAME="${DOLLHOUSE_TEST_INSTANCE_NAME:-${DOLLHOUSE_HOSTED_INSTANCE_NAME:-}}" \
+  DOLLHOUSE_HOSTED_MODE="${DOLLHOUSE_TEST_HOSTED_MODE:-${DOLLHOUSE_HOSTED_MODE:-}}" \
+  DOLLHOUSE_HOSTED_PROXY_MODE="${DOLLHOUSE_TEST_PROXY_MODE:-${DOLLHOUSE_HOSTED_PROXY_MODE:-}}" \
+  DOLLHOUSE_HOSTED_BIND_ADDRESS="${DOLLHOUSE_TEST_BIND_ADDRESS:-${DOLLHOUSE_HOSTED_BIND_ADDRESS:-}}" \
+  DOLLHOUSE_HOSTED_HTTP_BIND_PORT="${DOLLHOUSE_TEST_HTTP_BIND_PORT:-${DOLLHOUSE_HOSTED_HTTP_BIND_PORT:-}}" \
+  DOLLHOUSE_HOSTED_HTTPS_BIND_PORT="${DOLLHOUSE_TEST_HTTPS_BIND_PORT:-${DOLLHOUSE_HOSTED_HTTPS_BIND_PORT:-}}" \
+  DOLLHOUSE_AUTH_PROVIDER="${DOLLHOUSE_TEST_AUTH_PROVIDER:-${DOLLHOUSE_AUTH_PROVIDER:-}}" \
+  DOLLHOUSE_AUTH_METHODS="${DOLLHOUSE_TEST_AUTH_METHODS:-${DOLLHOUSE_AUTH_METHODS:-}}" \
+  DOLLHOUSE_AUTH_OPEN_DCR="${DOLLHOUSE_TEST_AUTH_OPEN_DCR:-${DOLLHOUSE_AUTH_OPEN_DCR:-}}" \
+  DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED="${DOLLHOUSE_TEST_AUTH_ALLOWLIST_REQUIRED:-${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}}" \
+  DOLLHOUSE_AUTH_ISSUER="${DOLLHOUSE_TEST_AUTH_ISSUER:-${DOLLHOUSE_AUTH_ISSUER:-}}" \
+  DOLLHOUSE_AUTH_AUDIENCE="${DOLLHOUSE_TEST_AUTH_AUDIENCE:-${DOLLHOUSE_AUTH_AUDIENCE:-}}" \
+  DOLLHOUSE_AUTH_JWKS_URI="${DOLLHOUSE_TEST_AUTH_JWKS_URI:-${DOLLHOUSE_AUTH_JWKS_URI:-}}" \
+  DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP="${DOLLHOUSE_TEST_AUTH_OIDC_REQUIRE_TYP:-${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}}" \
+  DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE="${DOLLHOUSE_TEST_AUTH_ALLOWLIST_SEED_FILE:-${DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE:-}}" \
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   DOLLHOUSE_HOSTED_GIT_URL="${DOLLHOUSE_TEST_GIT_URL:-https://github.com/DollhouseMCP/mcp-server.git}" \
   DOLLHOUSE_HOSTED_GIT_REF="${DOLLHOUSE_TEST_GIT_REF:-codex/test-ref}" \
@@ -325,7 +348,19 @@ log "checking dry-run does not open ssh"
 DRY_OUTPUT="${TMP_ROOT}/dry-run.out"
 run_remote --dry-run update > "${DRY_OUTPUT}"
 assert_contains "${DRY_OUTPUT}" "dry-run: would connect to root@example.test"
+assert_contains "${DRY_OUTPUT}" "instance=remote-deploy"
 [[ ! -s "${SSH_LOG}" ]] || fail "dry-run should not call ssh"
+
+log "checking remote canary derives instance from deploy dir"
+CANARY_DRY_OUTPUT="${TMP_ROOT}/canary-dry-run.out"
+DOLLHOUSE_TEST_DEPLOY_DIR="${TMP_ROOT}/dollhousemcp-canary" \
+DOLLHOUSE_TEST_HOSTED_MODE=lan \
+DOLLHOUSE_TEST_HTTP_BIND_PORT=3100 \
+  run_remote --dry-run update > "${CANARY_DRY_OUTPUT}"
+assert_contains "${CANARY_DRY_OUTPUT}" "deploy_dir=${TMP_ROOT}/dollhousemcp-canary"
+assert_contains "${CANARY_DRY_OUTPUT}" "instance=dollhousemcp-canary"
+assert_contains "${CANARY_DRY_OUTPUT}" "hosted overrides mode=lan"
+assert_contains "${CANARY_DRY_OUTPUT}" "would check http://mcp.example.com:3100/healthz"
 
 log "checking host key enrollment dry-run"
 ENROLL_DRY_OUTPUT="${TMP_ROOT}/enroll-dry-run.out"
@@ -376,6 +411,7 @@ assert_contains "${SSH_LOG}" "UserKnownHostsFile=${KNOWN_HOSTS_FILE}"
 assert_not_contains "${SSH_LOG}" "StrictHostKeyChecking=accept-new"
 assert_contains "${REMOTE_LOG}" "git clone --depth 1 --branch codex/test-ref"
 assert_contains "${REMOTE_LOG}" "${EXPECTED_HOSTED_ACTION}"
+assert_contains "${REMOTE_LOG}" "hostname_set=x hostname=mcp.example.com public_url_set= public_url= instance_set= instance= mode_set= mode= http_port_set= http_port="
 assert_contains "${REMOTE_LOG}" "pg_dump"
 assert_contains "${OUTPUT}" "backed up .env.production"
 assert_contains "${OUTPUT}" "creating database backup"
@@ -388,6 +424,66 @@ assert_contains "${DEPLOY_DIR}/DEPLOYED_REVISION" "codex/test-ref"
 latest_db_backup="$(find "${DEPLOY_DIR}/backups" -name 'pre-remote-update-*.sql' -print | head -n 1)"
 [[ -n "${latest_db_backup}" ]] || fail "expected database backup"
 assert_contains "${latest_db_backup}" "fake sql backup"
+
+log "checking remote effective public URL drives local verification"
+reset_fake_state
+: > "${CURL_LOG}"
+cat > "${DEPLOY_DIR}/.env.production" <<'EOF'
+POSTGRES_PASSWORD=existing
+DOLLHOUSE_HOSTED_MODE=lan
+DOLLHOUSE_HOSTED_HTTP_BIND_PORT=3000
+DOLLHOUSE_PUBLIC_BASE_URL=http://mcp.example.com:3000
+EOF
+PERSISTED_URL_OUTPUT="${TMP_ROOT}/persisted-url.out"
+run_remote --skip-backup update > "${PERSISTED_URL_OUTPUT}"
+assert_contains "${PERSISTED_URL_OUTPUT}" "effective public URL: http://mcp.example.com:3000"
+assert_contains "${PERSISTED_URL_OUTPUT}" "using remote effective public URL for verification: http://mcp.example.com:3000"
+assert_contains "${CURL_LOG}" "http://mcp.example.com:3000/healthz"
+assert_contains "${CURL_LOG}" "http://mcp.example.com:3000/readyz"
+assert_contains "${CURL_LOG}" "http://mcp.example.com:3000/mcp"
+assert_not_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
+
+log "checking remote canary overrides reach hosted helper"
+reset_fake_state
+CANARY_UPDATE_OUTPUT="${TMP_ROOT}/canary-update.out"
+DOLLHOUSE_TEST_DEPLOY_DIR="${TMP_ROOT}/dollhousemcp-canary" \
+DOLLHOUSE_TEST_HOSTED_MODE=lan \
+DOLLHOUSE_TEST_HTTP_BIND_PORT=3100 \
+  run_remote --skip-backup update > "${CANARY_UPDATE_OUTPUT}"
+assert_contains "${REMOTE_LOG}" "deploy=${TMP_ROOT}/dollhousemcp-canary"
+assert_contains "${REMOTE_LOG}" "instance_set= instance="
+assert_contains "${REMOTE_LOG}" "mode_set=x mode=lan"
+assert_contains "${REMOTE_LOG}" "http_port_set=x http_port=3100"
+assert_contains "${CURL_LOG}" "http://mcp.example.com:3100/healthz"
+
+log "checking explicit remote instance override reaches hosted helper"
+reset_fake_state
+EXPLICIT_INSTANCE_OUTPUT="${TMP_ROOT}/explicit-instance.out"
+DOLLHOUSE_TEST_INSTANCE_NAME=dollhousemcp-canary \
+  run_remote --skip-backup update > "${EXPLICIT_INSTANCE_OUTPUT}"
+assert_contains "${REMOTE_LOG}" "instance_set=x instance=dollhousemcp-canary"
+
+log "checking remote enterprise OIDC auth overrides reach hosted helper"
+reset_fake_state
+OIDC_REMOTE_OUTPUT="${TMP_ROOT}/oidc-remote.out"
+DOLLHOUSE_TEST_DEPLOY_DIR="${TMP_ROOT}/remote-oidc-deploy" \
+DOLLHOUSE_TEST_HOSTED_MODE=enterprise \
+DOLLHOUSE_TEST_AUTH_PROVIDER=oidc \
+DOLLHOUSE_TEST_AUTH_ISSUER=https://login.example.test \
+DOLLHOUSE_TEST_AUTH_AUDIENCE=dollhouse-enterprise \
+DOLLHOUSE_TEST_AUTH_JWKS_URI=https://login.example.test/.well-known/jwks.json \
+DOLLHOUSE_TEST_AUTH_OIDC_REQUIRE_TYP=true \
+DOLLHOUSE_TEST_AUTH_OPEN_DCR=false \
+DOLLHOUSE_TEST_AUTH_ALLOWLIST_REQUIRED=true \
+  run_remote --skip-backup update > "${OIDC_REMOTE_OUTPUT}"
+assert_contains "${REMOTE_LOG}" "deploy=${TMP_ROOT}/remote-oidc-deploy"
+assert_contains "${REMOTE_LOG}" "mode_set=x mode=enterprise"
+assert_contains "${REMOTE_LOG}" "auth_provider_set=x auth_provider=oidc"
+assert_contains "${REMOTE_LOG}" "auth_issuer_set=x auth_issuer=https://login.example.test"
+assert_contains "${REMOTE_LOG}" "auth_audience_set=x auth_audience=dollhouse-enterprise"
+assert_contains "${REMOTE_LOG}" "open_dcr_set=x open_dcr=false"
+assert_contains "${REMOTE_LOG}" "allowlist_required_set=x allowlist_required=true"
+assert_contains "${REMOTE_LOG}" "oidc_typ_set=x oidc_typ=true"
 
 log "checking postgres readiness retry"
 reset_fake_state
@@ -487,6 +583,20 @@ if PATH="${FAKE_BIN}:${PATH}" \
   fail "missing target unexpectedly succeeded"
 fi
 assert_contains "${MISSING_TARGET_OUTPUT}" "set --target or DOLLHOUSE_REMOTE_SSH_TARGET"
+
+log "checking remote invalid instance name rejection"
+BAD_REMOTE_INSTANCE_OUTPUT="${TMP_ROOT}/bad-remote-instance.out"
+if DOLLHOUSE_HOSTED_INSTANCE_NAME=Bad_Name run_remote --dry-run update > "${BAD_REMOTE_INSTANCE_OUTPUT}" 2>&1; then
+  fail "remote dry-run with invalid instance name unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_INSTANCE_OUTPUT}" "DOLLHOUSE_HOSTED_INSTANCE_NAME must be 1-48 lowercase letters"
+
+log "checking remote bind address rejects hostnames"
+BAD_REMOTE_BIND_OUTPUT="${TMP_ROOT}/bad-remote-bind.out"
+if DOLLHOUSE_HOSTED_BIND_ADDRESS=localhost run_remote --dry-run update > "${BAD_REMOTE_BIND_OUTPUT}" 2>&1; then
+  fail "remote dry-run with hostname bind address unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_BIND_OUTPUT}" "DOLLHOUSE_HOSTED_BIND_ADDRESS must be an IPv4 address"
 
 log "checking credential-bearing git URL rejection"
 : > "${SSH_LOG}"

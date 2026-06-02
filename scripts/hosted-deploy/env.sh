@@ -1,9 +1,22 @@
 # shellcheck shell=bash
 # Environment-file and secret helpers for hosted-deploy.
 
+ensure_container_portfolio_permissions() {
+  if chown -R 1001:1001 "${DEPLOY_DIR}/portfolio" 2>/dev/null; then
+    return 0
+  fi
+
+  if [[ "$(id -u)" == "0" ]]; then
+    die "failed to set container ownership on ${DEPLOY_DIR}/portfolio"
+  fi
+
+  return 0
+}
+
 ensure_layout() {
   mkdir -p "${DEPLOY_DIR}" "${DEPLOY_DIR}/portfolio" "${DEPLOY_DIR}/logs"
   chmod 0750 "${DEPLOY_DIR}" "${DEPLOY_DIR}/portfolio" "${DEPLOY_DIR}/logs"
+  ensure_container_portfolio_permissions
 
   return 0
 }
@@ -16,6 +29,18 @@ random_hex() {
   fi
 
   openssl rand -hex "${bytes}" || die "failed to generate ${bytes} random bytes with openssl"
+
+  return 0
+}
+
+random_base64() {
+  local bytes="$1"
+
+  if [[ ! "${bytes}" =~ ^[0-9]+$ || "${bytes}" -le 0 ]]; then
+    die "random secret byte count must be a positive integer, got: ${bytes}"
+  fi
+
+  openssl rand -base64 "${bytes}" || die "failed to generate ${bytes} random bytes with openssl"
 
   return 0
 }
@@ -163,6 +188,19 @@ ensure_env_secret() {
   return 0
 }
 
+ensure_env_secret_base64() {
+  local key="$1"
+  local bytes="$2"
+  local existing
+  existing="$(env_value "${key}")"
+  if [[ -n "${existing}" ]]; then
+    return 0
+  fi
+  upsert_env_value "${key}" "$(random_base64 "${bytes}")"
+
+  return 0
+}
+
 maybe_set_env_from_process() {
   local key="$1"
   local value="${!key:-}"
@@ -208,17 +246,54 @@ prompt_env_if_missing() {
   return 0
 }
 
+auth_methods_include() {
+  local needle="$1"
+  local method
+
+  IFS=',' read -r -a methods <<< "${AUTH_METHODS}"
+  for method in "${methods[@]}"; do
+    if [[ "${method}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
 write_env_defaults() {
   ensure_env_file
   sync_legacy_env_values
+  upsert_env_value DOLLHOUSE_HOSTED_INSTANCE_NAME "${INSTANCE_NAME}"
+  upsert_env_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
+  upsert_env_value DOLLHOUSE_HOSTED_MODE "${DEPLOY_MODE}"
+  upsert_env_value DOLLHOUSE_HOSTED_HOSTNAME "${HOSTNAME}"
+  upsert_env_value DOLLHOUSE_PUBLIC_BASE_URL "${PUBLIC_BASE_URL}"
+  upsert_env_value DOLLHOUSE_HOSTED_PROXY_MODE "${PROXY_MODE}"
+  upsert_env_value DOLLHOUSE_HOSTED_BIND_ADDRESS "${BIND_ADDRESS}"
+  upsert_env_value DOLLHOUSE_HOSTED_HTTP_BIND_PORT "${HTTP_BIND_PORT}"
+  upsert_env_value DOLLHOUSE_HOSTED_HTTPS_BIND_PORT "${HTTPS_BIND_PORT}"
+  upsert_env_value DOLLHOUSE_HTTP_PORT "${MCP_PORT}"
+  upsert_env_value DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
+  upsert_env_value DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  upsert_env_value DOLLHOUSE_AUTH_PROVIDER "${AUTH_PROVIDER}"
+  upsert_env_value DOLLHOUSE_AUTH_METHODS "${AUTH_METHODS}"
+  upsert_env_value DOLLHOUSE_AUTH_OPEN_DCR "${OPEN_DCR}"
+  upsert_env_value DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED "${ALLOWLIST_REQUIRED}"
   ensure_env_secret POSTGRES_ADMIN_PASSWORD 24
   ensure_env_secret POSTGRES_PASSWORD 24
   ensure_env_secret DOLLHOUSE_COOKIE_SIGNING_SECRET 32
   ensure_env_secret DOLLHOUSE_INVITE_TOKEN_SECRET 32
   ensure_env_secret DOLLHOUSE_AUDIT_HMAC_SECRET 32
-  upsert_env_value DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED "true"
-  prompt_env_if_missing DOLLHOUSE_AUTH_GITHUB_CLIENT_ID "GitHub OAuth client ID" false
-  prompt_env_if_missing DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "GitHub OAuth client secret" true
+  ensure_env_secret_base64 DOLLHOUSE_MASTER_ENCRYPTION_KEY 32
+  maybe_set_env_from_process DOLLHOUSE_AUTH_ISSUER
+  maybe_set_env_from_process DOLLHOUSE_AUTH_AUDIENCE
+  maybe_set_env_from_process DOLLHOUSE_AUTH_JWKS_URI
+  maybe_set_env_from_process DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP
+  maybe_set_env_from_process DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE
+  if [[ "${AUTH_PROVIDER}" == "embedded" ]] && auth_methods_include github; then
+    prompt_env_if_missing DOLLHOUSE_AUTH_GITHUB_CLIENT_ID "GitHub OAuth client ID" false
+    prompt_env_if_missing DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "GitHub OAuth client secret" true
+  fi
 
   return 0
 }

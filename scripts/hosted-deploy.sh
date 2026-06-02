@@ -16,6 +16,8 @@ HOSTED_DEPLOY_LIB_DIR="${HOSTED_DEPLOY_SCRIPT_DIR}/hosted-deploy"
 . "${HOSTED_DEPLOY_LIB_DIR}/logging.sh"
 # shellcheck source=scripts/hosted-deploy/config.sh
 . "${HOSTED_DEPLOY_LIB_DIR}/config.sh"
+# shellcheck source=scripts/hosted-deploy/modes.sh
+. "${HOSTED_DEPLOY_LIB_DIR}/modes.sh"
 # shellcheck source=scripts/hosted-deploy/validation.sh
 . "${HOSTED_DEPLOY_LIB_DIR}/validation.sh"
 # shellcheck source=scripts/hosted-deploy/env.sh
