@@ -169,6 +169,7 @@
     "scripts/pretooluse-gemini.sh",
     "scripts/pretooluse-codex.sh",
     "scripts/hosted-deploy.sh",
+    "scripts/hosted-deploy/*.sh",
     "data/personas/**/*.md",
     "data/skills/**/*.md",
     "data/templates/**/*.md",

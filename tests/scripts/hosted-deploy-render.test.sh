@@ -105,6 +105,22 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 [[ ! -e "${DRY_RUN_DEPLOY_DIR}" ]] || fail "dry-run render should not create ${DRY_RUN_DEPLOY_DIR}"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would render deployment files"
 
+log "checking quiet logging mode"
+QUIET_OUTPUT="${TMP_ROOT}/quiet.out"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/quiet-deploy" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" --quiet --dry-run render > "${QUIET_OUTPUT}"
+[[ ! -s "${QUIET_OUTPUT}" ]] || fail "quiet dry-run should not produce normal log output"
+
+log "checking debug logging mode"
+DEBUG_OUTPUT="${TMP_ROOT}/debug.out"
+DEBUG_ERROR="${TMP_ROOT}/debug.err"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/debug-deploy" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" --debug --dry-run render > "${DEBUG_OUTPUT}" 2> "${DEBUG_ERROR}"
+assert_contains "${DEBUG_OUTPUT}" "dry-run: would render deployment files"
+assert_contains "${DEBUG_ERROR}" "debug: action=render dry_run=true"
+
 log "checking invalid public base URL rejection"
 BAD_URL_OUTPUT="${TMP_ROOT}/bad-url.out"
 if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/bad-url-deploy" \

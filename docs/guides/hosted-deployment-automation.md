@@ -68,6 +68,18 @@ DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com \
 
 The helper lives at [`scripts/hosted-deploy.sh`](../../scripts/hosted-deploy.sh).
 
+The entrypoint stays intentionally thin. Implementation modules live under [`scripts/hosted-deploy/`](../../scripts/hosted-deploy/):
+
+- `config.sh`: defaults, usage text, and CLI parsing
+- `logging.sh`: `quiet`, `info`, and `debug` logging modes
+- `validation.sh`: input, URL, hostname, port, boolean, and git URL validation
+- `env.sh`: environment file, generated secrets, and env loading
+- `render.sh`: Compose, Caddy, and Postgres init file generation
+- `source.sh`: local source archive, remote clone, bundle snapshots, and rollback candidates
+- `runtime.sh`: Docker Compose, migrations, bootstrap, rollback, and verification actions
+- `dry-run.sh`: read-only operation planning
+- `actions.sh`: action dispatch
+
 ## What It Manages
 
 The helper manages the deployment directory, defaulting to `/opt/dollhousemcp`:
@@ -105,6 +117,7 @@ Common environment variables:
 |---|---|---|
 | `DOLLHOUSE_HOSTED_DEPLOY_DIR` | Deployment root | `/opt/dollhousemcp` |
 | `DOLLHOUSE_HOSTED_DRY_RUN` | Preview operations without writes, Docker, git clone, or HTTP checks | `false` |
+| `DOLLHOUSE_HOSTED_LOG_LEVEL` | Logging mode: `quiet`, `info`, or `debug` | `info` |
 | `DOLLHOUSE_HOSTED_HOSTNAME` | Public hostname, for example `mcp.example.com` | none |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | Public URL, for example `https://mcp.example.com` | derived from hostname |
 | `DOLLHOUSE_HOSTED_SOURCE_DIR` | Local repo source to deploy | current repo when available |
@@ -135,6 +148,8 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- render
 ```
 
 Any action can be previewed with `--dry-run`. Dry-run mode validates the deploy inputs and prints the planned filesystem, source, Docker, migration, bootstrap, rollback, and verification steps without writing deployment files, moving source bundles, starting containers, cloning repositories, or making HTTP requests.
+
+Logging can be adjusted with `--quiet`, `--debug`, `--log-level quiet|info|debug`, or `DOLLHOUSE_HOSTED_LOG_LEVEL`. `quiet` suppresses normal progress output but still reports errors. `debug` prints the resolved action, dry-run flag, and deployment directory to stderr before running.
 
 ### `install`
 
