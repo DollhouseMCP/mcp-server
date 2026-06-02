@@ -27,6 +27,21 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   npm run hosted:deploy -- update
 ```
 
+Run migrations for an existing install:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  npm run hosted:deploy -- migrate
+```
+
+Bootstrap the first GitHub admin:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
+  npm run hosted:deploy -- bootstrap-admin
+```
+
 Verify an existing install:
 
 ```bash
@@ -52,6 +67,8 @@ The helper manages the deployment directory, defaulting to `/opt/dollhousemcp`:
   logs/
   DEPLOYED_REVISION
   DEPLOYED_AT
+  server.prev-*/
+  server.rollback-from-*/
 ```
 
 It preserves:
@@ -61,6 +78,7 @@ It preserves:
 - Caddy certificate/config volumes
 - portfolio files
 - previous server bundle snapshots
+- rollback source snapshots
 
 ## Configuration
 
@@ -76,6 +94,10 @@ Common environment variables:
 | `DOLLHOUSE_HOSTED_GIT_REF` | Branch/ref cloned when no source dir is available | `codex/hosted-http-integration` |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | GitHub OAuth app client ID | prompted or left unset |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret | prompted or left unset |
+| `DOLLHOUSE_AUTH_OPEN_DCR` | Whether unauthenticated Dynamic Client Registration is enabled | `true` |
+| `DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME` | Optional GitHub username to pre-claim as the first admin | none |
+| `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` | Optional numeric GitHub ID to pre-claim as the first admin and skip API lookup | none |
+| `DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT` | Seconds to wait for Postgres readiness | `60` |
 
 Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs.
 
@@ -91,19 +113,63 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- render
 
 ### `install`
 
-Renders files, stages the server source, builds containers, starts the full stack, and verifies:
+Renders files, stages the server source, builds containers, starts Postgres, runs migrations, optionally bootstraps the GitHub admin, starts the full stack, and verifies:
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- install
 ```
 
+To bootstrap the admin in the same pass:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
+  npm run hosted:deploy -- install
+```
+
 ### `update`
 
-Renders files, stages a new server bundle, rebuilds/restarts the `dollhousemcp` service, and verifies:
+Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, ensures Postgres is ready, runs migrations, restarts the `dollhousemcp` service, and verifies:
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- update
 ```
+
+### `migrate`
+
+Renders files, rebuilds the current `dollhousemcp` image if needed, waits for Postgres, and runs:
+
+```bash
+docker compose run --rm dollhousemcp npm run db:migrate
+```
+
+Use this when the database needs to be brought current without staging new source:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- migrate
+```
+
+### `bootstrap-admin`
+
+Runs the admin pre-claim CLI inside the deployed container:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
+  npm run hosted:deploy -- bootstrap-admin
+```
+
+Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub ID, because it skips the GitHub API lookup. If neither bootstrap variable is set and the script has a TTY, it prompts for a GitHub username.
+
+### `rollback`
+
+Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, restarts `dollhousemcp` and Caddy, then verifies:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
+```
+
+Rollback restores the application source bundle only. It does not roll database schema backward; use it for ordinary failed app deploys, not for a migration that requires a planned database restore.
 
 ### `verify`
 
@@ -134,17 +200,27 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- install
 
 Or enter them at the prompt during an interactive install. In noninteractive mode, add them manually to `.env.production`.
 
+## Dynamic Client Registration
+
+The generated Compose file defaults to:
+
+```yaml
+DOLLHOUSE_AUTH_OPEN_DCR: "true"
+```
+
+This is the alpha compatibility shape for MCP clients such as claude.ai web and Gemini CLI that auto-register through Dynamic Client Registration. The server-side DCR policy validates redirect shape and records audit metadata, and user access is still governed by GitHub authentication plus the Dollhouse allowlist gate.
+
+For a stricter enterprise deployment where MCP clients are pre-registered or issued Initial Access Tokens, set `DOLLHOUSE_AUTH_OPEN_DCR=false` before `render`, `install`, or `update`. Future enterprise presets should make that choice explicit.
+
 ## Current Limitations
 
 - The public `curl | sh` installer URL does not exist yet.
 - Local/LAN self-hosting and enterprise IdP presets still need dedicated modes.
-- Rollback is not a command yet, though previous server bundles are retained.
 - The helper assumes Docker Compose and Caddy for the first production-like shape.
-- Admin bootstrap and allowlist management still use the existing `dollhouse-admin-bootstrap` and `dollhouse-allowlist` CLIs.
+- Allowlist management still uses the existing `dollhouse-allowlist` CLI.
 
 ## Next Steps
 
-- Add a rollback action.
 - Add local/LAN mode with clear binding and TLS choices.
 - Add enterprise mode presets for external OIDC/IdP configuration.
 - Add a wrapper installer that can be served from a stable URL.

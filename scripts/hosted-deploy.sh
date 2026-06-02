@@ -22,6 +22,10 @@ IMAGE_TAG="${DOLLHOUSE_HOSTED_IMAGE_TAG:-dollhousemcp-hosted:alpha}"
 MCP_PORT="${DOLLHOUSE_HTTP_PORT:-3000}"
 MEM_LIMIT="${DOLLHOUSE_HOSTED_MEM_LIMIT:-2g}"
 CPU_LIMIT="${DOLLHOUSE_HOSTED_CPUS:-2.0}"
+OPEN_DCR="${DOLLHOUSE_AUTH_OPEN_DCR:-true}"
+POSTGRES_READY_TIMEOUT="${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-60}"
+BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
+BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 
 ENV_FILE="${DEPLOY_DIR}/.env.production"
 COMPOSE_FILE="${DEPLOY_DIR}/compose.yml"
@@ -37,9 +41,12 @@ Usage:
   scripts/hosted-deploy.sh render
   scripts/hosted-deploy.sh install
   scripts/hosted-deploy.sh update
+  scripts/hosted-deploy.sh migrate
+  scripts/hosted-deploy.sh bootstrap-admin
+  scripts/hosted-deploy.sh rollback
   scripts/hosted-deploy.sh verify
 
-Required for render/install/update unless DOLLHOUSE_PUBLIC_BASE_URL is set:
+Required for render/install/update/migrate/bootstrap-admin/rollback unless DOLLHOUSE_PUBLIC_BASE_URL is set:
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com
 
 Common environment:
@@ -48,10 +55,16 @@ Common environment:
   DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration
   DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=...
   DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=...
+  DOLLHOUSE_AUTH_OPEN_DCR=true
+  DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=...
+  DOLLHOUSE_BOOTSTRAP_GITHUB_ID=...
 
 Examples:
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh install
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh update
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh migrate
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat scripts/hosted-deploy.sh bootstrap-admin
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh rollback
   DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com scripts/hosted-deploy.sh verify
 EOF
 }
@@ -91,11 +104,19 @@ resolve_hostname() {
   HOSTNAME="${HOSTNAME%%/*}"
 }
 
-ensure_prerequisites() {
+ensure_docker_prerequisites() {
   need_command docker
-  need_command openssl
-  need_command git
   docker compose version >/dev/null 2>&1 || die "Docker Compose is required"
+}
+
+ensure_runtime_prerequisites() {
+  ensure_docker_prerequisites
+  need_command openssl
+}
+
+ensure_prerequisites() {
+  ensure_runtime_prerequisites
+  need_command git
 }
 
 ensure_layout() {
@@ -270,7 +291,7 @@ services:
       DOLLHOUSE_AUTH_PROVIDER: embedded
       DOLLHOUSE_AUTH_METHODS: github
       DOLLHOUSE_AUTH_STORAGE_BACKEND: postgres
-      DOLLHOUSE_AUTH_OPEN_DCR: "true"
+      DOLLHOUSE_AUTH_OPEN_DCR: "${OPEN_DCR}"
       DOLLHOUSE_WEB_AUTH_ENABLED: "true"
       DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: \${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-true}
     expose:
@@ -401,17 +422,132 @@ compose() {
   (cd "${DEPLOY_DIR}" && docker compose -f "${COMPOSE_FILE}" "$@")
 }
 
+ensure_server_source() {
+  [[ -d "${SERVER_DIR}" ]] || die "server source not staged at ${SERVER_DIR}; run install or update first"
+}
+
+validate_postgres_timeout() {
+  [[ "${POSTGRES_READY_TIMEOUT}" =~ ^[0-9]+$ ]] || \
+    die "DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT must be an integer number of seconds"
+}
+
+wait_for_postgres() {
+  validate_postgres_timeout
+  log "starting postgres"
+  compose up -d postgres
+
+  log "waiting for postgres to become ready"
+  local elapsed=0
+  until compose exec -T postgres pg_isready -U dollhouse -d dollhousemcp >/dev/null 2>&1; do
+    if (( elapsed >= POSTGRES_READY_TIMEOUT )); then
+      compose ps postgres >&2 || true
+      die "postgres did not become ready within ${POSTGRES_READY_TIMEOUT}s"
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+}
+
+build_app_image() {
+  log "building dollhousemcp image"
+  compose build dollhousemcp
+}
+
+run_database_migrations() {
+  log "running database migrations"
+  compose run --rm dollhousemcp npm run db:migrate
+}
+
+prepare_existing_stack() {
+  ensure_runtime_prerequisites
+  render_files
+  ensure_server_source
+  build_app_image
+  wait_for_postgres
+}
+
+run_bootstrap_admin() {
+  local mode="${1:-required}"
+  local args=()
+
+  if [[ -n "${BOOTSTRAP_GITHUB_ID}" ]]; then
+    if [[ -n "${BOOTSTRAP_GITHUB_USERNAME}" ]]; then
+      warn "DOLLHOUSE_BOOTSTRAP_GITHUB_ID is set; ignoring DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME"
+    fi
+    args=(--method github --github-id "${BOOTSTRAP_GITHUB_ID}")
+  elif [[ -n "${BOOTSTRAP_GITHUB_USERNAME}" ]]; then
+    args=(--method github --github-username "${BOOTSTRAP_GITHUB_USERNAME}")
+  elif [[ "${mode}" == "optional" ]]; then
+    return
+  elif [[ -t 0 ]]; then
+    read -r -p "Admin GitHub username: " BOOTSTRAP_GITHUB_USERNAME
+    [[ -n "${BOOTSTRAP_GITHUB_USERNAME}" ]] || die "admin GitHub username is required"
+    args=(--method github --github-username "${BOOTSTRAP_GITHUB_USERNAME}")
+  else
+    die "set DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME or DOLLHOUSE_BOOTSTRAP_GITHUB_ID"
+  fi
+
+  log "bootstrapping GitHub admin"
+  compose run --rm dollhousemcp npx dollhouse-admin-bootstrap "${args[@]}"
+}
+
+bootstrap_admin() {
+  prepare_existing_stack
+  run_database_migrations
+  run_bootstrap_admin required
+}
+
 start_or_update() {
   local service="${1:-all}"
   ensure_prerequisites
   render_files
   stage_source
+  build_app_image
+  wait_for_postgres
+  run_database_migrations
+  run_bootstrap_admin optional
   if [[ "${service}" == "app" ]]; then
-    compose build dollhousemcp
     compose up -d dollhousemcp
   else
-    compose up -d --build
+    compose up -d
   fi
+}
+
+run_migrations() {
+  prepare_existing_stack
+  run_database_migrations
+}
+
+latest_previous_bundle() {
+  find "${DEPLOY_DIR}" -maxdepth 1 -type d -name 'server.prev-*' -print | sort | tail -n 1
+}
+
+rollback_server() {
+  local previous timestamp current_backup previous_name
+
+  ensure_runtime_prerequisites
+  render_files
+  previous="$(latest_previous_bundle)"
+  [[ -n "${previous}" ]] || die "no previous server bundle found in ${DEPLOY_DIR}"
+  [[ -d "${SERVER_DIR}" ]] || die "no current server bundle found at ${SERVER_DIR}"
+
+  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+  current_backup="${DEPLOY_DIR}/server.rollback-from-${timestamp}"
+  previous_name="$(basename "${previous}")"
+
+  log "rolling back server source to ${previous_name}"
+  mv "${SERVER_DIR}" "${current_backup}"
+  if ! mv "${previous}" "${SERVER_DIR}"; then
+    mv "${current_backup}" "${SERVER_DIR}" || true
+    die "failed to restore ${previous_name}; current server bundle was restored"
+  fi
+
+  printf 'rollback:%s\n' "${previous_name}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
+  date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
+
+  build_app_image
+  wait_for_postgres
+  compose up -d dollhousemcp caddy
 }
 
 verify_deploy() {
@@ -434,7 +570,6 @@ case "${ACTION}" in
     ;;
   render)
     need_command openssl
-    need_command git
     render_files
     ;;
   install)
@@ -443,6 +578,16 @@ case "${ACTION}" in
     ;;
   update)
     start_or_update app
+    verify_deploy
+    ;;
+  migrate)
+    run_migrations
+    ;;
+  bootstrap-admin)
+    bootstrap_admin
+    ;;
+  rollback)
+    rollback_server
     verify_deploy
     ;;
   verify)
