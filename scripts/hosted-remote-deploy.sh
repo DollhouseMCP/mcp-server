@@ -12,6 +12,10 @@ ACTION="update"
 ACTION_SET="false"
 REMOTE_SSH_TARGET="${DOLLHOUSE_REMOTE_SSH_TARGET:-${DOLLHOUSE_HOSTED_SSH_TARGET:-}}"
 REMOTE_SSH_IDENTITY_FILE="${DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE:-}"
+REMOTE_SSH_PORT="${DOLLHOUSE_REMOTE_SSH_PORT:-}"
+REMOTE_KNOWN_HOSTS_FILE="${DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE:-}"
+REMOTE_ACCEPT_HOST_KEY="${DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY:-false}"
+SSH_HOST=""
 DEPLOY_DIR="${DOLLHOUSE_HOSTED_DEPLOY_DIR:-/opt/dollhousemcp}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
 PUBLIC_BASE_URL="${DOLLHOUSE_PUBLIC_BASE_URL:-}"
@@ -35,10 +39,14 @@ Usage:
   scripts/hosted-remote-deploy.sh [options] bootstrap-admin
   scripts/hosted-remote-deploy.sh [options] rollback
   scripts/hosted-remote-deploy.sh [options] verify
+  scripts/hosted-remote-deploy.sh [options] enroll-host
 
 Options:
   --target USER@HOST        SSH target. Env: DOLLHOUSE_REMOTE_SSH_TARGET
   --identity-file PATH      SSH identity file. Env: DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE
+  --port PORT               SSH port. Env: DOLLHOUSE_REMOTE_SSH_PORT
+  --known-hosts PATH        Known hosts file. Env: DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE
+  --accept-host-key         Append scanned host key during enroll-host
   --hostname HOSTNAME       Public hostname. Env: DOLLHOUSE_HOSTED_HOSTNAME
   --public-base-url URL     Public origin. Env: DOLLHOUSE_PUBLIC_BASE_URL
   --deploy-dir DIR          Remote deploy dir. Env: DOLLHOUSE_HOSTED_DEPLOY_DIR
@@ -105,6 +113,35 @@ validate_bool() {
   return 0
 }
 
+validate_port_value() {
+  local key="$1"
+  local value="$2"
+
+  if [[ -n "${value}" && ( ! "${value}" =~ ^[0-9]+$ || "${value}" -lt 1 || "${value}" -gt 65535 ) ]]; then
+    die "${key} must be an integer from 1 to 65535, got: ${value}"
+  fi
+
+  return 0
+}
+
+expand_path() {
+  local path="$1"
+
+  case "${path}" in
+    \~)
+      printf '%s\n' "${HOME}"
+      ;;
+    \~/*)
+      printf '%s/%s\n' "${HOME}" "${path#~/}"
+      ;;
+    *)
+      printf '%s\n' "${path}"
+      ;;
+  esac
+
+  return 0
+}
+
 git_url_has_credentials() {
   local git_url="$1"
 
@@ -150,6 +187,19 @@ parse_args() {
         REMOTE_SSH_IDENTITY_FILE="${1:-}"
         [[ -n "${REMOTE_SSH_IDENTITY_FILE}" ]] || die "--identity-file requires a path"
         shift
+        ;;
+      --port)
+        REMOTE_SSH_PORT="${1:-}"
+        [[ -n "${REMOTE_SSH_PORT}" ]] || die "--port requires a port number"
+        shift
+        ;;
+      --known-hosts)
+        REMOTE_KNOWN_HOSTS_FILE="${1:-}"
+        [[ -n "${REMOTE_KNOWN_HOSTS_FILE}" ]] || die "--known-hosts requires a path"
+        shift
+        ;;
+      --accept-host-key)
+        REMOTE_ACCEPT_HOST_KEY="true"
         ;;
       --hostname)
         HOSTNAME="${1:-}"
@@ -221,13 +271,56 @@ parse_args() {
 
 validate_action() {
   case "${ACTION}" in
-    install|update|migrate|bootstrap-admin|rollback|verify)
+    install|update|migrate|bootstrap-admin|rollback|verify|enroll-host)
       ;;
     *)
       die "unknown action: ${ACTION}"
       ;;
   esac
 
+  return 0
+}
+
+resolve_ssh_host() {
+  local target_host
+
+  target_host="${REMOTE_SSH_TARGET#*@}"
+  if [[ "${target_host}" =~ ^\[([^]]+)\](:([0-9]+))?$ ]]; then
+    SSH_HOST="${BASH_REMATCH[1]}"
+    if [[ -z "${REMOTE_SSH_PORT}" && -n "${BASH_REMATCH[3]:-}" ]]; then
+      REMOTE_SSH_PORT="${BASH_REMATCH[3]}"
+    fi
+    return 0
+  fi
+
+  if [[ "${target_host}" == *":"* ]]; then
+    die "IPv6 SSH targets must use bracket form, for example root@[2001:db8::1]"
+  fi
+
+  SSH_HOST="${target_host}"
+  [[ -n "${SSH_HOST}" ]] || die "could not resolve host from SSH target: ${REMOTE_SSH_TARGET}"
+
+  return 0
+}
+
+known_hosts_lookup() {
+  if [[ -n "${REMOTE_SSH_PORT}" && "${REMOTE_SSH_PORT}" != "22" ]]; then
+    printf '[%s]:%s\n' "${SSH_HOST}" "${REMOTE_SSH_PORT}"
+    return 0
+  fi
+
+  printf '%s\n' "${SSH_HOST}"
+  return 0
+}
+
+resolve_known_hosts_file_for_enroll() {
+  if [[ -z "${REMOTE_KNOWN_HOSTS_FILE}" ]]; then
+    [[ -n "${HOME:-}" ]] || die "HOME is required when --known-hosts is not provided"
+    REMOTE_KNOWN_HOSTS_FILE="${HOME}/.ssh/known_hosts"
+    return 0
+  fi
+
+  REMOTE_KNOWN_HOSTS_FILE="$(expand_path "${REMOTE_KNOWN_HOSTS_FILE}")"
   return 0
 }
 
@@ -272,11 +365,23 @@ validate_config() {
   validate_bool DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY "${SKIP_LOCAL_VERIFY}"
   validate_bool DOLLHOUSE_REMOTE_KEEP_WORKDIR "${KEEP_WORKDIR}"
   validate_bool DOLLHOUSE_REMOTE_DRY_RUN "${DRY_RUN}"
-  validate_git_url_for_clone
+  validate_bool DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY "${REMOTE_ACCEPT_HOST_KEY}"
+  validate_port_value DOLLHOUSE_REMOTE_SSH_PORT "${REMOTE_SSH_PORT}"
   [[ -n "${REMOTE_SSH_TARGET}" ]] || die "set --target or DOLLHOUSE_REMOTE_SSH_TARGET"
   [[ "${REMOTE_SSH_TARGET}" != *[[:space:]]* ]] || die "SSH target must not contain whitespace"
+  resolve_ssh_host
   [[ -z "${REMOTE_SSH_IDENTITY_FILE}" || -f "${REMOTE_SSH_IDENTITY_FILE}" ]] || \
     die "SSH identity file does not exist: ${REMOTE_SSH_IDENTITY_FILE}"
+  if [[ "${ACTION}" == "enroll-host" ]]; then
+    resolve_known_hosts_file_for_enroll
+    return 0
+  fi
+  validate_git_url_for_clone
+  if [[ -n "${REMOTE_KNOWN_HOSTS_FILE}" ]]; then
+    REMOTE_KNOWN_HOSTS_FILE="$(expand_path "${REMOTE_KNOWN_HOSTS_FILE}")"
+    [[ -f "${REMOTE_KNOWN_HOSTS_FILE}" ]] || \
+      die "known hosts file does not exist: ${REMOTE_KNOWN_HOSTS_FILE}; run enroll-host or provide a managed known_hosts file"
+  fi
   resolve_public_base_url
   resolve_hostname
 
@@ -287,12 +392,30 @@ ssh_args() {
   if [[ -n "${REMOTE_SSH_IDENTITY_FILE}" ]]; then
     printf '%s\0%s\0%s\0%s\0' -i "${REMOTE_SSH_IDENTITY_FILE}" -o IdentitiesOnly=yes
   fi
-  printf '%s\0%s\0' -o StrictHostKeyChecking=accept-new
+  if [[ -n "${REMOTE_SSH_PORT}" ]]; then
+    printf '%s\0%s\0' -p "${REMOTE_SSH_PORT}"
+  fi
+  printf '%s\0%s\0' -o StrictHostKeyChecking=yes
+  if [[ -n "${REMOTE_KNOWN_HOSTS_FILE}" ]]; then
+    printf '%s\0%s\0' -o "UserKnownHostsFile=${REMOTE_KNOWN_HOSTS_FILE}"
+  fi
 
   return 0
 }
 
 run_dry_plan() {
+  if [[ "${ACTION}" == "enroll-host" ]]; then
+    log "dry-run: would scan SSH host keys for ${SSH_HOST}${REMOTE_SSH_PORT:+:${REMOTE_SSH_PORT}}"
+    log "dry-run: would print fingerprints for out-of-band verification"
+    log "dry-run: would use known hosts file ${REMOTE_KNOWN_HOSTS_FILE}"
+    if [[ "${REMOTE_ACCEPT_HOST_KEY}" == "true" ]]; then
+      log "dry-run: would append the scanned host key after operator acceptance"
+    else
+      log "dry-run: would not write without --accept-host-key"
+    fi
+    return 0
+  fi
+
   log "dry-run: would connect to ${REMOTE_SSH_TARGET}"
   log "dry-run: action=${ACTION} deploy_dir=${DEPLOY_DIR} hostname=${HOSTNAME} ref=${GIT_REF}"
   if [[ "${SKIP_BACKUP}" == "true" ]]; then
@@ -307,6 +430,62 @@ run_dry_plan() {
   else
     log "dry-run: would check ${PUBLIC_BASE_URL}/healthz, /readyz, and unauthenticated /mcp"
   fi
+
+  return 0
+}
+
+run_enroll_host() {
+  local keyscan_output
+  local lookup
+  local known_hosts_dir
+
+  need_command ssh-keyscan
+  need_command ssh-keygen
+
+  keyscan_output="$(mktemp /tmp/dollhouse-known-host.XXXXXX)"
+  chmod 0600 "${keyscan_output}"
+
+  log "scanning SSH host key for ${SSH_HOST}${REMOTE_SSH_PORT:+:${REMOTE_SSH_PORT}}"
+  if [[ -n "${REMOTE_SSH_PORT}" ]]; then
+    ssh-keyscan -T 10 -p "${REMOTE_SSH_PORT}" "${SSH_HOST}" > "${keyscan_output}" 2>/dev/null || {
+      rm -f "${keyscan_output}"
+      die "failed to scan SSH host key for ${SSH_HOST}"
+    }
+  else
+    ssh-keyscan -T 10 "${SSH_HOST}" > "${keyscan_output}" 2>/dev/null || {
+      rm -f "${keyscan_output}"
+      die "failed to scan SSH host key for ${SSH_HOST}"
+    }
+  fi
+  if [[ ! -s "${keyscan_output}" ]]; then
+    rm -f "${keyscan_output}"
+    die "ssh-keyscan returned no host keys for ${SSH_HOST}"
+  fi
+
+  lookup="$(known_hosts_lookup)"
+  log "host key fingerprint(s) for ${lookup}:"
+  ssh-keygen -lf "${keyscan_output}"
+
+  if [[ -f "${REMOTE_KNOWN_HOSTS_FILE}" ]] && ssh-keygen -F "${lookup}" -f "${REMOTE_KNOWN_HOSTS_FILE}" >/dev/null 2>&1; then
+    log "known hosts file already contains ${lookup}: ${REMOTE_KNOWN_HOSTS_FILE}"
+    rm -f "${keyscan_output}"
+    return 0
+  fi
+
+  if [[ "${REMOTE_ACCEPT_HOST_KEY}" != "true" ]]; then
+    log "not writing host key; verify the fingerprint out of band, then rerun with --accept-host-key"
+    rm -f "${keyscan_output}"
+    return 0
+  fi
+
+  known_hosts_dir="$(dirname "${REMOTE_KNOWN_HOSTS_FILE}")"
+  mkdir -p "${known_hosts_dir}"
+  chmod 0700 "${known_hosts_dir}" 2>/dev/null || true
+  touch "${REMOTE_KNOWN_HOSTS_FILE}"
+  chmod 0600 "${REMOTE_KNOWN_HOSTS_FILE}"
+  cat "${keyscan_output}" >> "${REMOTE_KNOWN_HOSTS_FILE}"
+  log "wrote ${lookup} to ${REMOTE_KNOWN_HOSTS_FILE}"
+  rm -f "${keyscan_output}"
 
   return 0
 }
@@ -575,6 +754,8 @@ main() {
   debug "action=${ACTION} target=${REMOTE_SSH_TARGET} ref=${GIT_REF} deploy_dir=${DEPLOY_DIR}"
   if [[ "${DRY_RUN}" == "true" ]]; then
     run_dry_plan
+  elif [[ "${ACTION}" == "enroll-host" ]]; then
+    run_enroll_host
   else
     need_command ssh
     run_remote_action

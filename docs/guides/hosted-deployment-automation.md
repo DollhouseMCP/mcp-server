@@ -70,6 +70,7 @@ Run an update on a remote host over SSH:
 
 ```bash
 DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration \
   npm run hosted:remote -- update
@@ -156,6 +157,9 @@ Remote wrapper variables:
 |---|---|---|
 | `DOLLHOUSE_REMOTE_SSH_TARGET` | SSH target for operator-managed remote deploys, for example `root@203.0.113.10` | none |
 | `DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE` | Optional SSH private key path | none |
+| `DOLLHOUSE_REMOTE_SSH_PORT` | Optional SSH port | default SSH port |
+| `DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE` | Optional known-hosts file used with strict host-key checking | OpenSSH default known-hosts files |
+| `DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY` | Permit `enroll-host` to append the scanned host key after operator verification | `false` |
 | `DOLLHOUSE_REMOTE_SKIP_BACKUP` | Skip remote DB/env backups before running the helper | `false` |
 | `DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY` | Skip local public endpoint checks after the remote helper completes | `false` |
 | `DOLLHOUSE_REMOTE_KEEP_WORKDIR` | Keep the temporary remote clone for debugging | `false` |
@@ -174,6 +178,8 @@ The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by defau
 ### Remote Operator Wrapper
 
 `npm run hosted:remote -- <action>` wraps the repo-owned helper for operator-managed SSH hosts. It is designed for the alpha/beta cloud path where an operator updates a VM but wants the manual safety steps automated.
+
+Remote deploy actions use `StrictHostKeyChecking=yes`. For production-like use, enroll the host key first or provide a managed known-hosts file from your infrastructure tooling. The wrapper does not silently trust first-contact SSH keys.
 
 It performs:
 
@@ -198,10 +204,29 @@ Update with an explicit identity file and branch:
 ```bash
 DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
 DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE=~/.ssh/dollhousemcp_alpha_hetzner_ed25519 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration \
   npm run hosted:remote -- update
 ```
+
+Enroll a host key into a dedicated known-hosts file:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
+  npm run hosted:remote -- enroll-host
+```
+
+The first pass scans the host key and prints fingerprints without writing. Verify those fingerprints out of band, for example against the provider console or your enterprise SSH host-key inventory. Then append the key explicitly:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
+  npm run hosted:remote -- --accept-host-key enroll-host
+```
+
+Enterprise deployments can skip `enroll-host` and point `DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE` at a managed known-hosts file or host-CA-backed SSH configuration.
 
 The wrapper does not replace `scripts/hosted-deploy.sh`; it calls it remotely after cloning the requested ref. It uploads its remote payload to a temporary `0600` script before execution so commands such as database dumps cannot consume the rest of a streamed SSH script from stdin. Use the direct helper when you are already logged into the target host or when building local/LAN and enterprise modes.
 
