@@ -51,6 +51,7 @@ async function fetchAuthServerMetadata(baseUrl: string) {
     token_endpoint: string;
     issuer: string;
     scopes_supported?: string[];
+    token_endpoint_auth_methods_supported?: string[];
   }>;
 }
 
@@ -102,6 +103,7 @@ describe('Cycle 24 smoke-test regressions', () => {
         body: JSON.stringify({
           redirect_uris: ['http://127.0.0.1:9999/cb'],
           scope: 'openid offline_access mcp profile email',
+          application_type: 'native',
         }),
       });
       expect(res.status).toBe(201);
@@ -156,6 +158,7 @@ describe('Cycle 24 smoke-test regressions', () => {
           body: JSON.stringify({
             redirect_uris: ['http://127.0.0.1:9999/cb'],
             scope,
+            application_type: 'native',
           }),
         });
         expect(res.status).toBe(201);
@@ -174,6 +177,7 @@ describe('Cycle 24 smoke-test regressions', () => {
       expect(meta.scopes_supported).toEqual(
         expect.arrayContaining(['openid', 'offline_access', 'mcp', 'profile', 'email']),
       );
+      expect(meta.token_endpoint_auth_methods_supported).toEqual(['none']);
     });
   });
 

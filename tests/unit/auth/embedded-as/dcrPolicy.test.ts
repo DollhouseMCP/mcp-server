@@ -21,9 +21,19 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
   });
 
   it('allows loopback HTTP callbacks for local/native MCP clients', () => {
-    expect(validateRedirectUriShape('http://127.0.0.1:5173/callback').ok).toBe(true);
-    expect(validateRedirectUriShape('http://localhost:8787/callback').ok).toBe(true);
-    expect(validateRedirectUriShape('http://[::1]:8787/callback').ok).toBe(true);
+    expect(validateRedirectUriShape('http://127.0.0.1:5173/callback', { applicationType: 'native' }).ok).toBe(true);
+    expect(validateRedirectUriShape('http://localhost:8787/callback', { applicationType: 'native' }).ok).toBe(true);
+    expect(validateRedirectUriShape('http://[::1]:8787/callback', { applicationType: 'native' }).ok).toBe(true);
+  });
+
+  it('rejects loopback HTTP callbacks unless application_type is native', () => {
+    const decision = validateDcrClientMetadata({
+      redirect_uris: ['http://127.0.0.1:5173/callback'],
+      scope: 'openid',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.errors.join('\n')).toContain('http loopback callbacks require application_type "native"');
   });
 
   it('rejects non-loopback HTTP callbacks, fragments, and userinfo', () => {
@@ -67,5 +77,36 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
     expect(decision.allowed).toBe(false);
     expect(decision.errors.join('\n')).toContain('jwks_uri is not accepted');
     expect(decision.errors.join('\n')).toContain('sector_identifier_uri is not accepted');
+  });
+
+  it('rejects secret-bearing dynamic clients; open DCR is public-client-only', () => {
+    const decision = validateDcrClientMetadata({
+      redirect_uris: ['https://client.example.com/callback'],
+      token_endpoint_auth_method: 'client_secret_basic',
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.errors.join('\n')).toContain(
+      'token_endpoint_auth_method contains unsupported value "client_secret_basic"',
+    );
+  });
+
+  it('records metadata host mismatch as an audit finding instead of rejecting', () => {
+    const decision = validateDcrClientMetadata({
+      redirect_uris: ['https://client.example.com/oauth/callback'],
+      client_uri: 'https://vendor.example.net/app',
+      policy_uri: 'https://client.example.com/policy',
+      token_endpoint_auth_method: 'none',
+    });
+
+    expect(decision.allowed).toBe(true);
+    expect(decision.auditFindings).toEqual([
+      {
+        type: 'metadata_host_mismatch',
+        field: 'client_uri',
+        host: 'vendor.example.net',
+        redirectHosts: ['client.example.com'],
+      },
+    ]);
   });
 });

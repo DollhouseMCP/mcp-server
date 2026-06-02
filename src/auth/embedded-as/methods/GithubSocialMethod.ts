@@ -270,7 +270,23 @@ export class GithubSocialMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
           const details = await provider.interactionDetails(req, res);
-          await renderClientConsentForIdentity(res, provider, details, result.identity.sub, deps.storage, deps.defaultResource);
+          await renderClientConsentForIdentity(
+            res,
+            provider,
+            details,
+            result.identity.sub,
+            deps.storage,
+            deps.defaultResource,
+            {
+              sub: result.identity.sub,
+              displayName: result.identity.displayName,
+              email: result.identity.email,
+              provider: GITHUB_PROVIDER,
+              providerUsername: typeof result.identity.raw?.githubUsername === 'string'
+                ? result.identity.raw.githubUsername
+                : undefined,
+            },
+          );
         } catch (err) {
           next(err);
         }
@@ -304,6 +320,7 @@ export class GithubSocialMethod implements IAuthMethod {
       displayName: profile.name ?? profile.login,
       email: profile.verifiedPrimaryEmail,
       emailVerified: true, // We only got here if the verified-primary lookup succeeded.
+      raw: { githubUsername: profile.login },
     };
 
     // Sign-in allowlist gate. Runs BEFORE any account write so a denied

@@ -276,6 +276,13 @@ describe('InteractionRouter — multi-method dispatch', () => {
         'github_42',
         storage,
         'https://mcp.example.com/mcp',
+        {
+          sub: 'github_42',
+          displayName: 'Mick Darling',
+          email: 'mick@example.com',
+          provider: 'github',
+          providerUsername: 'mickdarling',
+        },
       ).catch(next);
     });
     app.use('/interaction', createInteractionRouter({
@@ -295,6 +302,12 @@ describe('InteractionRouter — multi-method dispatch', () => {
       const html = await consent.text();
       expect(html).toContain('Authorize Test Client');
       expect(html).toContain('client.example.com');
+      expect(html).toContain('openid');
+      expect(html).toContain('mcp');
+      expect(html).toContain('https://mcp.example.com/mcp');
+      expect(html).toContain('@mickdarling');
+      expect(html).toContain('mick@example.com');
+      expect(html).toContain('First time this identity is authorizing this client');
       expect(html).toContain('This client will receive OAuth tokens');
       expect(interactionFinished).not.toHaveBeenCalled();
 
@@ -315,6 +328,94 @@ describe('InteractionRouter — multi-method dispatch', () => {
         login: { accountId: 'github_42' },
         consent: { grantId: 'fake-grant-id' },
       });
+
+      const events = await storage.listIdentityEvents({ type: 'auth.client_consent.approved' });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        sub: 'github_42',
+        details: {
+          clientId: 'c',
+          clientFirstSeenForIdentity: true,
+          callbackHost: 'client.example.com',
+          resource: 'https://mcp.example.com/mcp',
+          scopes: ['openid', 'mcp'],
+        },
+      });
+
+      const secondConsent = await fetch(`${baseUrl}/seed-consent`);
+      const secondHtml = await secondConsent.text();
+      expect(secondHtml).toContain('Previously authorized by this identity');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('client-consent denial records an audit event and aborts authorization', async () => {
+    const localDetails: OidcInteractionDetails = {
+      uid: 'client-consent-deny-uid',
+      params: {
+        client_id: 'c',
+        scope: 'openid mcp',
+        redirect_uri: 'https://client.example.com/oauth/callback',
+        resource: 'https://mcp.example.com/mcp',
+      },
+      prompt: { name: 'login', details: {} },
+    };
+    const interactionFinished = jest.fn<OidcProviderForInteractions['interactionFinished']>(
+      async (_req, res) => {
+        if (!res.headersSent) res.status(200).end('denied');
+      },
+    );
+    const provider = fakeProvider({ details: localDetails, interactionFinished });
+    const method = fakeMethod({ id: 'github', displayName: 'GitHub' });
+    const app = express();
+    app.disable('x-powered-by');
+    app.get('/seed-consent', (_req, res, next) => {
+      renderClientConsentForIdentity(
+        res,
+        provider,
+        localDetails,
+        'github_42',
+        storage,
+        'https://mcp.example.com/mcp',
+        { sub: 'github_42', provider: 'github', providerUsername: 'mickdarling' },
+      ).catch(next);
+    });
+    app.use('/interaction', createInteractionRouter({
+      provider,
+      methods: [method],
+      storage,
+      defaultResource: 'https://mcp.example.com/mcp',
+    }));
+    const server = app.listen(0);
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const consent = await fetch(`${baseUrl}/seed-consent`);
+      const html = await consent.text();
+      const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
+      expect(csrfMatch).not.toBeNull();
+
+      const deny = await fetch(`${baseUrl}/interaction/${localDetails.uid}`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': FORM_CONTENT_TYPE },
+        body: new URLSearchParams({
+          csrf_token: csrfMatch![1],
+          action: 'deny_oauth_client',
+        }),
+      });
+
+      expect(deny.status).toBe(200);
+      expect(interactionFinished).toHaveBeenCalledTimes(1);
+      expect(interactionFinished.mock.calls[0][2]).toMatchObject({
+        error: 'access_denied',
+      });
+      const events = await storage.listIdentityEvents({ type: 'auth.client_consent.denied' });
+      expect(events).toHaveLength(1);
+      expect(events[0].sub).toBe('github_42');
     } finally {
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }

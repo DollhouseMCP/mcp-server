@@ -11,12 +11,16 @@
 import { randomBytes } from 'node:crypto';
 import express, { type RequestHandler } from 'express';
 import { logger } from '../../utils/logger.js';
-import { validateDcrClientMetadata } from './dcrPolicy.js';
+import { validateDcrClientMetadata, type DcrPolicyAuditFinding } from './dcrPolicy.js';
+import { normalizeIp } from './rateLimit.js';
+import type { IAuthStorageLayer, IdentityAuditEvent } from './storage/IAuthStorageLayer.js';
+import type { IRateLimitStore } from './storage/IRateLimitStore.js';
 
 const DCR_BODY_LIMIT = '16kb';
 const MAX_CLIENT_ID_ATTEMPTS = 5;
 const DCR_RATE_LIMIT_WINDOW_MS = 60_000;
 const DCR_RATE_LIMIT_MAX_REQUESTS = 60;
+const DCR_RATE_LIMIT_SCOPE = 'open_dcr_registration';
 
 export interface DcrClientInstance {
   clientId: string;
@@ -35,23 +39,38 @@ export interface DcrProvider {
   Client: DcrClientConstructor;
 }
 
-interface DcrRateLimitBucket {
+interface DcrRateLimitState {
   count: number;
-  resetAt: number;
+  windowStartedAt: number;
+  limitFired?: boolean;
 }
+
+type DcrRateLimitDecision =
+  | { allowed: true }
+  | { allowed: false; retryAfterMs: number; event?: 'limit_crossed' };
 
 export function createOpenDcrRegistrationHandlers(options: {
   ensureProvider: () => Promise<DcrProvider>;
+  rateLimitStore: IRateLimitStore;
+  storage: IAuthStorageLayer;
 }): RequestHandler[] {
-  const rateLimitBuckets = new Map<string, DcrRateLimitBucket>();
-
   return [
-    express.json({ type: 'application/json', limit: DCR_BODY_LIMIT }),
     (req, res, next) => {
       void (async () => {
-        const rateLimit = consumeRateLimit(rateLimitBuckets, req.ip ?? req.socket.remoteAddress ?? 'unknown');
+        const ip = normalizeIp(req.ip ?? req.socket.remoteAddress ?? 'unknown');
+        const rateLimit = await consumeRateLimit(options.rateLimitStore, ip);
         if (!rateLimit.allowed) {
           res.set('Retry-After', String(Math.ceil(rateLimit.retryAfterMs / 1000)));
+          if (rateLimit.event === 'limit_crossed') {
+            await recordDcrAuditEvent(options.storage, {
+              type: 'auth.dcr.registration_rejected',
+              details: {
+                reason: 'rate limit exceeded',
+                ip,
+              },
+              timestamp: Date.now(),
+            });
+          }
           res.status(429).json({
             error: 'too_many_requests',
             error_description: 'dynamic client registration rate limit exceeded',
@@ -59,11 +78,36 @@ export function createOpenDcrRegistrationHandlers(options: {
           return;
         }
 
+        next();
+      })().catch((err) => {
+        logger.warn('[EmbeddedAuthorizationServer] open DCR rate-limit store failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        res.set('Retry-After', '30');
+        res.status(503).json({
+          error: 'temporarily_unavailable',
+          error_description: 'dynamic client registration is temporarily unavailable',
+        });
+      });
+    },
+    express.json({ type: 'application/json', limit: DCR_BODY_LIMIT }),
+    (req, res, next) => {
+      void (async () => {
+        const ip = normalizeIp(req.ip ?? req.socket.remoteAddress ?? 'unknown');
         const decision = validateDcrClientMetadata(req.body);
         if (!decision.allowed) {
           logger.warn('[EmbeddedAuthorizationServer] open DCR registration rejected by policy', {
             errors: decision.errors,
-            ip: req.ip,
+            ip,
+          });
+          await recordDcrAuditEvent(options.storage, {
+            type: 'auth.dcr.registration_rejected',
+            details: buildDcrAuditDetails(req.body, ip, {
+              errors: decision.errors,
+              redirectHosts: decision.redirectHosts,
+              auditFindings: decision.auditFindings,
+            }),
+            timestamp: Date.now(),
           });
           res.status(400).json({
             error: 'invalid_client_metadata',
@@ -76,6 +120,15 @@ export function createOpenDcrRegistrationHandlers(options: {
         const metadata = await buildClientMetadata(req.body, provider.Client);
         const client = new provider.Client(metadata);
         await provider.Client.adapter.upsert(client.clientId, client.metadata());
+        await recordDcrAuditEvent(options.storage, {
+          type: 'auth.dcr.registration_accepted',
+          details: buildDcrAuditDetails(metadata, ip, {
+            clientId: client.clientId,
+            redirectHosts: decision.redirectHosts,
+            auditFindings: decision.auditFindings,
+          }),
+          timestamp: Date.now(),
+        });
 
         res.set({
           'Cache-Control': 'no-store',
@@ -87,27 +140,47 @@ export function createOpenDcrRegistrationHandlers(options: {
   ];
 }
 
-function consumeRateLimit(
-  buckets: Map<string, DcrRateLimitBucket>,
+async function consumeRateLimit(
+  store: IRateLimitStore,
   key: string,
-): { allowed: true } | { allowed: false; retryAfterMs: number } {
+): Promise<DcrRateLimitDecision> {
   const now = Date.now();
-  if (buckets.size > 1000) {
-    for (const [bucketKey, bucket] of buckets) {
-      if (bucket.resetAt <= now) buckets.delete(bucketKey);
-    }
-  }
+  const update = await store.update<DcrRateLimitState, DcrRateLimitDecision>(
+    DCR_RATE_LIMIT_SCOPE,
+    key,
+    (prev) => {
+      if (!prev || now - prev.windowStartedAt >= DCR_RATE_LIMIT_WINDOW_MS) {
+        return {
+          state: { count: 1, windowStartedAt: now },
+          result: { allowed: true },
+        };
+      }
 
-  const current = buckets.get(key);
-  if (!current || current.resetAt <= now) {
-    buckets.set(key, { count: 1, resetAt: now + DCR_RATE_LIMIT_WINDOW_MS });
-    return { allowed: true };
-  }
-  if (current.count >= DCR_RATE_LIMIT_MAX_REQUESTS) {
-    return { allowed: false, retryAfterMs: current.resetAt - now };
-  }
-  current.count += 1;
-  return { allowed: true };
+      const retryAfterMs = Math.max(1, DCR_RATE_LIMIT_WINDOW_MS - (now - prev.windowStartedAt));
+      if (prev.count >= DCR_RATE_LIMIT_MAX_REQUESTS) {
+        const state = prev.limitFired ? prev : { ...prev, limitFired: true };
+        return {
+          state,
+          result: {
+            allowed: false,
+            retryAfterMs,
+            ...(prev.limitFired ? {} : { event: 'limit_crossed' as const }),
+          },
+        };
+      }
+
+      const next = { ...prev, count: prev.count + 1 };
+      return {
+        state: next,
+        result: { allowed: true },
+      };
+    },
+    {
+      expiresAt: now + DCR_RATE_LIMIT_WINDOW_MS * 2,
+      maxRetries: 5,
+    },
+  );
+  return update.result ?? { allowed: true };
 }
 
 async function buildClientMetadata(input: unknown, Client: DcrClientConstructor): Promise<Record<string, unknown>> {
@@ -122,17 +195,8 @@ async function buildClientMetadata(input: unknown, Client: DcrClientConstructor)
   metadata.token_endpoint_auth_method ??= 'none';
   metadata.grant_types ??= ['authorization_code', 'refresh_token'];
   metadata.response_types ??= ['code'];
-
-  if (
-    metadata.token_endpoint_auth_method === 'client_secret_basic'
-    || metadata.token_endpoint_auth_method === 'client_secret_post'
-  ) {
-    metadata.client_secret = randomBytes(32).toString('base64url');
-    metadata.client_secret_expires_at = 0;
-  } else {
-    delete metadata.client_secret;
-    delete metadata.client_secret_expires_at;
-  }
+  delete metadata.client_secret;
+  delete metadata.client_secret_expires_at;
 
   return metadata;
 }
@@ -144,4 +208,45 @@ async function generateUniqueClientId(Client: DcrClientConstructor): Promise<str
     if (!existing) return candidate;
   }
   throw new Error('failed to allocate a unique dynamic client id');
+}
+
+async function recordDcrAuditEvent(storage: IAuthStorageLayer, event: IdentityAuditEvent): Promise<void> {
+  try {
+    await storage.recordIdentityEvent(event);
+  } catch (err) {
+    logger.warn('[EmbeddedAuthorizationServer] failed to record open DCR audit event', {
+      type: event.type,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function buildDcrAuditDetails(
+  metadata: unknown,
+  ip: string,
+  context: {
+    clientId?: string;
+    errors?: string[];
+    redirectHosts: string[];
+    auditFindings: DcrPolicyAuditFinding[];
+  },
+): Record<string, unknown> {
+  const body = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata as Record<string, unknown>
+    : {};
+  return {
+    ip,
+    clientId: context.clientId,
+    clientName: stringValue(body.client_name),
+    redirectHosts: context.redirectHosts,
+    redirectUriCount: Array.isArray(body.redirect_uris) ? body.redirect_uris.length : undefined,
+    applicationType: stringValue(body.application_type),
+    tokenEndpointAuthMethod: stringValue(body.token_endpoint_auth_method),
+    errors: context.errors,
+    metadataAuditFindings: context.auditFindings,
+  };
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
 }

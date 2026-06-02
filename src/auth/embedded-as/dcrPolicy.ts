@@ -18,11 +18,7 @@ const MAX_STRING_METADATA_LENGTH = 256;
 const SUPPORTED_SCOPES = new Set(['openid', 'offline_access', 'profile', 'email', 'mcp']);
 const SUPPORTED_GRANT_TYPES = new Set(['authorization_code', 'refresh_token']);
 const SUPPORTED_RESPONSE_TYPES = new Set(['code']);
-const SUPPORTED_TOKEN_ENDPOINT_AUTH_METHODS = new Set([
-  'none',
-  'client_secret_basic',
-  'client_secret_post',
-]);
+const SUPPORTED_TOKEN_ENDPOINT_AUTH_METHODS = new Set(['none']);
 
 const FORBIDDEN_OPEN_DCR_METADATA = new Set([
   'client_id',
@@ -51,6 +47,18 @@ export interface DcrPolicyDecision {
   allowed: boolean;
   errors: string[];
   redirectHosts: string[];
+  auditFindings: DcrPolicyAuditFinding[];
+}
+
+export interface DcrPolicyAuditFinding {
+  type: 'metadata_host_mismatch';
+  field: string;
+  host: string;
+  redirectHosts: string[];
+}
+
+export interface RedirectUriPolicyOptions {
+  applicationType?: string;
 }
 
 export function validateDcrClientMetadata(input: unknown): DcrPolicyDecision {
@@ -61,6 +69,7 @@ export function validateDcrClientMetadata(input: unknown): DcrPolicyDecision {
       allowed: false,
       errors: ['registration request body must be a JSON object'],
       redirectHosts: [],
+      auditFindings: [],
     };
   }
 
@@ -74,7 +83,10 @@ export function validateDcrClientMetadata(input: unknown): DcrPolicyDecision {
     required: true,
     maxItems: MAX_REDIRECT_URIS,
   });
-  const redirectResults = redirectUris.map(validateRedirectUriShape);
+  const applicationType = typeof metadata.application_type === 'string'
+    ? metadata.application_type
+    : undefined;
+  const redirectResults = redirectUris.map((uri) => validateRedirectUriShape(uri, { applicationType }));
   for (const result of redirectResults) {
     errors.push(...result.errors.map((error) => `redirect_uris entry ${result.uri}: ${error}`));
   }
@@ -96,15 +108,20 @@ export function validateDcrClientMetadata(input: unknown): DcrPolicyDecision {
       .map((result) => result.host)
       .filter((host): host is string => typeof host === 'string' && host.length > 0),
   ));
+  const auditFindings = collectMetadataAuditFindings(metadata, redirectHosts);
 
   return {
     allowed: errors.length === 0,
     errors,
     redirectHosts,
+    auditFindings,
   };
 }
 
-export function validateRedirectUriShape(uri: string): RedirectUriPolicyResult {
+export function validateRedirectUriShape(
+  uri: string,
+  options: RedirectUriPolicyOptions = {},
+): RedirectUriPolicyResult {
   const errors: string[] = [];
   if (typeof uri !== 'string' || uri.trim() !== uri || uri.length === 0) {
     return { ok: false, uri: String(uri), errors: ['must be a non-empty string without surrounding whitespace'] };
@@ -132,6 +149,9 @@ export function validateRedirectUriShape(uri: string): RedirectUriPolicyResult {
 
   if (parsed.protocol === 'http:') {
     if (!loopback) errors.push('http callbacks are allowed only for loopback clients');
+    if (loopback && options.applicationType !== 'native') {
+      errors.push('http loopback callbacks require application_type "native"');
+    }
   } else if (parsed.protocol !== 'https:') {
     errors.push('must use https, or http for loopback clients');
   }
@@ -278,6 +298,39 @@ function validateIdTokenAlg(value: unknown, errors: string[]): void {
   if (value === undefined) return;
   if (value !== 'ES256') {
     errors.push('id_token_signed_response_alg must be ES256 when provided');
+  }
+}
+
+function collectMetadataAuditFindings(
+  metadata: Record<string, unknown>,
+  redirectHosts: string[],
+): DcrPolicyAuditFinding[] {
+  if (redirectHosts.length === 0) return [];
+  const findings: DcrPolicyAuditFinding[] = [];
+  const redirectHostSet = new Set(redirectHosts);
+  for (const field of ['client_uri', 'logo_uri', 'policy_uri', 'tos_uri']) {
+    const value = metadata[field];
+    if (typeof value !== 'string') continue;
+    const host = safeHttpsMetadataHost(value);
+    if (!host || redirectHostSet.has(host)) continue;
+    findings.push({
+      type: 'metadata_host_mismatch',
+      field,
+      host,
+      redirectHosts,
+    });
+  }
+  return findings;
+}
+
+function safeHttpsMetadataHost(value: string): string | null {
+  try {
+    const parsed = new URL(value);
+    if (parsed.protocol !== 'https:') return null;
+    const host = normalizeUrlHostname(parsed.hostname);
+    return host || null;
+  } catch {
+    return null;
   }
 }
 

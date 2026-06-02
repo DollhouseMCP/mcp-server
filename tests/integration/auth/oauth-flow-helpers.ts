@@ -16,6 +16,7 @@ import * as net from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
 import express, { type Express } from 'express';
 import { EmbeddedAuthorizationServer, type EmbeddedAuthorizationServerOptions } from '../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 
 export function pkceS256(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url');
@@ -135,6 +136,7 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
     publicBaseUrl,
     mcpPath: '/mcp',
     keyFilePath: path.join(tmpDir, 'key.json'),
+    rateLimitStore: opts.rateLimitStore ?? new InMemoryRateLimitStore(),
   });
 
   // Auto-bootstrap so existing E2E tests in multi-user mode aren't blocked

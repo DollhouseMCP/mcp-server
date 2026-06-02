@@ -156,6 +156,22 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     expect(typeof decoded.auth_time).toBe('number');
     expect(decoded.auth_time).toBeGreaterThan(0);
 
+    const tokenEvents = await storage.listIdentityEvents({ type: 'auth.oauth.token_issued' });
+    expect(tokenEvents).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          sub: 'local_alice',
+          details: expect.objectContaining({
+            providerEvent: 'access_token.issued',
+            tokenKind: 'AccessToken',
+            clientId: CLIENT_ID,
+            scope: 'mcp',
+            audience: `${harness.publicBaseUrl}/mcp`,
+          }),
+        }),
+      ]),
+    );
+
     // Account row in storage carries the password hash on credentials,
     // not rawProfile (B4).
     const stored = await storage.getAccount('local_alice');

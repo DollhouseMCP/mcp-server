@@ -41,6 +41,7 @@ const CSRF_TTL_SECONDS = 600; // 10 min, matches oidc-provider's default interac
 const METHOD_CHOICE_MODEL = 'InteractionMethodChoice';
 const METHOD_CHOICE_TTL_SECONDS = 600; // matches CSRF + Interaction TTL
 const PENDING_CLIENT_CONSENT_MODEL = 'PendingClientConsentIdentity';
+const CLIENT_CONSENT_SEEN_MODEL = 'ClientConsentSeen';
 const CLIENT_CONSENT_APPROVE_ACTION = 'authorize_oauth_client';
 const CLIENT_CONSENT_DENY_ACTION = 'deny_oauth_client';
 
@@ -76,6 +77,22 @@ interface OidcClientForConsent {
 
 interface OidcClientConstructorForConsent {
   find(id: string): Promise<OidcClientForConsent | undefined>;
+}
+
+export interface ClientConsentIdentitySummary {
+  sub: string;
+  displayName?: string;
+  email?: string;
+  provider?: string;
+  providerUsername?: string;
+}
+
+interface PendingClientConsentIdentity {
+  accountId?: string;
+  createdAt?: number;
+  clientId?: string;
+  firstSeen?: boolean;
+  identity?: ClientConsentIdentitySummary;
 }
 
 export interface OidcProviderForInteractions {
@@ -264,11 +281,16 @@ async function handlePost(
     if (!csrfOk) return;
 
     const pending = await storage.genericGet(PENDING_CLIENT_CONSENT_MODEL, details.uid) as
-      | { accountId?: string }
+      | PendingClientConsentIdentity
       | null;
     await storage.genericDestroy(PENDING_CLIENT_CONSENT_MODEL, details.uid);
 
     if (action === CLIENT_CONSENT_DENY_ACTION) {
+      await recordClientConsentAuditEvent(storage, 'auth.client_consent.denied', {
+        details,
+        pending,
+        defaultResource,
+      });
       await provider.interactionFinished(req, res, {
         error: 'access_denied',
         error_description: 'End-User denied client authorization',
@@ -281,6 +303,12 @@ async function handlePost(
       return;
     }
 
+    await markClientConsentSeen(storage, pending.accountId, paramString(details.params.client_id));
+    await recordClientConsentAuditEvent(storage, 'auth.client_consent.approved', {
+      details,
+      pending,
+      defaultResource,
+    });
     await finishInteractionWithIdentity(
       req,
       res,
@@ -432,16 +460,28 @@ export async function renderClientConsentForIdentity(
   accountId: string,
   storage: IAuthStorageLayer,
   defaultResource: string,
+  identity?: ClientConsentIdentitySummary,
 ): Promise<void> {
+  const clientId = paramString(details.params.client_id) || 'unknown-client';
+  const firstSeen = !(await hasSeenClientConsent(storage, accountId, clientId));
   await storage.genericSet(
     PENDING_CLIENT_CONSENT_MODEL,
     details.uid,
-    { accountId, createdAt: Date.now() },
+    {
+      accountId,
+      clientId,
+      firstSeen,
+      identity,
+      createdAt: Date.now(),
+    },
     CSRF_TTL_SECONDS,
   );
   const csrfToken = randomBytes(32).toString('base64url');
   await storage.genericSet(CSRF_MODEL, details.uid, { token: csrfToken }, CSRF_TTL_SECONDS);
-  const html = await renderOAuthClientConsentPage(provider, details, csrfToken, defaultResource);
+  const html = await renderOAuthClientConsentPage(provider, details, csrfToken, defaultResource, {
+    identity,
+    firstSeen,
+  });
   res.type('html').send(html);
 }
 
@@ -571,6 +611,10 @@ async function renderOAuthClientConsentPage(
   details: OidcInteractionDetails,
   csrfToken: string,
   defaultResource: string,
+  consent: {
+    identity?: ClientConsentIdentitySummary;
+    firstSeen: boolean;
+  },
 ): Promise<string> {
   const view = await buildClientConsentView(provider, details, defaultResource);
   const scopes = view.scopes.length > 0
@@ -585,6 +629,12 @@ async function renderOAuthClientConsentPage(
   const clientUri = view.clientUri
     ? `<p class="muted">Client website: <a href="${escapeHtmlAttr(view.clientUri)}" rel="noreferrer">${escapeHtmlText(view.clientUri)}</a></p>`
     : '';
+  const identitySummary = consent.identity
+    ? renderIdentitySummary(consent.identity)
+    : escapeHtmlText('this authenticated DollhouseMCP account');
+  const clientHistory = consent.firstSeen
+    ? 'First time this identity is authorizing this client'
+    : 'Previously authorized by this identity';
 
   return `<!doctype html>
 <html lang="en">
@@ -627,6 +677,10 @@ async function renderOAuthClientConsentPage(
       <dd><code>${escapeHtmlText(view.resource)}</code></dd>
       <dt>Application type</dt>
       <dd>${escapeHtmlText(view.applicationType)}</dd>
+      <dt>Authorizing as</dt>
+      <dd>${identitySummary}</dd>
+      <dt>Client history</dt>
+      <dd>${escapeHtmlText(clientHistory)}</dd>
     </dl>
     <h2>Requested scopes</h2>
     <ul>
@@ -744,6 +798,87 @@ function renderResource(resource: unknown, defaultResource: string): string {
     if (strings.length > 0) return strings.join(', ');
   }
   return defaultResource;
+}
+
+async function hasSeenClientConsent(
+  storage: IAuthStorageLayer,
+  accountId: string,
+  clientId: string,
+): Promise<boolean> {
+  const existing = await storage.genericGet(CLIENT_CONSENT_SEEN_MODEL, clientConsentSeenKey(accountId, clientId));
+  return Boolean(existing);
+}
+
+async function markClientConsentSeen(
+  storage: IAuthStorageLayer,
+  accountId: string,
+  clientId: string | undefined,
+): Promise<void> {
+  if (!clientId) return;
+  const key = clientConsentSeenKey(accountId, clientId);
+  const now = Date.now();
+  const existing = await storage.genericGet(CLIENT_CONSENT_SEEN_MODEL, key) as
+    | { firstApprovedAt?: number }
+    | null;
+  await storage.genericSet(CLIENT_CONSENT_SEEN_MODEL, key, {
+    accountId,
+    clientId,
+    firstApprovedAt: existing?.firstApprovedAt ?? now,
+    lastApprovedAt: now,
+  });
+}
+
+function clientConsentSeenKey(accountId: string, clientId: string): string {
+  return `${accountId}\0${clientId}`;
+}
+
+async function recordClientConsentAuditEvent(
+  storage: IAuthStorageLayer,
+  type: 'auth.client_consent.approved' | 'auth.client_consent.denied',
+  context: {
+    details: OidcInteractionDetails;
+    pending: PendingClientConsentIdentity | null;
+    defaultResource: string;
+  },
+): Promise<void> {
+  try {
+    const redirectUri = paramString(context.details.params.redirect_uri)
+      || firstString(context.details.params.redirect_uris)
+      || 'not provided';
+    await storage.recordIdentityEvent({
+      type,
+      sub: context.pending?.accountId,
+      details: {
+        clientId: context.pending?.clientId ?? paramString(context.details.params.client_id) ?? 'unknown-client',
+        clientFirstSeenForIdentity: context.pending?.firstSeen,
+        callbackHost: callbackHostFor(redirectUri),
+        redirectUri,
+        resource: renderResource(context.details.params.resource, context.defaultResource),
+        scopes: (paramString(context.details.params.scope) ?? '').split(/\s+/).filter(Boolean),
+        identity: context.pending?.identity,
+      },
+      timestamp: Date.now(),
+    });
+  } catch (err) {
+    logger.warn('[InteractionRouter] failed to record client-consent audit event', {
+      type,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+function renderIdentitySummary(identity: ClientConsentIdentitySummary): string {
+  const parts: string[] = [];
+  const primary = identity.providerUsername
+    ? `@${identity.providerUsername}`
+    : identity.displayName;
+  if (primary) parts.push(escapeHtmlText(primary));
+  if (identity.displayName && identity.displayName !== primary) {
+    parts.push(escapeHtmlText(identity.displayName));
+  }
+  if (identity.email) parts.push(escapeHtmlText(identity.email));
+  parts.push(`<code>${escapeHtmlText(identity.sub)}</code>`);
+  return parts.join('<br>');
 }
 
 function ensureCsrfInForm(html: string, csrfToken: string): string {
