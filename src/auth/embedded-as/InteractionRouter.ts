@@ -12,10 +12,10 @@
  *      .beginInteraction. If render-html, send the page (with a CSRF token
  *      stamped into the form). If redirect, send 303 to the target URL.
  *   3. POST /interaction/:uid: verify CSRF, call IAuthMethod
- *      .completeInteraction. On 'authenticated', upsert the account and
- *      tell oidc-provider via interactionFinished({ login, consent }).
- *      On 'next-step', send the next step's HTML/redirect. On 'denied',
- *      finish with an OAuth error.
+ *      .completeInteraction. On 'authenticated', render the hosted
+ *      OAuth-client consent page before oidc-provider receives
+ *      interactionFinished({ login, consent }). On 'next-step', send the
+ *      next step's HTML/redirect. On 'denied', finish with an OAuth error.
  *
  * CSRF (must-fix #6): a random token is generated on render-html and stored
  * in IAuthStorageLayer.genericSet under model 'InteractionCsrf', keyed on
@@ -29,6 +29,7 @@ import { randomBytes, timingSafeEqual } from 'node:crypto';
 import express, { type Router, type Request, type Response } from 'express';
 import { logger } from '../../utils/logger.js';
 import type {
+  AuthenticatedIdentity,
   IAuthMethod,
   InteractionContext,
   InteractionResult,
@@ -412,7 +413,30 @@ async function handleAuthMethodPost(
     return;
   }
 
-  await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, storage, defaultResource);
+  await renderClientConsentForIdentity(
+    res,
+    provider,
+    details,
+    result.identity.sub,
+    storage,
+    defaultResource,
+    buildClientConsentIdentitySummary(method, result.identity),
+  );
+}
+
+function buildClientConsentIdentitySummary(
+  method: IAuthMethod,
+  identity: AuthenticatedIdentity,
+): ClientConsentIdentitySummary {
+  return {
+    sub: identity.sub,
+    displayName: identity.displayName,
+    email: identity.email,
+    provider: method.id,
+    providerUsername: method.id === 'github' && typeof identity.raw?.githubUsername === 'string'
+      ? identity.raw.githubUsername
+      : undefined,
+  };
 }
 
 /**
@@ -1458,7 +1482,7 @@ async function markClientConsentSeen(
 }
 
 function clientConsentSeenKey(accountId: string, clientId: string): string {
-  return `${encodeURIComponent(accountId)}:${encodeURIComponent(clientId)}`;
+  return `cc_${Buffer.from(JSON.stringify([accountId, clientId]), 'utf8').toString('base64url')}`;
 }
 
 async function recordClientConsentAuditEvent(
@@ -1568,7 +1592,18 @@ function renderIdentityCard(identity: ClientConsentIdentitySummary): string {
 }
 
 function providerDisplayName(provider: string): string {
-  return provider === 'github' ? 'GitHub' : provider;
+  switch (provider) {
+    case 'github':
+      return 'GitHub';
+    case 'magic-link':
+      return 'Email magic link';
+    case 'local-password':
+      return 'Local password';
+    case 'trivial-consent':
+      return 'Trivial consent';
+    default:
+      return provider;
+  }
 }
 
 function ensureCsrfInForm(html: string, csrfToken: string): string {

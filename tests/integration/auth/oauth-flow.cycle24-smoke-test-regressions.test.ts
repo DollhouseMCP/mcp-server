@@ -39,6 +39,7 @@ import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/Triv
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import {
   type ASHarness,
+  approveClientConsentPage,
   followToCodeRedirect,
   startASHarness,
   startAuthorizeFlow,
@@ -244,7 +245,8 @@ describe('Cycle 24 smoke-test regressions', () => {
       expect(csrfMatch).not.toBeNull();
       const csrfToken = csrfMatch![1];
 
-      // POST consent — this is what the user clicking "Approve" does.
+      // POST method consent — this authenticates the user and then renders
+      // the hosted OAuth-client consent page.
       const postConsent = await fetch(interactionUrl, {
         method: 'POST',
         redirect: 'manual',
@@ -254,8 +256,15 @@ describe('Cycle 24 smoke-test regressions', () => {
         },
         body: new URLSearchParams({ csrf_token: csrfToken, action: 'approve' }),
       });
-      expect(postConsent.status).toBe(303);
-      jar.ingest(postConsent.headers);
+      expect(postConsent.status).toBe(200);
+
+      const clientConsent = await approveClientConsentPage({
+        baseUrl: harness.baseUrl,
+        response: postConsent,
+        jar,
+      });
+      expect(clientConsent.status).toBe(303);
+      jar.ingest(clientConsent.headers);
 
       // Walk the post-consent redirect chain. With the cycle-24 dual-
       // dimension grant binding, this lands on REDIRECT_URI?code=... in
@@ -263,7 +272,7 @@ describe('Cycle 24 smoke-test regressions', () => {
       // /interaction and the helper throws.
       const code = await followToCodeRedirect({
         baseUrl: harness.baseUrl,
-        start: postConsent.headers.get('location'),
+        start: clientConsent.headers.get('location'),
         jar,
         redirectUriPrefix: REDIRECT_URI,
       });

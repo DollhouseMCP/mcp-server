@@ -34,6 +34,7 @@ import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storag
 import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import {
   type ASHarness,
+  approveClientConsentPage,
   CookieJar,
   followToCodeRedirect,
   getFreePort,
@@ -146,12 +147,19 @@ describe('Filesystem storage — AS restart durability', () => {
       invite: inviteToken,
       password: 'a-very-long-password',
     });
-    expect([302, 303]).toContain(consentPost.status);
-    flow1.jar.ingest(consentPost.headers);
+    expect(consentPost.status).toBe(200);
+
+    const approvePost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: consentPost,
+      jar: flow1.jar,
+    });
+    expect([302, 303]).toContain(approvePost.status);
+    flow1.jar.ingest(approvePost.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: consentPost.headers.get('location'),
+      start: approvePost.headers.get('location'),
       jar: flow1.jar,
       redirectUriPrefix: REDIRECT_URI,
     });
@@ -209,12 +217,19 @@ describe('Filesystem storage — AS restart durability', () => {
       username: 'persisted',
       password: 'a-very-long-password',
     });
-    expect([302, 303]).toContain(loginPost.status);
-    flow2.jar.ingest(loginPost.headers);
+    expect(loginPost.status).toBe(200);
+
+    const approveLoginPost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: loginPost,
+      jar: flow2.jar,
+    });
+    expect([302, 303]).toContain(approveLoginPost.status);
+    flow2.jar.ingest(approveLoginPost.headers);
 
     const code2 = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: loginPost.headers.get('location'),
+      start: approveLoginPost.headers.get('location'),
       jar: flow2.jar,
       redirectUriPrefix: REDIRECT_URI,
     });

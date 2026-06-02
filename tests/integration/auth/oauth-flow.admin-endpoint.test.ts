@@ -23,6 +23,7 @@ import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/In
 import { randomBytes } from 'node:crypto';
 import {
   type ASHarness,
+  approveClientConsentPage,
   CookieJar,
   followToCodeRedirect,
   startAuthorizeFlow,
@@ -100,10 +101,18 @@ async function loginAsLocalUser(
     invite: inviteToken,
     password: 'a-very-long-password',
   });
-  jar.ingest(consentPost.headers);
+  if (consentPost.status !== 200) {
+    throw new Error(`client consent page returned ${consentPost.status}: ${await consentPost.text()}`);
+  }
+  const approvePost = await approveClientConsentPage({
+    baseUrl: harness.baseUrl,
+    response: consentPost,
+    jar,
+  });
+  jar.ingest(approvePost.headers);
   const code = await followToCodeRedirect({
     baseUrl: harness.baseUrl,
-    start: consentPost.headers.get('location'),
+    start: approvePost.headers.get('location'),
     jar,
     redirectUriPrefix: REDIRECT_URI,
   });

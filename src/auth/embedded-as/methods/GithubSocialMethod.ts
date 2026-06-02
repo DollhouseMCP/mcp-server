@@ -24,7 +24,8 @@
  *   2. User authorizes on github.com.
  *   3. GitHub redirects to our /auth/social/github/callback?code=..&state=..
  *      handler, which calls processCallback() to do the OAuth exchange and
- *      identity fetch, then drives provider.interactionFinished out-of-band.
+ *      identity fetch, then renders hosted OAuth-client consent before
+ *      provider.interactionFinished can issue an authorization code.
  *
  * @module auth/embedded-as/methods/GithubSocialMethod
  */

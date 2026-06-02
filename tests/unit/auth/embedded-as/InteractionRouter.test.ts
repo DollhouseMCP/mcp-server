@@ -55,6 +55,10 @@ function fakeMethod(opts: FakeMethodOptions): IAuthMethod {
   };
 }
 
+function clientConsentSeenTestKey(accountId: string, clientId: string): string {
+  return `cc_${Buffer.from(JSON.stringify([accountId, clientId]), 'utf8').toString('base64url')}`;
+}
+
 interface FakeProviderOptions {
   details: OidcInteractionDetails;
   interactionFinished?: jest.MockedFunction<OidcProviderForInteractions['interactionFinished']>;
@@ -230,6 +234,77 @@ describe('InteractionRouter — multi-method dispatch', () => {
     }
   });
 
+  it('authenticated method POST renders client consent before finishing interaction', async () => {
+    const localDetails: OidcInteractionDetails = {
+      uid: 'method-client-consent-uid',
+      params: {
+        client_id: 'c',
+        scope: 'openid mcp',
+        redirect_uri: 'https://client.example.com/oauth/callback',
+        resource: 'https://mcp.example.com/mcp',
+      },
+      prompt: { name: 'login', details: {} },
+    };
+    const interactionFinished = jest.fn<OidcProviderForInteractions['interactionFinished']>(
+      async (_req, res) => {
+        if (!res.headersSent) res.redirect(303, '/finished');
+      },
+    );
+    const provider = fakeProvider({ details: localDetails, interactionFinished });
+    const method = fakeMethod({
+      id: TRIVIAL_CONSENT_ID,
+      displayName: 'Trivial',
+      identity: {
+        sub: 'local_alice',
+        displayName: 'Alice Example',
+        email: 'alice@example.com',
+        emailVerified: true,
+      },
+    });
+    const h = await startHarness([method], storage, localDetails, provider);
+    try {
+      const getRes = await fetch(`${h.url}/interaction/${localDetails.uid}`);
+      const getBody = await getRes.text();
+      const initialCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(getBody)?.[1];
+      expect(initialCsrf).toBeTruthy();
+
+      const consent = await fetch(`${h.url}/interaction/${localDetails.uid}`, {
+        method: 'POST',
+        headers: { 'content-type': FORM_CONTENT_TYPE },
+        body: new URLSearchParams({ csrf_token: initialCsrf ?? '', action: 'approve' }),
+      });
+
+      expect(consent.status).toBe(200);
+      const consentHtml = await consent.text();
+      expect(consentHtml).toContain('Authorize Test Client');
+      expect(consentHtml).toContain('Signed in with Trivial consent');
+      expect(consentHtml).toContain('Alice Example');
+      expect(consentHtml).toContain('alice@example.com');
+      expect(interactionFinished).not.toHaveBeenCalled();
+
+      const consentCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(consentHtml)?.[1];
+      expect(consentCsrf).toBeTruthy();
+      const approve = await fetch(`${h.url}/interaction/${localDetails.uid}`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': FORM_CONTENT_TYPE },
+        body: new URLSearchParams({
+          csrf_token: consentCsrf ?? '',
+          action: 'authorize_oauth_client',
+        }),
+      });
+
+      expect(approve.status).toBe(303);
+      expect(interactionFinished).toHaveBeenCalledTimes(1);
+      expect(interactionFinished.mock.calls[0][2]).toMatchObject({
+        login: { accountId: 'local_alice' },
+        consent: { grantId: 'fake-grant-id' },
+      });
+    } finally {
+      await h.close();
+    }
+  });
+
   it('chooser HTML escapes method displayName', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: '<script>alert(1)</script>' }),
@@ -345,7 +420,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
           scopes: ['openid', 'mcp'],
         },
       });
-      const seen = await storage.genericGet('ClientConsentSeen', 'github_42:c');
+      const seen = await storage.genericGet('ClientConsentSeen', clientConsentSeenTestKey('github_42', 'c'));
       expect(seen).toMatchObject({
         accountId: 'github_42',
         clientId: 'c',

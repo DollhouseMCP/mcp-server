@@ -6,7 +6,8 @@
  * must-fix list:
  *   - #1 GET shows a "Click to sign in" confirmation page; consumption
  *     happens only on POST. Email pre-fetchers (corporate antivirus,
- *     Outlook etc.) hit GET and don't consume the token.
+ *     Outlook etc.) hit GET and don't consume the token. A successful
+ *     POST renders hosted OAuth-client consent before tokens are minted.
  *   - #2 account-enumeration prevention: /auth/email/request returns
  *     identical responses (200 + same body, equivalent timing) whether
  *     the email exists or not. Implementation: always claim "if that
@@ -38,7 +39,7 @@ import type {
   InteractionStep,
 } from '../IAuthMethod.js';
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
-import { finishInteractionWithIdentity } from '../InteractionRouter.js';
+import { renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { IRateLimitStore } from '../storage/IRateLimitStore.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
@@ -182,11 +183,12 @@ export class MagicLinkMethod implements IAuthMethod {
   /**
    * Mounts the magic-link callback flow:
    *   GET  /auth/email/verify?token=<token>   — anti-pre-fetch confirmation page (must-fix #1)
-   *   POST /auth/email/verify                 — consume token + complete OAuth interaction
+   *   POST /auth/email/verify                 — consume token + render OAuth client consent
    *
-   * The POST handler restores the original interaction URL and drives
-   * provider.interactionFinished after verifying the calling browser
-   * holds the same `_interaction` cookie that started the flow.
+   * The POST handler restores the original interaction URL and renders
+   * hosted OAuth-client consent after verifying the calling browser holds
+   * the same `_interaction` cookie that started the flow. The consent
+   * approval POST eventually drives provider.interactionFinished.
    */
   contributeRoutes(router: Router, deps: ContributeRoutesDeps): void {
     const bodyParser = express.urlencoded({ extended: false, limit: '4kb' });
@@ -264,7 +266,20 @@ export class MagicLinkMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${consume.interactionId}`;
           const details = await provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, provider, details, consume.identity.sub, deps.storage, deps.defaultResource);
+          await renderClientConsentForIdentity(
+            res,
+            provider,
+            details,
+            consume.identity.sub,
+            deps.storage,
+            deps.defaultResource,
+            {
+              sub: consume.identity.sub,
+              displayName: consume.identity.displayName,
+              email: consume.identity.email,
+              provider: PROVIDER_NAME,
+            },
+          );
         } catch (err) {
           next(err);
         }

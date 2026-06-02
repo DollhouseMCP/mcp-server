@@ -95,7 +95,7 @@ export type InteractionResult =
 /**
  * Runtime injected when EmbeddedAuthorizationServer wires a method's
  * standalone routes (callbacks, invite-redemption pages, etc.). Methods
- * import the helper functions they need (`finishInteractionWithIdentity`,
+ * import the helper functions they need (`renderClientConsentForIdentity`,
  * `verifyInteractionCookieMatches`) directly from peer modules — these
  * are pure helpers, not deps the AS owns or that vary per deployment.
  * `ContributeRoutesDeps` carries runtime state only: the storage layer
@@ -121,10 +121,10 @@ export interface ContributeRoutesDeps {
     cookieKeys: readonly string[];
   }>;
   /**
-   * Cycle 24 fix: the AS's resource URL. Used by route handlers that call
-   * `finishInteractionWithIdentity` (GitHub social callback, magic-link
-   * verify) so resource scopes get bound to a real resource server even
-   * when the authorize request didn't pass `resource=...`. See the helper's
+   * Cycle 24 fix: the AS's resource URL. Used by route handlers that render
+   * client consent and, after approval, finish the OAuth interaction so
+   * resource scopes get bound to a real resource server even when the
+   * authorize request didn't pass `resource=...`. See the finish helper's
    * JSDoc for the failure mode this prevents (consent-loop on missing
    * resource binding).
    */
