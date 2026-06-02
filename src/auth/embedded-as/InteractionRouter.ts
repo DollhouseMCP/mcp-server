@@ -1422,10 +1422,19 @@ function allowOAuthRedirectFormAction(res: Response, details: OidcInteractionDet
   if (!redirectUri) return;
 
   try {
+    // Safe only for the hosted client-consent page: oidc-provider has already
+    // matched this redirect_uri to the registered OAuth client, and this CSP
+    // source allows only the browser's final form-submit redirect back to that
+    // client origin. All other embedded auth pages keep form-action at 'self'.
     allowCspFormActionOrigin(res, new URL(redirectUri).origin);
-  } catch {
+  } catch (err) {
     // oidc-provider validates redirect_uri before creating the interaction.
     // Keep the CSP opt-in fail-closed if provider details are unexpected.
+    logger.debug('[InteractionRouter] skipped OAuth redirect CSP form-action origin', {
+      interactionIdHash: fingerprintTransientId(details.uid),
+      redirectUriHash: fingerprintTransientId(redirectUri),
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 }
 
