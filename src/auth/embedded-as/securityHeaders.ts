@@ -1,14 +1,19 @@
 /**
  * securityHeaders
  *
- * Middleware that emits the four security headers every response from
- * the embedded AS should carry (must-fix #7 + Phase 7 follow-ups):
+ * Middleware that emits the security headers every response from the embedded
+ * AS should carry (must-fix #7 + Phase 7 follow-ups):
  *
- *   - `Content-Security-Policy: frame-ancestors 'none'`
+ *   - `Content-Security-Policy`
+ *     Blocks scripts and object/embed content, limits forms and static assets
+ *     to this AS, and rejects all framing. Auth pages use inline CSS today, so
+ *     the middleware injects a per-response nonce into `<style>` tags rather
+ *     than allowing all inline styles.
+ *
  *   - `X-Frame-Options: DENY`
- *     Both prevent the consent page (and any future login forms) from
- *     being embedded in an attacker-controlled iframe — which would
- *     otherwise allow clickjacking the "Approve Connector" button.
+ *     Prevents the consent page (and any future login forms) from being
+ *     embedded in an attacker-controlled iframe — which would otherwise allow
+ *     clickjacking the "Approve Connector" button.
  *
  *   - `Cache-Control: no-store`
  *     Auth pages MUST NOT be cached by intermediaries or browser back-
@@ -30,11 +35,46 @@
  * @module auth/embedded-as/securityHeaders
  */
 
+import { randomBytes } from 'node:crypto';
 import type { Request, Response, NextFunction, RequestHandler } from 'express';
+
+const STYLE_TAG_WITHOUT_NONCE = /<style\b(?![^>]*\bnonce=)([^>]*)>/gi;
+
+export function buildContentSecurityPolicy(styleNonce: string): string {
+  return [
+    "default-src 'none'",
+    "base-uri 'none'",
+    "frame-ancestors 'none'",
+    "form-action 'self'",
+    "img-src 'self' data:",
+    "font-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "script-src 'none'",
+    `style-src 'self' 'nonce-${styleNonce}'`,
+  ].join('; ');
+}
+
+function createCspNonce(): string {
+  return randomBytes(16).toString('base64url');
+}
+
+function addStyleNonce(body: unknown, styleNonce: string): unknown {
+  if (typeof body !== 'string' || !body.includes('<style')) {
+    return body;
+  }
+
+  return body.replace(STYLE_TAG_WITHOUT_NONCE, `<style nonce="${styleNonce}"$1>`);
+}
 
 export function securityHeaders(): RequestHandler {
   return (_req: Request, res: Response, next: NextFunction): void => {
-    res.setHeader('Content-Security-Policy', "frame-ancestors 'none'");
+    const styleNonce = createCspNonce();
+    const send = res.send.bind(res);
+
+    res.send = ((body?: unknown): Response => send(addStyleNonce(body, styleNonce))) as Response['send'];
+
+    res.setHeader('Content-Security-Policy', buildContentSecurityPolicy(styleNonce));
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('Pragma', 'no-cache');
