@@ -634,343 +634,654 @@ async function renderOAuthClientConsentPage(
     ? 'New client for this account'
     : 'Previously authorized by this account';
   const historyClass = consent.firstSeen
-    ? 'badge accent'
-    : 'badge';
+    ? 'auth-badge auth-badge--accent'
+    : 'auth-badge';
   const authorizationSummary = consent.firstSeen
     ? 'Review this client before granting access.'
     : 'This client has been authorized before for this account.';
   const clientWebsiteRow = view.clientUri
     ? `<div><dt>Client website</dt><dd>${clientUri}</dd></div>`
     : '';
+  const signedInHeading = consent.identity?.provider
+    ? `Signed in with ${providerDisplayName(consent.identity.provider)}`
+    : 'Signed in';
+  const authorizationHost = hostFromDisplayResource(view.resource);
 
   return `<!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>DollhouseMCP - Authorize ${escapeHtmlText(view.clientName)}</title>
+  <title>DollhouseMCP Authorization - Authorize ${escapeHtmlText(view.clientName)}</title>
+  <link rel="icon" type="image/png" href="/dollhouse-logo.png">
+  <link rel="apple-touch-icon" href="/dollhouse-logo.png">
+  <link rel="stylesheet" href="/fonts.css">
   <style>
     :root {
       color-scheme: light;
-      --ink: #171717;
-      --muted: #64645f;
-      --line: #d9d7ce;
-      --panel: #ffffff;
-      --page: #f5f4ef;
-      --brand: #174c39;
-      --brand-strong: #0f3529;
-      --accent: #b65b00;
-      --soft: #f0eee5;
+      --ink-950: #0a1020;
+      --ink-900: #18243a;
+      --ink-700: #324563;
+      --ink-500: #677893;
+      --line: #c8d5e9;
+      --paper: #f3f7ff;
+      --paper-strong: #ffffff;
+      --surface-1: #eaf1ff;
+      --surface-2: #f8fbff;
+      --signal: #1e40af;
+      --signal-2: #3b82f6;
+      --accent: #f97316;
+      --accent-soft: #fff1e5;
+      --shadow-soft: 0 0.95rem 1.8rem -1.15rem rgba(17, 40, 74, 0.28);
+      --shadow-card: 0 1.5rem 2.9rem -1.35rem rgba(13, 35, 69, 0.34);
+      --font-body: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-heading: "Plus Jakarta Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      --step--1: clamp(0.78rem, 0.75rem + 0.15vw, 0.87rem);
+      --step-0: clamp(0.93rem, 0.88rem + 0.25vw, 1.05rem);
+      --step-1: clamp(1.1rem, 1rem + 0.5vw, 1.28rem);
+      --step-2: clamp(1.3rem, 1.16rem + 0.7vw, 1.6rem);
+      --gutter: clamp(1rem, 0.72rem + 1.15vw, 1.95rem);
     }
     * { box-sizing: border-box; }
+    html { min-height: 100%; }
     body {
       margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--page);
-      color: var(--ink);
+      min-height: 100vh;
+      color: var(--ink-900);
+      background:
+        radial-gradient(110% 55% at 0% 0%, color-mix(in srgb, var(--signal-2) 7%, transparent), transparent 55%),
+        radial-gradient(85% 45% at 100% 0%, color-mix(in srgb, var(--accent) 4%, transparent), transparent 50%),
+        var(--paper);
+      font-family: var(--font-body);
+      font-size: var(--step-0);
+      line-height: 1.62;
     }
-    .shell {
-      width: min(880px, calc(100vw - 32px));
-      margin: 32px auto;
+    .page-noise {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      background-image:
+        linear-gradient(135deg, color-mix(in srgb, var(--signal) 4%, transparent) 0.75px, transparent 0.75px),
+        linear-gradient(45deg, color-mix(in srgb, var(--accent) 3%, transparent) 0.75px, transparent 0.75px);
+      background-size: 24px 24px, 34px 34px;
+      z-index: -1;
     }
-    header {
+    .site-header {
+      position: sticky;
+      top: 0;
+      z-index: 35;
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      grid-template-areas:
+        "brand controls"
+        "nav nav";
+      align-items: center;
+      column-gap: 1rem;
+      row-gap: 0.12rem;
+      padding: 0.44rem var(--gutter) 0.4rem;
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--paper-strong) 90%, transparent);
+      backdrop-filter: blur(8px);
+    }
+    .site-header::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      bottom: -1px;
+      height: 2px;
+      background: linear-gradient(90deg,
+        color-mix(in srgb, var(--signal) 10%, transparent),
+        color-mix(in srgb, var(--accent) 12%, transparent),
+        color-mix(in srgb, var(--signal) 10%, transparent));
+      pointer-events: none;
+    }
+    .header-brand {
+      grid-area: brand;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      min-width: 0;
+      min-height: 2.35rem;
+    }
+    .header-logo {
+      width: 32px;
+      height: 32px;
+      flex-shrink: 0;
+    }
+    .header-brand-text {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 0.05rem;
+      min-width: 0;
+      min-height: 2.35rem;
+    }
+    .site-title {
+      margin: 0;
+      color: var(--ink-950);
+      font-family: var(--font-heading);
+      font-size: var(--step-1);
+      font-weight: 800;
+      line-height: 1.2;
+    }
+    .site-tagline {
+      margin: 0;
+      color: var(--ink-700);
+      font-size: var(--step--1);
+      line-height: 1.15;
+    }
+    .header-controls {
+      grid-area: controls;
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      min-width: 0;
+    }
+    .host-stat {
+      display: inline-flex;
+      align-items: baseline;
+      gap: 0.24rem;
+      max-width: min(44vw, 26rem);
+      border: 1px solid color-mix(in srgb, var(--line) 88%, var(--paper-strong));
+      border-radius: 0.32rem;
+      background: color-mix(in srgb, var(--surface-2) 65%, var(--paper-strong));
+      padding: 0.14rem 0.44rem;
+      color: var(--ink-500);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      overflow-wrap: anywhere;
+    }
+    .host-stat strong {
+      color: var(--ink-950);
+      font-family: var(--font-heading);
+      font-size: var(--step-0);
+      font-weight: 800;
+    }
+    .header-nav-row {
+      grid-area: nav;
+      display: flex;
+      justify-content: flex-end;
+      min-width: 0;
+    }
+    .console-tabs {
+      display: flex;
+      gap: 2px;
+      width: fit-content;
+      max-width: 100%;
+      border-radius: 0.42rem;
+      background: var(--surface-1);
+      padding: 2px;
+    }
+    .console-tab {
+      border: none;
+      border-radius: 0.42rem;
+      background: var(--paper-strong);
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+      color: var(--signal);
+      font-family: var(--font-mono);
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.02em;
+      padding: 4px 14px;
+    }
+    .auth-shell {
+      width: min(76rem, calc(100vw - (2 * var(--gutter))));
+      margin: 1.65rem auto 2.4rem;
+    }
+    main {
+      display: grid;
+      gap: 1rem;
+    }
+    .auth-hero {
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      background:
+        linear-gradient(135deg,
+          color-mix(in srgb, var(--signal-2) 6%, var(--surface-2)),
+          var(--surface-2) 60%);
+      box-shadow: var(--shadow-soft);
+      overflow: hidden;
+    }
+    .hero-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 16px;
-      margin-bottom: 14px;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      font-weight: 800;
-      letter-spacing: 0;
-    }
-    .brand-mark {
-      display: grid;
-      place-items: center;
-      width: 34px;
-      height: 34px;
-      border-radius: 7px;
-      background: var(--brand);
-      color: white;
-      font-size: 14px;
-    }
-    .host {
-      color: var(--muted);
-      font-size: 13px;
-      overflow-wrap: anywhere;
-      text-align: right;
-    }
-    main {
-      background: var(--panel);
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      box-shadow: 0 18px 48px rgba(23, 23, 23, 0.08);
-      overflow: hidden;
-    }
-    .hero {
-      padding: 30px 32px 24px;
+      gap: 1rem;
+      padding: 0.75rem 1rem;
+      background: var(--paper-strong);
       border-bottom: 1px solid var(--line);
-      background: #fbfaf6;
     }
     .eyebrow {
-      color: var(--brand);
-      font-size: 13px;
-      font-weight: 800;
-      margin: 0 0 8px;
+      margin: 0;
+      color: var(--ink-500);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.06em;
       text-transform: uppercase;
     }
+    .client-chip {
+      min-width: 0;
+      max-width: 55%;
+      border: 1px solid color-mix(in srgb, var(--signal) 24%, var(--line));
+      border-radius: 999px;
+      background: color-mix(in srgb, var(--surface-1) 70%, var(--paper-strong));
+      color: var(--ink-700);
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      font-weight: 700;
+      line-height: 1;
+      overflow: hidden;
+      padding: 0.48rem 0.78rem;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .hero-body {
+      padding: 1.45rem 1.6rem 1.5rem;
+    }
     h1 {
-      font-size: 28px;
+      margin: 0 0 0.5rem;
+      color: var(--ink-950);
+      font-family: var(--font-heading);
+      font-size: var(--step-2);
+      font-weight: 800;
       line-height: 1.15;
-      margin: 0 0 10px;
-      letter-spacing: 0;
     }
     h2 {
-      font-size: 16px;
-      margin: 0 0 12px;
+      margin: 0;
+      color: var(--ink-950);
+      font-family: var(--font-heading);
+      font-size: var(--step-1);
+      font-weight: 700;
+      line-height: 1.24;
     }
     p {
       line-height: 1.5;
       margin: 0;
     }
-    a { color: var(--brand); }
+    a {
+      color: var(--signal);
+      text-decoration-thickness: 0.08em;
+      text-underline-offset: 0.16em;
+    }
+    a:hover { color: var(--accent); }
     code {
-      font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-      font-size: 13px;
+      border-radius: 0.1875rem;
+      background: var(--surface-1);
+      color: var(--ink-900);
+      font-family: var(--font-mono);
+      font-size: 0.78rem;
+      padding: 0.05rem 0.22rem;
       overflow-wrap: anywhere;
     }
     .subtitle {
-      color: var(--muted);
-      font-size: 16px;
-      max-width: 660px;
+      max-width: 69ch;
+      color: var(--ink-700);
+      font-size: var(--step-0);
     }
-    .content {
+    .auth-layout {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 280px;
-      gap: 24px;
-      padding: 28px 32px 32px;
+      grid-template-columns: minmax(0, 1fr) 21rem;
+      gap: 1rem;
+      align-items: start;
     }
-    .section + .section { margin-top: 24px; }
+    .auth-card {
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      background: var(--paper-strong);
+      overflow: hidden;
+    }
+    .auth-card-header {
+      padding: 0.75rem 1rem;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+    }
+    .auth-card-body {
+      padding: 1rem;
+    }
+    .section + .section { margin-top: 1rem; }
     .scope-list {
       list-style: none;
       margin: 0;
       padding: 0;
       display: grid;
-      gap: 10px;
+      gap: 0.62rem;
     }
     .scope-list li {
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 12px 14px;
-      background: #fff;
+      border-radius: 0.42rem;
+      background: var(--surface-2);
+      padding: 0.75rem 0.85rem;
     }
     .scope-title {
       display: flex;
       align-items: baseline;
       justify-content: space-between;
-      gap: 12px;
-      font-weight: 750;
+      gap: 0.75rem;
+      color: var(--ink-900);
+      font-family: var(--font-heading);
+      font-size: 0.93rem;
+      font-weight: 700;
     }
     .scope-title code {
-      color: var(--muted);
+      flex-shrink: 0;
+      color: var(--ink-500);
       font-weight: 500;
     }
     .scope-desc {
-      color: var(--muted);
-      font-size: 14px;
-      margin-top: 4px;
+      color: var(--ink-700);
+      font-size: var(--step--1);
+      margin-top: 0.2rem;
     }
     .side {
       display: grid;
-      gap: 14px;
+      gap: 1rem;
       align-content: start;
     }
     .summary-card {
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--soft);
-      padding: 14px;
+      border-radius: 0.5rem;
+      background: var(--paper-strong);
+      overflow: hidden;
     }
-    .summary-card h2 {
-      margin-bottom: 10px;
+    .summary-card h2,
+    .details-panel h2 {
+      padding: 0.75rem 1rem;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
+      font-size: 0.875rem;
+      font-weight: 600;
+    }
+    .summary-card-body,
+    .details-body {
+      padding: 1rem;
+    }
+    .summary-card--primary {
+      background:
+        linear-gradient(135deg,
+          color-mix(in srgb, var(--accent) 7%, var(--paper-strong)),
+          var(--paper-strong) 56%);
     }
     dl {
       display: grid;
-      gap: 10px;
+      gap: 0.65rem;
       margin: 0;
     }
     dl > div {
       min-width: 0;
     }
     dt {
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 800;
-      margin-bottom: 3px;
+      color: var(--ink-500);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.18rem;
       text-transform: uppercase;
     }
     dd {
       margin: 0;
       min-width: 0;
+      color: var(--ink-900);
+      font-size: 0.9rem;
       overflow-wrap: anywhere;
     }
     .identity {
-      display: grid;
-      gap: 3px;
+      display: flex;
+      flex-direction: column;
+      gap: 0.18rem;
+      min-width: 0;
     }
     .identity strong {
-      font-size: 15px;
+      color: var(--ink-950);
+      font-family: var(--font-heading);
+      font-size: var(--step-0);
+      font-weight: 800;
     }
     .muted {
-      color: var(--muted);
-      font-size: 14px;
+      color: var(--ink-700);
+      font-size: var(--step--1);
     }
-    .badge {
+    .auth-badge {
       display: inline-flex;
       align-items: center;
       width: fit-content;
-      border: 1px solid var(--line);
       border-radius: 999px;
-      padding: 5px 9px;
-      background: white;
-      color: var(--muted);
-      font-size: 12px;
-      font-weight: 800;
+      border: 1px solid color-mix(in srgb, #22c55e 30%, var(--line));
+      background: color-mix(in srgb, #22c55e 15%, var(--surface-1));
+      color: #16a34a;
+      font-family: var(--font-mono);
+      font-size: 0.68rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      padding: 0.15rem 0.5rem;
+      text-transform: uppercase;
     }
-    .badge.accent {
-      border-color: #e0b27a;
-      background: #fff6e8;
-      color: #6b3400;
+    .auth-badge--accent {
+      border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+      background: var(--accent-soft);
+      color: #9a3412;
     }
-    details {
-      border-top: 1px solid var(--line);
-      padding-top: 18px;
-      margin-top: 24px;
+    .details-panel {
+      border: 1px solid var(--line);
+      border-radius: 0.5rem;
+      background: var(--paper-strong);
+      overflow: hidden;
+    }
+    .callbacks-title {
+      margin: 1rem -1rem 0;
     }
     summary {
       cursor: pointer;
-      color: var(--brand);
-      font-weight: 800;
+      color: var(--signal);
+      font-family: var(--font-heading);
+      font-weight: 700;
+      list-style-position: inside;
+      padding: 0.75rem 1rem;
+      background: var(--surface-2);
+      border-bottom: 1px solid var(--line);
     }
     .redirect-list {
-      margin: 12px 0 0;
-      padding-left: 18px;
-      color: var(--muted);
+      margin: 0.7rem 0 0;
+      padding-left: 1.15rem;
+      color: var(--ink-700);
+      font-size: var(--step--1);
     }
     form {
       display: flex;
-      gap: 12px;
+      gap: 0.8rem;
       flex-wrap: wrap;
-      margin-top: 28px;
+      margin-top: 1rem;
+    }
+    .side form {
+      margin-top: 0;
     }
     button {
-      border: 0;
-      border-radius: 7px;
-      padding: 12px 18px;
-      font-weight: 800;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 2.6rem;
+      border-radius: 0.42rem;
       cursor: pointer;
-      font-size: 15px;
+      font-family: var(--font-mono);
+      font-size: 0.88rem;
+      font-weight: 700;
+      padding: 0.55rem 1.4rem;
+      transition: transform 0.12s, box-shadow 0.12s, background 0.12s;
+    }
+    button:hover,
+    button:focus-visible {
+      box-shadow: var(--shadow-soft);
+      outline: 2px solid transparent;
+      transform: translateY(-1px);
     }
     button.primary {
-      background: var(--brand);
-      color: white;
+      border: none;
+      background: var(--signal);
+      color: #fff;
     }
-    button.primary:hover { background: var(--brand-strong); }
+    button.primary:hover { background: var(--signal-2); }
     button.secondary {
-      background: #ece8dd;
-      color: var(--ink);
+      border: 1px solid color-mix(in srgb, var(--signal) 30%, var(--line));
+      background: var(--surface-1);
+      color: var(--signal);
     }
-    @media (max-width: 760px) {
-      .shell { width: min(100vw - 20px, 880px); margin: 16px auto; }
-      header { align-items: flex-start; flex-direction: column; }
-      .host { text-align: left; }
-      .hero, .content { padding: 22px; }
-      .content { grid-template-columns: 1fr; }
-      h1 { font-size: 24px; }
+    button.secondary:hover {
+      background: color-mix(in srgb, var(--signal-2) 12%, var(--surface-1));
+    }
+    .callback-domain {
+      font-family: var(--font-mono);
+      font-size: 0.82rem;
+      font-weight: 600;
+    }
+    .status-copy {
+      margin-top: 0.65rem;
+    }
+    @media (max-width: 820px) {
+      .site-header {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+          "brand"
+          "controls"
+          "nav";
+      }
+      .header-controls,
+      .header-nav-row {
+        justify-content: flex-start;
+      }
+      .host-stat {
+        max-width: 100%;
+      }
+      .auth-shell {
+        width: min(100vw - 1.25rem, 76rem);
+        margin-top: 1rem;
+      }
+      .hero-header {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+      .client-chip {
+        max-width: 100%;
+      }
+      .hero-body {
+        padding: 1.2rem;
+      }
+      .auth-layout { grid-template-columns: 1fr; }
       form { flex-direction: column; }
       button { width: 100%; }
     }
   </style>
 </head>
 <body>
-  <div class="shell">
-    <header>
-      <div class="brand"><span class="brand-mark">DM</span><span>DollhouseMCP Authorization</span></div>
-      <div class="host">mcp.dollhousemcp.com</div>
-    </header>
+  <div class="page-noise" aria-hidden="true"></div>
+  <header class="site-header">
+    <div class="header-brand">
+      <img src="/dollhouse-logo.png" alt="DollhouseMCP" class="header-logo" width="32" height="32">
+      <div class="header-brand-text">
+        <p class="site-title">DollhouseMCP</p>
+        <p class="site-tagline">Authorization</p>
+      </div>
+    </div>
+    <div class="header-controls">
+      <div class="host-stat"><span>Host</span><strong>${escapeHtmlText(authorizationHost)}</strong></div>
+    </div>
+    <div class="header-nav-row">
+      <div class="console-tabs" aria-label="Authorization context">
+        <span class="console-tab">OAuth</span>
+      </div>
+    </div>
+  </header>
+  <div class="auth-shell">
     <main>
-      <section class="hero">
-        <p class="eyebrow">OAuth client authorization</p>
-        <h1>Authorize ${escapeHtmlText(view.clientName)}?</h1>
-        <p class="subtitle">${escapeHtmlText(view.clientName)} is requesting access to DollhouseMCP. DollhouseMCP will issue OAuth tokens to this client after approval.</p>
+      <section class="auth-hero">
+        <div class="hero-header">
+          <p class="eyebrow">OAuth client authorization</p>
+          <span class="client-chip">${escapeHtmlText(view.clientName)}</span>
+        </div>
+        <div class="hero-body">
+          <h1>Authorize ${escapeHtmlText(view.clientName)}?</h1>
+          <p class="subtitle">${escapeHtmlText(view.clientName)} is requesting access to DollhouseMCP. DollhouseMCP will issue OAuth tokens to this client after approval.</p>
+        </div>
       </section>
-      <section class="content">
+      <section class="auth-layout">
         <div>
-          <section class="section">
-            <h2>Requested access</h2>
-            <ul class="scope-list">
+          <section class="auth-card section">
+            <div class="auth-card-header">
+              <h2>Requested access</h2>
+            </div>
+            <div class="auth-card-body">
+              <ul class="scope-list">
 ${scopes}
-            </ul>
+              </ul>
+            </div>
           </section>
-          <details>
+          <details class="details-panel section">
             <summary>Technical details</summary>
-            <dl>
-              <div>
-                <dt>Client ID</dt>
-                <dd><code>${escapeHtmlText(view.clientId)}</code></dd>
-              </div>
-              ${clientWebsiteRow}
-              <div>
-                <dt>Callback domain</dt>
-                <dd><code>${escapeHtmlText(view.callbackHost)}</code></dd>
-              </div>
-              <div>
-                <dt>Callback URL</dt>
-                <dd><code>${escapeHtmlText(view.redirectUri)}</code></dd>
-              </div>
-              <div>
-                <dt>Resource</dt>
-                <dd><code>${escapeHtmlText(view.resource)}</code></dd>
-              </div>
-              <div>
-                <dt>Application type</dt>
-                <dd>${escapeHtmlText(view.applicationType)}</dd>
-              </div>
-            </dl>
-            <h2 style="margin-top: 20px;">Registered callbacks</h2>
-            <ul class="redirect-list">
+            <div class="details-body">
+              <dl>
+                <div>
+                  <dt>Client ID</dt>
+                  <dd><code>${escapeHtmlText(view.clientId)}</code></dd>
+                </div>
+                ${clientWebsiteRow}
+                <div>
+                  <dt>Callback domain</dt>
+                  <dd><code>${escapeHtmlText(view.callbackHost)}</code></dd>
+                </div>
+                <div>
+                  <dt>Callback URL</dt>
+                  <dd><code>${escapeHtmlText(view.redirectUri)}</code></dd>
+                </div>
+                <div>
+                  <dt>Resource</dt>
+                  <dd><code>${escapeHtmlText(view.resource)}</code></dd>
+                </div>
+                <div>
+                  <dt>Application type</dt>
+                  <dd>${escapeHtmlText(view.applicationType)}</dd>
+                </div>
+              </dl>
+              <h2 class="callbacks-title">Registered callbacks</h2>
+              <ul class="redirect-list">
 ${redirectList}
 ${redirectOverflow}
-            </ul>
+              </ul>
+            </div>
           </details>
-          <form method="post" action="/interaction/${escapeHtmlAttr(details.uid)}">
-            <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrfToken)}">
-            <button class="primary" type="submit" name="action" value="${CLIENT_CONSENT_APPROVE_ACTION}">Authorize</button>
-            <button class="secondary" type="submit" name="action" value="${CLIENT_CONSENT_DENY_ACTION}">Cancel</button>
-          </form>
         </div>
         <aside class="side">
-          <section class="summary-card">
-            <h2>Signed in with GitHub</h2>
-            ${identitySummary}
+          <section class="summary-card summary-card--primary">
+            <h2>${escapeHtmlText(signedInHeading)}</h2>
+            <div class="summary-card-body">
+              ${identitySummary}
+            </div>
           </section>
           <section class="summary-card">
             <h2>Client status</h2>
-            <span class="${historyClass}">${escapeHtmlText(historyLabel)}</span>
-            <p class="muted" style="margin-top: 10px;">${escapeHtmlText(authorizationSummary)}</p>
+            <div class="summary-card-body">
+              <span class="${historyClass}">${escapeHtmlText(historyLabel)}</span>
+              <p class="muted status-copy">${escapeHtmlText(authorizationSummary)}</p>
+            </div>
           </section>
           <section class="summary-card">
             <h2>Callback</h2>
-            <dl>
-              <div>
-                <dt>Domain</dt>
-                <dd><code>${escapeHtmlText(view.callbackHost)}</code></dd>
-              </div>
-            </dl>
+            <div class="summary-card-body">
+              <dl>
+                <div>
+                  <dt>Domain</dt>
+                  <dd class="callback-domain">${escapeHtmlText(view.callbackHost)}</dd>
+                </div>
+              </dl>
+            </div>
           </section>
+          <form method="post" action="/interaction/${escapeHtmlAttr(details.uid)}">
+            <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrfToken)}">
+            <button class="primary" type="submit" name="action" value="${CLIENT_CONSENT_APPROVE_ACTION}">Authorize Client</button>
+            <button class="secondary" type="submit" name="action" value="${CLIENT_CONSENT_DENY_ACTION}">Cancel</button>
+          </form>
         </aside>
       </section>
     </main>
@@ -1076,6 +1387,16 @@ function renderResource(resource: unknown, defaultResource: string): string {
     if (strings.length > 0) return strings.join(', ');
   }
   return defaultResource;
+}
+
+function hostFromDisplayResource(resource: string): string {
+  const firstResource = resource.split(',')[0]?.trim();
+  if (!firstResource) return 'mcp.dollhousemcp.com';
+  try {
+    return new URL(firstResource).host;
+  } catch {
+    return firstResource;
+  }
 }
 
 async function hasSeenClientConsent(
