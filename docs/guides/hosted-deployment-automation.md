@@ -132,7 +132,7 @@ Common environment variables:
 | `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` | Optional numeric GitHub ID to pre-claim as the first admin and skip API lookup | none |
 | `DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT` | Seconds to wait for Postgres readiness | `60` |
 
-Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs, except for one upgrade path: if an existing deployment already has `/opt/dollhousemcp/.env`, selected secrets and database URLs are imported once into `.env.production` so Docker Compose interpolation does not generate credentials that differ from the initialized Postgres volume. The helper records that upgrade in `.legacy-env-imported`; remove that marker only if you intentionally need to re-import from `.env`. Set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` to disable the import.
+Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs, except for one upgrade path: if an existing deployment already has `/opt/dollhousemcp/.env`, selected values are imported once into `.env.production` so Docker Compose interpolation does not generate credentials that differ from the initialized Postgres volume. When `.env.production` already exists, only database/connection keys are reconciled from `.env`; auth and runtime secrets already present in `.env.production` are preserved. The helper records that upgrade in `.legacy-env-imported`; remove that marker only if you intentionally need to re-import from `.env`. Set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` to disable the import.
 
 All helper-managed Docker Compose commands run with `--env-file .env.production`. This matters because Compose normally reads `.env` for variable interpolation, while `env_file: .env.production` only controls container environment injection.
 
@@ -251,7 +251,7 @@ Or enter them at the prompt during an interactive install. In noninteractive mod
 
 ### Legacy `.env` Import
 
-On upgrade from an earlier helper-generated deployment, the helper imports selected keys from `/opt/dollhousemcp/.env` into `.env.production` once, then writes `.legacy-env-imported`. The import log lists key names for auditability, but never prints values.
+On upgrade from an earlier helper-generated deployment, the helper imports selected keys from `/opt/dollhousemcp/.env` into `.env.production` once, then writes `.legacy-env-imported`. If `.env.production` already exists, the import is limited to database/connection keys so existing GitHub OAuth, cookie, audit, and encryption secrets are not overwritten by stale legacy values. The import log lists key names for auditability, but never prints values.
 
 If the import is not desired, set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` before running the helper. If `.env` exists but cannot be read, fix its permissions or disable the import. To intentionally repeat the import, remove `.legacy-env-imported` after confirming `.env` contains the values you want to preserve.
 

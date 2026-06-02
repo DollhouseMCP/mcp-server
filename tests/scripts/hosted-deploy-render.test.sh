@@ -135,7 +135,9 @@ DOLLHOUSE_HOSTED_DEPLOY_DIR="${LEGACY_DEPLOY_DIR}" \
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   bash "${HOSTED_DEPLOY}" render > "${LEGACY_IMPORT_OUTPUT}"
 assert_contains "${LEGACY_IMPORT_OUTPUT}" "POSTGRES_ADMIN_PASSWORD"
-assert_contains "${LEGACY_IMPORT_OUTPUT}" "DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET"
+if grep -Fq "DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET" "${LEGACY_IMPORT_OUTPUT}"; then
+  fail "existing .env.production should not import GitHub secret from legacy .env"
+fi
 if grep -Fq "legacy-secret" "${LEGACY_IMPORT_OUTPUT}"; then
   fail "legacy import log should not expose imported secret values"
 fi
@@ -143,10 +145,10 @@ fi
   fail "legacy POSTGRES_ADMIN_PASSWORD was not imported"
 [[ "$(env_value POSTGRES_PASSWORD "${LEGACY_DEPLOY_DIR}/.env.production")" == "legacy-app-password" ]] || \
   fail "legacy POSTGRES_PASSWORD was not imported"
-[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_ID "${LEGACY_DEPLOY_DIR}/.env.production")" == "legacy-client" ]] || \
-  fail "legacy GitHub client ID was not imported"
-[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "${LEGACY_DEPLOY_DIR}/.env.production")" == "legacy-secret" ]] || \
-  fail "legacy GitHub client secret was not imported"
+[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_ID "${LEGACY_DEPLOY_DIR}/.env.production")" == "generated-client" ]] || \
+  fail "legacy GitHub client ID should not replace existing .env.production"
+[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "${LEGACY_DEPLOY_DIR}/.env.production")" == "generated-secret" ]] || \
+  fail "legacy GitHub client secret should not replace existing .env.production"
 cat > "${LEGACY_DEPLOY_DIR}/.env" <<'EOF'
 POSTGRES_ADMIN_PASSWORD=stale-admin-password
 POSTGRES_PASSWORD=stale-app-password
@@ -165,6 +167,7 @@ ALLOWLIST_DEPLOY_DIR="${TMP_ROOT}/legacy-allowlist-deploy"
 mkdir -p "${ALLOWLIST_DEPLOY_DIR}"
 cat > "${ALLOWLIST_DEPLOY_DIR}/.env" <<'EOF'
 POSTGRES_PASSWORD=allowlisted-app-password
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=allowlisted-github-secret
 UNRELATED_LEGACY_SETTING=should-not-copy
 EOF
 ALLOWLIST_IMPORT_OUTPUT="${TMP_ROOT}/legacy-allowlist-import.out"
@@ -173,9 +176,12 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   bash "${HOSTED_DEPLOY}" render > "${ALLOWLIST_IMPORT_OUTPUT}"
 [[ "$(env_value POSTGRES_PASSWORD "${ALLOWLIST_DEPLOY_DIR}/.env.production")" == "allowlisted-app-password" ]] || \
   fail "allowlisted legacy key was not imported"
+[[ "$(env_value DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "${ALLOWLIST_DEPLOY_DIR}/.env.production")" == "allowlisted-github-secret" ]] || \
+  fail "allowlisted GitHub secret should be imported when .env.production is created"
 [[ -z "$(env_value UNRELATED_LEGACY_SETTING "${ALLOWLIST_DEPLOY_DIR}/.env.production")" ]] || \
   fail "unrelated legacy key should not be imported"
 assert_contains "${ALLOWLIST_IMPORT_OUTPUT}" "POSTGRES_PASSWORD"
+assert_contains "${ALLOWLIST_IMPORT_OUTPUT}" "DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET"
 
 log "checking dry-run render does not write files"
 DRY_RUN_DEPLOY_DIR="${TMP_ROOT}/dry-run-deploy"

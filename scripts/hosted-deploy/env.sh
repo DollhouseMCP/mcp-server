@@ -71,7 +71,9 @@ upsert_env_value() {
 }
 
 ensure_env_file() {
+  ENV_FILE_CREATED=false
   if [[ ! -f "${ENV_FILE}" ]]; then
+    ENV_FILE_CREATED=true
     if [[ "${IMPORT_LEGACY_ENV}" == "true" && -f "${LEGACY_ENV_FILE}" ]]; then
       ensure_legacy_env_readable
       log "creating ${ENV_FILE}; selected values will be imported from ${LEGACY_ENV_FILE}"
@@ -82,6 +84,36 @@ ensure_env_file() {
     fi
   else
     chmod 0600 "${ENV_FILE}"
+  fi
+
+  return 0
+}
+
+legacy_import_keys() {
+  if [[ "${ENV_FILE_CREATED:-false}" == "true" ]]; then
+    cat <<'EOF'
+POSTGRES_ADMIN_PASSWORD
+POSTGRES_PASSWORD
+POSTGRES_APP_PASSWORD
+DOLLHOUSE_DATABASE_URL
+DOLLHOUSE_DATABASE_ADMIN_URL
+DOLLHOUSE_COOKIE_SIGNING_SECRET
+DOLLHOUSE_INVITE_TOKEN_SECRET
+DOLLHOUSE_AUDIT_HMAC_SECRET
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET
+DOLLHOUSE_GITHUB_CLIENT_ID
+DOLLHOUSE_GITHUB_CLIENT_SECRET
+DOLLHOUSE_MASTER_ENCRYPTION_KEY
+EOF
+  else
+    cat <<'EOF'
+POSTGRES_ADMIN_PASSWORD
+POSTGRES_PASSWORD
+POSTGRES_APP_PASSWORD
+DOLLHOUSE_DATABASE_URL
+DOLLHOUSE_DATABASE_ADMIN_URL
+EOF
   fi
 
   return 0
@@ -107,21 +139,7 @@ sync_legacy_env_values() {
       imported_count=$((imported_count + 1))
       imported_keys="${imported_keys:+${imported_keys}, }${key}"
     fi
-  done <<'EOF'
-POSTGRES_ADMIN_PASSWORD
-POSTGRES_PASSWORD
-POSTGRES_APP_PASSWORD
-DOLLHOUSE_DATABASE_URL
-DOLLHOUSE_DATABASE_ADMIN_URL
-DOLLHOUSE_COOKIE_SIGNING_SECRET
-DOLLHOUSE_INVITE_TOKEN_SECRET
-DOLLHOUSE_AUDIT_HMAC_SECRET
-DOLLHOUSE_AUTH_GITHUB_CLIENT_ID
-DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET
-DOLLHOUSE_GITHUB_CLIENT_ID
-DOLLHOUSE_GITHUB_CLIENT_SECRET
-DOLLHOUSE_MASTER_ENCRYPTION_KEY
-EOF
+  done < <(legacy_import_keys)
 
   if (( imported_count > 0 )); then
     log "imported ${imported_count} existing secret/config key(s) from ${LEGACY_ENV_FILE}: ${imported_keys}"
