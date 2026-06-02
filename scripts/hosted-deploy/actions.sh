@@ -36,6 +36,8 @@ run_action() {
       die "unknown action: ${ACTION}"
       ;;
   esac
+
+  return 0
 }
 
 hosted_deploy_main() {
@@ -50,4 +52,6 @@ hosted_deploy_main() {
   else
     run_action
   fi
+
+  return 0
 }

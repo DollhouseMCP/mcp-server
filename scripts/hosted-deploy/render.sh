@@ -92,6 +92,8 @@ volumes:
   caddy_data:
   caddy_config:
 EOF
+
+  return 0
 }
 
 write_caddyfile() {
@@ -110,6 +112,8 @@ ${HOSTNAME} {
     }
 }
 EOF
+
+  return 0
 }
 
 write_init_db() {
@@ -141,6 +145,8 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 SQL
 EOF
   chmod 0750 "${INIT_DB_FILE}"
+
+  return 0
 }
 
 render_files() {
@@ -154,4 +160,6 @@ render_files() {
   write_caddyfile
   write_init_db
   log "rendered deployment files in ${DEPLOY_DIR}"
+
+  return 0
 }

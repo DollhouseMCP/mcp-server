@@ -10,6 +10,8 @@ describe_render_plan() {
   log "dry-run: would write ${COMPOSE_FILE}"
   log "dry-run: would write ${CADDY_FILE}"
   log "dry-run: would write ${INIT_DB_FILE} without embedding the app database password"
+
+  return 0
 }
 
 describe_source_plan() {
@@ -24,6 +26,8 @@ describe_source_plan() {
     validate_git_url_for_clone
     log "dry-run: would clone $(redact_url "${GIT_URL}") at ref ${GIT_REF}"
   fi
+
+  return 0
 }
 
 describe_bootstrap_plan() {
@@ -38,6 +42,8 @@ describe_bootstrap_plan() {
   else
     log "dry-run: would skip admin bootstrap because no bootstrap identity is set"
   fi
+
+  return 0
 }
 
 dry_run_start_or_update() {
@@ -56,6 +62,8 @@ dry_run_start_or_update() {
     log "dry-run: would start or update the full compose stack"
   fi
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+
+  return 0
 }
 
 dry_run_migrations() {
@@ -64,6 +72,8 @@ dry_run_migrations() {
   log "dry-run: would build dollhousemcp image"
   log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
   log "dry-run: would run database migrations"
+
+  return 0
 }
 
 dry_run_bootstrap_admin() {
@@ -73,6 +83,8 @@ dry_run_bootstrap_admin() {
   log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
   log "dry-run: would run database migrations"
   describe_bootstrap_plan required
+
+  return 0
 }
 
 dry_run_rollback() {
@@ -92,6 +104,8 @@ dry_run_rollback() {
   fi
   log "dry-run: would rebuild dollhousemcp image and restart dollhousemcp + caddy"
   log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+
+  return 0
 }
 
 dry_run_verify() {
@@ -101,6 +115,8 @@ dry_run_verify() {
   log "dry-run: would check ${PUBLIC_BASE_URL}/healthz"
   log "dry-run: would check ${PUBLIC_BASE_URL}/readyz"
   log "dry-run: would check ${PUBLIC_BASE_URL}/mcp returns 401 without a bearer token"
+
+  return 0
 }
 
 run_dry_action() {
@@ -132,4 +148,6 @@ run_dry_action() {
       die "unknown action: ${ACTION}"
       ;;
   esac
+
+  return 0
 }

@@ -9,6 +9,8 @@ need_command() {
   if [[ -z "${resolved_path}" ]]; then
     die "missing required command: ${command_name}"
   fi
+
+  return 0
 }
 
 validate_bool() {
@@ -21,10 +23,16 @@ validate_bool() {
       die "${key} must be 'true' or 'false', got: ${value}"
       ;;
   esac
+
+  return 0
 }
 
 is_dry_run() {
-  [[ "${DRY_RUN}" == "true" ]]
+  if [[ "${DRY_RUN}" == "true" ]]; then
+    return 0
+  fi
+
+  return 1
 }
 
 validate_no_whitespace() {
@@ -34,6 +42,8 @@ validate_no_whitespace() {
   if [[ "${value}" =~ [[:space:]] ]]; then
     die "${key} must not contain whitespace"
   fi
+
+  return 0
 }
 
 validate_hostname() {
@@ -48,6 +58,8 @@ validate_hostname() {
   if [[ "${HOSTNAME}" == *..* || "${HOSTNAME}" == .* || "${HOSTNAME}" == *. ]]; then
     die "DOLLHOUSE_HOSTED_HOSTNAME must be a valid hostname, got: ${HOSTNAME}"
   fi
+
+  return 0
 }
 
 validate_public_base_url() {
@@ -69,12 +81,16 @@ validate_public_base_url() {
   if [[ "${without_scheme}" == *"/"* || "${without_scheme}" == *"?"* || "${without_scheme}" == *"#"* ]]; then
     die "DOLLHOUSE_PUBLIC_BASE_URL must be an origin only, for example https://mcp.example.com"
   fi
+
+  return 0
 }
 
 validate_port() {
   if [[ ! "${MCP_PORT}" =~ ^[0-9]+$ || "${MCP_PORT}" -lt 1 || "${MCP_PORT}" -gt 65535 ]]; then
     die "DOLLHOUSE_HTTP_PORT must be an integer from 1 to 65535, got: ${MCP_PORT}"
   fi
+
+  return 0
 }
 
 validate_render_value() {
@@ -85,6 +101,8 @@ validate_render_value() {
   if [[ "${value}" == *":"* && "${key}" != "DOLLHOUSE_HOSTED_IMAGE_TAG" ]]; then
     die "${key} contains ':' unexpectedly: ${value}"
   fi
+
+  return 0
 }
 
 validate_render_inputs() {
@@ -95,11 +113,17 @@ validate_render_inputs() {
   validate_render_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
   validate_render_value DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
   validate_render_value DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"
+
+  return 0
 }
 
 git_url_has_credentials() {
   local git_url="$1"
-  [[ "${git_url}" =~ ^https?://[^/@]+@ ]]
+  if [[ "${git_url}" =~ ^https?://[^/@]+@ ]]; then
+    return 0
+  fi
+
+  return 1
 }
 
 validate_git_url_for_clone() {
@@ -107,22 +131,28 @@ validate_git_url_for_clone() {
   if git_url_has_credentials "${GIT_URL}" && [[ "${ALLOW_CREDENTIAL_GIT_URL}" != "true" ]]; then
     die "DOLLHOUSE_HOSTED_GIT_URL must not embed credentials; use a git credential helper, deploy key, or DOLLHOUSE_HOSTED_SOURCE_DIR instead"
   fi
+
+  return 0
 }
 
 resolve_public_base_url() {
   if [[ -n "${PUBLIC_BASE_URL}" ]]; then
-    return
+    return 0
   fi
   [[ -n "${HOSTNAME}" ]] || die "set DOLLHOUSE_HOSTED_HOSTNAME or DOLLHOUSE_PUBLIC_BASE_URL"
   PUBLIC_BASE_URL="https://${HOSTNAME}"
+
+  return 0
 }
 
 resolve_hostname() {
   if [[ -n "${HOSTNAME}" ]]; then
-    return
+    return 0
   fi
   [[ -n "${PUBLIC_BASE_URL}" ]] || die "set DOLLHOUSE_HOSTED_HOSTNAME or DOLLHOUSE_PUBLIC_BASE_URL"
   HOSTNAME="${PUBLIC_BASE_URL#https://}"
   HOSTNAME="${HOSTNAME#http://}"
   HOSTNAME="${HOSTNAME%%/*}"
+
+  return 0
 }

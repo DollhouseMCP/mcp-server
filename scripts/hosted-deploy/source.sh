@@ -3,11 +3,13 @@
 
 detect_default_source_dir() {
   if [[ -n "${SOURCE_DIR}" ]]; then
-    return
+    return 0
   fi
   if git -C "${HOSTED_DEPLOY_REPO_ROOT}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     SOURCE_DIR="${HOSTED_DEPLOY_REPO_ROOT}"
   fi
+
+  return 0
 }
 
 unique_path() {
@@ -20,6 +22,8 @@ unique_path() {
     suffix=$((suffix + 1))
   done
   printf '%s\n' "${candidate}"
+
+  return 0
 }
 
 redact_url() {
@@ -27,9 +31,11 @@ redact_url() {
 
   if [[ "${url}" =~ ^(https?://)([^/@]+@)(.*)$ ]]; then
     printf '%s***@%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
-    return
+    return 0
   fi
   printf '%s\n' "${url}"
+
+  return 0
 }
 
 stage_from_source_dir() {
@@ -48,6 +54,8 @@ stage_from_source_dir() {
   revision="$(git -C "${SOURCE_DIR}" rev-parse HEAD)" || \
     die "failed to resolve HEAD revision from ${SOURCE_DIR}"
   printf '%s\n' "${revision}"
+
+  return 0
 }
 
 stage_from_remote_git() {
@@ -64,6 +72,8 @@ stage_from_remote_git() {
   revision="$(git -C "${incoming}" rev-parse HEAD)" || \
     die "failed to resolve cloned revision from ${redacted_url}"
   printf '%s\n' "${revision}"
+
+  return 0
 }
 
 stage_source() {
@@ -86,9 +96,13 @@ stage_source() {
   mv "${incoming}" "${SERVER_DIR}" || die "failed to promote incoming server bundle to ${SERVER_DIR}"
   printf '%s\n' "${revision}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
   date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
+
+  return 0
 }
 
 latest_previous_bundle() {
   [[ -d "${DEPLOY_DIR}" ]] || return 0
   find "${DEPLOY_DIR}" -maxdepth 1 -type d -name 'server.prev-*' -print | sort | tail -n 1
+
+  return 0
 }

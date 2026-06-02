@@ -4,30 +4,43 @@
 ensure_docker_prerequisites() {
   need_command docker
   docker compose version >/dev/null 2>&1 || die "Docker Compose is required"
+
+  return 0
 }
 
 ensure_runtime_prerequisites() {
   ensure_docker_prerequisites
   need_command openssl
+
+  return 0
 }
 
 ensure_prerequisites() {
   ensure_runtime_prerequisites
   need_command git
   need_command tar
+
+  return 0
 }
 
 compose() {
-  (cd "${DEPLOY_DIR}" && docker compose -f "${COMPOSE_FILE}" "$@")
+  local status=0
+
+  (cd "${DEPLOY_DIR}" && docker compose -f "${COMPOSE_FILE}" "$@") || status=$?
+  return "${status}"
 }
 
 ensure_server_source() {
   [[ -d "${SERVER_DIR}" ]] || die "server source not staged at ${SERVER_DIR}; run install or update first"
+
+  return 0
 }
 
 validate_postgres_timeout() {
   [[ "${POSTGRES_READY_TIMEOUT}" =~ ^[0-9]+$ ]] || \
     die "DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT must be an integer number of seconds; try 60, 120, or 300"
+
+  return 0
 }
 
 wait_for_postgres() {
@@ -45,16 +58,22 @@ wait_for_postgres() {
     sleep 1
     elapsed=$((elapsed + 1))
   done
+
+  return 0
 }
 
 build_app_image() {
   log "building dollhousemcp image"
   compose build dollhousemcp
+
+  return 0
 }
 
 run_database_migrations() {
   log "running database migrations"
   compose run --rm dollhousemcp npm run db:migrate
+
+  return 0
 }
 
 prepare_existing_stack() {
@@ -63,6 +82,8 @@ prepare_existing_stack() {
   ensure_server_source
   build_app_image
   wait_for_postgres
+
+  return 0
 }
 
 run_bootstrap_admin() {
@@ -77,7 +98,7 @@ run_bootstrap_admin() {
   elif [[ -n "${BOOTSTRAP_GITHUB_USERNAME}" ]]; then
     args=(--method github --github-username "${BOOTSTRAP_GITHUB_USERNAME}")
   elif [[ "${mode}" == "optional" ]]; then
-    return
+    return 0
   elif [[ -t 0 ]]; then
     read -r -p "Admin GitHub username: " BOOTSTRAP_GITHUB_USERNAME
     [[ -n "${BOOTSTRAP_GITHUB_USERNAME}" ]] || die "admin GitHub username is required"
@@ -88,12 +109,16 @@ run_bootstrap_admin() {
 
   log "bootstrapping GitHub admin"
   compose run --rm dollhousemcp npx dollhouse-admin-bootstrap "${args[@]}"
+
+  return 0
 }
 
 bootstrap_admin() {
   prepare_existing_stack
   run_database_migrations
   run_bootstrap_admin required
+
+  return 0
 }
 
 start_or_update() {
@@ -111,11 +136,15 @@ start_or_update() {
   else
     compose up -d
   fi
+
+  return 0
 }
 
 run_migrations() {
   prepare_existing_stack
   run_database_migrations
+
+  return 0
 }
 
 rollback_server() {
@@ -144,6 +173,8 @@ rollback_server() {
   build_app_image
   wait_for_postgres
   compose up -d dollhousemcp caddy
+
+  return 0
 }
 
 verify_deploy() {
@@ -160,4 +191,6 @@ verify_deploy() {
   status="$(curl -sS -o /dev/null -w '%{http_code}' "${PUBLIC_BASE_URL}/mcp")"
   [[ "${status}" == "401" ]] || die "expected /mcp to return 401 without a bearer token, got ${status}"
   log "verification passed"
+
+  return 0
 }

@@ -26,6 +26,8 @@ hosted_deploy_init_config() {
   CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
   INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
   SERVER_DIR="${DEPLOY_DIR}/server"
+
+  return 0
 }
 
 usage() {
@@ -75,6 +77,8 @@ Examples:
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh rollback
   DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com scripts/hosted-deploy.sh verify
 EOF
+
+  return 0
 }
 
 parse_args() {
@@ -116,4 +120,6 @@ parse_args() {
         ;;
     esac
   done
+
+  return 0
 }
