@@ -59,7 +59,7 @@ The helper manages the deployment directory, defaulting to `/opt/dollhousemcp`:
 /opt/dollhousemcp/
   compose.yml
   Caddyfile
-  init-db.sql
+  init-db.sh
   .env.production
   server/
   portfolio/
@@ -100,6 +100,8 @@ Common environment variables:
 | `DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT` | Seconds to wait for Postgres readiness | `60` |
 
 Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs.
+
+The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
 ## Actions
 
@@ -227,15 +229,17 @@ Run the deployment helper shell checks:
 npm run lint:shell
 ```
 
-Run the render smoke test:
+Run the hosted deployment smoke tests:
 
 ```bash
 npm run test:hosted-deploy
 ```
+
+This runs both the generated-file render test and a Docker-stubbed workflow test covering install, update, rollback, migrations, verification, and an invalid source error path.
 
 ## Next Steps
 
 - Add local/LAN mode with clear binding and TLS choices.
 - Add enterprise mode presets for external OIDC/IdP configuration.
 - Add a wrapper installer that can be served from a stable URL.
-- Broaden generated-file tests beyond the current render smoke coverage.
+- Add optional real-container integration coverage for Docker environments.

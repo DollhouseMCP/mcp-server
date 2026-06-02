@@ -59,7 +59,7 @@ DEPLOY_DIR="${TMP_ROOT}/deploy"
 ENV_FILE="${DEPLOY_DIR}/.env.production"
 COMPOSE_FILE="${DEPLOY_DIR}/compose.yml"
 CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
-INIT_DB_FILE="${DEPLOY_DIR}/init-db.sql"
+INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
 
 log "rendering default alpha configuration"
 render_with_dcr "${DEPLOY_DIR}" ""
@@ -70,10 +70,12 @@ render_with_dcr "${DEPLOY_DIR}" ""
 [[ -f "${INIT_DB_FILE}" ]] || fail "missing ${INIT_DB_FILE}"
 
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
+assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: \${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-true}"
 assert_contains "${CADDY_FILE}" 'mcp.example.com {'
 assert_contains "${INIT_DB_FILE}" 'CREATE ROLE dollhouse_app'
+assert_contains "${INIT_DB_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret'
 
@@ -81,6 +83,9 @@ first_postgres_password="$(env_value POSTGRES_PASSWORD "${ENV_FILE}")"
 first_cookie_secret="$(env_value DOLLHOUSE_COOKIE_SIGNING_SECRET "${ENV_FILE}")"
 [[ -n "${first_postgres_password}" ]] || fail "POSTGRES_PASSWORD was not generated"
 [[ -n "${first_cookie_secret}" ]] || fail "DOLLHOUSE_COOKIE_SIGNING_SECRET was not generated"
+if grep -Fq "${first_postgres_password}" "${INIT_DB_FILE}"; then
+  fail "init-db.sh should not contain the generated app database password"
+fi
 
 log "rendering stricter DCR override"
 render_with_dcr "${DEPLOY_DIR}" "false"

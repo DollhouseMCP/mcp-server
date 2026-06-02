@@ -30,7 +30,7 @@ BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 ENV_FILE="${DEPLOY_DIR}/.env.production"
 COMPOSE_FILE="${DEPLOY_DIR}/compose.yml"
 CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
-INIT_DB_FILE="${DEPLOY_DIR}/init-db.sql"
+INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
 SERVER_DIR="${DEPLOY_DIR}/server"
 
 usage() {
@@ -83,7 +83,13 @@ die() {
 }
 
 need_command() {
-  command -v "$1" >/dev/null 2>&1 || die "missing required command: $1"
+  local command_name="$1"
+  local resolved_path
+
+  resolved_path="$(command -v "${command_name}" || true)"
+  if [[ -z "${resolved_path}" ]]; then
+    die "missing required command: ${command_name}"
+  fi
 }
 
 resolve_public_base_url() {
@@ -117,6 +123,7 @@ ensure_runtime_prerequisites() {
 ensure_prerequisites() {
   ensure_runtime_prerequisites
   need_command git
+  need_command tar
 }
 
 ensure_layout() {
@@ -125,7 +132,13 @@ ensure_layout() {
 }
 
 random_hex() {
-  openssl rand -hex "$1"
+  local bytes="$1"
+
+  if [[ ! "${bytes}" =~ ^[0-9]+$ || "${bytes}" -le 0 ]]; then
+    die "random secret byte count must be a positive integer, got: ${bytes}"
+  fi
+
+  openssl rand -hex "${bytes}" || die "failed to generate ${bytes} random bytes with openssl"
 }
 
 env_value() {
@@ -250,9 +263,10 @@ services:
       POSTGRES_USER: dollhouse
       POSTGRES_PASSWORD: \${POSTGRES_ADMIN_PASSWORD}
       POSTGRES_DB: dollhousemcp
+      DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}
     volumes:
       - ./pgdata:/var/lib/postgresql/data
-      - ./init-db.sql:/docker-entrypoint-initdb.d/00-create-roles.sql:ro
+      - ./init-db.sh:/docker-entrypoint-initdb.d/00-create-roles.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dollhouse -d dollhousemcp"]
       interval: 10s
@@ -348,27 +362,34 @@ EOF
 }
 
 write_init_db() {
-  local app_password="${POSTGRES_PASSWORD:-}"
-  [[ -n "${app_password}" ]] || die "POSTGRES_PASSWORD missing from ${ENV_FILE}"
-  [[ "${app_password}" != *"'"* ]] || die "POSTGRES_PASSWORD must not contain single quotes for init-db.sql generation"
+  cat > "${INIT_DB_FILE}" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
 
-  cat > "${INIT_DB_FILE}" <<EOF
-DO \$\$
-BEGIN
-  IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dollhouse_app') THEN
-    CREATE ROLE dollhouse_app WITH LOGIN PASSWORD '${app_password}'
-      NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
-  END IF;
-END
-\$\$;
+: "${POSTGRES_USER:?POSTGRES_USER is required}"
+: "${POSTGRES_DB:?POSTGRES_DB is required}"
+: "${DOLLHOUSE_APP_DB_PASSWORD:?DOLLHOUSE_APP_DB_PASSWORD is required}"
+
+psql -v ON_ERROR_STOP=1 \
+  --username "${POSTGRES_USER}" \
+  --dbname "${POSTGRES_DB}" \
+  -v app_password="${DOLLHOUSE_APP_DB_PASSWORD}" <<'SQL'
+SELECT format(
+  'CREATE ROLE dollhouse_app WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS',
+  :'app_password'
+)
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dollhouse_app')
+\gexec
+ALTER ROLE dollhouse_app WITH PASSWORD :'app_password';
 GRANT CONNECT ON DATABASE dollhousemcp TO dollhouse_app;
 GRANT USAGE ON SCHEMA public TO dollhouse_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO dollhouse_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO dollhouse_app;
+SQL
 EOF
-  chmod 0640 "${INIT_DB_FILE}"
+  chmod 0750 "${INIT_DB_FILE}"
 }
 
 detect_default_source_dir() {
@@ -380,28 +401,79 @@ detect_default_source_dir() {
   fi
 }
 
+unique_path() {
+  local base="$1"
+  local candidate="${base}"
+  local suffix=1
+
+  while [[ -e "${candidate}" ]]; do
+    candidate="${base}-${suffix}"
+    suffix=$((suffix + 1))
+  done
+  printf '%s\n' "${candidate}"
+}
+
+redact_url() {
+  local url="$1"
+
+  if [[ "${url}" =~ ^(https?://)([^/@]+@)(.*)$ ]]; then
+    printf '%s***@%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[3]}"
+    return
+  fi
+  printf '%s\n' "${url}"
+}
+
+stage_from_source_dir() {
+  local incoming="$1"
+  local revision
+
+  [[ -d "${SOURCE_DIR}" ]] || die "DOLLHOUSE_HOSTED_SOURCE_DIR does not exist: ${SOURCE_DIR}"
+  if ! git -C "${SOURCE_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    die "DOLLHOUSE_HOSTED_SOURCE_DIR is not a git checkout: ${SOURCE_DIR}"
+  fi
+
+  log "staging source from ${SOURCE_DIR}" >&2
+  if ! git -C "${SOURCE_DIR}" archive --format=tar HEAD | tar -xf - -C "${incoming}"; then
+    die "failed to archive HEAD from ${SOURCE_DIR}; check that it has a valid commit and that ${incoming} is writable"
+  fi
+  revision="$(git -C "${SOURCE_DIR}" rev-parse HEAD)" || \
+    die "failed to resolve HEAD revision from ${SOURCE_DIR}"
+  printf '%s\n' "${revision}"
+}
+
+stage_from_remote_git() {
+  local incoming="$1"
+  local revision redacted_url
+
+  redacted_url="$(redact_url "${GIT_URL}")"
+  log "cloning ${redacted_url} (${GIT_REF})" >&2
+  rmdir "${incoming}" || die "failed to prepare incoming clone directory: ${incoming}"
+  if ! git clone --depth 1 --branch "${GIT_REF}" "${GIT_URL}" "${incoming}"; then
+    die "failed to clone ${redacted_url} at ref ${GIT_REF}; check DOLLHOUSE_HOSTED_GIT_URL, DOLLHOUSE_HOSTED_GIT_REF, network access, and git credentials"
+  fi
+  revision="$(git -C "${incoming}" rev-parse HEAD)" || \
+    die "failed to resolve cloned revision from ${redacted_url}"
+  printf '%s\n' "${revision}"
+}
+
 stage_source() {
-  local timestamp incoming revision
+  local timestamp incoming revision previous_bundle
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  incoming="${DEPLOY_DIR}/server.incoming-${timestamp}"
+  incoming="$(unique_path "${DEPLOY_DIR}/server.incoming-${timestamp}")"
   mkdir "${incoming}"
 
   detect_default_source_dir
   if [[ -n "${SOURCE_DIR}" ]]; then
-    log "staging source from ${SOURCE_DIR}"
-    git -C "${SOURCE_DIR}" archive --format=tar HEAD | tar -xf - -C "${incoming}"
-    revision="$(git -C "${SOURCE_DIR}" rev-parse HEAD)"
+    revision="$(stage_from_source_dir "${incoming}")"
   else
-    log "cloning ${GIT_URL} (${GIT_REF})"
-    rmdir "${incoming}"
-    git clone --depth 1 --branch "${GIT_REF}" "${GIT_URL}" "${incoming}"
-    revision="$(git -C "${incoming}" rev-parse HEAD)"
+    revision="$(stage_from_remote_git "${incoming}")"
   fi
 
   if [[ -d "${SERVER_DIR}" ]]; then
-    mv "${SERVER_DIR}" "${DEPLOY_DIR}/server.prev-${timestamp}"
+    previous_bundle="$(unique_path "${DEPLOY_DIR}/server.prev-${timestamp}")"
+    mv "${SERVER_DIR}" "${previous_bundle}" || die "failed to move current server bundle to ${previous_bundle}"
   fi
-  mv "${incoming}" "${SERVER_DIR}"
+  mv "${incoming}" "${SERVER_DIR}" || die "failed to promote incoming server bundle to ${SERVER_DIR}"
   printf '%s\n' "${revision}" > "${DEPLOY_DIR}/DEPLOYED_REVISION"
   date -u +%Y-%m-%dT%H:%M:%SZ > "${DEPLOY_DIR}/DEPLOYED_AT"
 }
@@ -428,7 +500,7 @@ ensure_server_source() {
 
 validate_postgres_timeout() {
   [[ "${POSTGRES_READY_TIMEOUT}" =~ ^[0-9]+$ ]] || \
-    die "DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT must be an integer number of seconds"
+    die "DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT must be an integer number of seconds; try 60, 120, or 300"
 }
 
 wait_for_postgres() {
