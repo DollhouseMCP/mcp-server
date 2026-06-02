@@ -12,6 +12,8 @@ REMOTE_LOG="${TMP_ROOT}/remote.log"
 SSH_LOG="${TMP_ROOT}/ssh.log"
 CURL_LOG="${TMP_ROOT}/curl.log"
 KNOWN_HOSTS_FILE="${TMP_ROOT}/known_hosts"
+FAKE_STATE_DIR="${TMP_ROOT}/state"
+EXPECTED_HOSTED_ACTION="hosted action=update ref=codex/test-ref"
 
 cleanup() {
   if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT}" && "${TMP_ROOT}" == "${TMPDIR:-/tmp}"* ]]; then
@@ -32,7 +34,11 @@ fail() {
 assert_contains() {
   local file="$1"
   local expected="$2"
-  grep -Fq "${expected}" "${file}" || fail "expected ${file} to contain: ${expected}"
+  if ! grep -Fq "${expected}" "${file}"; then
+    printf '[hosted-remote-deploy-test] %s contents:\n' "${file}" >&2
+    sed 's/^/[hosted-remote-deploy-test]   /' "${file}" >&2 || true
+    fail "expected ${file} to contain: ${expected}"
+  fi
 }
 
 assert_not_contains() {
@@ -41,6 +47,14 @@ assert_not_contains() {
   if grep -Fq "${unexpected}" "${file}"; then
     fail "expected ${file} not to contain: ${unexpected}"
   fi
+}
+
+reset_fake_state() {
+  rm -R "${FAKE_STATE_DIR}" 2>/dev/null || true
+  mkdir -p "${FAKE_STATE_DIR}"
+  : > "${REMOTE_LOG}"
+
+  return 0
 }
 
 write_fake_commands() {
@@ -147,6 +161,13 @@ case "${1:-}" in
 esac
 EOF
 
+  cat > "${FAKE_BIN}/sleep" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+printf 'sleep %s\n' "$*" >> "${DOLLHOUSE_FAKE_REMOTE_LOG:?}"
+EOF
+
   cat > "${FAKE_BIN}/git" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -204,11 +225,35 @@ if [[ "${1:-}" == "compose" && "${2:-}" == "version" ]]; then
   exit 0
 fi
 
+increment_counter() {
+  local name="$1"
+  local file count
+
+  mkdir -p "${DOLLHOUSE_FAKE_STATE_DIR:?}"
+  file="${DOLLHOUSE_FAKE_STATE_DIR}/${name}"
+  count="0"
+  if [[ -f "${file}" ]]; then
+    count="$(cat "${file}")"
+  fi
+  count=$((count + 1))
+  printf '%s\n' "${count}" > "${file}"
+  printf '%s\n' "${count}"
+}
+
 if [[ "$*" == *"pg_isready"* ]]; then
+  attempt="$(increment_counter pg_isready)"
+  if [[ "${attempt}" -le "${DOLLHOUSE_FAKE_PG_ISREADY_FAILS:-0}" ]]; then
+    exit 1
+  fi
   exit 0
 fi
 if [[ "$*" == *"pg_dump"* ]]; then
+  attempt="$(increment_counter pg_dump)"
   cat >/dev/null || true
+  if [[ "${attempt}" -le "${DOLLHOUSE_FAKE_PG_DUMP_FAILS:-0}" ]]; then
+    printf 'partial sql backup attempt %s\n' "${attempt}"
+    exit 42
+  fi
   printf 'fake sql backup\n'
   exit 0
 fi
@@ -237,7 +282,7 @@ done
 exit 0
 EOF
 
-  chmod +x "${FAKE_BIN}/ssh" "${FAKE_BIN}/ssh-keyscan" "${FAKE_BIN}/ssh-keygen" "${FAKE_BIN}/git" "${FAKE_BIN}/docker" "${FAKE_BIN}/curl"
+  chmod +x "${FAKE_BIN}/ssh" "${FAKE_BIN}/ssh-keyscan" "${FAKE_BIN}/ssh-keygen" "${FAKE_BIN}/sleep" "${FAKE_BIN}/git" "${FAKE_BIN}/docker" "${FAKE_BIN}/curl"
 }
 
 prepare_existing_deploy() {
@@ -259,8 +304,13 @@ run_remote() {
   DOLLHOUSE_FAKE_CURL_MCP_STATUS="${DOLLHOUSE_FAKE_CURL_MCP_STATUS:-401}" \
   DOLLHOUSE_FAKE_GIT_FAIL_REF="${DOLLHOUSE_FAKE_GIT_FAIL_REF:-}" \
   DOLLHOUSE_FAKE_KEYSCAN_EMPTY="${DOLLHOUSE_FAKE_KEYSCAN_EMPTY:-false}" \
+  DOLLHOUSE_FAKE_STATE_DIR="${FAKE_STATE_DIR}" \
+  DOLLHOUSE_FAKE_PG_ISREADY_FAILS="${DOLLHOUSE_FAKE_PG_ISREADY_FAILS:-0}" \
+  DOLLHOUSE_FAKE_PG_DUMP_FAILS="${DOLLHOUSE_FAKE_PG_DUMP_FAILS:-0}" \
   DOLLHOUSE_REMOTE_SSH_TARGET=root@example.test \
   DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE="${DOLLHOUSE_TEST_KNOWN_HOSTS_FILE:-${KNOWN_HOSTS_FILE}}" \
+  DOLLHOUSE_REMOTE_BACKUP_RETRIES="${DOLLHOUSE_TEST_BACKUP_RETRIES:-3}" \
+  DOLLHOUSE_REMOTE_BACKUP_RETRY_DELAY="${DOLLHOUSE_TEST_BACKUP_RETRY_DELAY:-0}" \
   DOLLHOUSE_HOSTED_DEPLOY_DIR="${DEPLOY_DIR}" \
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   DOLLHOUSE_HOSTED_GIT_URL="${DOLLHOUSE_TEST_GIT_URL:-https://github.com/DollhouseMCP/mcp-server.git}" \
@@ -317,6 +367,7 @@ assert_contains "${PORT_ENROLL_OUTPUT}" "wrote [example.test]:2222 to ${PORT_KNO
 assert_contains "${PORT_KNOWN_HOSTS}" "[example.test]:2222 ssh-ed25519 AAAATESTKEY"
 
 log "checking remote update wrapper"
+reset_fake_state
 OUTPUT="${TMP_ROOT}/update.out"
 run_remote update > "${OUTPUT}"
 assert_contains "${SSH_LOG}" "target=root@example.test"
@@ -324,7 +375,7 @@ assert_contains "${SSH_LOG}" "StrictHostKeyChecking=yes"
 assert_contains "${SSH_LOG}" "UserKnownHostsFile=${KNOWN_HOSTS_FILE}"
 assert_not_contains "${SSH_LOG}" "StrictHostKeyChecking=accept-new"
 assert_contains "${REMOTE_LOG}" "git clone --depth 1 --branch codex/test-ref"
-assert_contains "${REMOTE_LOG}" "hosted action=update ref=codex/test-ref"
+assert_contains "${REMOTE_LOG}" "${EXPECTED_HOSTED_ACTION}"
 assert_contains "${REMOTE_LOG}" "pg_dump"
 assert_contains "${OUTPUT}" "backed up .env.production"
 assert_contains "${OUTPUT}" "creating database backup"
@@ -337,6 +388,92 @@ assert_contains "${DEPLOY_DIR}/DEPLOYED_REVISION" "codex/test-ref"
 latest_db_backup="$(find "${DEPLOY_DIR}/backups" -name 'pre-remote-update-*.sql' -print | head -n 1)"
 [[ -n "${latest_db_backup}" ]] || fail "expected database backup"
 assert_contains "${latest_db_backup}" "fake sql backup"
+
+log "checking postgres readiness retry"
+reset_fake_state
+READINESS_RETRY_OUTPUT="${TMP_ROOT}/readiness-retry.out"
+DOLLHOUSE_FAKE_PG_ISREADY_FAILS=1
+DOLLHOUSE_TEST_BACKUP_RETRIES=2
+run_remote update > "${READINESS_RETRY_OUTPUT}" 2>&1
+unset DOLLHOUSE_FAKE_PG_ISREADY_FAILS DOLLHOUSE_TEST_BACKUP_RETRIES
+assert_contains "${READINESS_RETRY_OUTPUT}" "postgres not ready for backup attempt 1/2"
+assert_contains "${READINESS_RETRY_OUTPUT}" "postgres ready for backup on attempt 2/2"
+assert_contains "${REMOTE_LOG}" "${EXPECTED_HOSTED_ACTION}"
+
+log "checking postgres readiness exponential backoff"
+reset_fake_state
+READINESS_BACKOFF_OUTPUT="${TMP_ROOT}/readiness-backoff.out"
+DOLLHOUSE_FAKE_PG_ISREADY_FAILS=2
+DOLLHOUSE_TEST_BACKUP_RETRIES=3
+DOLLHOUSE_TEST_BACKUP_RETRY_DELAY=2
+run_remote update > "${READINESS_BACKOFF_OUTPUT}" 2>&1
+unset DOLLHOUSE_FAKE_PG_ISREADY_FAILS DOLLHOUSE_TEST_BACKUP_RETRIES DOLLHOUSE_TEST_BACKUP_RETRY_DELAY
+assert_contains "${READINESS_BACKOFF_OUTPUT}" "postgres not ready for backup attempt 1/3; retrying in 2s"
+assert_contains "${READINESS_BACKOFF_OUTPUT}" "postgres not ready for backup attempt 2/3; retrying in 4s"
+assert_contains "${READINESS_BACKOFF_OUTPUT}" "postgres ready for backup on attempt 3/3"
+assert_contains "${REMOTE_LOG}" "sleep 2"
+assert_contains "${REMOTE_LOG}" "sleep 4"
+assert_contains "${REMOTE_LOG}" "${EXPECTED_HOSTED_ACTION}"
+
+log "checking pg_dump retry quarantines partial backup"
+reset_fake_state
+rm -R "${DEPLOY_DIR}/backups" 2>/dev/null || true
+DUMP_RETRY_OUTPUT="${TMP_ROOT}/dump-retry.out"
+DOLLHOUSE_FAKE_PG_DUMP_FAILS=1
+DOLLHOUSE_TEST_BACKUP_RETRIES=2
+run_remote update > "${DUMP_RETRY_OUTPUT}" 2>&1
+unset DOLLHOUSE_FAKE_PG_DUMP_FAILS DOLLHOUSE_TEST_BACKUP_RETRIES
+assert_contains "${DUMP_RETRY_OUTPUT}" "partial database backup from attempt 1 moved"
+assert_contains "${DUMP_RETRY_OUTPUT}" "database backup attempt 1/2 failed"
+assert_contains "${REMOTE_LOG}" "${EXPECTED_HOSTED_ACTION}"
+partial_backup="$(find "${DEPLOY_DIR}/backups" -name 'pre-remote-update-*.sql.failed-attempt-1' -print | head -n 1)"
+[[ -n "${partial_backup}" ]] || fail "expected quarantined partial backup"
+assert_contains "${partial_backup}" "partial sql backup attempt 1"
+successful_retry_backup="$(find "${DEPLOY_DIR}/backups" -name 'pre-remote-update-*.sql' -print | head -n 1)"
+[[ -n "${successful_retry_backup}" ]] || fail "expected successful retry backup"
+assert_contains "${successful_retry_backup}" "fake sql backup"
+
+log "checking permanent postgres readiness failure"
+reset_fake_state
+rm -R "${DEPLOY_DIR}/backups" 2>/dev/null || true
+READINESS_FAIL_OUTPUT="${TMP_ROOT}/readiness-fail.out"
+DOLLHOUSE_FAKE_PG_ISREADY_FAILS=9
+DOLLHOUSE_TEST_BACKUP_RETRIES=2
+if run_remote update > "${READINESS_FAIL_OUTPUT}" 2>&1; then
+  fail "permanent postgres readiness failure unexpectedly succeeded"
+fi
+unset DOLLHOUSE_FAKE_PG_ISREADY_FAILS DOLLHOUSE_TEST_BACKUP_RETRIES
+assert_contains "${READINESS_FAIL_OUTPUT}" "postgres is not ready for pre-update backup after 2 attempt(s)"
+assert_not_contains "${REMOTE_LOG}" "pg_dump"
+assert_not_contains "${REMOTE_LOG}" "hosted action=update"
+
+log "checking permanent pg_dump failure blocks update"
+reset_fake_state
+rm -R "${DEPLOY_DIR}/backups" 2>/dev/null || true
+DUMP_FAIL_OUTPUT="${TMP_ROOT}/dump-fail.out"
+DOLLHOUSE_FAKE_PG_DUMP_FAILS=9
+DOLLHOUSE_TEST_BACKUP_RETRIES=2
+if run_remote update > "${DUMP_FAIL_OUTPUT}" 2>&1; then
+  fail "permanent pg_dump failure unexpectedly succeeded"
+fi
+unset DOLLHOUSE_FAKE_PG_DUMP_FAILS DOLLHOUSE_TEST_BACKUP_RETRIES
+assert_contains "${DUMP_FAIL_OUTPUT}" "failed to create database backup"
+assert_contains "${DUMP_FAIL_OUTPUT}" "after 2 attempt(s)"
+assert_not_contains "${REMOTE_LOG}" "hosted action=update"
+partial_count="$(
+  find "${DEPLOY_DIR}/backups" -name 'pre-remote-update-*.sql.failed-attempt-*' -print |
+    wc -l |
+    tr -d ' '
+)"
+[[ "${partial_count}" == "2" ]] || fail "expected 2 quarantined partial backups, got ${partial_count}"
+success_count="$(
+  find "${DEPLOY_DIR}/backups" -name 'pre-remote-update-*.sql' -print |
+    wc -l |
+    tr -d ' '
+)"
+if [[ "${success_count}" != "0" ]]; then
+  fail "expected no finalized backup after permanent pg_dump failure, got ${success_count}"
+fi
 
 log "checking missing target error"
 MISSING_TARGET_OUTPUT="${TMP_ROOT}/missing-target.out"

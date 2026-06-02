@@ -27,6 +27,8 @@ SKIP_BACKUP="${DOLLHOUSE_REMOTE_SKIP_BACKUP:-false}"
 SKIP_LOCAL_VERIFY="${DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY:-false}"
 KEEP_WORKDIR="${DOLLHOUSE_REMOTE_KEEP_WORKDIR:-false}"
 DRY_RUN="${DOLLHOUSE_REMOTE_DRY_RUN:-false}"
+BACKUP_RETRIES="${DOLLHOUSE_REMOTE_BACKUP_RETRIES:-3}"
+BACKUP_RETRY_DELAY="${DOLLHOUSE_REMOTE_BACKUP_RETRY_DELAY:-2}"
 
 usage() {
   cat <<'EOF'
@@ -53,6 +55,8 @@ Options:
   --git-url URL             Repository URL cloned remotely. Env: DOLLHOUSE_HOSTED_GIT_URL
   --ref REF                 Branch/ref cloned remotely. Env: DOLLHOUSE_HOSTED_GIT_REF
   --skip-backup             Skip DB/env backup before remote action
+  --backup-retries N        Backup attempts before failing. Env: DOLLHOUSE_REMOTE_BACKUP_RETRIES
+  --backup-retry-delay N    Base seconds for exponential backup retry backoff
   --skip-local-verify       Skip local public endpoint checks after remote action
   --keep-workdir            Keep remote temporary clone for debugging
   --dry-run                 Print the plan without opening SSH
@@ -119,6 +123,28 @@ validate_port_value() {
 
   if [[ -n "${value}" && ( ! "${value}" =~ ^[0-9]+$ || "${value}" -lt 1 || "${value}" -gt 65535 ) ]]; then
     die "${key} must be an integer from 1 to 65535, got: ${value}"
+  fi
+
+  return 0
+}
+
+validate_positive_integer() {
+  local key="$1"
+  local value="$2"
+
+  if [[ ! "${value}" =~ ^[0-9]+$ || "${value}" -lt 1 ]]; then
+    die "${key} must be an integer greater than or equal to 1, got: ${value}"
+  fi
+
+  return 0
+}
+
+validate_nonnegative_integer() {
+  local key="$1"
+  local value="$2"
+
+  if [[ ! "${value}" =~ ^[0-9]+$ ]]; then
+    die "${key} must be an integer greater than or equal to 0, got: ${value}"
   fi
 
   return 0
@@ -228,6 +254,16 @@ parse_args() {
         ;;
       --skip-backup)
         SKIP_BACKUP="true"
+        ;;
+      --backup-retries)
+        BACKUP_RETRIES="${1:-}"
+        [[ -n "${BACKUP_RETRIES}" ]] || die "--backup-retries requires a count"
+        shift
+        ;;
+      --backup-retry-delay)
+        BACKUP_RETRY_DELAY="${1:-}"
+        [[ -n "${BACKUP_RETRY_DELAY}" ]] || die "--backup-retry-delay requires a second count"
+        shift
         ;;
       --skip-local-verify)
         SKIP_LOCAL_VERIFY="true"
@@ -367,6 +403,8 @@ validate_config() {
   validate_bool DOLLHOUSE_REMOTE_DRY_RUN "${DRY_RUN}"
   validate_bool DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY "${REMOTE_ACCEPT_HOST_KEY}"
   validate_port_value DOLLHOUSE_REMOTE_SSH_PORT "${REMOTE_SSH_PORT}"
+  validate_positive_integer DOLLHOUSE_REMOTE_BACKUP_RETRIES "${BACKUP_RETRIES}"
+  validate_nonnegative_integer DOLLHOUSE_REMOTE_BACKUP_RETRY_DELAY "${BACKUP_RETRY_DELAY}"
   [[ -n "${REMOTE_SSH_TARGET}" ]] || die "set --target or DOLLHOUSE_REMOTE_SSH_TARGET"
   [[ "${REMOTE_SSH_TARGET}" != *[[:space:]]* ]] || die "SSH target must not contain whitespace"
   resolve_ssh_host
@@ -422,6 +460,7 @@ run_dry_plan() {
     log "dry-run: would skip remote DB/env backups"
   else
     log "dry-run: would create remote DB/env backups when an existing deployment is present"
+    log "dry-run: backup retries=${BACKUP_RETRIES} base_retry_delay=${BACKUP_RETRY_DELAY}s exponential_backoff=true"
   fi
   log "dry-run: would clone $(redact_url "${GIT_URL}") at ${GIT_REF} on the remote host"
   log "dry-run: would run scripts/hosted-deploy.sh ${ACTION} on the remote host"
@@ -508,7 +547,9 @@ run_remote_action() {
     "${GIT_REF}" \
     "${LOG_LEVEL}" \
     "${SKIP_BACKUP}" \
-    "${KEEP_WORKDIR}" <<'REMOTE_BOOTSTRAP'
+    "${KEEP_WORKDIR}" \
+    "${BACKUP_RETRIES}" \
+    "${BACKUP_RETRY_DELAY}" <<'REMOTE_BOOTSTRAP'
 set -euo pipefail
 
 # Run the payload from a file so stdin-consuming remote commands cannot consume
@@ -538,6 +579,8 @@ git_ref="$6"
 log_level="$7"
 skip_backup="$8"
 keep_workdir="$9"
+backup_retries="${10}"
+backup_retry_delay="${11}"
 workdir=""
 
 remote_log() {
@@ -595,8 +638,41 @@ trap remote_cleanup EXIT
 
 remote_compose() {
   (cd "${deploy_dir}" && docker compose --env-file "${deploy_dir}/.env.production" -f "${deploy_dir}/compose.yml" "$@")
+}
+
+backup_delay_for_attempt() {
+  local attempt="$1"
+  local delay="${backup_retry_delay}"
+  local index
+
+  for ((index = 1; index < attempt; index++)); do
+    delay=$((delay * 2))
+  done
+
+  printf '%s\n' "${delay}"
+  return 0
+}
+
+sleep_between_backup_attempts() {
+  local attempt="$1"
+  local delay
+
+  delay="$(backup_delay_for_attempt "${attempt}")"
+  if [[ "${delay}" -gt 0 ]]; then
+    sleep "${delay}"
+  fi
 
   return 0
+}
+
+backup_requires_database() {
+  case "${action}" in
+    update|migrate|rollback)
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 backup_env_files() {
@@ -606,13 +682,100 @@ backup_env_files() {
   for file in .env .env.production; do
     if [[ -f "${deploy_dir}/${file}" ]]; then
       backup_name="${deploy_dir}/backups/${file#.}.pre-remote-${action}-${stamp}"
-      cp "${deploy_dir}/${file}" "${backup_name}"
-      chmod 0600 "${backup_name}"
+      cp "${deploy_dir}/${file}" "${backup_name}" || \
+        remote_die "failed to copy ${file} backup to ${backup_name}"
+      chmod 0600 "${backup_name}" || \
+        remote_die "failed to secure ${file} backup permissions for ${backup_name}"
       remote_log "backed up ${file} to ${backup_name}"
     fi
   done
 
   return 0
+}
+
+wait_for_database_backup_ready() {
+  local attempt retry_delay
+
+  for ((attempt = 1; attempt <= backup_retries; attempt++)); do
+    if remote_compose exec -T postgres pg_isready -U dollhouse -d dollhousemcp >/dev/null 2>&1; then
+      if [[ "${attempt}" -gt 1 ]]; then
+        remote_log "postgres ready for backup on attempt ${attempt}/${backup_retries}"
+      fi
+      return 0
+    fi
+
+    if [[ "${attempt}" -lt "${backup_retries}" ]]; then
+      retry_delay="$(backup_delay_for_attempt "${attempt}")"
+      remote_warn "postgres not ready for backup attempt ${attempt}/${backup_retries}; retrying in ${retry_delay}s"
+      sleep_between_backup_attempts "${attempt}"
+    fi
+  done
+
+  if backup_requires_database; then
+    remote_die "postgres is not ready for pre-${action} backup after ${backup_retries} attempt(s); set DOLLHOUSE_REMOTE_SKIP_BACKUP=true only if you have a separate backup"
+  fi
+
+  remote_warn "postgres is not ready after ${backup_retries} attempt(s); skipping database backup"
+  return 1
+}
+
+quarantine_partial_backup() {
+  local tmp_file="$1"
+  local backup_file="$2"
+  local attempt="$3"
+  local failed_file
+
+  if [[ ! -f "${tmp_file}" ]]; then
+    return 0
+  fi
+
+  if [[ ! -s "${tmp_file}" ]]; then
+    rm -f "${tmp_file}"
+    return 0
+  fi
+
+  failed_file="${backup_file}.failed-attempt-${attempt}"
+  mv "${tmp_file}" "${failed_file}" || \
+    remote_die "failed to quarantine partial database backup ${tmp_file}"
+  chmod 0600 "${failed_file}" || \
+    remote_die "failed to secure quarantined partial database backup ${failed_file}"
+  remote_warn "partial database backup from attempt ${attempt} moved to ${failed_file}"
+
+  return 0
+}
+
+dump_database_with_retries() {
+  local backup_file="$1"
+  local attempt retry_delay tmp_file
+
+  for ((attempt = 1; attempt <= backup_retries; attempt++)); do
+    tmp_file="${backup_file}.tmp"
+    rm -f "${tmp_file}"
+    remote_log "creating database backup ${backup_file} (attempt ${attempt}/${backup_retries})"
+
+    if remote_compose exec -T postgres pg_dump -U dollhouse dollhousemcp > "${tmp_file}"; then
+      if [[ ! -s "${tmp_file}" ]]; then
+        remote_warn "database backup attempt ${attempt}/${backup_retries} produced an empty dump"
+        rm -f "${tmp_file}"
+      else
+        mv "${tmp_file}" "${backup_file}" || \
+          remote_die "failed to finalize database backup ${backup_file}"
+        chmod 0600 "${backup_file}" || \
+          remote_die "failed to secure database backup permissions for ${backup_file}"
+        return 0
+      fi
+    else
+      quarantine_partial_backup "${tmp_file}" "${backup_file}" "${attempt}"
+    fi
+
+    if [[ "${attempt}" -lt "${backup_retries}" ]]; then
+      retry_delay="$(backup_delay_for_attempt "${attempt}")"
+      remote_warn "database backup attempt ${attempt}/${backup_retries} failed; retrying in ${retry_delay}s"
+      sleep_between_backup_attempts "${attempt}"
+    fi
+  done
+
+  remote_die "failed to create database backup ${backup_file} after ${backup_retries} attempt(s); partial attempts were quarantined as ${backup_file}.failed-attempt-*"
 }
 
 backup_database() {
@@ -624,23 +787,10 @@ backup_database() {
     return 0
   fi
 
-  if ! remote_compose exec -T postgres pg_isready -U dollhouse -d dollhousemcp >/dev/null 2>&1; then
-    case "${action}" in
-      update|migrate|rollback)
-        remote_die "postgres is not ready for pre-${action} backup; set DOLLHOUSE_REMOTE_SKIP_BACKUP=true only if you have a separate backup"
-        ;;
-      *)
-        remote_warn "postgres is not ready; skipping database backup"
-        return 0
-        ;;
-    esac
-  fi
+  wait_for_database_backup_ready || return 0
 
   backup_file="${deploy_dir}/backups/pre-remote-${action}-${stamp}.sql"
-  remote_log "creating database backup ${backup_file}"
-  remote_compose exec -T postgres pg_dump -U dollhouse dollhousemcp > "${backup_file}" || \
-    remote_die "failed to create database backup ${backup_file}"
-  chmod 0600 "${backup_file}"
+  dump_database_with_retries "${backup_file}"
 
   return 0
 }
@@ -658,8 +808,10 @@ backup_existing_deploy() {
   fi
 
   stamp="$(date -u +%Y%m%dT%H%M%SZ)"
-  mkdir -p "${deploy_dir}/backups"
-  chmod 0750 "${deploy_dir}/backups"
+  mkdir -p "${deploy_dir}/backups" || \
+    remote_die "failed to create backup directory ${deploy_dir}/backups"
+  chmod 0750 "${deploy_dir}/backups" || \
+    remote_die "failed to secure backup directory permissions for ${deploy_dir}/backups"
   backup_env_files "${stamp}"
   backup_database "${stamp}"
 
