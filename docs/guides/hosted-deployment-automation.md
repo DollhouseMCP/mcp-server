@@ -219,9 +219,23 @@ For a stricter enterprise deployment where MCP clients are pre-registered or iss
 - The helper assumes Docker Compose and Caddy for the first production-like shape.
 - Allowlist management still uses the existing `dollhouse-allowlist` CLI.
 
+## Validation
+
+Run the deployment helper shell checks:
+
+```bash
+npm run lint:shell
+```
+
+Run the render smoke test:
+
+```bash
+npm run test:hosted-deploy
+```
+
 ## Next Steps
 
 - Add local/LAN mode with clear binding and TLS choices.
 - Add enterprise mode presets for external OIDC/IdP configuration.
 - Add a wrapper installer that can be served from a stable URL.
-- Add dry-run tests for generated Compose, Caddy, and env behavior.
+- Broaden generated-file tests beyond the current render smoke coverage.
