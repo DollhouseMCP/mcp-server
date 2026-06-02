@@ -25,7 +25,7 @@
  * @module auth/embedded-as/InteractionRouter
  */
 
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import express, { type Router, type Request, type Response } from 'express';
 import { logger } from '../../utils/logger.js';
 import type {
@@ -45,6 +45,8 @@ const PENDING_CLIENT_CONSENT_MODEL = 'PendingClientConsentIdentity';
 const CLIENT_CONSENT_SEEN_MODEL = 'ClientConsentSeen';
 const CLIENT_CONSENT_APPROVE_ACTION = 'authorize_oauth_client';
 const CLIENT_CONSENT_DENY_ACTION = 'deny_oauth_client';
+const INTERACTION_COOKIE_NAME = '_interaction';
+const INTERACTION_SIG_COOKIE_NAME = '_interaction.sig';
 
 export interface OidcInteractionDetails {
   uid: string;
@@ -219,6 +221,7 @@ async function handleGet(
   try {
     details = await provider.interactionDetails(req, res);
   } catch (err) {
+    logInteractionDetailsFailure(req, 'GET', err);
     sendError(res, 400, 'invalid_interaction', describeError(err));
     return;
   }
@@ -272,6 +275,7 @@ async function handlePost(
   try {
     details = await provider.interactionDetails(req, res);
   } catch (err) {
+    logInteractionDetailsFailure(req, 'POST', err);
     sendError(res, 400, 'invalid_interaction', describeError(err));
     return;
   }
@@ -1668,6 +1672,92 @@ function sendError(res: Response, status: number, error: string, description: st
 
 function describeError(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+function logInteractionDetailsFailure(req: Request, phase: 'GET' | 'POST', err: unknown): void {
+  const diagnostics = interactionRequestDiagnostics(req);
+  const statusCode = errorObjectNumber(err, 'statusCode') ?? errorObjectNumber(err, 'status');
+  const errorDescription = errorObjectString(err, 'error_description');
+  logger.warn(
+    `[InteractionRouter] interactionDetails failed ` +
+      `phase=${phase} ` +
+      `pathUidHash=${diagnosticValue(diagnostics.pathUidHash)} ` +
+      `hasCookieHeader=${diagnosticValue(diagnostics.hasCookieHeader)} ` +
+      `hasInteractionCookie=${diagnosticValue(diagnostics.hasInteractionCookie)} ` +
+      `hasInteractionSigCookie=${diagnosticValue(diagnostics.hasInteractionSigCookie)} ` +
+      `interactionCookieHash=${diagnosticValue(diagnostics.interactionCookieHash)} ` +
+      `interactionCookieMatchesPathUid=${diagnosticValue(diagnostics.interactionCookieMatchesPathUid)} ` +
+      `error=${describeError(err)} ` +
+      `errorDescription=${diagnosticValue(errorDescription)} ` +
+      `statusCode=${diagnosticValue(statusCode)}`,
+    {
+      phase,
+      ...diagnostics,
+      errorName: err instanceof Error ? err.name : typeof err,
+      error: describeError(err),
+      errorDescription,
+      statusCode,
+    },
+  );
+}
+
+function interactionRequestDiagnostics(req: Request): Record<string, unknown> {
+  const pathUid = typeof req.params?.uid === 'string' ? req.params.uid : undefined;
+  const rawCookieHeader = Array.isArray(req.headers.cookie)
+    ? req.headers.cookie.join('; ')
+    : req.headers.cookie;
+  const interactionCookie = parseCookieValue(rawCookieHeader, INTERACTION_COOKIE_NAME);
+  const interactionSigCookie = parseCookieValue(rawCookieHeader, INTERACTION_SIG_COOKIE_NAME);
+  return {
+    hasPathUid: Boolean(pathUid),
+    pathUidHash: fingerprintTransientId(pathUid),
+    hasCookieHeader: Boolean(rawCookieHeader),
+    hasInteractionCookie: Boolean(interactionCookie),
+    hasInteractionSigCookie: Boolean(interactionSigCookie),
+    interactionCookieHash: fingerprintTransientId(interactionCookie),
+    interactionCookieMatchesPathUid: Boolean(pathUid && interactionCookie && pathUid === interactionCookie),
+    contentType: typeof req.headers['content-type'] === 'string' ? req.headers['content-type'] : undefined,
+  };
+}
+
+function fingerprintTransientId(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  return createHash('sha256').update(value).digest('hex').slice(0, 12);
+}
+
+function errorObjectString(err: unknown, key: string): string | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const value = (err as Record<string, unknown>)[key];
+  return typeof value === 'string' ? value : undefined;
+}
+
+function errorObjectNumber(err: unknown, key: string): number | undefined {
+  if (!err || typeof err !== 'object') return undefined;
+  const value = (err as Record<string, unknown>)[key];
+  return typeof value === 'number' ? value : undefined;
+}
+
+function parseCookieValue(header: string | undefined, name: string): string | undefined {
+  if (!header) return undefined;
+  for (const pair of header.split(';')) {
+    const eqIdx = pair.indexOf('=');
+    if (eqIdx < 0) continue;
+    const key = pair.slice(0, eqIdx).trim();
+    const value = pair.slice(eqIdx + 1).trim();
+    if (key !== name) continue;
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
+function diagnosticValue(value: unknown): string {
+  if (value === undefined || value === null || value === '') return 'none';
+  if (typeof value === 'boolean') return value ? 'true' : 'false';
+  return String(value).replace(/\s+/g, '_');
 }
 
 /**
