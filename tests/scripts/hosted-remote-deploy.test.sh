@@ -125,6 +125,7 @@ if [[ "$*" == *"pg_isready"* ]]; then
   exit 0
 fi
 if [[ "$*" == *"pg_dump"* ]]; then
+  cat >/dev/null || true
   printf 'fake sql backup\n'
   exit 0
 fi
@@ -200,6 +201,7 @@ assert_contains "${OUTPUT}" "remote deployment wrapper verification passed"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/readyz"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/mcp"
+assert_contains "${DEPLOY_DIR}/DEPLOYED_REVISION" "codex/test-ref"
 
 latest_db_backup="$(find "${DEPLOY_DIR}/backups" -name 'pre-remote-update-*.sql' -print | head -n 1)"
 [[ -n "${latest_db_backup}" ]] || fail "expected database backup"

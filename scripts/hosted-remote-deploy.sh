@@ -296,7 +296,22 @@ run_remote_action() {
     "${GIT_REF}" \
     "${LOG_LEVEL}" \
     "${SKIP_BACKUP}" \
-    "${KEEP_WORKDIR}" <<'REMOTE'
+    "${KEEP_WORKDIR}" <<'REMOTE_BOOTSTRAP'
+set -euo pipefail
+
+remote_payload="$(mktemp /tmp/dollhouse-remote-wrapper.XXXXXX.sh)"
+cleanup_remote_payload() {
+  case "${remote_payload}" in
+    /tmp/dollhouse-remote-wrapper.*.sh)
+      rm -f "${remote_payload}"
+      ;;
+  esac
+
+  return 0
+}
+trap cleanup_remote_payload EXIT
+
+cat > "${remote_payload}" <<'REMOTE_PAYLOAD'
 set -euo pipefail
 
 action="$1"
@@ -477,7 +492,10 @@ backup_existing_deploy
 clone_source
 run_hosted_helper
 print_remote_summary
-REMOTE
+REMOTE_PAYLOAD
+
+bash "${remote_payload}" "$@"
+REMOTE_BOOTSTRAP
 
   return 0
 }
