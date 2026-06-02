@@ -284,7 +284,7 @@ services:
       DOLLHOUSE_TRANSPORT: streamable-http
       DOLLHOUSE_HTTP_HOST: 0.0.0.0
       DOLLHOUSE_HTTP_PORT: 3000
-      DOLLHOUSE_HTTP_ALLOWED_HOSTS: mcp.your-domain.com
+      DOLLHOUSE_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.your-domain.com
       DOLLHOUSE_TRUSTED_PROXIES: 172.16.0.0/12   # docker default bridge CIDR; adjust if you use custom networks
 
       # Public-facing URL — issued JWTs and discovery docs advertise this
@@ -383,17 +383,17 @@ chmod 0600 init-db.sql
 # container at /docker-entrypoint-initdb.d/00-create-roles.sql.)
 
 # 2. Start Postgres — it runs init-db.sql exactly once, on first boot.
-docker compose up -d postgres
-until docker compose exec -T postgres pg_isready -U dollhouse -d dollhousemcp; do
+docker compose --env-file .env.production up -d postgres
+until docker compose --env-file .env.production exec -T postgres pg_isready -U dollhouse -d dollhousemcp; do
   sleep 2
 done
 
 # 3. Run migrations as admin — creates tables, RLS policies, sequences;
 #    also re-applies grants so the app role can use newly-created tables.
-docker compose run --rm dollhousemcp npm run db:migrate
+docker compose --env-file .env.production run --rm dollhousemcp-migrate
 
 # 4. Verify
-docker compose exec -T postgres psql -U dollhouse -d dollhousemcp -c '\dt'
+docker compose --env-file .env.production exec -T postgres psql -U dollhouse -d dollhousemcp -c '\dt'
 # Should list: users, elements, sessions, memory_entries, agent_states,
 #              auth_accounts, auth_kv, auth_signing_keys, ...
 ```
@@ -526,7 +526,7 @@ For updates: `git pull && npm ci --omit=dev && npm run build && sudo systemctl r
 DOLLHOUSE_TRANSPORT=streamable-http
 DOLLHOUSE_HTTP_HOST=127.0.0.1
 DOLLHOUSE_HTTP_PORT=3000
-DOLLHOUSE_HTTP_ALLOWED_HOSTS=mcp.your-domain.com
+DOLLHOUSE_HTTP_ALLOWED_HOSTS=localhost,127.0.0.1,mcp.your-domain.com
 DOLLHOUSE_TRUSTED_PROXIES=loopback
 
 # Public URL
@@ -952,7 +952,7 @@ Don't go live until all of these are true:
 - [ ] Secrets backed up encrypted, separately from the data backup
 
 **Network**
-- [ ] `DOLLHOUSE_HTTP_ALLOWED_HOSTS` set to your public hostname
+- [ ] `DOLLHOUSE_HTTP_ALLOWED_HOSTS` set to your public hostname plus loopback hosts used by health checks
 - [ ] `DOLLHOUSE_PUBLIC_BASE_URL` set to `https://mcp.your-domain.com` (matches the issued JWT `iss` claim)
 - [ ] `DOLLHOUSE_TRUSTED_PROXIES` set to the proxy CIDR (Docker bridge, `loopback`, or your VPC range) — not blank, not `loopback` if you bind to `0.0.0.0`
 - [ ] Postgres NOT reachable from outside the docker network or VPC (no host `ports:` mapping)
@@ -969,7 +969,7 @@ Don't go live until all of these are true:
 - [ ] `DOLLHOUSE_STORAGE_BACKEND=database` and `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres`
 - [ ] `DOLLHOUSE_DATABASE_SSL=require` (for managed or remote Postgres; `disable` is only OK on a private docker bridge)
 - [ ] Two roles: `dollhouse` (superuser, ADMIN_URL only) and `dollhouse_app` (NOBYPASSRLS, runtime URL)
-- [ ] Migrations have run (`docker compose run --rm dollhousemcp npm run db:migrate`)
+- [ ] Migrations have run (`docker compose --env-file .env.production run --rm dollhousemcp-migrate`)
 - [ ] Daily `pg_dump` configured + at least one tested restore
 
 **Operations**
@@ -1125,8 +1125,8 @@ Run migrations during a low-traffic window. `/readyz` returns 503 with `migratio
 
 ```bash
 # Run migrations against a separate temporary container, then restart the main one
-docker compose run --rm dollhousemcp npm run db:migrate
-docker compose restart dollhousemcp
+docker compose --env-file .env.production run --rm dollhousemcp-migrate
+docker compose --env-file .env.production restart dollhousemcp
 ```
 
 ---

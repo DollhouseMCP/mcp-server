@@ -44,7 +44,7 @@ services:
       DOLLHOUSE_TRANSPORT: streamable-http
       DOLLHOUSE_HTTP_HOST: 0.0.0.0
       DOLLHOUSE_HTTP_PORT: "${MCP_PORT}"
-      DOLLHOUSE_HTTP_ALLOWED_HOSTS: ${HOSTNAME}
+      DOLLHOUSE_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,${HOSTNAME}
       DOLLHOUSE_TRUSTED_PROXIES: 172.16.0.0/12
       DOLLHOUSE_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       DOLLHOUSE_STORAGE_BACKEND: database
@@ -73,6 +73,26 @@ services:
       - no-new-privileges:true
     mem_limit: ${MEM_LIMIT}
     cpus: ${CPU_LIMIT}
+
+  dollhousemcp-migrate:
+    build:
+      context: ./server
+      dockerfile: docker/Dockerfile
+      target: builder
+    image: ${IMAGE_TAG}-migrate
+    profiles:
+      - maintenance
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp
+      DOLLHOUSE_DATABASE_ADMIN_URL: postgres://dollhouse:\${POSTGRES_ADMIN_PASSWORD}@postgres:5432/dollhousemcp
+      DOLLHOUSE_DATABASE_SSL: disable
+    command: ["npm", "run", "db:migrate"]
 
   caddy:
     image: caddy:2

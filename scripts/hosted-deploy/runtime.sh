@@ -26,7 +26,7 @@ ensure_prerequisites() {
 compose() {
   local status=0
 
-  (cd "${DEPLOY_DIR}" && docker compose -f "${COMPOSE_FILE}" "$@") || status=$?
+  (cd "${DEPLOY_DIR}" && docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@") || status=$?
   return "${status}"
 }
 
@@ -64,14 +64,14 @@ wait_for_postgres() {
 
 build_app_image() {
   log "building dollhousemcp image"
-  compose build dollhousemcp
+  compose build dollhousemcp dollhousemcp-migrate
 
   return 0
 }
 
 run_database_migrations() {
   log "running database migrations"
-  compose run --rm dollhousemcp npm run db:migrate
+  compose run --rm dollhousemcp-migrate
 
   return 0
 }
