@@ -96,4 +96,22 @@ second_cookie_secret="$(env_value DOLLHOUSE_COOKIE_SIGNING_SECRET "${ENV_FILE}")
 [[ "${first_postgres_password}" == "${second_postgres_password}" ]] || fail "POSTGRES_PASSWORD changed on re-render"
 [[ "${first_cookie_secret}" == "${second_cookie_secret}" ]] || fail "DOLLHOUSE_COOKIE_SIGNING_SECRET changed on re-render"
 
+log "checking dry-run render does not write files"
+DRY_RUN_DEPLOY_DIR="${TMP_ROOT}/dry-run-deploy"
+DRY_RUN_OUTPUT="${TMP_ROOT}/dry-run.out"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" --dry-run render > "${DRY_RUN_OUTPUT}"
+[[ ! -e "${DRY_RUN_DEPLOY_DIR}" ]] || fail "dry-run render should not create ${DRY_RUN_DEPLOY_DIR}"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would render deployment files"
+
+log "checking invalid public base URL rejection"
+BAD_URL_OUTPUT="${TMP_ROOT}/bad-url.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/bad-url-deploy" \
+  DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com/path \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${BAD_URL_OUTPUT}" 2>&1; then
+  fail "dry-run render with path-bearing public URL unexpectedly succeeded"
+fi
+assert_contains "${BAD_URL_OUTPUT}" "DOLLHOUSE_PUBLIC_BASE_URL must be an origin only"
+
 log "render behavior passed"

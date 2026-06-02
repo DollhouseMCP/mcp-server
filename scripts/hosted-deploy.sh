@@ -11,7 +11,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-ACTION="${1:-help}"
+ACTION="help"
+ACTION_SET="false"
 DEPLOY_DIR="${DOLLHOUSE_HOSTED_DEPLOY_DIR:-/opt/dollhousemcp}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
 PUBLIC_BASE_URL="${DOLLHOUSE_PUBLIC_BASE_URL:-}"
@@ -23,6 +24,8 @@ MCP_PORT="${DOLLHOUSE_HTTP_PORT:-3000}"
 MEM_LIMIT="${DOLLHOUSE_HOSTED_MEM_LIMIT:-2g}"
 CPU_LIMIT="${DOLLHOUSE_HOSTED_CPUS:-2.0}"
 OPEN_DCR="${DOLLHOUSE_AUTH_OPEN_DCR:-true}"
+DRY_RUN="${DOLLHOUSE_HOSTED_DRY_RUN:-false}"
+ALLOW_CREDENTIAL_GIT_URL="${DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL:-false}"
 POSTGRES_READY_TIMEOUT="${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-60}"
 BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
 BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
@@ -38,6 +41,15 @@ usage() {
 DollhouseMCP hosted deployment helper
 
 Usage:
+  scripts/hosted-deploy.sh [--dry-run] render
+  scripts/hosted-deploy.sh [--dry-run] install
+  scripts/hosted-deploy.sh [--dry-run] update
+  scripts/hosted-deploy.sh [--dry-run] migrate
+  scripts/hosted-deploy.sh [--dry-run] bootstrap-admin
+  scripts/hosted-deploy.sh [--dry-run] rollback
+  scripts/hosted-deploy.sh [--dry-run] verify
+
+Actions:
   scripts/hosted-deploy.sh render
   scripts/hosted-deploy.sh install
   scripts/hosted-deploy.sh update
@@ -51,6 +63,7 @@ Required for render/install/update/migrate/bootstrap-admin/rollback unless DOLLH
 
 Common environment:
   DOLLHOUSE_HOSTED_DEPLOY_DIR=/opt/dollhousemcp
+  DOLLHOUSE_HOSTED_DRY_RUN=false
   DOLLHOUSE_HOSTED_SOURCE_DIR=/path/to/local/repo
   DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration
   DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=...
@@ -60,6 +73,7 @@ Common environment:
   DOLLHOUSE_BOOTSTRAP_GITHUB_ID=...
 
 Examples:
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh --dry-run install
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh install
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh update
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com scripts/hosted-deploy.sh migrate
@@ -82,6 +96,34 @@ die() {
   exit 1
 }
 
+parse_args() {
+  local arg
+  for arg in "$@"; do
+    case "${arg}" in
+      --dry-run)
+        DRY_RUN="true"
+        ;;
+      help|--help|-h)
+        if [[ "${ACTION_SET}" == "true" ]]; then
+          die "only one action may be provided"
+        fi
+        ACTION="help"
+        ACTION_SET="true"
+        ;;
+      --*)
+        die "unknown option: ${arg}"
+        ;;
+      *)
+        if [[ "${ACTION_SET}" == "true" ]]; then
+          die "only one action may be provided; got '${ACTION}' and '${arg}'"
+        fi
+        ACTION="${arg}"
+        ACTION_SET="true"
+        ;;
+    esac
+  done
+}
+
 need_command() {
   local command_name="$1"
   local resolved_path
@@ -89,6 +131,103 @@ need_command() {
   resolved_path="$(command -v "${command_name}" || true)"
   if [[ -z "${resolved_path}" ]]; then
     die "missing required command: ${command_name}"
+  fi
+}
+
+validate_bool() {
+  local key="$1"
+  local value="$2"
+  case "${value}" in
+    true|false)
+      ;;
+    *)
+      die "${key} must be 'true' or 'false', got: ${value}"
+      ;;
+  esac
+}
+
+is_dry_run() {
+  [[ "${DRY_RUN}" == "true" ]]
+}
+
+validate_no_whitespace() {
+  local key="$1"
+  local value="$2"
+
+  if [[ "${value}" =~ [[:space:]] ]]; then
+    die "${key} must not contain whitespace"
+  fi
+}
+
+validate_hostname() {
+  [[ -n "${HOSTNAME}" ]] || die "hostname resolved to an empty value"
+  validate_no_whitespace DOLLHOUSE_HOSTED_HOSTNAME "${HOSTNAME}"
+  if [[ "${HOSTNAME}" == *"/"* || "${HOSTNAME}" == *"@"* ]]; then
+    die "DOLLHOUSE_HOSTED_HOSTNAME must be a hostname only, for example mcp.example.com"
+  fi
+  if [[ ! "${HOSTNAME}" =~ ^[A-Za-z0-9]([A-Za-z0-9.-]*[A-Za-z0-9])?$ ]]; then
+    die "DOLLHOUSE_HOSTED_HOSTNAME contains unsupported characters: ${HOSTNAME}"
+  fi
+  if [[ "${HOSTNAME}" == *..* || "${HOSTNAME}" == .* || "${HOSTNAME}" == *. ]]; then
+    die "DOLLHOUSE_HOSTED_HOSTNAME must be a valid hostname, got: ${HOSTNAME}"
+  fi
+}
+
+validate_public_base_url() {
+  validate_no_whitespace DOLLHOUSE_PUBLIC_BASE_URL "${PUBLIC_BASE_URL}"
+  case "${PUBLIC_BASE_URL}" in
+    http://*|https://*)
+      ;;
+    *)
+      die "DOLLHOUSE_PUBLIC_BASE_URL must start with http:// or https://"
+      ;;
+  esac
+
+  local without_scheme
+  without_scheme="${PUBLIC_BASE_URL#https://}"
+  without_scheme="${without_scheme#http://}"
+  if [[ "${without_scheme}" == *"@"* ]]; then
+    die "DOLLHOUSE_PUBLIC_BASE_URL must not contain credentials"
+  fi
+  if [[ "${without_scheme}" == *"/"* || "${without_scheme}" == *"?"* || "${without_scheme}" == *"#"* ]]; then
+    die "DOLLHOUSE_PUBLIC_BASE_URL must be an origin only, for example https://mcp.example.com"
+  fi
+}
+
+validate_port() {
+  if [[ ! "${MCP_PORT}" =~ ^[0-9]+$ || "${MCP_PORT}" -lt 1 || "${MCP_PORT}" -gt 65535 ]]; then
+    die "DOLLHOUSE_HTTP_PORT must be an integer from 1 to 65535, got: ${MCP_PORT}"
+  fi
+}
+
+validate_render_value() {
+  local key="$1"
+  local value="$2"
+
+  validate_no_whitespace "${key}" "${value}"
+  if [[ "${value}" == *":"* && "${key}" != "DOLLHOUSE_HOSTED_IMAGE_TAG" ]]; then
+    die "${key} contains ':' unexpectedly: ${value}"
+  fi
+}
+
+validate_render_inputs() {
+  validate_bool DOLLHOUSE_AUTH_OPEN_DCR "${OPEN_DCR}"
+  validate_hostname
+  validate_public_base_url
+  validate_port
+  validate_render_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
+  validate_render_value DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
+  validate_render_value DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"
+}
+
+git_url_has_credentials() {
+  [[ "$1" =~ ^https?://[^/@]+@ ]]
+}
+
+validate_git_url_for_clone() {
+  validate_bool DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL "${ALLOW_CREDENTIAL_GIT_URL}"
+  if git_url_has_credentials "${GIT_URL}" && [[ "${ALLOW_CREDENTIAL_GIT_URL}" != "true" ]]; then
+    die "DOLLHOUSE_HOSTED_GIT_URL must not embed credentials; use a git credential helper, deploy key, or DOLLHOUSE_HOSTED_SOURCE_DIR instead"
   fi
 }
 
@@ -445,6 +584,7 @@ stage_from_remote_git() {
   local incoming="$1"
   local revision redacted_url
 
+  validate_git_url_for_clone
   redacted_url="$(redact_url "${GIT_URL}")"
   log "cloning ${redacted_url} (${GIT_REF})" >&2
   rmdir "${incoming}" || die "failed to prepare incoming clone directory: ${incoming}"
@@ -481,6 +621,7 @@ stage_source() {
 render_files() {
   resolve_public_base_url
   resolve_hostname
+  validate_render_inputs
   ensure_layout
   write_env_defaults
   load_env_file
@@ -572,6 +713,7 @@ bootstrap_admin() {
 start_or_update() {
   local service="${1:-all}"
   ensure_prerequisites
+  validate_git_url_for_clone
   render_files
   stage_source
   build_app_image
@@ -591,6 +733,7 @@ run_migrations() {
 }
 
 latest_previous_bundle() {
+  [[ -d "${DEPLOY_DIR}" ]] || return 0
   find "${DEPLOY_DIR}" -maxdepth 1 -type d -name 'server.prev-*' -print | sort | tail -n 1
 }
 
@@ -625,6 +768,8 @@ rollback_server() {
 verify_deploy() {
   need_command curl
   resolve_public_base_url
+  resolve_hostname
+  validate_render_inputs
   log "checking ${PUBLIC_BASE_URL}/healthz"
   curl -fsS "${PUBLIC_BASE_URL}/healthz" >/dev/null
   log "checking ${PUBLIC_BASE_URL}/readyz"
@@ -636,37 +781,181 @@ verify_deploy() {
   log "verification passed"
 }
 
-case "${ACTION}" in
-  help|--help|-h)
-    usage
-    ;;
-  render)
-    need_command openssl
-    render_files
-    ;;
-  install)
-    start_or_update all
-    verify_deploy
-    ;;
-  update)
-    start_or_update app
-    verify_deploy
-    ;;
-  migrate)
-    run_migrations
-    ;;
-  bootstrap-admin)
-    bootstrap_admin
-    ;;
-  rollback)
-    rollback_server
-    verify_deploy
-    ;;
-  verify)
-    verify_deploy
-    ;;
-  *)
-    usage >&2
-    die "unknown action: ${ACTION}"
-    ;;
-esac
+describe_render_plan() {
+  resolve_public_base_url
+  resolve_hostname
+  validate_render_inputs
+  log "dry-run: would render deployment files in ${DEPLOY_DIR}"
+  log "dry-run: would preserve or create ${ENV_FILE}"
+  log "dry-run: would write ${COMPOSE_FILE}"
+  log "dry-run: would write ${CADDY_FILE}"
+  log "dry-run: would write ${INIT_DB_FILE} without embedding the app database password"
+}
+
+describe_source_plan() {
+  detect_default_source_dir
+  if [[ -n "${SOURCE_DIR}" ]]; then
+    [[ -d "${SOURCE_DIR}" ]] || die "DOLLHOUSE_HOSTED_SOURCE_DIR does not exist: ${SOURCE_DIR}"
+    if ! git -C "${SOURCE_DIR}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+      die "DOLLHOUSE_HOSTED_SOURCE_DIR is not a git checkout: ${SOURCE_DIR}"
+    fi
+    log "dry-run: would stage source from ${SOURCE_DIR}"
+  else
+    validate_git_url_for_clone
+    log "dry-run: would clone $(redact_url "${GIT_URL}") at ref ${GIT_REF}"
+  fi
+}
+
+describe_bootstrap_plan() {
+  local mode="${1:-optional}"
+
+  if [[ -n "${BOOTSTRAP_GITHUB_ID}" ]]; then
+    log "dry-run: would bootstrap GitHub admin id ${BOOTSTRAP_GITHUB_ID}"
+  elif [[ -n "${BOOTSTRAP_GITHUB_USERNAME}" ]]; then
+    log "dry-run: would bootstrap GitHub admin username ${BOOTSTRAP_GITHUB_USERNAME}"
+  elif [[ "${mode}" == "required" ]]; then
+    log "dry-run: would require DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME or DOLLHOUSE_BOOTSTRAP_GITHUB_ID"
+  else
+    log "dry-run: would skip admin bootstrap because no bootstrap identity is set"
+  fi
+}
+
+dry_run_start_or_update() {
+  local service="${1:-all}"
+
+  validate_git_url_for_clone
+  describe_render_plan
+  describe_source_plan
+  log "dry-run: would build dollhousemcp image"
+  log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
+  log "dry-run: would run database migrations"
+  describe_bootstrap_plan optional
+  if [[ "${service}" == "app" ]]; then
+    log "dry-run: would restart dollhousemcp service"
+  else
+    log "dry-run: would start or update the full compose stack"
+  fi
+  log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+}
+
+dry_run_migrations() {
+  describe_render_plan
+  log "dry-run: would require existing server source at ${SERVER_DIR}"
+  log "dry-run: would build dollhousemcp image"
+  log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
+  log "dry-run: would run database migrations"
+}
+
+dry_run_bootstrap_admin() {
+  describe_render_plan
+  log "dry-run: would require existing server source at ${SERVER_DIR}"
+  log "dry-run: would build dollhousemcp image"
+  log "dry-run: would start postgres and wait up to ${POSTGRES_READY_TIMEOUT}s"
+  log "dry-run: would run database migrations"
+  describe_bootstrap_plan required
+}
+
+dry_run_rollback() {
+  describe_render_plan
+  log "dry-run: would restore the newest server.prev-* bundle"
+  if [[ -d "${SERVER_DIR}" ]]; then
+    log "dry-run: current server bundle exists at ${SERVER_DIR}"
+  else
+    log "dry-run: current server bundle is not present yet"
+  fi
+  local previous
+  previous="$(latest_previous_bundle)"
+  if [[ -n "${previous}" ]]; then
+    log "dry-run: newest rollback candidate is ${previous}"
+  else
+    log "dry-run: no server.prev-* rollback candidate found yet"
+  fi
+  log "dry-run: would rebuild dollhousemcp image and restart dollhousemcp + caddy"
+  log "dry-run: would verify ${PUBLIC_BASE_URL}/healthz, /readyz, and /mcp"
+}
+
+dry_run_verify() {
+  resolve_public_base_url
+  resolve_hostname
+  validate_render_inputs
+  log "dry-run: would check ${PUBLIC_BASE_URL}/healthz"
+  log "dry-run: would check ${PUBLIC_BASE_URL}/readyz"
+  log "dry-run: would check ${PUBLIC_BASE_URL}/mcp returns 401 without a bearer token"
+}
+
+run_dry_action() {
+  log "dry-run mode enabled; no files, source bundles, containers, git clones, or HTTP requests will be changed"
+  case "${ACTION}" in
+    render)
+      describe_render_plan
+      ;;
+    install)
+      dry_run_start_or_update all
+      ;;
+    update)
+      dry_run_start_or_update app
+      ;;
+    migrate)
+      dry_run_migrations
+      ;;
+    bootstrap-admin)
+      dry_run_bootstrap_admin
+      ;;
+    rollback)
+      dry_run_rollback
+      ;;
+    verify)
+      dry_run_verify
+      ;;
+    *)
+      usage >&2
+      die "unknown action: ${ACTION}"
+      ;;
+  esac
+}
+
+run_action() {
+  case "${ACTION}" in
+    help)
+      usage
+      ;;
+    render)
+      need_command openssl
+      render_files
+      ;;
+    install)
+      start_or_update all
+      verify_deploy
+      ;;
+    update)
+      start_or_update app
+      verify_deploy
+      ;;
+    migrate)
+      run_migrations
+      ;;
+    bootstrap-admin)
+      bootstrap_admin
+      ;;
+    rollback)
+      rollback_server
+      verify_deploy
+      ;;
+    verify)
+      verify_deploy
+      ;;
+    *)
+      usage >&2
+      die "unknown action: ${ACTION}"
+      ;;
+  esac
+}
+
+parse_args "$@"
+validate_bool DOLLHOUSE_HOSTED_DRY_RUN "${DRY_RUN}"
+
+if is_dry_run && [[ "${ACTION}" != "help" ]]; then
+  run_dry_action
+else
+  run_action
+fi

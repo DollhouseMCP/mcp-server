@@ -15,6 +15,23 @@ Issue: [#2223](https://github.com/DollhouseMCP/mcp-server/issues/2223)
 
 From a checkout of the repository:
 
+Preview an install without changing files or starting containers:
+
+```bash
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  npm run hosted:deploy -- --dry-run install
+```
+
+The same dry-run mode is also available through the environment:
+
+```bash
+DOLLHOUSE_HOSTED_DRY_RUN=true \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  npm run hosted:deploy -- install
+```
+
+Run the install:
+
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   npm run hosted:deploy -- install
@@ -87,11 +104,13 @@ Common environment variables:
 | Variable | Purpose | Default |
 |---|---|---|
 | `DOLLHOUSE_HOSTED_DEPLOY_DIR` | Deployment root | `/opt/dollhousemcp` |
+| `DOLLHOUSE_HOSTED_DRY_RUN` | Preview operations without writes, Docker, git clone, or HTTP checks | `false` |
 | `DOLLHOUSE_HOSTED_HOSTNAME` | Public hostname, for example `mcp.example.com` | none |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | Public URL, for example `https://mcp.example.com` | derived from hostname |
 | `DOLLHOUSE_HOSTED_SOURCE_DIR` | Local repo source to deploy | current repo when available |
 | `DOLLHOUSE_HOSTED_GIT_URL` | Repo cloned when no source dir is available | GitHub mcp-server repo |
 | `DOLLHOUSE_HOSTED_GIT_REF` | Branch/ref cloned when no source dir is available | `codex/hosted-http-integration` |
+| `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL` | Permit credentials embedded in `DOLLHOUSE_HOSTED_GIT_URL` | `false` |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | GitHub OAuth app client ID | prompted or left unset |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret | prompted or left unset |
 | `DOLLHOUSE_AUTH_OPEN_DCR` | Whether unauthenticated Dynamic Client Registration is enabled | `true` |
@@ -103,6 +122,8 @@ Secrets are created once and preserved in `.env.production`. The helper does not
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
+The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by default because credentials embedded in command arguments can leak through process listings or logs. Use a git credential helper, deploy key, or `DOLLHOUSE_HOSTED_SOURCE_DIR` instead. If an operator has an explicit reason to allow this, set `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL=true`.
+
 ## Actions
 
 ### `render`
@@ -112,6 +133,8 @@ Writes or refreshes deployment files without starting containers:
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- render
 ```
+
+Any action can be previewed with `--dry-run`. Dry-run mode validates the deploy inputs and prints the planned filesystem, source, Docker, migration, bootstrap, rollback, and verification steps without writing deployment files, moving source bundles, starting containers, cloning repositories, or making HTTP requests.
 
 ### `install`
 

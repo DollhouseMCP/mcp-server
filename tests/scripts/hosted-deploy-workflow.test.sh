@@ -133,6 +133,38 @@ create_source_repo
 
 DEPLOY_DIR="${TMP_ROOT}/deploy"
 
+log "checking dry-run install workflow"
+DRY_RUN_DEPLOY_DIR="${TMP_ROOT}/dry-run-deploy"
+DRY_RUN_OUTPUT="${TMP_ROOT}/dry-run-install.out"
+: > "${DOCKER_LOG}"
+: > "${CURL_LOG}"
+PATH="${FAKE_BIN}:${PATH}" \
+DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${DRY_RUN_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
+  bash "${HOSTED_DEPLOY}" --dry-run install > "${DRY_RUN_OUTPUT}"
+[[ ! -e "${DRY_RUN_DEPLOY_DIR}" ]] || fail "dry-run install should not create ${DRY_RUN_DEPLOY_DIR}"
+[[ ! -s "${DOCKER_LOG}" ]] || fail "dry-run install should not call docker"
+[[ ! -s "${CURL_LOG}" ]] || fail "dry-run install should not call curl"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would run database migrations"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
+
+log "checking credential-bearing git URL rejection"
+CREDENTIAL_URL_OUTPUT="${TMP_ROOT}/credential-url.out"
+if PATH="${FAKE_BIN}:${PATH}" \
+  DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+  DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/credential-url-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
+  DOLLHOUSE_HOSTED_GIT_URL=https://token@example.com/DollhouseMCP/mcp-server.git \
+    bash "${HOSTED_DEPLOY}" --dry-run install > "${CREDENTIAL_URL_OUTPUT}" 2>&1; then
+  fail "credential-bearing git URL unexpectedly succeeded"
+fi
+assert_contains "${CREDENTIAL_URL_OUTPUT}" "DOLLHOUSE_HOSTED_GIT_URL must not embed credentials"
+
 log "running install workflow"
 run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
