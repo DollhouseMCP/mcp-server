@@ -158,12 +158,12 @@ export function validateRedirectUriShape(
 
 function validateRedirectUriComponents(parsed: URL, host: string): string[] {
   return [
-    ...(!host ? ['must include a hostname'] : []),
-    ...(host.includes('*') ? ['must not contain wildcards'] : []),
-    ...(host.endsWith('.') ? ['must not use a trailing-dot hostname'] : []),
-    ...(host.includes('%') ? ['must not include IPv6 zone identifiers'] : []),
-    ...(parsed.username || parsed.password ? ['must not include username or password components'] : []),
-    ...(parsed.hash ? ['must not include a URL fragment'] : []),
+    ...errorIf(host.length === 0, 'must include a hostname'),
+    ...errorIf(host.includes('*'), 'must not contain wildcards'),
+    ...errorIf(host.endsWith('.'), 'must not use a trailing-dot hostname'),
+    ...errorIf(host.includes('%'), 'must not include IPv6 zone identifiers'),
+    ...errorIf(Boolean(parsed.username || parsed.password), 'must not include username or password components'),
+    ...errorIf(Boolean(parsed.hash), 'must not include a URL fragment'),
   ];
 }
 
@@ -174,19 +174,21 @@ function validateRedirectUriProtocol(
 ): string[] {
   if (protocol === 'http:') {
     return [
-      ...(!loopback ? ['http callbacks are allowed only for loopback clients'] : []),
-      ...(loopback && applicationType !== 'native'
-        ? ['http loopback callbacks require application_type "native"']
-        : []),
+      ...errorIf(loopback === false, 'http callbacks are allowed only for loopback clients'),
+      ...errorIf(loopback && applicationType !== 'native', 'http loopback callbacks require application_type "native"'),
     ];
   }
   return protocol === 'https:' ? [] : ['must use https, or http for loopback clients'];
 }
 
 function validateRedirectUriIp(host: string, loopback: boolean): string[] {
-  return !loopback && isPrivateIpLiteral(host)
+  return loopback === false && isPrivateIpLiteral(host)
     ? ['must not use a private, link-local, or unspecified IP literal']
     : [];
+}
+
+function errorIf(condition: boolean, message: string): string[] {
+  return condition ? [message] : [];
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
