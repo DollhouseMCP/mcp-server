@@ -36,6 +36,7 @@ import type {
   InteractionStep,
 } from './IAuthMethod.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
+import { allowCspFormActionOrigin } from './securityHeaders.js';
 
 const CSRF_MODEL = 'InteractionCsrf';
 const CSRF_TTL_SECONDS = 600; // 10 min, matches oidc-provider's default interaction TTL.
@@ -536,6 +537,7 @@ export async function renderClientConsentForIdentity(
   );
   const csrfToken = randomBytes(32).toString('base64url');
   await storage.genericSet(CSRF_MODEL, details.uid, { token: csrfToken }, CSRF_TTL_SECONDS);
+  allowOAuthRedirectFormAction(res, details);
   const html = await renderOAuthClientConsentPage(provider, details, csrfToken, defaultResource, {
     identity,
     firstSeen,
@@ -1413,6 +1415,27 @@ async function findClientForConsent(
 
 function paramString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function allowOAuthRedirectFormAction(res: Response, details: OidcInteractionDetails): void {
+  const redirectUri = paramString(details.params.redirect_uri);
+  if (!redirectUri) return;
+
+  try {
+    // Safe only for the hosted client-consent page: oidc-provider has already
+    // matched this redirect_uri to the registered OAuth client, and this CSP
+    // source allows only the browser's final form-submit redirect back to that
+    // client origin. All other embedded auth pages keep form-action at 'self'.
+    allowCspFormActionOrigin(res, new URL(redirectUri).origin);
+  } catch (err) {
+    // oidc-provider validates redirect_uri before creating the interaction.
+    // Keep the CSP opt-in fail-closed if provider details are unexpected.
+    logger.debug('[InteractionRouter] skipped OAuth redirect CSP form-action origin', {
+      interactionIdHash: fingerprintTransientId(details.uid),
+      redirectUriHash: fingerprintTransientId(redirectUri),
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 function firstString(value: unknown): string | undefined {
