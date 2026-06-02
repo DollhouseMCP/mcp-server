@@ -9,6 +9,8 @@ End-to-end walkthrough for deploying DollhouseMCP as a hosted HTTP service on a 
 
 This guide assumes you have read [Auth Server Setup](./auth-server-setup.md) and chose **Path D — Postgres-backed (production-shape)**. That guide explains the auth model in depth; this one is the operations counterpart that takes you from "I have a domain" to "the deploy is live, observable, and recoverable."
 
+For the emerging one-command install/update path, see [Hosted Deployment Automation](./hosted-deployment-automation.md). That helper turns the container + Caddy + Postgres path in this runbook into an executable deployment bundle; this runbook remains the detailed operator reference.
+
 For a vendor-specific Cloudflare Tunnel ingress (no port forwarding, no Caddy), see [Cloudflare Tunnel ingress](#cloudflare-tunnel-ingress-appendix) at the end.
 
 ---
