@@ -66,7 +66,18 @@ DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com \
   npm run hosted:deploy -- verify
 ```
 
+Run an update on a remote host over SSH:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration \
+  npm run hosted:remote -- update
+```
+
 The helper lives at [`scripts/hosted-deploy.sh`](../../scripts/hosted-deploy.sh).
+The SSH operator wrapper lives at [`scripts/hosted-remote-deploy.sh`](../../scripts/hosted-remote-deploy.sh).
 
 The entrypoint stays intentionally thin. Implementation modules live under [`scripts/hosted-deploy/`](../../scripts/hosted-deploy/):
 
@@ -109,6 +120,13 @@ It preserves:
 - previous server bundle snapshots
 - rollback source snapshots
 
+The remote wrapper additionally creates operator backups before it invokes the hosted helper on an existing deployment:
+
+- a Postgres dump under `backups/pre-remote-<action>-<timestamp>.sql`
+- `.env` and `.env.production` copies under `backups/`
+
+Set `DOLLHOUSE_REMOTE_SKIP_BACKUP=true` or pass `--skip-backup` only when a separate backup already exists.
+
 ## Configuration
 
 Common environment variables:
@@ -133,15 +151,84 @@ Common environment variables:
 | `DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT` | Seconds to wait for Postgres readiness | `60` |
 | `DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT` | Seconds to wait for public `/healthz`, `/readyz`, and `/mcp` checks after app restart | `60` |
 
+Remote wrapper variables:
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `DOLLHOUSE_REMOTE_SSH_TARGET` | SSH target for operator-managed remote deploys, for example `root@203.0.113.10` | none |
+| `DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE` | Optional SSH private key path | none |
+| `DOLLHOUSE_REMOTE_SSH_PORT` | Optional SSH port | default SSH port |
+| `DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE` | Optional known-hosts file used with strict host-key checking | OpenSSH default known-hosts files |
+| `DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY` | Permit `enroll-host` to append the scanned host key after operator verification | `false` |
+| `DOLLHOUSE_REMOTE_SKIP_BACKUP` | Skip remote DB/env backups before running the helper | `false` |
+| `DOLLHOUSE_REMOTE_SKIP_LOCAL_VERIFY` | Skip local public endpoint checks after the remote helper completes | `false` |
+| `DOLLHOUSE_REMOTE_KEEP_WORKDIR` | Keep the temporary remote clone for debugging | `false` |
+| `DOLLHOUSE_REMOTE_DRY_RUN` | Preview the remote plan without opening SSH | `false` |
+
 Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs, except for one upgrade path: if an existing deployment already has `/opt/dollhousemcp/.env`, selected values are imported once into `.env.production` so Docker Compose interpolation does not generate credentials that differ from the initialized Postgres volume. When `.env.production` already exists, only database/connection keys are reconciled from `.env`; auth and runtime secrets already present in `.env.production` are preserved. The helper records that upgrade in `.legacy-env-imported`; remove that marker only if you intentionally need to re-import from `.env`. Set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` to disable the import.
 
 All helper-managed Docker Compose commands run with `--env-file .env.production`. This matters because Compose normally reads `.env` for variable interpolation, while `env_file: .env.production` only controls container environment injection.
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
-The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by default because credentials embedded in command arguments can leak through process listings or logs. Use a git credential helper, deploy key, or `DOLLHOUSE_HOSTED_SOURCE_DIR` instead. If an operator has an explicit reason to allow this, set `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL=true`.
+The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by default because credentials embedded in command arguments can leak through process listings or logs. The remote wrapper applies the same check before opening SSH. Use a git credential helper, deploy key, or `DOLLHOUSE_HOSTED_SOURCE_DIR` instead. If an operator has an explicit reason to allow this, set `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL=true`.
 
 ## Actions
+
+### Remote Operator Wrapper
+
+`npm run hosted:remote -- <action>` wraps the repo-owned helper for operator-managed SSH hosts. It is designed for the alpha/beta cloud path where an operator updates a VM but wants the manual safety steps automated.
+
+Remote deploy actions use `StrictHostKeyChecking=yes`. For production-like use, enroll the host key first or provide a managed known-hosts file from your infrastructure tooling. The wrapper does not silently trust first-contact SSH keys.
+
+It performs:
+
+- local validation of target, hostname, ref, and options
+- remote Docker Compose preflight
+- remote env-file backup and database dump when an existing deployment is present
+- remote clone of `DOLLHOUSE_HOSTED_GIT_URL` at `DOLLHOUSE_HOSTED_GIT_REF`
+- remote execution of `scripts/hosted-deploy.sh <action>`
+- remote summary of deployed revision, timestamp, portfolio size, and relevant containers
+- local checks for `/healthz`, `/readyz`, and unauthenticated `/mcp`
+
+Preview without SSH:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  npm run hosted:remote -- --dry-run update
+```
+
+Update with an explicit identity file and branch:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE=~/.ssh/dollhousemcp_alpha_hetzner_ed25519 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration \
+  npm run hosted:remote -- update
+```
+
+Enroll a host key into a dedicated known-hosts file:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
+  npm run hosted:remote -- enroll-host
+```
+
+The first pass scans the host key and prints fingerprints without writing. Verify those fingerprints out of band, for example against the provider console or your enterprise SSH host-key inventory. Then append the key explicitly:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
+  npm run hosted:remote -- --accept-host-key enroll-host
+```
+
+Enterprise deployments can skip `enroll-host` and point `DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE` at a managed known-hosts file or host-CA-backed SSH configuration.
+
+The wrapper does not replace `scripts/hosted-deploy.sh`; it calls it remotely after cloning the requested ref. It uploads its remote payload to a temporary `0600` script before execution so commands such as database dumps cannot consume the rest of a streamed SSH script from stdin. Use the direct helper when you are already logged into the target host or when building local/LAN and enterprise modes.
 
 ### `render`
 
