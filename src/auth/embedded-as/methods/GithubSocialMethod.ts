@@ -41,7 +41,7 @@ import type {
   InteractionStep,
 } from '../IAuthMethod.js';
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
-import { finishInteractionWithIdentity } from '../InteractionRouter.js';
+import { renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
@@ -270,7 +270,7 @@ export class GithubSocialMethod implements IAuthMethod {
           // interactionDetails reads the correct interaction record.
           req.url = `/interaction/${result.interactionId}`;
           const details = await provider.interactionDetails(req, res);
-          await finishInteractionWithIdentity(req, res, provider, details, result.identity.sub, deps.storage, deps.defaultResource);
+          await renderClientConsentForIdentity(res, provider, details, result.identity.sub, deps.storage, deps.defaultResource);
         } catch (err) {
           next(err);
         }

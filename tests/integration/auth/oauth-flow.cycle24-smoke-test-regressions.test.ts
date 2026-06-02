@@ -109,6 +109,28 @@ describe('Cycle 24 smoke-test regressions', () => {
       expect(typeof body.client_id).toBe('string');
       expect(body.client_id?.length ?? 0).toBeGreaterThan(0);
     });
+
+    it('openDCR=true: /reg rejects unsafe non-loopback HTTP callbacks', async () => {
+      const storage = new InMemoryAuthStorageLayer();
+      harness = await startASHarness({
+        methods: [new TrivialConsentMethod({ defaultSubject: 'test-user' })],
+        storage,
+        openDCR: true,
+      });
+
+      const res = await fetch(`${harness.baseUrl}/reg`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          redirect_uris: ['http://client.example.com/callback'],
+          scope: 'mcp',
+        }),
+      });
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as { error?: string; error_description?: string };
+      expect(body.error).toBe('invalid_client_metadata');
+      expect(body.error_description).toContain('http callbacks are allowed only for loopback clients');
+    });
   });
 
   // -------------------------------------------------------------------

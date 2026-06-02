@@ -37,6 +37,10 @@ import type { IAuthMethod } from './IAuthMethod.js';
 import {
   createInteractionRouter,
 } from './InteractionRouter.js';
+import {
+  createOpenDcrRegistrationHandlers,
+  type DcrProvider,
+} from './dcrPolicyMiddleware.js';
 import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
@@ -417,6 +421,18 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     };
     for (const method of this.methods) {
       method.contributeRoutes?.(router, contributeDeps);
+    }
+
+    // Issue #2220: when open DCR is enabled for hosted MCP clients, keep
+    // registration dynamic but constrain unsafe callback/metadata shapes.
+    // Default/IAT-gated DCR remains handled by oidc-provider below.
+    if (this.openDCR) {
+      router.post('/reg', ...createOpenDcrRegistrationHandlers({
+        ensureProvider: async () => {
+          const state = await this.ensureInitialized();
+          return state.provider as unknown as DcrProvider;
+        },
+      }));
     }
 
     // Mount oidc-provider's full OAuth/OIDC surface (/auth, /token, /jwks,

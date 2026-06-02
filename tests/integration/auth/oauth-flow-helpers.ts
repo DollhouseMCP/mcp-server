@@ -243,3 +243,29 @@ export async function followToCodeRedirect(opts: {
   }
   throw new Error('Did not land on client redirect_uri with code');
 }
+
+export async function approveClientConsentPage(opts: {
+  baseUrl: string;
+  response: Response;
+  jar: CookieJar;
+}): Promise<Response> {
+  opts.jar.ingest(opts.response.headers);
+  const html = await opts.response.text();
+  const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
+  if (!csrfMatch) throw new Error('CSRF token not found in client consent page');
+  const formAction = /<form[^>]*action="([^"]+)"/i.exec(html)?.[1];
+  if (!formAction) throw new Error('Client consent form action not found');
+
+  return fetch(absoluteUrl(opts.baseUrl, formAction), {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: opts.jar.header(),
+    },
+    body: new URLSearchParams({
+      csrf_token: csrfMatch[1],
+      action: 'authorize_oauth_client',
+    }),
+  });
+}

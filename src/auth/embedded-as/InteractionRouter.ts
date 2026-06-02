@@ -40,6 +40,9 @@ const CSRF_MODEL = 'InteractionCsrf';
 const CSRF_TTL_SECONDS = 600; // 10 min, matches oidc-provider's default interaction TTL.
 const METHOD_CHOICE_MODEL = 'InteractionMethodChoice';
 const METHOD_CHOICE_TTL_SECONDS = 600; // matches CSRF + Interaction TTL
+const PENDING_CLIENT_CONSENT_MODEL = 'PendingClientConsentIdentity';
+const CLIENT_CONSENT_APPROVE_ACTION = 'authorize_oauth_client';
+const CLIENT_CONSENT_DENY_ACTION = 'deny_oauth_client';
 
 export interface OidcInteractionDetails {
   uid: string;
@@ -62,6 +65,19 @@ interface OidcGrantConstructor {
   find(id: string): Promise<OidcGrantInstance | undefined>;
 }
 
+interface OidcClientForConsent {
+  clientId?: string;
+  clientName?: string;
+  redirectUris?: string[];
+  applicationType?: string;
+  scope?: string;
+  metadata?(): Record<string, unknown>;
+}
+
+interface OidcClientConstructorForConsent {
+  find(id: string): Promise<OidcClientForConsent | undefined>;
+}
+
 export interface OidcProviderForInteractions {
   interactionDetails(req: Request, res: Response): Promise<OidcInteractionDetails>;
   interactionFinished(
@@ -71,6 +87,7 @@ export interface OidcProviderForInteractions {
     options?: { mergeWithLastSubmission?: boolean },
   ): Promise<void>;
   Grant: OidcGrantConstructor;
+  Client?: OidcClientConstructorForConsent;
 }
 
 export interface InteractionRouterDeps {
@@ -241,6 +258,41 @@ async function handlePost(
     return;
   }
 
+  const action = bodyValue(req, 'action');
+  if (action === CLIENT_CONSENT_APPROVE_ACTION || action === CLIENT_CONSENT_DENY_ACTION) {
+    const csrfOk = await verifyAndConsumeCsrf(req, res, storage, details.uid);
+    if (!csrfOk) return;
+
+    const pending = await storage.genericGet(PENDING_CLIENT_CONSENT_MODEL, details.uid) as
+      | { accountId?: string }
+      | null;
+    await storage.genericDestroy(PENDING_CLIENT_CONSENT_MODEL, details.uid);
+
+    if (action === CLIENT_CONSENT_DENY_ACTION) {
+      await provider.interactionFinished(req, res, {
+        error: 'access_denied',
+        error_description: 'End-User denied client authorization',
+      }, { mergeWithLastSubmission: false });
+      return;
+    }
+
+    if (!pending?.accountId) {
+      sendError(res, 400, 'invalid_interaction', 'no pending client consent found; restart sign-in');
+      return;
+    }
+
+    await finishInteractionWithIdentity(
+      req,
+      res,
+      provider,
+      details,
+      pending.accountId,
+      storage,
+      defaultResource,
+    );
+    return;
+  }
+
   const resolution = await resolveMethodForRequest(req, details, methods, storage);
   if (resolution.kind === 'chooser') {
     // POST without a stored method choice — the user submitted the
@@ -261,20 +313,8 @@ async function handlePost(
   // contributeRoutes path, NOT on /interaction/:uid POST — so any
   // redirect-flow request reaching this handler without a CSRF record
   // is also illegitimate.
-  const persistedCsrf = await storage.genericGet(CSRF_MODEL, details.uid) as { token?: string } | null;
-  if (!persistedCsrf?.token) {
-    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
-    return;
-  }
-  const submitted = bodyValue(req, 'csrf_token');
-  if (!submitted || !constantTimeStringEq(submitted, persistedCsrf.token)) {
-    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
-    return;
-  }
-  // Single-use: destroy regardless of method outcome. A subsequent
-  // next-step render-html stamps a fresh record before the user sees
-  // the next form.
-  await storage.genericDestroy(CSRF_MODEL, details.uid);
+  const csrfOk = await verifyAndConsumeCsrf(req, res, storage, details.uid);
+  if (!csrfOk) return;
 
   const method = resolution.method;
   const ctx = makeContext(details, req);
@@ -349,6 +389,7 @@ export async function finishInteractionWithIdentity(
   defaultResource: string,
 ): Promise<void> {
   try {
+    await storage.genericDestroy(PENDING_CLIENT_CONSENT_MODEL, details.uid);
     const grantId = await resolveAndSaveGrant(provider, details, accountId, defaultResource);
 
     // Stamp lastAuthAt before interactionFinished so the redirect-to-token
@@ -375,6 +416,33 @@ export async function finishInteractionWithIdentity(
       sendError(res, 500, 'server_error', 'Failed to finish interaction');
     }
   }
+}
+
+/**
+ * Render Dollhouse's client-consent page after an external auth method has
+ * authenticated and allowlisted the user, but before oidc-provider issues an
+ * authorization code. This is the hosted-DCR safety stop from #2220: unknown
+ * MCP clients are allowed, while the user still sees the client name, callback
+ * host, scopes, and resource before tokens are minted.
+ */
+export async function renderClientConsentForIdentity(
+  res: Response,
+  provider: OidcProviderForInteractions,
+  details: OidcInteractionDetails,
+  accountId: string,
+  storage: IAuthStorageLayer,
+  defaultResource: string,
+): Promise<void> {
+  await storage.genericSet(
+    PENDING_CLIENT_CONSENT_MODEL,
+    details.uid,
+    { accountId, createdAt: Date.now() },
+    CSRF_TTL_SECONDS,
+  );
+  const csrfToken = randomBytes(32).toString('base64url');
+  await storage.genericSet(CSRF_MODEL, details.uid, { token: csrfToken }, CSRF_TTL_SECONDS);
+  const html = await renderOAuthClientConsentPage(provider, details, csrfToken, defaultResource);
+  res.type('html').send(html);
 }
 
 /**
@@ -476,6 +544,208 @@ function makeContext(
   };
 }
 
+async function verifyAndConsumeCsrf(
+  req: Request,
+  res: Response,
+  storage: IAuthStorageLayer,
+  interactionId: string,
+): Promise<boolean> {
+  const persistedCsrf = await storage.genericGet(CSRF_MODEL, interactionId) as { token?: string } | null;
+  if (!persistedCsrf?.token) {
+    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    return false;
+  }
+  const submitted = bodyValue(req, 'csrf_token');
+  if (!submitted || !constantTimeStringEq(submitted, persistedCsrf.token)) {
+    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    return false;
+  }
+  // Single-use: destroy regardless of method outcome. A subsequent
+  // next-step render-html or client-consent page stamps a fresh record.
+  await storage.genericDestroy(CSRF_MODEL, interactionId);
+  return true;
+}
+
+async function renderOAuthClientConsentPage(
+  provider: OidcProviderForInteractions,
+  details: OidcInteractionDetails,
+  csrfToken: string,
+  defaultResource: string,
+): Promise<string> {
+  const view = await buildClientConsentView(provider, details, defaultResource);
+  const scopes = view.scopes.length > 0
+    ? view.scopes.map((scope) => `<li>${escapeHtmlText(scope)}</li>`).join('\n')
+    : '<li>default OAuth access</li>';
+  const redirectList = view.registeredRedirectUris.length > 0
+    ? view.registeredRedirectUris.slice(0, 5).map((uri) => `<li><code>${escapeHtmlText(uri)}</code></li>`).join('\n')
+    : '<li>Not available from client metadata</li>';
+  const redirectOverflow = view.registeredRedirectUris.length > 5
+    ? `<li>...and ${view.registeredRedirectUris.length - 5} more</li>`
+    : '';
+  const clientUri = view.clientUri
+    ? `<p class="muted">Client website: <a href="${escapeHtmlAttr(view.clientUri)}" rel="noreferrer">${escapeHtmlText(view.clientUri)}</a></p>`
+    : '';
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Authorize ${escapeHtmlText(view.clientName)}</title>
+  <style>
+    body { margin: 0; font-family: system-ui, sans-serif; background: #f7f7f4; color: #181816; }
+    main { max-width: 640px; margin: 8vh auto; padding: 32px; background: white; border: 1px solid #d8d6cc; border-radius: 8px; }
+    h1 { font-size: 24px; margin: 0 0 12px; }
+    h2 { font-size: 15px; margin: 24px 0 8px; }
+    p { line-height: 1.5; }
+    dl { display: grid; grid-template-columns: 150px 1fr; gap: 10px 16px; margin: 20px 0; }
+    dt { color: #68675f; font-weight: 700; }
+    dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+    code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; }
+    ul { margin: 8px 0 0; padding-left: 20px; }
+    form { display: flex; gap: 12px; flex-wrap: wrap; margin-top: 28px; }
+    button { border: 0; border-radius: 6px; padding: 12px 16px; font-weight: 700; cursor: pointer; }
+    button.primary { background: #185c37; color: white; }
+    button.secondary { background: #ece8dd; color: #181816; }
+    .muted { color: #68675f; font-size: 14px; }
+    .warning { border-left: 4px solid #b65b00; padding-left: 12px; color: #3a2a18; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Authorize ${escapeHtmlText(view.clientName)}</h1>
+    <p class="warning">This client will receive OAuth tokens for DollhouseMCP after approval.</p>
+    ${clientUri}
+    <dl>
+      <dt>Client ID</dt>
+      <dd><code>${escapeHtmlText(view.clientId)}</code></dd>
+      <dt>Callback domain</dt>
+      <dd><code>${escapeHtmlText(view.callbackHost)}</code></dd>
+      <dt>Callback URL</dt>
+      <dd><code>${escapeHtmlText(view.redirectUri)}</code></dd>
+      <dt>Resource</dt>
+      <dd><code>${escapeHtmlText(view.resource)}</code></dd>
+      <dt>Application type</dt>
+      <dd>${escapeHtmlText(view.applicationType)}</dd>
+    </dl>
+    <h2>Requested scopes</h2>
+    <ul>
+${scopes}
+    </ul>
+    <h2>Registered callbacks</h2>
+    <ul>
+${redirectList}
+${redirectOverflow}
+    </ul>
+    <form method="post" action="/interaction/${escapeHtmlAttr(details.uid)}">
+      <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrfToken)}">
+      <button class="primary" type="submit" name="action" value="${CLIENT_CONSENT_APPROVE_ACTION}">Authorize Client</button>
+      <button class="secondary" type="submit" name="action" value="${CLIENT_CONSENT_DENY_ACTION}">Cancel</button>
+    </form>
+  </main>
+</body>
+</html>`;
+}
+
+interface ClientConsentView {
+  clientId: string;
+  clientName: string;
+  clientUri?: string;
+  callbackHost: string;
+  redirectUri: string;
+  registeredRedirectUris: string[];
+  scopes: string[];
+  resource: string;
+  applicationType: string;
+}
+
+async function buildClientConsentView(
+  provider: OidcProviderForInteractions,
+  details: OidcInteractionDetails,
+  defaultResource: string,
+): Promise<ClientConsentView> {
+  const clientId = paramString(details.params.client_id) || 'unknown-client';
+  const redirectUri = paramString(details.params.redirect_uri) || firstString(details.params.redirect_uris) || 'not provided';
+  const client = await findClientForConsent(provider, clientId);
+  const metadata = client?.metadata?.() ?? {};
+  const registeredRedirectUris = stringArrayFrom(metadata.redirect_uris) ?? client?.redirectUris ?? [];
+  const clientName = stringFrom(metadata.client_name)
+    ?? client?.clientName
+    ?? clientId;
+  const clientUri = stringFrom(metadata.client_uri);
+  const scopes = (paramString(details.params.scope) ?? client?.scope ?? '')
+    .split(/\s+/)
+    .filter(Boolean);
+  const resource = renderResource(details.params.resource, defaultResource);
+  const applicationType = stringFrom(metadata.application_type)
+    ?? client?.applicationType
+    ?? 'unspecified';
+
+  return {
+    clientId,
+    clientName,
+    clientUri,
+    callbackHost: callbackHostFor(redirectUri),
+    redirectUri,
+    registeredRedirectUris,
+    scopes,
+    resource,
+    applicationType,
+  };
+}
+
+async function findClientForConsent(
+  provider: OidcProviderForInteractions,
+  clientId: string,
+): Promise<OidcClientForConsent | undefined> {
+  if (!provider.Client) return undefined;
+  try {
+    return await provider.Client.find(clientId);
+  } catch (err) {
+    logger.warn('[InteractionRouter] failed to load client metadata for consent page', {
+      clientId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
+  }
+}
+
+function paramString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function firstString(value: unknown): string | undefined {
+  if (!Array.isArray(value)) return undefined;
+  return value.find((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+}
+
+function stringFrom(value: unknown): string | undefined {
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+function stringArrayFrom(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const strings = value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+  return strings.length > 0 ? strings : undefined;
+}
+
+function callbackHostFor(uri: string): string {
+  try {
+    return new URL(uri).host;
+  } catch {
+    return 'not provided';
+  }
+}
+
+function renderResource(resource: unknown, defaultResource: string): string {
+  if (typeof resource === 'string' && resource.length > 0) return resource;
+  if (Array.isArray(resource)) {
+    const strings = resource.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+    if (strings.length > 0) return strings.join(', ');
+  }
+  return defaultResource;
+}
+
 function ensureCsrfInForm(html: string, csrfToken: string): string {
   // Insert a hidden CSRF input as the first child of EVERY <form>.
   // Methods can include their own placeholder (the empty csrfInput
@@ -500,6 +770,15 @@ function ensureCsrfInForm(html: string, csrfToken: string): string {
 
 function escapeHtmlAttr(value: string): string {
   return value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;');
+}
+
+function escapeHtmlText(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('\'', '&#39;');
 }
 
 function bodyValue(req: Request, field: string): string | undefined {
