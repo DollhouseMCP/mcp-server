@@ -341,6 +341,11 @@ describe('InteractionRouter — multi-method dispatch', () => {
           scopes: ['openid', 'mcp'],
         },
       });
+      const seen = await storage.genericGet('ClientConsentSeen', 'github_42:c');
+      expect(seen).toMatchObject({
+        accountId: 'github_42',
+        clientId: 'c',
+      });
 
       const secondConsent = await fetch(`${baseUrl}/seed-consent`);
       const secondHtml = await secondConsent.text();

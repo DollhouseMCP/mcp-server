@@ -829,7 +829,7 @@ async function markClientConsentSeen(
 }
 
 function clientConsentSeenKey(accountId: string, clientId: string): string {
-  return `${accountId}\0${clientId}`;
+  return `${encodeURIComponent(accountId)}:${encodeURIComponent(clientId)}`;
 }
 
 async function recordClientConsentAuditEvent(
