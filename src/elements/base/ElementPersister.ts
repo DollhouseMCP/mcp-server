@@ -245,12 +245,19 @@ export class ElementPersister<T extends IElement> {
         // so BOTH the canDelete pre-check snapshot load and the deletion target
         // the same element — previously the pre-check loaded by filename-as-id
         // (`readContent(relativePath)` → `WHERE id = '<name>.md'`) and 500'd.
-        const dbName = isDbMode
+        const probeName = isDbMode
           ? (this.storageLayer.getNameById?.(relativePath) ?? this.host.extractNameFromPath(relativePath))
           : undefined;
         const dbId = isDbMode
-          ? (this.storageLayer.getPathByName(dbName as string) ?? relativePath)
+          ? (this.storageLayer.getPathByName(probeName as string) ?? relativePath)
           : relativePath;
+        // deleteContent() matches on the raw stored name, and the inbound path is
+        // often a lowercased filename stem ("meeting-notes") rather than the raw
+        // name ("Meeting-Notes"). Prefer the canonical name the index holds for the
+        // resolved id, so the snapshot load and the delete target the same row.
+        const dbName = isDbMode
+          ? (this.storageLayer.getNameById?.(dbId) ?? probeName)
+          : undefined;
 
         if (this.host.canDelete) {
           const elementForValidation = isDbMode

@@ -4,7 +4,10 @@ let world: World;
 beforeAll(async () => { world = await setupWorld(); });
 
 const TYPE = 'personas';
-const NAME = 'e2e-test-persona';
+// Mixed-case on purpose: the filename stem the store addresses elements by is
+// lowercased, while the storage-layer name index is keyed by the raw name —
+// a name like this is the regression guard for that resolution mismatch.
+const NAME = 'E2E-Test-Persona';
 const base = `/api/v1/me/portfolio/elements/${TYPE}`;
 
 describe('/me/portfolio reads', () => {
@@ -66,6 +69,49 @@ describe('/me/portfolio element authoring (write routes enabled)', () => {
     const del = await world.clients.userA.delete(`${base}/${NAME}`, { ifMatch: edit.etag });
     expect(del.status).toBe(200);
     const gone = await world.clients.userA.get(`${base}/${NAME}`);
+    expect(gone.status).toBe(404);
+  });
+
+  // Memories are the one type the BFF stores as pure YAML (an `entries` array)
+  // rather than markdown-with-frontmatter, so they need their own round-trip:
+  // the persona path above structurally can't catch a memory serialization bug
+  // (e.g. silently dropping entries on create).
+  it('memory CRUD round-trip preserves entries (pure-YAML path)', async () => {
+    const memBase = '/api/v1/me/portfolio/elements/memories';
+    const memName = 'Mixed-Case-Memory'; // mixed-case: guards the name→id delete resolution
+    const memContent = [
+      'entries:',
+      '  - content: First e2e memory entry.',
+      '    tags: [e2e]',
+      '  - content: Second e2e memory entry.',
+    ].join('\n');
+
+    const created = await world.clients.userA.post(memBase, {
+      body: { name: memName, content: memContent, metadata: {}, tags: ['e2e'] },
+    });
+    expect(created.status).toBe(201);
+
+    // The entries must survive the create round-trip — the regression guard for
+    // the memory pure-YAML serialization path.
+    const read = await world.clients.userA.get(`${memBase}/${memName}`);
+    expect(read.status).toBe(200);
+    expect(read.body.content).toContain('First e2e memory entry.');
+    expect(read.body.content).toContain('Second e2e memory entry.');
+
+    const render = await world.clients.userA.post(`${memBase}/${memName}/render`, { body: {} });
+    expect(render.status).toBe(200);
+
+    const edit = await world.clients.userA.patch(`${memBase}/${memName}`, {
+      body: { content: 'entries:\n  - content: Edited memory entry.' },
+      ifMatch: read.etag,
+    });
+    expect(edit.status).toBe(200);
+    const afterEdit = await world.clients.userA.get(`${memBase}/${memName}`);
+    expect(afterEdit.body.content).toContain('Edited memory entry.');
+
+    const del = await world.clients.userA.delete(`${memBase}/${memName}`, { ifMatch: edit.etag });
+    expect(del.status).toBe(200);
+    const gone = await world.clients.userA.get(`${memBase}/${memName}`);
     expect(gone.status).toBe(404);
   });
 

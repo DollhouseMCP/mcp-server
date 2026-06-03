@@ -148,6 +148,15 @@ describe('RuntimeSessionModule', () => {
         idempotency: 'required',
       }),
       expect.objectContaining({
+        method: 'POST',
+        path: '/api/v1/me/sessions/revoke-all',
+        audience: 'self',
+        requiredCapability: 'console:self',
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        idempotency: 'required',
+      }),
+      expect.objectContaining({
         method: 'GET',
         path: '/api/v1/admin/accounts/users/:user_id/sessions',
         requiredCapability: 'console:admin:accounts',

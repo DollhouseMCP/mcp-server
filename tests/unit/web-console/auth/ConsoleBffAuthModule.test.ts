@@ -184,6 +184,33 @@ describe('ConsoleBffAuthModule', () => {
     });
   });
 
+  it('reports the role-entitled admin capabilities a principal can step up into', async () => {
+    const { app } = buildFixture({
+      principals: [{
+        sub: AUTH_SUB,
+        userId: USER_ID,
+        disabledAt: null,
+        authzVersion: 3,
+        roles: ['operator'],
+      }],
+    });
+    const login = await request(app).get(LOGIN_PATH);
+    const state = new URL(login.headers.location).searchParams.get('state');
+    const loginCookie = cookieHeader(login.headers['set-cookie'], CONSOLE_LOGIN_STATE_COOKIE);
+    const callback = await request(app)
+      .get(`${CALLBACK_PATH}?code=${AUTH_CODE}&state=${encodeURIComponent(state ?? '')}`)
+      .set('Cookie', loginCookie);
+    const sessionCookie = cookieHeader(callback.headers['set-cookie'], CONSOLE_SESSION_COOKIE);
+
+    const me = await request(app).get(ME_PATH).set('Cookie', sessionCookie);
+    expect(me.status).toBe(200);
+    // Not elevated: only console:self is *granted*, but operate is *available*
+    // to step up into — so the UI can offer elevation without elevating yet.
+    expect(me.body.granted_capabilities).toEqual([SELF_CAPABILITY]);
+    expect(me.body.available_admin_capabilities).toEqual(['console:admin:operate']);
+    expect(me.body.elevation).toEqual({ active: false, expires_at: null, acr: null });
+  });
+
   it('rejects callback replay without exchanging the code again', async () => {
     const { app, oauthClient } = buildFixture();
     const login = await request(app).get(LOGIN_PATH);

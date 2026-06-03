@@ -7,6 +7,7 @@ export const WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS = [
   'audit',
   'executions',
   'integrations',
+  'me-logs',
   'operations',
   'portfolio',
   'runtimeSessions',

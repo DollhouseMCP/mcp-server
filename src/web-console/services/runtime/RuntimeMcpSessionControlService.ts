@@ -6,8 +6,44 @@ import type {
   RuntimeTerminationAckResult,
 } from './IRuntimeSessionControlStore.js';
 
-export const DEFAULT_RUNTIME_SESSION_LEASE_MS = 45_000;
+/**
+ * Presence lease duration. This bounds two things: how long a runtime session
+ * stays VISIBLE in `/me/sessions` (Connected apps) after its last MCP request,
+ * and how long a crashed replica's presence row lingers before
+ * `sweepStalePresence` reaps it.
+ *
+ * It must reflect the TRANSPORT SESSION LIFETIME. A connected agent that is
+ * idle (sending no requests) keeps its streamable-http session alive until the
+ * idle timeout (`DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS`, default 15 min); the
+ * SDK only ends the transport on DELETE/idle-dispose, which marks presence
+ * `closing`. A lease shorter than that window made idle-but-connected agents
+ * flicker out of the list and reappear on their next request. The active/idle
+ * sub-state is derived from `lastActiveAt` recency at render time — NOT from
+ * this lease. Size it from the configured idle timeout via
+ * `runtimePresenceLeaseMsFor()`.
+ */
+export const DEFAULT_RUNTIME_SESSION_LEASE_MS = 15 * 60_000;
+
+/**
+ * Grace added on top of the transport idle window so the transport's own
+ * idle-dispose (which marks presence `closing`) wins the race against lease
+ * expiry — yielding a clean lifecycle transition rather than a gated zombie.
+ */
+export const RUNTIME_PRESENCE_LEASE_GRACE_MS = 60_000;
+
 export const DEFAULT_RUNTIME_COMMAND_BATCH_LIMIT = 100;
+
+/**
+ * Sizes the presence lease from the transport idle timeout so presence
+ * visibility tracks the real session lifetime. A non-positive idle timeout
+ * (idle expiry disabled) falls back to the default lease window.
+ */
+export function runtimePresenceLeaseMsFor(idleTimeoutMs: number): number {
+  const base = Number.isFinite(idleTimeoutMs) && idleTimeoutMs > 0
+    ? idleTimeoutMs
+    : DEFAULT_RUNTIME_SESSION_LEASE_MS;
+  return base + RUNTIME_PRESENCE_LEASE_GRACE_MS;
+}
 
 export interface RuntimeMcpSessionRegistration {
   readonly sessionId: string;

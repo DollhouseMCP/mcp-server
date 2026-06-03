@@ -1,0 +1,479 @@
+/**
+ * Console-shell components layered on the Atelier design language.
+ * Only the pieces the rewrite adds (auth gate, buttons, toasts, placeholders);
+ * everything else reuses styles.css. Tokens only — stays on-palette in light/dark.
+ */
+
+/* The hidden attribute must win over the explicit display rules below
+   (.auth-gate/.console-shell set display, which would otherwise override it). */
+[hidden] { display: none !important; }
+
+/* ── Buttons ────────────────────────────────────────────────────────────── */
+
+.btn {
+  appearance: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-weight: 600;
+  line-height: 1;
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
+  background: color-mix(in srgb, var(--paper-strong) 70%, var(--surface-1));
+  color: var(--ink-900);
+  cursor: pointer;
+  text-decoration: none;
+  transition: transform 0.08s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.btn:hover { box-shadow: var(--shadow-soft); transform: translateY(-1px); }
+.btn:active { transform: translateY(0); }
+
+.btn-primary {
+  border-color: transparent;
+  color: var(--paper-strong);
+  background: linear-gradient(135deg, var(--signal-2), var(--signal));
+  box-shadow: var(--shadow-soft);
+}
+.btn-primary:hover { box-shadow: var(--shadow-card); }
+
+.btn-ghost {
+  background: transparent;
+  border-color: color-mix(in srgb, var(--line) 70%, transparent);
+  color: var(--ink-700);
+}
+.btn-ghost:hover { background: color-mix(in srgb, var(--surface-1) 70%, transparent); }
+
+/* ── Auth gate ──────────────────────────────────────────────────────────── */
+
+.auth-gate {
+  position: fixed;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: var(--gutter);
+  background:
+    radial-gradient(120% 60% at 0% 0%, color-mix(in srgb, var(--signal-2) 10%, transparent), transparent 55%),
+    radial-gradient(90% 50% at 100% 0%, color-mix(in srgb, var(--accent) 7%, transparent), transparent 50%),
+    var(--paper);
+  z-index: 50;
+}
+.auth-gate-card {
+  width: min(28rem, 100%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 1rem;
+  padding: 2.6rem 2.2rem;
+  background: var(--paper-strong);
+  border: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+}
+.auth-gate-logo { border-radius: var(--radius-md); }
+.auth-gate-title {
+  font-family: var(--font-heading);
+  font-size: var(--step-2);
+  font-weight: 700;
+  margin: 0;
+  color: var(--ink-950);
+}
+.auth-gate-text { font-family: var(--font-body); font-size: var(--step-0); color: var(--ink-500); margin: 0; }
+.auth-gate-card .btn-primary { margin-top: 0.4rem; padding: 0.7rem 1.4rem; }
+
+/* ── Shell + account ────────────────────────────────────────────────────── */
+
+.console-shell { display: flex; flex-direction: column; min-height: 100vh; }
+.site-account {
+  appearance: none;
+  border: 1px solid transparent;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--ink-700);
+  padding: 0.3rem 0.6rem;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--surface-1) 60%, transparent);
+}
+.site-account::after { content: ' \25BE'; opacity: 0.6; }
+.site-account:hover { border-color: color-mix(in srgb, var(--line) 70%, transparent); }
+
+/* ── Placeholder panels (pre-feature) ──────────────────────────────────── */
+
+.panel-placeholder {
+  margin: var(--gutter) auto;
+  max-width: var(--max-width);
+  padding: 3rem 2rem;
+  text-align: center;
+  font-family: var(--font-body);
+  color: var(--ink-500);
+  background: color-mix(in srgb, var(--paper-strong) 60%, var(--surface-2));
+  border: 1px dashed color-mix(in srgb, var(--line) 80%, transparent);
+  border-radius: var(--radius-lg);
+}
+
+/* ── Toasts ─────────────────────────────────────────────────────────────── */
+
+.toast-stack {
+  position: fixed;
+  right: var(--gutter);
+  bottom: var(--gutter);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  z-index: 60;
+}
+.toast {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  padding: 0.7rem 1rem;
+  border-radius: var(--radius-sm);
+  background: var(--ink-900);
+  color: var(--paper-strong);
+  box-shadow: var(--shadow-card);
+  opacity: 0;
+  transform: translateY(0.6rem);
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  max-width: 24rem;
+}
+.toast--in { opacity: 1; transform: translateY(0); }
+.toast--warn { background: color-mix(in srgb, var(--accent) 88%, var(--ink-950)); }
+.toast--error { background: #b42318; }
+.toast--success { background: var(--teal); }
+
+/* ── Detail-modal frontmatter table (new) ──────────────────────────────── */
+
+.element-frontmatter {
+  display: grid;
+  gap: 0.35rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+}
+.fm-row {
+  display: grid;
+  grid-template-columns: 9rem 1fr;
+  gap: 0.85rem;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+}
+.fm-key { color: var(--ink-500); }
+.fm-val { color: var(--ink-900); word-break: break-word; }
+
+/* List view: show element names in full — the legacy clamped the title to a
+   fixed 13rem column with an ellipsis, which truncated real (longer) names. */
+.elements-grid[data-view="list"] .card-header {
+  width: auto;
+  max-width: 34rem;
+  overflow: visible;
+  flex: 0 1 auto;
+}
+.elements-grid[data-view="list"] .card-title {
+  white-space: nowrap;
+  overflow: visible;
+  text-overflow: clip;
+}
+
+/* ── Rendered-markdown headings (detail modal) ──────────────────────────────
+   styles.css gives .element-rendered margins/family but no font-size, so its
+   headings fall back to the global document scale (h1 = --step-4, ~2.6rem),
+   which dwarfs the modal body — especially with elements whose stored body
+   opens with a duplicated H1. Cap them to prose scale within the rendered view. */
+.element-rendered h1 { font-size: var(--step-1); }
+.element-rendered h2 { font-size: var(--step-0); }
+.element-rendered h3,
+.element-rendered h4,
+.element-rendered h5,
+.element-rendered h6 {
+  font-size: var(--step--1);
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+/* ── Detail validation banner ───────────────────────────────────────────────
+   Shown atop the detail modal when an element's validation_status isn't valid. */
+.detail-validation-warn {
+  margin: 0 0 1rem;
+  padding: 0.6rem 0.85rem;
+  border: 1px solid var(--accent);
+  border-left-width: 3px;
+  border-radius: 0.4rem;
+  background: var(--accent-soft);
+  color: var(--ink-900);
+  font-size: var(--step--1);
+}
+
+/* ── Admin elevation control ───────────────────────────────────────────────
+   Shown only for admin-eligible users (elevation.js gates on
+   available_admin_capabilities). Normal: an "Elevate" button. Elevated: a live
+   accent pill + a persistent top band so privileged mode is unmissable. */
+.elevation-control {
+  display: inline-flex;
+  align-items: center;
+}
+
+.btn-elevate {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-weight: 600;
+  line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.5rem 0.9rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid color-mix(in srgb, var(--accent) 55%, var(--line));
+  background: var(--accent-soft);
+  color: var(--ink-900);
+  cursor: pointer;
+  transition: transform 0.08s ease, box-shadow 0.18s ease, background 0.18s ease;
+}
+.btn-elevate:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--paper-strong));
+  box-shadow: var(--shadow-soft);
+  transform: translateY(-1px);
+}
+.elevate-icon { font-size: 0.95em; }
+
+/* Elevated pill */
+.admin-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.4rem 0.35rem 0.7rem;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-weight: 700;
+  color: var(--paper-strong);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, #000), var(--accent));
+  box-shadow: var(--shadow-soft);
+}
+.admin-pill-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--paper-strong);
+  box-shadow: 0 0 0 0 color-mix(in srgb, var(--paper-strong) 80%, transparent);
+  animation: admin-pulse 2s infinite;
+}
+@keyframes admin-pulse {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--paper-strong) 70%, transparent); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+.admin-pill-label { letter-spacing: 0.02em; }
+.admin-pill-countdown { font-variant-numeric: tabular-nums; opacity: 0.92; }
+.admin-pill-exit {
+  appearance: none;
+  font-family: var(--font-mono);
+  font-size: calc(var(--step--1) - 1px);
+  font-weight: 700;
+  color: var(--paper-strong);
+  background: color-mix(in srgb, #000 22%, transparent);
+  border: 1px solid color-mix(in srgb, var(--paper-strong) 45%, transparent);
+  border-radius: 999px;
+  padding: 0.2rem 0.6rem;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+.admin-pill-exit:hover { background: color-mix(in srgb, #000 38%, transparent); }
+.admin-pill-exit:disabled { opacity: 0.6; cursor: default; }
+
+/* Near-expiry urgency */
+.elevation-control.is-expiring .admin-pill { animation: admin-flash 1s steps(2, start) infinite; }
+@keyframes admin-flash { 50% { filter: brightness(1.25); } }
+
+/* Persistent top band while elevated */
+.admin-band {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.3rem 1rem;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--paper-strong);
+  background: linear-gradient(135deg, color-mix(in srgb, var(--accent) 88%, #000), var(--accent));
+  box-shadow: var(--shadow-soft);
+}
+.admin-band[hidden] { display: none; }
+.admin-band--expiring { animation: admin-flash 1s steps(2, start) infinite; }
+
+/* ── Account menu (dropdown off the account chip) ──────────────────────────── */
+.account-menu-wrap { position: relative; display: inline-flex; }
+.account-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 180px;
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-card);
+  padding: 0.3rem;
+  z-index: 60;
+}
+.account-menu[hidden] { display: none; }
+.account-menu-item {
+  appearance: none;
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--ink-900);
+  padding: 0.5rem 0.7rem;
+  border-radius: var(--radius-sm);
+}
+.account-menu-item:hover { background: var(--surface-1); }
+
+/* ── Security panel (self-service authenticator management) ────────────────── */
+.security-modal { position: fixed; inset: 0; z-index: 120; display: flex; align-items: center; justify-content: center; }
+.security-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(2px); }
+.security-card {
+  position: relative;
+  width: min(460px, 92vw);
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.security-card-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 0.9rem 1.1rem;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+}
+.security-card-title { font-family: var(--font-heading); font-weight: 700; color: var(--ink-900); }
+.security-close { appearance: none; background: none; border: none; cursor: pointer; font-size: 1.1rem; color: var(--ink-500); }
+.security-close:hover { color: var(--ink-900); }
+.security-card-body { padding: 1.1rem; }
+.security-section-title { font-size: var(--step--1); font-weight: 700; color: var(--ink-700); margin: 0 0 0.5rem; }
+.security-status { display: inline-flex; align-items: center; gap: 0.4rem; font-family: var(--font-mono); font-size: var(--step--1); margin: 0 0 0.5rem; }
+.security-dot { width: 8px; height: 8px; border-radius: 50%; }
+.security-status--on .security-dot { background: #22c55e; }
+.security-status--off .security-dot { background: var(--ink-500); }
+.security-muted { color: var(--ink-500); font-size: var(--step--1); margin: 0.3rem 0 0.8rem; }
+.security-meta { display: grid; grid-template-columns: auto 1fr; gap: 0.2rem 1rem; margin: 0 0 0.9rem; font-size: var(--step--1); }
+.security-meta div { display: contents; }
+.security-meta dt { color: var(--ink-500); }
+.security-meta dd { color: var(--ink-900); margin: 0; }
+.security-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.security-danger { color: #dc2626; border-color: color-mix(in srgb, #dc2626 40%, var(--line)); }
+.security-danger:hover { background: color-mix(in srgb, #dc2626 10%, transparent); }
+.security-foot { margin: 1rem 0 0; padding-top: 0.8rem; border-top: 1px solid var(--surface-1); color: var(--ink-500); font-size: calc(var(--step--1) - 1px); }
+
+/* ── Sessions tab ──────────────────────────────────────────────────────────
+   Active sessions across web console logins + connected MCP apps. Atelier
+   surfaces/tokens, consistent with the rest of the console. */
+.sessions-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  margin: var(--gutter) auto 0;
+  max-width: var(--max-width);
+  padding: 0 0.25rem;
+  flex-wrap: wrap;
+}
+.sessions-title { font-family: var(--font-heading); font-size: var(--step-1); font-weight: 700; color: var(--ink-900); }
+.sessions-bar-actions { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+
+.session-section { margin: 1.4rem auto 0; max-width: var(--max-width); padding: 0 0.25rem; }
+.session-section-title {
+  font-family: var(--font-heading);
+  font-size: var(--step-0);
+  font-weight: 700;
+  color: var(--ink-900);
+  margin: 0 0 0.1rem;
+  display: flex; align-items: center; gap: 0.5rem;
+}
+.session-count {
+  font-family: var(--font-mono);
+  font-size: var(--step--1);
+  color: var(--ink-700);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0 0.5rem;
+}
+.session-section-sub { color: var(--ink-500); font-size: var(--step--1); margin: 0 0 0.7rem; }
+.session-list { display: flex; flex-direction: column; gap: 0.6rem; }
+
+.session-card {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  padding: 0.85rem 1rem;
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md, 0.6rem);
+  box-shadow: var(--shadow-soft);
+}
+.session-card--current { border-color: color-mix(in srgb, var(--signal) 45%, var(--line)); }
+.session-icon { font-size: 1.3rem; flex-shrink: 0; }
+.session-main { flex: 1; min-width: 0; }
+.session-id-line { font-family: var(--font-mono); font-size: var(--step--1); color: var(--ink-900); }
+.session-ip { color: var(--ink-700); }
+.session-sub { font-size: calc(var(--step--1) - 1px); color: var(--ink-500); margin-top: 0.15rem; }
+.session-sid {
+  appearance: none;
+  background: none;
+  border: none;
+  padding: 0;
+  margin-top: 0.25rem;
+  display: block;
+  text-align: left;
+  cursor: pointer;
+  font-family: var(--font-mono);
+  font-size: calc(var(--step--1) - 2px);
+  color: var(--ink-500);
+  word-break: break-all;
+  line-height: 1.3;
+}
+.session-sid:hover { color: var(--ink-700); }
+.session-sid-key { text-transform: uppercase; letter-spacing: 0.04em; opacity: 0.65; margin-right: 0.35rem; }
+.session-badges { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; flex-shrink: 0; }
+.session-badge {
+  font-family: var(--font-mono);
+  font-size: calc(var(--step--1) - 1px);
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  background: var(--surface-1);
+  color: var(--ink-700);
+  border: 1px solid var(--line);
+  white-space: nowrap;
+}
+.session-badge--active { color: #15803d; border-color: color-mix(in srgb, #22c55e 40%, var(--line)); }
+.session-badge--you { color: var(--paper-strong); background: var(--signal); border-color: var(--signal); }
+.session-badge--admin { color: var(--paper-strong); background: var(--accent); border-color: var(--accent); }
+.session-actions { display: flex; gap: 0.4rem; flex-shrink: 0; }
+.session-link { color: var(--signal); }
+.session-danger { color: #dc2626; border-color: color-mix(in srgb, #dc2626 35%, var(--line)); }
+.session-danger:hover { background: color-mix(in srgb, #dc2626 10%, transparent); }
+.session-empty { color: var(--ink-500); font-size: var(--step--1); padding: 0.6rem 0.25rem; }
+
+/* ── Confirm dialog ─────────────────────────────────────────────────────── */
+.confirm-modal { position: fixed; inset: 0; z-index: 130; display: flex; align-items: center; justify-content: center; }
+.confirm-backdrop { position: absolute; inset: 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(2px); }
+.confirm-card {
+  position: relative;
+  width: min(420px, 92vw);
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  padding: 1.3rem 1.4rem;
+}
+.confirm-msg { margin: 0 0 1.1rem; color: var(--ink-900); font-size: var(--step-0); line-height: 1.5; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: 0.6rem; }

@@ -18,6 +18,7 @@ import {
   getRequestedTransportName,
   type StreamableHttpRuntimeOptions,
   type StreamableHttpRuntimeHandle,
+  type McpClientInfo,
 } from './server/StreamableHttpServer.js';
 import { createHttpSession } from './context/HttpSession.js';
 import { ElementType } from "./portfolio/PortfolioManager.js";
@@ -1125,7 +1126,7 @@ async function startStreamableHttpServer(
     : undefined;
   const runtimeSessionControl = await resolveRuntimeMcpSessionControl(container);
 
-  return createStreamableHttpRuntime(async (transport, authClaims) => {
+  return createStreamableHttpRuntime(async (transport, authClaims, clientInfo) => {
     // SECURITY: fail-closed per-user isolation. Authenticated HTTP
     // sessions must never collapse onto the unauthenticated fallback user.
     //
@@ -1177,7 +1178,7 @@ async function startStreamableHttpServer(
     }
 
     const runtimeSession = runtimeSessionControl
-      ? await resolveRuntimeSessionRegistration(runtimeSessionControl.composition, sessionUserId)
+      ? await resolveRuntimeSessionRegistration(runtimeSessionControl.composition, sessionUserId, clientInfo)
       : undefined;
 
     logger.info('[HTTP] Session connected', {
@@ -1187,6 +1188,10 @@ async function startStreamableHttpServer(
     });
 
     return {
+      // The transport adopts this as its mcp-session-id, unifying the id used
+      // for runtime presence, the client-facing session header, and the logs
+      // tagged with this SessionContext (so Sessions↔Logs cross-linking lines up).
+      contextSessionId: sessionContext.sessionId,
       runtimeSession,
       dispose: async () => {
         logger.info('[HTTP] Session disposing', { sessionId: sessionContext.sessionId });
@@ -1238,12 +1243,18 @@ async function resolveRuntimeMcpSessionControl(
 } | undefined> {
   if (!container.hasRegistration('WebConsoleComposition')) return undefined;
   const composition = container.resolve<WebConsoleComposition>('WebConsoleComposition');
-  const { RuntimeMcpSessionControlService } = await import('./web-console/services/runtime/index.js');
+  const { RuntimeMcpSessionControlService, runtimePresenceLeaseMsFor } =
+    await import('./web-console/services/runtime/index.js');
   return {
     composition,
     service: new RuntimeMcpSessionControlService({
       store: composition.runtimeSessionControlStore,
       replicaId: resolveRuntimeReplicaId(),
+      // Presence visibility must track the transport session lifetime, so the
+      // lease is sized to the idle timeout (the streamable-http session stays
+      // alive that long even when idle). Otherwise idle-but-connected agents
+      // blink out of `/me/sessions` between requests.
+      leaseDurationMs: runtimePresenceLeaseMsFor(env.DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS),
     }),
   };
 }
@@ -1251,9 +1262,11 @@ async function resolveRuntimeMcpSessionControl(
 async function resolveRuntimeSessionRegistration(
   composition: WebConsoleComposition,
   userId: string | undefined,
+  clientInfo: McpClientInfo | undefined,
 ): Promise<{
   readonly userId: string;
   readonly accountCorrelationId: string;
+  readonly clientInfo?: McpClientInfo | null;
 } | undefined> {
   if (!userId) return undefined;
   try {
@@ -1262,6 +1275,10 @@ async function resolveRuntimeSessionRegistration(
     return {
       userId: principal.userId,
       accountCorrelationId: principal.accountCorrelationId,
+      // Carry the MCP client's self-reported name/version so the console
+      // Sessions/Logs views label the connection (e.g. "Claude Code 1.2.3")
+      // instead of a bare session UUID.
+      clientInfo: clientInfo ?? null,
     };
   } catch (error) {
     logger.warn('[HTTP] Runtime session registration skipped; principal metadata unavailable', {

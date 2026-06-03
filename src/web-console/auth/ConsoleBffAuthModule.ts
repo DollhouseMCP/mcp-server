@@ -399,15 +399,23 @@ class ConsoleBffAuthService {
     };
   }
 
-  me(req: ConsoleRequest): ConsoleHandlerResult {
+  async me(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const authentication = requireAuthentication(req);
+    // The admin capabilities this principal's role entitles them to step up
+    // into — the honest signal for whether to offer elevation in the UI. A
+    // (non-elevated) session only holds `console:self`, so this must come from
+    // the role grant, not the session's current capabilities. Re-resolving keeps
+    // it live: a revoked role stops offering elevation immediately. Resolution
+    // failure (disabled/removed principal) falls back to none.
+    const principal = await this.options.identityResolver.resolveEnabledPrincipal(authentication.authSub);
+    const availableAdminCapabilities = principal ? capabilitiesForRoles(principal.roles ?? []) : [];
     return {
       status: 200,
       body: {
         user_id: authentication.userId,
         auth_sub: authentication.authSub,
         granted_capabilities: authentication.grantedCapabilities,
-        available_admin_capabilities: [],
+        available_admin_capabilities: availableAdminCapabilities,
         elevation: authentication.elevation
           ? {
             active: true,

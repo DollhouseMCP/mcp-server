@@ -3,6 +3,9 @@ import { describe, expect, it, jest } from '@jest/globals';
 const {
   InMemoryRuntimeSessionControlStore,
   RuntimeMcpSessionControlService,
+  runtimePresenceLeaseMsFor,
+  DEFAULT_RUNTIME_SESSION_LEASE_MS,
+  RUNTIME_PRESENCE_LEASE_GRACE_MS,
 } = await import('../../../../src/web-console/services/runtime/index.js');
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
@@ -45,6 +48,41 @@ describe('RuntimeMcpSessionControlService', () => {
     });
   });
 
+  it('keeps an idle-but-connected session visible across the transport lifetime', async () => {
+    // Regression: the lease was 45s and gated visibility, so an idle agent that
+    // had not sent a request in 45s vanished from /me/sessions even though its
+    // streamable-http session was still alive. The lease now tracks the idle
+    // timeout, so presence stays listed until the transport actually closes.
+    const store = new InMemoryRuntimeSessionControlStore();
+    let now = T0;
+    const service = new RuntimeMcpSessionControlService({
+      store,
+      replicaId: 'replica-a',
+      now: () => now,
+      leaseDurationMs: runtimePresenceLeaseMsFor(15 * 60_000),
+    });
+    await service.registerSession({
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      clientInfo: { name: 'Claude Code', version: '1.0.0' },
+    });
+
+    // Five minutes of inactivity — well past the old 45s lease.
+    now = new Date(T0.getTime() + 5 * 60_000);
+    await expect(store.listPresenceByUser(USER_ID, { now })).resolves.toHaveLength(1);
+
+    // Once the transport disposes the session it is no longer visible.
+    await service.markSessionDisposed(SESSION_ID);
+    await expect(store.listPresenceByUser(USER_ID, { now })).resolves.toHaveLength(0);
+  });
+
+  it('sizes the presence lease from the transport idle timeout', () => {
+    expect(runtimePresenceLeaseMsFor(15 * 60_000)).toBe(15 * 60_000 + RUNTIME_PRESENCE_LEASE_GRACE_MS);
+    // Idle expiry disabled (0) falls back to the default lease window + grace.
+    expect(runtimePresenceLeaseMsFor(0)).toBe(DEFAULT_RUNTIME_SESSION_LEASE_MS + RUNTIME_PRESENCE_LEASE_GRACE_MS);
+  });
+
   it('removes local ownership when heartbeat reports a replica mismatch', async () => {
     const store = new InMemoryRuntimeSessionControlStore();
     const service = new RuntimeMcpSessionControlService({
@@ -81,6 +119,7 @@ describe('RuntimeMcpSessionControlService', () => {
       store,
       replicaId: 'replica-a',
       now: () => T0,
+      leaseDurationMs: 45_000,
     });
     await service.registerSession({
       sessionId: SESSION_ID,

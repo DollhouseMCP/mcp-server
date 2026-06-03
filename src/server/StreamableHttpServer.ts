@@ -1,10 +1,12 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { json } from 'express';
+import { json, static as expressStatic } from 'express';
 import type { Express, Request, RequestHandler, Response, Router } from 'express';
 import type { AuthClaims } from '../auth/IAuthProvider.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
@@ -104,7 +106,21 @@ export interface StreamableHttpRuntimeHandle {
   pooledSessionCount(): number;
 }
 
+/** Client name/version advertised in the MCP `initialize` handshake (`clientInfo`). */
+export interface McpClientInfo {
+  readonly name?: string;
+  readonly version?: string;
+}
+
 export interface StreamableHttpSessionAttachment {
+  /**
+   * The dollhouse SessionContext id for this session. The transport adopts it
+   * as its own `mcp-session-id` (see `sessionIdGenerator` in `prepareSession`)
+   * so the id shown in `/me/sessions`, the runtime presence id, and the id
+   * that tags this session's logs are ALL ONE value — which is what keeps the
+   * Sessions↔Logs "View logs" cross-link working for MCP clients.
+   */
+  readonly contextSessionId: string;
   dispose(): Promise<void>;
   runtimeSession?: {
     readonly userId: string;
@@ -222,6 +238,27 @@ function getMcpSessionId(req: Request): string | undefined {
   // generalizes — duplicating it here was the sibling-fix-miss the
   // architect-reviewer flagged in cycle 15.
   return normalizeUserInput(pickHeaderValue(req.headers['mcp-session-id']));
+}
+
+/**
+ * Pull the client's self-reported name/version out of an `initialize` request
+ * body (`params.clientInfo`) so it can label the runtime session in the console
+ * Sessions/Logs views instead of a bare UUID. Values are trimmed and clamped to
+ * 100 chars (the runtime-presence store rejects longer); empties are dropped.
+ * Display sites escape the values, so untrusted content is rendered safely.
+ */
+function extractClientInfo(body: unknown): McpClientInfo | undefined {
+  const params = (body as { params?: unknown } | undefined)?.params;
+  const clientInfo = (params as { clientInfo?: unknown } | undefined)?.clientInfo;
+  if (!clientInfo || typeof clientInfo !== 'object') return undefined;
+  const clamp = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = normalizeUserInput(value)?.trim();
+    return normalized ? normalized.slice(0, 100) : undefined;
+  };
+  const name = clamp((clientInfo as { name?: unknown }).name);
+  const version = clamp((clientInfo as { version?: unknown }).version);
+  return name || version ? { ...(name ? { name } : {}), ...(version ? { version } : {}) } : undefined;
 }
 
 export function getClientKey(req: Request): string {
@@ -434,7 +471,7 @@ function runHostedDeploymentSafetyChecks(config: HostedDeploymentSafetyConfig): 
 }
 
 export async function createStreamableHttpRuntime(
-  createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: AuthClaims) => Promise<StreamableHttpSessionAttachment>,
+  createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: AuthClaims, clientInfo?: McpClientInfo) => Promise<StreamableHttpSessionAttachment>,
   options: StreamableHttpRuntimeOptions = {},
 ): Promise<StreamableHttpRuntimeHandle> {
   const host = normalizeUserInput(options.host ?? env.DOLLHOUSE_HTTP_HOST) ?? env.DOLLHOUSE_HTTP_HOST;
@@ -700,11 +737,18 @@ export async function createStreamableHttpRuntime(
     await replenishPoolPromise;
   };
 
-  const prepareSession = async (authClaims?: AuthClaims): Promise<PreparedSessionRecord> => {
+  const prepareSession = async (authClaims?: AuthClaims, clientInfo?: McpClientInfo): Promise<PreparedSessionRecord> => {
     let attachment: StreamableHttpSessionAttachment | null = null;
 
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      // Adopt the dollhouse context id as the transport session id so the
+      // mcp-session-id (the presence id + the header clients echo back on
+      // every request) is the SAME value that tags this session's logs.
+      // `attachment` is assigned before any request reaches handleRequest
+      // (where the SDK invokes this generator), so contextSessionId is always
+      // present here; the randomUUID() fallback only covers loosely-typed test
+      // attachments that omit it.
+      sessionIdGenerator: () => attachment?.contextSessionId ?? randomUUID(),
       onsessioninitialized: (sessionId) => {
         if (!attachment) {
           throw new Error('Session attachment was not ready when the transport initialized');
@@ -754,7 +798,7 @@ export async function createStreamableHttpRuntime(
       }
     };
 
-    attachment = await createSessionAttachment(transport, authClaims);
+    attachment = await createSessionAttachment(transport, authClaims, clientInfo);
 
     return {
       attachment,
@@ -769,9 +813,11 @@ export async function createStreamableHttpRuntime(
     };
   };
 
-  const getOrCreatePreparedSession = async (authClaims?: AuthClaims): Promise<PreparedSessionRecord> => {
+  const getOrCreatePreparedSession = async (authClaims?: AuthClaims, clientInfo?: McpClientInfo): Promise<PreparedSessionRecord> => {
     // Pooled sessions don't carry auth claims — they were pre-created without
     // knowing who would connect. When auth is enabled, always create fresh.
+    // (Pooled sessions are only used on the no-auth path, which never registers
+    // runtime presence, so dropping clientInfo there is harmless.)
     if (!authClaims) {
       const pooledSession = pooledSessions.pop();
       if (pooledSession) {
@@ -782,7 +828,7 @@ export async function createStreamableHttpRuntime(
     }
 
     sessionTelemetry.poolMisses += 1;
-    return prepareSession(authClaims);
+    return prepareSession(authClaims, clientInfo);
   };
 
   app.get('/', (_req, res) => {
@@ -865,6 +911,11 @@ export async function createStreamableHttpRuntime(
       }
       next();
     });
+    // Serve the console UI (static) at /ui. Public; the page self-gates on
+    // GET /api/v1/auth/me. Assets are copied to dist/web-console/ui by postbuild.
+    const consoleUiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../web-console/ui');
+    app.use('/ui', expressStatic(consoleUiDir, { index: 'index.html' }));
+    logger.info('[StreamableHTTP] Console UI mounted', { basePath: '/ui' });
     app.use(options.webConsoleApiV1.router);
     options.webConsoleApiV1.markMounted();
     logger.info('[StreamableHTTP] Descriptor web-console API mounted', { basePath: '/api/v1' });
@@ -913,7 +964,7 @@ export async function createStreamableHttpRuntime(
         return;
       }
 
-      const preparedSession = await getOrCreatePreparedSession(res.locals.authClaims);
+      const preparedSession = await getOrCreatePreparedSession(res.locals.authClaims, extractClientInfo(req.body));
 
       try {
         await preparedSession.transport.handleRequest(req, res, req.body);

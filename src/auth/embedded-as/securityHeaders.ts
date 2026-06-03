@@ -34,9 +34,22 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 
 export function securityHeaders(): RequestHandler {
   return (_req: Request, res: Response, next: NextFunction): void => {
+    // `form-action` MUST permit the OAuth authorization redirect: after the
+    // user submits the login/consent form, the flow redirects the form
+    // navigation to the client's registered redirect_uri — for MCP clients a
+    // loopback callback (http://localhost:<random-port>/…), for hosted clients
+    // an https URL. `form-action 'self'` blocked that cross-origin redirect, so
+    // every browser-based OAuth client (Claude Code, Gemini, MCP Inspector)
+    // hung after login. The redirect target is already validated by
+    // oidc-provider against the client's registered URIs, so this directive is
+    // defense-in-depth; we keep 'self' and additionally allow loopback + https
+    // form navigation. (Omitting form-action entirely would inherit
+    // default-src 'none' and block all form posts.)
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'",
+      "default-src 'none'; style-src 'unsafe-inline'; " +
+        "form-action 'self' http://localhost:* http://127.0.0.1:* https:; " +
+        "frame-ancestors 'none'",
     );
     res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Cache-Control', 'no-store');

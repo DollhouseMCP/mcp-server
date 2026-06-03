@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import express, { type Request, type Response, type Router } from 'express';
+import QRCode from 'qrcode';
 
 import type { IConsoleIdentityResolver } from '../../../web-console/identity/IConsoleIdentityResolver.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
@@ -48,7 +49,14 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
           details: {},
           timestamp: Date.now(),
         });
-        res.type('html').send(renderEnrollmentPage(enrollment.pendingId, enrollment.secretBase32, enrollment.otpauthUri, csrf));
+        // Inline SVG QR (CSP-clean: the AS page is default-src 'none', so an
+        // <img> would be blocked, but inline SVG markup is allowed). Falls back
+        // to the manual secret if QR generation ever fails.
+        let qrSvg = '';
+        try {
+          qrSvg = await QRCode.toString(enrollment.otpauthUri, { type: 'svg', margin: 1, width: 200 });
+        } catch { /* fall back to the typed secret below */ }
+        res.type('html').send(renderEnrollmentPage(enrollment.pendingId, enrollment.secretBase32, qrSvg, enrollment.otpauthUri, csrf));
       } catch (err) {
         sendTotpError(res, err);
       }
@@ -130,7 +138,7 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
         details: { method: disabled.method },
         timestamp: disabled.authTime.getTime(),
       });
-      res.type('html').send('<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Factor disabled</title></head><body><main><h1>Factor disabled</h1></main></body></html>');
+      res.type('html').send(page('Factor disabled', '<p>Your administrator authenticator has been removed.</p>\n<a class="backlink" href="/ui">Go back to console</a>'));
     })().catch(next);
   });
 }
@@ -186,22 +194,28 @@ function sendTotpError(res: Response, err: unknown): void {
   throw err;
 }
 
-function renderEnrollmentPage(pendingId: string, secret: string, uri: string, csrf: string): string {
+function renderEnrollmentPage(pendingId: string, secret: string, qrSvg: string, uri: string, csrf: string): string {
+  const qr = qrSvg ? `<div class="qr" aria-label="Authenticator QR code">${qrSvg}</div>` : '';
   return page('Enroll administrator authenticator', `
+${qr}
+<p>Scan the QR code with your authenticator app, or enter this key manually:</p>
 <p><code>${escapeHtml(secret)}</code></p>
-<p><a href="${escapeHtmlAttr(uri)}">Open authenticator app</a></p>
+<p><a href="${escapeHtmlAttr(uri)}">Open authenticator app on this device</a></p>
 <form method="post" action="/auth/totp/enroll/confirm">
 <input type="hidden" name="pending_id" value="${escapeHtmlAttr(pendingId)}">
 <input type="hidden" name="csrf_token" value="${escapeHtmlAttr(csrf)}">
 <label for="code">Authentication code</label>
 <input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
 <button type="submit">Confirm</button>
-</form>`);
+</form>
+<a class="backlink" href="/ui">Cancel and go back</a>`);
 }
 
 function renderBackupCodesPage(codes: readonly string[]): string {
   const items = codes.map((code) => `<li><code>${escapeHtml(code)}</code></li>`).join('');
-  return page('Recovery codes', `<ol>${items}</ol>`);
+  return page('Recovery codes', `<p>Save these recovery codes somewhere safe. Each works once if you lose your authenticator.</p>
+<ol>${items}</ol>
+<a class="backlink" href="/ui">Go back to console</a>`);
 }
 
 function renderDisablePage(disableId: string, csrf: string, error: string | null): string {
@@ -218,7 +232,7 @@ function renderDisablePage(disableId: string, csrf: string, error: string | null
 
 function page(title: string, body: string): string {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
-<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:10vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}label,input,button{display:block;width:100%;box-sizing:border-box}input{margin:8px 0 16px;padding:10px}button{padding:12px 16px;background:#185c37;color:white;border:0;border-radius:6px;font-weight:700}code{font-family:ui-monospace,monospace}</style>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:480px;margin:10vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}label,input,button{display:block;width:100%;box-sizing:border-box}input{margin:8px 0 16px;padding:10px}button{padding:12px 16px;background:#185c37;color:white;border:0;border-radius:6px;font-weight:700}code{font-family:ui-monospace,monospace}a.backlink{display:inline-block;margin-top:18px;color:#185c37;font-weight:700;text-decoration:none}a.backlink:hover{text-decoration:underline}.qr{margin:0 0 16px;display:flex;justify-content:center}.qr svg{width:200px;height:200px}</style>
 </head><body><main><h1>${escapeHtml(title)}</h1>${body}</main></body></html>`;
 }
 

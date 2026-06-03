@@ -128,7 +128,8 @@ function readinessEvidence(): unknown {
       activationProfile: 'shared-hosted', storageBackend: 'postgres', apiV1MountCreated: true, routesMounted: false,
       registeredRouteModuleIds: [
         'auth', 'health', 'accountAdmin', 'activations', 'approvals', 'audit', 'executions', 'integrations',
-        'operations', 'portfolio', 'runtimeSessions', 'security-admin', 'selfSecurity', 'selfService', 'session-telemetry',
+        'me-logs', 'operations', 'portfolio', 'runtimeSessions', 'security-admin', 'selfSecurity', 'selfService',
+        'session-telemetry',
       ],
     },
     liveChecks: ids.map(id => ({ id, ready: true, detail: 'e2e: verified by the harness setup.' })),

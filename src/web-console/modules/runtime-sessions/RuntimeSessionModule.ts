@@ -71,6 +71,20 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       handler: req => terminateSelfSession(req, service),
     },
     {
+      method: 'POST',
+      // Terminate ALL of the caller's own runtime sessions. Self-scoped: a no
+      // new privilege over deleting each individually — just bulk + atomic.
+      path: '/api/v1/me/sessions/revoke-all',
+      audience: 'self',
+      requiredCapability: RUNTIME_CAPABILITY_SELF,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectRuntimeRevokeAll,
+      handler: req => revokeAllSelfSessions(req, service),
+    },
+    {
       method: 'GET',
       path: '/api/v1/admin/accounts/users/:user_id/sessions',
       audience: 'admin',
@@ -174,6 +188,12 @@ async function terminateSelfSession(req: ConsoleRequest, service: RuntimeSession
   if (!sessionId) return invalidParam(SESSION_ID_PARAM);
   const body = await service.terminateSelfSession(actor.userId, sessionId);
   return body ? { status: 202, body: projectRuntimeTermination(body) } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+}
+
+async function revokeAllSelfSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
+  const actor = requireConsoleAuthentication(req);
+  const body = await service.revokeAllAccountSessions(actor.userId);
+  return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
 }
 
 async function listAccountSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {

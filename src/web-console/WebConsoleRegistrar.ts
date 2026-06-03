@@ -120,6 +120,7 @@ import {
 } from './modules/executions/index.js';
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createActivationModule } from './modules/activations/index.js';
+import { createMeLogsModule, createMemoryConsoleLogSource, type IConsoleLogSource } from './modules/me-logs/index.js';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
 import {
   GitHubAppIntegrationProvider,
@@ -533,6 +534,12 @@ export class WebConsoleRegistrar {
       ownedActivityQuery,
       ownedMetricQuery,
       now: this.options.now,
+    }));
+    // The Logs tab reads the server's own logs from the in-memory log sink (a
+    // backend-agnostic source, independent of the storage backend), filtered to
+    // the authenticated user.
+    registerRouteModule(registry, this.options, 'me-logs', () => createMeLogsModule({
+      logSource: resolveConsoleLogSource(container),
     }));
     registerRouteModule(registry, this.options, 'integrations', () => createIntegrationModule({
       integrationStore: stores.integrationStore,
@@ -1497,6 +1504,28 @@ function resolveOwnedActivityQuery(
   }
   if (database) return markProductionAdapter(new PostgresOwnedActivityQuery(database), 'PostgresOwnedActivityQuery');
   return new InMemoryOwnedActivityQuery();
+}
+
+function resolveConsoleLogSource(container: DiContainerFacade): IConsoleLogSource {
+  // Resolve the in-memory sink LAZILY (first query) rather than at registration:
+  // ObservabilityServiceRegistrar registers 'MemoryLogSink' on the root container,
+  // and resolving it eagerly here can race that registration. If it's genuinely
+  // absent (e.g. minimal/test composition) serve an empty feed instead of failing.
+  let source: IConsoleLogSource | undefined;
+  return {
+    queryUserLogs(options) {
+      if (!source) {
+        try {
+          source = createMemoryConsoleLogSource(
+            container.resolve<Parameters<typeof createMemoryConsoleLogSource>[0]>('MemoryLogSink'),
+          );
+        } catch {
+          return { entries: [], total: 0, has_more: false };
+        }
+      }
+      return source.queryUserLogs(options);
+    },
+  };
 }
 
 function resolveOwnedMetricQuery(

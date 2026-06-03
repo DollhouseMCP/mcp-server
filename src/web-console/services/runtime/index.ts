@@ -7,7 +7,9 @@ export {
 export {
   DEFAULT_RUNTIME_COMMAND_BATCH_LIMIT,
   DEFAULT_RUNTIME_SESSION_LEASE_MS,
+  RUNTIME_PRESENCE_LEASE_GRACE_MS,
   RuntimeMcpSessionControlService,
+  runtimePresenceLeaseMsFor,
 } from './RuntimeMcpSessionControlService.js';
 export type {
   IRuntimeSessionControlStore,

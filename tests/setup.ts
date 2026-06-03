@@ -60,11 +60,19 @@ export default async function globalSetup() {
     // Run init-db.sql grants on the test database
     const testSql = pg.default(TEST_DB_ADMIN_URL, { max: 1 });
 
-    // Create app role if not exists (shared across databases)
+    // Create the app role if missing, otherwise normalize its password.
+    // `dollhouse_app` is a CLUSTER-GLOBAL role shared with other suites — the
+    // web-console-e2e harness sets it to a different password ('dollhouse_app_local').
+    // These integration tests connect as dollhouse_app:dollhouse_app, so we must
+    // RESET the password every run; a bare CREATE-IF-NOT-EXISTS would inherit
+    // whatever a prior suite left, causing "password authentication failed".
     await testSql.unsafe(`
       DO $$ BEGIN
         IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dollhouse_app') THEN
           CREATE ROLE dollhouse_app WITH LOGIN PASSWORD 'dollhouse_app'
+            NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
+        ELSE
+          ALTER ROLE dollhouse_app WITH LOGIN PASSWORD 'dollhouse_app'
             NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS;
         END IF;
       END $$

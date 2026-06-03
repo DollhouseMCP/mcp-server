@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DollhouseMCP Console</title>
+  <meta name="description" content="DollhouseMCP management console">
+  <meta http-equiv="X-Content-Type-Options" content="nosniff">
+  <link rel="icon" type="image/png" href="dollhouse-logo.png">
+  <link rel="apple-touch-icon" href="dollhouse-logo.png">
+  <link rel="stylesheet" href="fonts.css">
+  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="console.css">
+  <link rel="stylesheet" href="logs.css">
+</head>
+<body>
+
+  <div class="page-noise" aria-hidden="true"></div>
+
+  <!-- Auth gate: shown until GET /api/v1/auth/me succeeds. -->
+  <div class="auth-gate" id="auth-gate" hidden>
+    <div class="auth-gate-card">
+      <img src="dollhouse-logo.png" alt="DollhouseMCP" class="auth-gate-logo" width="56" height="56">
+      <h1 class="auth-gate-title">DollhouseMCP Console</h1>
+      <p class="auth-gate-text" id="auth-gate-text">Sign in to manage your portfolio, sessions, and security.</p>
+      <button class="btn btn-primary" id="auth-gate-signin" type="button">Sign in with GitHub</button>
+    </div>
+  </div>
+
+  <!-- Console shell: revealed once authenticated. -->
+  <div class="console-shell" id="console-shell" hidden>
+    <!-- Persistent admin-mode band: shown only while elevation is active. -->
+    <div class="admin-band" id="admin-band" role="status" hidden></div>
+    <header class="site-header">
+      <div class="header-brand">
+        <img src="dollhouse-logo.png" alt="DollhouseMCP" class="header-logo" width="32" height="32">
+        <div class="header-brand-text">
+          <h1 class="site-title">DollhouseMCP</h1>
+          <p class="site-tagline">Management Console</p>
+        </div>
+      </div>
+      <div class="header-controls">
+        <!-- Elevation control: rendered only for admin-eligible users. -->
+        <div class="elevation-control" id="elevation-control" hidden></div>
+        <div class="account-menu-wrap">
+          <button class="site-account" id="site-account" type="button" aria-haspopup="menu" aria-expanded="false" aria-live="polite"></button>
+          <div class="account-menu" id="account-menu" role="menu" hidden>
+            <button class="account-menu-item" id="account-security" role="menuitem" type="button">Security</button>
+          </div>
+        </div>
+        <button class="theme-toggle" id="theme-toggle" type="button" aria-label="Switch to dark mode" title="Switch to dark mode">
+          <span class="theme-toggle-icon" id="theme-toggle-icon" aria-hidden="true">&#9790;</span>
+          <span class="sr-only" id="theme-toggle-label">Switch to dark mode</span>
+        </button>
+        <button class="btn btn-ghost" id="logout-btn" type="button">Sign out</button>
+      </div>
+      <div class="header-nav-row">
+        <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
+          <button class="console-tab active" data-tab="portfolio">Portfolio</button>
+          <button class="console-tab" data-tab="security">Auth</button>
+          <button class="console-tab" data-tab="sessions">Sessions</button>
+          <button class="console-tab" data-tab="logs">Logs</button>
+          <button class="console-tab" data-tab="metrics">Metrics</button>
+          <button class="console-tab" data-tab="integrations">Integrations</button>
+        </nav>
+      </div>
+    </header>
+
+    <main class="site-main">
+      <div id="tab-portfolio" class="tab-panel active" role="region" aria-label="Portfolio">
+        <div class="panel-placeholder" id="portfolio-root">Loading portfolio…</div>
+      </div>
+      <div id="tab-security" class="tab-panel" hidden role="region" aria-label="Auth">
+        <div class="panel-placeholder">Security &amp; sessions — coming next.</div>
+      </div>
+      <div id="tab-sessions" class="tab-panel" hidden role="region" aria-label="Sessions">
+        <div class="panel-placeholder">Loading sessions…</div>
+      </div>
+      <div id="tab-logs" class="tab-panel" hidden role="region" aria-label="Logs">
+        <div class="panel-placeholder">Loading logs…</div>
+      </div>
+      <div id="tab-metrics" class="tab-panel" hidden role="region" aria-label="Metrics">
+        <div class="panel-placeholder">Metrics — coming next.</div>
+      </div>
+      <div id="tab-integrations" class="tab-panel" hidden role="region" aria-label="Integrations">
+        <div class="panel-placeholder">Integrations — coming next.</div>
+      </div>
+    </main>
+  </div>
+
+  <div class="toast-stack" id="toast-stack" aria-live="polite"></div>
+
+  <!-- Markdown render + sanitize + YAML for the element detail view (self-hosted, CSP-clean). -->
+  <script src="vendor/marked.min.js"></script>
+  <script src="vendor/purify.min.js"></script>
+  <script src="vendor/js-yaml.min.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>
