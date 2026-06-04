@@ -148,6 +148,16 @@ log "rendering stricter DCR override"
 render_with_dcr "${DEPLOY_DIR}" "false"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "false"'
 
+log "checking in-place instance rename rejection"
+INSTANCE_RENAME_OUTPUT="${TMP_ROOT}/instance-rename.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${DEPLOY_DIR}" \
+  DOLLHOUSE_HOSTED_INSTANCE_NAME=renamed-deploy \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${INSTANCE_RENAME_OUTPUT}" 2>&1; then
+  fail "in-place instance rename unexpectedly succeeded"
+fi
+assert_contains "${INSTANCE_RENAME_OUTPUT}" "cannot rename deployment instance in-place"
+assert_contains "${INSTANCE_RENAME_OUTPUT}" "DOLLHOUSE_HOSTED_INSTANCE_NAME=deploy"
+
 second_postgres_password="$(env_value POSTGRES_PASSWORD "${ENV_FILE}")"
 second_cookie_secret="$(env_value DOLLHOUSE_COOKIE_SIGNING_SECRET "${ENV_FILE}")"
 second_master_key="$(env_value DOLLHOUSE_MASTER_ENCRYPTION_KEY "${ENV_FILE}")"

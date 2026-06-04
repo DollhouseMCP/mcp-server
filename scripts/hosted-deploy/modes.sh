@@ -66,6 +66,11 @@ adopt_deployment_config_from_env_file() {
     adopt_mode_dependent="false"
   fi
 
+  if [[ "${INSTANCE_NAME_SET}" == "true" && -n "${persisted_instance}" && "${persisted_instance}" != "${INSTANCE_NAME}" ]]; then
+    die "cannot rename deployment instance in-place: ${ENV_FILE} has DOLLHOUSE_HOSTED_INSTANCE_NAME=${persisted_instance}," \
+      "but ${INSTANCE_NAME} was requested; use a distinct DOLLHOUSE_HOSTED_DEPLOY_DIR for side-by-side deployments"
+  fi
+
   if [[ "${INSTANCE_NAME_SET}" != "true" && -z "${INSTANCE_NAME}" ]]; then
     [[ -z "${persisted_instance}" ]] || INSTANCE_NAME="${persisted_instance}"
   elif [[ -z "${persisted_instance}" || "${persisted_instance}" != "${INSTANCE_NAME}" ]]; then

@@ -251,6 +251,9 @@ The instance name is written to `.env.production` and used for:
 
 This prevents Docker container, network, volume, and image-tag collisions between production and canary stacks. Host ports are still exclusive. A canary on the same VPS must use alternate ports or a separate fronting proxy route; for example, LAN mode with `DOLLHOUSE_HOSTED_HTTP_BIND_PORT=3100`.
 
+Once `.env.production` records an instance name, the helper rejects attempts to rename that instance inside the same deployment root.
+Create a new deployment root for side-by-side canaries or migrations that need a different instance name.
+
 ## Deployment Modes
 
 The helper supports three presets. The selected mode, hostname, public URL, proxy mode, bind address, and auth posture are written into `.env.production`, so a later `install`, `update`, or `render` can preserve the deployment shape even if the operator does not pass every variable again.
