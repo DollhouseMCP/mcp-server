@@ -348,6 +348,10 @@ Enterprise deployments can skip `enroll-host` and point `DOLLHOUSE_REMOTE_KNOWN_
 
 The wrapper does not replace `scripts/hosted-deploy.sh`; it calls it remotely after cloning the requested ref. It uploads its remote payload to a temporary `0600` script before execution so commands such as database dumps cannot consume the rest of a streamed SSH script from stdin. Use the direct helper when you are already logged into the target host or when building local/LAN and enterprise modes.
 
+For remote actions, the wrapper forwards non-secret hosted configuration such as mode, bind ports, Host allowlists, trusted proxy CIDRs, resource limits, readiness timeouts, auth posture, OIDC settings, and bootstrap admin identity.
+Those values are passed to the remote helper after the wrapper clones the requested ref.
+It does not forward OAuth client secrets or other deployment secrets; place those in the remote `.env.production` or your remote secret-management flow before running the helper.
+
 ### `render`
 
 Writes or refreshes deployment files without starting containers:

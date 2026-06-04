@@ -204,11 +204,35 @@ if [[ "${1:-}" == "clone" ]]; then
 set -euo pipefail
 
 {
-  printf 'hosted action=%s ref=%s source=%s deploy=%s ' "${1:-}" "${DOLLHOUSE_HOSTED_GIT_REF:-}" "${DOLLHOUSE_HOSTED_SOURCE_DIR:-}" "${DOLLHOUSE_HOSTED_DEPLOY_DIR:-}"
-  printf 'hostname_set=%s hostname=%s public_url_set=%s public_url=%s ' "${DOLLHOUSE_HOSTED_HOSTNAME+x}" "${DOLLHOUSE_HOSTED_HOSTNAME:-}" "${DOLLHOUSE_PUBLIC_BASE_URL+x}" "${DOLLHOUSE_PUBLIC_BASE_URL:-}"
-  printf 'instance_set=%s instance=%s mode_set=%s mode=%s http_port_set=%s http_port=%s ' "${DOLLHOUSE_HOSTED_INSTANCE_NAME+x}" "${DOLLHOUSE_HOSTED_INSTANCE_NAME:-}" "${DOLLHOUSE_HOSTED_MODE+x}" "${DOLLHOUSE_HOSTED_MODE:-}" "${DOLLHOUSE_HOSTED_HTTP_BIND_PORT+x}" "${DOLLHOUSE_HOSTED_HTTP_BIND_PORT:-}"
-  printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' "${DOLLHOUSE_AUTH_PROVIDER+x}" "${DOLLHOUSE_AUTH_PROVIDER:-}" "${DOLLHOUSE_AUTH_ISSUER+x}" "${DOLLHOUSE_AUTH_ISSUER:-}" "${DOLLHOUSE_AUTH_AUDIENCE+x}" "${DOLLHOUSE_AUTH_AUDIENCE:-}"
-  printf 'open_dcr_set=%s open_dcr=%s allowlist_required_set=%s allowlist_required=%s oidc_typ_set=%s oidc_typ=%s\n' "${DOLLHOUSE_AUTH_OPEN_DCR+x}" "${DOLLHOUSE_AUTH_OPEN_DCR:-}" "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED+x}" "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}" "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP+x}" "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}"
+  printf 'hosted action=%s ref=%s source=%s deploy=%s ' \
+    "${1:-}" "${DOLLHOUSE_HOSTED_GIT_REF:-}" "${DOLLHOUSE_HOSTED_SOURCE_DIR:-}" "${DOLLHOUSE_HOSTED_DEPLOY_DIR:-}"
+  printf 'hostname_set=%s hostname=%s public_url_set=%s public_url=%s ' \
+    "${DOLLHOUSE_HOSTED_HOSTNAME+x}" "${DOLLHOUSE_HOSTED_HOSTNAME:-}" "${DOLLHOUSE_PUBLIC_BASE_URL+x}" "${DOLLHOUSE_PUBLIC_BASE_URL:-}"
+  printf 'instance_set=%s instance=%s mode_set=%s mode=%s http_port_set=%s http_port=%s ' \
+    "${DOLLHOUSE_HOSTED_INSTANCE_NAME+x}" "${DOLLHOUSE_HOSTED_INSTANCE_NAME:-}" \
+    "${DOLLHOUSE_HOSTED_MODE+x}" "${DOLLHOUSE_HOSTED_MODE:-}" \
+    "${DOLLHOUSE_HOSTED_HTTP_BIND_PORT+x}" "${DOLLHOUSE_HOSTED_HTTP_BIND_PORT:-}"
+  printf 'mcp_port_set=%s mcp_port=%s image_tag_set=%s image_tag=%s mem_set=%s mem=%s cpus_set=%s cpus=%s ' \
+    "${DOLLHOUSE_HTTP_PORT+x}" "${DOLLHOUSE_HTTP_PORT:-}" \
+    "${DOLLHOUSE_HOSTED_IMAGE_TAG+x}" "${DOLLHOUSE_HOSTED_IMAGE_TAG:-}" \
+    "${DOLLHOUSE_HOSTED_MEM_LIMIT+x}" "${DOLLHOUSE_HOSTED_MEM_LIMIT:-}" \
+    "${DOLLHOUSE_HOSTED_CPUS+x}" "${DOLLHOUSE_HOSTED_CPUS:-}"
+  printf 'import_legacy_set=%s import_legacy=%s postgres_timeout_set=%s postgres_timeout=%s verify_timeout_set=%s verify_timeout=%s ' \
+    "${DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV+x}" "${DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV:-}" \
+    "${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT+x}" "${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-}" \
+    "${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT+x}" "${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}"
+  printf 'allowed_hosts_set=%s allowed_hosts=%s trusted_proxies_set=%s trusted_proxies=%s ' \
+    "${DOLLHOUSE_HTTP_ALLOWED_HOSTS+x}" "${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}" "${DOLLHOUSE_TRUSTED_PROXIES+x}" "${DOLLHOUSE_TRUSTED_PROXIES:-}"
+  printf 'bootstrap_username_set=%s bootstrap_username=%s bootstrap_id_set=%s bootstrap_id=%s ' \
+    "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
+  printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' \
+    "${DOLLHOUSE_AUTH_PROVIDER+x}" "${DOLLHOUSE_AUTH_PROVIDER:-}" \
+    "${DOLLHOUSE_AUTH_ISSUER+x}" "${DOLLHOUSE_AUTH_ISSUER:-}" \
+    "${DOLLHOUSE_AUTH_AUDIENCE+x}" "${DOLLHOUSE_AUTH_AUDIENCE:-}"
+  printf 'open_dcr_set=%s open_dcr=%s allowlist_required_set=%s allowlist_required=%s oidc_typ_set=%s oidc_typ=%s\n' \
+    "${DOLLHOUSE_AUTH_OPEN_DCR+x}" "${DOLLHOUSE_AUTH_OPEN_DCR:-}" \
+    "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED+x}" "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}" \
+    "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP+x}" "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}"
 } >> "${DOLLHOUSE_FAKE_REMOTE_LOG:?}"
 mkdir -p "${DOLLHOUSE_HOSTED_DEPLOY_DIR}/portfolio/personas"
 printf '%s\n' "${DOLLHOUSE_HOSTED_GIT_REF:-unknown-ref}" > "${DOLLHOUSE_HOSTED_DEPLOY_DIR}/DEPLOYED_REVISION"
@@ -335,6 +359,17 @@ run_remote() {
   DOLLHOUSE_AUTH_JWKS_URI="${DOLLHOUSE_TEST_AUTH_JWKS_URI:-${DOLLHOUSE_AUTH_JWKS_URI:-}}" \
   DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP="${DOLLHOUSE_TEST_AUTH_OIDC_REQUIRE_TYP:-${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}}" \
   DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE="${DOLLHOUSE_TEST_AUTH_ALLOWLIST_SEED_FILE:-${DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE:-}}" \
+  DOLLHOUSE_HTTP_PORT="${DOLLHOUSE_TEST_MCP_PORT:-${DOLLHOUSE_HTTP_PORT:-}}" \
+  DOLLHOUSE_HOSTED_IMAGE_TAG="${DOLLHOUSE_TEST_IMAGE_TAG:-${DOLLHOUSE_HOSTED_IMAGE_TAG:-}}" \
+  DOLLHOUSE_HOSTED_MEM_LIMIT="${DOLLHOUSE_TEST_MEM_LIMIT:-${DOLLHOUSE_HOSTED_MEM_LIMIT:-}}" \
+  DOLLHOUSE_HOSTED_CPUS="${DOLLHOUSE_TEST_CPUS:-${DOLLHOUSE_HOSTED_CPUS:-}}" \
+  DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV="${DOLLHOUSE_TEST_IMPORT_LEGACY_ENV:-${DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV:-}}" \
+  DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT="${DOLLHOUSE_TEST_POSTGRES_READY_TIMEOUT:-${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-}}" \
+  DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT="${DOLLHOUSE_TEST_VERIFY_READY_TIMEOUT:-${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}}" \
+  DOLLHOUSE_HTTP_ALLOWED_HOSTS="${DOLLHOUSE_TEST_ALLOWED_HOSTS:-${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}}" \
+  DOLLHOUSE_TRUSTED_PROXIES="${DOLLHOUSE_TEST_TRUSTED_PROXIES:-${DOLLHOUSE_TRUSTED_PROXIES:-}}" \
+  DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_TEST_BOOTSTRAP_GITHUB_USERNAME:-${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}}" \
+  DOLLHOUSE_BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_TEST_BOOTSTRAP_GITHUB_ID:-${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}}" \
   DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   DOLLHOUSE_HOSTED_GIT_URL="${DOLLHOUSE_TEST_GIT_URL:-https://github.com/DollhouseMCP/mcp-server.git}" \
   DOLLHOUSE_HOSTED_GIT_REF="${DOLLHOUSE_TEST_GIT_REF:-codex/test-ref}" \
@@ -456,12 +491,50 @@ assert_contains "${REMOTE_LOG}" "mode_set=x mode=lan"
 assert_contains "${REMOTE_LOG}" "http_port_set=x http_port=3100"
 assert_contains "${CURL_LOG}" "http://mcp.example.com:3100/healthz"
 
+log "checking remote host allowlist and proxy overrides reach hosted helper"
+reset_fake_state
+HOST_PROXY_OUTPUT="${TMP_ROOT}/host-proxy-overrides.out"
+DOLLHOUSE_TEST_ALLOWED_HOSTS=localhost,127.0.0.1,mcp.example.com,alt.example.com \
+DOLLHOUSE_TEST_TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12 \
+  run_remote --skip-backup update > "${HOST_PROXY_OUTPUT}"
+assert_contains "${REMOTE_LOG}" "allowed_hosts_set=x allowed_hosts=localhost,127.0.0.1,mcp.example.com,alt.example.com"
+assert_contains "${REMOTE_LOG}" "trusted_proxies_set=x trusted_proxies=10.0.0.0/8,172.16.0.0/12"
+
+log "checking remote runtime overrides reach hosted helper"
+reset_fake_state
+RUNTIME_OVERRIDE_OUTPUT="${TMP_ROOT}/runtime-overrides.out"
+DOLLHOUSE_TEST_MCP_PORT=3333 \
+DOLLHOUSE_TEST_IMAGE_TAG=dollhousemcp/custom:alpha \
+DOLLHOUSE_TEST_MEM_LIMIT=4g \
+DOLLHOUSE_TEST_CPUS=1.5 \
+DOLLHOUSE_TEST_IMPORT_LEGACY_ENV=false \
+DOLLHOUSE_TEST_POSTGRES_READY_TIMEOUT=120 \
+DOLLHOUSE_TEST_VERIFY_READY_TIMEOUT=90 \
+  run_remote --skip-backup update > "${RUNTIME_OVERRIDE_OUTPUT}"
+assert_contains "${REMOTE_LOG}" "mcp_port_set=x mcp_port=3333"
+assert_contains "${REMOTE_LOG}" "image_tag_set=x image_tag=dollhousemcp/custom:alpha"
+assert_contains "${REMOTE_LOG}" "mem_set=x mem=4g"
+assert_contains "${REMOTE_LOG}" "cpus_set=x cpus=1.5"
+assert_contains "${REMOTE_LOG}" "import_legacy_set=x import_legacy=false"
+assert_contains "${REMOTE_LOG}" "postgres_timeout_set=x postgres_timeout=120"
+assert_contains "${REMOTE_LOG}" "verify_timeout_set=x verify_timeout=90"
+
 log "checking explicit remote instance override reaches hosted helper"
 reset_fake_state
 EXPLICIT_INSTANCE_OUTPUT="${TMP_ROOT}/explicit-instance.out"
 DOLLHOUSE_TEST_INSTANCE_NAME=dollhousemcp-canary \
   run_remote --skip-backup update > "${EXPLICIT_INSTANCE_OUTPUT}"
 assert_contains "${REMOTE_LOG}" "instance_set=x instance=dollhousemcp-canary"
+
+log "checking remote bootstrap overrides reach hosted helper"
+reset_fake_state
+BOOTSTRAP_OUTPUT="${TMP_ROOT}/bootstrap-admin.out"
+DOLLHOUSE_TEST_BOOTSTRAP_GITHUB_USERNAME=octocat \
+DOLLHOUSE_TEST_BOOTSTRAP_GITHUB_ID=184286 \
+  run_remote --skip-backup bootstrap-admin > "${BOOTSTRAP_OUTPUT}"
+assert_contains "${REMOTE_LOG}" "hosted action=bootstrap-admin"
+assert_contains "${REMOTE_LOG}" "bootstrap_username_set=x bootstrap_username=octocat"
+assert_contains "${REMOTE_LOG}" "bootstrap_id_set=x bootstrap_id=184286"
 
 log "checking remote enterprise OIDC auth overrides reach hosted helper"
 reset_fake_state

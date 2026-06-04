@@ -44,6 +44,17 @@ AUTH_AUDIENCE="${DOLLHOUSE_AUTH_AUDIENCE:-}"
 AUTH_JWKS_URI="${DOLLHOUSE_AUTH_JWKS_URI:-}"
 AUTH_OIDC_REQUIRE_TYP="${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}"
 AUTH_ALLOWLIST_SEED_FILE="${DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE:-}"
+MCP_PORT="${DOLLHOUSE_HTTP_PORT:-}"
+IMAGE_TAG="${DOLLHOUSE_HOSTED_IMAGE_TAG:-}"
+MEM_LIMIT="${DOLLHOUSE_HOSTED_MEM_LIMIT:-}"
+CPU_LIMIT="${DOLLHOUSE_HOSTED_CPUS:-}"
+IMPORT_LEGACY_ENV="${DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV:-}"
+POSTGRES_READY_TIMEOUT="${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-}"
+VERIFY_READY_TIMEOUT="${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}"
+ALLOWED_HOSTS="${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}"
+TRUSTED_PROXIES="${DOLLHOUSE_TRUSTED_PROXIES:-}"
+BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
+BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
 HOSTNAME_SET="false"
 [[ -z "${HOSTNAME}" ]] || HOSTNAME_SET="true"
@@ -608,6 +619,28 @@ validate_optional_bind_address() {
   return 0
 }
 
+validate_forwarded_hosted_inputs() {
+  validate_port_value DOLLHOUSE_HTTP_PORT "${MCP_PORT}"
+  validate_no_whitespace DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
+  validate_no_whitespace DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
+  validate_no_whitespace DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"
+  validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
+  validate_no_whitespace DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME "${BOOTSTRAP_GITHUB_USERNAME}"
+  validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_ID "${BOOTSTRAP_GITHUB_ID}"
+  if [[ -n "${IMPORT_LEGACY_ENV}" ]]; then
+    validate_bool DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV "${IMPORT_LEGACY_ENV}"
+  fi
+  if [[ -n "${POSTGRES_READY_TIMEOUT}" ]]; then
+    validate_nonnegative_integer DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT "${POSTGRES_READY_TIMEOUT}"
+  fi
+  if [[ -n "${VERIFY_READY_TIMEOUT}" ]]; then
+    validate_nonnegative_integer DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT "${VERIFY_READY_TIMEOUT}"
+  fi
+
+  return 0
+}
+
 validate_log_level() {
   case "${LOG_LEVEL}" in
     quiet|info|debug)
@@ -634,6 +667,7 @@ validate_config() {
   validate_optional_bind_address
   validate_port_value DOLLHOUSE_HOSTED_HTTP_BIND_PORT "${HTTP_BIND_PORT}"
   validate_port_value DOLLHOUSE_HOSTED_HTTPS_BIND_PORT "${HTTPS_BIND_PORT}"
+  validate_forwarded_hosted_inputs
   validate_positive_integer DOLLHOUSE_REMOTE_BACKUP_RETRIES "${BACKUP_RETRIES}"
   validate_nonnegative_integer DOLLHOUSE_REMOTE_BACKUP_RETRY_DELAY "${BACKUP_RETRY_DELAY}"
   [[ -n "${REMOTE_SSH_TARGET}" ]] || die "set --target or DOLLHOUSE_REMOTE_SSH_TARGET"
@@ -691,6 +725,14 @@ run_dry_plan() {
   log "dry-run: action=${ACTION} deploy_dir=${DEPLOY_DIR} instance=${INSTANCE_NAME} hostname=${HOSTNAME} ref=${GIT_REF}"
   if [[ -n "${DEPLOY_MODE}${PROXY_MODE}${BIND_ADDRESS}${HTTP_BIND_PORT}${HTTPS_BIND_PORT}" ]]; then
     log "dry-run: hosted overrides mode=${DEPLOY_MODE:-default} proxy_mode=${PROXY_MODE:-default} bind=${BIND_ADDRESS:-default} http_port=${HTTP_BIND_PORT:-default} https_port=${HTTPS_BIND_PORT:-default}"
+  fi
+  if [[ -n "${MCP_PORT}${IMAGE_TAG}${MEM_LIMIT}${CPU_LIMIT}${IMPORT_LEGACY_ENV}${POSTGRES_READY_TIMEOUT}${VERIFY_READY_TIMEOUT}${ALLOWED_HOSTS}${TRUSTED_PROXIES}" ]]; then
+    log "dry-run: hosted runtime overrides mcp_port=${MCP_PORT:-default} image_tag=${IMAGE_TAG:-default} mem=${MEM_LIMIT:-default} cpus=${CPU_LIMIT:-default}"
+    log "dry-run: hosted config overrides import_legacy_env=${IMPORT_LEGACY_ENV:-default} postgres_ready_timeout=${POSTGRES_READY_TIMEOUT:-default} verify_ready_timeout=${VERIFY_READY_TIMEOUT:-default}"
+    log "dry-run: hosted network overrides allowed_hosts=${ALLOWED_HOSTS:-default} trusted_proxies=${TRUSTED_PROXIES:-default}"
+  fi
+  if [[ -n "${BOOTSTRAP_GITHUB_USERNAME}${BOOTSTRAP_GITHUB_ID}" ]]; then
+    log "dry-run: hosted bootstrap override github_username=${BOOTSTRAP_GITHUB_USERNAME:-default} github_id=${BOOTSTRAP_GITHUB_ID:-default}"
   fi
   if [[ "${SKIP_BACKUP}" == "true" ]]; then
     log "dry-run: would skip remote DB/env backups"
@@ -778,6 +820,10 @@ run_remote_action() {
   local helper_auth_provider helper_auth_methods helper_auth_open_dcr
   local helper_auth_allowlist_required helper_auth_issuer helper_auth_audience
   local helper_auth_jwks_uri helper_auth_oidc_require_typ helper_auth_allowlist_seed_file
+  local helper_mcp_port helper_image_tag helper_mem_limit helper_cpu_limit
+  local helper_import_legacy_env helper_postgres_ready_timeout helper_verify_ready_timeout
+  local helper_allowed_hosts helper_trusted_proxies
+  local helper_bootstrap_github_username helper_bootstrap_github_id
 
   helper_hostname=""
   helper_public_base_url=""
@@ -796,6 +842,17 @@ run_remote_action() {
   helper_auth_jwks_uri="${AUTH_JWKS_URI}"
   helper_auth_oidc_require_typ="${AUTH_OIDC_REQUIRE_TYP}"
   helper_auth_allowlist_seed_file="${AUTH_ALLOWLIST_SEED_FILE}"
+  helper_mcp_port="${MCP_PORT}"
+  helper_image_tag="${IMAGE_TAG}"
+  helper_mem_limit="${MEM_LIMIT}"
+  helper_cpu_limit="${CPU_LIMIT}"
+  helper_import_legacy_env="${IMPORT_LEGACY_ENV}"
+  helper_postgres_ready_timeout="${POSTGRES_READY_TIMEOUT}"
+  helper_verify_ready_timeout="${VERIFY_READY_TIMEOUT}"
+  helper_allowed_hosts="${ALLOWED_HOSTS}"
+  helper_trusted_proxies="${TRUSTED_PROXIES}"
+  helper_bootstrap_github_username="${BOOTSTRAP_GITHUB_USERNAME}"
+  helper_bootstrap_github_id="${BOOTSTRAP_GITHUB_ID}"
   [[ "${HOSTNAME_SET}" != "true" ]] || helper_hostname="${HOSTNAME}"
   [[ "${PUBLIC_BASE_URL_SET}" != "true" ]] || helper_public_base_url="${PUBLIC_BASE_URL}"
   [[ "${INSTANCE_NAME_SET}" != "true" ]] || helper_instance_name="${INSTANCE_NAME}"
@@ -836,6 +893,17 @@ run_remote_action() {
     "${helper_auth_jwks_uri}"
     "${helper_auth_oidc_require_typ}"
     "${helper_auth_allowlist_seed_file}"
+    "${helper_mcp_port}"
+    "${helper_image_tag}"
+    "${helper_mem_limit}"
+    "${helper_cpu_limit}"
+    "${helper_import_legacy_env}"
+    "${helper_postgres_ready_timeout}"
+    "${helper_verify_ready_timeout}"
+    "${helper_allowed_hosts}"
+    "${helper_trusted_proxies}"
+    "${helper_bootstrap_github_username}"
+    "${helper_bootstrap_github_id}"
   )
   remote_command="bash -s --"
   for remote_payload_arg in "${remote_payload_args[@]}"; do
@@ -893,6 +961,17 @@ auth_audience="${23}"
 auth_jwks_uri="${24}"
 auth_oidc_require_typ="${25}"
 auth_allowlist_seed_file="${26}"
+mcp_port="${27}"
+image_tag="${28}"
+mem_limit="${29}"
+cpu_limit="${30}"
+import_legacy_env="${31}"
+postgres_ready_timeout="${32}"
+verify_ready_timeout="${33}"
+allowed_hosts="${34}"
+trusted_proxies="${35}"
+bootstrap_github_username="${36}"
+bootstrap_github_id="${37}"
 workdir=""
 
 remote_log() {
@@ -1163,6 +1242,17 @@ run_hosted_helper() {
   helper_env+=("DOLLHOUSE_HOSTED_GIT_URL=${git_url}")
   helper_env+=("DOLLHOUSE_HOSTED_GIT_REF=${git_ref}")
   helper_env+=("DOLLHOUSE_HOSTED_LOG_LEVEL=${log_level}")
+  [[ -z "${mcp_port}" ]] || helper_env+=("DOLLHOUSE_HTTP_PORT=${mcp_port}")
+  [[ -z "${image_tag}" ]] || helper_env+=("DOLLHOUSE_HOSTED_IMAGE_TAG=${image_tag}")
+  [[ -z "${mem_limit}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MEM_LIMIT=${mem_limit}")
+  [[ -z "${cpu_limit}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CPUS=${cpu_limit}")
+  [[ -z "${import_legacy_env}" ]] || helper_env+=("DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=${import_legacy_env}")
+  [[ -z "${postgres_ready_timeout}" ]] || helper_env+=("DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT=${postgres_ready_timeout}")
+  [[ -z "${verify_ready_timeout}" ]] || helper_env+=("DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT=${verify_ready_timeout}")
+  [[ -z "${allowed_hosts}" ]] || helper_env+=("DOLLHOUSE_HTTP_ALLOWED_HOSTS=${allowed_hosts}")
+  [[ -z "${trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_TRUSTED_PROXIES=${trusted_proxies}")
+  [[ -z "${bootstrap_github_username}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=${bootstrap_github_username}")
+  [[ -z "${bootstrap_github_id}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_ID=${bootstrap_github_id}")
   [[ -z "${deploy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MODE=${deploy_mode}")
   [[ -z "${proxy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_PROXY_MODE=${proxy_mode}")
   [[ -z "${bind_address}" ]] || helper_env+=("DOLLHOUSE_HOSTED_BIND_ADDRESS=${bind_address}")
@@ -1186,6 +1276,17 @@ run_hosted_helper() {
     unset DOLLHOUSE_HOSTED_BIND_ADDRESS
     unset DOLLHOUSE_HOSTED_HTTP_BIND_PORT
     unset DOLLHOUSE_HOSTED_HTTPS_BIND_PORT
+    unset DOLLHOUSE_HTTP_PORT
+    unset DOLLHOUSE_HOSTED_IMAGE_TAG
+    unset DOLLHOUSE_HOSTED_MEM_LIMIT
+    unset DOLLHOUSE_HOSTED_CPUS
+    unset DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV
+    unset DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT
+    unset DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT
+    unset DOLLHOUSE_HTTP_ALLOWED_HOSTS
+    unset DOLLHOUSE_TRUSTED_PROXIES
+    unset DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME
+    unset DOLLHOUSE_BOOTSTRAP_GITHUB_ID
     unset DOLLHOUSE_AUTH_PROVIDER
     unset DOLLHOUSE_AUTH_METHODS
     unset DOLLHOUSE_AUTH_OPEN_DCR
