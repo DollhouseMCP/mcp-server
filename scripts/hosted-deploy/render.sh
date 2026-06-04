@@ -3,10 +3,12 @@
 
 write_compose() {
   cat > "${COMPOSE_FILE}" <<EOF
+name: ${INSTANCE_NAME}
+
 services:
   postgres:
     image: postgres:17-alpine
-    container_name: dollhousemcp-postgres
+    container_name: ${POSTGRES_CONTAINER_NAME}
     restart: unless-stopped
     env_file:
       - .env.production
@@ -30,7 +32,7 @@ services:
       dockerfile: docker/Dockerfile
       target: production
     image: ${IMAGE_TAG}
-    container_name: dollhousemcp
+    container_name: ${APP_CONTAINER_NAME}
     restart: unless-stopped
     depends_on:
       postgres:
@@ -44,8 +46,10 @@ services:
       DOLLHOUSE_TRANSPORT: streamable-http
       DOLLHOUSE_HTTP_HOST: 0.0.0.0
       DOLLHOUSE_HTTP_PORT: "${MCP_PORT}"
-      DOLLHOUSE_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,${HOSTNAME}
-      DOLLHOUSE_TRUSTED_PROXIES: 172.16.0.0/12
+      # The app is reachable only on the Compose network; Caddy owns the public socket.
+      DOLLHOUSE_UNSAFE_NO_TLS: "true"
+      DOLLHOUSE_HTTP_ALLOWED_HOSTS: ${ALLOWED_HOSTS}
+      DOLLHOUSE_TRUSTED_PROXIES: ${TRUSTED_PROXIES}
       DOLLHOUSE_PUBLIC_BASE_URL: ${PUBLIC_BASE_URL}
       DOLLHOUSE_STORAGE_BACKEND: database
       DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp
@@ -53,12 +57,17 @@ services:
       DOLLHOUSE_DATABASE_SSL: disable
       DOLLHOUSE_DATABASE_POOL_SIZE: "20"
       DOLLHOUSE_AUTH_ENABLED: "true"
-      DOLLHOUSE_AUTH_PROVIDER: embedded
-      DOLLHOUSE_AUTH_METHODS: github
+      DOLLHOUSE_AUTH_PROVIDER: ${AUTH_PROVIDER}
+      DOLLHOUSE_AUTH_METHODS: "${AUTH_METHODS}"
+      DOLLHOUSE_AUTH_ISSUER: \${DOLLHOUSE_AUTH_ISSUER:-}
+      DOLLHOUSE_AUTH_AUDIENCE: \${DOLLHOUSE_AUTH_AUDIENCE:-}
+      DOLLHOUSE_AUTH_JWKS_URI: \${DOLLHOUSE_AUTH_JWKS_URI:-}
+      DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP: \${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-false}
+      DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE: \${DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE:-}
       DOLLHOUSE_AUTH_STORAGE_BACKEND: postgres
       DOLLHOUSE_AUTH_OPEN_DCR: "${OPEN_DCR}"
       DOLLHOUSE_WEB_AUTH_ENABLED: "true"
-      DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: \${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-true}
+      DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: "${ALLOWLIST_REQUIRED}"
     expose:
       - "${MCP_PORT}"
     volumes:
@@ -96,13 +105,12 @@ services:
 
   caddy:
     image: caddy:2
-    container_name: dollhousemcp-caddy
+    container_name: ${CADDY_CONTAINER_NAME}
     restart: unless-stopped
     depends_on:
       - dollhousemcp
     ports:
-      - "80:80"
-      - "443:443"
+$(caddy_ports_yaml)
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
@@ -116,14 +124,49 @@ EOF
   return 0
 }
 
+caddy_ports_yaml() {
+  # TLS mode maps host HTTP/HTTPS ports to Caddy's standard ports.
+  # HTTP mode maps the selected LAN port through unchanged because Caddy
+  # listens on that same port inside the container.
+  case "${PROXY_MODE}" in
+    caddy-tls)
+      printf '      - "%s:%s:80"\n' "${BIND_ADDRESS}" "${HTTP_BIND_PORT}"
+      printf '      - "%s:%s:443"\n' "${BIND_ADDRESS}" "${HTTPS_BIND_PORT}"
+      ;;
+    caddy-http)
+      printf '      - "%s:%s:%s"\n' "${BIND_ADDRESS}" "${HTTP_BIND_PORT}" "${HTTP_BIND_PORT}"
+      ;;
+    *)
+      die "unsupported DOLLHOUSE_HOSTED_PROXY_MODE: ${PROXY_MODE}"
+      ;;
+  esac
+
+  return 0
+}
+
 write_caddyfile() {
+  local site_address forwarded_proto
+  case "${PROXY_MODE}" in
+    caddy-tls)
+      site_address="${HOSTNAME}"
+      forwarded_proto="https"
+      ;;
+    caddy-http)
+      site_address="http://${HOSTNAME}:${HTTP_BIND_PORT}"
+      forwarded_proto="http"
+      ;;
+    *)
+      die "unsupported DOLLHOUSE_HOSTED_PROXY_MODE: ${PROXY_MODE}"
+      ;;
+  esac
+
   cat > "${CADDY_FILE}" <<EOF
-${HOSTNAME} {
+${site_address} {
     encode gzip
 
     reverse_proxy dollhousemcp:${MCP_PORT} {
         header_up Host {host}
-        header_up X-Forwarded-Proto https
+        header_up X-Forwarded-Proto ${forwarded_proto}
         transport http {
             read_timeout 1h
             write_timeout 1h
@@ -172,6 +215,7 @@ EOF
 render_files() {
   resolve_public_base_url
   resolve_hostname
+  resolve_allowed_hosts
   validate_render_inputs
   ensure_layout
   write_env_defaults

@@ -17,8 +17,50 @@ REMOTE_KNOWN_HOSTS_FILE="${DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE:-}"
 REMOTE_ACCEPT_HOST_KEY="${DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY:-false}"
 SSH_HOST=""
 DEPLOY_DIR="${DOLLHOUSE_HOSTED_DEPLOY_DIR:-/opt/dollhousemcp}"
+INSTANCE_NAME="${DOLLHOUSE_HOSTED_INSTANCE_NAME:-}"
+INSTANCE_NAME_SET="false"
+[[ -z "${INSTANCE_NAME}" ]] || INSTANCE_NAME_SET="true"
+DEPLOY_MODE="${DOLLHOUSE_HOSTED_MODE:-}"
+DEPLOY_MODE_SET="false"
+[[ -z "${DEPLOY_MODE}" ]] || DEPLOY_MODE_SET="true"
+PROXY_MODE="${DOLLHOUSE_HOSTED_PROXY_MODE:-}"
+PROXY_MODE_SET="false"
+[[ -z "${PROXY_MODE}" ]] || PROXY_MODE_SET="true"
+BIND_ADDRESS="${DOLLHOUSE_HOSTED_BIND_ADDRESS:-}"
+BIND_ADDRESS_SET="false"
+[[ -z "${BIND_ADDRESS}" ]] || BIND_ADDRESS_SET="true"
+HTTP_BIND_PORT="${DOLLHOUSE_HOSTED_HTTP_BIND_PORT:-}"
+HTTP_BIND_PORT_SET="false"
+[[ -z "${HTTP_BIND_PORT}" ]] || HTTP_BIND_PORT_SET="true"
+HTTPS_BIND_PORT="${DOLLHOUSE_HOSTED_HTTPS_BIND_PORT:-}"
+HTTPS_BIND_PORT_SET="false"
+[[ -z "${HTTPS_BIND_PORT}" ]] || HTTPS_BIND_PORT_SET="true"
+AUTH_PROVIDER="${DOLLHOUSE_AUTH_PROVIDER:-}"
+AUTH_METHODS="${DOLLHOUSE_AUTH_METHODS:-}"
+AUTH_OPEN_DCR="${DOLLHOUSE_AUTH_OPEN_DCR:-}"
+AUTH_ALLOWLIST_REQUIRED="${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}"
+AUTH_ISSUER="${DOLLHOUSE_AUTH_ISSUER:-}"
+AUTH_AUDIENCE="${DOLLHOUSE_AUTH_AUDIENCE:-}"
+AUTH_JWKS_URI="${DOLLHOUSE_AUTH_JWKS_URI:-}"
+AUTH_OIDC_REQUIRE_TYP="${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}"
+AUTH_ALLOWLIST_SEED_FILE="${DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE:-}"
+MCP_PORT="${DOLLHOUSE_HTTP_PORT:-}"
+IMAGE_TAG="${DOLLHOUSE_HOSTED_IMAGE_TAG:-}"
+MEM_LIMIT="${DOLLHOUSE_HOSTED_MEM_LIMIT:-}"
+CPU_LIMIT="${DOLLHOUSE_HOSTED_CPUS:-}"
+IMPORT_LEGACY_ENV="${DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV:-}"
+POSTGRES_READY_TIMEOUT="${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-}"
+VERIFY_READY_TIMEOUT="${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}"
+ALLOWED_HOSTS="${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}"
+TRUSTED_PROXIES="${DOLLHOUSE_TRUSTED_PROXIES:-}"
+BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
+BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
+HOSTNAME_SET="false"
+[[ -z "${HOSTNAME}" ]] || HOSTNAME_SET="true"
 PUBLIC_BASE_URL="${DOLLHOUSE_PUBLIC_BASE_URL:-}"
+PUBLIC_BASE_URL_SET="false"
+[[ -z "${PUBLIC_BASE_URL}" ]] || PUBLIC_BASE_URL_SET="true"
 GIT_URL="${DOLLHOUSE_HOSTED_GIT_URL:-https://github.com/DollhouseMCP/mcp-server.git}"
 GIT_REF="${DOLLHOUSE_HOSTED_GIT_REF:-codex/hosted-http-integration}"
 ALLOW_CREDENTIAL_GIT_URL="${DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL:-false}"
@@ -52,6 +94,12 @@ Options:
   --hostname HOSTNAME       Public hostname. Env: DOLLHOUSE_HOSTED_HOSTNAME
   --public-base-url URL     Public origin. Env: DOLLHOUSE_PUBLIC_BASE_URL
   --deploy-dir DIR          Remote deploy dir. Env: DOLLHOUSE_HOSTED_DEPLOY_DIR
+  --instance-name NAME      Compose/container name prefix. Env: DOLLHOUSE_HOSTED_INSTANCE_NAME
+  --mode MODE               Hosted mode: cloud, lan, or enterprise
+  --proxy-mode MODE         Hosted proxy mode: caddy-tls or caddy-http
+  --bind-address ADDRESS    IPv4 host bind address for Caddy
+  --http-bind-port PORT     Host HTTP port for Caddy
+  --https-bind-port PORT    Host HTTPS port for Caddy
   --git-url URL             Repository URL cloned remotely. Env: DOLLHOUSE_HOSTED_GIT_URL
   --ref REF                 Branch/ref cloned remotely. Env: DOLLHOUSE_HOSTED_GIT_REF
   --skip-backup             Skip DB/env backup before remote action
@@ -190,11 +238,47 @@ redact_url() {
   return 0
 }
 
+shell_quote() {
+  local value="$1"
+
+  printf "'"
+  printf '%s' "${value}" | sed "s/'/'\\\\''/g"
+  printf "'"
+
+  return 0
+}
+
 validate_git_url_for_clone() {
   validate_bool DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL "${ALLOW_CREDENTIAL_GIT_URL}"
   if git_url_has_credentials "${GIT_URL}" && [[ "${ALLOW_CREDENTIAL_GIT_URL}" != "true" ]]; then
     die "DOLLHOUSE_HOSTED_GIT_URL must not embed credentials; use a git credential helper or deploy key on the remote host instead"
   fi
+
+  return 0
+}
+
+adopt_remote_public_base_url() {
+  local output_file="$1"
+  local remote_public_base_url
+
+  remote_public_base_url="$(
+    sed -n 's/^\[hosted-remote\] effective public URL: //p' "${output_file}" |
+      tail -n 1
+  )"
+  [[ -n "${remote_public_base_url}" ]] || return 0
+  if [[ "${remote_public_base_url}" =~ [[:space:]] ]]; then
+    die "remote helper returned a public URL containing whitespace: ${remote_public_base_url}"
+  fi
+  case "${remote_public_base_url}" in
+    http://*|https://*)
+      ;;
+    *)
+      die "remote helper returned an unsupported public URL: ${remote_public_base_url}"
+      ;;
+  esac
+
+  PUBLIC_BASE_URL="${remote_public_base_url}"
+  log "using remote effective public URL for verification: ${PUBLIC_BASE_URL}"
 
   return 0
 }
@@ -230,16 +314,54 @@ parse_args() {
       --hostname)
         HOSTNAME="${1:-}"
         [[ -n "${HOSTNAME}" ]] || die "--hostname requires a hostname"
+        HOSTNAME_SET="true"
         shift
         ;;
       --public-base-url)
         PUBLIC_BASE_URL="${1:-}"
         [[ -n "${PUBLIC_BASE_URL}" ]] || die "--public-base-url requires a URL"
+        PUBLIC_BASE_URL_SET="true"
         shift
         ;;
       --deploy-dir)
         DEPLOY_DIR="${1:-}"
         [[ -n "${DEPLOY_DIR}" ]] || die "--deploy-dir requires a directory"
+        shift
+        ;;
+      --instance-name)
+        INSTANCE_NAME="${1:-}"
+        [[ -n "${INSTANCE_NAME}" ]] || die "--instance-name requires a name such as dollhousemcp-canary"
+        INSTANCE_NAME_SET="true"
+        shift
+        ;;
+      --mode)
+        DEPLOY_MODE="${1:-}"
+        [[ -n "${DEPLOY_MODE}" ]] || die "--mode requires cloud, lan, or enterprise"
+        DEPLOY_MODE_SET="true"
+        shift
+        ;;
+      --proxy-mode)
+        PROXY_MODE="${1:-}"
+        [[ -n "${PROXY_MODE}" ]] || die "--proxy-mode requires caddy-tls or caddy-http"
+        PROXY_MODE_SET="true"
+        shift
+        ;;
+      --bind-address)
+        BIND_ADDRESS="${1:-}"
+        [[ -n "${BIND_ADDRESS}" ]] || die "--bind-address requires an address such as 127.0.0.1 or 0.0.0.0"
+        BIND_ADDRESS_SET="true"
+        shift
+        ;;
+      --http-bind-port)
+        HTTP_BIND_PORT="${1:-}"
+        [[ -n "${HTTP_BIND_PORT}" ]] || die "--http-bind-port requires a port number"
+        HTTP_BIND_PORT_SET="true"
+        shift
+        ;;
+      --https-bind-port)
+        HTTPS_BIND_PORT="${1:-}"
+        [[ -n "${HTTPS_BIND_PORT}" ]] || die "--https-bind-port requires a port number"
+        HTTPS_BIND_PORT_SET="true"
         shift
         ;;
       --git-url)
@@ -361,11 +483,28 @@ resolve_known_hosts_file_for_enroll() {
 }
 
 resolve_public_base_url() {
+  local scheme port suffix
+
   if [[ -n "${PUBLIC_BASE_URL}" ]]; then
     return 0
   fi
   [[ -n "${HOSTNAME}" ]] || die "set --hostname, DOLLHOUSE_HOSTED_HOSTNAME, or DOLLHOUSE_PUBLIC_BASE_URL"
-  PUBLIC_BASE_URL="https://${HOSTNAME}"
+  if [[ "${DEPLOY_MODE}" == "lan" || "${PROXY_MODE}" == "caddy-http" ]]; then
+    scheme="http"
+    port="${HTTP_BIND_PORT:-3000}"
+  else
+    scheme="https"
+    port="${HTTPS_BIND_PORT:-443}"
+  fi
+  case "${scheme}:${port}" in
+    http:80|https:443)
+      suffix=""
+      ;;
+    *)
+      suffix=":${port}"
+      ;;
+  esac
+  PUBLIC_BASE_URL="${scheme}://${HOSTNAME}${suffix}"
 
   return 0
 }
@@ -378,6 +517,126 @@ resolve_hostname() {
   HOSTNAME="${PUBLIC_BASE_URL#https://}"
   HOSTNAME="${HOSTNAME#http://}"
   HOSTNAME="${HOSTNAME%%/*}"
+
+  return 0
+}
+
+default_instance_name() {
+  local normalized_dir deploy_basename instance_name
+  normalized_dir="${DEPLOY_DIR%/}"
+  [[ -n "${normalized_dir}" ]] || normalized_dir="${DEPLOY_DIR}"
+  deploy_basename="$(basename "${normalized_dir}")"
+  instance_name="$(
+    printf '%s\n' "${deploy_basename}" |
+      tr '[:upper:]' '[:lower:]' |
+      sed 's/[^a-z0-9-]/-/g; s/--*/-/g; s/^-//; s/-$//'
+  )"
+  if [[ -z "${instance_name}" ]]; then
+    instance_name="dollhousemcp"
+  fi
+  printf '%s\n' "${instance_name}"
+
+  return 0
+}
+
+resolve_instance_name() {
+  if [[ -z "${INSTANCE_NAME}" ]]; then
+    INSTANCE_NAME="$(default_instance_name)"
+  fi
+
+  return 0
+}
+
+validate_no_whitespace() {
+  local key="$1"
+  local value="$2"
+
+  if [[ "${value}" =~ [[:space:]] ]]; then
+    die "${key} must not contain whitespace"
+  fi
+
+  return 0
+}
+
+validate_instance_name() {
+  validate_no_whitespace DOLLHOUSE_HOSTED_INSTANCE_NAME "${INSTANCE_NAME}"
+  if [[ ! "${INSTANCE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]]; then
+    die "DOLLHOUSE_HOSTED_INSTANCE_NAME must be 1-48 lowercase letters, numbers, or hyphens and start with a letter or number; got: ${INSTANCE_NAME}"
+  fi
+
+  return 0
+}
+
+validate_optional_deploy_mode() {
+  [[ -n "${DEPLOY_MODE}" ]] || return 0
+  case "${DEPLOY_MODE}" in
+    cloud|lan|enterprise)
+      ;;
+    *)
+      die "DOLLHOUSE_HOSTED_MODE must be cloud, lan, or enterprise; got: ${DEPLOY_MODE}"
+      ;;
+  esac
+
+  return 0
+}
+
+validate_optional_proxy_mode() {
+  [[ -n "${PROXY_MODE}" ]] || return 0
+  case "${PROXY_MODE}" in
+    caddy-tls|caddy-http)
+      ;;
+    *)
+      die "DOLLHOUSE_HOSTED_PROXY_MODE must be caddy-tls or caddy-http; got: ${PROXY_MODE}"
+      ;;
+  esac
+
+  return 0
+}
+
+is_ipv4_address() {
+  local value="$1"
+  local octet
+  local -a octets
+
+  [[ "${value}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || return 1
+  IFS=. read -r -a octets <<< "${value}"
+  for octet in "${octets[@]}"; do
+    if (( 10#${octet} > 255 )); then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+validate_optional_bind_address() {
+  [[ -n "${BIND_ADDRESS}" ]] || return 0
+  validate_no_whitespace DOLLHOUSE_HOSTED_BIND_ADDRESS "${BIND_ADDRESS}"
+  if ! is_ipv4_address "${BIND_ADDRESS}"; then
+    die "DOLLHOUSE_HOSTED_BIND_ADDRESS must be an IPv4 address such as 127.0.0.1 or 0.0.0.0; got: ${BIND_ADDRESS}"
+  fi
+
+  return 0
+}
+
+validate_forwarded_hosted_inputs() {
+  validate_port_value DOLLHOUSE_HTTP_PORT "${MCP_PORT}"
+  validate_no_whitespace DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
+  validate_no_whitespace DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
+  validate_no_whitespace DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"
+  validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
+  validate_no_whitespace DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME "${BOOTSTRAP_GITHUB_USERNAME}"
+  validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_ID "${BOOTSTRAP_GITHUB_ID}"
+  if [[ -n "${IMPORT_LEGACY_ENV}" ]]; then
+    validate_bool DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV "${IMPORT_LEGACY_ENV}"
+  fi
+  if [[ -n "${POSTGRES_READY_TIMEOUT}" ]]; then
+    validate_nonnegative_integer DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT "${POSTGRES_READY_TIMEOUT}"
+  fi
+  if [[ -n "${VERIFY_READY_TIMEOUT}" ]]; then
+    validate_nonnegative_integer DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT "${VERIFY_READY_TIMEOUT}"
+  fi
 
   return 0
 }
@@ -403,6 +662,12 @@ validate_config() {
   validate_bool DOLLHOUSE_REMOTE_DRY_RUN "${DRY_RUN}"
   validate_bool DOLLHOUSE_REMOTE_ACCEPT_HOST_KEY "${REMOTE_ACCEPT_HOST_KEY}"
   validate_port_value DOLLHOUSE_REMOTE_SSH_PORT "${REMOTE_SSH_PORT}"
+  validate_optional_deploy_mode
+  validate_optional_proxy_mode
+  validate_optional_bind_address
+  validate_port_value DOLLHOUSE_HOSTED_HTTP_BIND_PORT "${HTTP_BIND_PORT}"
+  validate_port_value DOLLHOUSE_HOSTED_HTTPS_BIND_PORT "${HTTPS_BIND_PORT}"
+  validate_forwarded_hosted_inputs
   validate_positive_integer DOLLHOUSE_REMOTE_BACKUP_RETRIES "${BACKUP_RETRIES}"
   validate_nonnegative_integer DOLLHOUSE_REMOTE_BACKUP_RETRY_DELAY "${BACKUP_RETRY_DELAY}"
   [[ -n "${REMOTE_SSH_TARGET}" ]] || die "set --target or DOLLHOUSE_REMOTE_SSH_TARGET"
@@ -415,6 +680,8 @@ validate_config() {
     return 0
   fi
   validate_git_url_for_clone
+  resolve_instance_name
+  validate_instance_name
   if [[ -n "${REMOTE_KNOWN_HOSTS_FILE}" ]]; then
     REMOTE_KNOWN_HOSTS_FILE="$(expand_path "${REMOTE_KNOWN_HOSTS_FILE}")"
     [[ -f "${REMOTE_KNOWN_HOSTS_FILE}" ]] || \
@@ -455,7 +722,18 @@ run_dry_plan() {
   fi
 
   log "dry-run: would connect to ${REMOTE_SSH_TARGET}"
-  log "dry-run: action=${ACTION} deploy_dir=${DEPLOY_DIR} hostname=${HOSTNAME} ref=${GIT_REF}"
+  log "dry-run: action=${ACTION} deploy_dir=${DEPLOY_DIR} instance=${INSTANCE_NAME} hostname=${HOSTNAME} ref=${GIT_REF}"
+  if [[ -n "${DEPLOY_MODE}${PROXY_MODE}${BIND_ADDRESS}${HTTP_BIND_PORT}${HTTPS_BIND_PORT}" ]]; then
+    log "dry-run: hosted overrides mode=${DEPLOY_MODE:-default} proxy_mode=${PROXY_MODE:-default} bind=${BIND_ADDRESS:-default} http_port=${HTTP_BIND_PORT:-default} https_port=${HTTPS_BIND_PORT:-default}"
+  fi
+  if [[ -n "${MCP_PORT}${IMAGE_TAG}${MEM_LIMIT}${CPU_LIMIT}${IMPORT_LEGACY_ENV}${POSTGRES_READY_TIMEOUT}${VERIFY_READY_TIMEOUT}${ALLOWED_HOSTS}${TRUSTED_PROXIES}" ]]; then
+    log "dry-run: hosted runtime overrides mcp_port=${MCP_PORT:-default} image_tag=${IMAGE_TAG:-default} mem=${MEM_LIMIT:-default} cpus=${CPU_LIMIT:-default}"
+    log "dry-run: hosted config overrides import_legacy_env=${IMPORT_LEGACY_ENV:-default} postgres_ready_timeout=${POSTGRES_READY_TIMEOUT:-default} verify_ready_timeout=${VERIFY_READY_TIMEOUT:-default}"
+    log "dry-run: hosted network overrides allowed_hosts=${ALLOWED_HOSTS:-default} trusted_proxies=${TRUSTED_PROXIES:-default}"
+  fi
+  if [[ -n "${BOOTSTRAP_GITHUB_USERNAME}${BOOTSTRAP_GITHUB_ID}" ]]; then
+    log "dry-run: hosted bootstrap override github_username=${BOOTSTRAP_GITHUB_USERNAME:-default} github_id=${BOOTSTRAP_GITHUB_ID:-default}"
+  fi
   if [[ "${SKIP_BACKUP}" == "true" ]]; then
     log "dry-run: would skip remote DB/env backups"
   else
@@ -532,24 +810,111 @@ run_enroll_host() {
 run_remote_action() {
   local ssh_command=()
   local ssh_arg
+  local remote_command
+  local remote_payload_arg
+  local remote_payload_args=()
+  local remote_output
+  local helper_hostname helper_public_base_url helper_instance_name
+  local helper_deploy_mode helper_proxy_mode helper_bind_address
+  local helper_http_bind_port helper_https_bind_port
+  local helper_auth_provider helper_auth_methods helper_auth_open_dcr
+  local helper_auth_allowlist_required helper_auth_issuer helper_auth_audience
+  local helper_auth_jwks_uri helper_auth_oidc_require_typ helper_auth_allowlist_seed_file
+  local helper_mcp_port helper_image_tag helper_mem_limit helper_cpu_limit
+  local helper_import_legacy_env helper_postgres_ready_timeout helper_verify_ready_timeout
+  local helper_allowed_hosts helper_trusted_proxies
+  local helper_bootstrap_github_username helper_bootstrap_github_id
+
+  helper_hostname=""
+  helper_public_base_url=""
+  helper_instance_name=""
+  helper_deploy_mode=""
+  helper_proxy_mode=""
+  helper_bind_address=""
+  helper_http_bind_port=""
+  helper_https_bind_port=""
+  helper_auth_provider="${AUTH_PROVIDER}"
+  helper_auth_methods="${AUTH_METHODS}"
+  helper_auth_open_dcr="${AUTH_OPEN_DCR}"
+  helper_auth_allowlist_required="${AUTH_ALLOWLIST_REQUIRED}"
+  helper_auth_issuer="${AUTH_ISSUER}"
+  helper_auth_audience="${AUTH_AUDIENCE}"
+  helper_auth_jwks_uri="${AUTH_JWKS_URI}"
+  helper_auth_oidc_require_typ="${AUTH_OIDC_REQUIRE_TYP}"
+  helper_auth_allowlist_seed_file="${AUTH_ALLOWLIST_SEED_FILE}"
+  helper_mcp_port="${MCP_PORT}"
+  helper_image_tag="${IMAGE_TAG}"
+  helper_mem_limit="${MEM_LIMIT}"
+  helper_cpu_limit="${CPU_LIMIT}"
+  helper_import_legacy_env="${IMPORT_LEGACY_ENV}"
+  helper_postgres_ready_timeout="${POSTGRES_READY_TIMEOUT}"
+  helper_verify_ready_timeout="${VERIFY_READY_TIMEOUT}"
+  helper_allowed_hosts="${ALLOWED_HOSTS}"
+  helper_trusted_proxies="${TRUSTED_PROXIES}"
+  helper_bootstrap_github_username="${BOOTSTRAP_GITHUB_USERNAME}"
+  helper_bootstrap_github_id="${BOOTSTRAP_GITHUB_ID}"
+  [[ "${HOSTNAME_SET}" != "true" ]] || helper_hostname="${HOSTNAME}"
+  [[ "${PUBLIC_BASE_URL_SET}" != "true" ]] || helper_public_base_url="${PUBLIC_BASE_URL}"
+  [[ "${INSTANCE_NAME_SET}" != "true" ]] || helper_instance_name="${INSTANCE_NAME}"
+  [[ "${DEPLOY_MODE_SET}" != "true" ]] || helper_deploy_mode="${DEPLOY_MODE}"
+  [[ "${PROXY_MODE_SET}" != "true" ]] || helper_proxy_mode="${PROXY_MODE}"
+  [[ "${BIND_ADDRESS_SET}" != "true" ]] || helper_bind_address="${BIND_ADDRESS}"
+  [[ "${HTTP_BIND_PORT_SET}" != "true" ]] || helper_http_bind_port="${HTTP_BIND_PORT}"
+  [[ "${HTTPS_BIND_PORT_SET}" != "true" ]] || helper_https_bind_port="${HTTPS_BIND_PORT}"
 
   while IFS= read -r -d '' ssh_arg; do
     ssh_command+=("${ssh_arg}")
   done < <(ssh_args)
 
+  remote_payload_args=(
+    "${ACTION}"
+    "${DEPLOY_DIR}"
+    "${helper_hostname}"
+    "${helper_public_base_url}"
+    "${GIT_URL}"
+    "${GIT_REF}"
+    "${LOG_LEVEL}"
+    "${SKIP_BACKUP}"
+    "${KEEP_WORKDIR}"
+    "${BACKUP_RETRIES}"
+    "${BACKUP_RETRY_DELAY}"
+    "${helper_instance_name}"
+    "${helper_deploy_mode}"
+    "${helper_proxy_mode}"
+    "${helper_bind_address}"
+    "${helper_http_bind_port}"
+    "${helper_https_bind_port}"
+    "${helper_auth_provider}"
+    "${helper_auth_methods}"
+    "${helper_auth_open_dcr}"
+    "${helper_auth_allowlist_required}"
+    "${helper_auth_issuer}"
+    "${helper_auth_audience}"
+    "${helper_auth_jwks_uri}"
+    "${helper_auth_oidc_require_typ}"
+    "${helper_auth_allowlist_seed_file}"
+    "${helper_mcp_port}"
+    "${helper_image_tag}"
+    "${helper_mem_limit}"
+    "${helper_cpu_limit}"
+    "${helper_import_legacy_env}"
+    "${helper_postgres_ready_timeout}"
+    "${helper_verify_ready_timeout}"
+    "${helper_allowed_hosts}"
+    "${helper_trusted_proxies}"
+    "${helper_bootstrap_github_username}"
+    "${helper_bootstrap_github_id}"
+  )
+  remote_command="bash -s --"
+  for remote_payload_arg in "${remote_payload_args[@]}"; do
+    remote_command+=" $(shell_quote "${remote_payload_arg}")"
+  done
+
   log "connecting to ${REMOTE_SSH_TARGET}"
-  ssh "${ssh_command[@]}" "${REMOTE_SSH_TARGET}" bash -s -- \
-    "${ACTION}" \
-    "${DEPLOY_DIR}" \
-    "${HOSTNAME}" \
-    "${PUBLIC_BASE_URL}" \
-    "${GIT_URL}" \
-    "${GIT_REF}" \
-    "${LOG_LEVEL}" \
-    "${SKIP_BACKUP}" \
-    "${KEEP_WORKDIR}" \
-    "${BACKUP_RETRIES}" \
-    "${BACKUP_RETRY_DELAY}" <<'REMOTE_BOOTSTRAP'
+  remote_output="$(mktemp /tmp/dollhouse-remote-output.XXXXXX)"
+  if ! {
+    # shellcheck disable=SC2029 # remote_command is intentionally quoted locally to preserve empty arguments over SSH.
+    ssh "${ssh_command[@]}" "${REMOTE_SSH_TARGET}" "${remote_command}" <<'REMOTE_BOOTSTRAP'
 set -euo pipefail
 
 # Run the payload from a file so stdin-consuming remote commands cannot consume
@@ -581,6 +946,32 @@ skip_backup="$8"
 keep_workdir="$9"
 backup_retries="${10}"
 backup_retry_delay="${11}"
+instance_name="${12}"
+deploy_mode="${13}"
+proxy_mode="${14}"
+bind_address="${15}"
+http_bind_port="${16}"
+https_bind_port="${17}"
+auth_provider="${18}"
+auth_methods="${19}"
+auth_open_dcr="${20}"
+auth_allowlist_required="${21}"
+auth_issuer="${22}"
+auth_audience="${23}"
+auth_jwks_uri="${24}"
+auth_oidc_require_typ="${25}"
+auth_allowlist_seed_file="${26}"
+mcp_port="${27}"
+image_tag="${28}"
+mem_limit="${29}"
+cpu_limit="${30}"
+import_legacy_env="${31}"
+postgres_ready_timeout="${32}"
+verify_ready_timeout="${33}"
+allowed_hosts="${34}"
+trusted_proxies="${35}"
+bootstrap_github_username="${36}"
+bootstrap_github_id="${37}"
 workdir=""
 
 remote_log() {
@@ -689,6 +1080,15 @@ backup_env_files() {
       remote_log "backed up ${file} to ${backup_name}"
     fi
   done
+
+  return 0
+}
+
+remote_env_file_value() {
+  local key="$1"
+
+  [[ -f "${deploy_dir}/.env.production" ]] || return 0
+  awk -F= -v key="${key}" '$1 == key { value = substr($0, length(key) + 2) } END { print value }' "${deploy_dir}/.env.production"
 
   return 0
 }
@@ -830,22 +1230,80 @@ clone_source() {
 }
 
 run_hosted_helper() {
+  local helper_env=()
+
   cd "${workdir}"
   remote_log "running hosted helper action: ${action}"
-  DOLLHOUSE_HOSTED_DEPLOY_DIR="${deploy_dir}" \
-  DOLLHOUSE_HOSTED_HOSTNAME="${hostname}" \
-  DOLLHOUSE_PUBLIC_BASE_URL="${public_base_url}" \
-  DOLLHOUSE_HOSTED_SOURCE_DIR="${workdir}" \
-  DOLLHOUSE_HOSTED_GIT_URL="${git_url}" \
-  DOLLHOUSE_HOSTED_GIT_REF="${git_ref}" \
-  DOLLHOUSE_HOSTED_LOG_LEVEL="${log_level}" \
-    bash scripts/hosted-deploy.sh "${action}"
+  helper_env+=("DOLLHOUSE_HOSTED_DEPLOY_DIR=${deploy_dir}")
+  [[ -z "${instance_name}" ]] || helper_env+=("DOLLHOUSE_HOSTED_INSTANCE_NAME=${instance_name}")
+  [[ -z "${hostname}" ]] || helper_env+=("DOLLHOUSE_HOSTED_HOSTNAME=${hostname}")
+  [[ -z "${public_base_url}" ]] || helper_env+=("DOLLHOUSE_PUBLIC_BASE_URL=${public_base_url}")
+  helper_env+=("DOLLHOUSE_HOSTED_SOURCE_DIR=${workdir}")
+  helper_env+=("DOLLHOUSE_HOSTED_GIT_URL=${git_url}")
+  helper_env+=("DOLLHOUSE_HOSTED_GIT_REF=${git_ref}")
+  helper_env+=("DOLLHOUSE_HOSTED_LOG_LEVEL=${log_level}")
+  [[ -z "${mcp_port}" ]] || helper_env+=("DOLLHOUSE_HTTP_PORT=${mcp_port}")
+  [[ -z "${image_tag}" ]] || helper_env+=("DOLLHOUSE_HOSTED_IMAGE_TAG=${image_tag}")
+  [[ -z "${mem_limit}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MEM_LIMIT=${mem_limit}")
+  [[ -z "${cpu_limit}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CPUS=${cpu_limit}")
+  [[ -z "${import_legacy_env}" ]] || helper_env+=("DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=${import_legacy_env}")
+  [[ -z "${postgres_ready_timeout}" ]] || helper_env+=("DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT=${postgres_ready_timeout}")
+  [[ -z "${verify_ready_timeout}" ]] || helper_env+=("DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT=${verify_ready_timeout}")
+  [[ -z "${allowed_hosts}" ]] || helper_env+=("DOLLHOUSE_HTTP_ALLOWED_HOSTS=${allowed_hosts}")
+  [[ -z "${trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_TRUSTED_PROXIES=${trusted_proxies}")
+  [[ -z "${bootstrap_github_username}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=${bootstrap_github_username}")
+  [[ -z "${bootstrap_github_id}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_ID=${bootstrap_github_id}")
+  [[ -z "${deploy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MODE=${deploy_mode}")
+  [[ -z "${proxy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_PROXY_MODE=${proxy_mode}")
+  [[ -z "${bind_address}" ]] || helper_env+=("DOLLHOUSE_HOSTED_BIND_ADDRESS=${bind_address}")
+  [[ -z "${http_bind_port}" ]] || helper_env+=("DOLLHOUSE_HOSTED_HTTP_BIND_PORT=${http_bind_port}")
+  [[ -z "${https_bind_port}" ]] || helper_env+=("DOLLHOUSE_HOSTED_HTTPS_BIND_PORT=${https_bind_port}")
+  [[ -z "${auth_provider}" ]] || helper_env+=("DOLLHOUSE_AUTH_PROVIDER=${auth_provider}")
+  [[ -z "${auth_methods}" ]] || helper_env+=("DOLLHOUSE_AUTH_METHODS=${auth_methods}")
+  [[ -z "${auth_open_dcr}" ]] || helper_env+=("DOLLHOUSE_AUTH_OPEN_DCR=${auth_open_dcr}")
+  [[ -z "${auth_allowlist_required}" ]] || helper_env+=("DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=${auth_allowlist_required}")
+  [[ -z "${auth_issuer}" ]] || helper_env+=("DOLLHOUSE_AUTH_ISSUER=${auth_issuer}")
+  [[ -z "${auth_audience}" ]] || helper_env+=("DOLLHOUSE_AUTH_AUDIENCE=${auth_audience}")
+  [[ -z "${auth_jwks_uri}" ]] || helper_env+=("DOLLHOUSE_AUTH_JWKS_URI=${auth_jwks_uri}")
+  [[ -z "${auth_oidc_require_typ}" ]] || helper_env+=("DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP=${auth_oidc_require_typ}")
+  [[ -z "${auth_allowlist_seed_file}" ]] || helper_env+=("DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE=${auth_allowlist_seed_file}")
+  (
+    unset DOLLHOUSE_HOSTED_INSTANCE_NAME
+    unset DOLLHOUSE_HOSTED_HOSTNAME
+    unset DOLLHOUSE_PUBLIC_BASE_URL
+    unset DOLLHOUSE_HOSTED_MODE
+    unset DOLLHOUSE_HOSTED_PROXY_MODE
+    unset DOLLHOUSE_HOSTED_BIND_ADDRESS
+    unset DOLLHOUSE_HOSTED_HTTP_BIND_PORT
+    unset DOLLHOUSE_HOSTED_HTTPS_BIND_PORT
+    unset DOLLHOUSE_HTTP_PORT
+    unset DOLLHOUSE_HOSTED_IMAGE_TAG
+    unset DOLLHOUSE_HOSTED_MEM_LIMIT
+    unset DOLLHOUSE_HOSTED_CPUS
+    unset DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV
+    unset DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT
+    unset DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT
+    unset DOLLHOUSE_HTTP_ALLOWED_HOSTS
+    unset DOLLHOUSE_TRUSTED_PROXIES
+    unset DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME
+    unset DOLLHOUSE_BOOTSTRAP_GITHUB_ID
+    unset DOLLHOUSE_AUTH_PROVIDER
+    unset DOLLHOUSE_AUTH_METHODS
+    unset DOLLHOUSE_AUTH_OPEN_DCR
+    unset DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED
+    unset DOLLHOUSE_AUTH_ISSUER
+    unset DOLLHOUSE_AUTH_AUDIENCE
+    unset DOLLHOUSE_AUTH_JWKS_URI
+    unset DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP
+    unset DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE
+    env "${helper_env[@]}" bash scripts/hosted-deploy.sh "${action}"
+  )
 
   return 0
 }
 
 print_remote_summary() {
-  local portfolio_files portfolio_kib
+  local portfolio_files portfolio_kib summary_instance_name
 
   if [[ -f "${deploy_dir}/DEPLOYED_REVISION" ]]; then
     remote_log "deployed revision: $(cat "${deploy_dir}/DEPLOYED_REVISION")"
@@ -859,8 +1317,25 @@ print_remote_summary() {
     remote_log "portfolio: ${portfolio_files} file(s), ${portfolio_kib} KiB"
   fi
   if command -v docker >/dev/null 2>&1; then
-    docker ps --format '[hosted-remote] container: {{.Names}} {{.Status}}' | grep 'dollhousemcp' || true
+    summary_instance_name="$(remote_env_file_value DOLLHOUSE_HOSTED_INSTANCE_NAME)"
+    [[ -n "${summary_instance_name}" ]] || summary_instance_name="${instance_name}"
+    if [[ -n "${summary_instance_name}" ]]; then
+      docker ps --format '[hosted-remote] container: {{.Names}} {{.Status}}' | grep -F "${summary_instance_name}" || true
+    else
+      docker ps --format '[hosted-remote] container: {{.Names}} {{.Status}}' | grep 'dollhousemcp' || true
+    fi
   fi
+
+  return 0
+}
+
+print_effective_public_base_url() {
+  local effective_public_base_url
+
+  effective_public_base_url="$(remote_env_file_value DOLLHOUSE_PUBLIC_BASE_URL)"
+  [[ -n "${effective_public_base_url}" ]] || effective_public_base_url="${public_base_url}"
+  [[ -n "${effective_public_base_url}" ]] || return 0
+  printf '[hosted-remote] effective public URL: %s\n' "${effective_public_base_url}"
 
   return 0
 }
@@ -870,11 +1345,18 @@ docker compose version >/dev/null 2>&1 || remote_die "Docker Compose is required
 backup_existing_deploy
 clone_source
 run_hosted_helper
+print_effective_public_base_url
 print_remote_summary
 REMOTE_PAYLOAD
 
 bash "${remote_payload}" "$@"
 REMOTE_BOOTSTRAP
+  } | tee "${remote_output}"; then
+    rm -f "${remote_output}"
+    return 1
+  fi
+  adopt_remote_public_base_url "${remote_output}"
+  rm -f "${remote_output}"
 
   return 0
 }
@@ -903,7 +1385,7 @@ verify_public_endpoint() {
 main() {
   parse_args "$@"
   validate_config
-  debug "action=${ACTION} target=${REMOTE_SSH_TARGET} ref=${GIT_REF} deploy_dir=${DEPLOY_DIR}"
+  debug "action=${ACTION} target=${REMOTE_SSH_TARGET} ref=${GIT_REF} deploy_dir=${DEPLOY_DIR} instance=${INSTANCE_NAME}"
   if [[ "${DRY_RUN}" == "true" ]]; then
     run_dry_plan
   elif [[ "${ACTION}" == "enroll-host" ]]; then

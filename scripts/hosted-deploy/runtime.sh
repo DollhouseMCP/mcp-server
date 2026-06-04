@@ -26,7 +26,7 @@ ensure_prerequisites() {
 compose() {
   local status=0
 
-  (cd "${DEPLOY_DIR}" && docker compose --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@") || status=$?
+  (cd "${DEPLOY_DIR}" && docker compose --project-name "${INSTANCE_NAME}" --env-file "${ENV_FILE}" -f "${COMPOSE_FILE}" "$@") || status=$?
   return "${status}"
 }
 
@@ -79,6 +79,13 @@ build_app_image() {
 run_database_migrations() {
   log "running database migrations"
   compose run --rm dollhousemcp-migrate
+
+  return 0
+}
+
+restart_caddy_proxy() {
+  log "refreshing caddy proxy"
+  compose up -d --no-deps --force-recreate caddy
 
   return 0
 }
@@ -140,6 +147,7 @@ start_or_update() {
   run_bootstrap_admin optional
   if [[ "${service}" == "app" ]]; then
     compose up -d dollhousemcp
+    restart_caddy_proxy
   else
     compose up -d
   fi

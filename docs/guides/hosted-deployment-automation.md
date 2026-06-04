@@ -37,6 +37,35 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   npm run hosted:deploy -- install
 ```
 
+Render a conservative local/LAN deployment that listens on loopback only:
+
+```bash
+DOLLHOUSE_HOSTED_MODE=lan \
+DOLLHOUSE_HOSTED_HOSTNAME=localhost \
+  npm run hosted:deploy -- render
+```
+
+Expose the LAN deployment on all host interfaces:
+
+```bash
+DOLLHOUSE_HOSTED_MODE=lan \
+DOLLHOUSE_HOSTED_HOSTNAME=dollhouse.local \
+DOLLHOUSE_HOSTED_BIND_ADDRESS=0.0.0.0 \
+  npm run hosted:deploy -- install
+```
+
+Render an enterprise deployment that validates tokens from an external OIDC IdP:
+
+```bash
+DOLLHOUSE_HOSTED_MODE=enterprise \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_AUTH_PROVIDER=oidc \
+DOLLHOUSE_AUTH_METHODS='' \
+DOLLHOUSE_AUTH_ISSUER=https://idp.example.com \
+DOLLHOUSE_AUTH_AUDIENCE=dollhouse-mcp \
+  npm run hosted:deploy -- render
+```
+
 Update an existing install:
 
 ```bash
@@ -74,6 +103,19 @@ DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-http-integration \
   npm run hosted:remote -- update
+```
+
+Run a side-by-side canary on the same host without taking over the production stack:
+
+```bash
+DOLLHOUSE_REMOTE_SSH_TARGET=root@203.0.113.10 \
+DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
+DOLLHOUSE_HOSTED_DEPLOY_DIR=/opt/dollhousemcp-canary \
+DOLLHOUSE_HOSTED_MODE=lan \
+DOLLHOUSE_HOSTED_HOSTNAME=localhost \
+DOLLHOUSE_HOSTED_HTTP_BIND_PORT=3100 \
+DOLLHOUSE_HOSTED_GIT_REF=codex/hosted-lan-enterprise-setup \
+  npm run hosted:remote -- --skip-local-verify update
 ```
 
 The helper lives at [`scripts/hosted-deploy.sh`](../../scripts/hosted-deploy.sh).
@@ -135,19 +177,36 @@ Common environment variables:
 
 | Variable | Purpose | Default |
 |---|---|---|
+| `DOLLHOUSE_HOSTED_MODE` | Deployment preset: `cloud`, `lan`, or `enterprise` | `cloud` |
 | `DOLLHOUSE_HOSTED_DEPLOY_DIR` | Deployment root | `/opt/dollhousemcp` |
+| `DOLLHOUSE_HOSTED_INSTANCE_NAME` | Docker Compose project and container-name identity for this deployment | derived from the deployment root basename |
+| `DOLLHOUSE_HOSTED_IMAGE_TAG` | Docker image tag used for the app and migration images | `dollhousemcp-hosted:alpha` for `/opt/dollhousemcp`, otherwise `<instance>-hosted:alpha` |
 | `DOLLHOUSE_HOSTED_DRY_RUN` | Preview operations without writes, Docker, git clone, or HTTP checks | `false` |
 | `DOLLHOUSE_HOSTED_LOG_LEVEL` | Logging mode: `quiet`, `info`, or `debug` | `info` |
 | `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV` | Import selected secrets/config from an existing `.env` into `.env.production` during upgrade | `true` |
 | `DOLLHOUSE_HOSTED_HOSTNAME` | Public hostname, for example `mcp.example.com` | none |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | Public URL, for example `https://mcp.example.com` | derived from hostname |
+| `DOLLHOUSE_HOSTED_PROXY_MODE` | Reverse proxy mode: `caddy-tls` or `caddy-http` | mode-specific |
+| `DOLLHOUSE_HOSTED_BIND_ADDRESS` | IPv4 host interface for Caddy ports, for example `127.0.0.1` or `0.0.0.0` | mode-specific |
+| `DOLLHOUSE_HOSTED_HTTP_BIND_PORT` | Host HTTP port for Caddy | `80` for `cloud`/`enterprise`, `3000` for `lan` |
+| `DOLLHOUSE_HOSTED_HTTPS_BIND_PORT` | Host HTTPS port for Caddy TLS mode | `443` |
+| `DOLLHOUSE_HTTP_ALLOWED_HOSTS` | Comma-separated Host header allowlist passed to the app | `localhost,127.0.0.1,<hostname>` |
+| `DOLLHOUSE_TRUSTED_PROXIES` | Comma-separated trusted proxy CIDRs passed to the app | Docker bridge CIDR `172.16.0.0/12` |
 | `DOLLHOUSE_HOSTED_SOURCE_DIR` | Local repo source to deploy | current repo when available |
 | `DOLLHOUSE_HOSTED_GIT_URL` | Repo cloned when no source dir is available | GitHub mcp-server repo |
 | `DOLLHOUSE_HOSTED_GIT_REF` | Branch/ref cloned when no source dir is available | `codex/hosted-http-integration` |
 | `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL` | Permit credentials embedded in `DOLLHOUSE_HOSTED_GIT_URL` | `false` |
+| `DOLLHOUSE_AUTH_PROVIDER` | Auth provider: `embedded`, `oidc`, or `local` | `embedded` |
+| `DOLLHOUSE_AUTH_METHODS` | Embedded-AS sign-in methods, for example `github` or `github,local-password` | `github` for `embedded`, empty for `oidc` |
+| `DOLLHOUSE_AUTH_ISSUER` | External OIDC issuer URL for `DOLLHOUSE_AUTH_PROVIDER=oidc` | none |
+| `DOLLHOUSE_AUTH_AUDIENCE` | Expected OIDC audience for `DOLLHOUSE_AUTH_PROVIDER=oidc` | none |
+| `DOLLHOUSE_AUTH_JWKS_URI` | Optional OIDC JWKS URL override | derived by server when omitted |
+| `DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP` | Require RFC 9068 `typ: at+jwt` for OIDC bridge tokens | `false` |
+| `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED` | Require allowlist gate for user sign-in | `true` |
+| `DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE` | Optional allowlist seed JSON path for GitOps-managed installs | none |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` | GitHub OAuth app client ID | prompted or left unset |
 | `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` | GitHub OAuth app client secret | prompted or left unset |
-| `DOLLHOUSE_AUTH_OPEN_DCR` | Whether unauthenticated Dynamic Client Registration is enabled | `true` |
+| `DOLLHOUSE_AUTH_OPEN_DCR` | Whether unauthenticated Dynamic Client Registration is enabled | `true` in `cloud`, `false` in `lan`/`enterprise` |
 | `DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME` | Optional GitHub username to pre-claim as the first admin | none |
 | `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` | Optional numeric GitHub ID to pre-claim as the first admin and skip API lookup | none |
 | `DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT` | Seconds to wait for Postgres readiness | `60` |
@@ -176,6 +235,64 @@ All helper-managed Docker Compose commands run with `--env-file .env.production`
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
 The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by default because credentials embedded in command arguments can leak through process listings or logs. The remote wrapper applies the same check before opening SSH. Use a git credential helper, deploy key, or `DOLLHOUSE_HOSTED_SOURCE_DIR` instead. If an operator has an explicit reason to allow this, set `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL=true`.
+
+## Side-by-Side Canaries
+
+Multiple hosted deployments can run on the same Docker host when each deployment uses a distinct deployment root and instance name. If `DOLLHOUSE_HOSTED_INSTANCE_NAME` is not supplied, the helper derives it from the basename of `DOLLHOUSE_HOSTED_DEPLOY_DIR`. For example:
+
+- `/opt/dollhousemcp` derives `dollhousemcp`
+- `/opt/dollhousemcp-canary` derives `dollhousemcp-canary`
+
+The instance name is written to `.env.production` and used for:
+
+- the Docker Compose project name
+- generated container names: `<instance>`, `<instance>-postgres`, and `<instance>-caddy`
+- the default image tag, using `<instance>-hosted:alpha` except for the backward-compatible default `dollhousemcp-hosted:alpha`
+
+This prevents Docker container, network, volume, and image-tag collisions between production and canary stacks. Host ports are still exclusive. A canary on the same VPS must use alternate ports or a separate fronting proxy route; for example, LAN mode with `DOLLHOUSE_HOSTED_HTTP_BIND_PORT=3100`.
+
+Once `.env.production` records an instance name, the helper rejects attempts to rename that instance inside the same deployment root.
+Create a new deployment root for side-by-side canaries or migrations that need a different instance name.
+
+## Deployment Modes
+
+The helper supports three presets. The selected mode, hostname, public URL, proxy mode, bind address, and auth posture are written into `.env.production`, so a later `install`, `update`, or `render` can preserve the deployment shape even if the operator does not pass every variable again.
+
+### `cloud`
+
+`cloud` is the Dollhouse-operated alpha/demo shape. It renders:
+
+- Caddy with automatic HTTPS on host ports `80` and `443`
+- embedded Dollhouse OAuth/OIDC authorization server
+- GitHub sign-in
+- allowlist required
+- open DCR enabled for alpha MCP-client compatibility
+
+Use it for Dollhouse-managed cloud deployments where the server has a public hostname and Caddy can obtain certificates.
+
+### `lan`
+
+`lan` is for local or private-network installs. It renders:
+
+- Caddy HTTP on `DOLLHOUSE_HOSTED_HTTP_BIND_PORT`, defaulting to `3000`
+- loopback-only host binding by default: `DOLLHOUSE_HOSTED_BIND_ADDRESS=127.0.0.1`
+- embedded Dollhouse OAuth/OIDC authorization server
+- GitHub sign-in by default
+- allowlist required
+- open DCR disabled by default
+
+To expose the server to other machines on the network, set `DOLLHOUSE_HOSTED_BIND_ADDRESS=0.0.0.0` or a specific IPv4 interface address and set `DOLLHOUSE_HOSTED_HOSTNAME` to the DNS name or IP address clients will use. For real enterprise or untrusted LAN use, put TLS in front of this path or use the `enterprise` preset with a proper hostname.
+
+### `enterprise`
+
+`enterprise` is for organization-controlled single-tenant deployments. It renders:
+
+- Caddy with automatic HTTPS on host ports `80` and `443`
+- allowlist required
+- open DCR disabled by default
+- configurable auth provider
+
+Use `DOLLHOUSE_AUTH_PROVIDER=embedded` with `DOLLHOUSE_AUTH_METHODS=github` when the organization wants DollhouseMCP to run its own authorization server and use GitHub as the user sign-in method. Use `DOLLHOUSE_AUTH_PROVIDER=oidc` with `DOLLHOUSE_AUTH_ISSUER` and `DOLLHOUSE_AUTH_AUDIENCE` when the organization wants DollhouseMCP to validate access tokens issued by an external IdP such as Okta, Auth0, Keycloak, Google Workspace, or Microsoft Entra ID.
 
 ## Actions
 
@@ -233,6 +350,10 @@ DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=./dollhouse_known_hosts \
 Enterprise deployments can skip `enroll-host` and point `DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE` at a managed known-hosts file or host-CA-backed SSH configuration.
 
 The wrapper does not replace `scripts/hosted-deploy.sh`; it calls it remotely after cloning the requested ref. It uploads its remote payload to a temporary `0600` script before execution so commands such as database dumps cannot consume the rest of a streamed SSH script from stdin. Use the direct helper when you are already logged into the target host or when building local/LAN and enterprise modes.
+
+For remote actions, the wrapper forwards non-secret hosted configuration such as mode, bind ports, Host allowlists, trusted proxy CIDRs, resource limits, readiness timeouts, auth posture, OIDC settings, and bootstrap admin identity.
+Those values are passed to the remote helper after the wrapper clones the requested ref.
+It does not forward OAuth client secrets or other deployment secrets; place those in the remote `.env.production` or your remote secret-management flow before running the helper.
 
 ### `render`
 
@@ -361,7 +482,7 @@ DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=octocat \
 
 ## Dynamic Client Registration
 
-The generated Compose file defaults to:
+In `cloud` mode, the generated Compose file defaults to:
 
 ```yaml
 DOLLHOUSE_AUTH_OPEN_DCR: "true"
@@ -369,12 +490,18 @@ DOLLHOUSE_AUTH_OPEN_DCR: "true"
 
 This is the alpha compatibility shape for MCP clients such as claude.ai web and Gemini CLI that auto-register through Dynamic Client Registration. The server-side DCR policy validates redirect shape and records audit metadata, and user access is still governed by GitHub authentication plus the Dollhouse allowlist gate.
 
-For a stricter enterprise deployment where MCP clients are pre-registered or issued Initial Access Tokens, set `DOLLHOUSE_AUTH_OPEN_DCR=false` before `render`, `install`, or `update`. Future enterprise presets should make that choice explicit.
+`lan` and `enterprise` default to:
+
+```yaml
+DOLLHOUSE_AUTH_OPEN_DCR: "false"
+```
+
+For clients that require unauthenticated DCR in a private test, explicitly set `DOLLHOUSE_AUTH_OPEN_DCR=true` before `render`, `install`, or `update`. Do that only when the endpoint is bound to loopback, protected by a trusted tunnel, or otherwise unreachable by untrusted clients.
 
 ## Current Limitations
 
 - The public `curl | sh` installer URL does not exist yet.
-- Local/LAN self-hosting and enterprise IdP presets still need dedicated modes.
+- Local/LAN and enterprise modes currently cover generated deployment shape and docs; they still need real-container install/update validation in representative environments.
 - The helper assumes Docker Compose and Caddy for the first production-like shape.
 - Allowlist management still uses the existing `dollhouse-allowlist` CLI.
 
@@ -396,7 +523,5 @@ This runs both the generated-file render test and a Docker-stubbed workflow test
 
 ## Next Steps
 
-- Add local/LAN mode with clear binding and TLS choices.
-- Add enterprise mode presets for external OIDC/IdP configuration.
 - Add a wrapper installer that can be served from a stable URL.
 - Add optional real-container integration coverage for Docker environments.
