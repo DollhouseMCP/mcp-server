@@ -98,3 +98,50 @@ export interface OperatorConfigSettingDto {
 export interface OperatorConfigListDto {
   readonly items: readonly OperatorConfigSettingDto[];
 }
+
+/**
+ * System metrics (System A) — the in-process operational metrics snapshots from
+ * MemoryMetricsSink, projected for the admin Metrics surface. System-wide
+ * aggregates (counters/gauges/histograms by source), NOT per-session.
+ */
+export type SystemMetricType = 'counter' | 'gauge' | 'histogram';
+
+export interface SystemHistogramValueDto {
+  readonly count: number;
+  readonly sum: number;
+  readonly min?: number;
+  readonly max?: number;
+  readonly avg?: number;
+  readonly p50?: number;
+  readonly p75?: number;
+  readonly p90?: number;
+  readonly p95?: number;
+  readonly p99?: number;
+}
+
+export interface SystemMetricEntryDto {
+  readonly name: string;
+  readonly source: string;
+  readonly unit: string;
+  readonly type: SystemMetricType;
+  readonly value: number | SystemHistogramValueDto;
+  readonly labels?: Readonly<Record<string, string>>;
+}
+
+export interface SystemMetricSnapshotDto {
+  readonly id: string;
+  readonly timestamp: string;
+  readonly duration_ms: number;
+  readonly metrics: readonly SystemMetricEntryDto[];
+  readonly errors: readonly string[];
+}
+
+export interface SystemMetricsResponseDto {
+  readonly snapshots: readonly SystemMetricSnapshotDto[];
+  readonly total: number;
+  readonly has_more: boolean;
+  readonly limit: number;
+  readonly offset: number;
+  readonly oldest_available: string;
+  readonly newest_available: string;
+}

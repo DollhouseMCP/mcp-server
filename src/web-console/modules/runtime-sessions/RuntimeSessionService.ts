@@ -119,6 +119,8 @@ function toSelfDto(session: RuntimeSessionPresence): RuntimeSessionSelfDto {
     client_info: session.clientInfo ? { ...session.clientInfo } : null,
     created_at: session.startedAt.toISOString(),
     last_active_at: session.lastActiveAt.toISOString(),
+    request_count: session.requestCount,
+    error_count: session.errorCount,
     status: 'active',
   };
 }

@@ -15,6 +15,8 @@ export function projectRuntimeSessionSelf(value: unknown): RuntimeSessionSelfDto
     client_info: clientInfoField(record),
     created_at: stringField(record, 'created_at'),
     last_active_at: stringField(record, 'last_active_at'),
+    request_count: numberField(record, 'request_count'),
+    error_count: numberField(record, 'error_count'),
     status: 'active',
   };
 }

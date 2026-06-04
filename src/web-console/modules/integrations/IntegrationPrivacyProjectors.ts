@@ -13,6 +13,11 @@ export function projectIntegrationList(value: unknown): IntegrationListDto {
   return { integrations };
 }
 
+export function projectIntegrationConnect(value: unknown): { readonly authorize_url: string } {
+  const input = asRecord(value);
+  return { authorize_url: typeof input.authorize_url === 'string' ? input.authorize_url : '' };
+}
+
 export function projectGitHubIntegrationStatus(value: unknown): GitHubIntegrationStatusDto {
   const input = asRecord(value);
   return {

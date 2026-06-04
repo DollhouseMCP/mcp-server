@@ -9,6 +9,8 @@ export interface RuntimeSessionSelfDto {
   } | null;
   readonly created_at: string;
   readonly last_active_at: string;
+  readonly request_count: number;
+  readonly error_count: number;
   readonly status: 'active';
 }
 

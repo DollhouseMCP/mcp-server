@@ -426,6 +426,7 @@
 .session-id-line { font-family: var(--font-mono); font-size: var(--step--1); color: var(--ink-900); }
 .session-ip { color: var(--ink-700); }
 .session-sub { font-size: calc(var(--step--1) - 1px); color: var(--ink-500); margin-top: 0.15rem; }
+.session-err { color: #dc2626; font-weight: 600; } /* NOSONAR — semantic error red */
 .session-sid {
   appearance: none;
   background: none;

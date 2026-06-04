@@ -51,7 +51,12 @@ export function initElevation(principal, ctx = {}) {
 /* ── Rendering ──────────────────────────────────────────────────────────── */
 
 function render(elevation) {
-  const active = elevation?.active === true && elevation.expires_at;
+  // An already-past expiry is NOT active: treating it as active would render the
+  // elevated UI, immediately trip handleExpiry() (which re-enters render() and
+  // nulls expiresAt), then crash on the trailing fmtClock(expiresAt).
+  const active = elevation?.active === true
+    && !!elevation.expires_at
+    && new Date(elevation.expires_at).getTime() > Date.now();
   const prevElevated = sessionStorage.getItem(ELEVATED_KEY) === '1';
 
   stopTick();
@@ -185,6 +190,7 @@ async function onExit() {
 function hide(el) { if (el) el.hidden = true; }
 
 function fmtClock(date) {
+  if (!date || Number.isNaN(date.getTime())) return '';
   return date.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 }
 

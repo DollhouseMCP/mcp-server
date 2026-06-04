@@ -1,0 +1,85 @@
+/**
+ * Integrations tab — provider catalog cards on Atelier tokens.
+ */
+
+.int-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 16px 0;
+}
+
+.int-title { font-family: var(--font-heading); font-size: var(--step-1); font-weight: 700; color: var(--ink-900); }
+.int-sub { padding: 4px 16px 0; color: var(--ink-500); font-size: var(--step--1); max-width: 70ch; }
+
+.int-grid {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+.int-card {
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.int-card--connected { border-color: var(--signal-2); }
+
+.int-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.int-icon { font-size: 24px; line-height: 1; }
+.int-card-id { flex: 1; min-width: 0; }
+.int-card-name { font-family: var(--font-heading); font-weight: 700; color: var(--ink-900); }
+.int-card-cat { font-size: var(--step--1); color: var(--ink-500); }
+
+.int-chip {
+  font-size: 10.5px;
+  font-family: var(--font-mono);
+  padding: 2px 8px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.int-chip--ok { background: rgba(16, 185, 129, 0.12); color: #047857; } /* NOSONAR — semantic ok green */
+.int-chip--off { background: var(--surface-1); color: var(--ink-500); border: 1px solid var(--line); }
+.int-chip--err { background: rgba(239, 68, 68, 0.12); color: #dc2626; } /* NOSONAR — semantic error red */
+
+.int-card-body { padding: 14px; display: flex; flex-direction: column; gap: 10px; flex: 1; }
+
+.int-account { font-family: var(--font-mono); font-size: var(--step--1); color: var(--ink-900); }
+.int-blurb { color: var(--ink-700); font-size: var(--step--1); }
+.int-meta { font-family: var(--font-mono); font-size: 11px; color: var(--ink-500); }
+
+.int-caps { display: flex; flex-wrap: wrap; gap: 6px; }
+.int-cap {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  color: var(--ink-700);
+  border: 1px solid var(--line);
+}
+
+.int-alert {
+  font-size: var(--step--1);
+  color: #b45309; /* NOSONAR — warn amber on page bg */
+  background: rgba(245, 158, 11, 0.1);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  border-radius: var(--radius-sm);
+  padding: 6px 10px;
+}
+
+.int-actions { display: flex; gap: 8px; margin-top: auto; padding-top: 4px; }
+.int-danger { color: #dc2626; } /* NOSONAR — destructive */
+
+.int-loading { text-align: center; padding: 40px; color: var(--ink-500); font-size: 13px; }

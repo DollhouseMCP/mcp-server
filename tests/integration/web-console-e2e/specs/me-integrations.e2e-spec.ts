@@ -15,13 +15,11 @@ describe('/me/integrations', () => {
     expect(res.status).toBe(200);
   });
 
-  it('connect begins the GitHub OAuth flow (302 to GitHub)', async () => {
+  it('connect returns the GitHub authorization URL for the SPA to navigate to', async () => {
     const res = await world.clients.userA.post('/api/v1/me/integrations/github/connect', { body: {} });
-    expect([302, 303, 307].includes(res.status) || res.status === 200).toBe(true);
-    const location = res.headers.get('location');
-    if (res.status >= 300 && res.status < 400) {
-      expect(location).toContain('github.com');
-    }
+    expect(res.status).toBe(200);
+    expect(typeof res.body?.authorize_url).toBe('string');
+    expect(res.body.authorize_url).toContain('github.com');
   });
 
   it('disconnect is idempotent and never errors', async () => {

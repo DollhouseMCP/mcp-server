@@ -27,7 +27,10 @@ import {
   projectOperationalLogs,
   projectOperationalMetric,
   projectOperationalMetrics,
+  projectSystemMetrics,
 } from './OperationsPrivacyProjectors.js';
+import type { ISystemMetricsSource } from './SystemMetricsSource.js';
+import type { MetricQueryOptions, MetricQueryResult } from '../../../metrics/types.js';
 
 const OPERATE_CAPABILITY = 'console:admin:operate';
 const OPERATION_AUDIT_IDS = [
@@ -42,6 +45,7 @@ const OPERATION_AUDIT_IDS = [
   'operate.logs.stream',
   'operate.metrics.show',
   'operate.metrics.stream',
+  'operate.metrics.system',
 ] as const;
 
 const OPERATIONS_STREAM_POLICY = {
@@ -57,6 +61,8 @@ export interface OperationsModuleOptions {
   readonly telemetry: IConsoleTelemetryQuery;
   readonly operatorConfigStore: IOperatorConfigStore;
   readonly operatorConfigDefinitions?: readonly OperatorConfigSettingDefinition[];
+  /** In-process System A metrics sink; absent when metrics collection is off. */
+  readonly systemMetrics?: ISystemMetricsSource;
   readonly now?: () => Date;
 }
 
@@ -67,6 +73,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
     options.operatorConfigDefinitions ?? DEFAULT_OPERATOR_CONFIG_DEFINITIONS,
     options.now,
   );
+  const resolveNow = options.now ?? (() => new Date());
   return {
     id: 'operations',
     apiVersion: 'v1',
@@ -253,9 +260,40 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
           });
         },
       },
+      {
+        // System A: the MCP server's in-process operational metrics
+        // (cache/perf/gatekeeper/security counters), system-wide. Distinct from
+        // the session_activity_events-backed /metrics above.
+        method: 'GET',
+        path: '/api/v1/admin/operate/metrics/system',
+        audience: 'admin',
+        requiredCapability: OPERATE_CAPABILITY,
+        elevation: 'admin_30m',
+        privacyClass: 'operational_allowlist',
+        idempotency: 'not_applicable',
+        auditOperation: 'operate.metrics.system',
+        privacyProjector: projectSystemMetrics,
+        handler: req => querySystemMetrics(options.systemMetrics, parseSystemMetricQuery(req), resolveNow),
+      },
     ],
     auditOperations: OPERATION_AUDIT_IDS.map(id => ({ id })),
   };
+}
+
+// Reads the in-process System A sink. When metrics collection is disabled the
+// sink is absent, so we degrade to an empty result rather than erroring.
+function querySystemMetrics(
+  source: ISystemMetricsSource | undefined,
+  query: MetricQueryOptions,
+  now: () => Date,
+): ConsoleHandlerResult {
+  if (!source) return { status: 200, body: emptySystemMetrics(now()) };
+  return { status: 200, body: source.query(query) };
+}
+
+function emptySystemMetrics(at: Date): MetricQueryResult {
+  const ts = at.toISOString();
+  return { snapshots: [], total: 0, hasMore: false, limit: 0, offset: 0, oldestAvailable: ts, newestAvailable: ts };
 }
 
 function projectOperationalLogStreamData(value: unknown): unknown {
@@ -349,6 +387,34 @@ function parseMetricQuery(req: ConsoleRequest): OperationalMetricQuery {
     subsystem: boundedString(firstString(req.query.subsystem), 64),
     name: boundedString(firstString(req.query.name), 128),
   };
+}
+
+function parseSystemMetricQuery(req: ConsoleRequest): MetricQueryOptions {
+  const options: MetricQueryOptions = {};
+  const names = boundedString(firstString(req.query.names), 512);
+  if (names) options.names = names.split(',').map(name => name.trim()).filter(Boolean).slice(0, 50);
+  const source = boundedString(firstString(req.query.source), 80);
+  if (source) options.source = source;
+  const type = firstString(req.query.type);
+  if (type === 'counter' || type === 'gauge' || type === 'histogram') options.type = type;
+  const since = boundedString(firstString(req.query.since), 40);
+  if (since) options.since = since;
+  const until = boundedString(firstString(req.query.until), 40);
+  if (until) options.until = until;
+  const latest = firstString(req.query.latest);
+  if (latest !== null) options.latest = latest !== 'false';
+  const limit = boundedNonNegativeInt(firstString(req.query.limit), 1, 1000);
+  if (limit !== null) options.limit = limit;
+  const offset = boundedNonNegativeInt(firstString(req.query.offset), 0, Number.MAX_SAFE_INTEGER);
+  if (offset !== null) options.offset = offset;
+  return options;
+}
+
+function boundedNonNegativeInt(value: string | null, min: number, max: number): number | null {
+  if (value === null) return null;
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isSafeInteger(parsed)) return null;
+  return Math.min(Math.max(parsed, min), max);
 }
 
 function boundedLimit(value: string | null, fallback: number): number {

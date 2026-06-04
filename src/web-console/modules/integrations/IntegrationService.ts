@@ -94,14 +94,20 @@ export class IntegrationService {
       consumedAt: null,
     });
     return {
-      status: 302,
-      redirectTo: deps.githubProvider.createAuthorizationUrl({
-        state,
-        codeChallenge: createPkceChallenge(pkceVerifier),
-        codeChallengeMethod: 'S256',
-        redirectUri,
-        contentsPermission,
-      }),
+      // Return the authorization URL in the body (not a 302): the console is an
+      // SPA driven by fetch, which can't follow a cross-origin redirect, and CSRF
+      // is header-only so a plain form POST can't drive this. The browser does
+      // window.location = authorize_url. (Slice B's /:provider/connect matches.)
+      status: 200,
+      body: {
+        authorize_url: deps.githubProvider.createAuthorizationUrl({
+          state,
+          codeChallenge: createPkceChallenge(pkceVerifier),
+          codeChallengeMethod: 'S256',
+          redirectUri,
+          contentsPermission,
+        }),
+      },
       cookies: [{ operation: 'set', name: CONSOLE_INTEGRATION_STATE_COOKIE, value: transactionId }],
     };
   }

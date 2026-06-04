@@ -12,6 +12,8 @@
   <link rel="stylesheet" href="styles.css">
   <link rel="stylesheet" href="console.css">
   <link rel="stylesheet" href="logs.css">
+  <link rel="stylesheet" href="admin-metrics.css">
+  <link rel="stylesheet" href="integrations.css">
 </head>
 <body>
 
@@ -57,13 +59,17 @@
       <div class="header-nav-row">
         <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
           <button class="console-tab active" data-tab="portfolio">Portfolio</button>
-          <button class="console-tab" data-tab="security">Auth</button>
           <button class="console-tab" data-tab="sessions">Sessions</button>
           <button class="console-tab" data-tab="logs">Logs</button>
-          <button class="console-tab" data-tab="metrics">Metrics</button>
           <button class="console-tab" data-tab="integrations">Integrations</button>
-          <!-- Admin-only: revealed by app.js only while elevated with console:admin:accounts. -->
+          <button class="console-tab" data-tab="permissions">Permissions</button>
+          <button class="console-tab" data-tab="setup">Setup</button>
+          <!-- Admin-only: each revealed by app.js only while elevated AND holding the matching capability. -->
           <button class="console-tab console-tab--admin" data-tab="users" data-admin-cap="console:admin:accounts" hidden>Users</button>
+          <button class="console-tab console-tab--admin" data-tab="admin-security" data-admin-cap="console:admin:security" hidden>Security</button>
+          <button class="console-tab console-tab--admin" data-tab="operations" data-admin-cap="console:admin:operate" hidden>Operations</button>
+          <button class="console-tab console-tab--admin" data-tab="admin-metrics" data-admin-cap="console:admin:operate" hidden>Metrics</button>
+          <button class="console-tab console-tab--admin" data-tab="audit" data-admin-cap="console:admin:audit" hidden>Audit</button>
         </nav>
       </div>
     </header>
@@ -72,23 +78,35 @@
       <div id="tab-portfolio" class="tab-panel active" role="region" aria-label="Portfolio">
         <div class="panel-placeholder" id="portfolio-root">Loading portfolio…</div>
       </div>
-      <div id="tab-security" class="tab-panel" hidden role="region" aria-label="Auth">
-        <div class="panel-placeholder">Security &amp; sessions — coming next.</div>
-      </div>
       <div id="tab-sessions" class="tab-panel" hidden role="region" aria-label="Sessions">
         <div class="panel-placeholder">Loading sessions…</div>
       </div>
       <div id="tab-logs" class="tab-panel" hidden role="region" aria-label="Logs">
         <div class="panel-placeholder">Loading logs…</div>
       </div>
-      <div id="tab-metrics" class="tab-panel" hidden role="region" aria-label="Metrics">
-        <div class="panel-placeholder">Metrics — coming next.</div>
-      </div>
       <div id="tab-integrations" class="tab-panel" hidden role="region" aria-label="Integrations">
-        <div class="panel-placeholder">Integrations — coming next.</div>
+        <div class="panel-placeholder">Loading integrations…</div>
+      </div>
+      <div id="tab-permissions" class="tab-panel" hidden role="region" aria-label="Permissions">
+        <div class="panel-placeholder">Permissions (gatekeeper policies &amp; decision feed) — coming next.</div>
+      </div>
+      <div id="tab-setup" class="tab-panel" hidden role="region" aria-label="Setup">
+        <div class="panel-placeholder">Setup (connect your MCP client) — coming next.</div>
       </div>
       <div id="tab-users" class="tab-panel" hidden role="region" aria-label="User administration">
         <div class="panel-placeholder">Loading users…</div>
+      </div>
+      <div id="tab-admin-security" class="tab-panel" hidden role="region" aria-label="Security administration">
+        <div class="panel-placeholder">Security (auth policy &amp; signing keys) — coming next.</div>
+      </div>
+      <div id="tab-operations" class="tab-panel" hidden role="region" aria-label="Operations">
+        <div class="panel-placeholder">Operations (config, health, system logs, sessions) — coming next.</div>
+      </div>
+      <div id="tab-admin-metrics" class="tab-panel" hidden role="region" aria-label="System metrics">
+        <div class="panel-placeholder">Loading system metrics…</div>
+      </div>
+      <div id="tab-audit" class="tab-panel" hidden role="region" aria-label="Audit">
+        <div class="panel-placeholder">Audit (admin actions, approvals, authentication) — coming next.</div>
       </div>
     </main>
   </div>

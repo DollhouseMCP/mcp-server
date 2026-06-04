@@ -7,6 +7,11 @@ import type {
   OperationalLogPageDto,
   OperationalMetricDto,
   OperationalMetricResponseDto,
+  SystemHistogramValueDto,
+  SystemMetricEntryDto,
+  SystemMetricSnapshotDto,
+  SystemMetricsResponseDto,
+  SystemMetricType,
 } from './OperationsDtos.js';
 import {
   arrayValue,
@@ -206,4 +211,79 @@ function cloneAllowedValue(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(cloneAllowedValue);
   if (value && typeof value === 'object') return JSON.parse(JSON.stringify(value));
   return null;
+}
+
+// System metrics (System A): explicit field allowlist at the trust boundary.
+// Snapshots carry name/source/unit/type/value (+ optional labels); nothing else
+// is forwarded.
+export function projectSystemMetrics(value: unknown): SystemMetricsResponseDto {
+  const record = objectValue(value);
+  return {
+    snapshots: arrayValue(record.snapshots).map(projectSystemMetricSnapshot),
+    total: numberField(record, 'total'),
+    has_more: record.hasMore === true,
+    limit: numberField(record, 'limit'),
+    offset: numberField(record, 'offset'),
+    oldest_available: stringField(record, 'oldestAvailable'),
+    newest_available: stringField(record, 'newestAvailable'),
+  };
+}
+
+function projectSystemMetricSnapshot(value: unknown): SystemMetricSnapshotDto {
+  const record = objectValue(value);
+  return {
+    id: stringField(record, 'id'),
+    timestamp: stringField(record, 'timestamp'),
+    duration_ms: numberField(record, 'durationMs'),
+    metrics: arrayValue(record.metrics).map(projectSystemMetricEntry),
+    errors: arrayValue(record.errors).filter((e): e is string => typeof e === 'string'),
+  };
+}
+
+function projectSystemMetricEntry(value: unknown): SystemMetricEntryDto {
+  const record = objectValue(value);
+  const type = systemMetricTypeField(record, 'type');
+  return {
+    name: stringField(record, 'name'),
+    source: stringField(record, 'source'),
+    unit: stringField(record, 'unit'),
+    type,
+    value: type === 'histogram' ? projectHistogram(record.value) : numberField(record, 'value'),
+    ...projectMetricLabels(record.labels),
+  };
+}
+
+function projectHistogram(value: unknown): SystemHistogramValueDto {
+  const record = objectValue(value);
+  return {
+    count: numberField(record, 'count'),
+    sum: numberField(record, 'sum'),
+    ...numericOptional(record, 'min'),
+    ...numericOptional(record, 'max'),
+    ...numericOptional(record, 'avg'),
+    ...numericOptional(record, 'p50'),
+    ...numericOptional(record, 'p75'),
+    ...numericOptional(record, 'p90'),
+    ...numericOptional(record, 'p95'),
+    ...numericOptional(record, 'p99'),
+  };
+}
+
+function numericOptional<K extends string>(record: UnknownRecord, key: K): Partial<Record<K, number>> {
+  const value = record[key];
+  return typeof value === 'number' && Number.isFinite(value) ? { [key]: value } as Record<K, number> : {};
+}
+
+function projectMetricLabels(value: unknown): { labels?: Record<string, string> } {
+  if (!value || typeof value !== 'object') return {};
+  const labels: Record<string, string> = {};
+  for (const [key, raw] of Object.entries(value as Record<string, unknown>)) {
+    if (typeof raw === 'string') labels[key] = raw;
+  }
+  return Object.keys(labels).length > 0 ? { labels } : {};
+}
+
+function systemMetricTypeField(record: UnknownRecord, key: string): SystemMetricType {
+  const value = record[key];
+  return value === 'counter' || value === 'gauge' || value === 'histogram' ? value : 'gauge';
 }

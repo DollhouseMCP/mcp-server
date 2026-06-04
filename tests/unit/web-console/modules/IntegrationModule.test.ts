@@ -268,8 +268,8 @@ describe('IntegrationModule', () => {
     }));
 
     expect(result).toMatchObject({
-      status: 302,
-      redirectTo: expect.stringContaining('https://github.example/install?state='),
+      status: 200,
+      body: { authorize_url: expect.stringContaining('https://github.example/install?state=') },
       cookies: [expect.objectContaining({
         operation: 'set',
         name: CONSOLE_INTEGRATION_STATE_COOKIE,

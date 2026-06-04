@@ -41,12 +41,11 @@ function initTheme() {
  */
 const TAB_MODULES = {
   portfolio: () => import('./portfolio.js'),
-  // security:     () => import('./security.js'),
   sessions: () => import('./sessions.js'),
   logs: () => import('./logs.js'),
+  'admin-metrics': () => import('./admin-metrics.js'),
+  integrations: () => import('./integrations.js'),
   users: () => import('./users-admin.js'),
-  // metrics:      () => import('./metrics.js'),
-  // integrations: () => import('./integrations.js'),
 };
 // Memoized load+init promise per tab, so callers (e.g. the Sessions→Logs jump)
 // can await a module being ready without racing the lazy import.

@@ -135,6 +135,7 @@ import {
   type IConsoleTelemetryQuery,
   type OperationsHealthChecks,
 } from './modules/operations/index.js';
+import type { ISystemMetricsSource } from './modules/operations/SystemMetricsSource.js';
 import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
@@ -283,6 +284,7 @@ export interface WebConsoleRegistrarOptions {
   readonly telemetryQuery?: IConsoleTelemetryQuery | null;
   readonly ownedActivityQuery?: IOwnedActivityQuery | null;
   readonly ownedMetricQuery?: IOwnedMetricQuery | null;
+  readonly systemMetricsSource?: ISystemMetricsSource | null;
   readonly operatorConfigStore?: IOperatorConfigStore | null;
   readonly signingKeyStore?: ISigningKeyStore | null;
   readonly authPolicyStore?: IConsoleAuthPolicyStore | null;
@@ -405,6 +407,7 @@ export class WebConsoleRegistrar {
     const telemetryQuery = resolveTelemetryQuery(container, database, this.options);
     const ownedActivityQuery = resolveOwnedActivityQuery(container, database, this.options);
     const ownedMetricQuery = resolveOwnedMetricQuery(container, database, this.options);
+    const systemMetricsSource = resolveSystemMetricsSource(container, this.options);
     const operatorConfigStore = resolveOperatorConfigStore(database, container, this.options);
     const signingKeyStore = resolveSigningKeyStore(database, container, this.options);
     const accountInviteIssuer = resolveAccountInviteIssuer({
@@ -483,6 +486,7 @@ export class WebConsoleRegistrar {
       healthChecks: operationHealthChecks,
       telemetry: telemetryQuery,
       operatorConfigStore,
+      systemMetrics: systemMetricsSource,
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, SECURITY_ADMIN_MODULE_ID, () => createSecurityAdminModule({
@@ -1541,6 +1545,23 @@ function resolveOwnedMetricQuery(
   }
   if (database) return markProductionAdapter(new PostgresOwnedMetricQuery(database, { now: options.now }), 'PostgresOwnedMetricQuery');
   return new InMemoryOwnedMetricQuery({ now: options.now });
+}
+
+// The in-process System A metrics sink (MemoryMetricsSink), registered in the
+// container by ObservabilityServiceRegistrar only when metrics collection is
+// enabled. Absent → the operations module degrades the system-metrics route to
+// an empty result.
+const SYSTEM_METRICS_SINK_SERVICE_NAME = 'MemoryMetricsSink';
+
+function resolveSystemMetricsSource(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): ISystemMetricsSource | undefined {
+  if (options.systemMetricsSource !== undefined) return options.systemMetricsSource ?? undefined;
+  if (container.hasRegistration(SYSTEM_METRICS_SINK_SERVICE_NAME)) {
+    return container.resolve<ISystemMetricsSource>(SYSTEM_METRICS_SINK_SERVICE_NAME);
+  }
+  return undefined;
 }
 
 function resolveTelemetryReplicaId(container: DiContainerFacade): string {

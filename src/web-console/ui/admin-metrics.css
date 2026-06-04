@@ -1,0 +1,134 @@
+/**
+ * Admin Metrics tab (System A operational metrics). Card grid + stat tiles +
+ * tables, lifted from the legacy metrics dashboard, on Atelier tokens.
+ */
+
+.metrics-status-bar {
+  display: flex;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+  align-items: center;
+  font-size: 12px;
+  color: var(--ink-500);
+  font-family: var(--font-mono);
+}
+
+.metrics-scope-label { text-transform: uppercase; letter-spacing: 0.05em; font-size: 10.5px; }
+.metrics-checked { color: var(--ink-500); }
+.metrics-bar-actions { display: flex; gap: 10px; align-items: center; margin-left: auto; }
+.metrics-auto { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; cursor: pointer; user-select: none; }
+
+.metrics-dashboard {
+  padding: 16px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 16px;
+  font-family: var(--font-body);
+}
+
+@media (max-width: 900px) { .metrics-dashboard { grid-template-columns: 1fr; } }
+
+.metrics-card {
+  background: var(--paper-strong);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+
+.metrics-card--wide { grid-column: 1 / -1; }
+
+/* Matrix (multi-instance source): metric rows × instance columns. Scrolls
+ * horizontally if there are more instances than fit. */
+.metrics-matrix-wrap { overflow-x: auto; }
+.metrics-matrix th.metrics-num,
+.metrics-matrix td.metrics-num { text-align: right; min-width: 64px; }
+.metrics-matrix thead th { white-space: nowrap; }
+.metrics-matrix tbody td:first-child { white-space: nowrap; position: sticky; left: 0; background: var(--paper-strong); }
+.metrics-dim { color: var(--ink-500); }
+
+.metrics-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--surface-1);
+  border-bottom: 1px solid var(--line);
+}
+
+.metrics-card-meta { display: flex; align-items: center; gap: 8px; }
+
+.metrics-card-count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--ink-500);
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 6px;
+}
+
+.metrics-card-title {
+  font-family: var(--font-heading);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink-900);
+  letter-spacing: 0.02em;
+}
+
+.metrics-card-body { padding: 14px; overflow-x: auto; }
+
+.metrics-stat-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+}
+
+.metrics-stat { padding: 10px; background: var(--surface-2); border-radius: var(--radius-sm); text-align: center; }
+.metrics-stat-value { font-family: var(--font-mono); font-size: 22px; font-weight: 700; color: var(--ink-950); line-height: 1.2; }
+.metrics-stat-label { font-size: 10.5px; color: var(--ink-500); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 2px; }
+
+.metrics-table { width: 100%; border-collapse: collapse; font-family: var(--font-mono); font-size: 11.5px; }
+.metrics-table th {
+  text-align: left;
+  padding: 5px 6px;
+  color: var(--ink-500);
+  font-weight: 600;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid var(--line);
+}
+.metrics-table td { padding: 4px 6px; color: var(--ink-900); border-bottom: 1px solid var(--surface-1); vertical-align: top; }
+.metrics-table tr:hover td { background: var(--surface-2); }
+
+.metrics-num { text-align: right; white-space: nowrap; color: var(--ink-950); }
+.metrics-unit { color: var(--ink-500); white-space: nowrap; }
+.metrics-empty { color: var(--ink-500); font-size: 12px; }
+
+.metrics-label {
+  display: inline-block;
+  font-size: 9.5px;
+  color: var(--ink-500);
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 4px;
+  margin-left: 2px;
+}
+
+.metrics-alert {
+  margin-top: 10px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+}
+.metrics-alert--warn {
+  background: rgba(245, 158, 11, 0.1);
+  color: #b45309; /* NOSONAR — contrast computed against page bg, not rgba tint */
+  border: 1px solid rgba(245, 158, 11, 0.2);
+}
+
+.metrics-loading { text-align: center; padding: 40px; color: var(--ink-500); font-size: 13px; }

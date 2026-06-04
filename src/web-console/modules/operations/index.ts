@@ -23,7 +23,9 @@ export {
   projectOperationalLog,
   projectOperationalMetric,
   projectOperationalMetrics,
+  projectSystemMetrics,
 } from './OperationsPrivacyProjectors.js';
+export type { ISystemMetricsSource } from './SystemMetricsSource.js';
 export type {
   OperatorConfigListDto,
   OperatorConfigSettingDto,

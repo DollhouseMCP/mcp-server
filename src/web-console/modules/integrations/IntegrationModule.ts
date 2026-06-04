@@ -8,6 +8,7 @@ import type { IIntegrationSecurityEventSink } from './IntegrationSecurityEvents.
 import { IntegrationService } from './IntegrationService.js';
 import {
   projectGitHubIntegrationStatus,
+  projectIntegrationConnect,
   projectIntegrationList,
 } from './IntegrationPrivacyProjectors.js';
 
@@ -84,6 +85,7 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
         elevation: 'none',
         privacyClass: 'self_private',
         idempotency: 'required',
+        privacyProjector: projectIntegrationConnect,
         handler: req => service.connectGitHub(req),
       },
       {

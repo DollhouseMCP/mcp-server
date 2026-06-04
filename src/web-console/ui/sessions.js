@@ -131,7 +131,7 @@ function mcpCard(s) {
       <span class="session-icon" aria-hidden="true">&#x1f50c;</span>
       <div class="session-main">
         <div class="session-id-line">${escapeHtml(name)}</div>
-        <div class="session-sub">connected ${relAgo(s.created_at)} · last active ${relAgo(s.last_active_at)}</div>
+        <div class="session-sub">connected ${relAgo(s.created_at)} · last active ${relAgo(s.last_active_at)}${usageFragment(s)}</div>
         ${sidLine(s.session_id)}
       </div>
       <div class="session-badges">${recencyBadge(s.last_active_at)}</div>
@@ -144,6 +144,16 @@ function mcpCard(s) {
 
 function emptyRow(text) {
   return `<div class="session-empty">${escapeHtml(text)}</div>`;
+}
+
+// Per-session request/error counts (from the presence row). Requests always
+// shown; errors only when non-zero, emphasized.
+function usageFragment(s) {
+  const requests = Number(s.request_count || 0);
+  const errors = Number(s.error_count || 0);
+  const reqText = ` · ${requests.toLocaleString()} request${requests === 1 ? '' : 's'}`;
+  const errText = errors > 0 ? ` · <span class="session-err">${errors.toLocaleString()} error${errors === 1 ? '' : 's'}</span>` : '';
+  return reqText + errText;
 }
 
 // The full session ID — small and muted, click to copy. It's the value you'd

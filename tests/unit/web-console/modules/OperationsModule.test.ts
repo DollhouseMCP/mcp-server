@@ -12,7 +12,9 @@ import {
   projectOperationHealthSummary,
   projectOperationalLogs,
   projectOperationalMetrics,
+  projectSystemMetrics,
   type ConsoleRouteDefinition,
+  type ISystemMetricsSource,
   type OperationsHealthChecks,
 } from '../../../../src/web-console/index.js';
 
@@ -27,6 +29,7 @@ const OPERATE_LOGS_PATH = '/api/v1/admin/operate/logs';
 const OPERATE_LOGS_STREAM_PATH = '/api/v1/admin/operate/logs/stream';
 const OPERATE_METRICS_PATH = '/api/v1/admin/operate/metrics';
 const OPERATE_METRICS_STREAM_PATH = '/api/v1/admin/operate/metrics/stream';
+const SYSTEM_METRICS_PATH = '/api/v1/admin/operate/metrics/system';
 const OPERATE_CONFIG_PATH = '/api/v1/admin/operate/config';
 const LICENSE_KEY_PATH = '/api/v1/admin/operate/config/:key';
 const CONSOLE_PORT_KEY = 'console.port';
@@ -714,6 +717,67 @@ describe('OperationsModule', () => {
         },
       }],
     });
+  });
+
+  it('exposes in-process System A metrics, allowlisting snapshot fields', async () => {
+    const source: ISystemMetricsSource = {
+      query: () => ({
+        snapshots: [{
+          id: 'snap-1',
+          timestamp: NOW.toISOString(),
+          durationMs: 5,
+          errors: ['collector failed'],
+          metrics: [
+            { name: 'cache.hits', source: 'lru', unit: 'count', type: 'counter', value: 42, labels: { region: 'us' } },
+            { name: 'op.latency', source: 'perf', unit: 'ms', type: 'histogram', value: { count: 3, sum: 30, min: 5, p95: 20 } },
+          ],
+        }],
+        total: 1,
+        hasMore: false,
+        limit: 50,
+        offset: 0,
+        oldestAvailable: NOW.toISOString(),
+        newestAvailable: NOW.toISOString(),
+      }),
+    };
+    const route = findRoute(createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+      systemMetrics: source,
+      now: () => NOW,
+    }).routes, 'GET', SYSTEM_METRICS_PATH);
+
+    const result = await route.handler({ query: {}, params: {} } as never);
+
+    expect(result.status).toBe(200);
+    expect(projectSystemMetrics(result.body)).toEqual({
+      snapshots: [{
+        id: 'snap-1',
+        timestamp: NOW.toISOString(),
+        duration_ms: 5,
+        errors: ['collector failed'],
+        metrics: [
+          { name: 'cache.hits', source: 'lru', unit: 'count', type: 'counter', value: 42, labels: { region: 'us' } },
+          { name: 'op.latency', source: 'perf', unit: 'ms', type: 'histogram', value: { count: 3, sum: 30, min: 5, p95: 20 } },
+        ],
+      }],
+      total: 1,
+      has_more: false,
+      limit: 50,
+      offset: 0,
+      oldest_available: NOW.toISOString(),
+      newest_available: NOW.toISOString(),
+    });
+  });
+
+  it('returns an empty System A result when metrics collection is disabled (no sink)', async () => {
+    const route = findRoute(createModule().routes, 'GET', SYSTEM_METRICS_PATH);
+
+    const result = await route.handler({ query: {}, params: {} } as never);
+
+    expect(result.status).toBe(200);
+    expect(projectSystemMetrics(result.body)).toMatchObject({ snapshots: [], total: 0, has_more: false });
   });
 
   it('streams operational metrics through SSE update events with allowlisted payloads', async () => {
