@@ -9,6 +9,7 @@ import type {
 } from './ConsolePlatformTypes.js';
 import { serializeConsoleCookie, validateConsoleCookieDirectives } from '../middleware/ConsoleCookies.js';
 import { sendConsoleSseStream } from './ConsoleSseStream.js';
+import { renderAuthErrorPage, requestPrefersHtml } from '../../auth/embedded-as/browserErrorPage.js';
 
 const ALLOWED_HANDLER_HEADERS = new Set<keyof ConsoleResponseHeaders>([
   'ETag',
@@ -111,7 +112,26 @@ export function sendConsoleHandlerResult(response: Response, result: ConsoleHand
     response.status(result.status).end();
     return;
   }
+  // A browser navigation that lands on an error (e.g. a stale /auth/step-up link)
+  // gets a clean HTML page instead of raw problem JSON. XHR/SPA/API clients send
+  // Accept: application/json (or */*) and keep the JSON body unchanged.
+  if (result.status >= 400 && request && requestPrefersHtml(request)) {
+    const problem = asProblemBody(result.body);
+    if (problem) {
+      response.status(result.status).type('text/html')
+        .send(renderAuthErrorPage(result.status, problem.code, problem.detail, '/ui'));
+      return;
+    }
+  }
   response.status(result.status).json(result.body);
+}
+
+function asProblemBody(body: unknown): { code: string; detail: string } | null {
+  if (!body || typeof body !== 'object') return null;
+  const record = body as Record<string, unknown>;
+  const code = typeof record.code === 'string' ? record.code : undefined;
+  const detail = typeof record.detail === 'string' ? record.detail : undefined;
+  return code ? { code, detail: detail ?? '' } : null;
 }
 
 function projectStreamEvent(

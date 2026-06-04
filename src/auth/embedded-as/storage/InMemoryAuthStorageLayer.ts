@@ -105,26 +105,6 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
     return true;
   }
 
-  async setAccountRoles(sub: string, roles: string[]): Promise<boolean> {
-    const existing = this.accountsBySub.get(sub);
-    if (!existing) return false;
-    // Match the round-trip semantics of upsertAccount/getAccount: an
-    // empty roles array becomes `roles: undefined` in the stored shape
-    // so callers comparing `account.roles` see the same thing they'd
-    // see if the field had never been set. The Postgres mapper does
-    // the same coercion in rowToStoredAccount.
-    const next: StoredAccount = {
-      ...existing,
-      updatedAt: Date.now(),
-    };
-    if (roles.length > 0) {
-      next.roles = [...roles];
-    } else {
-      delete next.roles;
-    }
-    this.accountsBySub.set(sub, next);
-    return true;
-  }
 
   // ---- Audit (must-fix #21) ----
 
@@ -278,7 +258,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
       this.genericStore.delete(key);
       return false;
     }
-    const payload = record.payload as Record<string, unknown> & { consumed?: number };
+    const payload = record.payload as (Record<string, unknown> & { consumed?: number }) | undefined;
     if (payload && typeof payload.consumed === 'number') return false;
     // Single-process JS: this read-write pair is atomic against other
     // genericConsume calls on the same key. Two truly-concurrent

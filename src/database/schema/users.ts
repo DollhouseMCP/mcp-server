@@ -18,6 +18,10 @@ export const users = pgTable('users', {
   email: varchar('email', { length: 255 }),
   displayName: varchar('display_name', { length: 255 }),
   disabledAt: timestamp('disabled_at', { withTimezone: true }),
+  // Tombstone marker. Set when an account is deleted but its row must survive to
+  // anchor the tamper-evident audit chain (the row is scrubbed of PII). NULL is
+  // a live account; deleted rows are excluded from the account directory.
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
   authzVersion: bigint('authz_version', { mode: 'number' }).notNull().default(1),
   accountCorrelationId: uuid('account_correlation_id').notNull().defaultRandom(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),

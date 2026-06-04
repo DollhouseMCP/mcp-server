@@ -35,9 +35,11 @@ export class EmbeddedASOidcAccount {
         extras.auth_time = adminClaims.authTime;
       }
     }
-    if (account.roles && account.roles.length > 0) {
-      extras.roles = account.roles;
-    }
+    // Admin is a console-only concept, gated by interactive step-up elevation
+    // (TOTP) that a headless MCP/OAuth client cannot perform — so tokens
+    // deliberately carry NO role claims. Console roles live in user_admin_roles
+    // (per-user) and are resolved live console-side; per-host config admin is
+    // reachable only via the local stdio operator, the console, or the CLI.
     return Object.keys(extras).length > 0 ? extras : undefined;
   }
 

@@ -267,6 +267,20 @@
       "when": 1779060000000,
       "tag": "0037_drop_web_console_portfolio_elements",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1779065000000,
+      "tag": "0038_drop_auth_accounts_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1779070000000,
+      "tag": "0039_add_users_deleted_at",
+      "breakpoints": true
     }
   ]
 }

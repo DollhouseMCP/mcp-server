@@ -20,6 +20,11 @@ export class InMemoryConsoleIdentityResolver implements IConsoleIdentityResolver
     if (!principal || principal.disabledAt) return null;
     return clonePrincipal(principal);
   }
+
+  // In-memory principals are seeded directly (already "linked"); nothing to do.
+  async linkAccount(_sub: string, _displayName?: string): Promise<void> {
+    await Promise.resolve();
+  }
 }
 
 function clonePrincipal(principal: ConsolePrincipalSecurityState): ConsolePrincipalSecurityState {

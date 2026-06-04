@@ -21,13 +21,27 @@ export class ConsoleStoreConflictError extends Error {
 }
 
 export function isUniqueViolation(error: unknown): boolean {
+  return hasPostgresErrorCode(error, '23505');
+}
+
+/**
+ * Postgres foreign-key violation (SQLSTATE 23503). Used by the account
+ * deletion path to detect when a true `DELETE` is refused by a RESTRICT
+ * reference (the tamper-evident audit chain, role-grant authorship, …) so it
+ * can fall back to anonymize-tombstone instead.
+ */
+export function isForeignKeyViolation(error: unknown): boolean {
+  return hasPostgresErrorCode(error, '23503');
+}
+
+function hasPostgresErrorCode(error: unknown, code: string): boolean {
   const seen = new WeakSet<object>();
   let current = error;
   for (let depth = 0; depth < 5; depth += 1) {
     if (!current || typeof current !== 'object') return false;
     if (seen.has(current)) return false;
     seen.add(current);
-    if ('code' in current && current.code === '23505') return true;
+    if ('code' in current && current.code === code) return true;
     current = 'cause' in current ? current.cause : null;
   }
   return false;

@@ -81,6 +81,57 @@ export interface PrincipalProfileUpdateInput {
   readonly updatedAt: Date;
 }
 
+export interface PrincipalDeletionInput {
+  readonly userId: string;
+  readonly deletedAt: Date;
+}
+
+/** One provider login (auth account). Several may resolve to one user. */
+export interface LinkedIdentity {
+  readonly sub: string;
+  readonly provider: string;
+  readonly externalSub: string;
+  readonly email: string | null;
+  readonly emailVerified: boolean;
+  readonly displayName: string | null;
+  readonly linkedUserId: string | null;
+  readonly createdAt: Date;
+  readonly lastAuthAt: Date | null;
+}
+
+export interface IdentityLinkInput {
+  readonly userId: string;
+  readonly sub: string;
+  readonly linkedAt: Date;
+}
+
+export interface IdentityUnlinkInput {
+  readonly userId: string;
+  readonly sub: string;
+  readonly unlinkedAt: Date;
+}
+
+export interface IdentityMutationResult {
+  readonly sub: string;
+  readonly linkedUserId: string | null;
+}
+
+/**
+ * Outcome of a deletion attempt.
+ *
+ * `deleted` — the `users` row was hard-removed (no audit/authorship history
+ * referenced it).
+ * `anonymized` — a RESTRICT reference (the tamper-evident audit chain, a role
+ * grant this user authored, …) blocked the hard delete, so the row was scrubbed
+ * of all identifying data and kept as a PII-free audit anchor (`authzVersion`
+ * is the bumped value). The account is unusable either way.
+ */
+export interface PrincipalDeletionOutcome {
+  readonly userId: string;
+  readonly outcome: 'deleted' | 'anonymized';
+  readonly authzVersion: number | null;
+}
+
 export interface IConsoleAccountAdminStore {
   listPrincipals(query?: PrincipalDirectoryQuery): Promise<ConsolePrincipalSummary[]>;
   findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null>;
@@ -93,6 +144,20 @@ export interface IConsoleAccountAdminStore {
   enablePrincipal(input: PrincipalEnableInput): Promise<PrincipalStateChange | null>;
   bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null>;
   updatePrincipalProfile(input: PrincipalProfileUpdateInput): Promise<ConsolePrincipalSummary | null>;
+  /**
+   * Remove an account: detach its logins, factors and roles, then attempt a
+   * true row delete, falling back to anonymize-tombstone when audit/authorship
+   * RESTRICT references block it. Returns null when the user does not exist.
+   */
+  deletePrincipal(input: PrincipalDeletionInput): Promise<PrincipalDeletionOutcome | null>;
+  /** Provider logins (auth accounts) currently linked to this user. */
+  listLinkedIdentities(userId: string): Promise<LinkedIdentity[]>;
+  /** A single login by its `sub`, with its current link state. Null if unknown. */
+  findIdentityBySub(sub: string): Promise<LinkedIdentity | null>;
+  /** Attach an unlinked login to this user. Returns null when the login is gone. */
+  linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null>;
+  /** Detach a login from this user. Returns null when the login is gone. */
+  unlinkIdentity(input: IdentityUnlinkInput): Promise<IdentityMutationResult | null>;
 }
 
 export const CONSOLE_ADMIN_ROLES = [
@@ -140,6 +205,27 @@ export function validatePrincipalEnableInput(input: PrincipalEnableInput): void 
 
 export function validatePrincipalAuthzVersionBumpInput(input: PrincipalAuthzVersionBumpInput): void {
   assertUuid(input.userId, 'userId');
+}
+
+export function validatePrincipalDeletionInput(input: PrincipalDeletionInput): void {
+  assertUuid(input.userId, 'userId');
+}
+
+export function validateIdentitySub(sub: string, name = 'sub'): void {
+  // `${provider}_${externalSub}` — bounded; auth_accounts.sub is varchar(320).
+  if (sub.trim() === '' || sub.length > 320) {
+    throw new ConsoleStoreValidationError(`${name} must be non-empty and at most 320 characters`);
+  }
+}
+
+export function validateIdentityLinkInput(input: IdentityLinkInput): void {
+  assertUuid(input.userId, 'userId');
+  validateIdentitySub(input.sub);
+}
+
+export function validateIdentityUnlinkInput(input: IdentityUnlinkInput): void {
+  assertUuid(input.userId, 'userId');
+  validateIdentitySub(input.sub);
 }
 
 export function validatePrincipalProfileUpdateInput(input: PrincipalProfileUpdateInput): void {

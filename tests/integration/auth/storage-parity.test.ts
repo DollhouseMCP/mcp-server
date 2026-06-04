@@ -95,86 +95,9 @@ function runContractSuite(
       expect((await storage.getAccount('local_a'))?.provider).toBe('local');
     });
 
-    // Round 5 / B1: roles MUST round-trip through every backend. The bug
-    // this pins: Postgres schema lacked the column; upsertAccount silently
-    // dropped roles, so admin's JWT never carried `roles: ['admin']`. Same
-    // failure shape as Phase 8 (Postgres-not-reachable) and Phase 9 (CAS
-    // atomicity). The structural rule documented in the dashboard requires
-    // every new field on StoredAccount to have a parity assertion BEFORE
-    // being referenced anywhere else in the codebase.
-    it('B1: roles round-trip through upsert + getAccount', async () => {
-      const account = makeAccount({ roles: ['admin'] });
-      await storage.upsertAccount(account);
-      const found = await storage.getAccount(account.sub);
-      expect(found?.roles).toEqual(['admin']);
-    });
-
-    it('B1: empty roles round-trips as empty array (not undefined)', async () => {
-      const account = makeAccount({ roles: [] });
-      await storage.upsertAccount(account);
-      const found = await storage.getAccount(account.sub);
-      // Either undefined or [] is acceptable as long as it's not 'admin'.
-      expect(found?.roles ?? []).toEqual([]);
-    });
-
-    it('B1: omitted roles default to undefined or []', async () => {
-      const account = makeAccount(); // no roles
-      await storage.upsertAccount(account);
-      const found = await storage.getAccount(account.sub);
-      expect(found?.roles ?? []).toEqual([]);
-    });
-
-    it('B1: roles survive upsert idempotency — second write preserves the new roles', async () => {
-      await storage.upsertAccount(makeAccount({ roles: ['admin'] }));
-      await storage.upsertAccount(makeAccount({ email: 'new@example.com', roles: ['admin', 'auditor'] }));
-      const found = await storage.findAccountByExternalId('github', '42');
-      expect(found?.roles).toEqual(['admin', 'auditor']);
-      expect(found?.email).toBe('new@example.com');
-    });
-
-    // Round 5 / H5: setAccountRoles is the role-only write. The
-    // structural rule says any new IAuthStorageLayer method must have
-    // a parity assertion against all three backends, so these are the
-    // canonical contract checks for the new API.
-    it('H5: setAccountRoles writes roles on an existing account', async () => {
-      await storage.upsertAccount(makeAccount());
-      const ok = await storage.setAccountRoles('github_42', ['admin']);
-      expect(ok).toBe(true);
-      const found = await storage.getAccount('github_42');
-      expect(found?.roles).toEqual(['admin']);
-    });
-
-    it('H5: setAccountRoles returns false for an unknown sub (does not create a row)', async () => {
-      const ok = await storage.setAccountRoles('github_does_not_exist', ['admin']);
-      expect(ok).toBe(false);
-      const found = await storage.getAccount('github_does_not_exist');
-      expect(found).toBeNull();
-    });
-
-    it('H5: setAccountRoles preserves the rest of the account row', async () => {
-      // The whole point of the API: write roles WITHOUT clobbering
-      // displayName, email, lastAuthAt, etc. If a backend implements
-      // it as a row-replace this assertion fails immediately.
-      await storage.upsertAccount(makeAccount({
-        email: 'rolesplit@example.com',
-        displayName: 'Pre-existing Display',
-      }));
-      await storage.setAccountRoles('github_42', ['admin', 'auditor']);
-      const found = await storage.getAccount('github_42');
-      expect(found?.email).toBe('rolesplit@example.com');
-      expect(found?.displayName).toBe('Pre-existing Display');
-      expect(found?.roles).toEqual(['admin', 'auditor']);
-    });
-
-    it('H5: setAccountRoles to [] removes all roles', async () => {
-      await storage.upsertAccount(makeAccount({ roles: ['admin'] }));
-      const ok = await storage.setAccountRoles('github_42', []);
-      expect(ok).toBe(true);
-      const found = await storage.getAccount('github_42');
-      // Either undefined or [] is acceptable; what matters is that
-      // 'admin' is gone.
-      expect(found?.roles ?? []).toEqual([]);
-    });
+    // (Removed: auth_accounts.roles round-trip + setAccountRoles parity tests.
+    // Roles are no longer stored on auth accounts — admin lives per-user in
+    // user_admin_roles. See the role-cutover migration 0038.)
 
     it('lastAuthAt round-trips through upsert + getAccount', async () => {
       // Round 5 review fixup (L-R5-14): the field is read by
@@ -235,33 +158,12 @@ function runContractSuite(
       await storage.upsertAccount(makeAccount({
         email: 'lastauth@example.com',
         displayName: 'Pre-existing',
-        roles: ['admin'],
       }));
       await storage.updateAccountLastAuth('github_42', 5555);
       const found = await storage.getAccount('github_42');
       expect(found?.email).toBe('lastauth@example.com');
       expect(found?.displayName).toBe('Pre-existing');
-      expect(found?.roles).toEqual(['admin']);
       expect(found?.lastAuthAt).toBe(5555);
-    });
-
-    it('H5: subsequent upsertAccount without roles preserves roles set via setAccountRoles', async () => {
-      // The whole H5 fix: methods that don't know about a user's role
-      // (every login except the bootstrap admin's first login) must
-      // not clobber roles when they upsert. Verifying the contract
-      // means: setAccountRoles, then upsert again with roles=existing
-      // roles (or undefined), and confirm roles still present.
-      await storage.upsertAccount(makeAccount());
-      await storage.setAccountRoles('github_42', ['admin']);
-      // Method-level pattern: read existing, spread roles into upsert.
-      const existing = await storage.getAccount('github_42');
-      await storage.upsertAccount({
-        ...makeAccount({ email: 'second-login@example.com' }),
-        ...(existing?.roles ? { roles: existing.roles } : {}),
-      });
-      const found = await storage.getAccount('github_42');
-      expect(found?.roles).toEqual(['admin']);
-      expect(found?.email).toBe('second-login@example.com');
     });
   });
 
@@ -559,15 +461,15 @@ function runContractSuite(
         candidates.map((sub) => storage.markBootstrapComplete(sub, 'github')),
       );
       const successes = results.filter((r) => r.status === 'fulfilled');
-      const failures = results.filter((r) => r.status === 'rejected');
+      const failures = results.filter(
+        (r): r is PromiseRejectedResult => r.status === 'rejected',
+      );
       expect(successes.length).toBe(1);
       expect(failures.length).toBe(candidates.length - 1);
       // Every failure must be the admin-transfer rejection, not some
       // other error (network blip, lock contention timeout, etc).
       for (const fail of failures) {
-        if (fail.status === 'rejected') {
-          expect(String(fail.reason)).toMatch(/admin transfer is a separate operation/);
-        }
+        expect(String(fail.reason)).toMatch(/admin transfer is a separate operation/);
       }
       // The winning sub must be one of the candidates and must be what's
       // persisted (not a partial/corrupt write).

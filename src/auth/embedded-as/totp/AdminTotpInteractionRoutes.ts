@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { sendAuthError } from '../browserErrorPage.js';
 import express, { type Request, type Response, type Router } from 'express';
 import QRCode from 'qrcode';
 
@@ -58,7 +59,7 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
         } catch { /* fall back to the typed secret below */ }
         res.type('html').send(renderEnrollmentPage(enrollment.pendingId, enrollment.secretBase32, qrSvg, enrollment.otpauthUri, csrf));
       } catch (err) {
-        sendTotpError(res, err);
+        sendTotpError(res, req, err);
       }
     })().catch(next);
   });
@@ -69,13 +70,13 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
       if (!principal) return;
       const pendingId = formValue(req, 'pending_id');
       if (!pendingId || !(await verifyRouteCsrf(deps.storage, pendingId, principal.userId, formValue(req, 'csrf_token')))) {
-        res.status(403).json({ error: 'invalid_csrf', error_description: 'CSRF token missing or invalid' });
+        sendAuthError(res, req, 403, 'invalid_csrf', 'CSRF token missing or invalid');
         return;
       }
       const rateSubject = adminTotpRateLimitSubject(principal.userId, req.ip);
       const rateLimit = await checkAdminTotpRateLimit(deps.rateLimitStore, ENROLL_CONFIRM_RATE_SCOPE, rateSubject);
       if (!rateLimit.allowed) {
-        res.status(429).json({ error: 'rate_limited', error_description: 'too many enrollment confirmation attempts' });
+        sendAuthError(res, req, 429, 'rate_limited', 'too many enrollment confirmation attempts');
         return;
       }
       try {
@@ -93,7 +94,7 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
         if (err instanceof AdminTotpError && err.code === 'invalid_totp_code') {
           await noteAdminTotpFailure(deps.rateLimitStore, ENROLL_CONFIRM_RATE_SCOPE, rateSubject);
         }
-        sendTotpError(res, err);
+        sendTotpError(res, req, err);
       }
     })().catch(next);
   });
@@ -114,13 +115,13 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
       if (!principal) return;
       const disableId = formValue(req, 'disable_id');
       if (!disableId || !(await verifyRouteCsrf(deps.storage, disableId, principal.userId, formValue(req, 'csrf_token')))) {
-        res.status(403).json({ error: 'invalid_csrf', error_description: 'CSRF token missing or invalid' });
+        sendAuthError(res, req, 403, 'invalid_csrf', 'CSRF token missing or invalid');
         return;
       }
       const rateSubject = adminTotpRateLimitSubject(principal.userId, req.ip);
       const rateLimit = await checkAdminTotpRateLimit(deps.rateLimitStore, DISABLE_CONFIRM_RATE_SCOPE, rateSubject);
       if (!rateLimit.allowed) {
-        res.status(429).json({ error: 'rate_limited', error_description: 'too many disable confirmation attempts' });
+        sendAuthError(res, req, 429, 'rate_limited', 'too many disable confirmation attempts');
         return;
       }
       const disabled = await deps.totpService.disableWithProof(principal.userId, formValue(req, 'code') ?? '');
@@ -151,12 +152,12 @@ async function resolvePrincipal(
   const { provider } = await deps.ensureInitialized();
   const session = provider.Session ? await provider.Session.get({ req, res, secure: req.secure }) : null;
   if (!session?.accountId) {
-    res.status(401).json({ error: 'login_required', error_description: 'primary authentication is required' });
+    sendAuthError(res, req, 401, 'login_required', 'primary authentication is required');
     return null;
   }
   const principal = await deps.identityResolver.resolveEnabledPrincipal(session.accountId);
   if (!principal) {
-    res.status(401).json({ error: 'login_required', error_description: 'principal is disabled or unknown' });
+    sendAuthError(res, req, 401, 'login_required', 'principal is disabled or unknown');
     return null;
   }
   return { userId: principal.userId, sub: principal.sub };
@@ -185,10 +186,10 @@ function formValue(req: Request, field: string): string | undefined {
   return typeof value === 'string' ? value : undefined;
 }
 
-function sendTotpError(res: Response, err: unknown): void {
+function sendTotpError(res: Response, req: Request, err: unknown): void {
   if (err instanceof AdminTotpError) {
     const status = err.code === 'already_enrolled' ? 409 : 400;
-    res.status(status).json({ error: err.code, error_description: err.message });
+    sendAuthError(res, req, status, err.code, err.message);
     return;
   }
   throw err;

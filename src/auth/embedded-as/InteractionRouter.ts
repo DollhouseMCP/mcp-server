@@ -28,6 +28,7 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import express, { type Router, type Request, type Response } from 'express';
 import { logger } from '../../utils/logger.js';
+import { sendAuthError } from './browserErrorPage.js';
 import type {
   IAuthMethod,
   AuthenticatedIdentity,
@@ -220,7 +221,7 @@ async function handleGet(
   try {
     details = await provider.interactionDetails(req, res);
   } catch (err) {
-    sendError(res, 400, 'invalid_interaction', describeError(err));
+    sendError(res, req, 400, 'invalid_interaction', describeError(err));
     return;
   }
 
@@ -244,7 +245,7 @@ async function handleGet(
       interactionId: details.uid,
       error: err instanceof Error ? err.message : String(err),
     });
-    sendError(res, 500, 'server_error', 'method beginInteraction failed');
+    sendError(res, req, 500, 'server_error', 'method beginInteraction failed');
     return;
   }
 
@@ -274,7 +275,7 @@ async function handlePost(
   try {
     details = await provider.interactionDetails(req, res);
   } catch (err) {
-    sendError(res, 400, 'invalid_interaction', describeError(err));
+    sendError(res, req, 400, 'invalid_interaction', describeError(err));
     return;
   }
 
@@ -283,7 +284,7 @@ async function handlePost(
     // POST without a stored method choice — the user submitted the
     // interaction form before picking a method. Tell them to restart
     // rather than silently picking one.
-    sendError(res, 400, 'invalid_interaction', 'no auth method selected; restart sign-in');
+    sendError(res, req, 400, 'invalid_interaction', 'no auth method selected; restart sign-in');
     return;
   }
 
@@ -300,12 +301,12 @@ async function handlePost(
   // is also illegitimate.
   const persistedCsrf = await storage.genericGet(CSRF_MODEL, details.uid) as { token?: string } | null;
   if (!persistedCsrf?.token) {
-    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    sendError(res, req, 403, 'invalid_csrf', 'CSRF token missing or invalid');
     return;
   }
   const submitted = bodyValue(req, 'csrf_token');
   if (!submitted || !constantTimeStringEq(submitted, persistedCsrf.token)) {
-    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    sendError(res, req, 403, 'invalid_csrf', 'CSRF token missing or invalid');
     return;
   }
   // Single-use: destroy regardless of method outcome. A subsequent
@@ -342,12 +343,12 @@ async function handlePost(
       interactionId: details.uid,
       error: err instanceof Error ? err.message : String(err),
     });
-    sendError(res, 500, 'server_error', 'method completeInteraction failed');
+    sendError(res, req, 500, 'server_error', 'method completeInteraction failed');
     return;
   }
 
   if (result.kind === 'denied') {
-    sendError(res, 400, 'access_denied', result.reason);
+    sendError(res, req, 400, 'access_denied', result.reason);
     return;
   }
 
@@ -433,7 +434,7 @@ export async function finishInteractionWithIdentity(
       error: err instanceof Error ? err.message : String(err),
     });
     if (!res.headersSent) {
-      sendError(res, 500, 'server_error', 'Failed to finish interaction');
+      sendError(res, req, 500, 'server_error', 'Failed to finish interaction');
     }
   }
 }
@@ -477,13 +478,13 @@ export async function beginAdminStepUpProof(
   adminStepUp: AdminStepUpInteractionDeps | undefined,
 ): Promise<void> {
   if (!adminStepUp) {
-    sendError(res, 400, 'access_denied', 'administrative step-up is not configured');
+    sendError(res, req, 400, 'access_denied', 'administrative step-up is not configured');
     return;
   }
   const principal = await adminStepUp.identityResolver.resolveEnabledPrincipal(identity.sub);
   if (!principal || !(await adminStepUp.totpService.hasActiveFactor(principal.userId))) {
     await recordAdminProofFailure(storage, identity.sub, 'factor_not_enrolled');
-    sendError(res, 400, 'access_denied', 'administrative TOTP factor is required');
+    sendError(res, req, 400, 'access_denied', 'administrative TOTP factor is required');
     return;
   }
   await storage.genericSet(
@@ -503,14 +504,14 @@ async function completeAdminStepUpProof(
 ): Promise<void> {
   const { provider, details, defaultResource, pending, adminStepUp } = context;
   if (!adminStepUp) {
-    sendError(res, 400, 'access_denied', 'administrative step-up is not configured');
+    sendError(res, req, 400, 'access_denied', 'administrative step-up is not configured');
     return;
   }
   const code = bodyValue(req, 'code') ?? '';
   const rateSubject = adminTotpRateLimitSubject(pending.userId, req.ip);
   const check = await checkAdminTotpRateLimit(adminStepUp.rateLimitStore, ADMIN_TOTP_PROOF_SCOPE, rateSubject);
   if (!check.allowed) {
-    sendError(res, 429, 'rate_limited', 'too many administrative proof attempts');
+    sendError(res, req, 429, 'rate_limited', 'too many administrative proof attempts');
     return;
   }
 
@@ -734,8 +735,8 @@ function constantTimeStringEq(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-function sendError(res: Response, status: number, error: string, description: string): void {
-  res.status(status).json({ error, error_description: description });
+function sendError(res: Response, req: Request, status: number, error: string, description: string): void {
+  sendAuthError(res, req, status, error, description);
 }
 
 function describeError(err: unknown): string {

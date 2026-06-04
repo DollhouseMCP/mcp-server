@@ -139,41 +139,17 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     });
   }
 
-  async setAccountRoles(sub: string, roles: string[]): Promise<boolean> {
-    return this.locks.withLock(`auth:accounts:${this.accountsPath}`, async () => {
-      const accounts = await this.readAccountsRaw();
-      const idx = accounts.findIndex(a => a.sub === sub);
-      if (idx < 0) return false;
-      const next: StoredAccount = {
-        ...accounts[idx],
-        updatedAt: Date.now(),
-      };
-      // Empty array → drop the field entirely so the on-disk shape
-      // matches what upsertAccount({...account /* no roles */}) would
-      // produce. Keeps round-trip parity with InMemory + Postgres.
-      if (roles.length > 0) {
-        next.roles = [...roles];
-      } else {
-        delete next.roles;
-      }
-      accounts[idx] = next;
-      await this.ensureRoot();
-      await this.locks.atomicWriteFile(this.accountsPath, JSON.stringify(accounts, null, 2));
-      return true;
-    });
-  }
-
   // ---- Bootstrap state (must-fix #22) ----
 
   async getBootstrapState(): Promise<BootstrapState> {
     return this.locks.withLock(`auth:bootstrap:${this.bootstrapPath}`, async () => {
       try {
         const raw = await fs.readFile(this.bootstrapPath, 'utf-8');
-        const parsed = JSON.parse(raw) as BootstrapState;
+        const parsed = JSON.parse(raw) as BootstrapState | null;
         // Defensive: fail to "not bootstrapped" rather than to "open" if the
         // file is malformed. The gate stays closed, the operator sees the
         // 503 + actionable message and re-runs the CLI.
-        if (typeof parsed?.completed !== 'boolean') return { completed: false };
+        if (!parsed || typeof parsed.completed !== 'boolean') return { completed: false };
         return parsed;
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -262,7 +238,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
         const stat = await fs.stat(this.auditPath);
         if (stat.size >= FilesystemAuthStorageLayer.AUDIT_ROTATION_THRESHOLD_BYTES) {
           const archived = `${this.auditPath}.1`;
-          await fs.rename(this.auditPath, archived).catch(() => undefined);
+          await fs.rename(this.auditPath, archived).catch(() => {});
           logger.info('[AuthStorage:fs] audit log rotated', {
             from: this.auditPath, to: archived, sizeBytes: stat.size,
           });
@@ -434,7 +410,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       if (record.exp !== null && record.exp <= Date.now()) {
         return false;
       }
-      const value = record.value as Record<string, unknown> & { consumed?: number };
+      const value = record.value as (Record<string, unknown> & { consumed?: number }) | undefined;
       if (value && typeof value.consumed === 'number') return false;
       // Same lock that guards genericSet — this read-modify-write is
       // serialized against any concurrent set/destroy/consume on the

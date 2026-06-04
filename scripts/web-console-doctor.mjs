@@ -97,12 +97,23 @@ if (dbUrl && (!prodDbName || !prodDbUser)) {
   add('Database', PASS, 'Production database identity declared', `${prodDbUser}@${prodDbName}`);
 }
 
-// ── 3. Secrets & keys (mount fails without these) ──────────────────────────
-function keyCheck(name, { base64Bytes } = {}) {
+// ── 3. Secrets & keys ──────────────────────────────────────────────────────
+// Two failure modes matter here:
+//   (1) mount-blocking: a hosted /api/v1 mount refuses without these.
+//   (2) DURABILITY: several secrets silently AUTO-GENERATE a random file-backed
+//       key when unset. That "works" on first boot, but the key then differs
+//       across replicas and is lost if the file is ephemeral — so sessions,
+//       invites, audit hashes, and (critically) enrolled admin TOTP factors
+//       break on restart / across replicas, locking admins out of elevation.
+//       These must be PINNED to a stable value from a durable secret store.
+function isHexMinBytes(v, n) {
+  return /^[0-9a-fA-F]+$/.test(v) && v.length / 2 >= n;
+}
+function keyCheck(name, { base64Bytes, hexMinBytes, unsetLevel, detail, fix } = {}) {
   const v = get(name);
   if (!v) {
-    add('Secrets', apiV1On ? FAIL : WARN, `${name} is not set`,
-      'Required for hosted web-console activation.', `Set ${name}`);
+    add('Secrets', unsetLevel ?? (apiV1On ? FAIL : WARN), `${name} is not set`,
+      detail ?? 'Required for hosted web-console activation.', fix ?? `Set ${name}`);
     return;
   }
   if (base64Bytes && !isBase64Bytes(v, base64Bytes)) {
@@ -111,12 +122,43 @@ function keyCheck(name, { base64Bytes } = {}) {
       `Generate with: openssl rand -base64 ${base64Bytes}`);
     return;
   }
-  add('Secrets', PASS, `${name} present`, base64Bytes ? `valid base64 ${base64Bytes}-byte key` : 'set');
+  if (hexMinBytes && !isHexMinBytes(v, hexMinBytes)) {
+    add('Secrets', FAIL, `${name} is not a hex key of at least ${hexMinBytes} bytes`,
+      `Must be hex decoding to ≥ ${hexMinBytes} bytes.`,
+      `Generate with: openssl rand -hex ${hexMinBytes}`);
+    return;
+  }
+  add('Secrets', PASS, `${name} present`,
+    base64Bytes ? `valid base64 ${base64Bytes}-byte key` : hexMinBytes ? `valid hex key` : 'set');
 }
 keyCheck('DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY', { base64Bytes: 32 });
-keyCheck('DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY');
 keyCheck('DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY', { base64Bytes: 32 });
-keyCheck('DOLLHOUSE_AUDIT_HMAC_SECRET'); // required for Postgres admin audit chain
+// Durability-critical: pin these or risk lockout / data loss on restart.
+keyCheck('DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY', {
+  base64Bytes: 32,
+  detail: 'Encrypts enrolled admin TOTP secrets. If UNSET, admin step-up TOTP does not mount and enrolled authenticators are unusable. If it CHANGES between restarts (e.g. regenerated per deploy instead of pinned), every enrolled factor fails to decrypt ("Secret ciphertext authentication failed") and admins are LOCKED OUT of elevation. Pin it; to rotate, bump _KEY_ID and keep the old key in DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED.',
+  fix: 'Set a STABLE DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY (openssl rand -base64 32) from a durable secret store — never regenerate per boot.',
+});
+keyCheck('DOLLHOUSE_COOKIE_SIGNING_SECRET', {
+  hexMinBytes: 32, unsetLevel: WARN,
+  detail: 'Signs console session cookies. If unset, a RANDOM file-backed key is generated — each replica gets a different key (sessions break across replicas) and losing the file (ephemeral container fs) signs everyone out on restart.',
+  fix: 'Pin DOLLHOUSE_COOKIE_SIGNING_SECRET (openssl rand -hex 32) from a durable secret store.',
+});
+keyCheck('DOLLHOUSE_INVITE_TOKEN_SECRET', {
+  hexMinBytes: 16, unsetLevel: WARN,
+  detail: 'Signs account-invite / magic-link tokens. If unset, a random file-backed key is generated — pending invites/links break on restart or across replicas.',
+  fix: 'Pin DOLLHOUSE_INVITE_TOKEN_SECRET (openssl rand -hex 32).',
+});
+keyCheck('DOLLHOUSE_AUDIT_HMAC_SECRET', {
+  hexMinBytes: 32, unsetLevel: WARN,
+  detail: 'HMAC for the tamper-evident admin audit chain. If unset, a random key is generated + persisted to a local file/DB — fine on one box, but it diverges across replicas and a lost file invalidates prior audit hashes.',
+  fix: 'Pin DOLLHOUSE_AUDIT_HMAC_SECRET (openssl rand -hex 32) for hosted / multi-replica.',
+});
+keyCheck('DOLLHOUSE_MASTER_ENCRYPTION_KEY', {
+  base64Bytes: 32, unsetLevel: dbUrl ? FAIL : WARN,
+  detail: 'Envelope-encrypts stored OAuth/integration tokens. DB mode FAILS FAST without it; if it changes, previously-encrypted tokens become unreadable.',
+  fix: 'Pin DOLLHOUSE_MASTER_ENCRYPTION_KEY (openssl rand -base64 32) — stable across deploys.',
+});
 
 // ── 4. TLS / transport security ────────────────────────────────────────────
 const certPath = get('DOLLHOUSE_TLS_CERT_PATH');

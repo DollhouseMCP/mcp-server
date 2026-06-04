@@ -204,6 +204,10 @@ class ConsoleBffAuthService {
     } catch {
       return failedCallback();
     }
+    // Link this identity to its users row before resolving (idempotent). Lets a
+    // CLI-provisioned admin — whose users row + role exist before any login — be
+    // recognized on first console sign-in, and keeps console + MCP on one user.
+    await this.options.identityResolver.linkAccount(claims.sub, claims.displayName);
     const principal = await this.options.identityResolver.resolveEnabledPrincipal(claims.sub);
     if (!principal) {
       return failedCallback();

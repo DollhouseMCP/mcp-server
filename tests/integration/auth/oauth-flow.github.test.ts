@@ -144,7 +144,7 @@ describe('GithubSocialMethod — OAuth E2E', () => {
   });
 
   afterEach(async () => {
-    if (harness) await harness.close();
+    await harness.close();
   });
 
   it('end-to-end: github redirect → callback → access token', async () => {
@@ -249,12 +249,13 @@ describe('GithubSocialMethod — OAuth E2E', () => {
       type: 'auth.social.identity_changed',
     });
     expect(events.length).toBeGreaterThan(0);
-    const last = events[events.length - 1]!;
-    expect(last.details).toMatchObject({
+    const last = events.at(-1);
+    expect(last).toBeDefined();
+    expect(last?.details).toMatchObject({
       previousEmail: 'octo@example.com',
       newEmail: 'newaddress@example.com',
     });
-    expect(typeof (last.details as { grantsRevoked?: number }).grantsRevoked).toBe('number');
+    expect(typeof (last?.details as { grantsRevoked?: number }).grantsRevoked).toBe('number');
   }, 30_000);
 
   it('callback rejects when state does not match an active interaction', async () => {
@@ -309,8 +310,10 @@ describe('GithubSocialMethod — OAuth E2E', () => {
       method: 'GET', redirect: 'manual',
       headers: { Cookie: jar.header() },
     });
-    const githubLocation = interactionResp.headers.get('location')!;
-    const state = new URL(githubLocation).searchParams.get('state')!;
+    const githubLocation = interactionResp.headers.get('location');
+    expect(githubLocation).toBeTruthy();
+    const state = new URL(githubLocation ?? '').searchParams.get('state');
+    expect(state).toBeTruthy();
 
     const noCookie = await fetch(
       `${harness.publicBaseUrl}/auth/social/github/callback?code=valid-code&state=${state}`,
@@ -323,7 +326,7 @@ describe('GithubSocialMethod — OAuth E2E', () => {
     expect(tokenEndpointCalls).toBe(0);
   }, 30_000);
 
-  it('admin claim: pre-claimed github sub gets roles:["admin"] on JWT (cycle-16)', async () => {
+  it('pre-claimed github admin sub authenticates but the JWT carries NO roles (admin is console-only)', async () => {
     // Rebuild harness without auto-bootstrap so we can pre-claim a
     // specific admin sub.
     await harness.close();
@@ -380,16 +383,14 @@ describe('GithubSocialMethod — OAuth E2E', () => {
     expect(tokenResp.status).toBe(200);
     const tokenBody = await tokenResp.json() as { access_token: string };
 
+    // Token authenticates but carries NO roles — admin is console-only.
     const validation = await harness.as.validate(tokenBody.access_token);
     expect(validation.ok).toBe(true);
     if (validation.ok) {
       expect(validation.claims.sub).toBe(adminSub);
-      expect(validation.claims.roles).toEqual(['admin']);
+      expect(validation.claims.roles ?? []).toEqual([]);
     }
     const decoded = decodeJwt(tokenBody.access_token);
-    expect(decoded.roles).toEqual(['admin']);
-
-    const stored = await storage.getAccount(adminSub);
-    expect(stored?.roles).toEqual(['admin']);
+    expect(decoded.roles).toBeUndefined();
   }, 30_000);
 });

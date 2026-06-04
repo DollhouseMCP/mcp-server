@@ -31,7 +31,7 @@
 import { Command } from 'commander';
 import { createHash } from 'node:crypto';
 import { env } from '../config/env.js';
-import { openCliAuthStorage } from './cliAuthStorage.js';
+import { openCliAuthStorage, type CliAuthStorageHandle } from './cliAuthStorage.js';
 import { recordBootstrapCompleted, type BootstrapAdminMethod } from '../auth/embedded-as/bootstrapAdmin.js';
 
 interface BootstrapOptions {
@@ -111,7 +111,7 @@ function magicLinkSubFromEmail(email: string): string {
 }
 
 function isValidEmail(value: string): boolean {
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value); // NOSONAR — anchored email regex; quantifiers separated by literal anchors (@ and .); CLI input bounded by operator-typed length
+  return /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/.test(value); // NOSONAR — anchored email regex; quantifiers separated by literal anchors (@ and .); CLI input bounded by operator-typed length
 }
 
 function parseAndValidateOptions(): BootstrapOptions {
@@ -192,28 +192,27 @@ function bootstrapMagicLinkAdmin(opts: BootstrapOptions): BootstrapIdentity {
   return { adminSub: magicLinkSubFromEmail(opts.email), adminMethod: 'magic-link' };
 }
 
-async function main(): Promise<void> {
-  const opts = parseAndValidateOptions();
-  const { adminSub, adminMethod } = await resolveBootstrapIdentity(opts);
-
-  // Round 5 post-triage HIGH-1: openCliAuthStorage handles all three
-  // backends including postgres (which the previous direct
-  // createAuthStorage call could not — it requires an injected
-  // DatabaseInstance from the DI container, which CLIs don't have).
-  let handle;
+async function openStorageOrExit(adminMethod: BootstrapIdentity['adminMethod']): Promise<CliAuthStorageHandle> {
+  // Round 5 post-triage HIGH-1: openCliAuthStorage handles all three backends
+  // including postgres (which the previous direct createAuthStorage call could
+  // not — it requires an injected DatabaseInstance from the DI container).
   try {
-    handle = await openCliAuthStorage({ methods: [adminMethod] });
+    return await openCliAuthStorage({ methods: [adminMethod] });
   } catch (err) {
-    process.stderr.write(
-      `Failed to initialize auth storage: ${err instanceof Error ? err.message : String(err)}\n`,
-    );
-    process.exit(2);
+    process.stderr.write(`Failed to initialize auth storage: ${describeBootstrapError(err)}\n`);
+    return process.exit(2);
   }
+}
 
+async function markBootstrapOrExit(
+  handle: CliAuthStorageHandle,
+  adminSub: string,
+  adminMethod: BootstrapIdentity['adminMethod'],
+): Promise<void> {
   try {
     await handle.storage.markBootstrapComplete(adminSub, adminMethod);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = describeBootstrapError(err);
     await handle.close();
     if (msg.includes('admin transfer is a separate operation')) {
       process.stderr.write(`${msg}\n`);
@@ -222,32 +221,59 @@ async function main(): Promise<void> {
     process.stderr.write(`Failed to mark bootstrap complete: ${msg}\n`);
     process.exit(2);
   }
+}
 
+async function emitBootstrapAudit(
+  handle: CliAuthStorageHandle,
+  adminSub: string,
+  adminMethod: BootstrapIdentity['adminMethod'],
+): Promise<void> {
   // Cycle 19 / test-M1 + cycle 22: route through the shared
-  // `recordBootstrapCompleted` helper so the assertion lives at the
-  // helper level (not duplicated inline) AND the CLI invocation can
-  // be tested by spying on the helper. The helper emits with
-  // `via: 'admin-bootstrap-cli'` to distinguish from the implicit
-  // `dollhouse-create-user` path.
+  // `recordBootstrapCompleted` helper so the assertion lives at the helper level
+  // and the CLI invocation can be tested by spying on the helper. An audit
+  // emission failure must NOT fail the bootstrap — the state is already persisted.
   try {
-    await recordBootstrapCompleted(
-      handle.storage,
-      adminSub,
-      adminMethod as BootstrapAdminMethod,
-      'admin-bootstrap-cli',
-    );
+    await recordBootstrapCompleted(handle.storage, adminSub, adminMethod as BootstrapAdminMethod, 'admin-bootstrap-cli');
   } catch (err) {
-    // Audit emission failure shouldn't fail the bootstrap itself —
-    // the bootstrap state was already persisted above. Log + continue.
     process.stderr.write(
-      `[admin bootstrap] warning: failed to emit auth.bootstrap.completed audit event: ` +
-      `${err instanceof Error ? err.message : String(err)}\n`,
+      `[admin bootstrap] warning: failed to emit auth.bootstrap.completed audit event: ${describeBootstrapError(err)}\n`,
     );
   }
+}
+
+async function provisionConsoleAdminRole(handle: CliAuthStorageHandle, adminSub: string): Promise<void> {
+  // DB mode only: the operator designates the admin at setup, so the role is
+  // granted up front (the credential is still set by the user/IdP on first
+  // login, at which point the account auto-links to this user row by sub).
+  // Non-DB backends have no console role store — admin there is the stdio operator.
+  if (!handle.db) return;
+  try {
+    const { provisionConsoleAdmin } = await import('../web-console/identity/provisionConsoleAdmin.js');
+    const result = await provisionConsoleAdmin(handle.db, adminSub);
+    process.stdout.write(`Console admin provisioned in user_admin_roles (user ${result.userId}).\n`);
+  } catch (err) {
+    process.stderr.write(`[admin bootstrap] warning: failed to provision console admin role: ${describeBootstrapError(err)}\n`);
+  }
+}
+
+function describeBootstrapError(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function main(): Promise<void> {
+  const opts = parseAndValidateOptions();
+  const { adminSub, adminMethod } = await resolveBootstrapIdentity(opts);
+
+  const handle = await openStorageOrExit(adminMethod);
+  await markBootstrapOrExit(handle, adminSub, adminMethod);
+  await emitBootstrapAudit(handle, adminSub, adminMethod);
+  await provisionConsoleAdminRole(handle, adminSub);
 
   process.stdout.write(
     `Bootstrap recorded. Admin sub: ${adminSub} (method: ${adminMethod}).\n` +
-    `When this user authenticates, they will be granted admin role.\n`,
+    (handle.db
+      ? `Admin role is set now; ${adminSub} has admin the moment they log in (login only establishes their credential).\n`
+      : `When this user authenticates, they will be granted admin role.\n`),
   );
   await handle.close();
 }

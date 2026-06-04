@@ -3,13 +3,19 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
-import { userAdminRoles, users } from '../../database/schema/index.js';
+import { accountFactors, authAccounts, userAdminRoles, users } from '../../database/schema/index.js';
 import type {
   ConsoleAdminRole,
   ConsolePrincipalSummary,
   ConsoleRoleAssignment,
   IConsoleAccountAdminStore,
+  IdentityLinkInput,
+  IdentityMutationResult,
+  IdentityUnlinkInput,
+  LinkedIdentity,
   PrincipalAuthzVersionBumpInput,
+  PrincipalDeletionInput,
+  PrincipalDeletionOutcome,
   PrincipalDirectoryQuery,
   PrincipalDisableInput,
   PrincipalEnableInput,
@@ -22,10 +28,14 @@ import {
   assertAdminRole,
   clonePrincipalSummary,
   cloneRoleAssignment,
+  validateIdentityLinkInput,
+  validateIdentitySub,
+  validateIdentityUnlinkInput,
   validatePrincipalDirectoryQuery,
   validatePrincipalDisableInput,
   validatePrincipalEnableInput,
   validatePrincipalAuthzVersionBumpInput,
+  validatePrincipalDeletionInput,
   validatePrincipalProfileUpdateInput,
   validateRoleGrantInput,
   validateRoleRevokeInput,
@@ -33,6 +43,7 @@ import {
 import {
   ConsoleStoreConflictError,
   assertUuid,
+  isForeignKeyViolation,
   isUniqueViolation,
 } from './ConsoleStoreValidation.js';
 
@@ -98,10 +109,11 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
         FROM user_admin_roles uar
         WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
       ) role_summary ON true
-      WHERE (${query.sub ?? null}::TEXT IS NULL OR EXISTS (
-        SELECT 1 FROM auth_accounts aa
-        WHERE aa.user_id = u.id AND aa.sub = ${query.sub ?? null}
-      ))
+      WHERE u.deleted_at IS NULL
+        AND (${query.sub ?? null}::TEXT IS NULL OR EXISTS (
+          SELECT 1 FROM auth_accounts aa
+          WHERE aa.user_id = u.id AND aa.sub = ${query.sub ?? null}
+        ))
       ORDER BY u.created_at ASC, u.id ASC
       LIMIT ${limit}
     `));
@@ -168,6 +180,34 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
 
   async bumpPrincipalAuthzVersion(input: PrincipalAuthzVersionBumpInput): Promise<PrincipalStateChange | null> {
     return withSystemContext(this.db, tx => bumpConsolePrincipalAuthzVersionWithTx(tx, input));
+  }
+
+  async deletePrincipal(input: PrincipalDeletionInput): Promise<PrincipalDeletionOutcome | null> {
+    return withSystemContext(this.db, tx => deleteConsolePrincipalWithTx(tx, input));
+  }
+
+  async listLinkedIdentities(userId: string): Promise<LinkedIdentity[]> {
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select(IDENTITY_COLUMNS).from(authAccounts)
+        .where(eq(authAccounts.userId, userId))
+        .orderBy(authAccounts.createdAt, authAccounts.sub));
+    return rows.map(toLinkedIdentity);
+  }
+
+  async findIdentityBySub(sub: string): Promise<LinkedIdentity | null> {
+    validateIdentitySub(sub);
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select(IDENTITY_COLUMNS).from(authAccounts).where(eq(authAccounts.sub, sub)).limit(1));
+    return rows[0] ? toLinkedIdentity(rows[0]) : null;
+  }
+
+  async linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null> {
+    return withSystemContext(this.db, tx => linkConsoleIdentityWithTx(tx, input));
+  }
+
+  async unlinkIdentity(input: IdentityUnlinkInput): Promise<IdentityMutationResult | null> {
+    return withSystemContext(this.db, tx => unlinkConsoleIdentityWithTx(tx, input));
   }
 
   async updatePrincipalProfile(input: PrincipalProfileUpdateInput): Promise<ConsolePrincipalSummary | null> {
@@ -325,6 +365,116 @@ export async function bumpConsolePrincipalAuthzVersionWithTx(
   } : null;
 }
 
+export async function deleteConsolePrincipalWithTx(
+  tx: DrizzleTx,
+  input: PrincipalDeletionInput,
+): Promise<PrincipalDeletionOutcome | null> {
+  validatePrincipalDeletionInput(input);
+  const existing = await tx.select({ id: users.id }).from(users)
+    .where(and(eq(users.id, input.userId), isNull(users.deletedAt))).limit(1).for('update');
+  if (existing.length === 0) return null;
+
+  // Detach the account's own identity/credential/role surface first, so the
+  // login stops working on either branch and so these rows don't themselves
+  // block a hard delete (auth_accounts.user_id is SET NULL, but we remove the
+  // login records entirely; factors + own role rows would otherwise cascade).
+  await tx.delete(authAccounts).where(eq(authAccounts.userId, input.userId));
+  await tx.delete(accountFactors).where(eq(accountFactors.userId, input.userId));
+  await tx.delete(userAdminRoles).where(eq(userAdminRoles.userId, input.userId));
+
+  // Attempt the true delete inside a savepoint. A RESTRICT reference from the
+  // tamper-evident audit chain (or a role this user granted to someone else)
+  // raises 23503; we roll back just the DELETE and anonymize-tombstone instead.
+  try {
+    await tx.transaction(async sp => {
+      await sp.delete(users).where(eq(users.id, input.userId));
+    });
+    return { userId: input.userId, outcome: 'deleted', authzVersion: null };
+  } catch (error) {
+    if (!isForeignKeyViolation(error)) throw error;
+    const rows = await tx.update(users).set({
+      // Username is NOT NULL + unique; the id guarantees a unique tombstone.
+      username: `deleted-${input.userId}`,
+      email: null,
+      displayName: null,
+      externalId: null,
+      disabledAt: input.deletedAt,
+      deletedAt: input.deletedAt,
+      authzVersion: sql`${users.authzVersion} + 1`,
+      updatedAt: input.deletedAt,
+    }).where(eq(users.id, input.userId)).returning({ authzVersion: users.authzVersion });
+    return {
+      userId: input.userId,
+      outcome: 'anonymized',
+      authzVersion: rows[0] ? Number(rows[0].authzVersion) : null,
+    };
+  }
+}
+
+export async function linkConsoleIdentityWithTx(
+  tx: DrizzleTx,
+  input: IdentityLinkInput,
+): Promise<IdentityMutationResult | null> {
+  validateIdentityLinkInput(input);
+  // Only an UNLINKED login can be attached; the service rejects already-linked
+  // targets up front, and this WHERE makes the write itself race-safe.
+  const rows = await tx.update(authAccounts)
+    .set({ userId: input.userId, updatedAt: input.linkedAt })
+    .where(and(eq(authAccounts.sub, input.sub), isNull(authAccounts.userId)))
+    .returning({ sub: authAccounts.sub, userId: authAccounts.userId });
+  return rows[0] ? { sub: rows[0].sub, linkedUserId: rows[0].userId } : null;
+}
+
+export async function unlinkConsoleIdentityWithTx(
+  tx: DrizzleTx,
+  input: IdentityUnlinkInput,
+): Promise<IdentityMutationResult | null> {
+  validateIdentityUnlinkInput(input);
+  const rows = await tx.update(authAccounts)
+    .set({ userId: null, updatedAt: input.unlinkedAt })
+    .where(and(eq(authAccounts.sub, input.sub), eq(authAccounts.userId, input.userId)))
+    .returning({ sub: authAccounts.sub, userId: authAccounts.userId });
+  return rows[0] ? { sub: rows[0].sub, linkedUserId: rows[0].userId } : null;
+}
+
+const IDENTITY_COLUMNS = {
+  sub: authAccounts.sub,
+  provider: authAccounts.provider,
+  externalSub: authAccounts.externalSub,
+  email: authAccounts.email,
+  emailVerified: authAccounts.emailVerified,
+  displayName: authAccounts.displayName,
+  userId: authAccounts.userId,
+  createdAt: authAccounts.createdAt,
+  lastAuthAt: authAccounts.lastAuthAt,
+} as const;
+
+type IdentityColumnRow = {
+  sub: string;
+  provider: string;
+  externalSub: string;
+  email: string | null;
+  emailVerified: boolean;
+  displayName: string | null;
+  userId: string | null;
+  createdAt: Date;
+  lastAuthAt: number | null;
+};
+
+function toLinkedIdentity(row: IdentityColumnRow): LinkedIdentity {
+  return {
+    sub: row.sub,
+    provider: row.provider,
+    externalSub: row.externalSub,
+    email: row.email,
+    emailVerified: row.emailVerified,
+    displayName: row.displayName,
+    linkedUserId: row.userId,
+    createdAt: new Date(row.createdAt.getTime()),
+    lastAuthAt: row.lastAuthAt === null ? null : new Date(Number(row.lastAuthAt)),
+  };
+}
+
 async function revokeConsoleAdminRoleRowsWithTx(
   tx: DrizzleTx,
   input: RoleRevokeInput,
@@ -441,7 +591,7 @@ function principalProjectionSql(whereClause: ReturnType<typeof sql>) {
       FROM user_admin_roles uar
       WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
     ) role_summary ON true
-    WHERE ${whereClause}
+    WHERE u.deleted_at IS NULL AND (${whereClause})
   `;
 }
 

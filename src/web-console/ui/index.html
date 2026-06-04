@@ -62,6 +62,8 @@
           <button class="console-tab" data-tab="logs">Logs</button>
           <button class="console-tab" data-tab="metrics">Metrics</button>
           <button class="console-tab" data-tab="integrations">Integrations</button>
+          <!-- Admin-only: revealed by app.js only while elevated with console:admin:accounts. -->
+          <button class="console-tab console-tab--admin" data-tab="users" data-admin-cap="console:admin:accounts" hidden>Users</button>
         </nav>
       </div>
     </header>
@@ -84,6 +86,9 @@
       </div>
       <div id="tab-integrations" class="tab-panel" hidden role="region" aria-label="Integrations">
         <div class="panel-placeholder">Integrations — coming next.</div>
+      </div>
+      <div id="tab-users" class="tab-panel" hidden role="region" aria-label="User administration">
+        <div class="panel-placeholder">Loading users…</div>
       </div>
     </main>
   </div>

@@ -74,7 +74,6 @@ import {
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 import { EMBEDDED_AS_CONSOLE_CLIENT_ID } from './ConsoleOAuthClientConstants.js';
 import { EmbeddedASBootstrap } from './EmbeddedASBootstrap.js';
-import { EmbeddedASAdmin } from './EmbeddedASAdmin.js';
 import { EmbeddedASOidcAccount } from './EmbeddedASOidcAccount.js';
 import {
   ALGORITHM,
@@ -237,7 +236,6 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly openDCR: boolean;
   private readonly signingKeyStore: ISigningKeyStore | null;
   private readonly bootstrap: EmbeddedASBootstrap;
-  private readonly admin: EmbeddedASAdmin;
   private readonly tokens: EmbeddedASTokens;
   private readonly oidcAccount: EmbeddedASOidcAccount;
   private readonly adminTotpService: AdminTotpService | null;
@@ -285,11 +283,6 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       this.storage,
       () => this.bootstrapReadyLatch,
       (ready) => { this.bootstrapReadyLatch = ready; },
-    );
-    this.admin = new EmbeddedASAdmin(
-      this,
-      this.storage,
-      () => this.getProtectedResourceMetadataUrl(),
     );
     this.tokens = new EmbeddedASTokens(
       () => this.ensureInitialized(),
@@ -420,19 +413,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // intercepts /authorize, /token, /interaction/*, /auth/*.
     router.use(this.createBootstrapGate());
 
-    // Round 5 / H7: GET /auth/admin/me — admin-role enforcement
-    // endpoint. Closes the must-fix #22 loop end-to-end: CLI sets
-    // bootstrap-state → setAccountRoles writes ['admin'] →
-    // extraTokenClaims emits roles → assertHasRole('admin') gates
-    // this route. Without a route that actually reads the role, the
-    // dashboard's "admin claim flows" claim was unverifiable.
-    //
-    // Mounted AFTER the bootstrap gate so pre-bootstrap requests get
-    // the same 503 as every other auth-flow path. Post-bootstrap, the
-    // route validates the bearer token via this.validate(), then
-    // delegates to assertHasRole('admin'); a non-admin valid token
-    // gets 403, no token / invalid token gets 401.
-    router.get('/auth/admin/me', this.createAdminMeHandler());
+    // (Removed: GET /auth/admin/me. Admin is now a console-only concept resolved
+    // from user_admin_roles; tokens carry no roles, so a token-admin endpoint
+    // has nothing to gate on.)
 
     if (this.adminTotpService && this.consoleIdentityResolver) {
       mountAdminTotpInteractionRoutes(router, {
@@ -596,19 +579,6 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     return this.bootstrap.createBootstrapGate();
   }
 
-  /**
-   * Build the GET /auth/admin/me handler chain.
-   *
-   * Validates the bearer token via this.validate() (the same path the
-   * unified auth middleware uses), populates res.locals.authClaims so
-   * assertHasRole reads the same shape the rest of the codebase does,
-   * then assertHasRole('admin') gates the actual handler. Body is
-   * minimal — a stable shape for operator tooling that wants to verify
-   * "yes, I'm authenticated as the admin".
-   */
-  private createAdminMeHandler(): RequestHandler[] {
-    return this.admin.createAdminMeHandler();
-  }
 
   private async handleAuthorizationServerMetadata(_req: Request, res: Response): Promise<void> {
     // Synthesize the RFC 8414 metadata. This is a strict subset of the

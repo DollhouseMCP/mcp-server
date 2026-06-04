@@ -9,7 +9,13 @@ import type {
   ConsolePrincipalSummary,
   ConsoleRoleAssignment,
   IConsoleAccountAdminStore,
+  IdentityLinkInput,
+  IdentityMutationResult,
+  IdentityUnlinkInput,
+  LinkedIdentity,
   PrincipalAuthzVersionBumpInput,
+  PrincipalDeletionInput,
+  PrincipalDeletionOutcome,
   PrincipalDirectoryQuery,
   PrincipalDisableInput,
   PrincipalEnableInput,
@@ -21,10 +27,14 @@ import type {
 import {
   clonePrincipalSummary,
   cloneRoleAssignment,
+  validateIdentityLinkInput,
+  validateIdentitySub,
+  validateIdentityUnlinkInput,
   validatePrincipalDirectoryQuery,
   validatePrincipalDisableInput,
   validatePrincipalEnableInput,
   validatePrincipalAuthzVersionBumpInput,
+  validatePrincipalDeletionInput,
   validatePrincipalProfileUpdateInput,
   validateRoleGrantInput,
   validateRoleRevokeInput,
@@ -33,10 +43,17 @@ import {
 export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminStore {
   private readonly principals = new Map<string, ConsolePrincipalSummary>();
   private readonly roles = new Map<string, ConsoleRoleAssignment>();
+  private readonly identities = new Map<string, LinkedIdentity>();
 
-  constructor(initialPrincipals: readonly ConsolePrincipalSummary[] = []) {
+  constructor(
+    initialPrincipals: readonly ConsolePrincipalSummary[] = [],
+    initialIdentities: readonly LinkedIdentity[] = [],
+  ) {
     for (const principal of initialPrincipals) {
       this.addInitialPrincipal(principal);
+    }
+    for (const identity of initialIdentities) {
+      this.identities.set(identity.sub, cloneLinkedIdentity(identity));
     }
   }
 
@@ -191,6 +208,59 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return this.withCurrentRoles(updated);
   }
 
+  async deletePrincipal(input: PrincipalDeletionInput): Promise<PrincipalDeletionOutcome | null> {
+    await Promise.resolve();
+    validatePrincipalDeletionInput(input);
+    const principal = this.principals.get(input.userId);
+    if (!principal) return null;
+    // The in-memory backend models no FK graph, so a delete always fully
+    // removes the principal and its role assignments. The drop-vs-tombstone
+    // distinction is a Postgres-FK behavior, exercised by the integration tests.
+    this.principals.delete(input.userId);
+    for (const [id, assignment] of this.roles) {
+      if (assignment.userId === input.userId) this.roles.delete(id);
+    }
+    return { userId: input.userId, outcome: 'deleted', authzVersion: null };
+  }
+
+  async listLinkedIdentities(userId: string): Promise<LinkedIdentity[]> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    return [...this.identities.values()]
+      .filter(identity => identity.linkedUserId === userId)
+      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime())
+      .map(cloneLinkedIdentity);
+  }
+
+  async findIdentityBySub(sub: string): Promise<LinkedIdentity | null> {
+    await Promise.resolve();
+    validateIdentitySub(sub);
+    const identity = this.identities.get(sub);
+    return identity ? cloneLinkedIdentity(identity) : null;
+  }
+
+  async linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null> {
+    await Promise.resolve();
+    validateIdentityLinkInput(input);
+    const identity = this.identities.get(input.sub);
+    // Only an unlinked login can be attached (mirrors the Postgres WHERE).
+    if (!identity) return null;
+    if (identity.linkedUserId !== null) return null;
+    const updated = { ...identity, linkedUserId: input.userId };
+    this.identities.set(input.sub, updated);
+    return { sub: updated.sub, linkedUserId: updated.linkedUserId };
+  }
+
+  async unlinkIdentity(input: IdentityUnlinkInput): Promise<IdentityMutationResult | null> {
+    await Promise.resolve();
+    validateIdentityUnlinkInput(input);
+    const identity = this.identities.get(input.sub);
+    if (!identity || identity.linkedUserId !== input.userId) return null;
+    const updated = { ...identity, linkedUserId: null };
+    this.identities.set(input.sub, updated);
+    return { sub: updated.sub, linkedUserId: null };
+  }
+
   private withCurrentRoles(principal: ConsolePrincipalSummary): ConsolePrincipalSummary {
     return clonePrincipalSummary({
       ...principal,
@@ -245,6 +315,14 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
       authzVersion: principal.authzVersion + 1,
     }));
   }
+}
+
+function cloneLinkedIdentity(identity: LinkedIdentity): LinkedIdentity {
+  return {
+    ...identity,
+    createdAt: new Date(identity.createdAt.getTime()),
+    lastAuthAt: identity.lastAuthAt ? new Date(identity.lastAuthAt.getTime()) : null,
+  };
 }
 
 function stateChangeFromPrincipal(

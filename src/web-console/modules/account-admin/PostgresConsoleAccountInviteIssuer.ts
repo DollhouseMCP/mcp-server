@@ -96,7 +96,6 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
         rawProfile: null,
         passwordHash: null,
         lastAuthAt: null,
-        roles: [],
         createdAt: input.issuedAt,
         updatedAt: input.issuedAt,
       });

@@ -1,6 +1,7 @@
 import type { RequestHandler } from 'express';
 
 import { logger } from '../../utils/logger.js';
+import { renderAuthErrorPage, requestPrefersHtml } from './browserErrorPage.js';
 import type { IAuthMethod } from './IAuthMethod.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
@@ -98,22 +99,33 @@ export class EmbeddedASBootstrap {
           next();
           return;
         }
-        res.status(503).json({
-          error: 'bootstrap_required',
-          error_description:
-            'This authorization server has not been bootstrapped. ' +
-            'An operator must claim the first admin identity before any ' +
-            'authentication flow is accepted.',
-          next_step: this.bootstrapHint(),
-        });
+        const requiredDescription =
+          'This authorization server has not been bootstrapped. ' +
+          'An operator must claim the first admin identity before any ' +
+          'authentication flow is accepted.';
+        if (requestPrefersHtml(req)) {
+          res.status(503).type('text/html')
+            .send(renderAuthErrorPage(503, 'bootstrap_required', requiredDescription));
+        } else {
+          res.status(503).json({
+            error: 'bootstrap_required',
+            error_description: requiredDescription,
+            next_step: this.bootstrapHint(),
+          });
+        }
       } catch (err) {
         logger.error('[EmbeddedAuthorizationServer] bootstrap-gate storage read failed', {
           error: err instanceof Error ? err.message : String(err),
         });
-        res.status(503).json({
-          error: 'bootstrap_check_unavailable',
-          error_description: 'Unable to verify bootstrap state. Try again shortly.',
-        });
+        if (requestPrefersHtml(req)) {
+          res.status(503).type('text/html')
+            .send(renderAuthErrorPage(503, 'bootstrap_check_unavailable', 'Unable to verify bootstrap state. Try again shortly.'));
+        } else {
+          res.status(503).json({
+            error: 'bootstrap_check_unavailable',
+            error_description: 'Unable to verify bootstrap state. Try again shortly.',
+          });
+        }
       }
     };
   }

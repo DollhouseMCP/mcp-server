@@ -30,6 +30,7 @@
  */
 
 import type { Router } from 'express';
+import { sendAuthError } from '../browserErrorPage.js';
 import { logger } from '../../../utils/logger.js';
 import type {
   AuthenticatedIdentity,
@@ -43,7 +44,6 @@ import type {
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
 import { beginAdminStepUpProof, finishInteractionWithIdentity, isAdminStepUpRequest } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
-import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
 import {
   GITHUB_API_EMAILS_URL,
@@ -231,7 +231,7 @@ export class GithubSocialMethod implements IAuthMethod {
           const code = typeof req.query.code === 'string' ? req.query.code : '';
           const state = typeof req.query.state === 'string' ? req.query.state : '';
           if (!code || !state) {
-            res.status(400).json({ error: 'github_callback_failed', error_description: 'missing code or state' });
+            sendAuthError(res, req, 400, 'github_callback_failed', 'missing code or state');
             return;
           }
 
@@ -257,7 +257,7 @@ export class GithubSocialMethod implements IAuthMethod {
 
           const result = await this.processCallback({ code, state });
           if (result.kind === 'error') {
-            res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
+            sendAuthError(res, req, 400, 'github_callback_failed', result.reason);
             return;
           }
           if (result.kind === 'denied') {
@@ -394,8 +394,8 @@ export class GithubSocialMethod implements IAuthMethod {
     // link bootstrap admin getting accidentally promoted via a github
     // login that happens to have the same numeric tail. Round 5 / H5 —
     // see bootstrapAdmin.ts for the upsert/setRoles split.
-    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, identity.sub, 'github');
-
+    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
+    // (linked on first login), not stamped onto the auth account.
     const now = Date.now();
     await this.options.storage.upsertAccount({
       sub: identity.sub,
@@ -407,13 +407,7 @@ export class GithubSocialMethod implements IAuthMethod {
       rawProfile: profile.raw,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      // Preserve existing roles across the upsert; setAccountRoles
-      // below applies the admin-role write only on the bootstrap path.
-      ...(existing?.roles ? { roles: existing.roles } : {}),
     });
-    if (isBootstrapAdmin) {
-      await this.options.storage.setAccountRoles(identity.sub, ['admin']);
-    }
 
     return { kind: 'ok', interactionId: input.state, identity };
   }

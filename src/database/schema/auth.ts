@@ -64,14 +64,8 @@ export const authAccounts = pgTable('auth_accounts', {
   passwordHash: text('password_hash'),
   /** Epoch ms of most recent successful authentication (must-fix #12 auth_time source). */
   lastAuthAt: bigint('last_auth_at', { mode: 'number' }),
-  /**
-   * Authorization roles attached to this account (must-fix #22 admin
-   * pre-claim, plus future role assignments). Default `[]` so existing
-   * rows have a sentinel and the mapper never has to handle null
-   * separately from undefined. The bootstrap CLI sets `['admin']` on
-   * the pre-claimed admin identity; everyone else has [].
-   */
-  roles: jsonb('roles').$type<string[]>().notNull().default([]),
+  // (Removed `roles`: authorization roles are per-user in `user_admin_roles`,
+  // the authoritative store. Auth accounts no longer carry roles.)
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 }, (table) => [

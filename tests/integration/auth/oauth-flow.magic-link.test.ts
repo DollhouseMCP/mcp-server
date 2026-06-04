@@ -23,9 +23,10 @@ import {
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
+import type {
+  CookieJar} from './oauth-flow-helpers.js';
 import {
   type ASHarness,
-  CookieJar,
   followToCodeRedirect,
   getFreePort,
   startAuthorizeFlow,
@@ -42,6 +43,12 @@ class CollectingEmailSender implements EmailSender {
   async sendMagicLink(input: SendMagicLinkInput): Promise<void> {
     this.sent.push(input);
   }
+}
+
+function tokenFromMagicUrl(magicUrl: string): string {
+  const token = new URL(magicUrl).searchParams.get('token');
+  expect(token).toBeTruthy();
+  return token ?? '';
 }
 
 async function fetchAuthServerMetadata(baseUrl: string) {
@@ -101,7 +108,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
   });
 
   afterEach(async () => {
-    if (harness) await harness.close();
+    await harness.close();
   });
 
   async function bootHarness(): Promise<void> {
@@ -154,7 +161,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(await verifyGet.text()).toContain('Confirm sign-in');
 
     // POST consumes the token + completes the OAuth interaction.
-    const tokenParam = new URL(magicUrl).searchParams.get('token')!;
+    const tokenParam = tokenFromMagicUrl(magicUrl);
     const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
@@ -264,7 +271,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       resource: `${harness.publicBaseUrl}/mcp`, scope: OAUTH_SCOPES,
     });
     await postRequestLinkForm(interactionUrl, jar, 'replay@example.com');
-    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
+    const tokenParam = tokenFromMagicUrl(emailSender.sent[0].url);
 
     // First POST consumes (we don't follow the redirect; that path is
     // already covered by the end-to-end test above).
@@ -304,7 +311,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp',
     });
     await postRequestLinkForm(interactionUrl, jar, 'csrf@example.com');
-    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
+    const tokenParam = tokenFromMagicUrl(emailSender.sent[0].url);
 
     // POST without the cookie jar → cookie binding mismatches.
     const noCookie = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
@@ -327,7 +334,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect([302, 303]).toContain(withCookie.status);
   }, 30_000);
 
-  it('admin claim: pre-claimed magic-link sub gets roles:["admin"] on JWT (cycle-16)', async () => {
+  it('pre-claimed magic-link admin sub authenticates but the JWT carries NO roles (admin is console-only)', async () => {
     // Need to skip auto-bootstrap so we can pre-claim with a specific
     // admin sub. bootHarness() always auto-bootstraps with a placeholder
     // sub; build a custom harness here.
@@ -359,7 +366,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     });
     await postRequestLinkForm(interactionUrl, jar, adminEmail);
 
-    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
+    const tokenParam = tokenFromMagicUrl(emailSender.sent[0].url);
     const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
@@ -389,16 +396,14 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(tokenResp.status).toBe(200);
     const tokenBody = await tokenResp.json() as { access_token: string };
 
+    // Token authenticates but carries NO roles — admin is console-only.
     const validation = await harness.as.validate(tokenBody.access_token);
     expect(validation.ok).toBe(true);
     if (validation.ok) {
       expect(validation.claims.sub).toBe(adminSub);
-      expect(validation.claims.roles).toEqual(['admin']);
+      expect(validation.claims.roles ?? []).toEqual([]);
     }
     const decoded = decodeJwt(tokenBody.access_token);
-    expect(decoded.roles).toEqual(['admin']);
-
-    const stored = await storage.getAccount(adminSub);
-    expect(stored?.roles).toEqual(['admin']);
+    expect(decoded.roles).toBeUndefined();
   }, 30_000);
 });

@@ -1141,7 +1141,10 @@ async function startStreamableHttpServer(
     if (authClaims?.sub) {
       if (userIdentityService) {
         try {
-          sessionUserId = await userIdentityService.resolveOrCreateUser(
+          // Resolve via the auth_account link (not username==sub) so this MCP
+          // session and the web console converge on the SAME users row for this
+          // identity — every machine on one OAuth identity is one account.
+          sessionUserId = await userIdentityService.resolveUserForSub(
             authClaims.sub,
             authClaims.displayName,
           );

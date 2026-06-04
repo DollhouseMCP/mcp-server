@@ -1,4 +1,5 @@
 import type {
+  AccountDeletionDto,
   AccountPrincipalDto,
   AccountPrincipalLifecycleDto,
   AccountPrincipalListDto,
@@ -12,6 +13,15 @@ import type {
   AccountBootstrapStatusDto,
   AccountInviteDto,
 } from './AccountAdminOnboardingDtos.js';
+import type {
+  AccountIdentityDto,
+  AccountIdentityListDto,
+  AccountIdentityMutationDto,
+} from './AccountAdminIdentityDtos.js';
+import {
+  serializeAccountIdentityList,
+  serializeAccountIdentityMutation,
+} from './AccountAdminIdentityDtos.js';
 import {
   serializeAccountAllowlistEntry,
   serializeAccountAllowlistList,
@@ -21,6 +31,7 @@ import {
   serializeAccountInvite,
 } from './AccountAdminOnboardingDtos.js';
 import {
+  serializeAccountDeletion,
   serializeAccountPrincipalLifecycle,
   serializeAccountPrincipal,
   serializeAccountPrincipalList,
@@ -86,6 +97,53 @@ export function projectAccountPrincipalLifecycle(value: unknown): AccountPrincip
     }
     : undefined;
   return serializeAccountPrincipalLifecycle(summary, revocationSummary);
+}
+
+export function projectAccountDeletion(value: unknown): AccountDeletionDto {
+  const deletion = value as AccountDeletionDto;
+  const summary = deletion.revocation_summary;
+  return serializeAccountDeletion({
+    userId: deletion.user_id,
+    outcome: deletion.outcome === 'deleted' ? 'deleted' : 'anonymized',
+    deletedAt: new Date(deletion.deleted_at),
+    revocationSummary: summary
+      ? {
+        browser_sessions_revoked: numberField(summary, 'browser_sessions_revoked'),
+        mcp_oauth_grants_revoked: numberField(summary, 'mcp_oauth_grants_revoked'),
+        mcp_sessions_terminated: numberField(summary, 'mcp_sessions_terminated'),
+        mcp_sessions_termination_requested: optionalNumberField(summary, 'mcp_sessions_termination_requested'),
+        mcp_sessions_termination_acknowledged: optionalNumberField(summary, 'mcp_sessions_termination_acknowledged'),
+        mcp_sessions_termination_failed: optionalNumberField(summary, 'mcp_sessions_termination_failed'),
+        mcp_sessions_termination_timed_out: optionalNumberField(summary, 'mcp_sessions_termination_timed_out'),
+        authz_version_bumped: summary.authz_version_bumped === true,
+        new_authz_version: optionalNumberField(summary, 'new_authz_version'),
+      }
+      : undefined,
+  });
+}
+
+export function projectAccountIdentityList(value: unknown): AccountIdentityListDto {
+  const list = value as AccountIdentityListDto;
+  return serializeAccountIdentityList(list.user_id, list.identities.map(fromIdentityDto));
+}
+
+export function projectAccountIdentityMutation(value: unknown): AccountIdentityMutationDto {
+  const mutation = value as AccountIdentityMutationDto;
+  return serializeAccountIdentityMutation(mutation.user_id, mutation.sub, mutation.linked === true);
+}
+
+function fromIdentityDto(value: AccountIdentityDto) {
+  return {
+    sub: value.sub,
+    provider: value.provider,
+    externalSub: value.external_sub,
+    email: value.email,
+    emailVerified: value.email_verified,
+    displayName: value.display_name,
+    linkedUserId: value.linked_user_id,
+    createdAt: new Date(value.created_at),
+    lastAuthAt: value.last_auth_at ? new Date(value.last_auth_at) : null,
+  };
 }
 
 function numberField(record: Readonly<Record<string, unknown>>, key: string): number {

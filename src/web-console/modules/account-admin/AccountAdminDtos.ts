@@ -42,6 +42,30 @@ export interface AccountPrincipalLifecycleDto {
   };
 }
 
+export interface AccountDeletionDto {
+  readonly user_id: string;
+  /** `deleted` = row hard-removed; `anonymized` = scrubbed tombstone kept as an audit anchor. */
+  readonly outcome: 'deleted' | 'anonymized';
+  readonly deleted_at: string;
+  readonly revocation_summary: AccountPrincipalLifecycleDto['revocation_summary'];
+}
+
+export interface AccountDeletionInput {
+  readonly userId: string;
+  readonly outcome: 'deleted' | 'anonymized';
+  readonly deletedAt: Date;
+  readonly revocationSummary: AccountPrincipalLifecycleDto['revocation_summary'];
+}
+
+export function serializeAccountDeletion(input: AccountDeletionInput): AccountDeletionDto {
+  return {
+    user_id: input.userId,
+    outcome: input.outcome,
+    deleted_at: input.deletedAt.toISOString(),
+    revocation_summary: input.revocationSummary,
+  };
+}
+
 export function serializeAccountPrincipal(summary: ConsolePrincipalSummary): AccountPrincipalDto {
   return {
     user_id: summary.userId,

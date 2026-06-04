@@ -65,8 +65,6 @@ interface AuthAccountRow {
   rawProfile: unknown;
   passwordHash: string | null;
   lastAuthAt: number | null;
-  /** Round 5 / B1: roles claim source for extraTokenClaims. */
-  roles: string[];
   createdAt: Date;
   updatedAt: Date;
 }
@@ -114,10 +112,6 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
           rawProfile: row.rawProfile,
           passwordHash: row.passwordHash,
           lastAuthAt: row.lastAuthAt,
-          // Round 5 / B1: include roles in the conflict-update set or
-          // existing rows would keep their stale roles when an
-          // upsertAccount with new roles is issued.
-          roles: row.roles,
           updatedAt: row.updatedAt,
         },
       });
@@ -138,23 +132,6 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
       tx
         .update(authAccounts)
         .set({ lastAuthAt, updatedAt: new Date() })
-        .where(eq(authAccounts.sub, sub))
-        .returning({ sub: authAccounts.sub }),
-    );
-    return result.length > 0;
-  }
-
-  async setAccountRoles(sub: string, roles: string[]): Promise<boolean> {
-    // Single-statement UPDATE: same atomicity story as
-    // updateAccountLastAuth — Postgres serialises against concurrent
-    // upsertAccount on the same row. The roles column has a NOT NULL
-    // default of '[]'::jsonb (migration 0010), so we always write a
-    // concrete array; mapper-level "empty array → undefined" stays in
-    // rowToStoredAccount.
-    const result = await withSystemContext(this.db, (tx) =>
-      tx
-        .update(authAccounts)
-        .set({ roles: [...roles], updatedAt: new Date() })
         .where(eq(authAccounts.sub, sub))
         .returning({ sub: authAccounts.sub }),
     );
@@ -543,9 +520,6 @@ function storedAccountToRow(account: StoredAccount): typeof authAccounts.$inferI
     rawProfile: account.rawProfile ?? null,
     passwordHash: account.credentials?.passwordHash ?? null,
     lastAuthAt: account.lastAuthAt ?? null,
-    // Round 5 / B1: roles must round-trip through Postgres. Empty array
-    // is the column default + the canonical "no roles" sentinel.
-    roles: account.roles ?? [],
     createdAt: new Date(account.createdAt),
     updatedAt: new Date(account.updatedAt),
   };
@@ -565,13 +539,6 @@ function rowToStoredAccount(row: AuthAccountRow): StoredAccount {
   if (row.rawProfile !== null) account.rawProfile = row.rawProfile as Record<string, unknown>;
   if (row.passwordHash !== null) account.credentials = { passwordHash: row.passwordHash };
   if (row.lastAuthAt !== null) account.lastAuthAt = row.lastAuthAt;
-  // Round 5 / B1: emit roles only when non-empty so callers checking
-  // `account.roles?.length` get the same shape they would from the
-  // in-memory and filesystem backends (which preserve undefined when
-  // the field was never set).
-  if (Array.isArray(row.roles) && row.roles.length > 0) {
-    account.roles = row.roles;
-  }
   return account;
 }
 

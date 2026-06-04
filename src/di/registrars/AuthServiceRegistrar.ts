@@ -226,10 +226,13 @@ export class AuthServiceRegistrar {
     const { PostgresConsoleFactorStore } = await import('../../web-console/stores/PostgresConsoleFactorStore.js');
     const { PostgresConsoleIdentityResolver } = await import('../../web-console/identity/PostgresConsoleIdentityResolver.js');
     const { AeadSecretEncryptionService } = await import('../../web-console/security/SecretEncryption.js');
+    const retainedDecryptKeys = parseRetiredSecretKeys(
+      env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED,
+    );
     const secretEncryption = new AeadSecretEncryptionService({
       keyId: env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID,
       key: Buffer.from(encryptionKey, 'base64'),
-    });
+    }, retainedDecryptKeys);
     logger.info('[AuthServiceRegistrar] Admin TOTP step-up routes enabled (embedded AS, DB mode)');
     return {
       adminTotpService: new AdminTotpService({
@@ -240,6 +243,28 @@ export class AuthServiceRegistrar {
       consoleIdentityResolver: new PostgresConsoleIdentityResolver(database),
     };
   }
+}
+
+/**
+ * Parse `keyId=base64,keyId2=base64` into retained decrypt keys. These let the
+ * active secret-encryption key rotate without orphaning ciphertext encrypted
+ * under a prior key (the keyId embedded in each record selects the right key).
+ * Throws on a malformed entry rather than silently dropping a decrypt key.
+ */
+function parseRetiredSecretKeys(raw: string | undefined): { keyId: string; key: Buffer }[] {
+  if (!raw) return [];
+  return raw.split(',').map(entry => entry.trim()).filter(entry => entry.length > 0).map(entry => {
+    const eq = entry.indexOf('=');
+    if (eq <= 0) {
+      throw new Error(
+        `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED entry '${entry}' must be 'keyId=base64key'`,
+      );
+    }
+    return {
+      keyId: entry.slice(0, eq).trim(),
+      key: Buffer.from(entry.slice(eq + 1).trim(), 'base64'),
+    };
+  });
 }
 
 function hasProtectedResourceMetadata(provider: IAuthProvider): provider is ProtectedResourceMetadataProvider {

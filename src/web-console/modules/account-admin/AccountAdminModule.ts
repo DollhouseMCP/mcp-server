@@ -13,6 +13,8 @@ import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutat
 import { AccountAdminAllowlistService } from './AccountAdminAllowlistService.js';
 import { AccountAdminBootstrapService } from './AccountAdminBootstrapService.js';
 import { AccountAdminCredentialRevocationService } from './AccountAdminCredentialRevocationService.js';
+import { AccountAdminDeletionService } from './AccountAdminDeletionService.js';
+import { AccountAdminIdentityService } from './AccountAdminIdentityService.js';
 import {
   AccountAdminInviteService,
   type IConsoleAccountInviteIssuer,
@@ -26,6 +28,9 @@ import {
   projectAccountAllowlistEntry,
   projectAccountAllowlistList,
   projectAccountBootstrapStatus,
+  projectAccountDeletion,
+  projectAccountIdentityList,
+  projectAccountIdentityMutation,
   projectAccountInvite,
   projectAccountPrincipalLifecycle,
   projectAccountPrincipalList,
@@ -38,7 +43,11 @@ const ACCOUNT_ADMIN_AUDIT = {
   usersInvite: 'accounts.users.invite',
   usersDisable: 'accounts.users.disable',
   usersEnable: 'accounts.users.enable',
+  usersDelete: 'accounts.users.delete',
   usersCredentialsRevokeAll: 'accounts.users.credentials.revoke_all',
+  identitiesList: 'accounts.identities.list',
+  identitiesLink: 'accounts.identities.link',
+  identitiesUnlink: 'accounts.identities.unlink',
   rolesList: 'accounts.roles.list',
   rolesReplace: 'accounts.roles.replace',
   rolesGrant: 'accounts.roles.grant',
@@ -97,6 +106,19 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     transactionRunner,
     runtimeTerminationService,
+    now: options.now,
+  });
+  const deletionService = new AccountAdminDeletionService({
+    accountAdminStore,
+    sessionStore: options.sessionStore,
+    oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
+    transactionRunner,
+    runtimeTerminationService,
+    now: options.now,
+  });
+  const identityService = new AccountAdminIdentityService({
+    accountAdminStore,
+    transactionRunner,
     now: options.now,
   });
   const allowlistService = new AccountAdminAllowlistService({
@@ -192,6 +214,45 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     privacyProjector: projectAccountPrincipalLifecycle,
     handler: req => revokeAllCredentials(req, credentialRevocationService, revokeAllCredentialsRoute),
   };
+  const deleteUserRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'DELETE',
+    path: '/api/v1/admin/accounts/users/:user_id',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.usersDelete,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountDeletion,
+    handler: req => deleteUser(req, deletionService, deleteUserRoute),
+  };
+  const linkIdentityRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/:user_id/identities/link',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.identitiesLink,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountIdentityMutation,
+    handler: req => linkIdentity(req, identityService, linkIdentityRoute),
+  };
+  const unlinkIdentityRoute: ConsoleModuleDescriptor['routes'][number] = {
+    method: 'POST',
+    path: '/api/v1/admin/accounts/users/:user_id/identities/unlink',
+    audience: 'admin',
+    requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+    elevation: 'admin_5m',
+    privacyClass: 'account_metadata',
+    idempotency: 'required',
+    auditOperation: ACCOUNT_ADMIN_AUDIT.identitiesUnlink,
+    auditExecution: 'handler_transaction',
+    privacyProjector: projectAccountIdentityMutation,
+    handler: req => unlinkIdentity(req, identityService, unlinkIdentityRoute),
+  };
   const inviteRoute: ConsoleModuleDescriptor['routes'][number] = {
     method: 'POST',
     path: '/api/v1/admin/accounts/users/invite',
@@ -272,6 +333,7 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     inviteRoute,
     disableUserRoute,
     enableUserRoute,
+    deleteUserRoute,
     {
       method: 'GET',
       path: '/api/v1/admin/accounts/users/:user_id/roles',
@@ -288,6 +350,20 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     grantRoleRoute,
     revokeRoleRoute,
     revokeAllCredentialsRoute,
+    {
+      method: 'GET',
+      path: '/api/v1/admin/accounts/users/:user_id/identities',
+      audience: 'admin',
+      requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: 'account_metadata',
+      idempotency: 'not_applicable',
+      auditOperation: ACCOUNT_ADMIN_AUDIT.identitiesList,
+      privacyProjector: projectAccountIdentityList,
+      handler: req => listIdentities(req, identityService),
+    },
+    linkIdentityRoute,
+    unlinkIdentityRoute,
     ...(options.enableAccountAllowlistRoutes === true ? [
       {
         method: 'GET',
@@ -390,6 +466,45 @@ async function enableUser(
   const userId = stringParam(req, USER_ID_PARAM);
   if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
   return service.enablePrincipal(req, route, userId);
+}
+
+async function deleteUser(
+  req: ConsoleRequest,
+  service: AccountAdminDeletionService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.deletePrincipal(req, route, userId);
+}
+
+async function listIdentities(
+  req: ConsoleRequest,
+  service: AccountAdminIdentityService,
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.listIdentities(userId);
+}
+
+async function linkIdentity(
+  req: ConsoleRequest,
+  service: AccountAdminIdentityService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.linkIdentity(req, route, userId);
+}
+
+async function unlinkIdentity(
+  req: ConsoleRequest,
+  service: AccountAdminIdentityService,
+  route: ConsoleModuleDescriptor['routes'][number],
+): Promise<ConsoleHandlerResult> {
+  const userId = stringParam(req, USER_ID_PARAM);
+  if (!userId) return problem(400, 'invalid_request', USER_ID_REQUIRED_DETAIL);
+  return service.unlinkIdentity(req, route, userId);
 }
 
 async function replaceRoles(

@@ -989,14 +989,17 @@ describe('PostgresConsoleFactorStore', () => {
 });
 
 describe('PostgresConsoleIdentityResolver', () => {
-  it('returns the queried canonical security state for an enabled principal', async () => {
-    transaction.select = jest.fn(() => selectingChain([{
-      sub: PRIMARY_SUB,
-      userId: USER_ID,
-      disabledAt: null,
-      authzVersion: 4,
-      roles: ['admin'],
-    }]));
+  it('returns the canonical security state with roles from user_admin_roles', async () => {
+    // The resolver does two selects: the principal (sub→user), then the active
+    // roles from user_admin_roles (the authoritative per-user role store).
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([{
+        sub: PRIMARY_SUB,
+        userId: USER_ID,
+        disabledAt: null,
+        authzVersion: 4,
+      }]))
+      .mockReturnValueOnce(selectingOrderedChain([{ role: 'admin' }]));
     const resolver = new PostgresConsoleIdentityResolver({} as DatabaseInstance);
 
     await expect(resolver.resolveEnabledPrincipal(PRIMARY_SUB)).resolves.toEqual({

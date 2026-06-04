@@ -44,6 +44,7 @@ const TAB_MODULES = {
   // security:     () => import('./security.js'),
   sessions: () => import('./sessions.js'),
   logs: () => import('./logs.js'),
+  users: () => import('./users-admin.js'),
   // metrics:      () => import('./metrics.js'),
   // integrations: () => import('./integrations.js'),
 };
@@ -83,6 +84,22 @@ function ensureTabModule(name) {
   });
   tabModulePromises.set(name, loading);
   return loading;
+}
+
+/**
+ * Admin tabs (those with `data-admin-cap`) are revealed ONLY while the session
+ * is elevated AND the elevation grants the required capability. Driven by the
+ * `dh:elevation-changed` event from the elevation control, so the tab appears
+ * the moment admin mode is entered and disappears when it lapses. If elevation
+ * drops while an admin tab is active, fall back to the portfolio tab.
+ */
+function applyAdminTabVisibility({ active, capabilities } = {}) {
+  const caps = active ? (capabilities || []) : [];
+  document.querySelectorAll('.console-tab[data-admin-cap]').forEach(tab => {
+    const allowed = caps.includes(tab.dataset.adminCap);
+    tab.hidden = !allowed;
+    if (!allowed && tab.classList.contains('active')) activateTab('portfolio');
+  });
 }
 
 // Cross-link used by the Sessions tab: open the Logs tab filtered to a session.
@@ -216,6 +233,8 @@ function init() {
   initTabs();
   initAccountMenu();
   initStepUp();
+  // Reveal/hide admin-only tabs as elevation comes and goes.
+  window.addEventListener('dh:elevation-changed', (e) => applyAdminTabVisibility(e.detail));
   document.getElementById('auth-gate-signin')?.addEventListener('click', () => login('/ui'));
   document.getElementById('logout-btn')?.addEventListener('click', () => logout());
   runAuthGate();

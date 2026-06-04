@@ -421,6 +421,14 @@ const envSchema = z.object({
     .transform(v => (v && v.length > 0) ? v : undefined),
   /** Stable key ID persisted in console secret ciphertext records. */
   DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID: z.string().trim().default('web-console-env-v1'),
+  /**
+   * Retired secret-encryption keys retained for DECRYPTION ONLY, so the active
+   * key can be rotated (bump _KEY + _KEY_ID, move the old pair here) without
+   * breaking factors/secrets encrypted under the previous key. Format:
+   * `keyId=base64key,keyId2=base64key2`. Each key must decode to 32 bytes.
+   */
+  DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
   /** Base64-encoded 32-byte HMAC key for protected-correlation rate-limit selectors. */
   DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),

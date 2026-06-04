@@ -35,7 +35,6 @@ import type {
 import type { IAuthStorageLayer, StoredAccount } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import type { LocalLoginRateLimiter } from '../rateLimit.js';
-import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
 import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
 
 const LOCAL_PROVIDER = 'local';
@@ -280,22 +279,9 @@ export class LocalAccountMethod implements IAuthMethod {
       return { kind: 'denied', reason: gate.reason };
     }
 
-    // Bootstrap admin claim (must-fix #22 / spec L923): if the
-    // bootstrap-state pre-claim names this sub as the admin, the
-    // account being created here gets `roles: ['admin']`. The pre-
-    // claim was written by the create-user CLI BEFORE this user
-    // received their invite link, so any other identity that somehow
-    // redeemed the URL without being the pre-claimed admin would NOT
-    // be granted admin (they'd just be a regular account).
-    //
-    // Round 5 / H5: roles are written via setAccountRoles AFTER
-    // upsertAccount rather than spread into the upsert. Spreading
-    // `...(isAdmin ? { roles: [...] } : {})` quietly clobbered any
-    // previously-assigned roles for non-admin users on every login
-    // (full-row replacement + missing field = roles wiped). Splitting
-    // the writes preserves whatever roles were on the row before.
-    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, 'local-password');
-
+    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
+    // (and linked on first login), NOT stamped onto the auth account — so this
+    // path just records the credential/profile.
     const existing = await this.options.storage.getAccount(sub);
     const account: StoredAccount = {
       sub,
@@ -309,15 +295,8 @@ export class LocalAccountMethod implements IAuthMethod {
       credentials: { passwordHash },
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      // Preserve any pre-existing roles across upserts; setAccountRoles
-      // below applies the admin-role write only when this is the
-      // pre-claimed bootstrap admin.
-      ...(existing?.roles ? { roles: existing.roles } : {}),
     };
     await this.options.storage.upsertAccount(account);
-    if (isBootstrapAdmin) {
-      await this.options.storage.setAccountRoles(sub, ['admin']);
-    }
 
     return { kind: 'ok', sub, email: consume.payload.email };
   }

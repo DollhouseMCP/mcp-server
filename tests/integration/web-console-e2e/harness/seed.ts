@@ -72,13 +72,14 @@ export async function seedWorld(): Promise<SeededWorld> {
     `;
     await sql`
       INSERT INTO auth_accounts
-        (provider, external_sub, sub, user_id, email, email_verified, display_name, password_hash, roles, created_at, updated_at)
-      VALUES ('local', ${username}, ${sub}, ${id}, ${email}, true, ${username}, ${passwordHash}, ${sql.json(roles)}, ${now}, ${now})
+        (provider, external_sub, sub, user_id, email, email_verified, display_name, password_hash, created_at, updated_at)
+      VALUES ('local', ${username}, ${sub}, ${id}, ${email}, true, ${username}, ${passwordHash}, ${now}, ${now})
     `;
-    if (roles.includes('admin')) {
+    // Roles are authoritative in user_admin_roles (per-user), not on the auth account.
+    for (const role of roles) {
       await sql`
         INSERT INTO user_admin_roles (user_id, role, granted_at)
-        VALUES (${id}, 'admin', ${now})
+        VALUES (${id}, ${role}, ${now})
       `;
     }
     return { id, sub, username, email, password: SEED_PASSWORD };
