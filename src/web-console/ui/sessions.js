@@ -40,7 +40,7 @@ async function load() {
     get('/me/security/sessions').catch(() => null),
     get('/me/sessions').catch(() => null),
   ]);
-  state.console = sec?.status === 200 && Array.isArray(sec.body?.sessions) ? sec.body.sessions : [];
+  state.console = sec?.status === 200 && Array.isArray(sec.body?.sessions) ? sec.body?.sessions : [];
   state.mcp = mcp?.status === 200 && Array.isArray(mcp.body) ? mcp.body : [];
   state.error = !sec || sec.status !== 200;
   state.loading = false;

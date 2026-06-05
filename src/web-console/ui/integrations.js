@@ -53,7 +53,7 @@ async function load() {
   state.error = false;
   renderBody();
   const res = await get('/me/integrations').catch(() => null);
-  if (!res || res.status !== 200 || !Array.isArray(res.body?.integrations)) {
+  if (res?.status !== 200 || !Array.isArray(res.body?.integrations)) {
     state.error = true;
     state.loading = false;
     renderBody();
