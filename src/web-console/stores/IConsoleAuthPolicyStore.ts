@@ -26,6 +26,6 @@ export const DEFAULT_CONSOLE_AUTH_POLICY: ConsoleAuthPolicy = Object.freeze({
 export function cloneConsoleAuthPolicy(policy: ConsoleAuthPolicy): ConsoleAuthPolicy {
   return {
     maxAdminElevationSeconds: policy.maxAdminElevationSeconds,
-    updatedAt: new Date(policy.updatedAt.getTime()),
+    updatedAt: new Date(policy.updatedAt),
   };
 }

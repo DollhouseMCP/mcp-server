@@ -22,21 +22,21 @@
  * 4. MEDIUM: Input validation and sanitization throughout
  */
 
-import { IElementManager } from '../../types/elements/IElementManager.js';
-import { IElement, ElementValidationResult } from '../../types/elements/IElement.js';
+import type { IElementManager } from '../../types/elements/IElementManager.js';
+import type { IElement, ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
+import type { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { logger } from '../../utils/logger.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
+import type { FileLockManager } from '../../security/fileLockManager.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { LRUCache } from '../../cache/LRUCache.js';
+import type { LRUCache } from '../../cache/LRUCache.js';
 import * as path from 'path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { PathValidator } from '../../security/pathValidator.js';
-import { ElementEventDispatcher, ElementEventPayload } from '../../events/ElementEventDispatcher.js';
-import { FileWatchService } from '../../services/FileWatchService.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
-import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
+import type { ElementEventDispatcher, ElementEventPayload } from '../../events/ElementEventDispatcher.js';
+import type { FileWatchService } from '../../services/FileWatchService.js';
+import type { FileOperationsService } from '../../services/FileOperationsService.js';
+import type { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
 import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';

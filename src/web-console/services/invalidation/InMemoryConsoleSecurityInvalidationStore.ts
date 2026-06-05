@@ -36,7 +36,7 @@ export class InMemoryConsoleSecurityInvalidationStore implements IConsoleSecurit
       authzVersion: input.authzVersion ?? null,
       reason: input.reason,
       payload: { ...(input.payload ?? {}) },
-      createdAt: new Date(input.createdAt.getTime()),
+      createdAt: new Date(input.createdAt),
       createdByUserId: input.createdByUserId ?? null,
     };
     this.events.push(cloneSecurityInvalidationEvent(event));
@@ -78,7 +78,7 @@ export class InMemoryConsoleSecurityInvalidationStore implements IConsoleSecurit
     return [...this.leases.values()]
       .filter(lease => lease.leaseUntil > at)
       .map(lease => lease.replicaId)
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
   }
 
   async acknowledgeEvent(eventId: string, replicaId: string, acknowledgedAt: Date = new Date()): Promise<void> {
@@ -86,14 +86,14 @@ export class InMemoryConsoleSecurityInvalidationStore implements IConsoleSecurit
     validateEventId(eventId);
     validateReplicaId(replicaId);
     const eventAcks = this.acknowledgements.get(eventId) ?? new Map<string, Date>();
-    eventAcks.set(replicaId, new Date(acknowledgedAt.getTime()));
+    eventAcks.set(replicaId, new Date(acknowledgedAt));
     this.acknowledgements.set(eventId, eventAcks);
   }
 
   async listAcknowledgedReplicaIds(eventId: string): Promise<string[]> {
     await Promise.resolve();
     validateEventId(eventId);
-    return [...(this.acknowledgements.get(eventId)?.keys() ?? [])].sort();
+    return [...(this.acknowledgements.get(eventId)?.keys() ?? [])].sort((a, b) => a.localeCompare(b));
   }
 }
 

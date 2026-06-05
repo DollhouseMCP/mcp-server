@@ -21,11 +21,11 @@ export class InMemoryAdminAuditWriter implements IAdminAuditWriter {
 function cloneEvent(event: ConsoleAdminAuditEvent): ConsoleAdminAuditEvent {
   return {
     ...event,
-    occurredAt: new Date(event.occurredAt.getTime()),
+    occurredAt: new Date(event.occurredAt),
     actorConsoleSessionHash: Buffer.from(event.actorConsoleSessionHash),
     elevationAmr: [...event.elevationAmr],
     elevationAuthTime: event.elevationAuthTime
-      ? new Date(event.elevationAuthTime.getTime())
+      ? new Date(event.elevationAuthTime)
       : null,
     argsRedacted: cloneJsonRecord(event.argsRedacted),
     resultDetailRedacted: event.resultDetailRedacted
@@ -35,5 +35,5 @@ function cloneEvent(event: ConsoleAdminAuditEvent): ConsoleAdminAuditEvent {
 }
 
 function cloneJsonRecord(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return JSON.parse(JSON.stringify(record)) as Readonly<Record<string, unknown>>;
+  return structuredClone(record) as Readonly<Record<string, unknown>>;
 }

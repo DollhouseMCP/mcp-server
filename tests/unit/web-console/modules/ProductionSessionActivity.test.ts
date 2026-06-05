@@ -227,14 +227,16 @@ describe('production session activity adapters', () => {
 });
 
 function queryDb(rows: unknown[]) {
-  const chain: Record<string, jest.Mock> = {};
-  chain.from = jest.fn(() => chain);
-  chain.innerJoin = jest.fn(() => chain);
-  chain.where = jest.fn(() => chain);
-  chain.orderBy = jest.fn(() => chain);
-  chain.limit = jest.fn(() => chain);
-  chain.offset = jest.fn(() => Promise.resolve(rows));
-  chain.then = Promise.resolve(rows).then.bind(Promise.resolve(rows)) as never;
+  // Model a drizzle query builder: a real Promise (so awaiting the chain
+  // resolves rows via the prototype's then) augmented with chainable methods.
+  const chain = Object.assign(Promise.resolve(rows), {
+    from: jest.fn(() => chain),
+    innerJoin: jest.fn(() => chain),
+    where: jest.fn(() => chain),
+    orderBy: jest.fn(() => chain),
+    limit: jest.fn(() => chain),
+    offset: jest.fn(() => Promise.resolve(rows)),
+  });
   return {
     select: jest.fn(() => chain),
   };

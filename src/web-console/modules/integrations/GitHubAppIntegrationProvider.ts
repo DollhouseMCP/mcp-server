@@ -160,10 +160,16 @@ interface GitHubInstallationSummary {
 
 function normalizeApiBaseUrl(value: string): string {
   const url = new URL(value);
-  url.pathname = url.pathname.replace(/\/+$/u, '');
+  // Strip trailing slashes without a backtracking-prone regex.
+  let pathname = url.pathname;
+  while (pathname.endsWith('/')) {
+    pathname = pathname.slice(0, -1);
+  }
+  url.pathname = pathname;
   url.search = '';
   url.hash = '';
-  return url.toString().replace(/\/$/u, '');
+  const normalized = url.toString();
+  return normalized.endsWith('/') ? normalized.slice(0, -1) : normalized;
 }
 
 async function readJson(response: Response): Promise<unknown> {

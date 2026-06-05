@@ -78,8 +78,8 @@ export function cloneLoginTransaction(transaction: ConsoleLoginTransaction): Con
     consoleSessionIdHash: transaction.consoleSessionIdHash
       ? cloneBuffer(transaction.consoleSessionIdHash)
       : null,
-    createdAt: new Date(transaction.createdAt.getTime()),
-    expiresAt: new Date(transaction.expiresAt.getTime()),
+    createdAt: new Date(transaction.createdAt),
+    expiresAt: new Date(transaction.expiresAt),
     consumedAt: cloneDate(transaction.consumedAt),
   };
 }

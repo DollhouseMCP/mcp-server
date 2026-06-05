@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
-import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
 import path from 'path';

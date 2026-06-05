@@ -1987,7 +1987,7 @@ function parseCookieValue(header: string | undefined, name: string): string | un
 function diagnosticValue(value: unknown): string {
   if (value === undefined || value === null || value === '') return 'none';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value).replace(/\s+/g, '_');
+  return String(value).replaceAll(/\s+/g, '_');
 }
 
 /**

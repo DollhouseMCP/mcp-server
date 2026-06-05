@@ -1,7 +1,7 @@
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import type { DrizzleTx } from '../../../database/db-utils.js';
-import type { ConsoleAdminAuditEvent } from '../../audit/IAdminAuditWriter.js';
+import type { ConsoleAdminAuditEvent , IAdminAuditWriter } from '../../audit/IAdminAuditWriter.js';
 import {
   appendConsoleAdminAuditEventWithTx,
   type AdminAuditHmacKeyResolver,
@@ -34,7 +34,7 @@ import type {
   PrincipalStateChange,
   RoleGrantInput,
   RoleRevokeInput,
-} from '../../stores/IConsoleAccountAdminStore.js';
+ IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type {
   AllowlistAddInput,
   AllowlistRemoveInput,
@@ -45,13 +45,11 @@ import type {
 import {
   appendSecurityInvalidationEventWithTx,
 } from '../../services/invalidation/PostgresConsoleSecurityInvalidationStore.js';
-import type { IAdminAuditWriter } from '../../audit/IAdminAuditWriter.js';
 import type {
   IConsoleSecurityInvalidationStore,
   SecurityInvalidationEvent,
   SecurityInvalidationEventInput,
 } from '../../services/invalidation/IConsoleSecurityInvalidationStore.js';
-import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 
 export interface MutationTransactionBaseContext {
   appendSecurityInvalidationEvent(input: SecurityInvalidationEventInput): Promise<SecurityInvalidationEvent>;

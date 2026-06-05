@@ -137,14 +137,14 @@ export function cloneConsoleSession(record: ConsoleSessionRecord): ConsoleSessio
     elevation: record.elevation ? {
       ...record.elevation,
       capabilities: [...record.elevation.capabilities],
-      expiresAt: new Date(record.elevation.expiresAt.getTime()),
-      authTime: new Date(record.elevation.authTime.getTime()),
+      expiresAt: new Date(record.elevation.expiresAt),
+      authTime: new Date(record.elevation.authTime),
       amr: [...record.elevation.amr],
     } : null,
-    createdAt: new Date(record.createdAt.getTime()),
-    lastUsedAt: new Date(record.lastUsedAt.getTime()),
-    idleExpiresAt: new Date(record.idleExpiresAt.getTime()),
-    absoluteExpiresAt: new Date(record.absoluteExpiresAt.getTime()),
+    createdAt: new Date(record.createdAt),
+    lastUsedAt: new Date(record.lastUsedAt),
+    idleExpiresAt: new Date(record.idleExpiresAt),
+    absoluteExpiresAt: new Date(record.absoluteExpiresAt),
     revokedAt: cloneDate(record.revokedAt),
   };
 }

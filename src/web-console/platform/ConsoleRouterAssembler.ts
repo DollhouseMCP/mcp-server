@@ -1,11 +1,10 @@
 import { Router } from 'express';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
-import { createConsoleRequestContextMiddleware } from './ConsoleRequestContext.js';
+import { createConsoleRequestContextMiddleware , requireConsoleRequestContext } from './ConsoleRequestContext.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
 import type { ConsoleHttpMethod, ConsoleRequest, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
-import { requireConsoleRequestContext } from './ConsoleRequestContext.js';
 
 function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
   const handler: RequestHandler = (request, response, next): void => {

@@ -40,8 +40,11 @@ if (envFileArg) {
   const path = envFileArg.split('=')[1];
   if (!existsSync(path)) { console.error(`env-file not found: ${path}`); process.exit(2); }
   for (const line of readFileSync(path, 'utf8').split('\n')) {
-    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (m && env[m[1]] === undefined) env[m[1]] = m[2].replace(/^["']|["']$/g, '');
+    const eq = line.indexOf('=');
+    if (eq === -1) continue;
+    const key = line.slice(0, eq).trim();
+    if (!/^[A-Z0-9_]+$/.test(key) || env[key] !== undefined) continue;
+    env[key] = line.slice(eq + 1).trim().replace(/^["']|["']$/g, '');
   }
 }
 

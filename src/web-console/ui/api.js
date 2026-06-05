@@ -70,7 +70,7 @@ export async function request(method, path, options = {}) {
 
   if (res.status === 401 && problemCode === 'step_up_required') {
     const ext = (body && body.extensions) || {};
-    window.dispatchEvent(new CustomEvent('dh:step-up-required', {
+    globalThis.dispatchEvent(new CustomEvent('dh:step-up-required', {
       detail: {
         capability: ext.required_capability,
         stepUpUrl: ext.step_up_url,
@@ -163,12 +163,12 @@ export async function whoami() {
 
 /** Navigate the browser into the embedded-AS login (returns to the console after). */
 export function login(returnTo = '/ui') {
-  window.location.href = `${API_PREFIX}/auth/login?return_to=${encodeURIComponent(returnTo)}`;
+  globalThis.location.href = `${API_PREFIX}/auth/login?return_to=${encodeURIComponent(returnTo)}`;
 }
 
 export async function logout() {
   await post('/auth/logout');
-  window.location.reload();
+  globalThis.location.reload();
 }
 
 /**
@@ -178,7 +178,7 @@ export async function logout() {
  */
 export function stepUp(capability, returnTo = '/ui') {
   const params = new URLSearchParams({ capability, return_to: returnTo });
-  window.location.href = `${API_PREFIX}/auth/step-up?${params.toString()}`;
+  globalThis.location.href = `${API_PREFIX}/auth/step-up?${params.toString()}`;
 }
 
 /** Drop admin elevation immediately (back to standard access). 204 on success. */

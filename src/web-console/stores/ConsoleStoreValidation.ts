@@ -105,7 +105,7 @@ export function cloneBuffer(value: Buffer): Buffer {
 }
 
 export function cloneDate(value: Date | null): Date | null {
-  return value ? new Date(value.getTime()) : null;
+  return value ? new Date(value) : null;
 }
 
 function containsControlCharacter(value: string): boolean {

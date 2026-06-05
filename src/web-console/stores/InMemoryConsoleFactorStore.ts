@@ -42,7 +42,7 @@ export class InMemoryConsoleFactorStore implements IConsoleFactorStore {
     this.backupCodes.set(record.factorId, backupCodeHashes.map(codeHash => ({
       factorId: record.factorId,
       codeHash: cloneBuffer(codeHash),
-      createdAt: new Date(record.enrolledAt.getTime()),
+      createdAt: new Date(record.enrolledAt),
       usedAt: null,
     })));
   }

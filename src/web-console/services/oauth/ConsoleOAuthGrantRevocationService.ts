@@ -44,7 +44,7 @@ export class ConsoleOAuthGrantRevocationService implements IOAuthGrantRevocation
 
     return {
       userId: input.userId,
-      revokedAt: new Date(input.revokedAt.getTime()),
+      revokedAt: new Date(input.revokedAt),
       linkedSubjectsProcessed: subjects.length,
       oauthGrantFamiliesDiscovered: discoveredGrantIds.size,
       oauthGrantFamiliesRevoked: revokedGrantIds.size,

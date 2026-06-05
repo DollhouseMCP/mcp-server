@@ -316,7 +316,7 @@ export async function disableConsolePrincipalWithTx(
     userId: rows[0].userId,
     authzVersion: Number(rows[0].authzVersion),
     disabledAt: toDate(rows[0].disabledAt),
-    changedAt: new Date(input.disabledAt.getTime()),
+    changedAt: new Date(input.disabledAt),
   } : null;
 }
 
@@ -339,7 +339,7 @@ export async function enableConsolePrincipalWithTx(
     userId: rows[0].userId,
     authzVersion: rows[0].authzVersion,
     disabledAt: null,
-    changedAt: new Date(input.enabledAt.getTime()),
+    changedAt: new Date(input.enabledAt),
   } : null;
 }
 
@@ -361,7 +361,7 @@ export async function bumpConsolePrincipalAuthzVersionWithTx(
     userId: rows[0].userId,
     authzVersion: rows[0].authzVersion,
     disabledAt: rows[0].disabledAt ? toDate(rows[0].disabledAt) : null,
-    changedAt: new Date(input.bumpedAt.getTime()),
+    changedAt: new Date(input.bumpedAt),
   } : null;
 }
 
@@ -470,7 +470,7 @@ function toLinkedIdentity(row: IdentityColumnRow): LinkedIdentity {
     emailVerified: row.emailVerified,
     displayName: row.displayName,
     linkedUserId: row.userId,
-    createdAt: new Date(row.createdAt.getTime()),
+    createdAt: new Date(row.createdAt),
     lastAuthAt: row.lastAuthAt === null ? null : new Date(Number(row.lastAuthAt)),
   };
 }
@@ -673,11 +673,11 @@ function fromPrincipalRow(row: PrincipalRow): ConsolePrincipalSummary {
 
 function toDate(value: Date | string | null): Date | null {
   if (value === null) return null;
-  return value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  return value instanceof Date ? new Date(value) : new Date(value);
 }
 
 function requireDate(value: Date | string, name: string): Date {
-  const date = value instanceof Date ? new Date(value.getTime()) : new Date(value);
+  const date = value instanceof Date ? new Date(value) : new Date(value);
   if (Number.isNaN(date.getTime())) throw new Error(`${name} is not a valid timestamp`);
   return date;
 }

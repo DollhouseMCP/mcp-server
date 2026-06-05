@@ -233,9 +233,9 @@ export function cloneRuntimeSessionPresence(presence: RuntimeSessionPresence): R
   return {
     ...presence,
     clientInfo: presence.clientInfo ? { ...presence.clientInfo } : null,
-    startedAt: new Date(presence.startedAt.getTime()),
-    lastActiveAt: new Date(presence.lastActiveAt.getTime()),
-    leaseUntil: new Date(presence.leaseUntil.getTime()),
+    startedAt: new Date(presence.startedAt),
+    lastActiveAt: new Date(presence.lastActiveAt),
+    leaseUntil: new Date(presence.leaseUntil),
     closedAt: cloneDate(presence.closedAt),
   };
 }
@@ -243,7 +243,7 @@ export function cloneRuntimeSessionPresence(presence: RuntimeSessionPresence): R
 export function cloneRuntimeTerminationCommand(command: RuntimeTerminationCommand): RuntimeTerminationCommand {
   return {
     ...command,
-    requestedAt: new Date(command.requestedAt.getTime()),
+    requestedAt: new Date(command.requestedAt),
     requestedBy: { ...command.requestedBy },
   };
 }
@@ -251,7 +251,7 @@ export function cloneRuntimeTerminationCommand(command: RuntimeTerminationComman
 export function cloneRuntimeTerminationAck(ack: RuntimeTerminationAck): RuntimeTerminationAck {
   return {
     ...ack,
-    acknowledgedAt: new Date(ack.acknowledgedAt.getTime()),
+    acknowledgedAt: new Date(ack.acknowledgedAt),
   };
 }
 

@@ -364,13 +364,13 @@ function cloneRecord(record: Record<string, unknown>): Record<string, unknown> {
 }
 
 function cloneJson(value: unknown): unknown {
-  return JSON.parse(JSON.stringify(value));
+  return structuredClone(value);
 }
 
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   if (value && typeof value === 'object') {
-    return `{${Object.keys(value as Record<string, unknown>).sort()
+    return `{${Object.keys(value as Record<string, unknown>).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
       .map(key => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key])}`)
       .join(',')}}`;
   }

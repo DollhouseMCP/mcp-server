@@ -186,7 +186,7 @@ function jsonRecordField(
 ): ConsoleAdminAuditRedactedRecord {
   const value = record[key];
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? JSON.parse(JSON.stringify(value)) as ConsoleAdminAuditRedactedRecord
+    ? structuredClone(value) as ConsoleAdminAuditRedactedRecord
     : {};
 }
 
@@ -196,6 +196,6 @@ function nullableJsonRecordField(
 ): ConsoleAdminAuditRedactedRecord | null {
   const value = record[key];
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? JSON.parse(JSON.stringify(value)) as ConsoleAdminAuditRedactedRecord
+    ? structuredClone(value) as ConsoleAdminAuditRedactedRecord
     : null;
 }

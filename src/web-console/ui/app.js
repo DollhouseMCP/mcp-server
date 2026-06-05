@@ -66,7 +66,7 @@ function activateTab(name) {
     panel.hidden = !match;
   });
   ensureTabModule(name);
-  window.dispatchEvent(new CustomEvent('dh:tab-activated', { detail: { name } }));
+  globalThis.dispatchEvent(new CustomEvent('dh:tab-activated', { detail: { name } }));
 }
 
 function ensureTabModule(name) {
@@ -107,7 +107,7 @@ function applyAdminTabVisibility({ active, capabilities } = {}) {
 async function viewSessionLogs(logSessionId) {
   activateTab('logs');
   await ensureTabModule('logs');
-  window.dispatchEvent(new CustomEvent('dh:filter-logs-by-session', { detail: { sessionId: logSessionId } }));
+  globalThis.dispatchEvent(new CustomEvent('dh:filter-logs-by-session', { detail: { sessionId: logSessionId } }));
 }
 
 /* ── Toasts ─────────────────────────────────────────────────────────────── */
@@ -154,14 +154,14 @@ function initStepUp() {
   // User-facing surfaces don't require elevation; this is a safety net until the
   // dedicated admin step-up UX lands. It surfaces the requirement and routes to
   // the embedded-AS step-up flow, returning to the console afterwards.
-  window.addEventListener('dh:step-up-required', (event) => {
+  globalThis.addEventListener('dh:step-up-required', (event) => {
     const { capability, stepUpUrl } = event.detail || {};
     toast(`This action needs fresh admin elevation${capability ? ` (${capability})` : ''}.`, 'warn');
     if (stepUpUrl) {
-      const url = new URL(stepUpUrl, window.location.origin);
+      const url = new URL(stepUpUrl, globalThis.location.origin);
       url.searchParams.set('return_to', '/ui');
       // Defer so the toast is visible before navigation.
-      setTimeout(() => { window.location.href = url.toString(); }, 1200);
+      setTimeout(() => { globalThis.location.href = url.toString(); }, 1200);
     }
   });
 }
@@ -197,7 +197,7 @@ function showConsole(principal) {
 // The tab to open on load: the `?tab=` param (e.g. when returning from step-up),
 // falling back to portfolio. Validated against the real tabs.
 function initialTab() {
-  const requested = new URLSearchParams(window.location.search).get('tab');
+  const requested = new URLSearchParams(globalThis.location.search).get('tab');
   const known = [...document.querySelectorAll('.console-tab')].map(t => t.dataset.tab);
   return known.includes(requested) ? requested : 'portfolio';
 }
@@ -218,7 +218,7 @@ async function runAuthGate() {
   }
   if (principal) {
     showConsole(principal);
-    window.dispatchEvent(new CustomEvent('dh:authenticated', { detail: { principal } }));
+    globalThis.dispatchEvent(new CustomEvent('dh:authenticated', { detail: { principal } }));
     activateTab(initialTab()); // default tab, or the one we returned to after step-up
   } else {
     showGate();
@@ -233,7 +233,7 @@ function init() {
   initAccountMenu();
   initStepUp();
   // Reveal/hide admin-only tabs as elevation comes and goes.
-  window.addEventListener('dh:elevation-changed', (e) => applyAdminTabVisibility(e.detail));
+  globalThis.addEventListener('dh:elevation-changed', (e) => applyAdminTabVisibility(e.detail));
   document.getElementById('auth-gate-signin')?.addEventListener('click', () => login('/ui'));
   document.getElementById('logout-btn')?.addEventListener('click', () => logout());
   runAuthGate();

@@ -108,7 +108,7 @@ function isLiteEmailAddress(value: string): boolean {
 export function cloneAllowlistEntry(entry: ConsoleAccountAllowlistEntry): ConsoleAccountAllowlistEntry {
   return {
     ...entry,
-    createdAt: new Date(entry.createdAt.getTime()),
+    createdAt: new Date(entry.createdAt),
     revokedAt: cloneDate(entry.revokedAt),
   };
 }

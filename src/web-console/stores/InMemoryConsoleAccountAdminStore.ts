@@ -116,7 +116,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
       id: randomUUID(),
       userId: input.userId,
       role: input.role,
-      grantedAt: new Date(input.grantedAt.getTime()),
+      grantedAt: new Date(input.grantedAt),
       grantedByUserId: input.grantedByUserId,
       revokedAt: null,
       revokedByUserId: null,
@@ -136,7 +136,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     if (!active) return null;
     const revoked = {
       ...active,
-      revokedAt: new Date(input.revokedAt.getTime()),
+      revokedAt: new Date(input.revokedAt),
       revokedByUserId: input.revokedByUserId,
     };
     this.roles.set(active.id, cloneRoleAssignment(revoked));
@@ -161,7 +161,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     if (this.hasAccountsAdminRole(input.userId) && await this.countEnabledAccountsAdmins() <= 1) return null;
     const updated = {
       ...principal,
-      disabledAt: new Date(input.disabledAt.getTime()),
+      disabledAt: new Date(input.disabledAt),
       authzVersion: principal.authzVersion + 1,
     };
     this.principals.set(input.userId, clonePrincipalSummary(updated));
@@ -272,7 +272,7 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return [...this.roles.values()]
       .filter(assignment => assignment.userId === userId && !assignment.revokedAt)
       .map(assignment => assignment.role)
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
   }
 
   private hasAccountsAdminRole(userId: string): boolean {
@@ -320,8 +320,8 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
 function cloneLinkedIdentity(identity: LinkedIdentity): LinkedIdentity {
   return {
     ...identity,
-    createdAt: new Date(identity.createdAt.getTime()),
-    lastAuthAt: identity.lastAuthAt ? new Date(identity.lastAuthAt.getTime()) : null,
+    createdAt: new Date(identity.createdAt),
+    lastAuthAt: identity.lastAuthAt ? new Date(identity.lastAuthAt) : null,
   };
 }
 
@@ -332,7 +332,7 @@ function stateChangeFromPrincipal(
   return {
     userId: principal.userId,
     authzVersion: principal.authzVersion,
-    disabledAt: principal.disabledAt ? new Date(principal.disabledAt.getTime()) : null,
-    changedAt: new Date(changedAt.getTime()),
+    disabledAt: principal.disabledAt ? new Date(principal.disabledAt) : null,
+    changedAt: new Date(changedAt),
   };
 }

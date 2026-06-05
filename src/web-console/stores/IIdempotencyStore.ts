@@ -93,8 +93,8 @@ export function cloneIdempotencyClaim(claim: IdempotencyClaim): IdempotencyClaim
     ...claim,
     consoleSessionIdHash: cloneBuffer(claim.consoleSessionIdHash),
     requestFingerprint: cloneBuffer(claim.requestFingerprint),
-    createdAt: new Date(claim.createdAt.getTime()),
-    expiresAt: new Date(claim.expiresAt.getTime()),
+    createdAt: new Date(claim.createdAt),
+    expiresAt: new Date(claim.expiresAt),
   };
 }
 

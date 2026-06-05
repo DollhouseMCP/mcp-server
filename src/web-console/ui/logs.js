@@ -81,7 +81,7 @@ export async function init(panelEl, ctx = {}) {
   startPolling();
 
   // Poll only while the Logs tab is the active one and the page is visible.
-  window.addEventListener('dh:tab-activated', (e) => {
+  globalThis.addEventListener('dh:tab-activated', (e) => {
     panelActive = e.detail?.name === 'logs';
     if (panelActive) startPolling();
     else stopPolling();
@@ -91,7 +91,7 @@ export async function init(panelEl, ctx = {}) {
     else stopPolling();
   });
   // Cross-link from the Sessions tab: filter to a specific session's logs.
-  window.addEventListener('dh:filter-logs-by-session', (e) => {
+  globalThis.addEventListener('dh:filter-logs-by-session', (e) => {
     const sid = e.detail?.sessionId;
     if (sid) refilter(sid);
   });

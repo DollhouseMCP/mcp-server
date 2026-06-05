@@ -247,7 +247,7 @@ function renderMemoryView(content) {
     'REMEMBER','NOTE','IMPORTANT','CRITICAL',
   ];
   const DIRECTIVE_PATTERN = new RegExp(
-    `^(${DIRECTIVE_KEYWORDS.join('|')})(\\s)`, 'i'
+    String.raw`^(${DIRECTIVE_KEYWORDS.join('|')})(\s)`, 'i'
   );
 
   function renderInstructions(text) {

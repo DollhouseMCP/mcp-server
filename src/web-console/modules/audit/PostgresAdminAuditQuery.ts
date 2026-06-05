@@ -325,7 +325,7 @@ function jsonRecord(value: unknown): Readonly<Record<string, unknown>> {
     return JSON.parse(value) as Readonly<Record<string, unknown>>;
   }
   return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? JSON.parse(JSON.stringify(value)) as Readonly<Record<string, unknown>>
+    ? structuredClone(value) as Readonly<Record<string, unknown>>
     : {};
 }
 

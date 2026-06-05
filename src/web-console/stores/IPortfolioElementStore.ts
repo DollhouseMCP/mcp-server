@@ -185,7 +185,7 @@ export function clonePortfolioElementSummaryRecord(
 ): ConsolePortfolioElementSummaryRecord {
   return {
     ...record,
-    updatedAt: cloneDate(record.updatedAt) ?? new Date(record.updatedAt.getTime()),
+    updatedAt: cloneDate(record.updatedAt) ?? new Date(record.updatedAt),
     tags: [...record.tags],
   };
 }
@@ -195,7 +195,7 @@ export function clonePortfolioElementDetailRecord(
 ): ConsolePortfolioElementDetailRecord {
   return {
     ...clonePortfolioElementSummaryRecord(record),
-    metadata: JSON.parse(JSON.stringify(record.metadata)) as Record<string, unknown>,
+    metadata: structuredClone(record.metadata) as Record<string, unknown>,
     content: record.content,
   };
 }

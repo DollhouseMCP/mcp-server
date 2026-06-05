@@ -109,10 +109,10 @@ function createAuthenticationContext(
     grantedCapabilities: [...session.grantedCapabilities],
     elevation: session.elevation ? {
       capabilities: [...session.elevation.capabilities],
-      expiresAt: new Date(session.elevation.expiresAt.getTime()),
+      expiresAt: new Date(session.elevation.expiresAt),
       acr: session.elevation.acr,
       amr: [...session.elevation.amr],
-      authTime: new Date(session.elevation.authTime.getTime()),
+      authTime: new Date(session.elevation.authTime),
     } : null,
   };
 }

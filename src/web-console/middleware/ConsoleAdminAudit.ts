@@ -50,7 +50,7 @@ export function buildConsoleAdminAuditEvent(
     capability: route.requiredCapability,
     elevationAcr: elevation?.acr ?? null,
     elevationAmr: elevation ? [...elevation.amr] : [],
-    elevationAuthTime: elevation ? new Date(elevation.authTime.getTime()) : null,
+    elevationAuthTime: elevation ? new Date(elevation.authTime) : null,
     correlationId: requireConsoleRequestContext(req).correlationId,
     endpoint: `${route.method} ${route.path}`,
     operation: auditOperation,

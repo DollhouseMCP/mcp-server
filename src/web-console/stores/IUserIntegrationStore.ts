@@ -171,5 +171,5 @@ function isIntegrationErrorReason(value: string): value is UserIntegrationErrorR
 }
 
 function cloneJsonRecord(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  return structuredClone(value) as Record<string, unknown>;
 }

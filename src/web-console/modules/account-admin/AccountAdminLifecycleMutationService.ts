@@ -8,10 +8,10 @@ import type {
 } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { serializeAccountPrincipalLifecycle } from './AccountAdminDtos.js';
-import type { AccountAdminRuntimeTerminationService } from './AccountAdminRuntimeTerminationService.js';
 import {
   emptyRuntimeTerminationSummary,
   runtimeTerminationErrorCode,
+  type AccountAdminRuntimeTerminationService,
   type AccountRuntimeTerminationSummary,
 } from './AccountAdminRuntimeTerminationService.js';
 
@@ -274,7 +274,7 @@ function withLifecycleState(
 ): ConsolePrincipalSummary {
   return {
     ...principal,
-    disabledAt: disabledAt ? new Date(disabledAt.getTime()) : null,
+    disabledAt: disabledAt ? new Date(disabledAt) : null,
     authzVersion,
   };
 }

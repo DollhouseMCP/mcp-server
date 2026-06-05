@@ -26,7 +26,7 @@ export class ConsoleAccountAllowlistSignInAuthority implements SignInAllowlistAu
       value: entry.normalizedValue,
       note: entry.note,
       createdBy: entry.createdByUserId,
-      createdAt: new Date(entry.createdAt.getTime()),
+      createdAt: new Date(entry.createdAt),
     }));
   }
 }

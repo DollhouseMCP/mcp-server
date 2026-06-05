@@ -32,7 +32,7 @@
   <!-- Console shell: revealed once authenticated. -->
   <div class="console-shell" id="console-shell" hidden>
     <!-- Persistent admin-mode band: shown only while elevation is active. -->
-    <div class="admin-band" id="admin-band" role="status" hidden></div>
+    <output class="admin-band" id="admin-band" hidden></output>
     <header class="site-header">
       <div class="header-brand">
         <img src="dollhouse-logo.png" alt="DollhouseMCP" class="header-logo" width="32" height="32">
@@ -75,39 +75,39 @@
     </header>
 
     <main class="site-main">
-      <div id="tab-portfolio" class="tab-panel active" role="region" aria-label="Portfolio">
+      <section id="tab-portfolio" class="tab-panel active" aria-label="Portfolio">
         <div class="panel-placeholder" id="portfolio-root">Loading portfolio…</div>
-      </div>
-      <div id="tab-sessions" class="tab-panel" hidden role="region" aria-label="Sessions">
+      </section>
+      <section id="tab-sessions" class="tab-panel" hidden aria-label="Sessions">
         <div class="panel-placeholder">Loading sessions…</div>
-      </div>
-      <div id="tab-logs" class="tab-panel" hidden role="region" aria-label="Logs">
+      </section>
+      <section id="tab-logs" class="tab-panel" hidden aria-label="Logs">
         <div class="panel-placeholder">Loading logs…</div>
-      </div>
-      <div id="tab-integrations" class="tab-panel" hidden role="region" aria-label="Integrations">
+      </section>
+      <section id="tab-integrations" class="tab-panel" hidden aria-label="Integrations">
         <div class="panel-placeholder">Loading integrations…</div>
-      </div>
-      <div id="tab-permissions" class="tab-panel" hidden role="region" aria-label="Permissions">
+      </section>
+      <section id="tab-permissions" class="tab-panel" hidden aria-label="Permissions">
         <div class="panel-placeholder">Permissions (gatekeeper policies &amp; decision feed) — coming next.</div>
-      </div>
-      <div id="tab-setup" class="tab-panel" hidden role="region" aria-label="Setup">
+      </section>
+      <section id="tab-setup" class="tab-panel" hidden aria-label="Setup">
         <div class="panel-placeholder">Setup (connect your MCP client) — coming next.</div>
-      </div>
-      <div id="tab-users" class="tab-panel" hidden role="region" aria-label="User administration">
+      </section>
+      <section id="tab-users" class="tab-panel" hidden aria-label="User administration">
         <div class="panel-placeholder">Loading users…</div>
-      </div>
-      <div id="tab-admin-security" class="tab-panel" hidden role="region" aria-label="Security administration">
+      </section>
+      <section id="tab-admin-security" class="tab-panel" hidden aria-label="Security administration">
         <div class="panel-placeholder">Security (auth policy &amp; signing keys) — coming next.</div>
-      </div>
-      <div id="tab-operations" class="tab-panel" hidden role="region" aria-label="Operations">
+      </section>
+      <section id="tab-operations" class="tab-panel" hidden aria-label="Operations">
         <div class="panel-placeholder">Operations (config, health, system logs, sessions) — coming next.</div>
-      </div>
-      <div id="tab-admin-metrics" class="tab-panel" hidden role="region" aria-label="System metrics">
+      </section>
+      <section id="tab-admin-metrics" class="tab-panel" hidden aria-label="System metrics">
         <div class="panel-placeholder">Loading system metrics…</div>
-      </div>
-      <div id="tab-audit" class="tab-panel" hidden role="region" aria-label="Audit">
+      </section>
+      <section id="tab-audit" class="tab-panel" hidden aria-label="Audit">
         <div class="panel-placeholder">Audit (admin actions, approvals, authentication) — coming next.</div>
-      </div>
+      </section>
     </main>
   </div>
 

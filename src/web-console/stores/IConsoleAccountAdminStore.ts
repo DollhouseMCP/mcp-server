@@ -261,7 +261,7 @@ function hasUnsupportedControlCharacter(value: string): boolean {
 export function cloneRoleAssignment(assignment: ConsoleRoleAssignment): ConsoleRoleAssignment {
   return {
     ...assignment,
-    grantedAt: new Date(assignment.grantedAt.getTime()),
+    grantedAt: new Date(assignment.grantedAt),
     revokedAt: cloneDate(assignment.revokedAt),
   };
 }
@@ -272,7 +272,7 @@ export function clonePrincipalSummary(summary: ConsolePrincipalSummary): Console
     authMethods: [...summary.authMethods],
     roles: [...summary.roles],
     disabledAt: cloneDate(summary.disabledAt),
-    createdAt: new Date(summary.createdAt.getTime()),
+    createdAt: new Date(summary.createdAt),
     lastLoginAt: cloneDate(summary.lastLoginAt),
   };
 }

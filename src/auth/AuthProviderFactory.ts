@@ -264,6 +264,20 @@ async function createEmbeddedProvider(
     builtMethods.push(instrumentAuthMethod(raw, config.performanceMonitor));
   }
 
+  // Admin step-up (mounted only when both adminTotpService and
+  // consoleIdentityResolver are present) MUST have a rate-limit store, or
+  // TOTP proof attempts would not be throttled (checkAdminTotpRateLimit
+  // fails open on a missing store). Fail closed at construction — mirroring
+  // the local-password / magic-link / DCR guards — so a forgotten store is a
+  // startup error, never a silent loss of brute-force protection on the
+  // highest-value elevation path.
+  if (config.adminTotpService && config.consoleIdentityResolver && !config.rateLimitStore) {
+    throw new Error(
+      'admin step-up (adminTotpService + consoleIdentityResolver) requires AuthConfig.rateLimitStore. ' +
+      'AuthServiceRegistrar constructs one from DOLLHOUSE_RATE_LIMIT_BACKEND (memory|postgres) — verify the registrar ran before createAuthProvider().',
+    );
+  }
+
   return new EmbeddedAuthorizationServer({
     publicBaseUrl: config.publicBaseUrl,
     mcpPath: config.mcpPath,

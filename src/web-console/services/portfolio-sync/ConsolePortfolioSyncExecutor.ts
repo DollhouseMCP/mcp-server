@@ -390,7 +390,7 @@ function serializePortfolioElement(record: ConsolePortfolioElementDetailRecord):
 }
 
 function sanitizeMetadata(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  return structuredClone(value) as Record<string, unknown>;
 }
 
 function sameElementContent(existing: ConsolePortfolioElementDetailRecord, parsed: ParsedRemoteElement): boolean {

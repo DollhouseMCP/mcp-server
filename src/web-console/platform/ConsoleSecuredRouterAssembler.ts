@@ -19,7 +19,7 @@ import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
-import type { ConsoleHttpMethod, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
+import type { ConsoleHttpMethod, ConsoleRouteDefinition , ConsoleRequest } from './ConsolePlatformTypes.js';
 import { isElevationValidForRoute } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
@@ -29,7 +29,6 @@ import {
   type ConsoleUserContextOptions,
 } from './ConsoleUserContextMiddleware.js';
 import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
-import type { ConsoleRequest } from './ConsolePlatformTypes.js';
 import { requireConsoleAuthentication } from '../middleware/ConsoleAuthentication.js';
 
 export interface SecuredConsoleRouterOptions {

@@ -13,8 +13,7 @@ import {
   type ConsoleRequest,
   type ConsoleRouteDefinition,
 } from '../../../../src/web-console/index.js';
-import type { CliApprovalRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
-import type { ConfirmationRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
+import type { CliApprovalRecord , ConfirmationRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import { GatekeeperSession } from '../../../../src/handlers/mcp-aql/GatekeeperSession.js';
 import type { ApprovalRef, ApprovalSearchFilter, IConfirmationStore } from '../../../../src/state/IConfirmationStore.js';

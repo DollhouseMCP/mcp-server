@@ -209,7 +209,7 @@ function schemaTypeField(record: UnknownRecord, key: string): OperatorConfigSett
 function cloneAllowedValue(value: unknown): unknown {
   if (value === null || typeof value === 'string' || typeof value === 'boolean' || typeof value === 'number') return value;
   if (Array.isArray(value)) return value.map(cloneAllowedValue);
-  if (value && typeof value === 'object') return JSON.parse(JSON.stringify(value));
+  if (value && typeof value === 'object') return structuredClone(value);
   return null;
 }
 

@@ -19,7 +19,7 @@ export class InMemoryConsoleOAuthSubjectResolver implements ConsoleOAuthSubjectR
   async listLinkedSubjects(userId: string): Promise<readonly string[]> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
-    return [...(this.subjectsByUserId.get(userId) ?? [])].sort();
+    return [...(this.subjectsByUserId.get(userId) ?? [])].sort((a, b) => a.localeCompare(b));
   }
 
   private addLink(userId: string, sub: string): void {

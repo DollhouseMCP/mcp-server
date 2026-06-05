@@ -116,7 +116,7 @@ export function clonePortfolioSyncJobRecord(record: PortfolioSyncJobRecord): Por
     ...record,
     leaseUntil: cloneDate(record.leaseUntil),
     resultSummary: record.resultSummary ? cloneJsonRecord(record.resultSummary) : null,
-    createdAt: cloneDate(record.createdAt) ?? new Date(record.createdAt.getTime()),
+    createdAt: cloneDate(record.createdAt) ?? new Date(record.createdAt),
     startedAt: cloneDate(record.startedAt),
     completedAt: cloneDate(record.completedAt),
   };
@@ -172,5 +172,5 @@ function validateResultSummary(value: Readonly<Record<string, unknown>>): void {
 }
 
 function cloneJsonRecord(value: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>;
+  return structuredClone(value) as Record<string, unknown>;
 }

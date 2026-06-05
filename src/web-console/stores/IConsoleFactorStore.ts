@@ -63,7 +63,7 @@ export function cloneTotpFactorRecord(record: ConsoleTotpFactorRecord): ConsoleT
     factorId: record.factorId,
     factorType: record.factorType,
     secretCiphertext: cloneBuffer(record.secretCiphertext),
-    enrolledAt: new Date(record.enrolledAt.getTime()),
+    enrolledAt: new Date(record.enrolledAt),
     disabledAt: cloneDate(record.disabledAt),
     lastUsedAt: cloneDate(record.lastUsedAt),
   };

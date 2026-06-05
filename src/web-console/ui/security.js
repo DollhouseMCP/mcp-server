@@ -30,7 +30,7 @@ export async function fetchFactorStatus() {
 
 /** Navigate into the AS-hosted enrollment ceremony. */
 export function startEnrollment() {
-  window.location.href = ENROLL_URL;
+  globalThis.location.href = ENROLL_URL;
 }
 
 export async function openSecurityPanel(ctx = {}) {
@@ -65,7 +65,7 @@ function renderModal(status) {
   modal.querySelectorAll('[data-close]').forEach(el => el.addEventListener('click', close));
   modal.querySelector('#sec-enroll')?.addEventListener('click', startEnrollment);
   modal.querySelector('#sec-replace')?.addEventListener('click', startEnrollment);
-  modal.querySelector('#sec-disable')?.addEventListener('click', () => { window.location.href = DISABLE_URL; });
+  modal.querySelector('#sec-disable')?.addEventListener('click', () => { globalThis.location.href = DISABLE_URL; });
   document.addEventListener('keydown', onEsc);
 }
 

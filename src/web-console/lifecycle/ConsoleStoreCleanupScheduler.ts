@@ -96,7 +96,7 @@ export class ConsoleStoreCleanupScheduler {
           errors,
         );
       }
-      return { before: new Date(before.getTime()), removed, errors };
+      return { before: new Date(before), removed, errors };
     } finally {
       this.running = false;
     }

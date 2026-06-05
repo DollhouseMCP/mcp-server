@@ -77,7 +77,7 @@ function render(elevation) {
   else if (!active && prevElevated) toast('Back to standard access.', 'info');
   sessionStorage.setItem(ELEVATED_KEY, active ? '1' : '0');
 
-  window.dispatchEvent(new CustomEvent('dh:elevation-changed', {
+  globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
     detail: { active: !!active, capabilities, expiresAt },
   }));
 }

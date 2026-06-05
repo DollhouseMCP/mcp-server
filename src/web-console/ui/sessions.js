@@ -27,7 +27,7 @@ export async function init(panelEl, ctx = {}) {
   host.querySelector('#sess-revoke-others').addEventListener('click', signOutEverywhereElse);
   await load();
   // Re-fetch when the user returns to the tab (sessions drift over time).
-  window.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'sessions') load(); });
+  globalThis.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'sessions') load(); });
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
@@ -174,7 +174,7 @@ async function revokeConsole(sessionId, isCurrent) {
   if (!ok) return;
   const res = await del('/me/security/sessions/' + encodeURIComponent(sessionId)).catch(() => null);
   if (!res || (res.status !== 200 && res.status !== 204)) { notify('Could not sign out that session.', 'error'); return; }
-  if (isCurrent || res.body?.current_session_revoked) { window.location.href = '/ui'; return; }
+  if (isCurrent || res.body?.current_session_revoked) { globalThis.location.href = '/ui'; return; }
   notify('Signed out.', 'success');
   await load();
 }

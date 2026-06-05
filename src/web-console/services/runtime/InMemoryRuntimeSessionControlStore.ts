@@ -41,11 +41,11 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
       replicaId: input.replicaId,
       transport: input.transport,
       clientInfo: input.clientInfo ? { ...input.clientInfo } : null,
-      startedAt: new Date(input.startedAt.getTime()),
-      lastActiveAt: new Date(input.lastActiveAt.getTime()),
+      startedAt: new Date(input.startedAt),
+      lastActiveAt: new Date(input.lastActiveAt),
       requestCount: input.requestCount ?? 0,
       errorCount: input.errorCount ?? 0,
-      leaseUntil: new Date(input.leaseUntil.getTime()),
+      leaseUntil: new Date(input.leaseUntil),
       status: 'active',
       closedAt: null,
     };
@@ -62,10 +62,10 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
     if (current.status !== 'active') return { kind: 'lost', reason: 'closing' };
     const updated: RuntimeSessionPresence = {
       ...current,
-      lastActiveAt: new Date(input.lastActiveAt.getTime()),
+      lastActiveAt: new Date(input.lastActiveAt),
       requestCount: input.requestCount,
       errorCount: input.errorCount,
-      leaseUntil: new Date(input.leaseUntil.getTime()),
+      leaseUntil: new Date(input.leaseUntil),
     };
     this.presence.set(input.sessionId, cloneRuntimeSessionPresence(updated));
     return { kind: 'updated', presence: cloneRuntimeSessionPresence(updated) };
@@ -79,7 +79,7 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
     const updated: RuntimeSessionPresence = {
       ...current,
       status: 'closing',
-      closedAt: new Date(closedAt.getTime()),
+      closedAt: new Date(closedAt),
     };
     this.presence.set(sessionId, cloneRuntimeSessionPresence(updated));
     return cloneRuntimeSessionPresence(updated);
@@ -137,7 +137,7 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
       sessionId: input.sessionId,
       targetReplicaId: input.targetReplicaId,
       reason: input.reason,
-      requestedAt: new Date(input.requestedAt.getTime()),
+      requestedAt: new Date(input.requestedAt),
       requestedBy: { ...input.requestedBy },
       invalidationEventId: input.invalidationEventId ?? null,
     };
@@ -166,7 +166,7 @@ export class InMemoryRuntimeSessionControlStore implements IRuntimeSessionContro
     this.acknowledgements.set(input.commandId, {
       commandId: input.commandId,
       replicaId: input.replicaId,
-      acknowledgedAt: new Date(input.acknowledgedAt.getTime()),
+      acknowledgedAt: new Date(input.acknowledgedAt),
       result: input.result,
       errorCode: input.errorCode ?? null,
     });

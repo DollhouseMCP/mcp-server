@@ -74,7 +74,7 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
       displayValue: input.value.trim(),
       note: input.note ?? null,
       createdByUserId: input.createdByUserId,
-      createdAt: new Date(input.createdAt.getTime()),
+      createdAt: new Date(input.createdAt),
       revokedByUserId: null,
       revokedAt: null,
     };
@@ -103,7 +103,7 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
     const revoked = {
       ...entry,
       revokedByUserId: input.revokedByUserId,
-      revokedAt: new Date(input.revokedAt.getTime()),
+      revokedAt: new Date(input.revokedAt),
     };
     this.entries.set(entry.id, cloneAllowlistEntry(revoked));
     return cloneAllowlistEntry(revoked);

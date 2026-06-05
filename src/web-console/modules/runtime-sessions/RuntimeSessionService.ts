@@ -1,8 +1,7 @@
 import type {
   RuntimeSessionPresence,
   RuntimeTerminationReason,
-} from '../../services/runtime/IRuntimeSessionControlStore.js';
-import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
+ IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type {
   RuntimeSessionAccountDto,

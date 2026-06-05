@@ -33,7 +33,7 @@ export async function init(panelEl, ctx = {}) {
   host.querySelector('#am-refresh').addEventListener('click', () => load());
   host.querySelector('#am-auto').addEventListener('change', (e) => { state.autoRefresh = e.target.checked; syncTimer(); });
   await load();
-  window.addEventListener('dh:tab-activated', onTabActivated);
+  globalThis.addEventListener('dh:tab-activated', onTabActivated);
   document.addEventListener('visibilitychange', syncTimer);
 }
 

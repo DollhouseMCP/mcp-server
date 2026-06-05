@@ -13,6 +13,8 @@ import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/
 import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 import type { SignInAllowlistAuthority } from '../../../src/auth/embedded-as/allowlistGate.js';
+import type { AdminTotpService } from '../../../src/auth/embedded-as/totp/AdminTotpService.js';
+import type { IConsoleIdentityResolver } from '../../../src/web-console/identity/IConsoleIdentityResolver.js';
 
 const TRIVIAL_CONSENT_ID = 'trivial-consent';
 const LOOPBACK_BASE_URL = 'http://127.0.0.1:65530';
@@ -332,6 +334,49 @@ describe('AuthProviderFactory two-level structure', () => {
         expect(message).toMatch(/DOLLHOUSE_GITHUB_CLIENT_ID/);
         expect(message).toMatch(/DOLLHOUSE_GITHUB_CLIENT_SECRET/);
       }
+    });
+  });
+
+  describe('admin step-up rate-limit store guard', () => {
+    const originalHost = process.env.DOLLHOUSE_HTTP_HOST;
+    // The fakes are never invoked — both assertions resolve at construction
+    // time, before the AS would call into either service.
+    const fakeAdminTotpService = {} as unknown as AdminTotpService;
+    const fakeConsoleIdentityResolver: IConsoleIdentityResolver = {
+      resolveEnabledPrincipal: () => Promise.resolve(null),
+      linkAccount: () => Promise.resolve(),
+    };
+
+    afterEach(() => {
+      if (originalHost === undefined) delete process.env.DOLLHOUSE_HTTP_HOST;
+      else process.env.DOLLHOUSE_HTTP_HOST = originalHost;
+    });
+
+    it('refuses to construct when admin step-up is enabled without a rate-limit store', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
+      await expect(createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: [TRIVIAL_CONSENT_ID],
+        publicBaseUrl: LOOPBACK_BASE_URL,
+        adminTotpService: fakeAdminTotpService,
+        consoleIdentityResolver: fakeConsoleIdentityResolver,
+        // rateLimitStore intentionally omitted — admin step-up must fail closed.
+      })).rejects.toThrow(/admin step-up.*requires AuthConfig\.rateLimitStore/);
+    });
+
+    it('constructs when admin step-up is enabled with a rate-limit store', async () => {
+      process.env.DOLLHOUSE_HTTP_HOST = '127.0.0.1';
+      const provider = await createAuthProvider({
+        enabled: true,
+        provider: 'embedded',
+        methods: [TRIVIAL_CONSENT_ID],
+        publicBaseUrl: LOOPBACK_BASE_URL,
+        rateLimitStore: new InMemoryRateLimitStore(),
+        adminTotpService: fakeAdminTotpService,
+        consoleIdentityResolver: fakeConsoleIdentityResolver,
+      });
+      expect(provider).toBeDefined();
     });
   });
 });

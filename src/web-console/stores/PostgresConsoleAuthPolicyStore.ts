@@ -21,7 +21,7 @@ export class PostgresConsoleAuthPolicyStore implements IConsoleAuthPolicyStore {
     if (!row) return cloneConsoleAuthPolicy(DEFAULT_CONSOLE_AUTH_POLICY);
     return {
       maxAdminElevationSeconds: row.maxAdminElevationSeconds,
-      updatedAt: new Date(row.updatedAt.getTime()),
+      updatedAt: new Date(row.updatedAt),
     };
   }
 

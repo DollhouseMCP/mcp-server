@@ -84,10 +84,10 @@ const ALLOWED_PAYLOAD_KEYS = {
 } as const satisfies Record<ConsoleSecurityInvalidationKind, readonly string[]>;
 
 export function validateSecurityInvalidationEventInput(input: SecurityInvalidationEventInput): void {
-  if (!EVENT_KINDS.some(kind => kind === input.kind)) {
+  if (!EVENT_KINDS.includes(input.kind)) {
     throw new ConsoleStoreValidationError(`unknown security invalidation kind '${input.kind}'`);
   }
-  if (!URGENCIES.some(urgency => urgency === input.urgency)) {
+  if (!URGENCIES.includes(input.urgency)) {
     throw new ConsoleStoreValidationError(`unknown security invalidation urgency '${input.urgency}'`);
   }
   if (input.userId === null && input.kind !== 'console_session_revoked') {
@@ -138,7 +138,7 @@ export function cloneSecurityInvalidationEvent(
     ...event,
     consoleSessionIdHash: event.consoleSessionIdHash ? cloneBuffer(event.consoleSessionIdHash) : null,
     payload: { ...event.payload },
-    createdAt: new Date(event.createdAt.getTime()),
+    createdAt: new Date(event.createdAt),
     createdByUserId: event.createdByUserId,
   };
 }
@@ -146,8 +146,8 @@ export function cloneSecurityInvalidationEvent(
 export function cloneReplicaLease(lease: ReplicaLease): ReplicaLease {
   return {
     replicaId: lease.replicaId,
-    leaseUntil: new Date(lease.leaseUntil.getTime()),
-    renewedAt: new Date(lease.renewedAt.getTime()),
+    leaseUntil: new Date(lease.leaseUntil),
+    renewedAt: new Date(lease.renewedAt),
   };
 }
 

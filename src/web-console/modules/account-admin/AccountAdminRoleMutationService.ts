@@ -348,7 +348,7 @@ function parseRolesBody(body: unknown):
 }
 
 function uniqueSortedRoles(roles: readonly ConsoleAdminRole[]): ConsoleAdminRole[] {
-  return [...new Set(roles)].sort();
+  return [...new Set(roles)].sort((a, b) => a.localeCompare(b));
 }
 
 function isConsoleAdminRole(value: string): value is ConsoleAdminRole {

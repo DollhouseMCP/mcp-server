@@ -30,6 +30,6 @@ export class InMemoryConsoleIdentityResolver implements IConsoleIdentityResolver
 function clonePrincipal(principal: ConsolePrincipalSecurityState): ConsolePrincipalSecurityState {
   return {
     ...principal,
-    disabledAt: principal.disabledAt ? new Date(principal.disabledAt.getTime()) : null,
+    disabledAt: principal.disabledAt ? new Date(principal.disabledAt) : null,
   };
 }

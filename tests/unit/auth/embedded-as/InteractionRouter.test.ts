@@ -81,7 +81,7 @@ function fakeProvider(opts: FakeProviderOptions): OidcProviderForInteractions {
     addOIDCScope(scope: string) { this.scopes.push(scope); }
     addResourceScope(_resource: string, scope: string) { this.scopes.push(scope); }
     async save() { return 'grant-for-test'; }
-    static async find() { return undefined; }
+    static async find() { return; }
   }
 
   return {

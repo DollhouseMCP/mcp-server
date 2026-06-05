@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import { buffersEqual, hashKey } from './ConsoleStoreValidation.js';
+import { buffersEqual, hashKey , ConsoleStoreConflictError, assertHash, assertUuid } from './ConsoleStoreValidation.js';
 import type {
   IdempotencyClaim,
   IdempotencyClaimResult,
@@ -17,7 +17,6 @@ import {
   validateIdempotencyCompletion,
   validateIdempotencyIdentity,
 } from './IIdempotencyStore.js';
-import { ConsoleStoreConflictError, assertHash, assertUuid } from './ConsoleStoreValidation.js';
 
 type StoredClaim = IdempotencyClaim | IdempotencyRecord;
 

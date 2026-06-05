@@ -4,9 +4,8 @@
 
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { GatekeeperSession } from '../../../../src/handlers/mcp-aql/GatekeeperSession.js';
-import type { CreateCliApprovalArgs } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
+import type { CreateCliApprovalArgs , CliApprovalRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
-import type { CliApprovalRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 
 const TOOL_BASH = 'Bash';
 const NPM_INSTALL = { command: 'npm install' };

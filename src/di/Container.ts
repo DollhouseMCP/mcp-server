@@ -55,7 +55,7 @@ import type { InitializationService } from "../services/InitializationService.js
 import { PersonaIndicatorService } from "../services/PersonaIndicatorService.js";
 import { ElementEventDispatcher } from "../events/ElementEventDispatcher.js";
 import { DangerZoneEnforcer } from "../security/DangerZoneEnforcer.js";
-import type { IActivationStateStore } from "../state/IActivationStateStore.js";
+import type { IActivationStateStore , PersistedActivation } from "../state/IActivationStateStore.js";
 import { FileActivationStateStore } from "../state/FileActivationStateStore.js";
 import { FileConfirmationStore } from "../state/FileConfirmationStore.js";
 import { FileChallengeStore } from "../state/FileChallengeStore.js";
@@ -77,7 +77,7 @@ import type { SessionContainerRegistry } from "./SessionContainerRegistry.js";
 import type { PatternEncryptor } from "../security/encryption/PatternEncryptor.js";
 import type { ContextTracker } from "../security/encryption/ContextTracker.js";
 import type { createStdioSession } from "../context/StdioSession.js";
-import type { SessionResolver } from "../context/SessionContext.js";
+import type { SessionResolver , SessionContext } from "../context/SessionContext.js";
 import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
 import type { ITokenStore } from "../security/tokenStores/ITokenStore.js";
@@ -105,8 +105,6 @@ import type { GatekeeperMetricsTracker } from '../metrics/GatekeeperMetricsTrack
 import type { LifecycleService } from '../lifecycle/LifecycleService.js';
 import type { WebServerResult } from '../web/server.js';
 import type { RequestHandler } from 'express';
-import type { PersistedActivation } from '../state/IActivationStateStore.js';
-import type { SessionContext } from '../context/SessionContext.js';
 import type { IUserPathResolver } from '../paths/IUserPathResolver.js';
 import type { PathService } from '../paths/PathService.js';
 import type { SecurityTelemetry } from '../security/telemetry/SecurityTelemetry.js';

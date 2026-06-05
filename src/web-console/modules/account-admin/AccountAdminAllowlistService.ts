@@ -11,8 +11,7 @@ import type {
   ConsoleAccountAllowlistKind,
   IConsoleAccountAllowlistStore,
 } from '../../stores/IConsoleAccountAllowlistStore.js';
-import { assertAllowlistKind } from '../../stores/IConsoleAccountAllowlistStore.js';
-import { validateAllowlistValue } from '../../stores/IConsoleAccountAllowlistStore.js';
+import { assertAllowlistKind , validateAllowlistValue } from '../../stores/IConsoleAccountAllowlistStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import {
   serializeAccountAllowlistEntry,

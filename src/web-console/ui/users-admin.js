@@ -56,7 +56,7 @@ export async function init(panelEl, ctx = {}) {
   host.querySelector('#ua-refresh').addEventListener('click', load);
   host.querySelector('#ua-invite').addEventListener('click', openInvite);
   // Re-fetch when re-entering the tab; accounts drift as other admins act.
-  window.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'users') load(); });
+  globalThis.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'users') load(); });
   await load();
 }
 

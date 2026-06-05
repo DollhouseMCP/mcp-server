@@ -228,7 +228,7 @@ function isJsonCompatible(value: unknown): boolean {
 }
 
 function cloneJson(value: unknown): unknown {
-  return value === undefined ? null : JSON.parse(JSON.stringify(value)) as unknown;
+  return value === undefined ? null : structuredClone(value) as unknown;
 }
 
 function validateConfigSize(config: UserConfig): ConsoleHandlerResult | null {

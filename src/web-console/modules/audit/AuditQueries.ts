@@ -163,7 +163,7 @@ function decodeCursor(cursor: string): number {
 }
 
 function cloneRecord(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return JSON.parse(JSON.stringify(record)) as Readonly<Record<string, unknown>>;
+  return structuredClone(record) as Readonly<Record<string, unknown>>;
 }
 
 function projectApprovalAuditDto(row: ApprovalAuditEventDto): ApprovalAuditEventDto {

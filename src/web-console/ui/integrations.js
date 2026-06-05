@@ -45,7 +45,7 @@ export async function init(panelEl, ctx = {}) {
   host.innerHTML = shell();
   host.querySelector('#int-refresh').addEventListener('click', () => load());
   await load();
-  window.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'integrations') load(); });
+  globalThis.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'integrations') load(); });
 }
 
 async function load() {
@@ -165,7 +165,7 @@ async function connect(providerId) {
   const url = res?.status === 200 ? res.body?.authorize_url : null;
   if (!url) { notify('Couldn\'t start the connection. Try again.', 'error'); return; }
   // Hand off to the provider's authorization page; it returns to /me/integrations.
-  window.location.href = url;
+  globalThis.location.href = url;
 }
 
 async function disconnect(providerId) {

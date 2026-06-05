@@ -147,7 +147,7 @@ const CONTRACT_ROUTES = [
   'POST /api/v1/admin/security/users/:user_id/factors/totp/reset',
   'GET /api/v1/health',
   'GET /api/v1/health/ready',
-].sort();
+].sort((a, b) => a.localeCompare(b));
 
 describe('web-console route manifest parity', () => {
   it('matches the v1 API contract route list when all descriptor feature gates are enabled', async () => {
@@ -166,7 +166,7 @@ describe('web-console route manifest parity', () => {
 
     const manifestRoutes = composition.registry.createRouteManifest().routes
       .map(route => `${route.method} ${route.path}`)
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
     expect(manifestRoutes).toEqual(CONTRACT_ROUTES);
   });
 });

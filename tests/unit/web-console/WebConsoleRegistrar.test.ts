@@ -872,7 +872,7 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container);
 
     const registeredIds = new Set(composition.registry.createRouteManifest().routes.map(route => route.moduleId));
-    expect([...registeredIds].sort()).toEqual(['auth', 'health']);
+    expect([...registeredIds].sort((a, b) => a.localeCompare(b))).toEqual(['auth', 'health']);
     expect(composition.apiV1Mount).toBeNull();
     expect(composition.routesMounted).toBe(false);
   });
@@ -1266,8 +1266,8 @@ describe('WebConsoleRegistrar', () => {
       },
     });
 
-    expect([...new Set(dependencies.map(dependency => dependency.moduleId))].sort()).toEqual(
-      [...registeredIds].filter(moduleId => moduleId !== 'health').sort(),
+    expect([...new Set(dependencies.map(dependency => dependency.moduleId))].sort((a, b) => a.localeCompare(b))).toEqual(
+      [...registeredIds].filter(moduleId => moduleId !== 'health').sort((a, b) => a.localeCompare(b)),
     );
     expect(dependencies.every(dependency => registeredIds.has(dependency.moduleId))).toBe(true);
   });
