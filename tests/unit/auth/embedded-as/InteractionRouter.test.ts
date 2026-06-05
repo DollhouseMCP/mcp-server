@@ -6,12 +6,13 @@
  * `?method=<id>`, and dispatch on subsequent requests.
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import {
   ADMIN_STEP_UP_CLAIMS_MODEL,
   createInteractionRouter,
+  renderClientConsentForIdentity,
   type AdminStepUpInteractionDeps,
   type OidcProviderForInteractions,
   type OidcInteractionDetails,
@@ -26,6 +27,7 @@ import type {
   InteractionStep,
 } from '../../../../src/auth/embedded-as/IAuthMethod.js';
 import type { AuthMethodId } from '../../../../src/auth/embedded-as/AuthMethodFactory.js';
+import { securityHeaders } from '../../../../src/auth/embedded-as/securityHeaders.js';
 
 const TRIVIAL_CONSENT_ID = 'trivial-consent';
 const MAGIC_LINK_ID = 'magic-link';
@@ -58,8 +60,13 @@ function fakeMethod(opts: FakeMethodOptions): IAuthMethod {
   };
 }
 
+function clientConsentSeenTestKey(accountId: string, clientId: string): string {
+  return `cc_${Buffer.from(JSON.stringify([accountId, clientId]), 'utf8').toString('base64url')}`;
+}
+
 interface FakeProviderOptions {
   details: OidcInteractionDetails;
+  interactionFinished?: jest.MockedFunction<OidcProviderForInteractions['interactionFinished']>;
 }
 
 function fakeProvider(opts: FakeProviderOptions): OidcProviderForInteractions {
@@ -76,10 +83,33 @@ function fakeProvider(opts: FakeProviderOptions): OidcProviderForInteractions {
     async save() { return 'grant-for-test'; }
     static async find() { return undefined; }
   }
+
   return {
     async interactionDetails() { return opts.details; },
-    async interactionFinished(_req, res) { res.redirect(303, '/finished'); },
+    interactionFinished: opts.interactionFinished ?? (async (_req, res) => {
+      if (!res.headersSent) res.redirect(303, '/finished');
+    }),
     Grant,
+    Client: {
+      async find() {
+        return {
+          clientId: 'c',
+          clientName: 'Test Client',
+          redirectUris: ['https://client.example.com/oauth/callback'],
+          applicationType: 'web',
+          scope: 'openid mcp',
+          metadata() {
+            return {
+              client_id: 'c',
+              client_name: 'Test Client',
+              redirect_uris: ['https://client.example.com/oauth/callback'],
+              application_type: 'web',
+              scope: 'openid mcp',
+            };
+          },
+        };
+      },
+    },
   };
 }
 
@@ -93,14 +123,15 @@ async function startHarness(
   storage: InMemoryAuthStorageLayer,
   details: OidcInteractionDetails,
   adminStepUp?: AdminStepUpInteractionDeps,
+  providerOverride?: OidcProviderForInteractions,
 ): Promise<HarnessResult> {
   const app = express();
   app.disable('x-powered-by');
   const router = createInteractionRouter({
-    provider: fakeProvider({ details }),
+    provider: providerOverride ?? fakeProvider({ details }),
     methods,
     storage,
-    defaultResource: 'https://as.example.test/mcp',
+    defaultResource: 'https://mcp.example.com/mcp',
     adminStepUp,
   });
   app.use('/interaction', router);
@@ -217,6 +248,77 @@ describe('InteractionRouter — multi-method dispatch', () => {
     }
   });
 
+  it('authenticated method POST renders client consent before finishing interaction', async () => {
+    const localDetails: OidcInteractionDetails = {
+      uid: 'method-client-consent-uid',
+      params: {
+        client_id: 'c',
+        scope: 'openid mcp',
+        redirect_uri: 'https://client.example.com/oauth/callback',
+        resource: 'https://mcp.example.com/mcp',
+      },
+      prompt: { name: 'login', details: {} },
+    };
+    const interactionFinished = jest.fn<OidcProviderForInteractions['interactionFinished']>(
+      async (_req, res) => {
+        if (!res.headersSent) res.redirect(303, '/finished');
+      },
+    );
+    const provider = fakeProvider({ details: localDetails, interactionFinished });
+    const method = fakeMethod({
+      id: TRIVIAL_CONSENT_ID,
+      displayName: 'Trivial',
+      identity: {
+        sub: 'local_alice',
+        displayName: 'Alice Example',
+        email: 'alice@example.com',
+        emailVerified: true,
+      },
+    });
+    const h = await startHarness([method], storage, localDetails, undefined, provider);
+    try {
+      const getRes = await fetch(`${h.url}/interaction/${localDetails.uid}`);
+      const getBody = await getRes.text();
+      const initialCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(getBody)?.[1];
+      expect(initialCsrf).toBeTruthy();
+
+      const consent = await fetch(`${h.url}/interaction/${localDetails.uid}`, {
+        method: 'POST',
+        headers: { 'content-type': FORM_CONTENT_TYPE },
+        body: new URLSearchParams({ csrf_token: initialCsrf ?? '', action: 'approve' }),
+      });
+
+      expect(consent.status).toBe(200);
+      const consentHtml = await consent.text();
+      expect(consentHtml).toContain('Authorize Test Client');
+      expect(consentHtml).toContain('Signed in with Trivial consent');
+      expect(consentHtml).toContain('Alice Example');
+      expect(consentHtml).toContain('alice@example.com');
+      expect(interactionFinished).not.toHaveBeenCalled();
+
+      const consentCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(consentHtml)?.[1];
+      expect(consentCsrf).toBeTruthy();
+      const approve = await fetch(`${h.url}/interaction/${localDetails.uid}`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': FORM_CONTENT_TYPE },
+        body: new URLSearchParams({
+          csrf_token: consentCsrf ?? '',
+          action: 'authorize_oauth_client',
+        }),
+      });
+
+      expect(approve.status).toBe(303);
+      expect(interactionFinished).toHaveBeenCalledTimes(1);
+      expect(interactionFinished.mock.calls[0][2]).toMatchObject({
+        login: { accountId: 'local_alice' },
+        consent: { grantId: 'grant-for-test' },
+      });
+    } finally {
+      await h.close();
+    }
+  });
+
   it('chooser HTML escapes method displayName', async () => {
     const methods = [
       fakeMethod({ id: 'github', displayName: '<script>alert(1)</script>' }),
@@ -231,6 +333,191 @@ describe('InteractionRouter — multi-method dispatch', () => {
       expect(body).toContain('Magic &amp; Link');
     } finally {
       await h.close();
+    }
+  });
+
+  it('client-consent approval finishes a pending callback identity', async () => {
+    const localDetails: OidcInteractionDetails = {
+      uid: 'client-consent-uid',
+      params: {
+        client_id: 'c',
+        scope: 'openid mcp',
+        redirect_uri: 'https://client.example.com/oauth/callback',
+        resource: 'https://mcp.example.com/mcp',
+      },
+      prompt: { name: 'login', details: {} },
+    };
+    const interactionFinished = jest.fn<OidcProviderForInteractions['interactionFinished']>(
+      async (_req, res) => {
+        if (!res.headersSent) res.redirect(303, '/finished');
+      },
+    );
+    const provider = fakeProvider({ details: localDetails, interactionFinished });
+    const method = fakeMethod({ id: 'github', displayName: 'GitHub' });
+
+    const app = express();
+    app.disable('x-powered-by');
+    app.use(securityHeaders());
+    app.get('/seed-consent', (_req, res, next) => {
+      renderClientConsentForIdentity(
+        res,
+        provider,
+        localDetails,
+        'github_42',
+        storage,
+        'https://mcp.example.com/mcp',
+        {
+          sub: 'github_42',
+          displayName: 'Mick Darling',
+          email: 'mick@example.com',
+          provider: 'github',
+          providerUsername: 'mickdarling',
+        },
+      ).catch(next);
+    });
+    app.use('/interaction', createInteractionRouter({
+      provider,
+      methods: [method],
+      storage,
+      defaultResource: 'https://mcp.example.com/mcp',
+    }));
+    const server = app.listen(0);
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const consent = await fetch(`${baseUrl}/seed-consent`);
+      expect(consent.status).toBe(200);
+      expect(consent.headers.get('content-security-policy')).toContain("form-action 'self' https://client.example.com");
+      const html = await consent.text();
+      expect(html).toContain('Authorize Test Client');
+      expect(html).toContain('DollhouseMCP Authorization');
+      expect(html).toContain('OAuth client authorization');
+      expect(html).toContain('client.example.com');
+      expect(html).toContain('openid');
+      expect(html).toContain('mcp');
+      expect(html).toContain('Use DollhouseMCP tools');
+      expect(html).toContain('https://mcp.example.com/mcp');
+      expect(html).toContain('Signed in with GitHub');
+      expect(html).toContain('@mickdarling');
+      expect(html).toContain('mick@example.com');
+      expect(html).toContain('New client for this account');
+      expect(html).toContain('DollhouseMCP will issue OAuth tokens');
+      expect(interactionFinished).not.toHaveBeenCalled();
+
+      const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
+      expect(csrfMatch).not.toBeNull();
+      const approve = await fetch(`${baseUrl}/interaction/${localDetails.uid}`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': FORM_CONTENT_TYPE },
+        body: new URLSearchParams({
+          csrf_token: csrfMatch![1],
+          action: 'authorize_oauth_client',
+        }),
+      });
+      expect(approve.status).toBe(303);
+      expect(interactionFinished).toHaveBeenCalledTimes(1);
+      expect(interactionFinished.mock.calls[0][2]).toMatchObject({
+        login: { accountId: 'github_42' },
+        consent: { grantId: 'grant-for-test' },
+      });
+
+      const events = await storage.listIdentityEvents({ type: 'auth.client_consent.approved' });
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        sub: 'github_42',
+        details: {
+          clientId: 'c',
+          clientFirstSeenForIdentity: true,
+          callbackHost: 'client.example.com',
+          resource: 'https://mcp.example.com/mcp',
+          scopes: ['openid', 'mcp'],
+        },
+      });
+      const seen = await storage.genericGet('ClientConsentSeen', clientConsentSeenTestKey('github_42', 'c'));
+      expect(seen).toMatchObject({
+        accountId: 'github_42',
+        clientId: 'c',
+      });
+
+      const secondConsent = await fetch(`${baseUrl}/seed-consent`);
+      const secondHtml = await secondConsent.text();
+      expect(secondHtml).toContain('Previously authorized by this account');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it('client-consent denial records an audit event and aborts authorization', async () => {
+    const localDetails: OidcInteractionDetails = {
+      uid: 'client-consent-deny-uid',
+      params: {
+        client_id: 'c',
+        scope: 'openid mcp',
+        redirect_uri: 'https://client.example.com/oauth/callback',
+        resource: 'https://mcp.example.com/mcp',
+      },
+      prompt: { name: 'login', details: {} },
+    };
+    const interactionFinished = jest.fn<OidcProviderForInteractions['interactionFinished']>(
+      async (_req, res) => {
+        if (!res.headersSent) res.status(200).end('denied');
+      },
+    );
+    const provider = fakeProvider({ details: localDetails, interactionFinished });
+    const method = fakeMethod({ id: 'github', displayName: 'GitHub' });
+    const app = express();
+    app.disable('x-powered-by');
+    app.get('/seed-consent', (_req, res, next) => {
+      renderClientConsentForIdentity(
+        res,
+        provider,
+        localDetails,
+        'github_42',
+        storage,
+        'https://mcp.example.com/mcp',
+        { sub: 'github_42', provider: 'github', providerUsername: 'mickdarling' },
+      ).catch(next);
+    });
+    app.use('/interaction', createInteractionRouter({
+      provider,
+      methods: [method],
+      storage,
+      defaultResource: 'https://mcp.example.com/mcp',
+    }));
+    const server = app.listen(0);
+    await new Promise<void>((resolve) => server.once('listening', resolve));
+    const port = (server.address() as AddressInfo).port;
+    const baseUrl = `http://127.0.0.1:${port}`;
+
+    try {
+      const consent = await fetch(`${baseUrl}/seed-consent`);
+      const html = await consent.text();
+      const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
+      expect(csrfMatch).not.toBeNull();
+
+      const deny = await fetch(`${baseUrl}/interaction/${localDetails.uid}`, {
+        method: 'POST',
+        redirect: 'manual',
+        headers: { 'content-type': FORM_CONTENT_TYPE },
+        body: new URLSearchParams({
+          csrf_token: csrfMatch![1],
+          action: 'deny_oauth_client',
+        }),
+      });
+
+      expect(deny.status).toBe(200);
+      expect(interactionFinished).toHaveBeenCalledTimes(1);
+      expect(interactionFinished.mock.calls[0][2]).toMatchObject({
+        error: 'access_denied',
+      });
+      const events = await storage.listIdentityEvents({ type: 'auth.client_consent.denied' });
+      expect(events).toHaveLength(1);
+      expect(events[0].sub).toBe('github_42');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 
@@ -508,7 +795,18 @@ describe('InteractionRouter — multi-method dispatch', () => {
           redirect: 'manual',
         });
 
-        expect(post.status).toBe(303);
+        // Non-admin logins go through client consent rather than finishing
+        // directly; approving consent completes the interaction with no admin claims.
+        expect(post.status).toBe(200);
+        const consentCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await post.text())![1];
+        const approve = await fetch(`${h.url}/interaction/${normalDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: consentCsrf, action: 'authorize_oauth_client' }),
+          redirect: 'manual',
+        });
+
+        expect(approve.status).toBe(303);
         await expect(storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-for-test')).resolves.toBeNull();
       } finally {
         await h.close();

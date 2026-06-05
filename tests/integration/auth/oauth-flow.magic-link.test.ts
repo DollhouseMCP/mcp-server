@@ -5,7 +5,7 @@
  * configured with MagicLinkMethod + an in-memory CollectingEmailSender.
  * Asserts the spec-relevant invariants:
  *   - GET /auth/email/verify renders confirmation page (does NOT consume) — must-fix #1
- *   - POST /auth/email/verify completes the OAuth interaction → access_token
+ *   - POST /auth/email/verify renders hosted client consent before access_token
  *   - Account-enumeration: identical response for known and unknown email — must-fix #2
  *   - Per-email rate limit triggers + audit event after threshold — must-fix #3
  *   - Token replay rejected (second consume fails)
@@ -23,10 +23,10 @@ import {
 import { InviteTokenStore } from '../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
-import type {
-  CookieJar} from './oauth-flow-helpers.js';
 import {
   type ASHarness,
+  approveClientConsentPage,
+  type CookieJar,
   followToCodeRedirect,
   getFreePort,
   startAuthorizeFlow,
@@ -160,8 +160,8 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(verifyGet.status).toBe(200);
     expect(await verifyGet.text()).toContain('Confirm sign-in');
 
-    // POST consumes the token + completes the OAuth interaction.
-    const tokenParam = tokenFromMagicUrl(magicUrl);
+    // POST consumes the token and renders hosted client consent.
+    const tokenParam = new URL(magicUrl).searchParams.get('token')!;
     const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
@@ -170,13 +170,20 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       },
       body: new URLSearchParams({ token: tokenParam }),
     });
-    expect([302, 303]).toContain(verifyPost.status);
-    jar.ingest(verifyPost.headers);
+    expect(verifyPost.status).toBe(200);
+
+    const consentPost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: verifyPost,
+      jar,
+    });
+    expect([302, 303]).toContain(consentPost.status);
+    jar.ingest(consentPost.headers);
 
     // Follow the oidc-provider redirect chain to the client redirect_uri.
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: verifyPost.headers.get('location'),
+      start: consentPost.headers.get('location'),
       jar,
       redirectUriPrefix: REDIRECT_URI,
     });
@@ -273,8 +280,8 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     await postRequestLinkForm(interactionUrl, jar, 'replay@example.com');
     const tokenParam = tokenFromMagicUrl(emailSender.sent[0].url);
 
-    // First POST consumes (we don't follow the redirect; that path is
-    // already covered by the end-to-end test above).
+    // First POST consumes and renders the client-consent page. We don't
+    // approve it here; this test only cares that the token is consumed.
     const first = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
@@ -283,7 +290,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       },
       body: new URLSearchParams({ token: tokenParam }),
     });
-    expect([302, 303]).toContain(first.status);
+    expect(first.status).toBe(200);
 
     // Second POST must be rejected (token already consumed).
     const second = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
@@ -322,7 +329,8 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(noCookie.status).toBe(400);
 
     // Subsequent POST with the right cookie should still work — the
-    // earlier mismatch must not have consumed the token.
+    // earlier mismatch must not have consumed the token. It now renders
+    // client consent rather than directly redirecting.
     const withCookie = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
@@ -331,7 +339,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       },
       body: new URLSearchParams({ token: tokenParam }),
     });
-    expect([302, 303]).toContain(withCookie.status);
+    expect(withCookie.status).toBe(200);
   }, 30_000);
 
   it('pre-claimed magic-link admin sub authenticates but the JWT carries NO roles (admin is console-only)', async () => {
@@ -375,12 +383,19 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       },
       body: new URLSearchParams({ token: tokenParam }),
     });
-    expect([302, 303]).toContain(verifyPost.status);
-    jar.ingest(verifyPost.headers);
+    expect(verifyPost.status).toBe(200);
+
+    const consentPost = await approveClientConsentPage({
+      baseUrl: harness.baseUrl,
+      response: verifyPost,
+      jar,
+    });
+    expect([302, 303]).toContain(consentPost.status);
+    jar.ingest(consentPost.headers);
 
     const code = await followToCodeRedirect({
       baseUrl: harness.baseUrl,
-      start: verifyPost.headers.get('location'),
+      start: consentPost.headers.get('location'),
       jar, redirectUriPrefix: REDIRECT_URI,
     });
     const tokenResp = await fetch(authServer.token_endpoint, {

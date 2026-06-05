@@ -278,6 +278,7 @@ async function createEmbeddedProvider(
     adminTotpService: config.adminTotpService,
     consoleIdentityResolver: config.consoleIdentityResolver,
     adminTotpRateLimitStore: config.rateLimitStore,
+    rateLimitStore: config.rateLimitStore,
   });
 }
 

@@ -58,4 +58,25 @@ describe('PostgresRateLimitStore', () => {
       { maxRetries: 2 },
     )).rejects.toThrow('Rate limit CAS failed after 2 attempts');
   });
+
+  it('binds expiresAt as ISO text for timestamptz casts', async () => {
+    const queries: unknown[] = [];
+    executeMock.mockImplementation(async (query: unknown) => {
+      queries.push(query);
+      return queries.length === 1 ? [] : [{ version: 1 }];
+    });
+    const store = new PostgresRateLimitStore({} as DatabaseInstance);
+    const expiresAt = Date.UTC(2026, 5, 2, 4, 0, 0);
+
+    await store.update(
+      'open_dcr_registration',
+      '198.51.100.25',
+      () => ({ state: { count: 1, windowStartedAt: expiresAt } }),
+      { expiresAt },
+    );
+
+    const insertQuery = queries[1] as { queryChunks?: unknown[] };
+    expect(insertQuery.queryChunks).toContain('2026-06-02T04:00:00.000Z');
+    expect(insertQuery.queryChunks?.some((chunk) => chunk instanceof Date)).toBe(false);
+  });
 });

@@ -16,6 +16,7 @@ WORKDIR /app
 # Copy package files and local workspace packages
 COPY package*.json ./
 COPY tsconfig.json ./
+COPY drizzle.config.ts ./
 COPY packages/ ./packages/
 
 # Install dependencies (includes local @dollhousemcp/safety package)

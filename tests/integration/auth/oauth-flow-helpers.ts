@@ -16,6 +16,7 @@ import * as net from 'node:net';
 import { createHash, randomBytes } from 'node:crypto';
 import express, { type Express } from 'express';
 import { EmbeddedAuthorizationServer, type EmbeddedAuthorizationServerOptions } from '../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
+import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 
 export function pkceS256(verifier: string): string {
   return createHash('sha256').update(verifier).digest('base64url');
@@ -135,6 +136,7 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
     publicBaseUrl,
     mcpPath: '/mcp',
     keyFilePath: path.join(tmpDir, 'key.json'),
+    rateLimitStore: opts.rateLimitStore ?? new InMemoryRateLimitStore(),
   });
 
   // Auto-bootstrap so existing E2E tests in multi-user mode aren't blocked
@@ -242,4 +244,30 @@ export async function followToCodeRedirect(opts: {
     nextUrl = absoluteUrl(opts.baseUrl, location);
   }
   throw new Error('Did not land on client redirect_uri with code');
+}
+
+export async function approveClientConsentPage(opts: {
+  baseUrl: string;
+  response: Response;
+  jar: CookieJar;
+}): Promise<Response> {
+  opts.jar.ingest(opts.response.headers);
+  const html = await opts.response.text();
+  const csrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(html);
+  if (!csrfMatch) throw new Error('CSRF token not found in client consent page');
+  const formAction = /<form[^>]*action="([^"]+)"/i.exec(html)?.[1];
+  if (!formAction) throw new Error('Client consent form action not found');
+
+  return fetch(absoluteUrl(opts.baseUrl, formAction), {
+    method: 'POST',
+    redirect: 'manual',
+    headers: {
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Cookie: opts.jar.header(),
+    },
+    body: new URLSearchParams({
+      csrf_token: csrfMatch[1],
+      action: 'authorize_oauth_client',
+    }),
+  });
 }
