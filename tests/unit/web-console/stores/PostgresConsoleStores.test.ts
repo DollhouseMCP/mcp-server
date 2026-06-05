@@ -612,7 +612,7 @@ describe('PostgresPortfolioSyncJobStore', () => {
 
   it('maps pending-job unique violations to an already-pending error', async () => {
     transaction.insert = jest.fn(() => {
-      throw { code: '23505' };
+      throw Object.assign(new Error('duplicate'), { code: '23505' });
     });
     const store = new PostgresPortfolioSyncJobStore({} as DatabaseInstance);
 

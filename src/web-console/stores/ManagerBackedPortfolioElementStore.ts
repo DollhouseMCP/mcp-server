@@ -80,7 +80,7 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
         records.push(record);
       }
     }
-    return records
+    return [...records]
       .sort((left, right) => left.type.localeCompare(right.type) || left.name.localeCompare(right.name))
       .map(clonePortfolioElementSummaryRecord);
   }

@@ -10,11 +10,10 @@
  *  - Attach (E2E_NO_BOOT=1): target an already-running instance; the caller
  *    exports E2E_BASE_URL / E2E_DATABASE_ADMIN_URL / E2E_OPAQUE_HMAC_KEY.
  */
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { createWriteStream, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import postgres from 'postgres';

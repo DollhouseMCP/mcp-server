@@ -103,10 +103,9 @@ export function cloneUserIntegrationRecord(record: UserIntegrationRecord): UserI
 }
 
 function assertAuthorizedPermissions(
-  provider: UserIntegrationProvider,
+  _provider: UserIntegrationProvider,
   value: Readonly<Record<string, unknown>>,
 ): void {
-  void provider;
   const serialized = JSON.stringify(value);
   if (Buffer.byteLength(serialized, 'utf8') > 4096) {
     throw new ConsoleStoreValidationError('authorizedPermissions must be at most 4096 bytes');

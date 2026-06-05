@@ -99,7 +99,5 @@ function isDirectRun(): boolean {
 }
 
 if (isDirectRun()) {
-  void runWebConsoleReplacementReadinessCli(process.argv.slice(2)).then(exitCode => {
-    process.exitCode = exitCode;
-  });
+  process.exitCode = await runWebConsoleReplacementReadinessCli(process.argv.slice(2));
 }

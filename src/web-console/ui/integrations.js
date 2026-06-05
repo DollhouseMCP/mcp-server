@@ -90,8 +90,12 @@ function renderBody() {
 }
 
 function providerCard(provider, status) {
-  const connected = status && status.status === 'connected';
-  const errored = status && status.status === 'error';
+  const connected = status?.status === 'connected';
+  const errored = status?.status === 'error';
+  let cardBody;
+  if (connected) cardBody = connectedBody(provider, status);
+  else if (errored) cardBody = erroredBody(provider, status);
+  else cardBody = disconnectedBody(provider);
   return `
     <div class="int-card${connected ? ' int-card--connected' : ''}">
       <div class="int-card-head">
@@ -103,7 +107,7 @@ function providerCard(provider, status) {
         ${statusChip(status)}
       </div>
       <div class="int-card-body">
-        ${connected ? connectedBody(provider, status) : errored ? erroredBody(provider, status) : disconnectedBody(provider)}
+        ${cardBody}
       </div>
     </div>`;
 }

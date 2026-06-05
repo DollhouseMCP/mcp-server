@@ -138,7 +138,7 @@ export async function appendSecurityInvalidationEventWithTx(
     consoleSessionIdHash: input.consoleSessionIdHash ?? null,
     authzVersion: input.authzVersion ?? null,
     reason: input.reason,
-    payload: { ...(input.payload ?? {}) },
+    payload: { ...input.payload },
     createdAt: input.createdAt,
     createdByUserId: input.createdByUserId ?? null,
   }).returning();

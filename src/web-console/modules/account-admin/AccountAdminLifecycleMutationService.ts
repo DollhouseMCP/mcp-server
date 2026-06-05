@@ -55,7 +55,7 @@ export class AccountAdminLifecycleMutationService {
           authzVersion: change.authzVersion,
           reason: 'account_admin_principal_disabled',
           payload: {
-            terminatedRuntimeSessions: this.options.runtimeTerminationService ? true : false,
+            terminatedRuntimeSessions: Boolean(this.options.runtimeTerminationService),
           },
           createdAt: occurredAt,
           createdByUserId: actor.userId,

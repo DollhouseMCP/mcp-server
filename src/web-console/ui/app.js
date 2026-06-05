@@ -15,7 +15,7 @@ const THEME_KEY = 'dh-console-theme';
 /* ── Theme ──────────────────────────────────────────────────────────────── */
 
 function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
+  document.documentElement.dataset.theme = theme;
   const toDark = theme === 'light';
   const icon = document.getElementById('theme-toggle-icon');
   const label = document.getElementById('theme-toggle-label');
@@ -26,7 +26,7 @@ function applyTheme(theme) {
 function initTheme() {
   applyTheme(localStorage.getItem(THEME_KEY) || 'light');
   document.getElementById('theme-toggle')?.addEventListener('click', () => {
-    const next = document.documentElement.getAttribute('data-theme') === 'light' ? 'dark' : 'light';
+    const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
     localStorage.setItem(THEME_KEY, next);
     applyTheme(next);
   });
@@ -156,7 +156,8 @@ function initStepUp() {
   // the embedded-AS step-up flow, returning to the console afterwards.
   globalThis.addEventListener('dh:step-up-required', (event) => {
     const { capability, stepUpUrl } = event.detail || {};
-    toast(`This action needs fresh admin elevation${capability ? ` (${capability})` : ''}.`, 'warn');
+    const capabilitySuffix = capability ? ` (${capability})` : '';
+    toast(`This action needs fresh admin elevation${capabilitySuffix}.`, 'warn');
     if (stepUpUrl) {
       const url = new URL(stepUpUrl, globalThis.location.origin);
       url.searchParams.set('return_to', '/ui');

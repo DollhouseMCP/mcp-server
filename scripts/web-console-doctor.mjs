@@ -62,12 +62,12 @@ if (baseUrl) {
 const hosted = isLoopback === false; // non-loopback public base = hosted/shared
 
 // ── 1. Mount & transport ──────────────────────────────────────────────────
-if (!apiV1On) {
+if (apiV1On) {
+  add('Mount', PASS, '/api/v1 console enabled', 'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true');
+} else {
   add('Mount', FAIL, 'New console (/api/v1) is NOT enabled',
     'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED is not truthy — the rewritten console will not mount.',
     'Set DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true');
-} else {
-  add('Mount', PASS, '/api/v1 console enabled', 'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED=true');
 }
 if (!baseUrl) {
   add('Mount', apiV1On ? FAIL : WARN, 'DOLLHOUSE_PUBLIC_BASE_URL is not set',
@@ -83,12 +83,12 @@ if (!baseUrl) {
 
 // ── 2. Database (console is Postgres-or-volatile-memory) ───────────────────
 const dbUrl = get('DOLLHOUSE_DATABASE_URL');
-if (!dbUrl) {
+if (dbUrl) {
+  add('Database', PASS, 'DOLLHOUSE_DATABASE_URL set', dbUrl.replace(/:\/\/[^@]*@/, '://***@'));
+} else {
   add('Database', apiV1On ? FAIL : WARN, 'No DOLLHOUSE_DATABASE_URL — console will use volatile in-memory stores',
     'Without a database the console silently falls back to in-memory stores: sessions, MFA factors, audit chain, integrations, portfolio sync jobs all evaporate on restart. Not viable beyond local smoke tests.',
     'Set DOLLHOUSE_DATABASE_URL to your PostgreSQL connection string');
-} else {
-  add('Database', PASS, 'DOLLHOUSE_DATABASE_URL set', dbUrl.replace(/:\/\/[^@]*@/, '://***@'));
 }
 const prodDbName = get('DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME');
 const prodDbUser = get('DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER');
@@ -131,8 +131,10 @@ function keyCheck(name, { base64Bytes, hexMinBytes, unsetLevel, detail, fix } = 
       `Generate with: openssl rand -hex ${hexMinBytes}`);
     return;
   }
-  add('Secrets', PASS, `${name} present`,
-    base64Bytes ? `valid base64 ${base64Bytes}-byte key` : hexMinBytes ? `valid hex key` : 'set');
+  let presentDetail = 'set';
+  if (base64Bytes) presentDetail = `valid base64 ${base64Bytes}-byte key`;
+  else if (hexMinBytes) presentDetail = `valid hex key`;
+  add('Secrets', PASS, `${name} present`, presentDetail);
 }
 keyCheck('DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY', { base64Bytes: 32 });
 keyCheck('DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY', { base64Bytes: 32 });
@@ -193,12 +195,12 @@ if (hosted && !tlsConfigured && !isHttps) {
 }
 
 // ── 5. Auth posture (allowlist, DCR, methods) ──────────────────────────────
-if (!isTrue('DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED')) {
+if (isTrue('DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED')) {
+  add('Auth', PASS, 'Sign-in allowlist enforced', 'DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=true');
+} else {
   add('Auth', WARN, 'Sign-in allowlist is NOT enforced (default)',
     'DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED defaults to false — any identity that can authenticate via an enabled method can sign in. The allowlist is the load-bearing access gate.',
     'Set DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=true and seed entries via the allowlist CLI');
-} else {
-  add('Auth', PASS, 'Sign-in allowlist enforced', 'DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=true');
 }
 if (isTrue('DOLLHOUSE_AUTH_OPEN_DCR') && hosted) {
   add('Auth', WARN, 'Open DCR enabled on a hosted bind',
@@ -221,12 +223,12 @@ if (methods.includes('magic') && !(get('DOLLHOUSE_SMTP_HOST') && get('DOLLHOUSE_
 const intId = get('DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID');
 const intSecret = get('DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET');
 if (intId || intSecret) {
-  if (!(intId && intSecret)) {
+  if (intId && intSecret) {
+    add('Integrations', PASS, 'GitHub portfolio-sync integration configured', 'distinct App from sign-in');
+  } else {
     add('Integrations', WARN, 'Partial GitHub portfolio-sync integration config',
       'Only one of DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID/SECRET is set.',
       'Set both, or neither (separate GitHub App from the sign-in app)');
-  } else {
-    add('Integrations', PASS, 'GitHub portfolio-sync integration configured', 'distinct App from sign-in');
   }
 } else {
   add('Integrations', INFO, 'GitHub portfolio-sync integration not configured',
@@ -234,6 +236,35 @@ if (intId || intSecret) {
 }
 
 // ── 7. Database connectivity + migrations (best-effort) ────────────────────
+// Bootstrap: allowlist enforced but empty + no admin => first sign-in blocked.
+async function checkBootstrapAllowlist(sql) {
+  if (!isTrue('DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED')) return;
+  try {
+    const [{ count }] = await sql`select count(*)::int as count from account_allowlist_entries`;
+    if (count === 0) {
+      add('Bootstrap', WARN, 'Allowlist enforced but empty',
+        'No allowlist entries exist; sign-in is required-and-empty. Confirm the first-admin bootstrap path or seed an entry.',
+        'Seed the first operator via the allowlist CLI, or use the documented bootstrap flow');
+    } else {
+      add('Bootstrap', PASS, 'Allowlist has entries', `${count} entr${count === 1 ? 'y' : 'ies'}`);
+    }
+  } catch { /* table-shape differences: skip silently */ }
+}
+
+async function checkTablesAndBootstrap(sql, present) {
+  // High-confidence tables that should exist once migrations are applied.
+  const expected = ['users', 'elements', 'portfolio_elements', 'console_sessions', 'account_allowlist_entries'];
+  const missing = expected.filter(t => !present.has(t));
+  if (missing.length) {
+    add('Database', FAIL, 'Expected tables missing — migrations may not be applied (or wrong DB)',
+      `missing: ${missing.join(', ')}`,
+      'Run the database migrations against this database before mounting the console');
+    return;
+  }
+  add('Database', PASS, 'Core console tables present', expected.join(', '));
+  await checkBootstrapAllowlist(sql);
+}
+
 async function dbChecks() {
   if (!dbUrl) return;
   let postgres;
@@ -245,29 +276,7 @@ async function dbChecks() {
     const rows = await sql`select table_name from information_schema.tables where table_schema='public'`;
     const present = new Set(rows.map(r => r.table_name));
     add('Database', PASS, 'Connected to PostgreSQL', `${present.size} tables in public schema`);
-    // High-confidence tables that should exist once migrations are applied.
-    const expected = ['users', 'elements', 'portfolio_elements', 'console_sessions', 'account_allowlist_entries'];
-    const missing = expected.filter(t => !present.has(t));
-    if (missing.length) {
-      add('Database', FAIL, 'Expected tables missing — migrations may not be applied (or wrong DB)',
-        `missing: ${missing.join(', ')}`,
-        'Run the database migrations against this database before mounting the console');
-    } else {
-      add('Database', PASS, 'Core console tables present', expected.join(', '));
-      // Bootstrap: allowlist enforced but empty + no admin => first sign-in blocked.
-      if (isTrue('DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED')) {
-        try {
-          const [{ count }] = await sql`select count(*)::int as count from account_allowlist_entries`;
-          if (count === 0) {
-            add('Bootstrap', WARN, 'Allowlist enforced but empty',
-              'No allowlist entries exist; sign-in is required-and-empty. Confirm the first-admin bootstrap path or seed an entry.',
-              'Seed the first operator via the allowlist CLI, or use the documented bootstrap flow');
-          } else {
-            add('Bootstrap', PASS, 'Allowlist has entries', `${count} entr${count === 1 ? 'y' : 'ies'}`);
-          }
-        } catch { /* table-shape differences: skip silently */ }
-      }
-    }
+    await checkTablesAndBootstrap(sql, present);
   } catch (e) {
     add('Database', FAIL, 'Could not connect to PostgreSQL', String(e?.message ?? e),
       'Verify DOLLHOUSE_DATABASE_URL, network reachability, and credentials');
@@ -299,8 +308,10 @@ if (json) {
   }
   console.log('\n' + '─'.repeat(40));
   console.log(`${counts.fail} fail · ${counts.warn} warn · ${counts.pass} ok · ${counts.info} info`);
-  console.log(counts.fail === 0
-    ? (counts.warn === 0 ? 'Looks good.\n' : 'No blockers, but review the warnings above.\n')
-    : 'Setup has blockers — fix the ✗ items before starting.\n');
+  let summary;
+  if (counts.fail !== 0) summary = 'Setup has blockers — fix the ✗ items before starting.\n';
+  else if (counts.warn === 0) summary = 'Looks good.\n';
+  else summary = 'No blockers, but review the warnings above.\n';
+  console.log(summary);
 }
 process.exit(counts.fail === 0 ? 0 : 1);

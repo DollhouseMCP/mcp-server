@@ -136,7 +136,7 @@ function canonicalJson(value: unknown, depth: number): string {
   if (Array.isArray(value)) return `[${value.map(item => canonicalJson(item, depth + 1)).join(',')}]`;
   if (typeof value === 'object') {
     const object = value as Record<string, unknown>;
-    const members = Object.keys(object).sort((a, b) => (a < b ? -1 : a > b ? 1 : 0))
+    const members = Object.keys(object).sort(compareCodeUnits)
       .map(key => `${JSON.stringify(key)}:${canonicalJson(object[key], depth + 1)}`);
     return `{${members.join(',')}}`;
   }

@@ -114,7 +114,7 @@ function renderMemoryView(content) {
   const detailRows = [
     detailField('Author', parsed.author),
     detailField('ID', parsed.unique_id || parsed.id),
-    ...MEMORY_CONFIG_FIELDS.map(k => (parsed[k] !== undefined ? detailField(prettyMemoryKey(k), String(parsed[k])) : '')),
+    ...MEMORY_CONFIG_FIELDS.map(k => (parsed[k] === undefined ? '' : detailField(prettyMemoryKey(k), String(parsed[k])))),
   ].filter(Boolean).join('');
   if (detailRows) html += detailSection('Details', detailRows);
   if (Array.isArray(parsed.tags) && parsed.tags.length) {
@@ -261,7 +261,7 @@ function renderMemoryView(content) {
     // Detect directives in a single pass — cache match results
     const parsed = paragraphs.map(p => {
       const trimmed = p.trim();
-      const match = trimmed.match(DIRECTIVE_PATTERN);
+      const match = DIRECTIVE_PATTERN.exec(trimmed);
       return { trimmed, match };
     });
 
@@ -443,10 +443,14 @@ function renderMemoryView(content) {
       const enumValues = Array.isArray(d.enum) && d.enum.length
         ? `<div class="detail-param-enum">${d.enum.map(v => detailPill(v, 'pill-meta')).join(' ')}</div>`
         : '';
-      const defaultVal = d.default === undefined ? ''
-        : Array.isArray(d.default)
-          ? `<span class="detail-pill">default: ${escapeHtml(d.default.join(', '))}</span>`
-          : `<span class="detail-pill">default: ${escapeHtml(String(d.default))}</span>`;
+      let defaultVal;
+      if (d.default === undefined) {
+        defaultVal = '';
+      } else if (Array.isArray(d.default)) {
+        defaultVal = `<span class="detail-pill">default: ${escapeHtml(d.default.join(', '))}</span>`;
+      } else {
+        defaultVal = `<span class="detail-pill">default: ${escapeHtml(String(d.default))}</span>`;
+      }
       return `<div class="detail-param">
         <div class="detail-param-header">
           <span class="detail-param-name">${escapeHtml(name)}</span>
@@ -690,7 +694,8 @@ export function renderElementDetail({ metadata, content, type }) {
   // Instructions section); `content` is then only a short description stub, so
   // passing it as the body here would duplicate the body as a redundant
   // "Content" section. Only fall back to `content` when there's no instructions.
-  const body = fm.instructions ? '' : (typeof content === 'string' ? content : '');
+  const contentBody = typeof content === 'string' ? content : '';
+  const body = fm.instructions ? '' : contentBody;
   html += renderDetailExtra(fm, body);
   return html || `<pre class="element-source"><code class="element-code">${escapeHtml(typeof content === 'string' ? content : '')}</code></pre>`;
 }

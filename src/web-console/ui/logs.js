@@ -369,7 +369,7 @@ function buildQuery(extra = {}) {
 async function reload() {
   setStatus('reconnecting');
   const res = await get(buildQuery({ limit: INITIAL_LIMIT })).catch(() => null);
-  if (!res || res.status !== 200 || !res.body) {
+  if (res?.status !== 200 || !res?.body) {
     lastPollFailed = true;
     setStatus('disconnected');
     updateEntryCount();
@@ -406,6 +406,26 @@ function stopPolling() {
   }
 }
 
+function markPollFailed() {
+  if (!lastPollFailed) setStatus('disconnected');
+  lastPollFailed = true;
+}
+
+// Append a batch of newest-first entries (already reversed to oldest→newest)
+// and refresh the viewport if anything was added.
+function applyFreshEntries(fresh) {
+  let added = false;
+  for (const entry of fresh) {
+    if (appendToBuffer(entry)) added = true;
+  }
+  if (noteSessions(fresh)) rebuildSessionOptions();
+  if (added && !paused) {
+    updateEntryCount();
+    renderViewport();
+    if (autoScroll) scrollToBottom();
+  }
+}
+
 // Incremental tail: fetch only entries strictly newer than newestTs, append.
 async function poll() {
   if (pollInFlight || document.visibilityState !== 'visible') return;
@@ -413,26 +433,14 @@ async function poll() {
   try {
     const res = await get(buildQuery({ since: newestTs ?? undefined, limit: POLL_LIMIT }));
     if (res.status !== 200 || !res.body) {
-      if (!lastPollFailed) setStatus('disconnected');
-      lastPollFailed = true;
+      markPollFailed();
       return;
     }
     if (lastPollFailed) setStatus(paused ? 'paused' : 'live');
     lastPollFailed = false;
-    const fresh = (res.body.entries || []).slice().reverse(); // oldest→newest
-    let added = false;
-    for (const entry of fresh) {
-      if (appendToBuffer(entry)) added = true;
-    }
-    if (noteSessions(fresh)) rebuildSessionOptions();
-    if (added && !paused) {
-      updateEntryCount();
-      renderViewport();
-      if (autoScroll) scrollToBottom();
-    }
+    applyFreshEntries((res.body.entries || []).slice().reverse()); // oldest→newest
   } catch {
-    if (!lastPollFailed) setStatus('disconnected');
-    lastPollFailed = true;
+    markPollFailed();
   } finally {
     pollInFlight = false;
   }
@@ -714,10 +722,8 @@ function scrollToBottom() {
 // reconnecting (amber, in-flight), disconnected (red), paused (idle).
 function setStatus(status) {
   if (!statusDot) return;
-  const dotClass = status === 'live' ? 'connected'
-    : status === 'disconnected' ? 'disconnected'
-    : status === 'reconnecting' ? 'reconnecting'
-    : '';
+  const STATUS_DOT_CLASS = { live: 'connected', disconnected: 'disconnected', reconnecting: 'reconnecting' };
+  const dotClass = STATUS_DOT_CLASS[status] || '';
   statusDot.className = 'log-status-dot ' + dotClass;
   statusText.textContent = status;
 }

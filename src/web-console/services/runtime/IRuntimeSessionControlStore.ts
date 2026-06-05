@@ -9,6 +9,7 @@ import {
   assertUuid,
   cloneDate,
   ConsoleStoreValidationError,
+  tupleIncludes,
 } from '../../stores/ConsoleStoreValidation.js';
 import { validateReplicaId } from '../invalidation/IConsoleSecurityInvalidationStore.js';
 
@@ -274,13 +275,13 @@ function validateCounts(requestCount: number, errorCount: number): void {
 }
 
 function validateTerminationReason(reason: RuntimeTerminationReason): void {
-  if (!TERMINATION_REASONS.some(candidate => candidate === reason)) {
+  if (!tupleIncludes(TERMINATION_REASONS, reason)) {
     throw new ConsoleStoreValidationError(`unknown runtime termination reason '${reason}'`);
   }
 }
 
 function validateRequester(requestedBy: RuntimeTerminationCommandInput['requestedBy']): void {
-  if (!REQUESTER_KINDS.some(candidate => candidate === requestedBy.kind)) {
+  if (!tupleIncludes(REQUESTER_KINDS, requestedBy.kind)) {
     throw new ConsoleStoreValidationError(`unknown runtime termination requester kind '${requestedBy.kind}'`);
   }
   if (requestedBy.kind === 'system') {
@@ -292,15 +293,15 @@ function validateRequester(requestedBy: RuntimeTerminationCommandInput['requeste
 }
 
 function validateAckResult(result: RuntimeTerminationAckResult): void {
-  if (!ACK_RESULTS.some(candidate => candidate === result)) {
+  if (!tupleIncludes(ACK_RESULTS, result)) {
     throw new ConsoleStoreValidationError(`unknown runtime termination acknowledgement result '${result}'`);
   }
 }
 
 export function isRuntimeSessionStatus(value: string): value is RuntimeSessionStatus {
-  return STATUSES.some(candidate => candidate === value);
+  return tupleIncludes(STATUSES, value);
 }
 
 export function isRuntimeTerminationReason(value: string): value is RuntimeTerminationReason {
-  return TERMINATION_REASONS.some(candidate => candidate === value);
+  return tupleIncludes(TERMINATION_REASONS, value);
 }

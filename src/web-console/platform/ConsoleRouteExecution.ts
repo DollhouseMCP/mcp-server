@@ -166,7 +166,7 @@ function validateResult(result: ConsoleHandlerResult): void {
 function validateHeaders(headers: ConsoleHandlerResult['headers']): void {
   if (headers === undefined) return;
   if (typeof headers !== 'object' || Array.isArray(headers)) {
-    throw new Error('Console route handler returned invalid headers');
+    throw new TypeError('Console route handler returned invalid headers');
   }
   for (const [name, value] of Object.entries(headers)) {
     if (!ALLOWED_HANDLER_HEADERS.has(name as keyof ConsoleResponseHeaders) || !isPrintableAsciiHeaderValue(value)) {

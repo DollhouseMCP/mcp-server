@@ -78,14 +78,14 @@ function asRecord(value: unknown, field: string): EvidenceRecord {
 
 function asArray(value: unknown, field: string): readonly unknown[] {
   if (!Array.isArray(value)) {
-    throw new Error(`${field} must be an array`);
+    throw new TypeError(`${field} must be an array`);
   }
   return value;
 }
 
 function parseBoolean(value: unknown, field: string): boolean {
   if (typeof value !== 'boolean') {
-    throw new Error(`${field} must be a boolean`);
+    throw new TypeError(`${field} must be a boolean`);
   }
   return value;
 }

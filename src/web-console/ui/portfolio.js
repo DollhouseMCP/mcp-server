@@ -205,7 +205,8 @@ function render() {
     grid.innerHTML = pageItems.map(card).join('');
   }
 
-  const countText = `${items.length} element${items.length === 1 ? '' : 's'}${state.type !== 'all' ? ` · ${TYPE_META[state.type]?.label ?? ''}` : ''}`;
+  const typeSuffix = state.type === 'all' ? '' : ` · ${TYPE_META[state.type]?.label ?? ''}`;
+  const countText = `${items.length} element${items.length === 1 ? '' : 's'}${typeSuffix}`;
   host.querySelector('#pf-count').textContent = countText;
   host.querySelector('#pf-announcer').textContent = `${countText}, page ${state.page} of ${pages}`;
 
@@ -221,6 +222,7 @@ function card(el) {
   const singular = TYPE_META[el.type]?.singular ?? el.type;
   const label = capitalize(TYPE_META[el.type]?.singular ?? el.type);
   const stale = el.validation_status && el.validation_status !== 'valid';
+  const tagItems = (el.tags || []).slice(0, 5).map(t => `<li class="tag">${escapeHtml(t)}</li>`).join('');
   return `
   <article class="element-card" data-type="${escapeAttr(singular)}" data-key="${escapeAttr(el.type)}" data-name="${escapeAttr(el.name)}"
     role="listitem" tabindex="0" aria-label="View ${escapeHtml(title(el))}">
@@ -246,7 +248,7 @@ function card(el) {
         <button class="card-download-btn" data-action="download" aria-label="Download ${escapeHtml(title(el))}" title="Download">&#10515;</button>
       </div>
       ${el.tags?.length
-        ? `<ul class="card-tags" aria-label="Tags">${el.tags.slice(0, 5).map(t => `<li class="tag">${escapeHtml(t)}</li>`).join('')}</ul>`
+        ? `<ul class="card-tags" aria-label="Tags">${tagItems}</ul>`
         : ''}
     </footer>
     <div class="card-inline-detail"></div>
@@ -359,7 +361,7 @@ async function openModal(list, idx) {
 function setHeader(el) {
   const dlg = document.getElementById('pf-modal');
   const label = capitalize(TYPE_META[el.type]?.singular ?? el.type);
-  dlg.querySelector('.modal-dialog').setAttribute('data-type', TYPE_META[el.type]?.singular ?? el.type);
+  dlg.querySelector('.modal-dialog').dataset.type = TYPE_META[el.type]?.singular ?? el.type;
   dlg.querySelector('#pf-modal-title').textContent = title(el);
   dlg.querySelector('#pf-modal-type').textContent = label;
   dlg.querySelector('#pf-modal-author').textContent = el.author || el.metadata?.author ? `by ${el.author || el.metadata.author}` : '';
@@ -383,9 +385,10 @@ function validationBanner(el) {
   const status = el?.validation_status ?? el?.validationStatus;
   if (!status || status === 'valid') return '';
   const reason = el?.validation_reason ?? el?.metadata?.validation_reason;
+  const reasonSuffix = reason ? ` — ${escapeHtml(reason)}` : '';
   const text = status === 'warn'
     ? `Security scan: ${escapeHtml(reason || 'warning')}`
-    : `This element ${escapeHtml(status)} validation${reason ? ` — ${escapeHtml(reason)}` : ''}.`;
+    : `This element ${escapeHtml(status)} validation${reasonSuffix}.`;
   return `<div class="detail-validation-warn">${text}</div>`;
 }
 
@@ -398,7 +401,7 @@ function rawSource(el) {
   // Memories are pure YAML (no frontmatter); the BFF already serves the full
   // memory document as content — hand it back verbatim.
   if (el?.type === 'memories') return (el.content || '').replace(/^\n+/, '');
-  const meta = { ...(el?.metadata || {}) };
+  const meta = { ...(el?.metadata) };
   const hasInstructions = typeof meta.instructions === 'string' && meta.instructions.trim();
   const body = (hasInstructions ? meta.instructions : el?.content || '').replace(/^\n+/, '');
   delete meta.instructions;

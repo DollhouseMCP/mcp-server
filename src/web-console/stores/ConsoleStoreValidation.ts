@@ -86,8 +86,18 @@ export function assertNullableDisplayString(value: string | null, name: string, 
   assertDisplayString(value, name, maxLength);
 }
 
+/**
+ * Membership test for a readonly literal tuple against a wider string.
+ * `tuple.includes(value)` won't type-check when value is a wider `string`
+ * than the tuple's literal element type, so this widens internally and
+ * narrows the result via a type guard.
+ */
+export function tupleIncludes<T extends string>(tuple: readonly T[], value: string): value is T {
+  return (tuple as readonly string[]).includes(value);
+}
+
 export function assertCapability(value: string, name: string): asserts value is ConsoleCapability {
-  if (!CONSOLE_CAPABILITIES.some(capability => capability === value)) {
+  if (!tupleIncludes(CONSOLE_CAPABILITIES, value)) {
     throw new ConsoleStoreValidationError(`${name} contains unknown capability '${value}'`);
   }
 }

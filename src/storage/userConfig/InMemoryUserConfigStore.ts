@@ -17,7 +17,7 @@ export class InMemoryUserConfigStore implements IUserConfigStore {
   async load(userId: string): Promise<UserConfig> {
     assertValidUserId(userId);
     const stored = this.configs.get(userId);
-    return Promise.resolve(stored ? cloneConfig(stored) : cloneDefault());
+    return stored ? cloneConfig(stored) : cloneDefault();
   }
 
   async save(
@@ -44,7 +44,6 @@ export class InMemoryUserConfigStore implements IUserConfigStore {
       configVersion: config.configVersion,
       updatedAt: Date.now(),
     });
-    return Promise.resolve();
   }
 }
 

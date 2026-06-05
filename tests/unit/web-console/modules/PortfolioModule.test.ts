@@ -139,13 +139,11 @@ function responseEtag(result: ConsoleHandlerResult): string {
 }
 
 class ConflictOnWritePortfolioStore extends InMemoryPortfolioElementStore {
-  override update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
-    void input;
+  override update(_input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     return Promise.reject(new PortfolioElementVersionConflictError());
   }
 
-  override delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null> {
-    void input;
+  override delete(_input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     return Promise.reject(new PortfolioElementVersionConflictError());
   }
 }

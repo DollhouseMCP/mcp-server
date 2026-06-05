@@ -144,6 +144,30 @@ async function startHarness(
   };
 }
 
+function adminDeps(overrides: {
+  hasFactor?: boolean;
+  proofOk?: boolean;
+  proofMethod?: 'totp' | 'backup';
+  rateLimitStore?: InMemoryRateLimitStore;
+} = {}): AdminStepUpInteractionDeps {
+  const totpService = {
+    hasActiveFactor: async () => overrides.hasFactor ?? true,
+    prove: async () => (overrides.proofOk ?? true)
+      ? { ok: true as const, method: overrides.proofMethod ?? 'totp', authTime: new Date('2026-05-27T12:00:00.000Z') }
+      : { ok: false as const },
+  } satisfies AdminStepUpInteractionDeps['totpService'];
+  return {
+    totpService,
+    identityResolver: new InMemoryConsoleIdentityResolver([{
+      sub: 'local_admin',
+      userId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
+      disabledAt: null,
+      authzVersion: 1,
+    }]),
+    rateLimitStore: overrides.rateLimitStore,
+  };
+}
+
 describe('InteractionRouter — multi-method dispatch', () => {
   let storage: InMemoryAuthStorageLayer;
   const details: OidcInteractionDetails = {
@@ -583,30 +607,6 @@ describe('InteractionRouter — multi-method dispatch', () => {
       },
       prompt: { name: 'login', details: {} },
     };
-
-    function adminDeps(overrides: {
-      hasFactor?: boolean;
-      proofOk?: boolean;
-      proofMethod?: 'totp' | 'backup';
-      rateLimitStore?: InMemoryRateLimitStore;
-    } = {}): AdminStepUpInteractionDeps {
-      const totpService = {
-        hasActiveFactor: async () => overrides.hasFactor ?? true,
-        prove: async () => (overrides.proofOk ?? true)
-          ? { ok: true as const, method: overrides.proofMethod ?? 'totp', authTime: new Date('2026-05-27T12:00:00.000Z') }
-          : { ok: false as const },
-      } satisfies AdminStepUpInteractionDeps['totpService'];
-      return {
-        totpService,
-        identityResolver: new InMemoryConsoleIdentityResolver([{
-          sub: 'local_admin',
-          userId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
-          disabledAt: null,
-          authzVersion: 1,
-        }]),
-        rateLimitStore: overrides.rateLimitStore,
-      };
-    }
 
     it('fails requested admin ACR when the principal has no active TOTP factor', async () => {
       const method = fakeMethod({

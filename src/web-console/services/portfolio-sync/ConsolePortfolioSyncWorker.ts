@@ -64,7 +64,7 @@ export class ConsolePortfolioSyncWorker implements IConsolePortfolioSyncWorker {
 
   constructor(private readonly options: ConsolePortfolioSyncWorkerOptions) {
     validateWorkerId(options.workerId);
-    this.executor = options.executor ? options.executor : new ProviderUnavailablePortfolioSyncExecutor();
+    this.executor = options.executor ?? PROVIDER_UNAVAILABLE_PORTFOLIO_SYNC_EXECUTOR;
     this.intervalMs = validatePositiveInteger(
       options.intervalMs ?? DEFAULT_PORTFOLIO_SYNC_WORKER_INTERVAL_MS,
       'portfolio sync worker interval',
@@ -180,6 +180,12 @@ class ProviderUnavailablePortfolioSyncExecutor implements IPortfolioSyncJobExecu
     });
   }
 }
+
+// Shared stateless null-object: used when no real executor is wired (e.g. the
+// GitHub provider is not configured). A module singleton keeps the fallback a
+// plain reference rather than a per-construction `new`.
+const PROVIDER_UNAVAILABLE_PORTFOLIO_SYNC_EXECUTOR: IPortfolioSyncJobExecutor =
+  new ProviderUnavailablePortfolioSyncExecutor();
 
 interface ConsolePortfolioSyncWorkerRunResultMutable extends ConsolePortfolioSyncWorkerRunResult {
   claimed: number;

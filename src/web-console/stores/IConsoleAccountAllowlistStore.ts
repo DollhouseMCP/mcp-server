@@ -4,6 +4,7 @@ import {
   assertUuid,
   cloneDate,
   ConsoleStoreValidationError,
+  tupleIncludes,
 } from './ConsoleStoreValidation.js';
 
 export type ConsoleAccountAllowlistKind = AuthAllowlistKind;
@@ -71,7 +72,7 @@ export function validateAllowlistRemoveInput(input: AllowlistRemoveInput): void 
 }
 
 export function assertAllowlistKind(value: string, name: string): asserts value is ConsoleAccountAllowlistKind {
-  if (!CONSOLE_ACCOUNT_ALLOWLIST_KINDS.some(kind => kind === value)) {
+  if (!tupleIncludes(CONSOLE_ACCOUNT_ALLOWLIST_KINDS, value)) {
     throw new ConsoleStoreValidationError(`${name} contains unknown allowlist kind '${value}'`);
   }
 }

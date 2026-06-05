@@ -74,7 +74,7 @@ export interface AllowlistGateOptions {
    * Optional sign-in allowlist authority. When omitted, the legacy
    * IAuthStorageLayer allowlist remains authoritative.
    */
-  authority?: SignInAllowlistAuthority | undefined;
+  authority?: SignInAllowlistAuthority;
   /** `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED` env value. */
   required: boolean;
 }

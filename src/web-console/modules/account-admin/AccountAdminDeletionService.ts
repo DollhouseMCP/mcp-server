@@ -70,7 +70,7 @@ export class AccountAdminDeletionService {
     // then removes. A failure here aborts before any destructive write.
     let browserSessionsRevoked = 0;
     let oauthGrantsRevoked = 0;
-    let runtimeSummary: AccountRuntimeTerminationSummary = emptyRuntimeTerminationSummary();
+    let runtimeSummary: AccountRuntimeTerminationSummary;
     try {
       browserSessionsRevoked = await this.options.sessionStore.revokeForUser(userId, occurredAt);
       const oauthSummary = await this.options.oauthGrantRevocationService.revokePrincipalGrants({

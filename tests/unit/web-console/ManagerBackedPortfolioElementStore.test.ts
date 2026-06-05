@@ -356,7 +356,9 @@ class FakeElement implements IElement {
     return this.body;
   }
 
-  deserialize(): void {}
+  deserialize(): void {
+    // no-op: fake element stores body directly; nothing to parse back
+  }
 
   getStatus(): ElementStatus {
     return ElementStatus.INACTIVE;

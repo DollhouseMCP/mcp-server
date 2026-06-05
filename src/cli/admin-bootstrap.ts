@@ -32,7 +32,7 @@ import { Command } from 'commander';
 import { createHash } from 'node:crypto';
 import { env } from '../config/env.js';
 import { openCliAuthStorage, type CliAuthStorageHandle } from './cliAuthStorage.js';
-import { recordBootstrapCompleted, type BootstrapAdminMethod } from '../auth/embedded-as/bootstrapAdmin.js';
+import { recordBootstrapCompleted } from '../auth/embedded-as/bootstrapAdmin.js';
 
 interface BootstrapOptions {
   method: string;
@@ -233,7 +233,7 @@ async function emitBootstrapAudit(
   // and the CLI invocation can be tested by spying on the helper. An audit
   // emission failure must NOT fail the bootstrap — the state is already persisted.
   try {
-    await recordBootstrapCompleted(handle.storage, adminSub, adminMethod as BootstrapAdminMethod, 'admin-bootstrap-cli');
+    await recordBootstrapCompleted(handle.storage, adminSub, adminMethod, 'admin-bootstrap-cli');
   } catch (err) {
     process.stderr.write(
       `[admin bootstrap] warning: failed to emit auth.bootstrap.completed audit event: ${describeBootstrapError(err)}\n`,

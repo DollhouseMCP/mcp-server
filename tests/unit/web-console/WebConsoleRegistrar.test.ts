@@ -110,9 +110,9 @@ class TestContainer implements DiContainerFacade {
   }
 }
 
-class ProductionAdapter {}
-class GatekeeperSessionApprovalStore {}
-class GatekeeperSessionStateReader {}
+class ProductionAdapter { /* intentionally empty */ }
+class GatekeeperSessionApprovalStore { /* intentionally empty */ }
+class GatekeeperSessionStateReader { /* intentionally empty */ }
 
 function productionAdapter<T>(): T {
   return new ProductionAdapter() as T;

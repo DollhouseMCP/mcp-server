@@ -123,8 +123,9 @@ function consoleCard(s) {
 }
 
 function mcpCard(s) {
+  const version = s.client_info?.version ? ' ' + s.client_info.version : '';
   const name = s.client_info?.name
-    ? `${s.client_info.name}${s.client_info.version ? ' ' + s.client_info.version : ''}`
+    ? `${s.client_info.name}${version}`
     : 'MCP client';
   return `
     <div class="session-card">
@@ -152,7 +153,8 @@ function usageFragment(s) {
   const requests = Number(s.request_count || 0);
   const errors = Number(s.error_count || 0);
   const reqText = ` · ${requests.toLocaleString()} request${requests === 1 ? '' : 's'}`;
-  const errText = errors > 0 ? ` · <span class="session-err">${errors.toLocaleString()} error${errors === 1 ? '' : 's'}</span>` : '';
+  const errSuffix = errors === 1 ? '' : 's';
+  const errText = errors > 0 ? ` · <span class="session-err">${errors.toLocaleString()} error${errSuffix}</span>` : '';
   return reqText + errText;
 }
 
@@ -259,19 +261,28 @@ function relAgo(ts) {
 }
 
 // Friendly browser/OS from a user-agent string (best-effort, display only).
+function matchLabel(text, table, fallback) {
+  for (const [pattern, label] of table) {
+    if (pattern.test(text)) return label;
+  }
+  return fallback;
+}
+
 function describeBrowser(ua) {
   if (!ua) return 'Console session';
-  const browser = /Edg\//.test(ua) ? 'Edge'
-    : /Chrome\//.test(ua) ? 'Chrome'
-    : /Firefox\//.test(ua) ? 'Firefox'
-    : /Safari\//.test(ua) ? 'Safari'
-    : 'Browser';
-  const os = /Windows/.test(ua) ? 'Windows'
-    : /Mac OS X|Macintosh/.test(ua) ? 'macOS'
-    : /Android/.test(ua) ? 'Android'
-    : /iPhone|iPad|iOS/.test(ua) ? 'iOS'
-    : /Linux/.test(ua) ? 'Linux'
-    : '';
+  const browser = matchLabel(ua, [
+    [/Edg\//, 'Edge'],
+    [/Chrome\//, 'Chrome'],
+    [/Firefox\//, 'Firefox'],
+    [/Safari\//, 'Safari'],
+  ], 'Browser');
+  const os = matchLabel(ua, [
+    [/Windows/, 'Windows'],
+    [/Mac OS X|Macintosh/, 'macOS'],
+    [/Android/, 'Android'],
+    [/iPhone|iPad|iOS/, 'iOS'],
+    [/Linux/, 'Linux'],
+  ], '');
   return os ? `${browser} on ${os}` : browser;
 }
 

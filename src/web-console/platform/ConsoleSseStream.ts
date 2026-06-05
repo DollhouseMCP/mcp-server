@@ -120,7 +120,7 @@ function validateSseEvent(event: ConsoleSseEvent, policy: ConsoleStreamPolicy): 
   }
   const serializedData = event.data === undefined ? '' : JSON.stringify(event.data);
   if (typeof serializedData !== 'string') {
-    throw new Error('Console SSE event data is not JSON serializable');
+    throw new TypeError('Console SSE event data is not JSON serializable');
   }
   if (Buffer.byteLength(serializedData, 'utf8') > policy.maxEventBytes) {
     throw new Error('Console SSE event exceeds the configured byte limit');

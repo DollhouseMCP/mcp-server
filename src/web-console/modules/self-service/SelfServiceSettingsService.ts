@@ -119,7 +119,7 @@ function parseSettingMutationBody(body: unknown):
 function parseSettingPath(key: string):
   | { readonly kind: 'valid'; readonly section: ConfigSection; readonly path: readonly string[] }
   | { readonly kind: 'problem'; readonly result: ConsoleHandlerResult } {
-  if (!/^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$/.test(key)) {
+  if (!/^\w+(?:\.\w+)*$/.test(key)) {
     return { kind: 'problem', result: problem(400, 'invalid_request', 'Invalid request', 'Setting key must be a dotted allowlist path.') };
   }
   const [section, ...path] = key.split('.');

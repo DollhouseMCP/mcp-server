@@ -241,7 +241,7 @@ describe('SelfSecurityModule', () => {
     await expect(findRoute(module.routes, FACTORS_PATH).handler(req))
       .rejects.toThrow(AUTH_MIDDLEWARE_ERROR);
     expect(() => {
-      void findRoute(module.routes, ENROLL_PATH).handler(req);
+      findRoute(module.routes, ENROLL_PATH).handler(req);
     })
       .toThrow(AUTH_MIDDLEWARE_ERROR);
   });

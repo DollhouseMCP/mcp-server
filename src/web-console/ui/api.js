@@ -27,7 +27,7 @@ function readCookie(name) {
 }
 
 function buildHeaders(method, options) {
-  const headers = { accept: 'application/json', ...(options.headers ?? {}) };
+  const headers = { accept: 'application/json', ...options.headers };
   if (options.body !== undefined) headers['content-type'] = 'application/json';
   if (options.ifMatch) headers['if-match'] = options.ifMatch;
   if (MUTATING.has(method)) {
@@ -57,7 +57,7 @@ export async function request(method, path, options = {}) {
     credentials: 'same-origin',
     redirect: 'manual',
     headers: buildHeaders(method, options),
-    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    body: options.body === undefined ? undefined : JSON.stringify(options.body),
     signal: options.signal,
   });
 
@@ -69,7 +69,7 @@ export async function request(method, path, options = {}) {
   const problemCode = parseProblemCode(body);
 
   if (res.status === 401 && problemCode === 'step_up_required') {
-    const ext = (body && body.extensions) || {};
+    const ext = body?.extensions || {};
     globalThis.dispatchEvent(new CustomEvent('dh:step-up-required', {
       detail: {
         capability: ext.required_capability,

@@ -52,7 +52,7 @@ describe('production telemetry query adapters', () => {
       status_code: null,
       error_code: null,
     }]);
-    const query = new PostgresConsoleTelemetryQuery(db as never, {
+    const query = new PostgresConsoleTelemetryQuery(db, {
       replicaId: REPLICA_ID,
       now: () => NOW,
     });
@@ -98,7 +98,7 @@ describe('production telemetry query adapters', () => {
       error_code: null,
       value: 1,
     }]);
-    const query = new PostgresConsoleTelemetryQuery(db as never, {
+    const query = new PostgresConsoleTelemetryQuery(db, {
       replicaId: REPLICA_ID,
       now: () => NOW,
     });
@@ -130,7 +130,7 @@ describe('production telemetry query adapters', () => {
       error_code: RUNTIME_WARNING_CODE,
       value: '3',
     }]);
-    const query = new PostgresOwnedMetricQuery(db as never, { now: () => NOW });
+    const query = new PostgresOwnedMetricQuery(db, { now: () => NOW });
 
     await expect(query.queryOwnedMetrics(USER_ID, SESSION_ID, {
       subsystem: 'runtime',

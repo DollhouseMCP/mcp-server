@@ -78,7 +78,7 @@ async function load() {
   } else {
     state.users = [];
     // A 401 step_up_required is handled by the shell; show a soft message here.
-    state.error = !usersRes || usersRes.status !== 200;
+    state.error = usersRes?.status !== 200;
   }
   state.loading = false;
   renderList();
@@ -238,11 +238,13 @@ function panelSection(title, inner, note) {
 // Identity & linked logins — the heart of the login↔MCP question. One account,
 // possibly many linked provider logins, all sharing this identity.
 function panelIdentity(u) {
+  const emailUnverifiedSuffix = u.email ? ' (unverified)' : '';
+  const emailSuffix = u.email && u.email_verified ? ' (verified)' : emailUnverifiedSuffix;
   const rows = [
     ['Account ID', u.user_id],
     ['Username', u.username],
     ['Primary subject', u.primary_sub || '—'],
-    ['Email', `${u.email || '—'}${u.email && u.email_verified ? ' (verified)' : u.email ? ' (unverified)' : ''}`],
+    ['Email', `${u.email || '—'}${emailSuffix}`],
     ['Created', relAgo(u.created_at)],
   ].map(([k, v]) => `<div class="ua-kv"><span class="ua-kv-k">${escapeHtml(k)}</span><span class="ua-kv-v">${escapeHtml(String(v))}</span></div>`).join('');
   return panelSection('Identity & linked logins',
@@ -275,26 +277,28 @@ function panelRoles(u) {
 function panelMfa(u) {
   const enrolled = u.admin_factor_enrolled;
   const pending = isPendingEnrollment(u);
+  const unenrolledStatus = pending
+    ? '<span class="ua-mfa ua-mfa--pending">&#x26a0; Pending enrollment</span>'
+    : '<span class="ua-mfa ua-mfa--off">Not enrolled</span>';
   const status = enrolled
     ? '<span class="ua-mfa ua-mfa--on">&#x2713; Authenticator enrolled</span>'
-    : pending
-      ? '<span class="ua-mfa ua-mfa--pending">&#x26a0; Pending enrollment</span>'
-      : '<span class="ua-mfa ua-mfa--off">Not enrolled</span>';
+    : unenrolledStatus;
   // Reset is the industry-standard "require re-registration": disable the
   // current factor so the user must enroll a new one. Only meaningful when a
   // factor exists; only offered to actors holding the security capability.
   const canReset = canResetFactor();
+  const resetDisabledAttr = canReset ? '' : ' disabled title="Requires security-admin elevation"';
   const resetRow = enrolled
     ? `<div class="ua-actions-row">
-         <button class="btn btn-ghost session-danger" data-mfa="reset" type="button"${
-           canReset ? '' : ' disabled title="Requires security-admin elevation"'}>Reset authenticator</button>
+         <button class="btn btn-ghost session-danger" data-mfa="reset" type="button"${resetDisabledAttr}>Reset authenticator</button>
        </div>`
     : '';
+  const unenrolledNote = pending
+    ? 'This account holds an admin role but cannot elevate until an authenticator is enrolled. When the user attempts to elevate they are routed into enrollment.'
+    : 'Admin elevation requires an enrolled authenticator. Regular (non-admin) accounts do not need one.';
   const note = enrolled
     ? 'Required for admin elevation. Reset forces the user to enroll a new device and ends any active elevation.'
-    : pending
-      ? 'This account holds an admin role but cannot elevate until an authenticator is enrolled. When the user attempts to elevate they are routed into enrollment.'
-      : 'Admin elevation requires an enrolled authenticator. Regular (non-admin) accounts do not need one.';
+    : unenrolledNote;
   return panelSection('Multi-factor (TOTP)',
     `<div class="ua-mfa-status">${status}</div>${resetRow}`,
     note);
@@ -358,7 +362,7 @@ async function resetFactor(u) {
     'Reset authenticator');
   if (!ok) return;
   const res = await post(`/admin/security/users/${encodeURIComponent(u.user_id)}/factors/totp/reset`).catch(() => null);
-  if (!res || res.status !== 200) {
+  if (res?.status !== 200) {
     const denied = res?.status === 401 || res?.status === 403;
     notify(denied ? 'Reset needs security-admin elevation.' : 'Could not reset the authenticator.', 'error');
     return;
@@ -416,7 +420,7 @@ async function lifecycle(u, action) {
   }
   notify(action === 'revoke-all' ? 'Credentials revoked.' : `Account ${action}d.`, 'success');
   await load();
-  if (action !== 'revoke-all') renderDrawer(); else loadUserSessions(u.user_id);
+  if (action === 'revoke-all') loadUserSessions(u.user_id); else renderDrawer();
 }
 
 function wireIdentity(u) {
@@ -452,7 +456,7 @@ async function linkLogin(userId) {
   const sub = (input?.value || '').trim();
   if (!sub) { notify('Enter the login subject to link.', 'warn'); return; }
   const res = await post(`/admin/accounts/users/${encodeURIComponent(userId)}/identities/link`, { body: { sub } }).catch(() => null);
-  if (!res || res.status !== 200) {
+  if (res?.status !== 200) {
     notify(res?.body?.detail || 'Could not link that login.', 'error');
     return;
   }
@@ -465,7 +469,7 @@ async function linkLogin(userId) {
 async function unlinkLogin(userId, sub) {
   if (!(await confirmDialog('Unlink this login from the account? The account can no longer be signed into with it.', 'Unlink'))) return;
   const res = await post(`/admin/accounts/users/${encodeURIComponent(userId)}/identities/unlink`, { body: { sub } }).catch(() => null);
-  if (!res || res.status !== 200) {
+  if (res?.status !== 200) {
     notify(res?.body?.detail || 'Could not unlink that login.', 'error');
     return;
   }
@@ -478,8 +482,9 @@ async function loadUserSessions(userId) {
   const box = host.querySelector(`#ua-user-sessions-${CSS.escape(userId)}`);
   if (!box) return;
   const res = await get(`/admin/accounts/users/${encodeURIComponent(userId)}/sessions`).catch(() => null);
+  const fallbackSessions = Array.isArray(res?.body) ? res.body : [];
   const sessions = res?.status === 200 && Array.isArray(res.body?.sessions) ? res.body.sessions
-    : (Array.isArray(res?.body) ? res.body : []);
+    : fallbackSessions;
   if (!box.isConnected) return;
   if (sessions.length === 0) { box.innerHTML = '<span class="ua-muted">No active sessions.</span>'; return; }
   box.innerHTML = sessions.map(s => `
@@ -541,7 +546,7 @@ async function submitInvite(modal) {
   const body = { username, email, ...(roles.length ? { roles } : {}) };
   const res = await post('/admin/accounts/users/invite', { body }).catch(() => null);
   sendBtn.disabled = false;
-  if (!res || res.status !== 201) {
+  if (res?.status !== 201) {
     const detail = res?.body?.detail || (res?.status === 409 ? 'That username or email already exists.' : 'Invite failed.');
     notify(detail, 'error');
     return;

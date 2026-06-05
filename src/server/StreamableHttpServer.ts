@@ -1053,16 +1053,18 @@ export async function createStreamableHttpRuntime(
     // H7: lifecycle (GET/DELETE) must enforce the same ownership gate
     // as POST. A valid bearer + leaked session id could otherwise SSE-
     // attach to someone else's session (GET) or terminate it (DELETE).
-    if (!assertSessionOwner(req, res, sessionId, session)) return;
+    if (!assertSessionOwner(req, res, sessionId, session)) {
+      return;
+    }
 
-      try {
-        touchSession(sessionId);
-        await session.transport.handleRequest(req, res);
-        recordRuntimeActivity(sessionId);
-      } catch (error) {
-        recordRuntimeActivity(sessionId, 'error');
-        handleRequestFailure(req, res, methodName, error, sessionId);
-      }
+    try {
+      touchSession(sessionId);
+      await session.transport.handleRequest(req, res);
+      recordRuntimeActivity(sessionId);
+    } catch (error) {
+      recordRuntimeActivity(sessionId, 'error');
+      handleRequestFailure(req, res, methodName, error, sessionId);
+    }
   };
 
   app.get(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'GET'));

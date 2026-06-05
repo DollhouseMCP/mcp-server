@@ -164,7 +164,7 @@ function parseInviteBody(body: unknown): { readonly kind: 'valid'; readonly valu
   try {
     if (!isRecord(body)) throw new ConsoleStoreValidationError('request body is required.');
     const username = stringField(body, 'username');
-    if (!/^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/.test(username)) {
+    if (!/^\w[A-Za-z0-9_-]{0,63}$/.test(username)) {
       throw new ConsoleStoreValidationError('username must match /^[A-Za-z0-9_][A-Za-z0-9_-]{0,63}$/');
     }
     const email = stringField(body, 'email');

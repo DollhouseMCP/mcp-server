@@ -57,7 +57,7 @@ export async function forgeSession(principal: SeededPrincipal, options: ForgeOpt
        created_at, last_used_at, idle_expires_at, absolute_expires_at)
     VALUES
       (${hashOpaque(session)}, ${principal.id}, ${principal.sub}, ${hashOpaque(csrf)},
-       ${sql.array(granted as string[])}, ${sql.array(elevated as string[])},
+       ${sql.array(granted)}, ${sql.array(elevated)},
        ${isElevated ? plus(3600e3) : null}, ${isElevated ? 'urn:dollhouse:acr:admin-stepup' : null},
        ${isElevated ? sql.array(['otp']) : null}, ${isElevated ? now : null},
        ${now}, ${now}, ${plus(3600e3)}, ${plus(8 * 3600e3)})

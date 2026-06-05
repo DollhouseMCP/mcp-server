@@ -101,7 +101,7 @@ function validateCookieDirective(directive: unknown): asserts directive is Conso
     throw new Error('Console cookie directive operation is invalid');
   }
   if (typeof candidate.value !== 'string') {
-    throw new Error('Console cookie value must be a string');
+    throw new TypeError('Console cookie value must be a string');
   }
   if (candidate.value.length === 0) {
     throw new Error('Console cookie set directive requires a non-empty value; use clear instead');

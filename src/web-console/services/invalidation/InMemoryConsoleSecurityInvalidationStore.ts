@@ -35,7 +35,7 @@ export class InMemoryConsoleSecurityInvalidationStore implements IConsoleSecurit
       consoleSessionIdHash: input.consoleSessionIdHash ? Buffer.from(input.consoleSessionIdHash) : null,
       authzVersion: input.authzVersion ?? null,
       reason: input.reason,
-      payload: { ...(input.payload ?? {}) },
+      payload: { ...input.payload },
       createdAt: new Date(input.createdAt),
       createdByUserId: input.createdByUserId ?? null,
     };

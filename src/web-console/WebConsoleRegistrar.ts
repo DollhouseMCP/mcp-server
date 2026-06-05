@@ -183,7 +183,6 @@ import {
 } from './auth/index.js';
 import {
   SECURITY_ADMIN_MODULE_ID,
-  WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
   type WebConsoleOmittableRouteModuleId,
 } from './WebConsoleRouteModuleIds.js';
 
@@ -236,7 +235,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   cleanupScheduler: 'WebConsoleStoreCleanupScheduler',
 } as const;
 
-export { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS, type WebConsoleOmittableRouteModuleId };
+export { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS } from './WebConsoleRouteModuleIds.js';
+export type { WebConsoleOmittableRouteModuleId };
 
 export interface WebConsoleRegistrarOptions {
   readonly activationProfile?: WebConsoleActivationProfile;

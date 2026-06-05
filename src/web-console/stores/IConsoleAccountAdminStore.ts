@@ -3,6 +3,7 @@ import {
   assertUuid,
   cloneDate,
   ConsoleStoreValidationError,
+  tupleIncludes,
 } from './ConsoleStoreValidation.js';
 
 export type { ConsoleAdminRole };
@@ -169,7 +170,7 @@ export const CONSOLE_ADMIN_ROLES = [
 ] as const satisfies readonly ConsoleAdminRole[];
 
 export function assertAdminRole(value: string, name: string): asserts value is ConsoleAdminRole {
-  if (!CONSOLE_ADMIN_ROLES.some(role => role === value)) {
+  if (!tupleIncludes(CONSOLE_ADMIN_ROLES, value)) {
     throw new ConsoleStoreValidationError(`${name} contains unknown administrative role '${value}'`);
   }
 }

@@ -111,7 +111,7 @@ export class ConsoleClient {
       }
     }
     if (options.ifMatch) headers['if-match'] = options.ifMatch;
-    return { ...headers, ...(options.headers ?? {}) };
+    return { ...headers, ...options.headers };
   }
 
   /**

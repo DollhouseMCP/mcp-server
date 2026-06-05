@@ -87,9 +87,14 @@ export class InMemoryAuthenticationAuditQuery implements IAuthenticationAuditQue
   }
 }
 
+const DEFAULT_INTEGRITY: AdminAuditChainVerification = Object.freeze({
+  status: 'not_available',
+  reason: 'verification_key_unavailable',
+});
+
 export function toAdminAuditDto(
   row: AdminAuditRow,
-  integrity: AdminAuditChainVerification = { status: 'not_available', reason: 'verification_key_unavailable' },
+  integrity: AdminAuditChainVerification = DEFAULT_INTEGRITY,
 ): AdminAuditEventDto {
   return {
     id: row.id,
@@ -163,7 +168,7 @@ function decodeCursor(cursor: string): number {
 }
 
 function cloneRecord(record: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
-  return structuredClone(record) as Readonly<Record<string, unknown>>;
+  return structuredClone(record);
 }
 
 function projectApprovalAuditDto(row: ApprovalAuditEventDto): ApprovalAuditEventDto {

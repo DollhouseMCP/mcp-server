@@ -673,11 +673,11 @@ function fromPrincipalRow(row: PrincipalRow): ConsolePrincipalSummary {
 
 function toDate(value: Date | string | null): Date | null {
   if (value === null) return null;
-  return value instanceof Date ? new Date(value) : new Date(value);
+  return new Date(value);
 }
 
 function requireDate(value: Date | string, name: string): Date {
-  const date = value instanceof Date ? new Date(value) : new Date(value);
+  const date = new Date(value);
   if (Number.isNaN(date.getTime())) throw new Error(`${name} is not a valid timestamp`);
   return date;
 }
