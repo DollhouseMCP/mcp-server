@@ -21,7 +21,12 @@ import os from 'node:os';
 import { EmbeddedAuthorizationServer } from '../../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { TrivialConsentMethod } from '../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
-import type { IAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
+import type {
+  IAuthStorageLayer,
+  StoredAccount,
+  IdentityAuditEvent,
+  IdentityEventFilter,
+} from '../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
 
 /**
  * Storage proxy that always throws on genericGet — so ensureInitialized()
@@ -37,14 +42,13 @@ class AlwaysFailGetStorage implements IAuthStorageLayer {
 
   // Cycle-10 fix (TPW-1): kept up to date with IAuthStorageLayer.
   findAccountByExternalId(p: string, e: string) { return this.inner.findAccountByExternalId(p, e); }
-  upsertAccount(a: import('../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js').StoredAccount) { return this.inner.upsertAccount(a); }
+  upsertAccount(a: StoredAccount) { return this.inner.upsertAccount(a); }
   getAccount(s: string) { return this.inner.getAccount(s); }
-  setAccountRoles(s: string, r: string[]) { return this.inner.setAccountRoles(s, r); }
   updateAccountLastAuth(s: string, t: number) { return this.inner.updateAccountLastAuth(s, t); }
   getBootstrapState() { return this.inner.getBootstrapState(); }
   markBootstrapComplete(s: string, m: 'local-password' | 'magic-link' | 'github') { return this.inner.markBootstrapComplete(s, m); }
-  recordIdentityEvent(e: import('../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js').IdentityAuditEvent) { return this.inner.recordIdentityEvent(e); }
-  listIdentityEvents(f?: import('../../../../src/auth/embedded-as/storage/IAuthStorageLayer.js').IdentityEventFilter) { return this.inner.listIdentityEvents(f); }
+  recordIdentityEvent(e: IdentityAuditEvent) { return this.inner.recordIdentityEvent(e); }
+  listIdentityEvents(f?: IdentityEventFilter) { return this.inner.listIdentityEvents(f); }
   findGrantsByAccountId(s: string) { return this.inner.findGrantsByAccountId(s); }
   genericSet(m: string, i: string, p: unknown, e?: number) { return this.inner.genericSet(m, i, p, e); }
   genericDestroy(m: string, i: string) { return this.inner.genericDestroy(m, i); }

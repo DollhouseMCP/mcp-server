@@ -26,7 +26,7 @@ import { randomBytes } from 'node:crypto';
 import {
   type ASHarness,
   approveClientConsentPage,
-  CookieJar,
+  type CookieJar,
   followToCodeRedirect,
   startAuthorizeFlow,
   startASHarness,
@@ -35,6 +35,12 @@ import {
 const REDIRECT_URI = 'http://127.0.0.1/callback';
 const CLIENT_ID = 'dollhouse-claude-connector';
 const VALID_PASSWORD = 'a-very-long-password';
+
+function inviteTokenFromUrl(inviteUrl: string): string {
+  const token = new URL(inviteUrl).searchParams.get('invite');
+  expect(token).toBeTruthy();
+  return token ?? '';
+}
 
 function buildLocalMethod(storage: InMemoryAuthStorageLayer): LocalAccountMethod {
   const invites = new InviteTokenStore(randomBytes(32), storage);
@@ -98,7 +104,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
   it('end-to-end: invite redemption → access token → validate', async () => {
     // Operator issues an invite via the method's API (CLI equivalent).
     const inviteUrl = method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
-    const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
+    const inviteToken = inviteTokenFromUrl(inviteUrl);
 
     // Begin OAuth flow.
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);
@@ -187,7 +193,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     expect(stored?.rawProfile).toBeUndefined();
   }, 30_000);
 
-  it('admin claim: pre-claimed sub gets roles:["admin"] on JWT (must-fix #22)', async () => {
+  it('pre-claimed admin sub authenticates but the JWT carries NO roles (admin is console-only)', async () => {
     // Replace the auto-bootstrapped harness with one that skips
     // auto-bootstrap so we can simulate the create-user CLI's pre-claim
     // for a specific admin sub. Auto-bootstrap uses a placeholder sub
@@ -204,7 +210,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     await storage.markBootstrapComplete('local_admin', 'local-password');
 
     const inviteUrl = method.issueInvite('local_admin', 'admin@example.com', REDIRECT_URI);
-    const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
+    const inviteToken = inviteTokenFromUrl(inviteUrl);
 
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);
     const { interactionUrl, jar, verifier } = await startAuthorizeFlow({
@@ -247,49 +253,48 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     expect(tokenResp.status).toBe(200);
     const tokenBody = await tokenResp.json() as { access_token: string };
 
-    // Validate via AS — claims should include admin role.
+    // Validate via AS — the token authenticates, but carries NO roles claim.
+    // Admin is a console-only concept (resolved from user_admin_roles, gated by
+    // interactive step-up). A headless token can't elevate, so it never carries
+    // admin — even for the pre-claimed bootstrap admin.
     const validation = await harness.as.validate(tokenBody.access_token);
     expect(validation.ok).toBe(true);
     if (validation.ok) {
       expect(validation.claims.sub).toBe('local_admin');
-      expect(validation.claims.roles).toEqual(['admin']);
+      expect(validation.claims.roles ?? []).toEqual([]);
     }
 
-    // Decoded JWT also carries roles claim — what downstream services see.
+    // The decoded JWT carries no roles claim — what downstream services see.
     const decoded = decodeJwt(tokenBody.access_token);
-    expect(decoded.roles).toEqual(['admin']);
-
-    // Account in storage has roles persisted (so future logins still
-    // get admin via extraTokenClaims, even after token rotation).
-    const stored = await storage.getAccount('local_admin');
-    expect(stored?.roles).toEqual(['admin']);
+    expect(decoded.roles).toBeUndefined();
   }, 30_000);
 
-  it('non-admin: invite redeemed by a different sub does NOT get admin role', async () => {
+  it('invite redeemed by a non-bootstrap sub creates a regular account (no roles on the account)', async () => {
     // Same harness rebuild as above — clean storage with skip-auto-bootstrap.
     await harness.close();
     storage = new InMemoryAuthStorageLayer();
     method = buildLocalMethod(storage);
     harness = await startASHarness({ methods: [method], storage, skipAutoBootstrap: true });
 
-    // Pre-claim adminSub = local_admin. Then issue an invite for a
-    // DIFFERENT sub (local_alice) and have her redeem it. Alice should
-    // NOT receive admin role even though bootstrap is complete —
-    // because adminSub doesn't match her sub.
+    // Pre-claim adminSub = local_admin, then redeem an invite for a DIFFERENT
+    // sub (local_alice). Auth accounts never carry roles now (admin is a
+    // console-only, user_admin_roles concept), so redemption just creates a
+    // plain account — nothing about it confers admin.
     await storage.markBootstrapComplete('local_admin', 'local-password');
 
     const inviteUrl = method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
-    const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
+    const inviteToken = inviteTokenFromUrl(inviteUrl);
     await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
     const stored = await storage.getAccount('local_alice');
-    expect(stored?.roles).toBeUndefined();
+    expect(stored).not.toBeNull();
+    expect(stored?.sub).toBe('local_alice');
   }, 30_000);
 
   it('login flow with existing account → access token', async () => {
     // First, redeem an invite to set up the account out-of-band.
     const inviteUrl = method.issueInvite('local_bob', 'bob@example.com', REDIRECT_URI);
-    const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
+    const inviteToken = inviteTokenFromUrl(inviteUrl);
     await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
     // Now drive an OAuth flow as a LOGIN (not invite redemption).
@@ -343,7 +348,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
   it('rate-limit: 5 wrong-password attempts lock the account (must-fix #16)', async () => {
     // Set up the account.
     const inviteUrl = method.issueInvite('local_carol', 'carol@example.com', REDIRECT_URI);
-    const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
+    const inviteToken = inviteTokenFromUrl(inviteUrl);
     await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);

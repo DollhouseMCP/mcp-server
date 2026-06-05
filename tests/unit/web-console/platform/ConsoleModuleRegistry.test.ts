@@ -1,0 +1,447 @@
+import { describe, expect, it } from '@jest/globals';
+import {
+  ConsoleModuleRegistry,
+  ConsoleModuleRegistrationError,
+  type ConsoleModuleDescriptor,
+  type ConsoleRouteDefinition,
+} from '../../../../src/web-console/index.js';
+
+const ADMIN_AUDIT_OPERATION = 'operations.health.read';
+const PROFILE_UPDATED_EVENT = 'profile.updated.v1';
+const SELF_CAPABILITY = 'console:self';
+const SELF_STREAM_PATH = '/api/v1/me/example/stream';
+const EMPTY_SSE_EVENTS: AsyncIterable<never> = {
+  [Symbol.asyncIterator]: () => ({
+    next: () => Promise.resolve({ done: true, value: undefined as never }),
+  }),
+};
+
+function selfRoute(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
+  return {
+    method: 'GET',
+    path: '/api/v1/me/example',
+    audience: 'self',
+    requiredCapability: SELF_CAPABILITY,
+    ownership: 'authenticated_user',
+    elevation: 'none',
+    privacyClass: 'self_private',
+    idempotency: 'not_applicable',
+    handler: () => ({ status: 200, body: { ok: true } }),
+    ...overrides,
+  };
+}
+
+function selfModule(overrides: Partial<ConsoleModuleDescriptor> = {}): ConsoleModuleDescriptor {
+  return {
+    id: 'example',
+    apiVersion: 'v1',
+    capabilities: [SELF_CAPABILITY],
+    routes: [selfRoute()],
+    ...overrides,
+  };
+}
+
+function publicAuthRoute(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
+  return {
+    method: 'GET',
+    path: '/api/v1/auth/login',
+    audience: 'public',
+    requiredCapability: 'none',
+    ownership: 'flow_transaction',
+    elevation: 'none',
+    privacyClass: 'self_security',
+    idempotency: 'not_applicable',
+    handler: () => ({ status: 302, redirectTo: 'https://as.example.test/authorize' }),
+    ...overrides,
+  };
+}
+
+function publicAuthModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}): ConsoleModuleDescriptor {
+  return {
+    id: 'auth',
+    apiVersion: 'v1',
+    capabilities: [SELF_CAPABILITY],
+    routes: [publicAuthRoute(routeOverrides)],
+  };
+}
+
+function publicHealthModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}): ConsoleModuleDescriptor {
+  return {
+    id: 'health',
+    apiVersion: 'v1',
+    capabilities: [],
+    routes: [{
+      method: 'GET',
+      path: '/api/v1/health/ready',
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'none',
+      elevation: 'none',
+      privacyClass: 'operational_allowlist',
+      idempotency: 'not_applicable',
+      handler: () => ({ status: 503, body: { status: 'not_ready' } }),
+      ...routeOverrides,
+    }],
+  };
+}
+
+function adminModule(routeOverrides: Partial<ConsoleRouteDefinition> = {}): ConsoleModuleDescriptor {
+  return {
+    id: 'operations',
+    apiVersion: 'v1',
+    capabilities: ['console:admin:operate'],
+    auditOperations: [{ id: ADMIN_AUDIT_OPERATION }],
+    routes: [{
+      method: 'GET',
+      path: '/api/v1/admin/operate/health',
+      audience: 'admin',
+      requiredCapability: 'console:admin:operate',
+      elevation: 'admin_30m',
+      privacyClass: 'operational_allowlist',
+      idempotency: 'not_applicable',
+      auditOperation: ADMIN_AUDIT_OPERATION,
+      privacyProjector: value => value,
+      handler: () => ({ status: 200, body: { status: 'ok' } }),
+      ...routeOverrides,
+    }],
+  };
+}
+
+describe('ConsoleModuleRegistry', () => {
+  it('registers a valid self-service fixture and produces its manifest', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(selfModule());
+
+    expect(registry.createRouteManifest()).toEqual({
+      apiVersion: 'v1',
+      routes: [{
+        moduleId: 'example',
+        method: 'GET',
+        path: '/api/v1/me/example',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+      }],
+    });
+  });
+
+  it('registers an admin descriptor only with its platform declarations', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(adminModule());
+
+    expect(registry.createRouteManifest().routes[0]).toEqual(expect.objectContaining({
+      moduleId: 'operations',
+      requiredCapability: 'console:admin:operate',
+      elevation: 'admin_30m',
+      privacyClass: 'operational_allowlist',
+      auditOperation: ADMIN_AUDIT_OPERATION,
+    }));
+  });
+
+  it('registers a transaction-bound public auth route', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(publicAuthModule());
+
+    expect(registry.createRouteManifest().routes[0]).toEqual(expect.objectContaining({
+      moduleId: 'auth',
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'flow_transaction',
+      elevation: 'none',
+      privacyClass: 'self_security',
+    }));
+  });
+
+  it('registers a public health route without auth-flow ownership', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(publicHealthModule());
+
+    expect(registry.createRouteManifest().routes[0]).toEqual(expect.objectContaining({
+      moduleId: 'health',
+      audience: 'public',
+      requiredCapability: 'none',
+      ownership: 'none',
+      elevation: 'none',
+      privacyClass: 'operational_allowlist',
+    }));
+  });
+
+  it('registers stream descriptors with explicit SSE policy metadata', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    registry.register(adminModule({
+      path: '/api/v1/admin/operate/logs/stream',
+      auditOperation: ADMIN_AUDIT_OPERATION,
+      responseKind: 'sse',
+      streamPolicy: {
+        lastEventId: 'bounded',
+        heartbeatMs: 15_000,
+        revalidateMs: 15_000,
+        maxEventBytes: 65_536,
+        maxLastEventIdBytes: 512,
+      },
+      handler: () => ({ status: 200, stream: { events: EMPTY_SSE_EVENTS } }),
+    }));
+
+    expect(registry.createRouteManifest().routes[0]).toEqual(expect.objectContaining({
+      path: '/api/v1/admin/operate/logs/stream',
+      responseKind: 'sse',
+    }));
+  });
+
+  it.each([
+    ['an unsupported API version', selfModule({
+      apiVersion: 'v2' as never,
+    }), /unsupported API version/],
+    ['an invalid module identifier', selfModule({
+      id: 'Invalid module id',
+    }), /invalid identifier/],
+    ['an unknown capability', selfModule({
+      capabilities: ['console:made-up' as never],
+      routes: [selfRoute({ requiredCapability: 'console:made-up' as never })],
+    }), /unknown capability/],
+    ['an undeclared route capability', selfModule({
+      capabilities: [],
+    }), /uses undeclared capability/],
+    ['an invalid HTTP method', selfModule({
+      routes: [selfRoute({ method: 'OPTIONS' as never })],
+    }), /invalid method/],
+    ['a path outside the API namespace', selfModule({
+      routes: [selfRoute({ path: '/api/v2/me/example' })],
+    }), /must be under \/api\/v1/],
+    ['a missing privacy class', selfModule({
+      routes: [selfRoute({ privacyClass: undefined })],
+    }), /missing a valid privacy class/],
+    ['a missing elevation policy', adminModule({ elevation: undefined }), /missing a valid elevation policy/],
+    ['an invalid ownership policy', selfModule({
+      routes: [selfRoute({ ownership: 'other_user' as never })],
+    }), /invalid ownership policy/],
+    ['an admin route without audit', adminModule({ auditOperation: undefined }), /missing a declared audit operation/],
+    ['an admin route without privacy projection', adminModule({ privacyProjector: undefined }), /missing a privacy projector/],
+    ['an admin route without elevation', adminModule({ elevation: 'none' }), /requires administrative elevation/],
+    ['an admin route with a self audience', adminModule({ audience: 'self' }), /inconsistent admin policy/],
+    ['a mutating route without idempotency decision', selfModule({
+      routes: [selfRoute({ method: 'POST', idempotency: undefined })],
+    }), /missing an idempotency decision/],
+    ['an invalid idempotency decision', selfModule({
+      routes: [selfRoute({ idempotency: 'sometimes' as never })],
+    }), /invalid idempotency decision/],
+    ['an invalid rate-limit policy', selfModule({
+      routes: [selfRoute({ rateLimit: 'sometimes' as never })],
+    }), /invalid rate-limit policy/],
+    ['an invalid response kind', selfModule({
+      routes: [selfRoute({ responseKind: 'xml' as never })],
+    }), /invalid response kind/],
+    ['an SSE route without stream policy', selfModule({
+      routes: [selfRoute({ path: SELF_STREAM_PATH, responseKind: 'sse' })],
+    }), /missing stream policy/],
+    ['a non-GET SSE route', selfModule({
+      routes: [selfRoute({
+        method: 'POST',
+        path: SELF_STREAM_PATH,
+        idempotency: 'not_applicable',
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /must use GET/],
+    ['an SSE route requiring idempotency', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        idempotency: 'required',
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /cannot require idempotency/],
+    ['an SSE route with invalid Last-Event-ID policy', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'raw' as never,
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /invalid Last-Event-ID policy/],
+    ['an SSE route with non-positive stream limits', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 0,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /invalid stream limits/],
+    ['an SSE route with excessive stream limits', selfModule({
+      routes: [selfRoute({
+        path: SELF_STREAM_PATH,
+        responseKind: 'sse',
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: Number.MAX_SAFE_INTEGER,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /invalid stream limits/],
+    ['a JSON route with stream policy', selfModule({
+      routes: [selfRoute({
+        streamPolicy: {
+          lastEventId: 'bounded',
+          heartbeatMs: 15_000,
+          revalidateMs: 15_000,
+          maxEventBytes: 65_536,
+          maxLastEventIdBytes: 512,
+        },
+      })],
+    }), /non-stream route/],
+    ['a non-mutating route requiring idempotency', selfModule({
+      routes: [selfRoute({ idempotency: 'required' })],
+    }), /cannot require idempotency/],
+    ['a private self-service route without ownership', selfModule({
+      routes: [selfRoute({ ownership: undefined })],
+    }), /missing an ownership policy/],
+    ['a self-service route with administrative elevation', selfModule({
+      routes: [selfRoute({ elevation: 'admin_30m' })],
+    }), /cannot require admin elevation/],
+    ['a self-service route with administrative privacy', selfModule({
+      routes: [selfRoute({ privacyClass: 'account_metadata' })],
+    }), /invalid privacy class/],
+    ['a self-service route outside me or auth', selfModule({
+      routes: [selfRoute({ path: '/api/v1/profile' })],
+    }), /inconsistent self-service policy/],
+    ['a public route outside auth or health', publicAuthModule({
+      path: '/api/v1/me/public-login',
+    }), /inconsistent public policy/],
+    ['a public auth route with a capability', publicAuthModule({
+      requiredCapability: SELF_CAPABILITY,
+    }), /inconsistent public policy/],
+    ['a public health route with auth-flow ownership', publicHealthModule({
+      ownership: 'flow_transaction',
+    }), /inconsistent public policy/],
+    ['a public health route with self-security privacy', publicHealthModule({
+      privacyClass: 'self_security',
+    }), /inconsistent public policy/],
+  ])('rejects %s', (_label, descriptor, expected) => {
+    const registry = new ConsoleModuleRegistry();
+
+    expect(() => registry.register(descriptor)).toThrow(expected);
+  });
+
+  it('rejects duplicate module IDs', () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register(selfModule());
+
+    expect(() => registry.register(selfModule())).toThrow(ConsoleModuleRegistrationError);
+    expect(() => registry.register(selfModule())).toThrow(/Duplicate console module id/);
+  });
+
+  it('rejects route collisions across modules', () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register(selfModule());
+
+    expect(() => registry.register(selfModule({
+      id: 'otherExample',
+    }))).toThrow(/collides between modules/);
+  });
+
+  it('rejects duplicated declarations inside one module', () => {
+    const registry = new ConsoleModuleRegistry();
+
+    expect(() => registry.register(selfModule({
+      routes: [selfRoute(), selfRoute()],
+    }))).toThrow(/duplicates route/);
+
+    expect(() => registry.register({
+      ...adminModule(),
+      auditOperations: [{ id: ADMIN_AUDIT_OPERATION }, { id: ADMIN_AUDIT_OPERATION }],
+    })).toThrow(/duplicates audit operation/);
+
+    expect(() => registry.register(selfModule({
+      events: [
+        { type: PROFILE_UPDATED_EVENT, schemaId: PROFILE_UPDATED_EVENT },
+        { type: PROFILE_UPDATED_EVENT, schemaId: 'profile.updated.other.v1' },
+      ],
+    }))).toThrow(/duplicates event/);
+
+    expect(() => registry.register(selfModule({
+      schemas: [{ id: 'profile.v1' }, { id: 'profile.v1' }],
+    }))).toThrow(/duplicates schema/);
+
+    expect(() => registry.register(selfModule({
+      events: [{ type: PROFILE_UPDATED_EVENT, schemaId: 'profile.v1' }],
+      schemas: [{ id: 'profile.v1' }],
+    }))).toThrow(/duplicates schema/);
+  });
+
+  it('rejects event and schema identifier collisions across modules', () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register(selfModule({
+      events: [{ type: PROFILE_UPDATED_EVENT, schemaId: PROFILE_UPDATED_EVENT }],
+    }));
+
+    expect(() => registry.register(selfModule({
+      id: 'otherExample',
+      routes: [selfRoute({ path: '/api/v1/me/other-example' })],
+      events: [{ type: PROFILE_UPDATED_EVENT, schemaId: 'other.schema.v1' }],
+    }))).toThrow(/Event "profile.updated.v1" collides/);
+
+    expect(() => registry.register(selfModule({
+      id: 'thirdExample',
+      routes: [selfRoute({ path: '/api/v1/me/third-example' })],
+      schemas: [{ id: PROFILE_UPDATED_EVENT }],
+    }))).toThrow(/Schema "profile.updated.v1" collides/);
+  });
+
+  it('rejects a schema used by a subsequently registered event', () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register(selfModule({
+      schemas: [{ id: 'profile.projection.v1' }],
+    }));
+
+    expect(() => registry.register(selfModule({
+      id: 'otherExample',
+      routes: [selfRoute({ path: '/api/v1/me/other-example' })],
+      events: [{ type: 'profile.projected.v1', schemaId: 'profile.projection.v1' }],
+    }))).toThrow(/Schema "profile.projection.v1" collides/);
+  });
+
+  it('stores immutable descriptor snapshots after registration', () => {
+    const registry = new ConsoleModuleRegistry();
+    const descriptor = selfModule();
+    registry.register(descriptor);
+
+    (descriptor.routes[0] as unknown as { path: string }).path = '/api/v1/me/mutated';
+
+    expect(registry.createRouteManifest().routes[0]?.path).toBe('/api/v1/me/example');
+    expect(Object.isFrozen(registry.getModules()[0])).toBe(true);
+    expect(Object.isFrozen(registry.getModules()[0]?.routes)).toBe(true);
+    expect(Object.isFrozen(registry.getModules()[0]?.routes[0])).toBe(true);
+  });
+});

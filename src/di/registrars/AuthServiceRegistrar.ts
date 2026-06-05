@@ -15,9 +15,15 @@
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+import type { AuthConfig } from '../../auth/AuthProviderFactory.js';
 import type { IAuthProvider } from '../../auth/IAuthProvider.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
+import type { SignInAllowlistAuthority } from '../../auth/embedded-as/allowlistGate.js';
+import type { IRateLimitStore } from '../../auth/embedded-as/storage/IRateLimitStore.js';
+import type { IAuthStorageLayer } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
+import type { AdminTotpService } from '../../auth/embedded-as/totp/AdminTotpService.js';
+import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 
 interface ProtectedResourceMetadataProvider extends IAuthProvider {
   getProtectedResourceMetadataUrl(): string;
@@ -34,12 +40,12 @@ export class AuthServiceRegistrar {
       return;
     }
 
-    const { createAuthProvider } = await import('../../auth/AuthProviderFactory.js');
+    const { createAuthProvider, resolveAuthMethods } = await import('../../auth/AuthProviderFactory.js');
     const { createUnifiedAuthMiddleware } = await import('../../auth/authMiddleware.js');
     const { createSigningKeyStore } = await import('../../storage/signingKeys/createSigningKeyStore.js');
+    const { createAuthStorage } = await import('../../auth/embedded-as/storage/createAuthStorage.js');
     const { InMemoryRateLimitStore } = await import('../../auth/embedded-as/storage/InMemoryRateLimitStore.js');
     const { PostgresRateLimitStore } = await import('../../auth/embedded-as/storage/PostgresRateLimitStore.js');
-    type IRateLimitStore = import('../../auth/embedded-as/storage/IRateLimitStore.js').IRateLimitStore;
 
     // Pull DatabaseInstance from the container if it has one. Required
     // when DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres; the Postgres backend's
@@ -73,6 +79,18 @@ export class AuthServiceRegistrar {
       rateLimitStore = new InMemoryRateLimitStore();
     }
     container.register('RateLimitStore', () => rateLimitStore);
+    const signInAllowlistAuthority = await this.createSignInAllowlistAuthority(database);
+    const authMethods = resolveAuthMethods({
+      enabled: true,
+      provider: env.DOLLHOUSE_AUTH_PROVIDER,
+      methods: env.DOLLHOUSE_AUTH_METHODS as AuthConfig['methods'],
+    });
+    const authStorage = env.DOLLHOUSE_AUTH_PROVIDER === 'embedded'
+      ? await createAuthStorage({ methods: authMethods, database })
+      : undefined;
+    if (authStorage) {
+      container.register('AuthStorage', () => authStorage);
+    }
 
     // Phase 4.5 / Phase J: prune rotated signing keys older than 30 days
     // every 6 hours. Without this, audit history accumulates unboundedly —
@@ -110,6 +128,10 @@ export class AuthServiceRegistrar {
     // backend instead of file-direct in persistKeys/cookieSecret), so the
     // dual-mode behavior is uniform across deployments.
 
+    // Web-console admin step-up (TOTP) dependencies. When present, the
+    // embedded AS mounts the /auth/totp/* enrollment + step-up routes.
+    const adminStepUp = await this.createAdminStepUpDeps(database, authStorage);
+
     const provider = await createAuthProvider({
       enabled: true,
       provider: env.DOLLHOUSE_AUTH_PROVIDER,
@@ -120,14 +142,18 @@ export class AuthServiceRegistrar {
       localDefaultSub: env.DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB,
       publicBaseUrl: env.DOLLHOUSE_PUBLIC_BASE_URL,
       mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
-      methods: env.DOLLHOUSE_AUTH_METHODS as import('../../auth/AuthProviderFactory.js').AuthConfig['methods'],
+      methods: authMethods,
       database,
+      storage: authStorage,
       // Cycle 19 / security-#6: opt-in OIDC-bridge typ enforcement.
       oidcRequireAccessTokenTyp: env.DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP,
       // Phase 4.5: signing key store (filesystem or postgres backend
       // selected per DOLLHOUSE_AUTH_STORAGE_BACKEND inside the factory).
       signingKeyStore,
       rateLimitStore,
+      adminTotpService: adminStepUp.adminTotpService,
+      consoleIdentityResolver: adminStepUp.consoleIdentityResolver,
+      signInAllowlistAuthority,
       // PerformanceMonitor for auth-flow timing. Optional — when present,
       // each method's three IAuthMethod entry points (beginInteraction /
       // completeInteraction / findAccount) record per-call duration into
@@ -141,6 +167,10 @@ export class AuthServiceRegistrar {
     if (!provider) return;
 
     container.register('AuthProvider', () => provider);
+    if (signInAllowlistAuthority) {
+      container.register('SignInAllowlistAuthority', () => signInAllowlistAuthority);
+      container.register('WebConsoleAccountAllowlistAuthorityCutoverComplete', () => true);
+    }
 
     const middleware = createUnifiedAuthMiddleware({
       provider,
@@ -153,6 +183,88 @@ export class AuthServiceRegistrar {
 
     logger.info(`[AuthServiceRegistrar] Auth enabled with provider: ${provider.name}`);
   }
+
+  private async createSignInAllowlistAuthority(
+    database: DatabaseInstance | undefined,
+  ): Promise<SignInAllowlistAuthority | undefined> {
+    if (!database || env.DOLLHOUSE_AUTH_PROVIDER !== 'embedded' || env.DOLLHOUSE_AUTH_STORAGE_BACKEND !== 'postgres') {
+      return undefined;
+    }
+    const { PostgresConsoleAccountAllowlistStore } = await import(
+      '../../web-console/stores/PostgresConsoleAccountAllowlistStore.js'
+    );
+    const { ConsoleAccountAllowlistSignInAuthority } = await import(
+      '../../web-console/services/account-allowlist/ConsoleAccountAllowlistSignInAuthority.js'
+    );
+    return new ConsoleAccountAllowlistSignInAuthority(
+      new PostgresConsoleAccountAllowlistStore(database),
+    );
+  }
+
+  /**
+   * Construct the web-console admin step-up (TOTP) dependencies so the embedded
+   * AS mounts the /auth/totp/* enrollment + step-up interaction routes. Requires
+   * embedded provider + DB mode (Postgres factor/identity stores) + the
+   * web-console secret-encryption key (factor secrets share that key with the
+   * console, so the key id/material must match DOLLHOUSE_WEB_CONSOLE_SECRET_*).
+   * Returns empty when any prerequisite is absent → routes stay unmounted.
+   */
+  private async createAdminStepUpDeps(
+    database: DatabaseInstance | undefined,
+    authStorage: IAuthStorageLayer | undefined,
+  ): Promise<{ adminTotpService?: AdminTotpService; consoleIdentityResolver?: IConsoleIdentityResolver }> {
+    if (env.DOLLHOUSE_AUTH_PROVIDER !== 'embedded' || !database || !authStorage) return {};
+    const encryptionKey = env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY;
+    if (!encryptionKey) {
+      logger.debug(
+        '[AuthServiceRegistrar] DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY unset — ' +
+        'admin TOTP step-up routes will not mount',
+      );
+      return {};
+    }
+    const { AdminTotpService } = await import('../../auth/embedded-as/totp/AdminTotpService.js');
+    const { PostgresConsoleFactorStore } = await import('../../web-console/stores/PostgresConsoleFactorStore.js');
+    const { PostgresConsoleIdentityResolver } = await import('../../web-console/identity/PostgresConsoleIdentityResolver.js');
+    const { AeadSecretEncryptionService } = await import('../../web-console/security/SecretEncryption.js');
+    const retainedDecryptKeys = parseRetiredSecretKeys(
+      env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED,
+    );
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID,
+      key: Buffer.from(encryptionKey, 'base64'),
+    }, retainedDecryptKeys);
+    logger.info('[AuthServiceRegistrar] Admin TOTP step-up routes enabled (embedded AS, DB mode)');
+    return {
+      adminTotpService: new AdminTotpService({
+        authStorage,
+        factorStore: new PostgresConsoleFactorStore(database),
+        secretEncryption,
+      }),
+      consoleIdentityResolver: new PostgresConsoleIdentityResolver(database),
+    };
+  }
+}
+
+/**
+ * Parse `keyId=base64,keyId2=base64` into retained decrypt keys. These let the
+ * active secret-encryption key rotate without orphaning ciphertext encrypted
+ * under a prior key (the keyId embedded in each record selects the right key).
+ * Throws on a malformed entry rather than silently dropping a decrypt key.
+ */
+function parseRetiredSecretKeys(raw: string | undefined): { keyId: string; key: Buffer }[] {
+  if (!raw) return [];
+  return raw.split(',').map(entry => entry.trim()).filter(entry => entry.length > 0).map(entry => {
+    const eq = entry.indexOf('=');
+    if (eq <= 0) {
+      throw new Error(
+        `DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED entry '${entry}' must be 'keyId=base64key'`,
+      );
+    }
+    return {
+      keyId: entry.slice(0, eq).trim(),
+      key: Buffer.from(entry.slice(eq + 1).trim(), 'base64'),
+    };
+  });
 }
 
 function hasProtectedResourceMetadata(provider: IAuthProvider): provider is ProtectedResourceMetadataProvider {

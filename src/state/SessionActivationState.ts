@@ -14,6 +14,7 @@
  */
 
 import { logger } from '../utils/logger.js';
+import type { IActivationStateStore } from './IActivationStateStore.js';
 
 /**
  * Per-session identity override.
@@ -54,7 +55,7 @@ export interface SessionActivationState {
    * Used by ElementCRUDHandler to persist activation changes
    * to the correct session's file.
    */
-  activationStore?: import('./IActivationStateStore.js').IActivationStateStore;
+  activationStore?: IActivationStateStore;
 }
 
 /**

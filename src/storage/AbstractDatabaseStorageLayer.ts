@@ -21,6 +21,21 @@ import type { DrizzleTx } from '../database/db-utils.js';
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
 import type { IWritableStorageLayer, ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
 
+/**
+ * Canonical key for case/format-insensitive name resolution: lowercase, with
+ * runs of whitespace/underscores collapsed to a single hyphen and surrounding
+ * hyphens trimmed. Mirrors the filename-stem form the web-console addresses
+ * elements by, so a stem ("meeting-notes") resolves a raw name ("Meeting-Notes").
+ */
+function canonicalNameKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replaceAll(/[\s_]+/gu, '-')
+    .replaceAll(/-+/gu, '-')
+    .replaceAll(/^-|-$/gu, '');
+}
+
 // ── Implementation ──────────────────────────────────────────────────
 
 export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLayer {
@@ -64,19 +79,23 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
       unchanged: [],
     };
 
-    const isFullScan = !this.lastScanTimestamp;
+    // Bind the timestamp locally so the incremental branch narrows it to a
+    // non-null Date (the boolean alone can't carry that narrowing across the
+    // closure, which previously forced a non-null assertion).
+    const lastScan = this.lastScanTimestamp;
+    const isFullScan = !lastScan;
 
     // Explicit userId in all queries for defense-in-depth (alongside RLS)
     // and to enable composite index utilization on idx_elements_scan/idx_elements_user_type.
     const rows = await withUserRead(this.db, this.userId, async (tx) => {
-      if (!isFullScan) {
+      if (lastScan) {
         return tx
           .select({ id: elements.id, name: elements.name, updatedAt: elements.updatedAt })
           .from(elements)
           .where(and(
             eq(elements.userId, this.userId),
             eq(elements.elementType, this.elementType),
-            gt(elements.updatedAt, this.lastScanTimestamp!),
+            gt(elements.updatedAt, lastScan),
           ));
       }
       return tx
@@ -192,8 +211,17 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
   }
 
   getPathByName(name: string): string | undefined {
-    return this.nameToIdMap.get(name)
-      ?? this.nameToIdMap.get(name.toLowerCase());
+    const direct = this.nameToIdMap.get(name) ?? this.nameToIdMap.get(name.toLowerCase());
+    if (direct !== undefined) return direct;
+    // The web-console addresses elements by their filename stem (lowercased, with
+    // spaces/underscores hyphenated), which won't match a raw mixed-case index
+    // key like "Meeting-Notes". Fall back to a canonical comparison so resolve
+    // and delete work for any-cased name (only scans on a direct miss).
+    const target = canonicalNameKey(name);
+    for (const [key, id] of this.nameToIdMap) {
+      if (canonicalNameKey(key) === target) return id;
+    }
+    return undefined;
   }
 
   /**
@@ -252,7 +280,9 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
         .from(elements)
         .where(eq(elements.id, relativePath))
         .limit(1);
-      return rows[0] ?? null;
+      // `.at(0)` (vs `rows[0]`) keeps `undefined` in the type so the
+      // not-found guard below stays meaningful without noUncheckedIndexedAccess.
+      return rows.at(0) ?? null;
     });
 
     if (!row) {

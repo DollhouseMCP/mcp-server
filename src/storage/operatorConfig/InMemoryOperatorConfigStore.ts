@@ -9,29 +9,38 @@
  */
 
 import type { IOperatorConfigStore, OperatorConfig } from './IOperatorConfigStore.js';
-import { DEFAULT_OPERATOR_CONFIG } from './IOperatorConfigStore.js';
+import { DEFAULT_OPERATOR_CONFIG, OperatorConfigConflictError } from './IOperatorConfigStore.js';
 
 export class InMemoryOperatorConfigStore implements IOperatorConfigStore {
   private current: OperatorConfig | null = null;
 
-  async load(): Promise<OperatorConfig> {
+  load(): Promise<OperatorConfig> {
     if (!this.current) {
       // Clone the frozen default so callers can mutate their copy
       // freely without affecting subsequent loads or each other.
-      return cloneConfig(DEFAULT_OPERATOR_CONFIG);
+      return Promise.resolve(cloneConfig(DEFAULT_OPERATOR_CONFIG));
     }
-    return cloneConfig(this.current);
+    return Promise.resolve(cloneConfig(this.current));
   }
 
-  async save(config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number }): Promise<void> {
+  save(
+    config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number },
+    options: { readonly expectedUpdatedAt?: number } = {},
+  ): Promise<void> {
+    const currentUpdatedAt = this.current?.updatedAt ?? DEFAULT_OPERATOR_CONFIG.updatedAt;
+    if (options.expectedUpdatedAt !== undefined && currentUpdatedAt !== options.expectedUpdatedAt) {
+      return Promise.reject(new OperatorConfigConflictError());
+    }
+    const updatedAt = Math.max(Date.now(), currentUpdatedAt + 1);
     this.current = {
       enhancedIndexConfig: { ...config.enhancedIndexConfig },
       consoleConfig: { ...config.consoleConfig },
       licenseConfig: { ...config.licenseConfig },
       defaultsConfig: { ...config.defaultsConfig },
       configVersion: config.configVersion,
-      updatedAt: Date.now(),
+      updatedAt,
     };
+    return Promise.resolve();
   }
 }
 

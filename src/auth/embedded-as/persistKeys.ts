@@ -26,7 +26,7 @@ import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStor
 
 const ALGORITHM = 'ES256';
 
-interface StoredKeyPair {
+export interface StoredKeyPair {
   kid: string;
   privateKey: JWK;
   publicKey: JWK;
@@ -60,7 +60,7 @@ export function defaultKeyFilePath(legacyRoot?: string): string {
 export async function loadOrGenerateSigningJwks(keyFilePath: string): Promise<SigningKeyset> {
   try {
     const raw = await fs.readFile(keyFilePath, 'utf-8');
-    const stored = JSON.parse(raw) as StoredKeyPair;
+    const stored = JSON.parse(raw) as Partial<StoredKeyPair>;
     if (stored.kid && stored.privateKey && stored.publicKey) {
       logger.info(`[persistKeys] Loaded signing key from ${keyFilePath}`);
       return {
@@ -155,7 +155,7 @@ export async function loadOrGenerateSigningJwksViaStore(
 ): Promise<SigningKeyset> {
   const active = await store.getActive('jwks');
   if (active) {
-    const stored = active.payload as unknown as StoredKeyPair;
+    const stored = active.payload as unknown as Partial<StoredKeyPair>;
     if (stored.kid && stored.privateKey && stored.publicKey) {
       logger.info(`[persistKeys] Loaded signing key from store (kid=${stored.kid})`);
       return {
@@ -202,7 +202,7 @@ export async function rotateSigningKeyViaStore(store: ISigningKeyStore): Promise
  * Internal helper — generates a fresh ES256 keypair and packs it in the
  * StoredKeyPair shape both file and store backends use.
  */
-async function generateNewKeypair(): Promise<StoredKeyPair> {
+export async function generateNewKeypair(): Promise<StoredKeyPair> {
   const { privateKey, publicKey } = await generateKeyPair(ALGORITHM, { extractable: true });
   const kid = `dh-${randomUUID()}`;
   const privateJwk = await exportJWK(privateKey);

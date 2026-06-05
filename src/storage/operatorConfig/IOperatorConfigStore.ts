@@ -60,6 +60,13 @@ export const DEFAULT_OPERATOR_CONFIG: OperatorConfig = Object.freeze({
   updatedAt: 0,
 });
 
+export class OperatorConfigConflictError extends Error {
+  constructor(message = 'operator config update conflict') {
+    super(message);
+    this.name = 'OperatorConfigConflictError';
+  }
+}
+
 /**
  * Storage contract for the singleton operator config. All methods async.
  *
@@ -81,7 +88,12 @@ export interface IOperatorConfigStore {
    * Atomically write the singleton operator config. Replaces all sections —
    * partial updates are the caller's responsibility (ConfigManager reads,
    * mutates, writes). `updatedAt` is set by the implementation; the caller
-   * may pass any value or omit it.
+   * may pass any value or omit it. When `expectedUpdatedAt` is supplied, the
+   * write MUST fail with `OperatorConfigConflictError` if the currently stored
+   * document no longer has that timestamp.
    */
-  save(config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number }): Promise<void>;
+  save(
+    config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number },
+    options?: { readonly expectedUpdatedAt?: number },
+  ): Promise<void>;
 }

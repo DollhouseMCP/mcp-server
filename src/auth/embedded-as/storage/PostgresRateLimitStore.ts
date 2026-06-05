@@ -36,7 +36,7 @@ export class PostgresRateLimitStore implements IRateLimitStore {
         LIMIT 1
       `),
     );
-    const row = rows[0];
+    const row = rows.at(0);
     return row ? { state: row.state as TState, version: Number(row.version) } : null;
   }
 
@@ -55,8 +55,10 @@ export class PostgresRateLimitStore implements IRateLimitStore {
           WHERE scope = ${scope} AND key = ${key}
           LIMIT 1
         `) as RateLimitRow[];
-        const current = rows[0];
+        const current = rows.at(0);
         const next = compute((current?.state ?? null) as TState | null);
+        // Raw `tx.execute(sql`...`)` over postgres-js does not serialize a JS
+        // Date param — pass an ISO string cast to timestamptz instead.
         const expiresAt = options.expiresAt === undefined ? null : new Date(options.expiresAt).toISOString();
 
         if (next.state === null) {

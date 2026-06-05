@@ -28,14 +28,20 @@ import os from 'node:os';
 import { logger } from '../utils/logger.js';
 import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
 import type { IAuthProvider } from './IAuthProvider.js';
-import {
+import { createDefaultAuthMethodFactory } from './embedded-as/AuthMethodFactory.js';
+import type {
   AuthMethodFactory,
-  createDefaultAuthMethodFactory,
-  type AuthMethodId,
+  AuthMethodId,
 } from './embedded-as/AuthMethodFactory.js';
 import type { IAuthStorageLayer } from './embedded-as/storage/IAuthStorageLayer.js';
 import type { IRateLimitStore } from './embedded-as/storage/IRateLimitStore.js';
+import type { SignInAllowlistAuthority } from './embedded-as/allowlistGate.js';
+import type { IAuthMethod } from './embedded-as/IAuthMethod.js';
+import type { InviteTokenStore } from './embedded-as/inviteTokens.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { ISigningKeyStore } from '../storage/signingKeys/ISigningKeyStore.js';
+import type { AdminTotpService } from './embedded-as/totp/AdminTotpService.js';
+import type { IConsoleIdentityResolver } from '../web-console/identity/IConsoleIdentityResolver.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { instrumentAuthMethod } from './embedded-as/instrumentAuthMethod.js';
 import { instrumentAuthProvider } from './instrumentAuthProvider.js';
@@ -86,9 +92,25 @@ export interface AuthConfig {
    * keys persist via the store instead of the legacy filesystem path.
    * Forwarded to EmbeddedAuthorizationServer; ignored by other providers.
    */
-  signingKeyStore?: import('../storage/signingKeys/ISigningKeyStore.js').ISigningKeyStore;
+  signingKeyStore?: ISigningKeyStore;
   /** Shared auth rate-limit state store. Required for multi-replica Postgres deployments. */
   rateLimitStore?: IRateLimitStore;
+  /**
+   * Web-console admin step-up dependencies. When BOTH are present (DB mode
+   * with the web console enabled), EmbeddedAuthorizationServer mounts the
+   * /auth/totp/* enrollment + admin step-up interaction routes. Absent → those
+   * routes are not mounted and admin elevation (acr=admin-stepup, amr=otp) is
+   * unavailable. Forwarded to EmbeddedAuthorizationServer; ignored by other
+   * providers. adminTotpRateLimitStore reuses rateLimitStore.
+   */
+  adminTotpService?: AdminTotpService;
+  consoleIdentityResolver?: IConsoleIdentityResolver;
+  /**
+   * Replacement sign-in allowlist authority. Hosted/shared console cutover
+   * injects this so auth methods read from account_allowlist_entries while
+   * legacy auth storage still owns bootstrap/audit/OAuth state.
+   */
+  signInAllowlistAuthority?: SignInAllowlistAuthority;
   /**
    * Optional PerformanceMonitor for instrumenting auth-flow timing.
    * When present, each method's beginInteraction / completeInteraction /
@@ -221,6 +243,9 @@ async function createEmbeddedProvider(
   // and refuses memory storage with durable-data methods unless
   // DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true is explicitly set.
   const storage = config.storage ?? await createAuthStorage({ methods, database: config.database });
+  if (config.signInAllowlistAuthority) {
+    await verifySignInAllowlistAuthorityCutover(storage, config.signInAllowlistAuthority);
+  }
 
   const baseUrl = config.publicBaseUrl
     ?? `http://${env.DOLLHOUSE_HTTP_HOST}:${env.DOLLHOUSE_HTTP_PORT}`;
@@ -230,13 +255,27 @@ async function createEmbeddedProvider(
   // Construct each configured method. Build ALL of them — multi-method
   // deployments (e.g. "GitHub + magic link") expose every method
   // simultaneously and let the LoginChooser pick at /interaction time.
-  const builtMethods: import('./embedded-as/IAuthMethod.js').IAuthMethod[] = [];
+  const builtMethods: IAuthMethod[] = [];
   for (const id of methods) {
     const raw = await buildAuthMethod(id, { storage, baseUrl, ensureInvites, config });
     // Wrap with PerformanceMonitor instrumentation when one was injected.
     // No-op when monitor is undefined; otherwise records per-method timing
     // for the three IAuthMethod entry points.
     builtMethods.push(instrumentAuthMethod(raw, config.performanceMonitor));
+  }
+
+  // Admin step-up (mounted only when both adminTotpService and
+  // consoleIdentityResolver are present) MUST have a rate-limit store, or
+  // TOTP proof attempts would not be throttled (checkAdminTotpRateLimit
+  // fails open on a missing store). Fail closed at construction — mirroring
+  // the local-password / magic-link / DCR guards — so a forgotten store is a
+  // startup error, never a silent loss of brute-force protection on the
+  // highest-value elevation path.
+  if (config.adminTotpService && config.consoleIdentityResolver && !config.rateLimitStore) {
+    throw new Error(
+      'admin step-up (adminTotpService + consoleIdentityResolver) requires AuthConfig.rateLimitStore. ' +
+      'AuthServiceRegistrar constructs one from DOLLHOUSE_RATE_LIMIT_BACKEND (memory|postgres) — verify the registrar ran before createAuthProvider().',
+    );
   }
 
   return new EmbeddedAuthorizationServer({
@@ -249,6 +288,10 @@ async function createEmbeddedProvider(
     // in filesystem mode → EmbeddedAuthorizationServer falls back to the
     // legacy persistKeys / cookieSecret file paths.
     signingKeyStore: config.signingKeyStore,
+    // Web-console admin step-up: mounts /auth/totp/* only when both present.
+    adminTotpService: config.adminTotpService,
+    consoleIdentityResolver: config.consoleIdentityResolver,
+    adminTotpRateLimitStore: config.rateLimitStore,
     rateLimitStore: config.rateLimitStore,
   });
 }
@@ -350,8 +393,8 @@ function warnAllowlistDisabledForSocial(
 function makeInviteStoreFactory(
   config: AuthConfig,
   storage: IAuthStorageLayer,
-): () => Promise<import('./embedded-as/inviteTokens.js').InviteTokenStore> {
-  let shared: import('./embedded-as/inviteTokens.js').InviteTokenStore | undefined;
+): () => Promise<InviteTokenStore> {
+  let shared: InviteTokenStore | undefined;
   return async () => {
     if (shared) return shared;
     const {
@@ -409,7 +452,7 @@ function getDefaultSub(): string {
 interface BuildAuthMethodCtx {
   storage: IAuthStorageLayer;
   baseUrl: string;
-  ensureInvites: () => Promise<import('./embedded-as/inviteTokens.js').InviteTokenStore>;
+  ensureInvites: () => Promise<InviteTokenStore>;
   config: AuthConfig;
 }
 
@@ -422,7 +465,7 @@ interface BuildAuthMethodCtx {
 async function buildAuthMethod(
   id: AuthMethodId,
   ctx: BuildAuthMethodCtx,
-): Promise<import('./embedded-as/IAuthMethod.js').IAuthMethod> {
+): Promise<IAuthMethod> {
   const { storage, baseUrl, ensureInvites, config } = ctx;
   const { env } = await import('../config/env.js');
 
@@ -467,6 +510,7 @@ async function buildAuthMethod(
         callbackUrl: `${baseUrl.replace(/\/$/, '')}/auth/social/github/callback`,
         storage,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+        signInAllowlistAuthority: config.signInAllowlistAuthority,
       });
     }
 
@@ -490,6 +534,7 @@ async function buildAuthMethod(
         invites,
         rateLimiter,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+        signInAllowlistAuthority: config.signInAllowlistAuthority,
       });
     }
 
@@ -529,6 +574,7 @@ async function buildAuthMethod(
         emailSender,
         verifyUrl,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
+        signInAllowlistAuthority: config.signInAllowlistAuthority,
         rateLimitStore: config.rateLimitStore,
       });
     }
@@ -543,4 +589,27 @@ async function buildAuthMethod(
       });
     }
   }
+}
+
+async function verifySignInAllowlistAuthorityCutover(
+  storage: IAuthStorageLayer,
+  authority: SignInAllowlistAuthority,
+): Promise<void> {
+  const legacyEntries = await storage.allowlistList();
+  if (legacyEntries.length === 0) return;
+
+  const authorityEntries = await authority.listEntries();
+  const authorityKeys = new Set(
+    authorityEntries.map(entry => allowlistEntryKey(entry.kind, entry.value)),
+  );
+  const missing = legacyEntries.filter(entry => !authorityKeys.has(allowlistEntryKey(entry.kind, entry.value)));
+  if (missing.length > 0) {
+    throw new Error(
+      'Sign-in allowlist authority cutover refused: legacy auth_allowlist entries are not fully represented in account_allowlist_entries.',
+    );
+  }
+}
+
+function allowlistEntryKey(kind: string, value: string): string {
+  return `${kind}\0${kind === 'github_id' ? value.trim() : value.trim().toLowerCase()}`;
 }

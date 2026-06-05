@@ -1,10 +1,15 @@
 import { randomUUID } from 'node:crypto';
 import type { Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
+import { fileURLToPath } from 'node:url';
+import { dirname, resolve } from 'node:path';
 import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import type { Express, Request, Response } from 'express';
+import { json, static as expressStatic } from 'express';
+import type { Express, Request, RequestHandler, Response, Router } from 'express';
+import type { AuthClaims } from '../auth/IAuthProvider.js';
+import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { env } from '../config/env.js';
 import { PACKAGE_VERSION } from '../generated/version.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -16,6 +21,7 @@ import { createHttpOrHttpsServer } from './createHttpOrHttpsServer.js';
 import { TlsConfig } from './TlsConfig.js';
 
 export type RuntimeTransportName = 'stdio' | 'streamable-http';
+export const DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS = 5_000;
 
 /** Constant form of the streamable-http transport name. Used in /healthz,
  *  /readyz, and runtime selection — extracted so changes (or typos) can't
@@ -41,11 +47,11 @@ export interface StreamableHttpRuntimeOptions {
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
   /** Express middleware for authentication. Mounted before MCP handlers when provided. */
-  authMiddleware?: import('express').RequestHandler;
+  authMiddleware?: RequestHandler;
   /** Embedded OAuth provider. Discovery and token routes are mounted before MCP auth middleware. */
   oauthProvider?: {
     setPublicBaseUrl?: (publicBaseUrl: string) => void;
-    createRouter: () => import('express').Router;
+    createRouter: () => Router;
     /**
      * Round 5 / H3: optional readiness predicate. /readyz returns 503
      * when this resolves to false (multi-user mode + bootstrap
@@ -64,13 +70,26 @@ export interface StreamableHttpRuntimeOptions {
   onSessionCreated?: (sessionId: string) => void;
   /** Called when an HTTP session is disposed (disconnect, expiry, or shutdown). */
   onSessionDisposed?: (sessionId: string) => void;
+  /** Optional web-console runtime control-plane bridge. Dormant when omitted. */
+  runtimeSessionControl?: StreamableHttpRuntimeSessionControl;
+  /**
+   * Optional descriptor-driven web-console API router. The production registrar
+   * only creates this after its activation checks pass; the HTTP runtime owns
+   * the actual Express mount and marks readiness once mounted.
+   */
+  webConsoleApiV1?: {
+    router: Router;
+    markMounted: () => void;
+  };
+  /** Poll interval for durable runtime termination commands when runtimeSessionControl is configured. */
+  runtimeCommandPollIntervalMs?: number;
   /**
    * Optional PerformanceMonitor. When provided, /healthz includes
    * per-op auth timing aggregates (latency p50/p95/p99, success rate)
    * under the `auth` key so operators can spot slow OAuth round-trips,
    * JWKS misses, etc.
    */
-  performanceMonitor?: import('../utils/PerformanceMonitor.js').PerformanceMonitor;
+  performanceMonitor?: PerformanceMonitor;
 }
 
 export interface StreamableHttpRuntimeHandle {
@@ -87,8 +106,47 @@ export interface StreamableHttpRuntimeHandle {
   pooledSessionCount(): number;
 }
 
+/** Client name/version advertised in the MCP `initialize` handshake (`clientInfo`). */
+export interface McpClientInfo {
+  readonly name?: string;
+  readonly version?: string;
+}
+
 export interface StreamableHttpSessionAttachment {
+  /**
+   * The dollhouse SessionContext id for this session. The transport adopts it
+   * as its own `mcp-session-id` (see `sessionIdGenerator` in `prepareSession`)
+   * so the id shown in `/me/sessions`, the runtime presence id, and the id
+   * that tags this session's logs are ALL ONE value — which is what keeps the
+   * Sessions↔Logs "View logs" cross-link working for MCP clients.
+   */
+  readonly contextSessionId: string;
   dispose(): Promise<void>;
+  runtimeSession?: {
+    readonly userId: string;
+    readonly accountCorrelationId: string;
+    readonly clientInfo?: {
+      readonly name?: string;
+      readonly version?: string;
+    } | null;
+  };
+}
+
+export interface StreamableHttpRuntimeSessionControl {
+  registerSession(input: {
+    readonly sessionId: string;
+    readonly userId: string;
+    readonly accountCorrelationId: string;
+    readonly clientInfo?: {
+      readonly name?: string;
+      readonly version?: string;
+    } | null;
+  }): Promise<void>;
+  recordActivity(sessionId: string, outcome?: 'ok' | 'error'): Promise<unknown>;
+  markSessionDisposed(sessionId: string): Promise<void>;
+  reconcilePendingCommands(terminator: {
+    terminateLocalSession(sessionId: string): Promise<'terminated' | 'already_absent'>;
+  }): Promise<number>;
 }
 
 interface ActiveSessionRecord {
@@ -182,6 +240,27 @@ function getMcpSessionId(req: Request): string | undefined {
   return normalizeUserInput(pickHeaderValue(req.headers['mcp-session-id']));
 }
 
+/**
+ * Pull the client's self-reported name/version out of an `initialize` request
+ * body (`params.clientInfo`) so it can label the runtime session in the console
+ * Sessions/Logs views instead of a bare UUID. Values are trimmed and clamped to
+ * 100 chars (the runtime-presence store rejects longer); empties are dropped.
+ * Display sites escape the values, so untrusted content is rendered safely.
+ */
+function extractClientInfo(body: unknown): McpClientInfo | undefined {
+  const params = (body as { params?: unknown } | undefined)?.params;
+  const clientInfo = (params as { clientInfo?: unknown } | undefined)?.clientInfo;
+  if (!clientInfo || typeof clientInfo !== 'object') return undefined;
+  const clamp = (value: unknown): string | undefined => {
+    if (typeof value !== 'string') return undefined;
+    const normalized = normalizeUserInput(value)?.trim();
+    return normalized ? normalized.slice(0, 100) : undefined;
+  };
+  const name = clamp((clientInfo as { name?: unknown }).name);
+  const version = clamp((clientInfo as { version?: unknown }).version);
+  return name || version ? { ...(name ? { name } : {}), ...(version ? { version } : {}) } : undefined;
+}
+
 export function getClientKey(req: Request): string {
   // Cycle-8 fix (H1): use Express's `req.ip` which resolves through
   // the configured `app.set('trust proxy', ...)` chain. The earlier
@@ -267,7 +346,7 @@ async function closeHttpServer(httpServer: HttpServer | HttpsServer): Promise<vo
   // Destroy all active sockets so keep-alive connections don't prevent shutdown.
   // httpServer.close() only stops accepting new connections — existing sockets
   // stay alive until their keep-alive timeout expires.
-  httpServer.closeAllConnections?.();
+  httpServer.closeAllConnections();
   await new Promise<void>((resolve, reject) => {
     httpServer.close((error) => {
       if (error) {
@@ -301,7 +380,16 @@ async function closeHttpServer(httpServer: HttpServer | HttpsServer): Promise<vo
  * Exported so tests can exercise the guard logic without standing up
  * an Express server.
  */
-export async function assertHostedDeploymentSafety(config: {
+export function assertHostedDeploymentSafety(config: HostedDeploymentSafetyConfig): Promise<void> {
+  try {
+    runHostedDeploymentSafetyChecks(config);
+    return Promise.resolve();
+  } catch (error) {
+    return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+  }
+}
+
+interface HostedDeploymentSafetyConfig {
   host: string;
   methods: readonly string[] | undefined;
   authEnabled: boolean;
@@ -317,17 +405,19 @@ export async function assertHostedDeploymentSafety(config: {
    * Refusing this combination prevents the silent misconfig.
    */
   nativeTls?: boolean;
-}): Promise<void> {
+}
+
+function runHostedDeploymentSafetyChecks(config: HostedDeploymentSafetyConfig): void {
   const multiUserMethods = new Set(['github', 'local-password', 'magic-link']);
-  const hasMultiUserMethod = Array.isArray(config.methods)
-    && config.methods.some((m) => multiUserMethods.has(m));
+  const configuredMethods = Array.isArray(config.methods) ? config.methods : [];
+  const hasMultiUserMethod = configuredMethods.some((m) => multiUserMethods.has(m));
   if (!hasMultiUserMethod) return;
   if (isLoopbackHost(config.host)) return;
 
   if (!config.authEnabled) {
     throw new Error(
       `[StreamableHttpServer] Refusing to start: DOLLHOUSE_AUTH_METHODS configures ` +
-      `a multi-user identity method (${config.methods!.join(',')}) on a non-loopback ` +
+      `a multi-user identity method (${configuredMethods.join(',')}) on a non-loopback ` +
       `bind '${config.host}', but DOLLHOUSE_AUTH_ENABLED is false. The MCP endpoint ` +
       `would accept unauthenticated traffic. Set DOLLHOUSE_AUTH_ENABLED=true (and ` +
       `ensure the bootstrap-admin CLI has been run) before exposing this deployment.`,
@@ -381,7 +471,7 @@ export async function assertHostedDeploymentSafety(config: {
 }
 
 export async function createStreamableHttpRuntime(
-  createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: import('../auth/IAuthProvider.js').AuthClaims) => Promise<StreamableHttpSessionAttachment>,
+  createSessionAttachment: (transport: StreamableHTTPServerTransport, authClaims?: AuthClaims, clientInfo?: McpClientInfo) => Promise<StreamableHttpSessionAttachment>,
   options: StreamableHttpRuntimeOptions = {},
 ): Promise<StreamableHttpRuntimeHandle> {
   const host = normalizeUserInput(options.host ?? env.DOLLHOUSE_HTTP_HOST) ?? env.DOLLHOUSE_HTTP_HOST;
@@ -395,6 +485,10 @@ export async function createStreamableHttpRuntime(
   const rateLimitMaxRequests = Math.max(0, options.rateLimitMaxRequests ?? env.DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS);
   const sessionIdleTimeoutMs = Math.max(0, options.sessionIdleTimeoutMs ?? env.DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS);
   const sessionPoolSize = Math.max(0, options.sessionPoolSize ?? env.DOLLHOUSE_HTTP_SESSION_POOL_SIZE);
+  const runtimeCommandPollIntervalMs = Math.max(
+    0,
+    options.runtimeCommandPollIntervalMs ?? DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS,
+  );
   const publicBaseUrl = env.DOLLHOUSE_PUBLIC_BASE_URL;
   if (publicBaseUrl) {
     assertSafePublicBaseUrl(publicBaseUrl);
@@ -440,7 +534,10 @@ export async function createStreamableHttpRuntime(
     rateLimitedRequests: 0,
   };
   let closingPromise: Promise<void> | null = null;
+  const isShuttingDown = (): boolean => Boolean(closingPromise);
   let replenishPoolPromise: Promise<void> | null = null;
+  let runtimeCommandPollTimer: NodeJS.Timeout | null = null;
+  let runtimeCommandPollRunning = false;
 
   const clearSessionTimer = (session: ActiveSessionRecord): void => {
     if (session.expirationTimer) {
@@ -474,6 +571,14 @@ export async function createStreamableHttpRuntime(
     sessionTelemetry.disposed += 1;
     clearSessionTimer(session);
     options.onSessionDisposed?.(sessionId);
+    try {
+      await options.runtimeSessionControl?.markSessionDisposed(sessionId);
+    } catch (error) {
+      logger.warn('[StreamableHTTP] Failed to mark runtime session disposed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     if (!skipTransportClose) {
       await session.transport.close().catch(() => {
@@ -489,6 +594,45 @@ export async function createStreamableHttpRuntime(
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  };
+
+  const recordRuntimeActivity = (sessionId: string, outcome: 'ok' | 'error' = 'ok'): void => {
+    void options.runtimeSessionControl?.recordActivity(sessionId, outcome).catch((error) => {
+      logger.warn('[StreamableHTTP] Failed to heartbeat runtime session', {
+        sessionId,
+        outcome,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
+  };
+
+  const pollRuntimeCommands = async (): Promise<void> => {
+    if (!options.runtimeSessionControl || runtimeCommandPollRunning || closingPromise) return;
+    runtimeCommandPollRunning = true;
+    try {
+      await options.runtimeSessionControl.reconcilePendingCommands({
+        terminateLocalSession: async (sessionId) => {
+          if (!sessions.has(sessionId)) return 'already_absent';
+          await disposeSession(sessionId);
+          return 'terminated';
+        },
+      });
+    } catch (error) {
+      logger.warn('[StreamableHTTP] Runtime command reconciliation failed', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      runtimeCommandPollRunning = false;
+    }
+  };
+
+  const startRuntimeCommandPolling = (): void => {
+    if (!options.runtimeSessionControl || runtimeCommandPollIntervalMs <= 0 || runtimeCommandPollTimer) return;
+    runtimeCommandPollTimer = setInterval(() => {
+      void pollRuntimeCommands();
+    }, runtimeCommandPollIntervalMs);
+    runtimeCommandPollTimer.unref();
+    void pollRuntimeCommands();
   };
 
   const touchSession = (sessionId: string): void => {
@@ -511,7 +655,7 @@ export async function createStreamableHttpRuntime(
       sessionTelemetry.expired += 1;
       void disposeSession(sessionId);
     }, sessionIdleTimeoutMs);
-    session.expirationTimer.unref?.();
+    session.expirationTimer.unref();
   };
 
   const consumeRateLimit = (req: Request, res: Response): boolean => {
@@ -576,7 +720,7 @@ export async function createStreamableHttpRuntime(
     }
 
     replenishPoolPromise = (async () => {
-      while (!closingPromise && pooledSessions.length < sessionPoolSize) {
+      while (!isShuttingDown() && pooledSessions.length < sessionPoolSize) {
         try {
           pooledSessions.push(await prepareSession());
         } catch (error) {
@@ -593,11 +737,18 @@ export async function createStreamableHttpRuntime(
     await replenishPoolPromise;
   };
 
-  const prepareSession = async (authClaims?: import('../auth/IAuthProvider.js').AuthClaims): Promise<PreparedSessionRecord> => {
+  const prepareSession = async (authClaims?: AuthClaims, clientInfo?: McpClientInfo): Promise<PreparedSessionRecord> => {
     let attachment: StreamableHttpSessionAttachment | null = null;
 
     const transport = new StreamableHTTPServerTransport({
-      sessionIdGenerator: () => randomUUID(),
+      // Adopt the dollhouse context id as the transport session id so the
+      // mcp-session-id (the presence id + the header clients echo back on
+      // every request) is the SAME value that tags this session's logs.
+      // `attachment` is assigned before any request reaches handleRequest
+      // (where the SDK invokes this generator), so contextSessionId is always
+      // present here; the randomUUID() fallback only covers loosely-typed test
+      // attachments that omit it.
+      sessionIdGenerator: () => attachment?.contextSessionId ?? randomUUID(),
       onsessioninitialized: (sessionId) => {
         if (!attachment) {
           throw new Error('Session attachment was not ready when the transport initialized');
@@ -614,6 +765,20 @@ export async function createStreamableHttpRuntime(
         touchSession(sessionId);
         logger.info('[StreamableHTTP] Session initialized', { sessionId });
         options.onSessionCreated?.(sessionId);
+        const runtimeSession = attachment.runtimeSession;
+        if (runtimeSession && options.runtimeSessionControl) {
+          void options.runtimeSessionControl.registerSession({
+            sessionId,
+            userId: runtimeSession.userId,
+            accountCorrelationId: runtimeSession.accountCorrelationId,
+            clientInfo: runtimeSession.clientInfo ?? null,
+          }).catch((error) => {
+            logger.warn('[StreamableHTTP] Failed to register runtime session presence', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        }
         // Fire-and-forget: replenishPoolPromise guard inside maintainSessionPool()
         // prevents concurrent replenishment — safe to call without awaiting.
         void maintainSessionPool();
@@ -633,7 +798,7 @@ export async function createStreamableHttpRuntime(
       }
     };
 
-    attachment = await createSessionAttachment(transport, authClaims);
+    attachment = await createSessionAttachment(transport, authClaims, clientInfo);
 
     return {
       attachment,
@@ -643,14 +808,16 @@ export async function createStreamableHttpRuntime(
         await transport.close().catch(() => {
           /* pooled transport shutdown is best-effort */
         });
-        await attachment?.dispose();
+        await attachment.dispose();
       },
     };
   };
 
-  const getOrCreatePreparedSession = async (authClaims?: import('../auth/IAuthProvider.js').AuthClaims): Promise<PreparedSessionRecord> => {
+  const getOrCreatePreparedSession = async (authClaims?: AuthClaims, clientInfo?: McpClientInfo): Promise<PreparedSessionRecord> => {
     // Pooled sessions don't carry auth claims — they were pre-created without
     // knowing who would connect. When auth is enabled, always create fresh.
+    // (Pooled sessions are only used on the no-auth path, which never registers
+    // runtime presence, so dropping clientInfo there is harmless.)
     if (!authClaims) {
       const pooledSession = pooledSessions.pop();
       if (pooledSession) {
@@ -661,7 +828,7 @@ export async function createStreamableHttpRuntime(
     }
 
     sessionTelemetry.poolMisses += 1;
-    return prepareSession(authClaims);
+    return prepareSession(authClaims, clientInfo);
   };
 
   app.get('/', (_req, res) => {
@@ -735,6 +902,25 @@ export async function createStreamableHttpRuntime(
     });
   });
 
+  if (options.webConsoleApiV1) {
+    const parseConsoleJson = json();
+    app.use((req, res, next) => {
+      if (req.path === '/api/v1' || req.path.startsWith('/api/v1/')) {
+        parseConsoleJson(req, res, next);
+        return;
+      }
+      next();
+    });
+    // Serve the console UI (static) at /ui. Public; the page self-gates on
+    // GET /api/v1/auth/me. Assets are copied to dist/web-console/ui by postbuild.
+    const consoleUiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../web-console/ui');
+    app.use('/ui', expressStatic(consoleUiDir, { index: 'index.html' }));
+    logger.info('[StreamableHTTP] Console UI mounted', { basePath: '/ui' });
+    app.use(options.webConsoleApiV1.router);
+    options.webConsoleApiV1.markMounted();
+    logger.info('[StreamableHTTP] Descriptor web-console API mounted', { basePath: '/api/v1' });
+  }
+
   // Mount auth middleware on MCP path so /mcp requests are validated
   // (and 401 on missing/invalid token) before they reach the MCP handler.
   // The embedded OAuth provider's router is mounted LATER, after the /mcp
@@ -769,6 +955,7 @@ export async function createStreamableHttpRuntime(
 
         touchSession(sessionId);
         await existingSession.transport.handleRequest(req, res, req.body);
+        recordRuntimeActivity(sessionId);
         return;
       }
 
@@ -777,7 +964,7 @@ export async function createStreamableHttpRuntime(
         return;
       }
 
-      const preparedSession = await getOrCreatePreparedSession(res.locals.authClaims);
+      const preparedSession = await getOrCreatePreparedSession(res.locals.authClaims, extractClientInfo(req.body));
 
       try {
         await preparedSession.transport.handleRequest(req, res, req.body);
@@ -793,6 +980,7 @@ export async function createStreamableHttpRuntime(
         throw error;
       }
     } catch (error) {
+      if (sessionId) recordRuntimeActivity(sessionId, 'error');
       handleRequestFailure(req, res, 'POST', error, sessionId);
     }
   });
@@ -865,12 +1053,16 @@ export async function createStreamableHttpRuntime(
     // H7: lifecycle (GET/DELETE) must enforce the same ownership gate
     // as POST. A valid bearer + leaked session id could otherwise SSE-
     // attach to someone else's session (GET) or terminate it (DELETE).
-    if (!assertSessionOwner(req, res, sessionId, session)) return;
+    if (!assertSessionOwner(req, res, sessionId, session)) {
+      return;
+    }
 
     try {
       touchSession(sessionId);
       await session.transport.handleRequest(req, res);
+      recordRuntimeActivity(sessionId);
     } catch (error) {
+      recordRuntimeActivity(sessionId, 'error');
       handleRequestFailure(req, res, methodName, error, sessionId);
     }
   };
@@ -918,6 +1110,7 @@ export async function createStreamableHttpRuntime(
   });
 
   await maintainSessionPool();
+  startRuntimeCommandPolling();
 
   const shutdown = async (): Promise<void> => {
     if (closingPromise) {
@@ -935,6 +1128,10 @@ export async function createStreamableHttpRuntime(
 
       const allSessions = Array.from(sessions.keys());
       const warmSessions = pooledSessions.splice(0);
+      if (runtimeCommandPollTimer) {
+        clearInterval(runtimeCommandPollTimer);
+        runtimeCommandPollTimer = null;
+      }
 
       for (const sessionId of allSessions) {
         await disposeSession(sessionId);

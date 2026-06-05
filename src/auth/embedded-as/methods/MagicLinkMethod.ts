@@ -43,8 +43,7 @@ import { renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { IRateLimitStore } from '../storage/IRateLimitStore.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
-import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
 import { normalizeIp } from '../rateLimit.js';
 
 const PROVIDER_NAME = 'magic-link' as const;
@@ -100,6 +99,8 @@ export interface MagicLinkMethodOptions {
    * rules.
    */
   allowlistRequired?: boolean;
+  /** Optional replacement sign-in allowlist authority for hosted console cutover. */
+  signInAllowlistAuthority?: SignInAllowlistAuthority;
   /**
    * Shared rate-limit state store. Required — no implicit in-memory fallback.
    * The DI registrar threads in the same store instance used by
@@ -138,15 +139,15 @@ export class MagicLinkMethod implements IAuthMethod {
     }
   }
 
-  async beginInteraction(_ctx: InteractionContext): Promise<InteractionStep> {
-    return { kind: 'render-html', html: renderRequestPage(), csrfToken: '' };
+  beginInteraction(_ctx: InteractionContext): Promise<InteractionStep> {
+    return Promise.resolve({ kind: 'render-html', html: renderRequestPage(), csrfToken: '' });
   }
 
   async completeInteraction(
     ctx: InteractionContext,
     input: InteractionInput,
   ): Promise<InteractionResult> {
-    const form = input.formBody ?? {};
+    const form: Partial<Record<string, string>> = input.formBody ?? {};
     const action = String(form.action ?? '');
 
     if (action === 'request-link') {
@@ -194,19 +195,17 @@ export class MagicLinkMethod implements IAuthMethod {
     const bodyParser = express.urlencoded({ extended: false, limit: '4kb' });
 
     router.get('/auth/email/verify', (req, res, next) => {
-      void (async () => {
-        try {
-          const token = typeof req.query.token === 'string' ? req.query.token : '';
-          const verified = this.verifyMagicLink(token);
-          if (!verified.ok) {
-            res.status(400).type('html').send(renderMagicLinkError(verified.reason));
-            return;
-          }
-          res.type('html').send(this.renderConfirmationPage(token));
-        } catch (err) {
-          next(err);
+      try {
+        const token = typeof req.query.token === 'string' ? req.query.token : '';
+        const verified = this.verifyMagicLink(token);
+        if (!verified.ok) {
+          res.status(400).type('html').send(renderMagicLinkError(verified.reason));
+          return;
         }
-      })();
+        res.type('html').send(this.renderConfirmationPage(token));
+      } catch (err) {
+        next(err);
+      }
     });
 
     router.post('/auth/email/verify', bodyParser, (req, res, next) => {
@@ -348,19 +347,18 @@ export class MagicLinkMethod implements IAuthMethod {
         provider: PROVIDER_NAME,
         externalSub: hashEmail(email),
       },
-      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
     );
     if (!gate.allowed) {
       return { kind: 'denied', reason: gate.reason };
     }
 
-    // Bootstrap admin claim (must-fix #22): the admin-bootstrap CLI
-    // pre-claimed this email's sub before the gate opened. If we match,
-    // grant admin role on the account. Round 5 / H5 — see
-    // bootstrapAdmin.ts for why setAccountRoles is split off from the
-    // upsertAccount payload.
-    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, sub, PROVIDER_NAME);
-
+    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
+    // (linked on first login), not stamped onto the auth account.
     const existing = await this.options.storage.getAccount(sub);
     await this.options.storage.upsertAccount({
       sub,
@@ -371,13 +369,7 @@ export class MagicLinkMethod implements IAuthMethod {
       displayName: existing?.displayName ?? email,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      // Preserve existing roles across the upsert; setAccountRoles
-      // below applies the admin-role write only on the bootstrap path.
-      ...(existing?.roles ? { roles: existing.roles } : {}),
     });
-    if (isBootstrapAdmin) {
-      await this.options.storage.setAccountRoles(sub, ['admin']);
-    }
 
     return {
       kind: 'ok',
@@ -401,7 +393,7 @@ export class MagicLinkMethod implements IAuthMethod {
    * Postgres deployments enforce limits across replicas.
    */
   private async handleRequestLink(
-    form: Record<string, string>,
+    form: Partial<Record<string, string>>,
     ip: string,
     interactionId: string,
   ): Promise<InteractionResult> {
@@ -413,7 +405,7 @@ export class MagicLinkMethod implements IAuthMethod {
 
     try {
       const email = String(form.email ?? '').trim().toLowerCase();
-      if (!email?.includes('@')) {
+      if (!email.includes('@')) {
         return generic();
       }
 

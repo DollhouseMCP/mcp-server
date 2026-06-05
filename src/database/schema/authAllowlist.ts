@@ -26,6 +26,12 @@
  *   - 'github_username' — GitHub `login` (lowercased)
  *   - 'github_id' — GitHub numeric `id` as a string (stable across rename)
  *
+ * Authority note:
+ *   This table remains the authoritative sign-in gate. The web-console
+ *   `account_allowlist_entries` table is a history-preserving replacement
+ *   surface that is feature-gated off by default until the AS read path and
+ *   data migration are cut over.
+ *
  * No RLS — system-internal AS infrastructure, operated only via
  * `withSystemContext` from the admin role. Same convention as auth_kv,
  * auth_signing_keys, auth_accounts.

@@ -9,7 +9,7 @@
  */
 
 import type { IUserConfigStore, UserConfig } from './IUserConfigStore.js';
-import { DEFAULT_USER_CONFIG } from './IUserConfigStore.js';
+import { DEFAULT_USER_CONFIG, UserConfigConflictError } from './IUserConfigStore.js';
 
 export class InMemoryUserConfigStore implements IUserConfigStore {
   private readonly configs = new Map<string, UserConfig>();
@@ -23,8 +23,13 @@ export class InMemoryUserConfigStore implements IUserConfigStore {
   async save(
     userId: string,
     config: Omit<UserConfig, 'updatedAt'> & { updatedAt?: number },
+    options: { readonly expectedUpdatedAt?: number } = {},
   ): Promise<void> {
     assertValidUserId(userId);
+    const current = this.configs.get(userId)?.updatedAt ?? DEFAULT_USER_CONFIG.updatedAt;
+    if (options.expectedUpdatedAt !== undefined && current !== options.expectedUpdatedAt) {
+      throw new UserConfigConflictError();
+    }
     this.configs.set(userId, {
       githubConfig: { ...config.githubConfig },
       syncConfig: { ...config.syncConfig },

@@ -16,7 +16,8 @@
  * - Audit logging for all decisions
  */
 
-import { CRUDEndpoint, getRoute } from './OperationRouter.js';
+import { getRoute } from './OperationRouter.js';
+import type { CRUDEndpoint } from './OperationRouter.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { GatekeeperSession, type ClientInfo } from './GatekeeperSession.js';
@@ -178,10 +179,18 @@ export class Gatekeeper {
   }
 
   /**
+   * Return a registered live session without creating a fallback session.
+   */
+  getRegisteredSession(sessionId: string): GatekeeperSession | undefined {
+    return this.sessionRegistry.get(sessionId);
+  }
+
+  /**
    * Remove a session's GatekeeperSession.
    * Called by Container during session disconnect.
    */
   disposeSession(sessionId: string): void {
+    this.sessionRegistry.get(sessionId)?.cancelPendingCliApprovals();
     this.sessionRegistry.dispose(sessionId);
   }
 
@@ -446,9 +455,13 @@ export class Gatekeeper {
   /**
    * Approve a pending CLI approval request.
    */
-  approveCliRequest(requestId: string, scope: CliApprovalScope = 'single'): CliApprovalRecord | undefined {
+  approveCliRequest(
+    requestId: string,
+    scope: CliApprovalScope = 'single',
+    approvedAt?: string,
+  ): CliApprovalRecord | undefined {
     const session = this.resolveSession();
-    const record = session.approveCliRequest(requestId, scope);
+    const record = session.approveCliRequest(requestId, scope, approvedAt);
 
     if (record) {
       SecurityMonitor.logSecurityEvent({

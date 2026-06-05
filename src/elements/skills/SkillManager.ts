@@ -4,17 +4,19 @@
  * and creation workflows while eliminating duplicated file handling code.
  */
 
-import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
-import { Skill, SkillMetadata } from './Skill.js';
+import { BaseElementManager } from '../base/BaseElementManager.js';
+import type { ElementManagerDeps } from '../base/BaseElementManager.js';
+import { Skill } from './Skill.js';
+import type { SkillMetadata } from './Skill.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { logger } from '../../utils/logger.js';
-import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
-import { ValidationService } from '../../services/validation/ValidationService.js';
-import { SerializationService } from '../../services/SerializationService.js';
-import { MetadataService } from '../../services/MetadataService.js';
+import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
+import type { ValidationService } from '../../services/validation/ValidationService.js';
+import type { SerializationService } from '../../services/SerializationService.js';
+import type { MetadataService } from '../../services/MetadataService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
@@ -82,7 +84,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Skill creation warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -92,7 +94,10 @@ export class SkillManager extends BaseElementManager<Skill> {
       maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
       allowSpaces: true
     });
-    const sanitizedName = nameResult.sanitizedValue!;
+    const sanitizedName = nameResult.sanitizedValue;
+    if (!sanitizedName) {
+      throw new Error('Skill name validation did not return a sanitized value');
+    }
 
     // Use inherited getElementFilename() for consistent filename normalization
     const filename = this.getElementFilename(sanitizedName);
@@ -138,15 +143,16 @@ export class SkillManager extends BaseElementManager<Skill> {
   }
 
   /**
-   * Import a skill from YAML or JSON input formats.
+   * Import a skill from Markdown/YAML frontmatter or JSON input formats.
    */
-  async importElement(data: string, format: 'yaml' | 'json' = 'yaml'): Promise<Skill> {
+  async importElement(data: string, format: 'yaml' | 'json' | 'markdown' = 'yaml'): Promise<Skill> {
+    await Promise.resolve();
     try {
       let metadata: any;
       let instructions: string;
 
-      if (format === 'yaml') {
-        // Use SerializationService for YAML parsing
+      if (format === 'yaml' || format === 'markdown') {
+        // Use SerializationService for YAML frontmatter parsing
         const result = this.serializationService.parseFrontmatter(data, {
           maxYamlSize: 64 * 1024,
           validateContent: true,
@@ -186,9 +192,13 @@ export class SkillManager extends BaseElementManager<Skill> {
   }
 
   /**
-   * Export a skill to YAML or JSON.
+   * Export a skill to Markdown/YAML frontmatter, YAML, or JSON.
    */
-  async exportElement(element: Skill, format: 'yaml' | 'json' = 'yaml'): Promise<string> {
+  async exportElement(element: Skill, format: 'yaml' | 'json' | 'markdown' = 'yaml'): Promise<string> {
+    if (format === 'markdown') {
+      return this.serializeElement(element);
+    }
+
     if (format === 'yaml') {
       const data = {
         metadata: element.metadata,
@@ -223,7 +233,7 @@ export class SkillManager extends BaseElementManager<Skill> {
   /**
    * Validate and normalize metadata parsed from frontmatter.
    */
-  protected async parseMetadata(data: any): Promise<SkillMetadata> {
+  protected parseMetadata(data: any): Promise<SkillMetadata> {
     const metadata = { ...(data as SkillMetadata) };
 
     if (Array.isArray(data?.triggers)) {
@@ -238,10 +248,10 @@ export class SkillManager extends BaseElementManager<Skill> {
     // Issue #676: Sanitize gatekeeper policy on load to prevent prompt-injection attacks
     // Malformed policies are stripped and logged as security events (never reach enforcement)
     if (metadata.gatekeeper) {
-      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'skill', metadata as Record<string, unknown>);
+      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'skill', metadata);
     }
 
-    return metadata;
+    return Promise.resolve(metadata);
   }
 
   /**
@@ -274,7 +284,7 @@ export class SkillManager extends BaseElementManager<Skill> {
    * Serialize a skill to markdown with frontmatter.
    * v2.0 format: instructions in YAML frontmatter, content as body.
    */
-  protected async serializeElement(element: Skill): Promise<string> {
+  protected serializeElement(element: Skill): Promise<string> {
     // Prepare metadata with version and instructions
     const metadata: Record<string, any> = { ...element.metadata };
     // Issue #755: Serialize type as singular and persist unique_id
@@ -293,17 +303,18 @@ export class SkillManager extends BaseElementManager<Skill> {
     // Body is the reference content
     const body = element.content || this.buildDefaultBody(element);
 
-    return this.serializationService.createFrontmatter(metadata, body, {
+    return Promise.resolve(this.serializationService.createFrontmatter(metadata, body, {
       method: 'matter',
       cleanMetadata: true,
       cleaningStrategy: 'remove-both',  // Fix #913: standardize across all managers
       schema: 'json'  // Fix #914: failsafe corrupts booleans/numbers to strings
-    });
+    }));
   }
 
   private buildDefaultBody(skill: Skill): string {
-    const name = (skill.metadata.name ?? '').trim();
-    const description = (skill.metadata.description ?? '').trim();
+    const metadata = skill.metadata as Partial<SkillMetadata>;
+    const name = (metadata.name ?? '').trim();
+    const description = (metadata.description ?? '').trim();
     const lines: string[] = [];
     if (name) {
       lines.push(`# ${name}`);

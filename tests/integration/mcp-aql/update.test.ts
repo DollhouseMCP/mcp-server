@@ -9,7 +9,7 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
-import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
 import path from 'path';
@@ -30,9 +30,9 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
 
     server = new DollhouseMCPServer(container);
 
-    // Manually get the server instance from the server to pass to createHandlers
-    // Access the private server property via type casting
-    const mcpServer = (server as any).server;
+    // Obtain the lazily-initialized low-level MCP server (server creation moved
+    // from the constructor to an async getServer()); await it before wiring handlers.
+    const mcpServer = await (server as any).getServer();
 
     // Get handlers including mcpAqlHandler - reuse these for all tests
     const handlers = await container.createHandlers(mcpServer);

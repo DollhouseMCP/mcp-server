@@ -14,7 +14,12 @@
  */
 
 import { describe, it, expect, beforeEach } from '@jest/globals';
-import { checkAllowlistGate, renderAllowlistDeniedPage } from '../../../../src/auth/embedded-as/allowlistGate.js';
+import {
+  checkAllowlistGate,
+  renderAllowlistDeniedPage,
+  withSignInAllowlistAuthority,
+  type SignInAllowlistAuthority,
+} from '../../../../src/auth/embedded-as/allowlistGate.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
 const ALICE_EMAIL = 'alice@example.com';
@@ -99,6 +104,19 @@ describe('checkAllowlistGate — decision matrix', () => {
       );
       expect(result.allowed).toBe(true);
     });
+
+    it('uses an injected sign-in authority instead of the legacy storage allowlist', async () => {
+      const authority = fixedAuthority({
+        entries: 1,
+        matches: true,
+      });
+      const result = await checkAllowlistGate(
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL, githubId: '99' },
+        { storage, authority, required: true },
+      );
+      expect(result.allowed).toBe(true);
+      expect(await storage.allowlistList()).toHaveLength(0);
+    });
   });
 
   // ── Rule 3: REQUIRED=true + no match → DENY ──────────────────────────
@@ -134,6 +152,32 @@ describe('checkAllowlistGate — decision matrix', () => {
         { storage, required: false },
       );
       expect(result.allowed).toBe(true);
+    });
+
+    it('uses the injected authority entry state for back-compat empty-list behavior', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'someone-else@example.com' });
+      const authority = fixedAuthority({
+        entries: 0,
+        matches: false,
+      });
+      const result = await checkAllowlistGate(
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL, githubId: '99' },
+        { storage, authority, required: false },
+      );
+      expect(result.allowed).toBe(true);
+    });
+
+    it('can adapt legacy storage to a replacement sign-in authority', async () => {
+      const wrapped = withSignInAllowlistAuthority(storage, fixedAuthority({
+        entries: 1,
+        matches: true,
+      }));
+      const result = await checkAllowlistGate(
+        { sub: 'github_99', method: 'github', email: ALICE_EMAIL, githubId: '99' },
+        { storage: wrapped, required: true },
+      );
+      expect(result.allowed).toBe(true);
+      expect(await storage.allowlistList()).toHaveLength(0);
     });
   });
 
@@ -177,9 +221,9 @@ describe('checkAllowlistGate — decision matrix', () => {
       expect(events[0]?.provider).toBe('github');
       expect(events[0]?.externalSub).toBe('99');
       const details = events[0]?.details as Record<string, unknown>;
-      expect(details?.method).toBe('github');
-      expect(details?.email).toBe(ALICE_EMAIL);
-      expect(details?.githubUsername).toBe('alice');
+      expect(details.method).toBe('github');
+      expect(details.email).toBe(ALICE_EMAIL);
+      expect(details.githubUsername).toBe('alice');
     });
 
     it('does NOT write an audit event when the identity passes', async () => {
@@ -222,6 +266,24 @@ describe('checkAllowlistGate — decision matrix', () => {
     });
   });
 });
+
+function fixedAuthority(options: {
+  readonly entries: number;
+  readonly matches: boolean;
+}): SignInAllowlistAuthority {
+  return {
+    hasAnyEntries: () => Promise.resolve(options.entries > 0),
+    listEntries: () => Promise.resolve(Array.from({ length: options.entries }, (_, index) => ({
+      id: `00000000-0000-4000-8000-${index.toString().padStart(12, '0')}`,
+      kind: 'email',
+      value: `placeholder-${index}@example.test`,
+      note: null,
+      createdBy: null,
+      createdAt: new Date('2026-05-30T00:00:00.000Z'),
+    }))),
+    matchesIdentity: () => Promise.resolve(options.matches),
+  };
+}
 
 describe('renderAllowlistDeniedPage', () => {
   it('returns valid HTML with the standard denial copy', () => {

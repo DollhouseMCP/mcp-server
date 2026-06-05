@@ -28,6 +28,7 @@
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import express, { type Router, type Request, type Response } from 'express';
 import { logger } from '../../utils/logger.js';
+import { sendAuthError } from './browserErrorPage.js';
 import type {
   AuthenticatedIdentity,
   IAuthMethod,
@@ -36,12 +37,26 @@ import type {
   InteractionStep,
 } from './IAuthMethod.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
+import type { AdminTotpService } from './totp/AdminTotpService.js';
+import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
+import type { IRateLimitStore } from './storage/IRateLimitStore.js';
+import {
+  adminTotpRateLimitSubject,
+  checkAdminTotpRateLimit,
+  noteAdminTotpFailure,
+  resetAdminTotpRateLimit,
+} from './totp/AdminTotpRateLimit.js';
 import { allowCspFormActionOrigin } from './securityHeaders.js';
 
 const CSRF_MODEL = 'InteractionCsrf';
 const CSRF_TTL_SECONDS = 600; // 10 min, matches oidc-provider's default interaction TTL.
 const METHOD_CHOICE_MODEL = 'InteractionMethodChoice';
 const METHOD_CHOICE_TTL_SECONDS = 600; // matches CSRF + Interaction TTL
+const ADMIN_ACR = 'urn:dollhouse:acr:admin-stepup';
+const ADMIN_STEP_UP_PENDING_MODEL = 'AdminStepUpPending';
+export const ADMIN_STEP_UP_CLAIMS_MODEL = 'AdminStepUpClaims';
+const ADMIN_STEP_UP_TTL_SECONDS = 600;
+const ADMIN_TOTP_PROOF_SCOPE = 'admin_totp_stepup';
 const PENDING_CLIENT_CONSENT_MODEL = 'PendingClientConsentIdentity';
 const CLIENT_CONSENT_SEEN_MODEL = 'ClientConsentSeen';
 const CLIENT_CONSENT_APPROVE_ACTION = 'authorize_oauth_client';
@@ -131,10 +146,31 @@ export interface InteractionRouterDeps {
    * callback returns.
    */
   defaultResource: string;
+  adminStepUp?: AdminStepUpInteractionDeps;
+}
+
+export interface AdminStepUpInteractionDeps {
+  totpService: Pick<AdminTotpService, 'hasActiveFactor' | 'prove'>;
+  identityResolver: IConsoleIdentityResolver;
+  rateLimitStore?: IRateLimitStore;
+  now?: () => Date;
+}
+
+export interface AdminStepUpClaims {
+  accountId: string;
+  acr: typeof ADMIN_ACR;
+  amr: readonly string[];
+  authTime: number;
+}
+
+export interface FinishInteractionOptions {
+  storage: IAuthStorageLayer;
+  defaultResource: string;
+  adminClaims?: AdminStepUpClaims;
 }
 
 export function createInteractionRouter(deps: InteractionRouterDeps): Router {
-  const { provider, methods, storage, defaultResource } = deps;
+  const { provider, methods, storage, defaultResource, adminStepUp } = deps;
   const router = express.Router();
   // Cycle-13 fix (HIGH): cap urlencoded body at 4kb to match the
   // per-method routers (LocalAccountMethod, MagicLinkMethod). The
@@ -154,7 +190,7 @@ export function createInteractionRouter(deps: InteractionRouterDeps): Router {
   });
 
   router.post('/:uid', (req, res, next) => {
-    handlePost(req, res, provider, methods, storage, defaultResource).catch(next);
+    handlePost(req, res, provider, methods, storage, defaultResource, adminStepUp).catch(next);
   });
 
   return router;
@@ -223,7 +259,7 @@ async function handleGet(
     details = await provider.interactionDetails(req, res);
   } catch (err) {
     logInteractionDetailsFailure(req, 'GET', err);
-    sendError(res, 400, 'invalid_interaction', describeError(err));
+    sendError(res, req, 400, 'invalid_interaction', describeError(err));
     return;
   }
 
@@ -247,7 +283,7 @@ async function handleGet(
       interactionId: details.uid,
       error: err instanceof Error ? err.message : String(err),
     });
-    sendError(res, 500, 'server_error', 'method beginInteraction failed');
+    sendError(res, req, 500, 'server_error', 'method beginInteraction failed');
     return;
   }
 
@@ -271,13 +307,14 @@ async function handlePost(
   methods: readonly IAuthMethod[],
   storage: IAuthStorageLayer,
   defaultResource: string,
+  adminStepUp: AdminStepUpInteractionDeps | undefined,
 ): Promise<void> {
   let details;
   try {
     details = await provider.interactionDetails(req, res);
   } catch (err) {
     logInteractionDetailsFailure(req, 'POST', err);
-    sendError(res, 400, 'invalid_interaction', describeError(err));
+    sendError(res, req, 400, 'invalid_interaction', describeError(err));
     return;
   }
 
@@ -287,7 +324,7 @@ async function handlePost(
     return;
   }
 
-  await handleAuthMethodPost(req, res, provider, methods, storage, defaultResource, details);
+  await handleAuthMethodPost(req, res, details, { provider, methods, storage, defaultResource, adminStepUp });
 }
 
 function isClientConsentAction(action: string | undefined): action is
@@ -327,7 +364,7 @@ async function handleClientConsentPost(
   }
 
   if (!pending?.accountId) {
-    sendError(res, 400, 'invalid_interaction', 'no pending client consent found; restart sign-in');
+    sendError(res, req, 400, 'invalid_interaction', 'no pending client consent found; restart sign-in');
     return;
   }
 
@@ -343,26 +380,29 @@ async function handleClientConsentPost(
     provider,
     details,
     pending.accountId,
-    storage,
-    defaultResource,
+    { storage, defaultResource },
   );
 }
 
 async function handleAuthMethodPost(
   req: Request,
   res: Response,
-  provider: OidcProviderForInteractions,
-  methods: readonly IAuthMethod[],
-  storage: IAuthStorageLayer,
-  defaultResource: string,
   details: OidcInteractionDetails,
+  deps: {
+    readonly provider: OidcProviderForInteractions;
+    readonly methods: readonly IAuthMethod[];
+    readonly storage: IAuthStorageLayer;
+    readonly defaultResource: string;
+    readonly adminStepUp: AdminStepUpInteractionDeps | undefined;
+  },
 ): Promise<void> {
+  const { provider, methods, storage, defaultResource, adminStepUp } = deps;
   const resolution = await resolveMethodForRequest(req, details, methods, storage);
   if (resolution.kind === 'chooser') {
     // POST without a stored method choice — the user submitted the
     // interaction form before picking a method. Tell them to restart
     // rather than silently picking one.
-    sendError(res, 400, 'invalid_interaction', 'no auth method selected; restart sign-in');
+    sendError(res, req, 400, 'invalid_interaction', 'no auth method selected; restart sign-in');
     return;
   }
 
@@ -379,6 +419,18 @@ async function handleAuthMethodPost(
   // is also illegitimate.
   const csrfOk = await verifyAndConsumeCsrf(req, res, storage, details.uid);
   if (!csrfOk) return;
+
+  const pendingAdminStepUp = await readPendingAdminStepUp(storage, details.uid);
+  if (pendingAdminStepUp) {
+    await completeAdminStepUpProof(req, res, storage, {
+      provider,
+      details,
+      defaultResource,
+      pending: pendingAdminStepUp,
+      adminStepUp,
+    });
+    return;
+  }
 
   const method = resolution.method;
   const ctx = makeContext(details, req);
@@ -397,12 +449,12 @@ async function handleAuthMethodPost(
       interactionId: details.uid,
       error: err instanceof Error ? err.message : String(err),
     });
-    sendError(res, 500, 'server_error', 'method completeInteraction failed');
+    sendError(res, req, 500, 'server_error', 'method completeInteraction failed');
     return;
   }
 
   if (result.kind === 'denied') {
-    sendError(res, 400, 'access_denied', result.reason);
+    sendError(res, req, 400, 'access_denied', result.reason);
     return;
   }
 
@@ -415,6 +467,14 @@ async function handleAuthMethodPost(
     const csrfToken = randomBytes(32).toString('base64url');
     await storage.genericSet(CSRF_MODEL, details.uid, { token: csrfToken }, CSRF_TTL_SECONDS);
     res.type('html').send(ensureCsrfInForm(result.step.html, csrfToken));
+    return;
+  }
+
+  // Admin step-up re-auth: route to the TOTP proof instead of finishing, so the
+  // issued token carries amr=['otp']. Normal logins go through client consent,
+  // which finishes the interaction on approval.
+  if (isAdminStepUpRequest(details)) {
+    await beginAdminStepUpProof(req, res, storage, details, result.identity, adminStepUp);
     return;
   }
 
@@ -463,21 +523,16 @@ export async function finishInteractionWithIdentity(
   provider: OidcProviderForInteractions,
   details: OidcInteractionDetails,
   accountId: string,
-  storage: IAuthStorageLayer,
-  /**
-   * Cycle 24 fix: fallback resource URL applied when the client requested
-   * a resource scope (e.g. `mcp`) but didn't pass `resource=...` on the
-   * authorize request. Without this, the grant's resource-scope binding
-   * is empty, oidc-provider observes the grant doesn't satisfy the
-   * requested scopes, and re-prompts via a new interaction — looping
-   * forever. Mirrors the AS's `resourceIndicators.defaultResource`
-   * callback. Passed by callers from the AS's resource URL (`this.resource`).
-   */
-  defaultResource: string,
+  options: FinishInteractionOptions,
 ): Promise<void> {
   try {
+    const { storage, defaultResource, adminClaims } = options;
+    // Consent (if any) is complete by the time we finish; clear the pending record.
     await storage.genericDestroy(PENDING_CLIENT_CONSENT_MODEL, details.uid);
     const grantId = await resolveAndSaveGrant(provider, details, accountId, defaultResource);
+    if (adminClaims) {
+      await storage.genericSet(ADMIN_STEP_UP_CLAIMS_MODEL, grantId, adminClaims, ADMIN_STEP_UP_TTL_SECONDS);
+    }
 
     // Stamp lastAuthAt before interactionFinished so the redirect-to-token
     // round-trip that follows can read a fresh value via extraTokenClaims.
@@ -486,13 +541,23 @@ export async function finishInteractionWithIdentity(
     // freshly-fetched displayName/rawProfile via the read-modify-write
     // path. Best-effort: a missing account row (new account / race) just
     // logs — the auth_time claim is omitted.
-    const stamped = await storage.updateAccountLastAuth(accountId, Date.now());
+    const stamped = await storage.updateAccountLastAuth(
+      accountId,
+      adminClaims ? adminClaims.authTime * 1000 : Date.now(),
+    );
     if (!stamped) {
       logger.warn('[InteractionRouter] no account row to stamp lastAuthAt', { accountId });
     }
 
+    // Admin step-up acr/amr/auth_time must go on the LOGIN RESULT so
+    // oidc-provider stamps them natively into the id_token (which the BFF
+    // reads). extraTokenClaims only populates access tokens, not id_tokens, so
+    // relying on it alone left the id_token without amr=otp and the BFF
+    // rejected the elevation. `ts` is the OIDC auth_time (seconds).
     await provider.interactionFinished(req, res, {
-      login: { accountId },
+      login: adminClaims
+        ? { accountId, acr: adminClaims.acr, amr: [...adminClaims.amr], ts: adminClaims.authTime }
+        : { accountId },
       consent: { grantId },
     });
   } catch (err) {
@@ -500,9 +565,151 @@ export async function finishInteractionWithIdentity(
       error: err instanceof Error ? err.message : String(err),
     });
     if (!res.headersSent) {
-      sendError(res, 500, 'server_error', 'Failed to finish interaction');
+      sendError(res, req, 500, 'server_error', 'Failed to finish interaction');
     }
   }
+}
+
+interface PendingAdminStepUp {
+  accountId: string;
+  userId: string;
+}
+
+interface AdminStepUpProofContext {
+  provider: OidcProviderForInteractions;
+  details: OidcInteractionDetails;
+  defaultResource: string;
+  pending: PendingAdminStepUp;
+  adminStepUp?: AdminStepUpInteractionDeps;
+}
+
+export function isAdminStepUpRequest(details: OidcInteractionDetails): boolean {
+  return typeof details.params.acr_values === 'string'
+    && details.params.acr_values.split(/\s+/).includes(ADMIN_ACR);
+}
+
+async function readPendingAdminStepUp(
+  storage: IAuthStorageLayer,
+  interactionId: string,
+): Promise<PendingAdminStepUp | null> {
+  const raw = await storage.genericGet(ADMIN_STEP_UP_PENDING_MODEL, interactionId);
+  if (!raw || typeof raw !== 'object') return null;
+  const value = raw as Record<string, unknown>;
+  return typeof value.accountId === 'string' && typeof value.userId === 'string'
+    ? { accountId: value.accountId, userId: value.userId }
+    : null;
+}
+
+export async function beginAdminStepUpProof(
+  req: Request,
+  res: Response,
+  storage: IAuthStorageLayer,
+  details: OidcInteractionDetails,
+  identity: AuthenticatedIdentity,
+  adminStepUp: AdminStepUpInteractionDeps | undefined,
+): Promise<void> {
+  if (!adminStepUp) {
+    sendError(res, req, 400, 'access_denied', 'administrative step-up is not configured');
+    return;
+  }
+  const principal = await adminStepUp.identityResolver.resolveEnabledPrincipal(identity.sub);
+  if (!principal || !(await adminStepUp.totpService.hasActiveFactor(principal.userId))) {
+    await recordAdminProofFailure(storage, identity.sub, 'factor_not_enrolled');
+    sendError(res, req, 400, 'access_denied', 'administrative TOTP factor is required');
+    return;
+  }
+  await storage.genericSet(
+    ADMIN_STEP_UP_PENDING_MODEL,
+    details.uid,
+    { accountId: identity.sub, userId: principal.userId },
+    ADMIN_STEP_UP_TTL_SECONDS,
+  );
+  await renderAdminProofStep(req, res, storage, details.uid, null);
+}
+
+async function completeAdminStepUpProof(
+  req: Request,
+  res: Response,
+  storage: IAuthStorageLayer,
+  context: AdminStepUpProofContext,
+): Promise<void> {
+  const { provider, details, defaultResource, pending, adminStepUp } = context;
+  if (!adminStepUp) {
+    sendError(res, req, 400, 'access_denied', 'administrative step-up is not configured');
+    return;
+  }
+  const code = bodyValue(req, 'code') ?? '';
+  const rateSubject = adminTotpRateLimitSubject(pending.userId, req.ip);
+  const check = await checkAdminTotpRateLimit(adminStepUp.rateLimitStore, ADMIN_TOTP_PROOF_SCOPE, rateSubject);
+  if (!check.allowed) {
+    sendError(res, req, 429, 'rate_limited', 'too many administrative proof attempts');
+    return;
+  }
+
+  const proof = await adminStepUp.totpService.prove(pending.userId, code);
+  if (!proof.ok) {
+    await noteAdminTotpFailure(adminStepUp.rateLimitStore, ADMIN_TOTP_PROOF_SCOPE, rateSubject);
+    await recordAdminProofFailure(storage, pending.accountId, 'invalid_totp_code');
+    await renderAdminProofStep(req, res, storage, details.uid, 'Invalid authentication code.');
+    return;
+  }
+  await resetAdminTotpRateLimit(adminStepUp.rateLimitStore, ADMIN_TOTP_PROOF_SCOPE, rateSubject);
+  await storage.genericDestroy(ADMIN_STEP_UP_PENDING_MODEL, details.uid);
+  await storage.recordIdentityEvent({
+    type: proof.method === 'backup'
+      ? 'auth.admin_step_up.backup_code_consumed'
+      : 'auth.admin_step_up.succeeded',
+    sub: pending.accountId,
+    details: { method: proof.method },
+    timestamp: proof.authTime.getTime(),
+  });
+  await finishInteractionWithIdentity(req, res, provider, details, pending.accountId, {
+    storage,
+    defaultResource,
+    adminClaims: {
+      accountId: pending.accountId,
+      acr: ADMIN_ACR,
+      amr: ['otp'],
+      authTime: Math.floor(proof.authTime.getTime() / 1000),
+    },
+  });
+}
+
+async function renderAdminProofStep(
+  _req: Request,
+  res: Response,
+  storage: IAuthStorageLayer,
+  interactionId: string,
+  error: string | null,
+): Promise<void> {
+  const csrfToken = randomBytes(32).toString('base64url');
+  await storage.genericSet(CSRF_MODEL, interactionId, { token: csrfToken }, CSRF_TTL_SECONDS);
+  const errorHtml = error ? `<p role="alert">${escapeHtmlText(error)}</p>` : '';
+  res.type('html').send(ensureCsrfInForm(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Administrative verification</title>
+<style>body{margin:0;font-family:system-ui,sans-serif;background:#f7f7f4;color:#181816}main{max-width:420px;margin:12vh auto;padding:32px;background:white;border:1px solid #d8d6cc;border-radius:8px}label,input,button{display:block;width:100%;box-sizing:border-box}input{margin:8px 0 16px;padding:10px}button{padding:12px 16px;background:#185c37;color:white;border:0;border-radius:6px;font-weight:700}</style>
+</head><body><main>
+<h1>Administrative verification</h1>
+${errorHtml}
+<form method="post" action="/interaction/${encodeURIComponent(interactionId)}">
+<label for="code">Authentication code</label>
+<input id="code" name="code" inputmode="numeric" autocomplete="one-time-code" required>
+<button type="submit">Continue</button>
+</form>
+</main></body></html>`, csrfToken));
+}
+
+async function recordAdminProofFailure(
+  storage: IAuthStorageLayer,
+  sub: string,
+  reason: string,
+): Promise<void> {
+  await storage.recordIdentityEvent({
+    type: 'auth.admin_step_up.failed',
+    sub,
+    details: { reason },
+    timestamp: Date.now(),
+  });
 }
 
 /**
@@ -652,12 +859,12 @@ async function verifyAndConsumeCsrf(
 ): Promise<boolean> {
   const persistedCsrf = await storage.genericGet(CSRF_MODEL, interactionId) as { token?: string } | null;
   if (!persistedCsrf?.token) {
-    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    sendError(res, req, 403, 'invalid_csrf', 'CSRF token missing or invalid');
     return false;
   }
   const submitted = bodyValue(req, 'csrf_token');
   if (!submitted || !constantTimeStringEq(submitted, persistedCsrf.token)) {
-    sendError(res, 403, 'invalid_csrf', 'CSRF token missing or invalid');
+    sendError(res, req, 403, 'invalid_csrf', 'CSRF token missing or invalid');
     return false;
   }
   // Single-use: destroy regardless of method outcome. A subsequent
@@ -1689,8 +1896,8 @@ function constantTimeStringEq(a: string, b: string): boolean {
   return timingSafeEqual(bufA, bufB);
 }
 
-function sendError(res: Response, status: number, error: string, description: string): void {
-  res.status(status).json({ error, error_description: description });
+function sendError(res: Response, req: Request, status: number, error: string, description: string): void {
+  sendAuthError(res, req, status, error, description);
 }
 
 function describeError(err: unknown): string {
@@ -1780,7 +1987,8 @@ function parseCookieValue(header: string | undefined, name: string): string | un
 function diagnosticValue(value: unknown): string {
   if (value === undefined || value === null || value === '') return 'none';
   if (typeof value === 'boolean') return value ? 'true' : 'false';
-  return String(value).replace(/\s+/g, '_');
+  const stringified = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return stringified.replaceAll(/\s+/g, '_');
 }
 
 /**

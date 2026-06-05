@@ -241,14 +241,49 @@ function runContractSuite(
     });
   });
 
+  describe('retire() / delete()', () => {
+    it('retires an active key so no active key remains for that kind', async () => {
+      const write = makeCookieWrite();
+      await store.rotate(write);
+      const retired = await store.retire(write.kid, Date.now());
+
+      expect(retired).toMatchObject({ kid: write.kid, active: false });
+      expect(retired?.retiredAt).toBeGreaterThan(0);
+      expect(await store.getActive('cookie')).toBeNull();
+    });
+
+    it('requires retirement before ordinary hard delete and removes key material after retire', async () => {
+      const write = makeInviteWrite();
+      await store.rotate(write);
+
+      expect(await store.delete(write.kid)).toBe(false);
+      await store.retire(write.kid, Date.now());
+      expect(await store.delete(write.kid)).toBe(true);
+      expect(await store.getByKid(write.kid)).toBeNull();
+    });
+
+    it('supports emergency force delete for inactive compromised material', async () => {
+      const oldKey = makeJwksWrite();
+      const activeKey = makeJwksWrite();
+      await store.rotate(oldKey);
+      await store.rotate(activeKey);
+
+      expect(await store.delete(oldKey.kid)).toBe(false);
+      expect(await store.delete(oldKey.kid, { force: true })).toBe(true);
+      expect(await store.getByKid(oldKey.kid)).toBeNull();
+      expect((await store.getActive('jwks'))?.kid).toBe(activeKey.kid);
+    });
+  });
+
   describe('isolation', () => {
     it('mutating a returned key does not affect the stored row', async () => {
       const write = makeJwksWrite();
       await store.rotate(write);
       const a = await store.getActive('jwks');
-      (a!.payload as Record<string, unknown>).x = 'tampered';
+      if (!a) throw new Error('expected active signing key');
+      a.payload.x = 'tampered';
       const b = await store.getActive('jwks');
-      expect((b!.payload as Record<string, unknown>).x).toBe('test-x-coord');
+      expect(b?.payload.x).toBe('test-x-coord');
     });
   });
 }
@@ -257,7 +292,7 @@ function runContractSuite(
 
 describe('ISigningKeyStore contract: InMemorySigningKeyStore', () => {
   runContractSuite(
-    async () => new InMemorySigningKeyStore(),
+    () => Promise.resolve(new InMemorySigningKeyStore()),
     async () => { /* GC'd. */ },
   );
 });

@@ -3,31 +3,35 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { Persona, PersonaMetadata } from '../types/persona.js';
-import { PersonaElement, PersonaElementMetadata } from './PersonaElement.js';
+import type { Persona, PersonaMetadata } from '../types/persona.js';
+import type { PersonaElementMetadata } from './PersonaElement.js';
+import { PersonaElement } from './PersonaElement.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { validateFilename, sanitizeInput, validateContentSize } from '../security/InputValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
 // Issue #1948: PathValidator import removed — initialized via DI container, not PersonaManager
-import { FileLockManager } from '../security/fileLockManager.js';
+import type { FileLockManager } from '../security/fileLockManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { IndicatorConfig, formatIndicator } from '../config/indicator-config.js';
-import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
+import type { IndicatorConfig} from '../config/indicator-config.js';
+import { formatIndicator } from '../config/indicator-config.js';
+import type { PortfolioManager} from '../portfolio/PortfolioManager.js';
+import { ElementType } from '../portfolio/PortfolioManager.js';
 import { toSingularLabel } from '../utils/elementTypeNormalization.js';
-import { StateChangeNotifier, type PersonaStateChangeType } from '../services/StateChangeNotifier.js';
+import type { StateChangeNotifier, PersonaStateChangeType } from '../services/StateChangeNotifier.js';
+import type { SessionActivationState, SessionUserIdentity } from '../state/SessionActivationState.js';
 import { generateUniqueId } from '../utils/filesystem.js';
 import { logger } from '../utils/logger.js';
 import { isDefaultPersona } from '../constants/defaultPersonas.js';
-import { PersonaImporter, ImportResult } from './export-import/PersonaImporter.js';
+import type { PersonaImporter, ImportResult } from './export-import/PersonaImporter.js';
 import { BaseElementManager, type ElementManagerDeps } from '../elements/base/BaseElementManager.js';
 import { VALIDATION_CONSTANTS } from '../elements/base/ElementValidation.js';
 import { normalizeVersion } from '../elements/BaseElement.js';
-import { TriggerValidationService } from '../services/validation/TriggerValidationService.js';
-import { ValidationService } from '../services/validation/ValidationService.js';
-import { MetadataService } from '../services/MetadataService.js';
+import type { TriggerValidationService } from '../services/validation/TriggerValidationService.js';
+import type { ValidationService } from '../services/validation/ValidationService.js';
+import type { MetadataService } from '../services/MetadataService.js';
 import { SerializationService } from '../services/SerializationService.js';
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../config/active-element-limits.js';
 import type { ContextTracker } from '../security/encryption/ContextTracker.js';
@@ -111,7 +115,7 @@ function applyEditValueToPersona(
     return;
   }
   if (field === 'category') {
-    persona.metadata.category = sanitizeInput(sanitizedValue, 50)?.toLowerCase() || 'general';
+    persona.metadata.category = sanitizeInput(sanitizedValue, 50).toLowerCase() || 'general';
     return;
   }
   if (field === 'description') {
@@ -151,6 +155,16 @@ function bumpPatchVersion(currentVersion: string | undefined): string {
 }
 
 /**
+ * Whether a body already opens with the element's `# name` title heading (after
+ * any leading whitespace). Used to keep the serialize-time heading prepend
+ * idempotent across the multiple serialize passes a single write performs.
+ */
+function bodyOpensWithHeading(body: string, name: string): boolean {
+  const firstLine = body.replace(/^\s+/, '').split('\n', 1)[0] ?? '';
+  return firstLine.trim() === `# ${name}`;
+}
+
+/**
  * Validate and sanitize a username for setUserIdentity. Applies Unicode
  * normalization, refuses critical Unicode patterns, enforces the
  * project-wide username format (3-50 chars, alphanumeric + `-` + `_`),
@@ -181,7 +195,7 @@ function validateEmail(email: string): void {
   if (!emailUnicode.isValid && emailUnicode.severity === 'critical') {
     throw new Error(`Email contains dangerous Unicode patterns: ${emailUnicode.detectedIssues?.join(', ')}`);
   }
-  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const emailRegex = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
   if (!emailRegex.test(emailUnicode.normalizedContent)) {
     throw new Error('Invalid email format');
   }
@@ -191,7 +205,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   // Fallback for tests/callers that don't inject the registry
   private readonly _localActivePersonas: Set<string> = new Set();
   // Fallback identity for when no registry is injected (tests)
-  private _localUserIdentity?: import('../state/SessionActivationState.js').SessionUserIdentity;
+  private _localUserIdentity?: SessionUserIdentity;
   private indicatorConfig: IndicatorConfig;
   protected override portfolioManager: PortfolioManager;
   protected override fileLockManager: FileLockManager;
@@ -248,7 +262,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Used for identity override access (userIdentity field).
    * Issue #1946: Per-session identity.
    */
-  private getSessionActivationState(): import('../state/SessionActivationState.js').SessionActivationState | undefined {
+  private getSessionActivationState(): SessionActivationState | undefined {
     if (!this.activationRegistry) return undefined;
     const sessionId = this.contextTracker?.getSessionContext()?.sessionId
       ?? this.activationRegistry.getDefaultSessionId();
@@ -256,12 +270,12 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   /** Get the current session's user identity override (with local fallback). */
-  private getSessionUserIdentity(): import('../state/SessionActivationState.js').SessionUserIdentity | undefined {
+  private getSessionUserIdentity(): SessionUserIdentity | undefined {
     return this.getSessionActivationState()?.userIdentity ?? this._localUserIdentity;
   }
 
   /** Set the current session's user identity override (with local fallback). */
-  private setSessionUserIdentity(identity: import('../state/SessionActivationState.js').SessionUserIdentity | undefined): void {
+  private setSessionUserIdentity(identity: SessionUserIdentity | undefined): void {
     const state = this.getSessionActivationState();
     if (state) {
       state.userIdentity = identity;
@@ -312,8 +326,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     const base =
-      persona.metadata?.unique_id ||
-      this.normalizeFilename(persona.metadata?.name || 'persona');
+      persona.metadata.unique_id ||
+      this.normalizeFilename(persona.metadata.name || 'persona');
 
     return base.endsWith('.md') ? base : `${base}.md`;
   }
@@ -360,7 +374,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   private normalizePersonaForSave(persona: PersonaElement): void {
-    const metadata: PersonaMetadata = { ...(persona.metadata ?? {}) };
+    const metadata: PersonaMetadata = { ...persona.metadata };
 
     // Sanitize name first (before MetadataService)
     const sanitizedName =
@@ -495,7 +509,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Strategy 1: Exact filename match (with or without .md)
     if (filename === trimmed || filename === filenameWithExt) return true;
     // Strategy 2: Name match (case-insensitive)
-    if (persona.metadata.name?.toLowerCase() === lower) return true;
+    if (persona.metadata.name.toLowerCase() === lower) return true;
     // Strategy 3: Unique ID match
     if (persona.id === trimmed || persona.metadata.unique_id === trimmed) return true;
 
@@ -808,7 +822,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       description: validatedInputs.description,
       unique_id: validatedInputs.uniqueId,
       author: validatedInputs.author,
-      triggers: validatedInputs.triggers || metadataOverrides?.triggers,
+      triggers: validatedInputs.triggers,
       version: metadataOverrides?.version || "1.0.0",
       age_rating: metadataOverrides?.age_rating || "all",
       content_flags: metadataOverrides?.content_flags || ["user-created"],
@@ -929,7 +943,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       // SECURITY: Phase 4.4 - Log validation failures
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
-        severity: instructionsValidation.severity?.toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' || 'MEDIUM',
+        severity: (instructionsValidation.severity?.toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | undefined) ?? 'MEDIUM',
         source: 'PersonaManager.validatePersonaInputs',
         details: `Content validation failed: ${instructionsValidation.detectedPatterns?.join(', ')}`,
         additionalData: {
@@ -993,9 +1007,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return;
     }
 
-    const dangerousKeys = ['__proto__', 'constructor', 'prototype'];
+    const dangerousKeys = new Set(['__proto__', 'constructor', 'prototype']);
     const foundDangerousKeys = Object.keys(metadata).filter(
-      key => dangerousKeys.includes(key)
+      key => dangerousKeys.has(key)
     );
 
     if (foundDangerousKeys.length > 0) {
@@ -1083,7 +1097,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Persona creation warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -1170,7 +1184,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Persona edit warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -1220,8 +1234,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         additionalData: {
           field: normalizedField,
           isDefaultPersonaCopy: isDefault,
-          oldValue: persona.content?.substring(0, 50),
-          newValue: editablePersona.content?.substring(0, 50)
+          oldValue: persona.content.substring(0, 50),
+          newValue: editablePersona.content.substring(0, 50)
         }
       });
 
@@ -1617,7 +1631,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       }
 
       const personaToSave = this.createElement(elementMetadata, result.persona.content);
-      personaToSave.filename = result.persona.filename ?? personaToSave.filename;
+      personaToSave.filename = result.persona.filename;
       personaToSave.unique_id = result.persona.unique_id;
       personaToSave.id = personaToSave.unique_id;
 
@@ -1644,13 +1658,17 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   private toPersonaElementMetadata(metadata: PersonaMetadata): PersonaElementMetadata {
     const { filename, ...metadataWithoutFilename } = metadata; // Strip filename from legacy data
 
+    // Legacy/imported metadata is cast to PersonaMetadata upstream but may omit
+    // fields at runtime (parsed YAML/JSON), so default defensively through a
+    // Partial view — the declared type alone would mark these defaults dead.
+    const source = metadata as Partial<PersonaMetadata>;
     return {
       ...metadataWithoutFilename,
       type: ElementType.PERSONA,
-      name: metadata.name ?? 'Untitled Persona',
-      description: metadata.description ?? '',
-      age_rating: (metadata.age_rating as 'all' | '13+' | '18+') ?? 'all',
-      generation_method: (metadata.generation_method as 'human' | 'ChatGPT' | 'Claude' | 'hybrid') ?? 'human'
+      name: source.name ?? 'Untitled Persona',
+      description: source.description ?? '',
+      age_rating: (source.age_rating as 'all' | '13+' | '18+' | undefined) ?? 'all',
+      generation_method: (source.generation_method as 'human' | 'ChatGPT' | 'Claude' | 'hybrid' | undefined) ?? 'human'
     };
   }
 
@@ -1729,14 +1747,20 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       metadata.instructions = element.instructions;
     }
 
-    // Build body: content (reference material) below '---', with name heading
+    // Build body: content (reference material) below '---', with name heading.
+    // The prepend is idempotent: an element round-trips through serialize more
+    // than once per write (save, then record projection), and the v1→v2 format
+    // flip turns a previously-serialized body into `content` — so re-adding the
+    // heading unconditionally would stack duplicate "# name" titles on each pass.
     const name = element.metadata.name;
     const bodyContent = element.content || '';
-    const description = (element.metadata.description ?? '').trim();
+    const description = element.metadata.description.trim();
 
     let body: string;
     if (bodyContent.trim()) {
-      body = `# ${name}\n\n${bodyContent}`;
+      body = bodyOpensWithHeading(bodyContent, name)
+        ? bodyContent.replace(/^\s+/, '')
+        : `# ${name}\n\n${bodyContent}`;
     } else if (description) {
       body = `# ${name}\n\n${description}`;
     } else {

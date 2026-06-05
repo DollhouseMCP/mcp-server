@@ -26,7 +26,7 @@ import { InMemoryRateLimitStore } from '../../../src/auth/embedded-as/storage/In
 import {
   type ASHarness,
   approveClientConsentPage,
-  CookieJar,
+  type CookieJar,
   followToCodeRedirect,
   getFreePort,
   startAuthorizeFlow,
@@ -43,6 +43,12 @@ class CollectingEmailSender implements EmailSender {
   async sendMagicLink(input: SendMagicLinkInput): Promise<void> {
     this.sent.push(input);
   }
+}
+
+function tokenFromMagicUrl(magicUrl: string): string {
+  const token = new URL(magicUrl).searchParams.get('token');
+  expect(token).toBeTruthy();
+  return token ?? '';
 }
 
 async function fetchAuthServerMetadata(baseUrl: string) {
@@ -102,7 +108,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
   });
 
   afterEach(async () => {
-    if (harness) await harness.close();
+    await harness.close();
   });
 
   async function bootHarness(): Promise<void> {
@@ -272,7 +278,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       resource: `${harness.publicBaseUrl}/mcp`, scope: OAUTH_SCOPES,
     });
     await postRequestLinkForm(interactionUrl, jar, 'replay@example.com');
-    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
+    const tokenParam = tokenFromMagicUrl(emailSender.sent[0].url);
 
     // First POST consumes and renders the client-consent page. We don't
     // approve it here; this test only cares that the token is consumed.
@@ -312,7 +318,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
       resource: `${harness.publicBaseUrl}/mcp`, scope: 'mcp',
     });
     await postRequestLinkForm(interactionUrl, jar, 'csrf@example.com');
-    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
+    const tokenParam = tokenFromMagicUrl(emailSender.sent[0].url);
 
     // POST without the cookie jar → cookie binding mismatches.
     const noCookie = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
@@ -336,7 +342,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(withCookie.status).toBe(200);
   }, 30_000);
 
-  it('admin claim: pre-claimed magic-link sub gets roles:["admin"] on JWT (cycle-16)', async () => {
+  it('pre-claimed magic-link admin sub authenticates but the JWT carries NO roles (admin is console-only)', async () => {
     // Need to skip auto-bootstrap so we can pre-claim with a specific
     // admin sub. bootHarness() always auto-bootstraps with a placeholder
     // sub; build a custom harness here.
@@ -368,7 +374,7 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     });
     await postRequestLinkForm(interactionUrl, jar, adminEmail);
 
-    const tokenParam = new URL(emailSender.sent[0].url).searchParams.get('token')!;
+    const tokenParam = tokenFromMagicUrl(emailSender.sent[0].url);
     const verifyPost = await fetch(`${harness.publicBaseUrl}/auth/email/verify`, {
       method: 'POST', redirect: 'manual',
       headers: {
@@ -405,16 +411,14 @@ describe('MagicLinkMethod — OAuth E2E', () => {
     expect(tokenResp.status).toBe(200);
     const tokenBody = await tokenResp.json() as { access_token: string };
 
+    // Token authenticates but carries NO roles — admin is console-only.
     const validation = await harness.as.validate(tokenBody.access_token);
     expect(validation.ok).toBe(true);
     if (validation.ok) {
       expect(validation.claims.sub).toBe(adminSub);
-      expect(validation.claims.roles).toEqual(['admin']);
+      expect(validation.claims.roles ?? []).toEqual([]);
     }
     const decoded = decodeJwt(tokenBody.access_token);
-    expect(decoded.roles).toEqual(['admin']);
-
-    const stored = await storage.getAccount(adminSub);
-    expect(stored?.roles).toEqual(['admin']);
+    expect(decoded.roles).toBeUndefined();
   }, 30_000);
 });

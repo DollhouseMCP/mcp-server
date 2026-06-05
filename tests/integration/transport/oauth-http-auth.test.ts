@@ -219,9 +219,10 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
     expect(csrfMatch).not.toBeNull();
     const csrfToken = csrfMatch![1];
 
-    // 5. POST the consent form; the InteractionRouter saves a Grant and calls
-    //    interactionFinished, which 303s back into oidc-provider's /auth/:uid.
-    const consentPost = await fetch(interactionUrl, {
+    // 5. POST the login form; the InteractionRouter now renders the OAuth
+    //    client consent page (with a freshly stamped CSRF token) before
+    //    finishing the interaction.
+    const loginPost = await fetch(interactionUrl, {
       method: 'POST',
       redirect: 'manual',
       headers: {
@@ -229,6 +230,24 @@ describe('Embedded OAuth + Streamable HTTP auth (oidc-provider)', () => {
         Cookie: jar.header(),
       },
       body: new URLSearchParams({ csrf_token: csrfToken, action: 'approve' }),
+    });
+    expect(loginPost.status).toBe(200);
+    jar.ingest(loginPost.headers);
+    const consentFormHtml = await loginPost.text();
+    const consentCsrfMatch = /name="csrf_token"\s+value="([^"]+)"/.exec(consentFormHtml);
+    expect(consentCsrfMatch).not.toBeNull();
+
+    // 5b. Approve the OAuth client consent; the InteractionRouter saves a Grant
+    //     and calls interactionFinished, which 303s back into oidc-provider's
+    //     /auth/:uid.
+    const consentPost = await fetch(interactionUrl, {
+      method: 'POST',
+      redirect: 'manual',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        Cookie: jar.header(),
+      },
+      body: new URLSearchParams({ csrf_token: consentCsrfMatch![1], action: 'authorize_oauth_client' }),
     });
     expect([302, 303]).toContain(consentPost.status);
     jar.ingest(consentPost.headers);

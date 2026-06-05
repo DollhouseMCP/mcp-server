@@ -45,6 +45,8 @@ export const authSigningKeys = pgTable('auth_signing_keys', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   /** Null while active; populated when the key is rotated out. */
   rotatedAt: timestamp('rotated_at', { withTimezone: true }),
+  /** Null until an operator explicitly retires the key from verification. */
+  retiredAt: timestamp('retired_at', { withTimezone: true }),
 }, (table) => [
   index('idx_auth_signing_keys_kind_active').on(table.kind, table.active),
   uniqueIndex('idx_auth_signing_keys_kind_active_unique')

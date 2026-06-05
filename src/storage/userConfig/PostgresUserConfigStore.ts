@@ -30,7 +30,7 @@ import type { DatabaseInstance } from '../../database/connection.js';
 import { withUserContext, withUserRead } from '../../database/rls.js';
 import { userSettings } from '../../database/schema/index.js';
 import type { IUserConfigStore, UserConfig } from './IUserConfigStore.js';
-import { DEFAULT_USER_CONFIG } from './IUserConfigStore.js';
+import { DEFAULT_USER_CONFIG, UserConfigConflictError } from './IUserConfigStore.js';
 
 export interface PostgresUserConfigStoreOptions {
   /** Drizzle DB instance. Pass the same instance the rest of the app uses. */
@@ -66,12 +66,13 @@ export class PostgresUserConfigStore implements IUserConfigStore {
       tx.select().from(userSettings).where(eq(userSettings.userId, userId)).limit(1),
     );
     if (rows.length === 0) return cloneDefault();
-    return rowToConfig(rows[0] as UserSettingsRow);
+    return rowToConfig(rows[0]);
   }
 
   async save(
     userId: string,
     config: Omit<UserConfig, 'updatedAt'> & { updatedAt?: number },
+    options: { readonly expectedUpdatedAt?: number } = {},
   ): Promise<void> {
     assertValidUserId(userId);
     const now = new Date();
@@ -91,6 +92,15 @@ export class PostgresUserConfigStore implements IUserConfigStore {
     };
 
     await withUserContext(this.db, userId, async (tx) => {
+      if (options.expectedUpdatedAt !== undefined) {
+        const lockedRows = await tx
+          .select({ updatedAt: userSettings.updatedAt })
+          .from(userSettings)
+          .where(eq(userSettings.userId, userId))
+          .for('update');
+        const currentUpdatedAt = lockedRows[0]?.updatedAt.getTime() ?? DEFAULT_USER_CONFIG.updatedAt;
+        if (currentUpdatedAt !== options.expectedUpdatedAt) throw new UserConfigConflictError();
+      }
       await tx
         .insert(userSettings)
         .values(writeRow)

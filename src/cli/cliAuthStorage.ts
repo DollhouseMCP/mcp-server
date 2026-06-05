@@ -35,6 +35,12 @@ import type { DatabaseInstance } from '../database/connection.js';
 
 export interface CliAuthStorageHandle {
   storage: IAuthStorageLayer;
+  /**
+   * The Postgres DatabaseInstance when backend=postgres, else undefined. Lets a
+   * CLI provision console-domain rows (users, user_admin_roles) directly — e.g.
+   * `admin bootstrap` granting the admin role at setup.
+   */
+  db?: DatabaseInstance;
   /** Drain the database pool if one was opened. No-op for non-Postgres backends. */
   close: () => Promise<void>;
 }
@@ -65,7 +71,7 @@ export async function openCliAuthStorage(
 
   if (backend !== 'postgres') {
     const storage = await createAuthStorage(baseOptions);
-    return { storage, close: async () => undefined };
+    return { storage, close: async () => {} };
   }
 
   // Postgres backend — open a connection from the same env the AS
@@ -108,6 +114,7 @@ export async function openCliAuthStorage(
 
   return {
     storage,
+    db: connection.db as unknown as DatabaseInstance,
     close: async () => {
       try {
         await connection.close();

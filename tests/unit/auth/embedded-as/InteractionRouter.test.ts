@@ -10,12 +10,16 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import express from 'express';
 import type { AddressInfo } from 'node:net';
 import {
+  ADMIN_STEP_UP_CLAIMS_MODEL,
   createInteractionRouter,
   renderClientConsentForIdentity,
+  type AdminStepUpInteractionDeps,
   type OidcProviderForInteractions,
   type OidcInteractionDetails,
 } from '../../../../src/auth/embedded-as/InteractionRouter.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
+import { InMemoryConsoleIdentityResolver } from '../../../../src/web-console/identity/InMemoryConsoleIdentityResolver.js';
 import type {
   IAuthMethod,
   AuthenticatedIdentity,
@@ -66,11 +70,18 @@ interface FakeProviderOptions {
 }
 
 function fakeProvider(opts: FakeProviderOptions): OidcProviderForInteractions {
-  class FakeGrant {
-    addOIDCScope(): void { /* no-op */ }
-    addResourceScope(): void { /* no-op */ }
-    async save(): Promise<string> { return 'fake-grant-id'; }
-    static async find(): Promise<undefined> { return undefined; }
+  class Grant {
+    accountId?: string;
+    clientId?: string;
+    scopes: string[] = [];
+    constructor(init: { accountId: string; clientId: string }) {
+      this.accountId = init.accountId;
+      this.clientId = init.clientId;
+    }
+    addOIDCScope(scope: string) { this.scopes.push(scope); }
+    addResourceScope(_resource: string, scope: string) { this.scopes.push(scope); }
+    async save() { return 'grant-for-test'; }
+    static async find() { return; }
   }
 
   return {
@@ -78,7 +89,7 @@ function fakeProvider(opts: FakeProviderOptions): OidcProviderForInteractions {
     interactionFinished: opts.interactionFinished ?? (async (_req, res) => {
       if (!res.headersSent) res.redirect(303, '/finished');
     }),
-    Grant: FakeGrant,
+    Grant,
     Client: {
       async find() {
         return {
@@ -111,6 +122,7 @@ async function startHarness(
   methods: readonly IAuthMethod[],
   storage: InMemoryAuthStorageLayer,
   details: OidcInteractionDetails,
+  adminStepUp?: AdminStepUpInteractionDeps,
   providerOverride?: OidcProviderForInteractions,
 ): Promise<HarnessResult> {
   const app = express();
@@ -120,6 +132,7 @@ async function startHarness(
     methods,
     storage,
     defaultResource: 'https://mcp.example.com/mcp',
+    adminStepUp,
   });
   app.use('/interaction', router);
   const server = app.listen(0);
@@ -128,6 +141,30 @@ async function startHarness(
   return {
     url: `http://127.0.0.1:${port}`,
     close: () => new Promise((resolve) => server.close(() => resolve())),
+  };
+}
+
+function adminDeps(overrides: {
+  hasFactor?: boolean;
+  proofOk?: boolean;
+  proofMethod?: 'totp' | 'backup';
+  rateLimitStore?: InMemoryRateLimitStore;
+} = {}): AdminStepUpInteractionDeps {
+  const totpService = {
+    hasActiveFactor: async () => overrides.hasFactor ?? true,
+    prove: async () => (overrides.proofOk ?? true)
+      ? { ok: true as const, method: overrides.proofMethod ?? 'totp', authTime: new Date('2026-05-27T12:00:00.000Z') }
+      : { ok: false as const },
+  } satisfies AdminStepUpInteractionDeps['totpService'];
+  return {
+    totpService,
+    identityResolver: new InMemoryConsoleIdentityResolver([{
+      sub: 'local_admin',
+      userId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
+      disabledAt: null,
+      authzVersion: 1,
+    }]),
+    rateLimitStore: overrides.rateLimitStore,
   };
 }
 
@@ -262,7 +299,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
         emailVerified: true,
       },
     });
-    const h = await startHarness([method], storage, localDetails, provider);
+    const h = await startHarness([method], storage, localDetails, undefined, provider);
     try {
       const getRes = await fetch(`${h.url}/interaction/${localDetails.uid}`);
       const getBody = await getRes.text();
@@ -299,7 +336,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
       expect(interactionFinished).toHaveBeenCalledTimes(1);
       expect(interactionFinished.mock.calls[0][2]).toMatchObject({
         login: { accountId: 'local_alice' },
-        consent: { grantId: 'fake-grant-id' },
+        consent: { grantId: 'grant-for-test' },
       });
     } finally {
       await h.close();
@@ -408,7 +445,7 @@ describe('InteractionRouter — multi-method dispatch', () => {
       expect(interactionFinished).toHaveBeenCalledTimes(1);
       expect(interactionFinished.mock.calls[0][2]).toMatchObject({
         login: { accountId: 'github_42' },
-        consent: { grantId: 'fake-grant-id' },
+        consent: { grantId: 'grant-for-test' },
       });
 
       const events = await storage.listIdentityEvents({ type: 'auth.client_consent.approved' });
@@ -554,6 +591,223 @@ describe('InteractionRouter — multi-method dispatch', () => {
         expect(postRes.status).toBe(500);
         const body = await postRes.json() as { error: string };
         expect(body.error).toBe('server_error');
+      } finally {
+        await h.close();
+      }
+    });
+  });
+
+  describe('administrative ACR TOTP step-up', () => {
+    const adminDetails: OidcInteractionDetails = {
+      uid: 'admin-step-up-uid',
+      params: {
+        client_id: 'console',
+        scope: 'openid',
+        acr_values: 'urn:dollhouse:acr:admin-stepup',
+      },
+      prompt: { name: 'login', details: {} },
+    };
+
+    it('fails requested admin ACR when the principal has no active TOTP factor', async () => {
+      const method = fakeMethod({
+        id: TRIVIAL_CONSENT_ID,
+        displayName: 'Trivial',
+        identity: { sub: 'local_admin', emailVerified: true },
+      });
+      const h = await startHarness([method], storage, adminDetails, adminDeps({ hasFactor: false }));
+      try {
+        const getRes = await fetch(`${h.url}/interaction/${adminDetails.uid}`);
+        const csrfToken = /name="csrf_token"\s+value="([^"]+)"/.exec(await getRes.text())![1];
+        const postRes = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: csrfToken }),
+        });
+
+        expect(postRes.status).toBe(400);
+        const body = await postRes.json() as { error: string };
+        expect(body.error).toBe('access_denied');
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('requires TOTP proof and stores AS-issued admin ACR claims for token issuance', async () => {
+      const method = fakeMethod({
+        id: TRIVIAL_CONSENT_ID,
+        displayName: 'Trivial',
+        identity: { sub: 'local_admin', emailVerified: true },
+      });
+      const h = await startHarness([method], storage, adminDetails, adminDeps());
+      try {
+        const getRes = await fetch(`${h.url}/interaction/${adminDetails.uid}`);
+        const firstCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await getRes.text())![1];
+        const primaryPost = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: firstCsrf }),
+        });
+        const proofPage = await primaryPost.text();
+        expect(proofPage).toContain('Administrative verification');
+        const proofCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(proofPage)![1];
+
+        const proofPost = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: proofCsrf, code: '123456' }),
+          redirect: 'manual',
+        });
+
+        expect(proofPost.status).toBe(303);
+        await expect(storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-for-test'))
+          .resolves.toEqual({
+            accountId: 'local_admin',
+            acr: 'urn:dollhouse:acr:admin-stepup',
+            amr: ['otp'],
+            authTime: 1779883200,
+          });
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('re-renders the proof step after failed proof without issuing admin claims', async () => {
+      const method = fakeMethod({
+        id: TRIVIAL_CONSENT_ID,
+        displayName: 'Trivial',
+        identity: { sub: 'local_admin', emailVerified: true },
+      });
+      const h = await startHarness([method], storage, adminDetails, adminDeps({ proofOk: false }));
+      try {
+        const getRes = await fetch(`${h.url}/interaction/${adminDetails.uid}`);
+        const firstCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await getRes.text())![1];
+        const primaryPost = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: firstCsrf }),
+        });
+        const proofCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await primaryPost.text())![1];
+
+        const failedProof = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: proofCsrf, code: '000000' }),
+        });
+
+        expect(failedProof.status).toBe(200);
+        expect(await failedProof.text()).toContain('Invalid authentication code.');
+        await expect(storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-for-test')).resolves.toBeNull();
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('locks out administrative proof after repeated failures', async () => {
+      const method = fakeMethod({
+        id: TRIVIAL_CONSENT_ID,
+        displayName: 'Trivial',
+        identity: { sub: 'local_admin', emailVerified: true },
+      });
+      const h = await startHarness([method], storage, adminDetails, adminDeps({
+        proofOk: false,
+        rateLimitStore: new InMemoryRateLimitStore(),
+      }));
+      try {
+        const getRes = await fetch(`${h.url}/interaction/${adminDetails.uid}`);
+        let csrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await getRes.text())![1];
+        const primaryPost = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: csrf }),
+        });
+        csrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await primaryPost.text())![1];
+
+        for (let attempt = 0; attempt < 5; attempt += 1) {
+          const failed = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+            method: 'POST',
+            headers: { 'content-type': FORM_CONTENT_TYPE },
+            body: new URLSearchParams({ csrf_token: csrf, code: '000000' }),
+          });
+          const body = await failed.text();
+          csrf = /name="csrf_token"\s+value="([^"]+)"/.exec(body)?.[1] ?? csrf;
+        }
+
+        const locked = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: csrf, code: '000000' }),
+        });
+
+        expect(locked.status).toBe(429);
+        await expect(storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-for-test')).resolves.toBeNull();
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('accepts backup-code proof and records admin claims', async () => {
+      const method = fakeMethod({
+        id: TRIVIAL_CONSENT_ID,
+        displayName: 'Trivial',
+        identity: { sub: 'local_admin', emailVerified: true },
+      });
+      const h = await startHarness([method], storage, adminDetails, adminDeps({ proofMethod: 'backup' }));
+      try {
+        const getRes = await fetch(`${h.url}/interaction/${adminDetails.uid}`);
+        const firstCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await getRes.text())![1];
+        const primaryPost = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: firstCsrf }),
+        });
+        const proofCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await primaryPost.text())![1];
+
+        const proofPost = await fetch(`${h.url}/interaction/${adminDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: proofCsrf, code: 'BACKUP' }),
+          redirect: 'manual',
+        });
+
+        expect(proofPost.status).toBe(303);
+        await expect(storage.listIdentityEvents({ type: 'auth.admin_step_up.backup_code_consumed' }))
+          .resolves.toHaveLength(1);
+      } finally {
+        await h.close();
+      }
+    });
+
+    it('does not issue admin claims when acr_values does not request admin step-up', async () => {
+      const method = fakeMethod({
+        id: TRIVIAL_CONSENT_ID,
+        displayName: 'Trivial',
+        identity: { sub: 'local_admin', emailVerified: true },
+      });
+      const normalDetails = { ...adminDetails, params: { client_id: 'console', scope: 'openid', acr_values: 'urn:other' } };
+      const h = await startHarness([method], storage, normalDetails, adminDeps());
+      try {
+        const getRes = await fetch(`${h.url}/interaction/${normalDetails.uid}`);
+        const csrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await getRes.text())![1];
+        const post = await fetch(`${h.url}/interaction/${normalDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: csrf }),
+          redirect: 'manual',
+        });
+
+        // Non-admin logins go through client consent rather than finishing
+        // directly; approving consent completes the interaction with no admin claims.
+        expect(post.status).toBe(200);
+        const consentCsrf = /name="csrf_token"\s+value="([^"]+)"/.exec(await post.text())![1];
+        const approve = await fetch(`${h.url}/interaction/${normalDetails.uid}`, {
+          method: 'POST',
+          headers: { 'content-type': FORM_CONTENT_TYPE },
+          body: new URLSearchParams({ csrf_token: consentCsrf, action: 'authorize_oauth_client' }),
+          redirect: 'manual',
+        });
+
+        expect(approve.status).toBe(303);
+        await expect(storage.genericGet(ADMIN_STEP_UP_CLAIMS_MODEL, 'grant-for-test')).resolves.toBeNull();
       } finally {
         await h.close();
       }

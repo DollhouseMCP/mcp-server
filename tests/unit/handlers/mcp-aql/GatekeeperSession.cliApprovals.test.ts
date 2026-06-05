@@ -2,9 +2,9 @@
  * Unit tests for GatekeeperSession CLI approval store (Issue #625 Phase 3)
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { GatekeeperSession } from '../../../../src/handlers/mcp-aql/GatekeeperSession.js';
-import type { CreateCliApprovalArgs } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
+import type { CreateCliApprovalArgs , CliApprovalRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
 
 const TOOL_BASH = 'Bash';
@@ -26,6 +26,11 @@ const moderateArgs = (
 ): CreateCliApprovalArgs => ({
   toolName, toolInput, riskLevel: 'moderate', riskScore: 40, irreversible: false, denyReason,
 });
+
+function requireRecord(record: CliApprovalRecord | undefined): CliApprovalRecord {
+  if (!record) throw new Error('expected CLI approval record');
+  return record;
+}
 
 describe('GatekeeperSession CLI approval store', () => {
   let session: GatekeeperSession;
@@ -68,12 +73,11 @@ describe('GatekeeperSession CLI approval store', () => {
   describe('approveCliRequest', () => {
     it('should set approvedAt on approval', async () => {
       const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
-      const record = session.approveCliRequest(requestId, 'single');
-      expect(record).toBeDefined();
-      expect(record!.approvedAt).toBeDefined();
+      const record = requireRecord(session.approveCliRequest(requestId, 'single'));
+      expect(record.approvedAt).toBeDefined();
     });
 
-    it('should return undefined for nonexistent request', async () => {
+    it('should return undefined for nonexistent request', () => {
       const record = session.approveCliRequest('cli-nonexistent', 'single');
       expect(record).toBeUndefined();
     });
@@ -85,14 +89,26 @@ describe('GatekeeperSession CLI approval store', () => {
       expect(secondApproval).toBeUndefined();
     });
 
+    it('should refuse denied and expired requests', async () => {
+      const deniedId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
+      expect(session.denyCliRequest(deniedId)).toBeDefined();
+      expect(session.approveCliRequest(deniedId, 'single')).toBeUndefined();
+
+      const expiredId = await session.createCliApprovalRequest(dangerousArgs('Edit', {}, 'old', 1_000));
+      const expired = requireRecord(session.getCliApproval(expiredId));
+      expired.requestedAt = new Date(Date.now() - 5_000).toISOString();
+
+      expect(session.approveCliRequest(expiredId, 'single')).toBeUndefined();
+      expect(session.getCliApproval(expiredId)?.expiredAt).toBeDefined();
+    });
+
     it('should promote to session approvals for tool_session scope', async () => {
       const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'tool_session');
 
       // Should be findable via checkCliApproval for same tool
-      const found = session.checkCliApproval(TOOL_BASH, { command: 'different command' });
-      expect(found).toBeDefined();
-      expect(found!.scope).toBe('tool_session');
+      const found = requireRecord(session.checkCliApproval(TOOL_BASH, { command: 'different command' }));
+      expect(found.scope).toBe('tool_session');
     });
   });
 
@@ -102,9 +118,8 @@ describe('GatekeeperSession CLI approval store', () => {
       session.approveCliRequest(requestId, 'single');
 
       // First check returns the approval
-      const first = session.checkCliApproval(TOOL_BASH, NPM_INSTALL);
-      expect(first).toBeDefined();
-      expect(first!.consumed).toBe(true);
+      const first = requireRecord(session.checkCliApproval(TOOL_BASH, NPM_INSTALL));
+      expect(first.consumed).toBe(true);
 
       // Second check returns nothing (consumed)
       const second = session.checkCliApproval(TOOL_BASH, NPM_INSTALL);
@@ -132,6 +147,32 @@ describe('GatekeeperSession CLI approval store', () => {
       expect(result).toBeUndefined();
     });
 
+    it('should not consume denied, cancelled, or expired approvals', async () => {
+      const deniedId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
+      session.denyCliRequest(deniedId);
+      expect(session.checkCliApproval(TOOL_BASH, NPM_INSTALL)).toBeUndefined();
+
+      const cancelledId = await session.createCliApprovalRequest(dangerousArgs('Edit', { file_path: 'a.ts' }));
+      const cancelled = requireRecord(session.getCliApproval(cancelledId));
+      cancelled.approvedAt = new Date().toISOString();
+      cancelled.cancelledAt = new Date().toISOString();
+      expect(session.checkCliApproval('Edit', { file_path: 'a.ts' })).toBeUndefined();
+
+      const expiredId = await session.createCliApprovalRequest(dangerousArgs('Write', { file_path: 'b.ts' }));
+      const expired = requireRecord(session.getCliApproval(expiredId));
+      expired.approvedAt = new Date().toISOString();
+      expired.expiredAt = new Date().toISOString();
+      expect(session.checkCliApproval('Write', { file_path: 'b.ts' })).toBeUndefined();
+    });
+
+    it('should ignore terminal session-scoped fast-path approvals', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
+      const approved = requireRecord(session.approveCliRequest(requestId, 'tool_session'));
+      approved.deniedAt = new Date().toISOString();
+
+      expect(session.checkCliApproval(TOOL_BASH, NPM_INSTALL)).toBeUndefined();
+    });
+
     it('should not match different tool names', async () => {
       const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       session.approveCliRequest(requestId, 'single');
@@ -152,13 +193,26 @@ describe('GatekeeperSession CLI approval store', () => {
       expect(pending[0].toolName).toBe('Edit');
     });
 
-    it('should return empty array when no pending', async () => {
+    it('should return empty array when no pending', () => {
       expect(session.getPendingCliApprovals()).toHaveLength(0);
+    });
+
+    it('should cancel pending approvals on session termination', async () => {
+      const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
+      const cancelledAt = new Date().toISOString();
+
+      expect(session.cancelPendingCliApprovals(cancelledAt)).toBe(1);
+
+      expect(session.getPendingCliApprovals()).toEqual([]);
+      expect(session.getCliApproval(requestId)).toMatchObject({
+        cancelledAt,
+      });
+      expect(session.checkCliApproval(TOOL_BASH, NPM_INSTALL)).toBeUndefined();
     });
   });
 
   describe('expiry', () => {
-    it('should expire stale unapproved requests', async () => {
+    it('should mark stale unapproved requests expired and remove them from pending', async () => {
       await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
 
       // Manually backdate the request
@@ -175,6 +229,8 @@ describe('GatekeeperSession CLI approval store', () => {
       // Original should be expired, only the new one remains
       expect(remaining).toHaveLength(1);
       expect(remaining[0].toolName).toBe('Edit');
+      const retained = session.getAllCliApprovals().find(record => record.toolName === TOOL_BASH);
+      expect(retained?.expiredAt).toBeDefined();
     });
 
     it('should use per-record ttlMs when set (Issue #644)', async () => {
@@ -213,6 +269,41 @@ describe('GatekeeperSession CLI approval store', () => {
       // Original should NOT be expired (200s < 300s default)
       expect(remaining).toHaveLength(2);
     });
+
+    it('should purge old denied terminal records from memory and backing store', async () => {
+      const store = {
+        initialize: jest.fn<() => Promise<void>>().mockResolvedValue(),
+        persist: jest.fn<() => Promise<void>>().mockResolvedValue(),
+        getAllConfirmations: jest.fn().mockReturnValue([]),
+        getAllCliApprovals: jest.fn().mockReturnValue([]),
+        getAllCliSessionApprovals: jest.fn().mockReturnValue([]),
+        getPermissionPromptActive: jest.fn().mockReturnValue(false),
+        saveConfirmation: jest.fn(),
+        getConfirmation: jest.fn(),
+        deleteConfirmation: jest.fn(),
+        clearAllConfirmations: jest.fn(),
+        saveCliApproval: jest.fn(),
+        getCliApproval: jest.fn(),
+        deleteCliApproval: jest.fn(),
+        saveCliSessionApproval: jest.fn(),
+        getCliSessionApproval: jest.fn(),
+        findApprovals: jest.fn().mockResolvedValue([]),
+        getRawApprovalDetail: jest.fn().mockResolvedValue(null),
+        savePermissionPromptActive: jest.fn(),
+        getSessionId: jest.fn().mockReturnValue('test-session'),
+      };
+      const durableSession = new GatekeeperSession(undefined, 100, 50, store, 'test-session', auditResolver);
+      const requestId = await durableSession.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
+      const denied = durableSession.denyCliRequest(requestId);
+      expect(denied).toBeDefined();
+      if (!denied) throw new Error('expected denied approval');
+      denied.deniedAt = new Date(Date.now() - 90_000_000).toISOString();
+
+      await durableSession.createCliApprovalRequest(moderateArgs('Edit'));
+
+      expect(durableSession.getCliApproval(requestId)).toBeUndefined();
+      expect(store.deleteCliApproval).toHaveBeenCalledWith(requestId);
+    });
   });
 
   describe('summary', () => {
@@ -226,12 +317,12 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('permissionPromptActive (Issue #625 Phase 4)', () => {
-    it('should default to false', async () => {
+    it('should default to false', () => {
       expect(session.isPermissionPromptActive).toBe(false);
       expect(session.getSummary().permissionPromptActive).toBe(false);
     });
 
-    it('should be true after markPermissionPromptActive()', async () => {
+    it('should be true after markPermissionPromptActive()', () => {
       session.markPermissionPromptActive();
       expect(session.isPermissionPromptActive).toBe(true);
       expect(session.getSummary().permissionPromptActive).toBe(true);

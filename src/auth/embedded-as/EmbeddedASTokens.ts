@@ -1,11 +1,25 @@
-import { importJWK, jwtVerify, SignJWT, errors as joseErrors, type JWK } from 'jose';
+import {
+  decodeProtectedHeader,
+  importJWK,
+  jwtVerify,
+  SignJWT,
+  errors as joseErrors,
+  type JWK,
+} from 'jose';
 
 import type {
   AuthClaims,
   AuthResult,
   IssueOptions,
 } from '../IAuthProvider.js';
-import type { SigningKeyset } from './persistKeys.js';
+import {
+  type SigningKeyset,
+  type StoredKeyPair,
+} from './persistKeys.js';
+import type {
+  ISigningKeyStore,
+  SigningKey,
+} from '../../storage/signingKeys/ISigningKeyStore.js';
 
 export const ALGORITHM = 'ES256';
 export const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600;
@@ -26,9 +40,13 @@ export class EmbeddedASTokens {
     private readonly ensureInitialized: () => Promise<EmbeddedASInitializedState>,
     private readonly getIssuer: () => string,
     private readonly getResource: () => string,
+    private readonly signingKeyStore?: ISigningKeyStore,
   ) {}
 
   async validate(token: string): Promise<AuthResult> {
+    if (this.signingKeyStore) {
+      return await this.validateWithStore(token);
+    }
     const { publicSigningKey, keyset } = await this.ensureInitialized();
     try {
       const { payload, protectedHeader } = await jwtVerify(token, publicSigningKey, {
@@ -45,7 +63,9 @@ export class EmbeddedASTokens {
   }
 
   async issue(sub: string, options?: IssueOptions): Promise<string> {
-    const { keyset, privateSigningKey } = await this.ensureInitialized();
+    const { keyset, privateSigningKey } = this.signingKeyStore
+      ? await this.loadActiveSigningStateFromStore()
+      : await this.ensureInitialized();
     const ttl = options?.ttlSeconds ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
     const scope = options?.scopes?.join(' ') || 'mcp';
 
@@ -62,6 +82,56 @@ export class EmbeddedASTokens {
       .setExpirationTime(`${ttl}s`)
       .sign(privateSigningKey);
   }
+
+  private async validateWithStore(token: string): Promise<AuthResult> {
+    await this.ensureInitialized();
+    try {
+      const protectedHeader = decodeProtectedHeader(token);
+      if (!protectedHeader.kid) return { ok: false, reason: 'token missing kid header' };
+      const key = await requiredSigningKeyStore(this.signingKeyStore).getByKid(protectedHeader.kid);
+      if (!(key?.kind === 'jwks' && key.retiredAt === undefined)) {
+        return { ok: false, reason: 'unknown key id' };
+      }
+      const keyset = signingKeyToKeyset(key);
+      const { publicSigningKey } = await importSigningKeys(keyset);
+      const { payload } = await jwtVerify(token, publicSigningKey, {
+        issuer: this.getIssuer(),
+        audience: this.getResource(),
+        algorithms: [ALGORITHM],
+        typ: 'at+jwt',
+        crit: {},
+      });
+      return buildEmbeddedAsAuthResult(payload, protectedHeader, keyset.kid);
+    } catch (error) {
+      return { ok: false, reason: mapEmbeddedAsVerifyError(error) };
+    }
+  }
+
+  private async loadActiveSigningStateFromStore(): Promise<EmbeddedASInitializedState> {
+    await this.ensureInitialized();
+    const active = await requiredSigningKeyStore(this.signingKeyStore).getActive('jwks');
+    if (!active || active.retiredAt !== undefined) {
+      throw new Error('No active JWKS signing key is available for token issuance');
+    }
+    const keyset = signingKeyToKeyset(active);
+    const { publicSigningKey, privateSigningKey } = await importSigningKeys(keyset);
+    return {
+      keyset,
+      publicSigningKey,
+      privateSigningKey,
+    };
+  }
+}
+
+export async function loadPublicSigningJwksFromStore(
+  store: ISigningKeyStore,
+): Promise<{ keys: JWK[] }> {
+  const keys = await store.listByKind('jwks');
+  return {
+    keys: keys
+      .filter(key => key.kind === 'jwks' && key.retiredAt === undefined)
+      .map(key => stripPrivate(signingKeyToKeyset(key).jwks.keys[0])),
+  };
 }
 
 function claimsFromPayload(payload: Record<string, unknown>): AuthClaims {
@@ -115,7 +185,7 @@ function mapEmbeddedAsVerifyError(error: unknown): string {
     if (claim === 'aud') return 'invalid audience';
     if (claim === 'iss') return 'invalid issuer';
     if (claim === 'typ') return 'wrong token type';
-    return `claim validation failed: ${claim ?? 'unknown'}`;
+    return `claim validation failed: ${claim}`;
   }
   return 'token validation failed';
 }
@@ -129,12 +199,12 @@ const PRIVATE_JWK_FIELDS: ReadonlySet<string> = new Set([
 
 export function stripPrivate(jwk: JWK): JWK {
   const result: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(jwk as JWK & Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(jwk)) {
     if (!PRIVATE_JWK_FIELDS.has(key)) {
       result[key] = value;
     }
   }
-  return result as JWK;
+  return result;
 }
 
 export async function importSigningKeys(keyset: SigningKeyset): Promise<{
@@ -146,4 +216,27 @@ export async function importSigningKeys(keyset: SigningKeyset): Promise<{
     publicSigningKey: (await importJWK(stripPrivate(privateJwk), ALGORITHM)) as CryptoKey,
     privateSigningKey: (await importJWK(privateJwk, ALGORITHM)) as CryptoKey,
   };
+}
+
+function signingKeyToKeyset(key: SigningKey): SigningKeyset {
+  const stored = key.payload as unknown as Partial<StoredKeyPair>;
+  if (!stored.kid || !stored.privateKey || !stored.publicKey) {
+    throw new Error(`Stored JWKS signing key '${key.kid}' is malformed`);
+  }
+  return {
+    kid: stored.kid,
+    jwks: {
+      keys: [{
+        ...stored.privateKey,
+        kid: stored.kid,
+        alg: ALGORITHM,
+        use: 'sig',
+      }],
+    },
+  };
+}
+
+function requiredSigningKeyStore(store: ISigningKeyStore | undefined): ISigningKeyStore {
+  if (!store) throw new Error('Signing key store is required');
+  return store;
 }

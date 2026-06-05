@@ -103,6 +103,33 @@ export class FilesystemSigningKeyStore implements ISigningKeyStore {
     });
   }
 
+  async retire(kid: string, retiredAt: number = Date.now()): Promise<SigningKey | null> {
+    return this.locks.withLock(`signing-keys:${this.filePath}`, async () => {
+      const all = await this.readAllRaw();
+      const key = all.find(candidate => candidate.kid === kid);
+      if (!key) return null;
+      key.active = false;
+      key.rotatedAt ??= retiredAt;
+      key.retiredAt = retiredAt;
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.filePath, JSON.stringify(all, null, 2));
+      return structuredClone(key);
+    });
+  }
+
+  async delete(kid: string, options: { readonly force?: boolean } = {}): Promise<boolean> {
+    return this.locks.withLock(`signing-keys:${this.filePath}`, async () => {
+      const all = await this.readAllRaw();
+      const key = all.find(candidate => candidate.kid === kid);
+      if (!key) return false;
+      if (!options.force && (key.active || key.retiredAt === undefined)) return false;
+      const kept = all.filter(candidate => candidate.kid !== kid);
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.filePath, JSON.stringify(kept, null, 2));
+      return true;
+    });
+  }
+
   private async readAll(): Promise<SigningKey[]> {
     return this.readAllRaw();
   }

@@ -20,7 +20,7 @@ import type { DatabaseInstance } from '../../database/connection.js';
 import { withSystemContext } from '../../database/admin.js';
 import { operatorSettings } from '../../database/schema/index.js';
 import type { IOperatorConfigStore, OperatorConfig } from './IOperatorConfigStore.js';
-import { DEFAULT_OPERATOR_CONFIG } from './IOperatorConfigStore.js';
+import { DEFAULT_OPERATOR_CONFIG, OperatorConfigConflictError } from './IOperatorConfigStore.js';
 
 export interface PostgresOperatorConfigStoreOptions {
   /** Drizzle DB instance. Pass the same instance the rest of the app uses. */
@@ -51,12 +51,17 @@ export class PostgresOperatorConfigStore implements IOperatorConfigStore {
     const rows = await withSystemContext(this.db, (tx) =>
       tx.select().from(operatorSettings).where(eq(operatorSettings.id, 1)).limit(1),
     );
-    if (rows.length === 0) return cloneDefault();
-    return rowToConfig(rows[0] as OperatorSettingsRow);
+    const row = rows.at(0);
+    if (!row) return cloneDefault();
+    return rowToConfig(row);
   }
 
-  async save(config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number }): Promise<void> {
-    const now = new Date();
+  async save(
+    config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number },
+    options: { readonly expectedUpdatedAt?: number } = {},
+  ): Promise<void> {
+    let expectedUpdatedAt = options.expectedUpdatedAt;
+    const initialNow = new Date();
     const writeRow = {
       id: 1,
       enhancedIndexConfig: config.enhancedIndexConfig,
@@ -64,10 +69,30 @@ export class PostgresOperatorConfigStore implements IOperatorConfigStore {
       licenseConfig: config.licenseConfig,
       defaultsConfig: config.defaultsConfig,
       configVersion: config.configVersion,
-      updatedAt: now,
+      updatedAt: initialNow,
     };
 
     await withSystemContext(this.db, async (tx) => {
+      if (expectedUpdatedAt === undefined) {
+        const rows = await tx
+          .select({ updatedAt: operatorSettings.updatedAt })
+          .from(operatorSettings)
+          .where(eq(operatorSettings.id, 1))
+          .limit(1);
+        expectedUpdatedAt = rows.at(0)?.updatedAt.getTime();
+        if (expectedUpdatedAt !== undefined) {
+          writeRow.updatedAt = new Date(Math.max(Date.now(), expectedUpdatedAt + 1));
+        }
+      } else {
+        const lockedRows = await tx
+          .select({ updatedAt: operatorSettings.updatedAt })
+          .from(operatorSettings)
+          .where(eq(operatorSettings.id, 1))
+          .for('update');
+        const currentUpdatedAt = lockedRows.at(0)?.updatedAt.getTime() ?? DEFAULT_OPERATOR_CONFIG.updatedAt;
+        if (currentUpdatedAt !== expectedUpdatedAt) throw new OperatorConfigConflictError();
+        writeRow.updatedAt = new Date(Math.max(Date.now(), currentUpdatedAt + 1));
+      }
       await tx
         .insert(operatorSettings)
         .values(writeRow)

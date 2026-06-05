@@ -152,6 +152,10 @@ describe('OAUTH_STATE_MODELS', () => {
     expect(OAUTH_STATE_MODELS).toContain('RefreshToken');
     expect(OAUTH_STATE_MODELS).toContain('AuthorizationCode');
     expect(OAUTH_STATE_MODELS).toContain('Interaction');
+    expect(OAUTH_STATE_MODELS).toContain('AdminStepUpClaims');
+    expect(OAUTH_STATE_MODELS).toContain('AdminStepUpPending');
+    expect(OAUTH_STATE_MODELS).toContain('AdminTotpRouteCsrf');
+    expect(OAUTH_STATE_MODELS).toContain('ConsoleTotpEnrollment');
   });
 
   it('does NOT include AuthModeFingerprint (that record persists across mode switches)', () => {

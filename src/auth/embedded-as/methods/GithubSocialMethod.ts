@@ -30,7 +30,8 @@
  * @module auth/embedded-as/methods/GithubSocialMethod
  */
 
-import type { Router } from 'express';
+import type { Request, Response, Router } from 'express';
+import { sendAuthError } from '../browserErrorPage.js';
 import { logger } from '../../../utils/logger.js';
 import type {
   AuthenticatedIdentity,
@@ -42,10 +43,9 @@ import type {
   InteractionStep,
 } from '../IAuthMethod.js';
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
-import { renderClientConsentForIdentity } from '../InteractionRouter.js';
+import { beginAdminStepUpProof, isAdminStepUpRequest, renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
-import { isBootstrapAdminFor } from '../bootstrapAdmin.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage } from '../allowlistGate.js';
+import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
 import {
   GITHUB_API_EMAILS_URL,
   GITHUB_API_USER_URL,
@@ -100,6 +100,8 @@ export interface GithubSocialMethodOptions {
    * passes regardless. Resolved at construction so tests can override.
    */
   allowlistRequired?: boolean;
+  /** Optional replacement sign-in allowlist authority for hosted console cutover. */
+  signInAllowlistAuthority?: SignInAllowlistAuthority;
 }
 
 interface GithubProfile {
@@ -125,7 +127,7 @@ export class GithubSocialMethod implements IAuthMethod {
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
-  async beginInteraction(ctx: InteractionContext): Promise<InteractionStep> {
+  beginInteraction(ctx: InteractionContext): Promise<InteractionStep> {
     // Use the interactionId itself as the OAuth state. It is unguessable
     // and unique per authorization request; we verify it round-trips on the
     // callback. No extra storage write needed.
@@ -134,7 +136,7 @@ export class GithubSocialMethod implements IAuthMethod {
     url.searchParams.set('redirect_uri', this.options.callbackUrl);
     url.searchParams.set('scope', MIN_AUTHCODE_SCOPES.join(' '));
     url.searchParams.set('state', ctx.interactionId);
-    return { kind: 'redirect', url: url.toString() };
+    return Promise.resolve({ kind: 'redirect', url: url.toString() });
   }
 
   /**
@@ -143,14 +145,14 @@ export class GithubSocialMethod implements IAuthMethod {
    * GitHub interaction is in flight, it's an error condition (the user
    * shouldn't have a consent form to submit).
    */
-  async completeInteraction(
+  completeInteraction(
     _ctx: InteractionContext,
     _input: InteractionInput,
   ): Promise<InteractionResult> {
-    return {
+    return Promise.resolve({
       kind: 'denied',
       reason: 'GitHub social does not use the consent POST path; complete via /auth/social/github/callback.',
-    };
+    });
   }
 
   /**
@@ -227,72 +229,105 @@ export class GithubSocialMethod implements IAuthMethod {
     router.get('/auth/social/github/callback', (req, res, next) => {
       void (async () => {
         try {
-          const code = typeof req.query.code === 'string' ? req.query.code : '';
-          const state = typeof req.query.state === 'string' ? req.query.state : '';
-          if (!code || !state) {
-            res.status(400).json({ error: 'github_callback_failed', error_description: 'missing code or state' });
-            return;
-          }
-
-          // Verify cookie binding FIRST, BEFORE exchanging the GitHub
-          // one-time code (Phase 9 L1 / Q8). Earlier shape called
-          // processCallback first — which contacted GitHub's /token
-          // endpoint, burning the one-time code, and called
-          // upsertAccount/recordIdentityEvent — and only then verified
-          // the interaction-cookie binding. An attacker who captured
-          // `code` + `state` without the legitimate user's cookie could
-          // therefore mutate audit state and burn the user's GitHub
-          // code before the binding check rejected the flow.
-          //
-          // `state` IS the interactionId by construction (see
-          // beginInteraction); we use it to look up the cookie binding
-          // without paying any upstream-side-effect cost.
-          const { provider, cookieKeys } = await deps.ensureInitialized();
-          const binding = verifyInteractionCookieMatches(req, state, cookieKeys);
-          if (!binding.ok) {
-            res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
-            return;
-          }
-
-          const result = await this.processCallback({ code, state });
-          if (result.kind === 'error') {
-            res.status(400).json({ error: 'github_callback_failed', error_description: result.reason });
-            return;
-          }
-          if (result.kind === 'denied') {
-            // Sign-in allowlist denied this identity. The audit event was
-            // already emitted inside the gate. Render a friendly HTML
-            // page (matching the rest of the AS's UX) instead of a raw
-            // 403 JSON blob.
-            res.status(403).type('html').send(renderAllowlistDeniedPage());
-            return;
-          }
-          // Restore the request URL to the interaction so oidc-provider's
-          // interactionDetails reads the correct interaction record.
-          req.url = `/interaction/${result.interactionId}`;
-          const details = await provider.interactionDetails(req, res);
-          await renderClientConsentForIdentity(
-            res,
-            provider,
-            details,
-            result.identity.sub,
-            deps.storage,
-            deps.defaultResource,
-            {
-              sub: result.identity.sub,
-              displayName: result.identity.displayName,
-              email: result.identity.email,
-              provider: GITHUB_PROVIDER,
-              providerUsername: typeof result.identity.raw?.githubUsername === 'string'
-                ? result.identity.raw.githubUsername
-                : undefined,
-            },
-          );
+          await this.handleCallbackRequest(req, res, deps);
         } catch (err) {
+          logger.error('[GithubSocialMethod] /auth/social/github/callback failed', {
+            url: req.url,
+            error: err instanceof Error ? err.message : String(err),
+            stack: err instanceof Error ? err.stack : undefined,
+          });
           next(err);
         }
       })();
     });
+  }
+
+  /**
+   * Drives the GitHub OAuth callback: validates the query params, verifies
+   * the interaction-cookie binding, exchanges the code, and routes the
+   * resulting identity through step-up or normal consent. Extracted from
+   * the route handler so the request-level try/catch stays thin.
+   */
+  private async handleCallbackRequest(
+    req: Request,
+    res: Response,
+    deps: ContributeRoutesDeps,
+  ): Promise<void> {
+    const code = typeof req.query.code === 'string' ? req.query.code : '';
+    const state = typeof req.query.state === 'string' ? req.query.state : '';
+    if (!code || !state) {
+      sendAuthError(res, req, 400, 'github_callback_failed', 'missing code or state');
+      return;
+    }
+
+    // Verify cookie binding FIRST, BEFORE exchanging the GitHub
+    // one-time code (Phase 9 L1 / Q8). Earlier shape called
+    // processCallback first — which contacted GitHub's /token
+    // endpoint, burning the one-time code, and called
+    // upsertAccount/recordIdentityEvent — and only then verified
+    // the interaction-cookie binding. An attacker who captured
+    // `code` + `state` without the legitimate user's cookie could
+    // therefore mutate audit state and burn the user's GitHub
+    // code before the binding check rejected the flow.
+    //
+    // `state` IS the interactionId by construction (see
+    // beginInteraction); we use it to look up the cookie binding
+    // without paying any upstream-side-effect cost.
+    const { provider, cookieKeys } = await deps.ensureInitialized();
+    const binding = verifyInteractionCookieMatches(req, state, cookieKeys);
+    if (!binding.ok) {
+      res.status(400).type('html').send(renderInteractionBindingError('GitHub sign-in'));
+      return;
+    }
+
+    const result = await this.processCallback({ code, state });
+    if (result.kind === 'error') {
+      sendAuthError(res, req, 400, 'github_callback_failed', result.reason);
+      return;
+    }
+    if (result.kind === 'denied') {
+      // Sign-in allowlist denied this identity. The audit event was
+      // already emitted inside the gate. Render a friendly HTML
+      // page (matching the rest of the AS's UX) instead of a raw
+      // 403 JSON blob.
+      res.status(403).type('html').send(renderAllowlistDeniedPage());
+      return;
+    }
+    // Restore the request URL to the interaction so oidc-provider's
+    // interactionDetails reads the correct interaction record.
+    req.url = `/interaction/${result.interactionId}`;
+    const details = await provider.interactionDetails(req, res);
+    // Admin step-up: a GitHub-backed step-up re-authenticates here, but
+    // elevation requires an OTP factor proof. Route to the TOTP challenge
+    // instead of finishing as a normal login — otherwise the issued token
+    // carries amr=['github'] (no otp) and the BFF rejects the step-up.
+    if (deps.adminStepUp && isAdminStepUpRequest(details)) {
+      logger.info('[GithubSocialMethod] admin step-up: routing github callback to TOTP challenge', {
+        uid: details.uid,
+        prompt: typeof details.prompt.name === 'string' ? details.prompt.name : undefined,
+      });
+      await beginAdminStepUpProof(req, res, deps.storage, details, result.identity, deps.adminStepUp);
+      return;
+    }
+    // Normal login: route through the client-consent screen, which finishes
+    // the interaction once the user approves.
+    await renderClientConsentForIdentity(
+      res,
+      provider,
+      details,
+      result.identity.sub,
+      deps.storage,
+      deps.defaultResource,
+      {
+        sub: result.identity.sub,
+        displayName: result.identity.displayName,
+        email: result.identity.email,
+        provider: GITHUB_PROVIDER,
+        providerUsername: typeof result.identity.raw?.githubUsername === 'string'
+          ? result.identity.raw.githubUsername
+          : undefined,
+      },
+    );
   }
 
   /**
@@ -338,7 +373,11 @@ export class GithubSocialMethod implements IAuthMethod {
         provider: GITHUB_PROVIDER,
         externalSub: String(profile.id),
       },
-      { storage: this.options.storage, required: this.options.allowlistRequired ?? false },
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
     );
     if (!gate.allowed) {
       return { kind: 'denied', reason: gate.reason };
@@ -386,8 +425,8 @@ export class GithubSocialMethod implements IAuthMethod {
     // link bootstrap admin getting accidentally promoted via a github
     // login that happens to have the same numeric tail. Round 5 / H5 —
     // see bootstrapAdmin.ts for the upsert/setRoles split.
-    const isBootstrapAdmin = await isBootstrapAdminFor(this.options.storage, identity.sub, 'github');
-
+    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
+    // (linked on first login), not stamped onto the auth account.
     const now = Date.now();
     await this.options.storage.upsertAccount({
       sub: identity.sub,
@@ -399,13 +438,7 @@ export class GithubSocialMethod implements IAuthMethod {
       rawProfile: profile.raw,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      // Preserve existing roles across the upsert; setAccountRoles
-      // below applies the admin-role write only on the bootstrap path.
-      ...(existing?.roles ? { roles: existing.roles } : {}),
     });
-    if (isBootstrapAdmin) {
-      await this.options.storage.setAccountRoles(identity.sub, ['admin']);
-    }
 
     return { kind: 'ok', interactionId: input.state, identity };
   }
@@ -418,7 +451,7 @@ export class GithubSocialMethod implements IAuthMethod {
    * generic 500, losing the diagnostic.
    */
   private async exchangeCodeForToken(code: string): Promise<string | null> {
-    let response: Response;
+    let response: globalThis.Response;
     try {
       response = await this.fetchImpl(GITHUB_TOKEN_URL, {
         method: 'POST',
@@ -467,7 +500,7 @@ export class GithubSocialMethod implements IAuthMethod {
   private async fetchProfile(
     accessToken: string,
   ): Promise<GithubProfile | { error: string }> {
-    let userResp: Response;
+    let userResp: globalThis.Response;
     try {
       userResp = await this.fetchImpl(GITHUB_API_USER_URL, {
         headers: {
@@ -491,7 +524,7 @@ export class GithubSocialMethod implements IAuthMethod {
       return { error: 'github user fetch failed' };
     }
 
-    let emailsResp: Response;
+    let emailsResp: globalThis.Response;
     try {
       emailsResp = await this.fetchImpl(GITHUB_API_EMAILS_URL, {
         headers: {

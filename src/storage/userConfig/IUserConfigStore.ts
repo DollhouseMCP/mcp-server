@@ -65,6 +65,13 @@ export interface UserConfig {
   updatedAt: number;
 }
 
+export class UserConfigConflictError extends Error {
+  constructor(message = 'user configuration was modified by another writer') {
+    super(message);
+    this.name = 'UserConfigConflictError';
+  }
+}
+
 /**
  * Sentinel returned by `load(userId)` when no row exists for that user
  * yet (first-touch case). Consumers can read keys without null-checking;
@@ -112,5 +119,9 @@ export interface IUserConfigStore {
    * writes). `updatedAt` is set by the implementation; the caller may
    * pass any value or omit it.
    */
-  save(userId: string, config: Omit<UserConfig, 'updatedAt'> & { updatedAt?: number }): Promise<void>;
+  save(
+    userId: string,
+    config: Omit<UserConfig, 'updatedAt'> & { updatedAt?: number },
+    options?: { readonly expectedUpdatedAt?: number },
+  ): Promise<void>;
 }

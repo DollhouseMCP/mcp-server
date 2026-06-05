@@ -34,6 +34,7 @@ import type {
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import { normalizeIp } from './rateLimit.js';
+import type { IRateLimitStore } from './storage/IRateLimitStore.js';
 import type { IAuthMethod } from './IAuthMethod.js';
 import {
   createInteractionRouter,
@@ -57,6 +58,12 @@ import {
   rotateCookieSecretViaStore,
 } from './cookieSecret.js';
 import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
+import type { AdminTotpService } from './totp/AdminTotpService.js';
+import {
+  mountAdminTotpInteractionRoutes,
+  type TotpSessionProvider,
+} from './totp/AdminTotpInteractionRoutes.js';
+import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 import {
   checkModeFingerprint,
   persistModeFingerprint,
@@ -69,9 +76,8 @@ import {
   type RotationRequestContext,
 } from './storage/OidcProviderAdapter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
-import type { IRateLimitStore } from './storage/IRateLimitStore.js';
+import { EMBEDDED_AS_CONSOLE_CLIENT_ID } from './ConsoleOAuthClientConstants.js';
 import { EmbeddedASBootstrap } from './EmbeddedASBootstrap.js';
-import { EmbeddedASAdmin } from './EmbeddedASAdmin.js';
 import { EmbeddedASOidcAccount } from './EmbeddedASOidcAccount.js';
 import {
   ALGORITHM,
@@ -83,6 +89,7 @@ import {
   DEFAULT_CLIENT_ID,
   EmbeddedASTokens,
   importSigningKeys,
+  loadPublicSigningJwksFromStore,
 } from './EmbeddedASTokens.js';
 
 /**
@@ -239,6 +246,9 @@ export interface EmbeddedAuthorizationServerOptions {
    * Wired in by AuthServiceRegistrar from the DI-resolved 'SigningKeyStore'.
    */
   signingKeyStore?: ISigningKeyStore;
+  adminTotpService?: AdminTotpService;
+  consoleIdentityResolver?: IConsoleIdentityResolver;
+  adminTotpRateLimitStore?: IRateLimitStore;
 }
 
 interface InitializedState {
@@ -266,9 +276,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly rateLimitStore: IRateLimitStore | null;
   private readonly signingKeyStore: ISigningKeyStore | null;
   private readonly bootstrap: EmbeddedASBootstrap;
-  private readonly admin: EmbeddedASAdmin;
   private readonly tokens: EmbeddedASTokens;
   private readonly oidcAccount: EmbeddedASOidcAccount;
+  private readonly adminTotpService: AdminTotpService | null;
+  private readonly consoleIdentityResolver: IConsoleIdentityResolver | null;
+  private readonly adminTotpRateLimitStore: IRateLimitStore | null;
 
   private publicBaseUrl: string;
   private issuer: string;
@@ -304,21 +316,20 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
     this.rateLimitStore = options.rateLimitStore ?? null;
     this.signingKeyStore = options.signingKeyStore ?? null;
+    this.adminTotpService = options.adminTotpService ?? null;
+    this.consoleIdentityResolver = options.consoleIdentityResolver ?? null;
+    this.adminTotpRateLimitStore = options.adminTotpRateLimitStore ?? null;
     this.bootstrap = new EmbeddedASBootstrap(
       this.methods,
       this.storage,
       () => this.bootstrapReadyLatch,
       (ready) => { this.bootstrapReadyLatch = ready; },
     );
-    this.admin = new EmbeddedASAdmin(
-      this,
-      this.storage,
-      () => this.getProtectedResourceMetadataUrl(),
-    );
     this.tokens = new EmbeddedASTokens(
       () => this.ensureInitialized(),
       () => this.issuer,
       () => this.resource,
+      this.signingKeyStore ?? undefined,
     );
     this.oidcAccount = new EmbeddedASOidcAccount(this.methods, this.storage);
   }
@@ -419,6 +430,20 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       })();
     });
 
+    const signingKeyStore = this.signingKeyStore;
+    if (signingKeyStore) {
+      router.get('/jwks', (_req, res, next) => {
+        void (async () => {
+          try {
+            await this.ensureInitialized();
+            res.json(await loadPublicSigningJwksFromStore(signingKeyStore));
+          } catch (err) {
+            next(err);
+          }
+        })();
+      });
+    }
+
     // Hosted auth pages reuse the console's first-party visual assets, but the
     // embedded AS is often mounted without the web console's static middleware.
     // Serve only the exact logo/font assets needed by those pages.
@@ -436,19 +461,20 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // intercepts /authorize, /token, /interaction/*, /auth/*.
     router.use(this.createBootstrapGate());
 
-    // Round 5 / H7: GET /auth/admin/me — admin-role enforcement
-    // endpoint. Closes the must-fix #22 loop end-to-end: CLI sets
-    // bootstrap-state → setAccountRoles writes ['admin'] →
-    // extraTokenClaims emits roles → assertHasRole('admin') gates
-    // this route. Without a route that actually reads the role, the
-    // dashboard's "admin claim flows" claim was unverifiable.
-    //
-    // Mounted AFTER the bootstrap gate so pre-bootstrap requests get
-    // the same 503 as every other auth-flow path. Post-bootstrap, the
-    // route validates the bearer token via this.validate(), then
-    // delegates to assertHasRole('admin'); a non-admin valid token
-    // gets 403, no token / invalid token gets 401.
-    router.get('/auth/admin/me', this.createAdminMeHandler());
+    // (Removed: GET /auth/admin/me. Admin is now a console-only concept resolved
+    // from user_admin_roles; tokens carry no roles, so a token-admin endpoint
+    // has nothing to gate on.)
+
+    if (this.adminTotpService && this.consoleIdentityResolver) {
+      mountAdminTotpInteractionRoutes(router, {
+        storage: this.storage,
+        totpService: this.adminTotpService,
+        identityResolver: this.consoleIdentityResolver,
+        rateLimitStore: this.adminTotpRateLimitStore ?? undefined,
+        ensureInitialized: () => this.ensureInitialized()
+          .then((s) => ({ provider: s.provider as unknown as TotpSessionProvider })),
+      });
+    }
 
     // Each method owns its own standalone routes (callbacks, invite-redemption
     // pages, etc.) and registers them via contributeRoutes. Replaces the
@@ -463,6 +489,16 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // Cycle 24 fix: pass the AS's resource URL so social/magic-link
       // callbacks can bind resource scopes to it via finishInteractionWithIdentity.
       defaultResource: this.resource,
+      // Admin step-up: social callbacks (GitHub) must route an admin-stepup
+      // interaction through the TOTP challenge rather than completing as a
+      // normal login. Same deps the InteractionRouter POST path uses.
+      adminStepUp: this.adminTotpService && this.consoleIdentityResolver
+        ? {
+          totpService: this.adminTotpService,
+          identityResolver: this.consoleIdentityResolver,
+          rateLimitStore: this.adminTotpRateLimitStore ?? undefined,
+        }
+        : undefined,
     };
     for (const method of this.methods) {
       method.contributeRoutes?.(router, contributeDeps);
@@ -608,19 +644,6 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     return this.bootstrap.createBootstrapGate();
   }
 
-  /**
-   * Build the GET /auth/admin/me handler chain.
-   *
-   * Validates the bearer token via this.validate() (the same path the
-   * unified auth middleware uses), populates res.locals.authClaims so
-   * assertHasRole reads the same shape the rest of the codebase does,
-   * then assertHasRole('admin') gates the actual handler. Body is
-   * minimal — a stable shape for operator tooling that wants to verify
-   * "yes, I'm authenticated as the admin".
-   */
-  private createAdminMeHandler(): RequestHandler[] {
-    return this.admin.createAdminMeHandler();
-  }
 
   private async handleAuthorizationServerMetadata(_req: Request, res: Response): Promise<void> {
     // Synthesize the RFC 8414 metadata. This is a strict subset of the
@@ -812,11 +835,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // constructor, but the runtime accepts a class. Cast bridges the
       // mismatch — see https://github.com/panva/node-oidc-provider docs on
       // adapter shape (the `Adapter` interface is structural at runtime).
-      adapter: adapterFactory as unknown as Configuration['adapter'],
+      adapter: adapterFactory,
       // jwks: the JWKS object shape we produce from `loadOrGenerateSigningJwks`
       // matches the runtime spec ({ keys: [JWK] }) but the @types/oidc-provider
       // declares a narrower internal type. Cast preserves runtime correctness.
-      jwks: keyset.jwks as unknown as Configuration['jwks'],
+      jwks: keyset.jwks,
       // Pre-register the default Claude connector client so curl-based dev
       // flows and native MCP clients work without DCR. The bare-host
       // loopback redirect_uris below are deliberate: with
@@ -838,6 +861,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           response_types: ['code'],
           redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'],
           application_type: 'native',
+          id_token_signed_response_alg: 'ES256',
+        },
+        {
+          client_id: EMBEDDED_AS_CONSOLE_CLIENT_ID,
+          token_endpoint_auth_method: 'none',
+          grant_types: ['authorization_code'],
+          response_types: ['code'],
+          redirect_uris: [
+            joinUrl(this.publicBaseUrl, '/api/v1/auth/callback'),
+            joinUrl(this.publicBaseUrl, '/api/v1/auth/step-up/callback'),
+          ],
           id_token_signed_response_alg: 'ES256',
         },
       ],
@@ -965,7 +999,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // window. A truly-atomic solution would require an upstream
       // contract change in oidc-provider; out of §8.1 scope.
       rotateRefreshToken: true,
-      issueRefreshToken: async (_ctx, client, code) => {
+      issueRefreshToken: (_ctx, client, code) => {
         // Only issue a refresh token when offline_access was granted.
         return client.grantTypeAllowed('refresh_token') && code.scopes.has('offline_access');
       },
@@ -1056,6 +1090,13 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // Without this, the grant ends up scope-empty for the resource
       // dimension, oidc-provider re-prompts, and the consent flow loops.
       defaultResource: this.resource,
+      adminStepUp: this.adminTotpService && this.consoleIdentityResolver
+        ? {
+          totpService: this.adminTotpService,
+          identityResolver: this.consoleIdentityResolver,
+          rateLimitStore: this.adminTotpRateLimitStore ?? undefined,
+        }
+        : undefined,
     });
 
     return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };

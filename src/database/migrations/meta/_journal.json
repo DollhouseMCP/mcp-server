@@ -162,6 +162,125 @@
       "when": 1778985000000,
       "tag": "0022_audit_hmac_keys",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1778990000000,
+      "tag": "0023_web_console_platform_foundations",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1778995000000,
+      "tag": "0024_web_console_account_admin_invalidation",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1779000000000,
+      "tag": "0025_web_console_admin_audit",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1779005000000,
+      "tag": "0026_web_console_account_allowlist",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1779010000000,
+      "tag": "0027_web_console_runtime_control",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1779015000000,
+      "tag": "0028_web_console_user_integrations",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1779020000000,
+      "tag": "0029_web_console_user_integration_error_reason",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1779025000000,
+      "tag": "0030_web_console_portfolio_sync_jobs",
+      "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1779030000000,
+      "tag": "0031_auth_signing_key_lifecycle",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1779035000000,
+      "tag": "0032_web_console_auth_policy",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1779040000000,
+      "tag": "0033_web_console_portfolio_elements",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1779045000000,
+      "tag": "0034_web_console_session_activation_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1779050000000,
+      "tag": "0035_web_console_session_activity_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1779055000000,
+      "tag": "0036_web_console_approval_audit_events",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1779060000000,
+      "tag": "0037_drop_web_console_portfolio_elements",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1779065000000,
+      "tag": "0038_drop_auth_accounts_roles",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1779070000000,
+      "tag": "0039_add_users_deleted_at",
+      "breakpoints": true
     }
   ]
 }

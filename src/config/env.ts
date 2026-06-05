@@ -63,8 +63,9 @@ const isWebSilent = process.argv.includes('--web')
   && !process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG;
 const originalStdoutWrite = process.stdout.write.bind(process.stdout);
 const originalStderrWrite = process.stderr.write.bind(process.stderr);
-process.stdout.write = (isWebSilent ? (() => true) : process.stderr.write.bind(process.stderr)) as any;
-if (isWebSilent) process.stderr.write = (() => true) as any;
+const suppressStreamWrite = () => true;
+process.stdout.write = isWebSilent ? suppressStreamWrite : process.stderr.write.bind(process.stderr);
+if (isWebSilent) process.stderr.write = suppressStreamWrite;
 dotenv.config({ path: ['.env.local', '.env'] });
 process.stdout.write = originalStdoutWrite;
 if (isWebSilent) process.stderr.write = originalStderrWrite;
@@ -132,6 +133,9 @@ const envSchema = z.object({
   /** Public HTTPS base URL used in OAuth discovery metadata for remote connectors. */
   DOLLHOUSE_PUBLIC_BASE_URL: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Stable per-process replica identifier for hosted web-console/runtime control. */
+  DOLLHOUSE_REPLICA_ID: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
   /** Path to TLS certificate (PEM). When set with DOLLHOUSE_TLS_KEY_PATH, the HTTP transport binds HTTPS. */
   DOLLHOUSE_TLS_CERT_PATH: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
@@ -157,6 +161,16 @@ const envSchema = z.object({
   DOLLHOUSE_AUTH_GITHUB_CLIENT_ID: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
   DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
+   * GitHub App OAuth credentials for the web-console portfolio integration.
+   * These are intentionally separate from console login GitHub credentials:
+   * integration grants are repository/portfolio capabilities, not identity
+   * authentication.
+   */
+  DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
   /**
    * Legacy GitHub OAuth client secret. Predates the env-var split
@@ -193,6 +207,12 @@ const envSchema = z.object({
   DOLLHOUSE_DATABASE_POOL_SIZE: z.coerce.number().int().min(1).max(100).default(10),
   /** SSL mode for database connection. */
   DOLLHOUSE_DATABASE_SSL: z.enum(['disable', 'prefer', 'require']).default('prefer'),
+  /** Expected production database name for hosted web-console activation verification. */
+  DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Expected database current_user for hosted web-console activation verification. */
+  DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
   /** Base64-encoded 32-byte key used to wrap DB-stored OAuth token DEKs. Required in database mode. */
   DOLLHOUSE_MASTER_ENCRYPTION_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
@@ -373,6 +393,51 @@ const envSchema = z.object({
    * (browser, followers, bridge) have been updated to attach tokens.
    */
   DOLLHOUSE_WEB_AUTH_ENABLED: envBool(false),
+
+  /**
+   * Enables the replacement descriptor-driven `/api/v1/*` web-console API on
+   * the Streamable HTTP server. Default false until the M7 replacement gates
+   * are deliberately satisfied.
+   */
+  DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED: envBool(false),
+  /**
+   * Enables portfolio mutation/sync routes on the replacement console. Reads
+   * remain available when the API v1 gate is enabled; writes default off until
+   * the manager-backed authoring path is deliberately exposed.
+   */
+  DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: envBool(false),
+  /**
+   * Enables the sign-in allowlist admin routes (/api/v1/admin/accounts/allowlist*)
+   * on the replacement console. Defaults on: the console is the operator surface
+   * for managing the sign-in allowlist, and the routes are admin-capability +
+   * step-up gated. Set false to hide them.
+   */
+  DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED: envBool(true),
+  /** Base64-encoded 32-byte HMAC key for opaque console browser values. */
+  DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Base64-encoded 32-byte AEAD key for console-managed integration secrets. */
+  DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Stable key ID persisted in console secret ciphertext records. */
+  DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID: z.string().trim().default('web-console-env-v1'),
+  /**
+   * Retired secret-encryption keys retained for DECRYPTION ONLY, so the active
+   * key can be rotated (bump _KEY + _KEY_ID, move the old pair here) without
+   * breaking factors/secrets encrypted under the previous key. Format:
+   * `keyId=base64key,keyId2=base64key2`. Each key must decode to 32 bytes.
+   */
+  DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Base64-encoded 32-byte HMAC key for protected-correlation rate-limit selectors. */
+  DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
+   * JSON evidence file consumed by the replacement-readiness gate before the
+   * production `/api/v1/*` router is exposed.
+   */
+  DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
 
   /**
    * Unified authentication (JWT-based) for HTTP transport and web console.
