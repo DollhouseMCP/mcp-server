@@ -85,7 +85,7 @@ function renderTotp(totp) {
     <p class="security-status security-status--on"><span class="security-dot"></span>Enrolled${enrolled ? ` · since ${enrolled}` : ''}</p>
     <dl class="security-meta">
       <div><dt>Last used</dt><dd>${escapeHtml(lastUsed)}</dd></div>
-      ${codes !== null ? `<div><dt>Backup codes left</dt><dd>${codes}</dd></div>` : ''}
+      ${codes === null ? '' : `<div><dt>Backup codes left</dt><dd>${codes}</dd></div>`}
     </dl>
     <div class="security-actions">
       <button class="btn btn-ghost" id="sec-replace" type="button">Replace device</button>

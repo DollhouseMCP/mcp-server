@@ -29,6 +29,9 @@ export interface IConsoleTelemetryQuery {
   streamOperationalMetrics(query: OperationalMetricQuery): AsyncIterable<OperationalMetricDto>;
 }
 
+/** A SQL column read back loosely-typed by the driver (number, text, or null). */
+type SqlNullableNumeric = number | string | null;
+
 interface OperationalLogRow {
   readonly ts: Date | string;
   readonly level: string;
@@ -38,8 +41,8 @@ interface OperationalLogRow {
   readonly account_correlation_id: string | null;
   readonly session_id: string | null;
   readonly replica: string;
-  readonly duration_ms: number | string | null;
-  readonly status_code: number | string | null;
+  readonly duration_ms: SqlNullableNumeric;
+  readonly status_code: SqlNullableNumeric;
   readonly error_code: string | null;
 }
 
