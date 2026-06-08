@@ -192,6 +192,8 @@ Common environment variables:
 | `DOLLHOUSE_HOSTED_HTTPS_BIND_PORT` | Host HTTPS port for Caddy TLS mode | `443` |
 | `DOLLHOUSE_HTTP_ALLOWED_HOSTS` | Comma-separated Host header allowlist passed to the app | `localhost,127.0.0.1,<hostname>` |
 | `DOLLHOUSE_TRUSTED_PROXIES` | Comma-separated trusted proxy CIDRs passed to the app | Docker bridge CIDR `172.16.0.0/12` |
+| `DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG` | Enable Caddy access logs with OAuth/token query values redacted | `true` for `cloud`/`enterprise`, `false` for `lan` |
+| `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES` | Comma-separated edge proxy CIDRs Caddy may trust for client IP headers, for example Cloudflare ranges | none |
 | `DOLLHOUSE_HOSTED_SOURCE_DIR` | Local repo source to deploy | current repo when available |
 | `DOLLHOUSE_HOSTED_GIT_URL` | Repo cloned when no source dir is available | GitHub mcp-server repo |
 | `DOLLHOUSE_HOSTED_GIT_REF` | Branch/ref cloned when no source dir is available | `codex/hosted-http-integration` |
@@ -229,6 +231,8 @@ Remote wrapper variables:
 | `DOLLHOUSE_REMOTE_DRY_RUN` | Preview the remote plan without opening SSH | `false` |
 
 Secrets are created once and preserved in `.env.production`. The helper does not overwrite generated secrets on later runs, except for one upgrade path: if an existing deployment already has `/opt/dollhousemcp/.env`, selected values are imported once into `.env.production` so Docker Compose interpolation does not generate credentials that differ from the initialized Postgres volume. When `.env.production` already exists, only database/connection keys are reconciled from `.env`; auth and runtime secrets already present in `.env.production` are preserved. The helper records that upgrade in `.legacy-env-imported`; remove that marker only if you intentionally need to re-import from `.env`. Set `DOLLHOUSE_HOSTED_IMPORT_LEGACY_ENV=false` to disable the import.
+
+For deployments behind a public edge proxy such as Cloudflare, keep `DOLLHOUSE_TRUSTED_PROXIES` scoped to the proxy that directly connects to the app container, usually the Docker bridge CIDR. Put the public edge CIDRs in `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES` instead. Caddy then validates the edge hop before forwarding a normalized client IP to the app. The generated Caddy access logs redact common OAuth and token query parameters such as `code`, `state`, `token`, `access_token`, and `client_secret`.
 
 All helper-managed Docker Compose commands run with `--env-file .env.production`. This matters because Compose normally reads `.env` for variable interpolation, while `env_file: .env.production` only controls container environment injection.
 

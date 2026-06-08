@@ -223,6 +223,9 @@ set -euo pipefail
     "${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT+x}" "${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}"
   printf 'allowed_hosts_set=%s allowed_hosts=%s trusted_proxies_set=%s trusted_proxies=%s ' \
     "${DOLLHOUSE_HTTP_ALLOWED_HOSTS+x}" "${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}" "${DOLLHOUSE_TRUSTED_PROXIES+x}" "${DOLLHOUSE_TRUSTED_PROXIES:-}"
+  printf 'caddy_access_log_set=%s caddy_access_log=%s caddy_trusted_proxies_set=%s caddy_trusted_proxies=%s ' \
+    "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG+x}" "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}" \
+    "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES+x}" "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
   printf 'bootstrap_username_set=%s bootstrap_username=%s bootstrap_id_set=%s bootstrap_id=%s ' \
     "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
   printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' \
@@ -496,9 +499,13 @@ reset_fake_state
 HOST_PROXY_OUTPUT="${TMP_ROOT}/host-proxy-overrides.out"
 DOLLHOUSE_TEST_ALLOWED_HOSTS=localhost,127.0.0.1,mcp.example.com,alt.example.com \
 DOLLHOUSE_TEST_TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12 \
+  DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true \
+  DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32 \
   run_remote --skip-backup update > "${HOST_PROXY_OUTPUT}"
 assert_contains "${REMOTE_LOG}" "allowed_hosts_set=x allowed_hosts=localhost,127.0.0.1,mcp.example.com,alt.example.com"
 assert_contains "${REMOTE_LOG}" "trusted_proxies_set=x trusted_proxies=10.0.0.0/8,172.16.0.0/12"
+assert_contains "${REMOTE_LOG}" "caddy_access_log_set=x caddy_access_log=true"
+assert_contains "${REMOTE_LOG}" "caddy_trusted_proxies_set=x caddy_trusted_proxies=173.245.48.0/20,2606:4700::/32"
 
 log "checking remote runtime overrides reach hosted helper"
 reset_fake_state

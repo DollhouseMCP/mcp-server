@@ -109,6 +109,7 @@ assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.com"
+assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_TRUSTED_PROXIES: 172.16.0.0/12"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_UNSAFE_NO_TLS: "true"'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_PROVIDER: embedded'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_METHODS: "github"'
@@ -118,6 +119,14 @@ assert_contains "${COMPOSE_FILE}" '      - "0.0.0.0:443:443"'
 assert_contains "${COMPOSE_FILE}" "dollhousemcp-migrate:"
 assert_contains "${COMPOSE_FILE}" "target: builder"
 assert_contains "${CADDY_FILE}" 'mcp.example.com {'
+assert_contains "${CADDY_FILE}" '    log {'
+assert_contains "${CADDY_FILE}" '            request>uri query {'
+assert_contains "${CADDY_FILE}" '                replace code REDACTED'
+assert_contains "${CADDY_FILE}" '                replace state REDACTED'
+assert_contains "${CADDY_FILE}" '            request>headers>Authorization delete'
+assert_contains "${CADDY_FILE}" '        header_up X-Forwarded-For {client_ip}'
+assert_contains "${CADDY_FILE}" '        header_up X-Real-IP {client_ip}'
+assert_not_contains "${CADDY_FILE}" 'trusted_proxies static'
 assert_contains "${INIT_DB_FILE}" 'CREATE ROLE dollhouse_app'
 assert_contains "${INIT_DB_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=cloud'
@@ -127,6 +136,8 @@ assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_PROXY_MODE=caddy-tls'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_BIND_ADDRESS=0.0.0.0'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com'
+assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true'
+assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret'
 
@@ -147,6 +158,35 @@ fi
 log "rendering stricter DCR override"
 render_with_dcr "${DEPLOY_DIR}" "false"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "false"'
+
+log "rendering cloud configuration behind Cloudflare"
+CLOUDFLARE_DEPLOY_DIR="${TMP_ROOT}/cloudflare-deploy"
+CLOUDFLARE_ENV_FILE="${CLOUDFLARE_DEPLOY_DIR}/.env.production"
+CLOUDFLARE_CADDY_FILE="${CLOUDFLARE_DEPLOY_DIR}/Caddyfile"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${CLOUDFLARE_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32 \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${CLOUDFLARE_CADDY_FILE}" '{'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies static 173.245.48.0/20 2606:4700::/32'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies_strict'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" '    log {'
+assert_contains "${CLOUDFLARE_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true'
+assert_contains "${CLOUDFLARE_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32'
+
+log "checking Caddy trusted proxy CIDR validation"
+CADDY_BAD_CIDR_OUTPUT="${TMP_ROOT}/caddy-bad-cidr.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/caddy-bad-cidr-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='173.245.48.0/20,{bad}' \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${CADDY_BAD_CIDR_OUTPUT}" 2>&1; then
+  fail "Caddy trusted proxy render with invalid CIDR unexpectedly succeeded"
+fi
+assert_contains "${CADDY_BAD_CIDR_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES must be a comma-separated CIDR list"
 
 log "checking in-place instance rename rejection"
 INSTANCE_RENAME_OUTPUT="${TMP_ROOT}/instance-rename.out"
@@ -209,10 +249,12 @@ assert_contains "${LAN_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "false"'
 assert_contains "${LAN_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: "true"'
 assert_contains "${LAN_COMPOSE_FILE}" "${LAN_LOOPBACK_PORT_MAPPING}"
 assert_contains "${LAN_CADDY_FILE}" "${LAN_CADDY_SITE}"
+assert_not_contains "${LAN_CADDY_FILE}" '    log {'
 assert_contains "${LAN_CADDY_FILE}" 'header_up X-Forwarded-Proto http'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=lan'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_PROXY_MODE=caddy-http'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_BIND_ADDRESS=127.0.0.1'
+assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=false'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR=false'
 
 log "checking LAN deployment mode persists on re-render"

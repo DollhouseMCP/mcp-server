@@ -136,6 +136,27 @@ validate_no_whitespace() {
   return 0
 }
 
+validate_cidr_list() {
+  local key="$1"
+  local value="$2"
+  local cidr
+
+  [[ -n "${value}" ]] || return 0
+  validate_no_whitespace "${key}" "${value}"
+  if [[ ! "${value}" =~ ^[0-9A-Fa-f:.,/]+$ ]]; then
+    die "${key} must be a comma-separated CIDR list"
+  fi
+
+  IFS=',' read -r -a cidrs <<< "${value}"
+  for cidr in "${cidrs[@]}"; do
+    if [[ -z "${cidr}" || ! "${cidr}" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]]; then
+      die "${key} contains an invalid CIDR entry: ${cidr}"
+    fi
+  done
+
+  return 0
+}
+
 validate_instance_name() {
   validate_no_whitespace DOLLHOUSE_HOSTED_INSTANCE_NAME "${INSTANCE_NAME}"
   if [[ ! "${INSTANCE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]]; then
@@ -281,6 +302,8 @@ validate_render_inputs() {
   validate_bind_address
   validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
   validate_no_whitespace DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_bool DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG "${CADDY_ACCESS_LOG}"
+  validate_cidr_list DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES "${CADDY_TRUSTED_PROXIES}"
   validate_render_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
   validate_render_value DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
   validate_render_value DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"

@@ -53,6 +53,8 @@ POSTGRES_READY_TIMEOUT="${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-}"
 VERIFY_READY_TIMEOUT="${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}"
 ALLOWED_HOSTS="${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}"
 TRUSTED_PROXIES="${DOLLHOUSE_TRUSTED_PROXIES:-}"
+CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
+CADDY_TRUSTED_PROXIES="${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
 BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
 BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
@@ -822,7 +824,7 @@ run_remote_action() {
   local helper_auth_jwks_uri helper_auth_oidc_require_typ helper_auth_allowlist_seed_file
   local helper_mcp_port helper_image_tag helper_mem_limit helper_cpu_limit
   local helper_import_legacy_env helper_postgres_ready_timeout helper_verify_ready_timeout
-  local helper_allowed_hosts helper_trusted_proxies
+  local helper_allowed_hosts helper_trusted_proxies helper_caddy_access_log helper_caddy_trusted_proxies
   local helper_bootstrap_github_username helper_bootstrap_github_id
 
   helper_hostname=""
@@ -851,6 +853,8 @@ run_remote_action() {
   helper_verify_ready_timeout="${VERIFY_READY_TIMEOUT}"
   helper_allowed_hosts="${ALLOWED_HOSTS}"
   helper_trusted_proxies="${TRUSTED_PROXIES}"
+  helper_caddy_access_log="${CADDY_ACCESS_LOG}"
+  helper_caddy_trusted_proxies="${CADDY_TRUSTED_PROXIES}"
   helper_bootstrap_github_username="${BOOTSTRAP_GITHUB_USERNAME}"
   helper_bootstrap_github_id="${BOOTSTRAP_GITHUB_ID}"
   [[ "${HOSTNAME_SET}" != "true" ]] || helper_hostname="${HOSTNAME}"
@@ -902,6 +906,8 @@ run_remote_action() {
     "${helper_verify_ready_timeout}"
     "${helper_allowed_hosts}"
     "${helper_trusted_proxies}"
+    "${helper_caddy_access_log}"
+    "${helper_caddy_trusted_proxies}"
     "${helper_bootstrap_github_username}"
     "${helper_bootstrap_github_id}"
   )
@@ -970,8 +976,10 @@ postgres_ready_timeout="${32}"
 verify_ready_timeout="${33}"
 allowed_hosts="${34}"
 trusted_proxies="${35}"
-bootstrap_github_username="${36}"
-bootstrap_github_id="${37}"
+caddy_access_log="${36}"
+caddy_trusted_proxies="${37}"
+bootstrap_github_username="${38}"
+bootstrap_github_id="${39}"
 workdir=""
 
 remote_log() {
@@ -1251,6 +1259,8 @@ run_hosted_helper() {
   [[ -z "${verify_ready_timeout}" ]] || helper_env+=("DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT=${verify_ready_timeout}")
   [[ -z "${allowed_hosts}" ]] || helper_env+=("DOLLHOUSE_HTTP_ALLOWED_HOSTS=${allowed_hosts}")
   [[ -z "${trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_TRUSTED_PROXIES=${trusted_proxies}")
+  [[ -z "${caddy_access_log}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=${caddy_access_log}")
+  [[ -z "${caddy_trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${caddy_trusted_proxies}")
   [[ -z "${bootstrap_github_username}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=${bootstrap_github_username}")
   [[ -z "${bootstrap_github_id}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_ID=${bootstrap_github_id}")
   [[ -z "${deploy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MODE=${deploy_mode}")

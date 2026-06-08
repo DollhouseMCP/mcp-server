@@ -144,6 +144,17 @@ adopt_deployment_config_from_env_file() {
     [[ -z "${value}" ]] || TRUSTED_PROXIES="${value}"
   fi
 
+  if [[ "${adopt_mode_dependent}" == "true" && "${CADDY_ACCESS_LOG_SET}" != "true" && -z "${CADDY_ACCESS_LOG}" ]]; then
+    value="$(deployment_env_file_value DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG)"
+    [[ -z "${value}" ]] || CADDY_ACCESS_LOG="${value}"
+  fi
+
+  if [[ "${adopt_mode_dependent}" == "true" && "${CADDY_TRUSTED_PROXIES_SET}" != "true" && \
+    "${PROXY_MODE_SET}" != "true" && -z "${CADDY_TRUSTED_PROXIES}" ]]; then
+    value="$(deployment_env_file_value DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES)"
+    [[ -z "${value}" ]] || CADDY_TRUSTED_PROXIES="${value}"
+  fi
+
   if [[ "${adopt_mode_dependent}" == "true" && "${ALLOWED_HOSTS_SET}" != "true" && \
     "${HOSTNAME_SET}" != "true" && "${PUBLIC_BASE_URL_SET}" != "true" && \
     -z "${ALLOWED_HOSTS}" ]]; then
@@ -318,6 +329,22 @@ mode_default_trusted_proxies() {
   return 0
 }
 
+mode_default_caddy_access_log() {
+  case "${DEPLOY_MODE}" in
+    cloud|enterprise)
+      printf 'true\n'
+      ;;
+    lan)
+      printf 'false\n'
+      ;;
+    *)
+      die "unsupported DOLLHOUSE_HOSTED_MODE: ${DEPLOY_MODE}"
+      ;;
+  esac
+
+  return 0
+}
+
 mode_default_scheme() {
   case "${PROXY_MODE}" in
     caddy-tls)
@@ -412,6 +439,10 @@ resolve_mode_defaults() {
 
   if [[ -z "${TRUSTED_PROXIES}" ]]; then
     TRUSTED_PROXIES="$(mode_default_trusted_proxies)"
+  fi
+
+  if [[ -z "${CADDY_ACCESS_LOG}" ]]; then
+    CADDY_ACCESS_LOG="$(mode_default_caddy_access_log)"
   fi
 
   return 0

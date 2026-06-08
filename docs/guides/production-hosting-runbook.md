@@ -415,13 +415,37 @@ For co-admins (e.g., the friend hosting the box), repeat for each. Bootstrap is 
 
 ### A.9 `Caddyfile`
 
+If the hostname is behind Cloudflare or another public edge proxy, configure Caddy's global `trusted_proxies static ...` block with that provider's complete current CIDR list. Keep `DOLLHOUSE_TRUSTED_PROXIES` scoped to the Docker/Caddy hop that directly connects to the app container. The hosted deploy helper renders this from `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES`.
+
 ```caddy
 mcp.your-domain.com {
     encode gzip
 
+    log {
+        format filter {
+            request>uri query {
+                replace access_token REDACTED
+                replace client_secret REDACTED
+                replace code REDACTED
+                replace id_token REDACTED
+                replace password REDACTED
+                replace refresh_token REDACTED
+                replace session REDACTED
+                replace state REDACTED
+                replace ticket REDACTED
+                replace token REDACTED
+            }
+            request>headers>Authorization delete
+            request>headers>Cookie delete
+            wrap json
+        }
+    }
+
     reverse_proxy dollhousemcp:3000 {
         header_up Host {host}
         header_up X-Forwarded-Proto https
+        header_up X-Forwarded-For {client_ip}
+        header_up X-Real-IP {client_ip}
         # Streamable HTTP connections idle longer than Caddy's 30s default.
         # 1h is generous; tune downward only if you've measured client
         # behavior. Below ~5 min, Gemini CLI sees "MCP ERROR" pop-ups.
