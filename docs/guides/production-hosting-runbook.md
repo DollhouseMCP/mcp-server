@@ -417,6 +417,15 @@ For co-admins (e.g., the friend hosting the box), repeat for each. Bootstrap is 
 
 If the hostname is behind Cloudflare or another public edge proxy, configure Caddy's global `trusted_proxies static ...` block with that provider's complete current CIDR list. Keep `DOLLHOUSE_TRUSTED_PROXIES` scoped to the Docker/Caddy hop that directly connects to the app container. The hosted deploy helper renders this from `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES`.
 
+For Cloudflare, fetch the current CIDRs before deployment:
+
+```bash
+curl -fsS https://api.cloudflare.com/client/v4/ips |
+  jq -r '[.result.ipv4_cidrs[], .result.ipv6_cidrs[]] | join(",")'
+```
+
+Cloudflare WAF and rate-limit rules should be validated separately in Cloudflare before a public deployment is opened beyond alpha users. At minimum, cover OAuth callbacks, dynamic client registration, MCP endpoints, and admin surfaces without breaking legitimate OAuth redirects or streamable HTTP clients.
+
 ```caddy
 mcp.your-domain.com {
     encode gzip

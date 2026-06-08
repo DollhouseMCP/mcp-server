@@ -234,6 +234,21 @@ Secrets are created once and preserved in `.env.production`. The helper does not
 
 For deployments behind a public edge proxy such as Cloudflare, keep `DOLLHOUSE_TRUSTED_PROXIES` scoped to the proxy that directly connects to the app container, usually the Docker bridge CIDR. Put the public edge CIDRs in `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES` instead. Caddy then validates the edge hop before forwarding a normalized client IP to the app. The generated Caddy access logs redact common OAuth and token query parameters such as `code`, `state`, `token`, `access_token`, and `client_secret`.
 
+For Cloudflare, validate the CIDR list at deploy time rather than copying an old list blindly:
+
+```bash
+curl -fsS https://api.cloudflare.com/client/v4/ips |
+  jq -r '[.result.ipv4_cidrs[], .result.ipv6_cidrs[]] | join(",")'
+```
+
+As of 2026-06-08, Cloudflare published these ranges for the hosted alpha deployment:
+
+```text
+173.245.48.0/20,103.21.244.0/22,103.22.200.0/22,103.31.4.0/22,141.101.64.0/18,108.162.192.0/18,190.93.240.0/20,188.114.96.0/20,197.234.240.0/22,198.41.128.0/17,162.158.0.0/15,104.16.0.0/13,104.24.0.0/14,172.64.0.0/13,131.0.72.0/22,2400:cb00::/32,2606:4700::/32,2803:f800::/32,2405:b500::/32,2405:8100::/32,2a06:98c0::/29,2c0f:f248::/32
+```
+
+Cloudflare WAF and rate-limit rules are configured in Cloudflare, not by this helper. Before making a Cloudflare-fronted deployment generally available, validate that rules exist for auth callbacks, DCR/client registration, MCP endpoints, and admin surfaces, and that the rule actions are tested against legitimate OAuth and streamable HTTP clients.
+
 All helper-managed Docker Compose commands run with `--env-file .env.production`. This matters because Compose normally reads `.env` for variable interpolation, while `env_file: .env.production` only controls container environment injection.
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.

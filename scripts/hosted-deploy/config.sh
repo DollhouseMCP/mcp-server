@@ -91,6 +91,9 @@ hosted_deploy_init_config() {
   if hosted_deploy_nonempty_env DOLLHOUSE_TRUSTED_PROXIES; then
     TRUSTED_PROXIES_SET="true"
   fi
+  # App trusted proxies describe the direct hop into the app container
+  # (usually Caddy on Docker). Caddy trusted proxies describe the public edge
+  # hop, such as Cloudflare, that Caddy may trust for real client IP headers.
   CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
   CADDY_ACCESS_LOG_SET="false"
   if hosted_deploy_nonempty_env DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG; then
