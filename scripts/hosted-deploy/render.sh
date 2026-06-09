@@ -178,6 +178,7 @@ caddy_access_log_block() {
 				replace client_secret REDACTED
 				replace code REDACTED
 				replace id_token REDACTED
+				replace invite REDACTED
 				replace password REDACTED
 				replace refresh_token REDACTED
 				replace session REDACTED

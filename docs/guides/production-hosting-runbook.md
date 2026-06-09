@@ -438,6 +438,7 @@ mcp.your-domain.com {
                 replace client_secret REDACTED
                 replace code REDACTED
                 replace id_token REDACTED
+                replace invite REDACTED
                 replace password REDACTED
                 replace refresh_token REDACTED
                 replace session REDACTED
