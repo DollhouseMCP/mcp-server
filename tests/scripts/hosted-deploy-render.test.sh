@@ -209,6 +209,65 @@ if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/caddy-bad-prefix-deploy" \
 fi
 assert_contains "${CADDY_BAD_PREFIX_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES contains an invalid CIDR entry: 173.245.48.0/999"
 
+log "checking Caddy trusted proxy IPv6 validation"
+CADDY_BAD_IPV6_OUTPUT="${TMP_ROOT}/caddy-bad-ipv6.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/caddy-bad-ipv6-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='::::/64' \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${CADDY_BAD_IPV6_OUTPUT}" 2>&1; then
+  fail "Caddy trusted proxy render with invalid IPv6 CIDR unexpectedly succeeded"
+fi
+assert_contains "${CADDY_BAD_IPV6_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES contains an invalid CIDR entry: ::::/64"
+
+log "checking Caddy trusted proxy empty entry validation"
+CADDY_EMPTY_ENTRY_OUTPUT="${TMP_ROOT}/caddy-empty-entry.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/caddy-empty-entry-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='173.245.48.0/20,' \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${CADDY_EMPTY_ENTRY_OUTPUT}" 2>&1; then
+  fail "Caddy trusted proxy render with empty entry unexpectedly succeeded"
+fi
+assert_contains "${CADDY_EMPTY_ENTRY_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES must not contain empty comma-separated entries"
+
+log "checking app trusted proxy validation"
+APP_BAD_PROXY_OUTPUT="${TMP_ROOT}/app-bad-proxy.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/app-bad-proxy-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_TRUSTED_PROXIES='loopback,::::/64' \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${APP_BAD_PROXY_OUTPUT}" 2>&1; then
+  fail "render with invalid app trusted proxy unexpectedly succeeded"
+fi
+assert_contains "${APP_BAD_PROXY_OUTPUT}" "DOLLHOUSE_TRUSTED_PROXIES contains an invalid trusted proxy entry: ::::/64"
+
+log "checking app trusted proxy empty entry validation"
+APP_EMPTY_PROXY_OUTPUT="${TMP_ROOT}/app-empty-proxy.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/app-empty-proxy-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_TRUSTED_PROXIES='loopback,' \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${APP_EMPTY_PROXY_OUTPUT}" 2>&1; then
+  fail "render with empty app trusted proxy unexpectedly succeeded"
+fi
+assert_contains "${APP_EMPTY_PROXY_OUTPUT}" "DOLLHOUSE_TRUSTED_PROXIES must not contain empty comma-separated entries"
+
+log "checking app trusted proxy allows keywords and strict IP ranges"
+APP_GOOD_PROXY_DEPLOY_DIR="${TMP_ROOT}/app-good-proxy-deploy"
+APP_GOOD_PROXY_ENV_FILE="${APP_GOOD_PROXY_DEPLOY_DIR}/.env.production"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${APP_GOOD_PROXY_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+DOLLHOUSE_TRUSTED_PROXIES='loopback,fd00::/8,10.0.0.0/8,127.0.0.1' \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${APP_GOOD_PROXY_ENV_FILE}" 'DOLLHOUSE_TRUSTED_PROXIES=loopback,fd00::/8,10.0.0.0/8,127.0.0.1'
+
 log "checking edge CIDR migration resets app trusted proxies to direct hop"
 EDGE_MIGRATION_DEPLOY_DIR="${TMP_ROOT}/edge-migration-deploy"
 EDGE_MIGRATION_ENV_FILE="${EDGE_MIGRATION_DEPLOY_DIR}/.env.production"

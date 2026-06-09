@@ -691,6 +691,41 @@ if DOLLHOUSE_HOSTED_BIND_ADDRESS=localhost run_remote --dry-run update > "${BAD_
 fi
 assert_contains "${BAD_REMOTE_BIND_OUTPUT}" "DOLLHOUSE_HOSTED_BIND_ADDRESS must be an IPv4 address"
 
+log "checking remote app trusted proxy validation"
+BAD_REMOTE_TRUSTED_PROXY_OUTPUT="${TMP_ROOT}/bad-remote-trusted-proxy.out"
+if DOLLHOUSE_TEST_TRUSTED_PROXIES='loopback,::::/64' run_remote --dry-run update > "${BAD_REMOTE_TRUSTED_PROXY_OUTPUT}" 2>&1; then
+  fail "remote dry-run with invalid app trusted proxy unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_TRUSTED_PROXY_OUTPUT}" "DOLLHOUSE_TRUSTED_PROXIES contains an invalid trusted proxy entry: ::::/64"
+
+log "checking remote app trusted proxy empty entry validation"
+BAD_REMOTE_EMPTY_TRUSTED_PROXY_OUTPUT="${TMP_ROOT}/bad-remote-empty-trusted-proxy.out"
+if DOLLHOUSE_TEST_TRUSTED_PROXIES='loopback,' run_remote --dry-run update > "${BAD_REMOTE_EMPTY_TRUSTED_PROXY_OUTPUT}" 2>&1; then
+  fail "remote dry-run with empty app trusted proxy unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_EMPTY_TRUSTED_PROXY_OUTPUT}" "DOLLHOUSE_TRUSTED_PROXIES must not contain empty comma-separated entries"
+
+log "checking remote Caddy access log validation"
+BAD_REMOTE_CADDY_LOG_OUTPUT="${TMP_ROOT}/bad-remote-caddy-log.out"
+if DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=maybe run_remote --dry-run update > "${BAD_REMOTE_CADDY_LOG_OUTPUT}" 2>&1; then
+  fail "remote dry-run with invalid Caddy access log setting unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_CADDY_LOG_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG must be 'true' or 'false'"
+
+log "checking remote Caddy trusted proxy CIDR validation"
+BAD_REMOTE_CADDY_CIDR_OUTPUT="${TMP_ROOT}/bad-remote-caddy-cidr.out"
+if DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='::::/64' run_remote --dry-run update > "${BAD_REMOTE_CADDY_CIDR_OUTPUT}" 2>&1; then
+  fail "remote dry-run with invalid Caddy trusted proxy CIDR unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_CADDY_CIDR_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES contains an invalid CIDR entry: ::::/64"
+
+log "checking remote Caddy trusted proxy empty entry validation"
+BAD_REMOTE_EMPTY_CADDY_CIDR_OUTPUT="${TMP_ROOT}/bad-remote-empty-caddy-cidr.out"
+if DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='173.245.48.0/20,' run_remote --dry-run update > "${BAD_REMOTE_EMPTY_CADDY_CIDR_OUTPUT}" 2>&1; then
+  fail "remote dry-run with empty Caddy trusted proxy CIDR unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_EMPTY_CADDY_CIDR_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES must not contain empty comma-separated entries"
+
 log "checking credential-bearing git URL rejection"
 : > "${SSH_LOG}"
 CREDENTIAL_URL_OUTPUT="${TMP_ROOT}/credential-url.out"

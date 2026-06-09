@@ -560,6 +560,17 @@ validate_no_whitespace() {
   return 0
 }
 
+validate_no_empty_comma_entries() {
+  local key="$1"
+  local value="$2"
+
+  if [[ "${value}" == ,* || "${value}" == *, || "${value}" == *,,* ]]; then
+    die "${key} must not contain empty comma-separated entries"
+  fi
+
+  return 0
+}
+
 validate_instance_name() {
   validate_no_whitespace DOLLHOUSE_HOSTED_INSTANCE_NAME "${INSTANCE_NAME}"
   if [[ ! "${INSTANCE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]]; then
@@ -611,6 +622,133 @@ is_ipv4_address() {
   return 0
 }
 
+ipv6_hextet_count() {
+  local value="$1"
+  local rest part count
+  rest="${value}"
+  count=0
+
+  while [[ "${rest}" == *:* ]]; do
+    part="${rest%%:*}"
+    if [[ -n "${part}" ]]; then
+      [[ "${part}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+      count=$((count + 1))
+    fi
+    rest="${rest#*:}"
+  done
+  if [[ -n "${rest}" ]]; then
+    [[ "${rest}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+    count=$((count + 1))
+  fi
+
+  printf '%s\n' "${count}"
+  return 0
+}
+
+is_ipv6_address() {
+  local value="$1"
+  local without_double double_count hextets
+
+  [[ "${value}" == *:* ]] || return 1
+  [[ "${value}" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+  [[ "${value}" != *:::* ]] || return 1
+
+  without_double="${value//::/}"
+  double_count=$(((${#value} - ${#without_double}) / 2))
+  (( double_count <= 1 )) || return 1
+
+  if (( double_count == 0 )); then
+    [[ "${value}" != :* && "${value}" != *: ]] || return 1
+    hextets="$(ipv6_hextet_count "${value}")" || return 1
+    (( hextets == 8 )) || return 1
+  else
+    [[ "${value}" != :* || "${value}" == ::* ]] || return 1
+    [[ "${value}" != *: || "${value}" == *:: ]] || return 1
+    hextets="$(ipv6_hextet_count "${value}")" || return 1
+    (( hextets < 8 )) || return 1
+  fi
+
+  return 0
+}
+
+validate_cidr_list() {
+  local key="$1"
+  local value="$2"
+  local cidr address prefix
+  local -a cidrs
+
+  [[ -n "${value}" ]] || return 0
+  validate_no_whitespace "${key}" "${value}"
+  validate_no_empty_comma_entries "${key}" "${value}"
+  if [[ ! "${value}" =~ ^[0-9A-Fa-f:.,/]+$ ]]; then
+    die "${key} must be a comma-separated CIDR list"
+  fi
+
+  IFS=',' read -r -a cidrs <<< "${value}"
+  for cidr in "${cidrs[@]}"; do
+    if [[ -z "${cidr}" || ! "${cidr}" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]]; then
+      die "${key} contains an invalid CIDR entry: ${cidr}"
+    fi
+    address="${cidr%/*}"
+    prefix="${cidr##*/}"
+    if [[ "${address}" == *:* ]]; then
+      if ! is_ipv6_address "${address}" || (( 10#${prefix} > 128 )); then
+        die "${key} contains an invalid CIDR entry: ${cidr}"
+      fi
+    else
+      if ! is_ipv4_address "${address}" || (( 10#${prefix} > 32 )); then
+        die "${key} contains an invalid CIDR entry: ${cidr}"
+      fi
+    fi
+  done
+
+  return 0
+}
+
+validate_trusted_proxy_list() {
+  local key="$1"
+  local value="$2"
+  local entry address prefix max_prefix
+  local -a entries
+
+  [[ -n "${value}" ]] || return 0
+  validate_no_whitespace "${key}" "${value}"
+  validate_no_empty_comma_entries "${key}" "${value}"
+
+  IFS=',' read -r -a entries <<< "${value}"
+  for entry in "${entries[@]}"; do
+    case "${entry}" in
+      loopback|linklocal|uniquelocal)
+        continue
+        ;;
+    esac
+
+    [[ -n "${entry}" ]] || die "${key} contains an invalid trusted proxy entry: ${entry}"
+    if [[ "${entry}" == */* ]]; then
+      address="${entry%/*}"
+      prefix="${entry##*/}"
+      [[ "${prefix}" =~ ^[0-9]{1,3}$ ]] || die "${key} contains an invalid trusted proxy entry: ${entry}"
+    else
+      address="${entry}"
+      prefix=""
+    fi
+
+    if [[ "${address}" == *:* ]]; then
+      is_ipv6_address "${address}" || die "${key} contains an invalid trusted proxy entry: ${entry}"
+      max_prefix=128
+    else
+      is_ipv4_address "${address}" || die "${key} contains an invalid trusted proxy entry: ${entry}"
+      max_prefix=32
+    fi
+
+    if [[ -n "${prefix}" ]] && (( 10#${prefix} > max_prefix )); then
+      die "${key} contains an invalid trusted proxy entry: ${entry}"
+    fi
+  done
+
+  return 0
+}
+
 validate_optional_bind_address() {
   [[ -n "${BIND_ADDRESS}" ]] || return 0
   validate_no_whitespace DOLLHOUSE_HOSTED_BIND_ADDRESS "${BIND_ADDRESS}"
@@ -627,7 +765,11 @@ validate_forwarded_hosted_inputs() {
   validate_no_whitespace DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
   validate_no_whitespace DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"
   validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
-  validate_no_whitespace DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_trusted_proxy_list DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  if [[ -n "${CADDY_ACCESS_LOG}" ]]; then
+    validate_bool DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG "${CADDY_ACCESS_LOG}"
+  fi
+  validate_cidr_list DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES "${CADDY_TRUSTED_PROXIES}"
   validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME "${BOOTSTRAP_GITHUB_USERNAME}"
   validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_ID "${BOOTSTRAP_GITHUB_ID}"
   if [[ -n "${IMPORT_LEGACY_ENV}" ]]; then

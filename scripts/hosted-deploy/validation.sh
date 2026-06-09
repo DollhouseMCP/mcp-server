@@ -136,13 +136,26 @@ validate_no_whitespace() {
   return 0
 }
 
+validate_no_empty_comma_entries() {
+  local key="$1"
+  local value="$2"
+
+  if [[ "${value}" == ,* || "${value}" == *, || "${value}" == *,,* ]]; then
+    die "${key} must not contain empty comma-separated entries"
+  fi
+
+  return 0
+}
+
 validate_cidr_list() {
   local key="$1"
   local value="$2"
   local cidr address prefix
+  local -a cidrs
 
   [[ -n "${value}" ]] || return 0
   validate_no_whitespace "${key}" "${value}"
+  validate_no_empty_comma_entries "${key}" "${value}"
   if [[ ! "${value}" =~ ^[0-9A-Fa-f:.,/]+$ ]]; then
     die "${key} must be a comma-separated CIDR list"
   fi
@@ -155,13 +168,57 @@ validate_cidr_list() {
     address="${cidr%/*}"
     prefix="${cidr##*/}"
     if [[ "${address}" == *:* ]]; then
-      if (( 10#${prefix} > 128 )); then
+      if ! is_ipv6_address "${address}" || (( 10#${prefix} > 128 )); then
         die "${key} contains an invalid CIDR entry: ${cidr}"
       fi
     else
       if ! is_ipv4_address "${address}" || (( 10#${prefix} > 32 )); then
         die "${key} contains an invalid CIDR entry: ${cidr}"
       fi
+    fi
+  done
+
+  return 0
+}
+
+validate_trusted_proxy_list() {
+  local key="$1"
+  local value="$2"
+  local entry address prefix max_prefix
+  local -a entries
+
+  [[ -n "${value}" ]] || return 0
+  validate_no_whitespace "${key}" "${value}"
+  validate_no_empty_comma_entries "${key}" "${value}"
+
+  IFS=',' read -r -a entries <<< "${value}"
+  for entry in "${entries[@]}"; do
+    case "${entry}" in
+      loopback|linklocal|uniquelocal)
+        continue
+        ;;
+    esac
+
+    [[ -n "${entry}" ]] || die "${key} contains an invalid trusted proxy entry: ${entry}"
+    if [[ "${entry}" == */* ]]; then
+      address="${entry%/*}"
+      prefix="${entry##*/}"
+      [[ "${prefix}" =~ ^[0-9]{1,3}$ ]] || die "${key} contains an invalid trusted proxy entry: ${entry}"
+    else
+      address="${entry}"
+      prefix=""
+    fi
+
+    if [[ "${address}" == *:* ]]; then
+      is_ipv6_address "${address}" || die "${key} contains an invalid trusted proxy entry: ${entry}"
+      max_prefix=128
+    else
+      is_ipv4_address "${address}" || die "${key} contains an invalid trusted proxy entry: ${entry}"
+      max_prefix=32
+    fi
+
+    if [[ -n "${prefix}" ]] && (( 10#${prefix} > max_prefix )); then
+      die "${key} contains an invalid trusted proxy entry: ${entry}"
     fi
   done
 
@@ -277,6 +334,55 @@ is_ipv4_address() {
   return 0
 }
 
+ipv6_hextet_count() {
+  local value="$1"
+  local rest part count
+  rest="${value}"
+  count=0
+
+  while [[ "${rest}" == *:* ]]; do
+    part="${rest%%:*}"
+    if [[ -n "${part}" ]]; then
+      [[ "${part}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+      count=$((count + 1))
+    fi
+    rest="${rest#*:}"
+  done
+  if [[ -n "${rest}" ]]; then
+    [[ "${rest}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+    count=$((count + 1))
+  fi
+
+  printf '%s\n' "${count}"
+  return 0
+}
+
+is_ipv6_address() {
+  local value="$1"
+  local without_double double_count hextets
+
+  [[ "${value}" == *:* ]] || return 1
+  [[ "${value}" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+  [[ "${value}" != *:::* ]] || return 1
+
+  without_double="${value//::/}"
+  double_count=$(((${#value} - ${#without_double}) / 2))
+  (( double_count <= 1 )) || return 1
+
+  if (( double_count == 0 )); then
+    [[ "${value}" != :* && "${value}" != *: ]] || return 1
+    hextets="$(ipv6_hextet_count "${value}")" || return 1
+    (( hextets == 8 )) || return 1
+  else
+    [[ "${value}" != :* || "${value}" == ::* ]] || return 1
+    [[ "${value}" != *: || "${value}" == *:: ]] || return 1
+    hextets="$(ipv6_hextet_count "${value}")" || return 1
+    (( hextets < 8 )) || return 1
+  fi
+
+  return 0
+}
+
 validate_bind_address() {
   validate_no_whitespace DOLLHOUSE_HOSTED_BIND_ADDRESS "${BIND_ADDRESS}"
   if ! is_ipv4_address "${BIND_ADDRESS}"; then
@@ -312,7 +418,7 @@ validate_render_inputs() {
   validate_bind_ports
   validate_bind_address
   validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
-  validate_no_whitespace DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_trusted_proxy_list DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
   validate_bool DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG "${CADDY_ACCESS_LOG}"
   validate_cidr_list DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES "${CADDY_TRUSTED_PROXIES}"
   validate_render_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
