@@ -197,6 +197,8 @@ validate_trusted_proxy_list() {
       loopback|linklocal|uniquelocal)
         continue
         ;;
+      *)
+        ;;
     esac
 
     [[ -n "${entry}" ]] || die "${key} contains an invalid trusted proxy entry: ${entry}"
