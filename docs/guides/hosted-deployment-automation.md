@@ -234,6 +234,8 @@ Secrets are created once and preserved in `.env.production`. The helper does not
 
 For deployments behind a public edge proxy such as Cloudflare, keep `DOLLHOUSE_TRUSTED_PROXIES` scoped to the proxy that directly connects to the app container, usually the Docker bridge CIDR. Put the public edge CIDRs in `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES` instead. Caddy then validates the edge hop before forwarding a normalized client IP to the app. The helper validates `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES` as a comma-separated CIDR list with sane IPv4/IPv6 prefix lengths; use Cloudflare's published API to verify provider ownership/currentness. The generated Caddy access logs redact common OAuth and token query parameters such as `code`, `state`, `token`, `access_token`, and `client_secret`.
 
+When migrating an older Cloudflare-fronted deployment that stored public edge CIDRs in `DOLLHOUSE_TRUSTED_PROXIES`, set `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES` on the update and leave `DOLLHOUSE_TRUSTED_PROXIES` unset. The helper will reset the app trusted-proxy list to the direct Caddy/Docker hop default. Set `DOLLHOUSE_TRUSTED_PROXIES` explicitly only when the direct hop uses a custom Docker network or VPC CIDR.
+
 For Cloudflare, validate the CIDR list at deploy time rather than copying an old list blindly:
 
 ```bash

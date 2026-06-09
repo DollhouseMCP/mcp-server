@@ -146,7 +146,8 @@ adopt_deployment_config_from_env_file() {
   fi
 
   if [[ "${adopt_mode_dependent}" == "true" && "${TRUSTED_PROXIES_SET}" != "true" && \
-    "${proxy_mode_changed}" != "true" && -z "${TRUSTED_PROXIES}" ]]; then
+    "${CADDY_TRUSTED_PROXIES_SET}" != "true" && "${proxy_mode_changed}" != "true" && \
+    -z "${TRUSTED_PROXIES}" ]]; then
     value="$(deployment_env_file_value DOLLHOUSE_TRUSTED_PROXIES)"
     [[ -z "${value}" ]] || TRUSTED_PROXIES="${value}"
   fi
