@@ -54,11 +54,14 @@ public_base_url_port_for_scheme() {
 }
 
 adopt_deployment_config_from_env_file() {
-  local value persisted_mode persisted_instance adopt_mode_dependent adopt_instance_dependent
+  local value persisted_mode persisted_instance persisted_proxy_mode
+  local adopt_mode_dependent adopt_instance_dependent proxy_mode_changed
   adopt_mode_dependent="true"
   adopt_instance_dependent="true"
+  proxy_mode_changed="false"
   persisted_mode="$(deployment_env_file_value DOLLHOUSE_HOSTED_MODE)"
   persisted_instance="$(deployment_env_file_value DOLLHOUSE_HOSTED_INSTANCE_NAME)"
+  persisted_proxy_mode="$(deployment_env_file_value DOLLHOUSE_HOSTED_PROXY_MODE)"
 
   if [[ "${DEPLOY_MODE_SET}" != "true" ]]; then
     [[ -z "${persisted_mode}" ]] || DEPLOY_MODE="${persisted_mode}"
@@ -100,6 +103,10 @@ adopt_deployment_config_from_env_file() {
     [[ -z "${value}" ]] || PROXY_MODE="${value}"
   fi
 
+  if [[ "${PROXY_MODE_SET}" == "true" && -n "${persisted_proxy_mode}" && "${persisted_proxy_mode}" != "${PROXY_MODE}" ]]; then
+    proxy_mode_changed="true"
+  fi
+
   if [[ "${adopt_mode_dependent}" == "true" && "${BIND_ADDRESS_SET}" != "true" && -z "${BIND_ADDRESS}" ]]; then
     value="$(deployment_env_file_value DOLLHOUSE_HOSTED_BIND_ADDRESS)"
     [[ -z "${value}" ]] || BIND_ADDRESS="${value}"
@@ -139,7 +146,7 @@ adopt_deployment_config_from_env_file() {
   fi
 
   if [[ "${adopt_mode_dependent}" == "true" && "${TRUSTED_PROXIES_SET}" != "true" && \
-    "${PROXY_MODE_SET}" != "true" && -z "${TRUSTED_PROXIES}" ]]; then
+    "${proxy_mode_changed}" != "true" && -z "${TRUSTED_PROXIES}" ]]; then
     value="$(deployment_env_file_value DOLLHOUSE_TRUSTED_PROXIES)"
     [[ -z "${value}" ]] || TRUSTED_PROXIES="${value}"
   fi
@@ -150,7 +157,7 @@ adopt_deployment_config_from_env_file() {
   fi
 
   if [[ "${adopt_mode_dependent}" == "true" && "${CADDY_TRUSTED_PROXIES_SET}" != "true" && \
-    "${PROXY_MODE_SET}" != "true" && -z "${CADDY_TRUSTED_PROXIES}" ]]; then
+    "${proxy_mode_changed}" != "true" && -z "${CADDY_TRUSTED_PROXIES}" ]]; then
     value="$(deployment_env_file_value DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES)"
     [[ -z "${value}" ]] || CADDY_TRUSTED_PROXIES="${value}"
   fi

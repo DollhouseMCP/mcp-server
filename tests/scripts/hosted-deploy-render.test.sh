@@ -163,18 +163,26 @@ log "rendering cloud configuration behind Cloudflare"
 CLOUDFLARE_DEPLOY_DIR="${TMP_ROOT}/cloudflare-deploy"
 CLOUDFLARE_ENV_FILE="${CLOUDFLARE_DEPLOY_DIR}/.env.production"
 CLOUDFLARE_CADDY_FILE="${CLOUDFLARE_DEPLOY_DIR}/Caddyfile"
+CLOUDFLARE_SAMPLE_CIDRS="173.245.48.0/20,103.21.244.0/22,2400:cb00::/32,2a06:98c0::/29"
 DOLLHOUSE_HOSTED_DEPLOY_DIR="${CLOUDFLARE_DEPLOY_DIR}" \
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
 DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
-DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32 \
+DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES="${CLOUDFLARE_SAMPLE_CIDRS}" \
   bash "${HOSTED_DEPLOY}" render
 assert_contains "${CLOUDFLARE_CADDY_FILE}" '{'
-assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies static 173.245.48.0/20 2606:4700::/32'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 2400:cb00::/32 2a06:98c0::/29'
 assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies_strict'
 assert_contains "${CLOUDFLARE_CADDY_FILE}" '    log {'
 assert_contains "${CLOUDFLARE_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true'
-assert_contains "${CLOUDFLARE_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32'
+assert_contains "${CLOUDFLARE_ENV_FILE}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${CLOUDFLARE_SAMPLE_CIDRS}"
+
+log "checking restated proxy mode preserves persisted Cloudflare edge CIDRs"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${CLOUDFLARE_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_PROXY_MODE=caddy-tls \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 2400:cb00::/32 2a06:98c0::/29'
+assert_contains "${CLOUDFLARE_ENV_FILE}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${CLOUDFLARE_SAMPLE_CIDRS}"
 
 log "checking Caddy trusted proxy CIDR validation"
 CADDY_BAD_CIDR_OUTPUT="${TMP_ROOT}/caddy-bad-cidr.out"
@@ -187,6 +195,18 @@ if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/caddy-bad-cidr-deploy" \
   fail "Caddy trusted proxy render with invalid CIDR unexpectedly succeeded"
 fi
 assert_contains "${CADDY_BAD_CIDR_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES must be a comma-separated CIDR list"
+
+log "checking Caddy trusted proxy prefix validation"
+CADDY_BAD_PREFIX_OUTPUT="${TMP_ROOT}/caddy-bad-prefix.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/caddy-bad-prefix-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='173.245.48.0/999' \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${CADDY_BAD_PREFIX_OUTPUT}" 2>&1; then
+  fail "Caddy trusted proxy render with invalid prefix length unexpectedly succeeded"
+fi
+assert_contains "${CADDY_BAD_PREFIX_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES contains an invalid CIDR entry: 173.245.48.0/999"
 
 log "checking in-place instance rename rejection"
 INSTANCE_RENAME_OUTPUT="${TMP_ROOT}/instance-rename.out"

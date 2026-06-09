@@ -139,7 +139,7 @@ validate_no_whitespace() {
 validate_cidr_list() {
   local key="$1"
   local value="$2"
-  local cidr
+  local cidr address prefix
 
   [[ -n "${value}" ]] || return 0
   validate_no_whitespace "${key}" "${value}"
@@ -151,6 +151,17 @@ validate_cidr_list() {
   for cidr in "${cidrs[@]}"; do
     if [[ -z "${cidr}" || ! "${cidr}" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]]; then
       die "${key} contains an invalid CIDR entry: ${cidr}"
+    fi
+    address="${cidr%/*}"
+    prefix="${cidr##*/}"
+    if [[ "${address}" == *:* ]]; then
+      if (( 10#${prefix} > 128 )); then
+        die "${key} contains an invalid CIDR entry: ${cidr}"
+      fi
+    else
+      if ! is_ipv4_address "${address}" || (( 10#${prefix} > 32 )); then
+        die "${key} contains an invalid CIDR entry: ${cidr}"
+      fi
     fi
   done
 

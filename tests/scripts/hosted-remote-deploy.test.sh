@@ -90,6 +90,10 @@ index=$((index + 1))
 printf 'target=%s\n' "${target}" >> "${DOLLHOUSE_FAKE_SSH_LOG:?}"
 command_args=("${args[@]:$index}")
 remote_command="${command_args[*]}"
+if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" == "true" ]]; then
+  export DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=stale
+  export DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=198.51.100.0/24
+fi
 bash -c "${remote_command}"
 EOF
 
@@ -339,6 +343,7 @@ run_remote() {
   DOLLHOUSE_FAKE_CURL_MCP_STATUS="${DOLLHOUSE_FAKE_CURL_MCP_STATUS:-401}" \
   DOLLHOUSE_FAKE_GIT_FAIL_REF="${DOLLHOUSE_FAKE_GIT_FAIL_REF:-}" \
   DOLLHOUSE_FAKE_KEYSCAN_EMPTY="${DOLLHOUSE_FAKE_KEYSCAN_EMPTY:-false}" \
+  DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV="${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" \
   DOLLHOUSE_FAKE_STATE_DIR="${FAKE_STATE_DIR}" \
   DOLLHOUSE_FAKE_PG_ISREADY_FAILS="${DOLLHOUSE_FAKE_PG_ISREADY_FAILS:-0}" \
   DOLLHOUSE_FAKE_PG_DUMP_FAILS="${DOLLHOUSE_FAKE_PG_DUMP_FAILS:-0}" \
@@ -506,6 +511,14 @@ assert_contains "${REMOTE_LOG}" "allowed_hosts_set=x allowed_hosts=localhost,127
 assert_contains "${REMOTE_LOG}" "trusted_proxies_set=x trusted_proxies=10.0.0.0/8,172.16.0.0/12"
 assert_contains "${REMOTE_LOG}" "caddy_access_log_set=x caddy_access_log=true"
 assert_contains "${REMOTE_LOG}" "caddy_trusted_proxies_set=x caddy_trusted_proxies=173.245.48.0/20,2606:4700::/32"
+
+log "checking stale remote Caddy environment is cleared before hosted helper"
+reset_fake_state
+DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
+  run_remote --skip-backup update > "${TMP_ROOT}/stale-caddy-env.out"
+assert_contains "${REMOTE_LOG}" "caddy_access_log_set= caddy_access_log= caddy_trusted_proxies_set= caddy_trusted_proxies="
+assert_not_contains "${REMOTE_LOG}" "caddy_access_log=stale"
+assert_not_contains "${REMOTE_LOG}" "caddy_trusted_proxies=198.51.100.0/24"
 
 log "checking remote runtime overrides reach hosted helper"
 reset_fake_state
