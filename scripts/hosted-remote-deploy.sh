@@ -53,6 +53,8 @@ POSTGRES_READY_TIMEOUT="${DOLLHOUSE_HOSTED_POSTGRES_READY_TIMEOUT:-}"
 VERIFY_READY_TIMEOUT="${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}"
 ALLOWED_HOSTS="${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}"
 TRUSTED_PROXIES="${DOLLHOUSE_TRUSTED_PROXIES:-}"
+CADDY_ACCESS_LOG="${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}"
+CADDY_TRUSTED_PROXIES="${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
 BOOTSTRAP_GITHUB_USERNAME="${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}"
 BOOTSTRAP_GITHUB_ID="${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
 HOSTNAME="${DOLLHOUSE_HOSTED_HOSTNAME:-}"
@@ -558,6 +560,17 @@ validate_no_whitespace() {
   return 0
 }
 
+validate_no_empty_comma_entries() {
+  local key="$1"
+  local value="$2"
+
+  if [[ "${value}" == ,* || "${value}" == *, || "${value}" == *,,* ]]; then
+    die "${key} must not contain empty comma-separated entries"
+  fi
+
+  return 0
+}
+
 validate_instance_name() {
   validate_no_whitespace DOLLHOUSE_HOSTED_INSTANCE_NAME "${INSTANCE_NAME}"
   if [[ ! "${INSTANCE_NAME}" =~ ^[a-z0-9][a-z0-9-]{0,47}$ ]]; then
@@ -609,6 +622,135 @@ is_ipv4_address() {
   return 0
 }
 
+ipv6_hextet_count() {
+  local value="$1"
+  local rest part count
+  rest="${value}"
+  count=0
+
+  while [[ "${rest}" == *:* ]]; do
+    part="${rest%%:*}"
+    if [[ -n "${part}" ]]; then
+      [[ "${part}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+      count=$((count + 1))
+    fi
+    rest="${rest#*:}"
+  done
+  if [[ -n "${rest}" ]]; then
+    [[ "${rest}" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
+    count=$((count + 1))
+  fi
+
+  printf '%s\n' "${count}"
+  return 0
+}
+
+is_ipv6_address() {
+  local value="$1"
+  local without_double double_count hextets
+
+  [[ "${value}" == *:* ]] || return 1
+  [[ "${value}" =~ ^[0-9A-Fa-f:]+$ ]] || return 1
+  [[ "${value}" != *:::* ]] || return 1
+
+  without_double="${value//::/}"
+  double_count=$(((${#value} - ${#without_double}) / 2))
+  (( double_count <= 1 )) || return 1
+
+  if (( double_count == 0 )); then
+    [[ "${value}" != :* && "${value}" != *: ]] || return 1
+    hextets="$(ipv6_hextet_count "${value}")" || return 1
+    (( hextets == 8 )) || return 1
+  else
+    [[ "${value}" != :* || "${value}" == ::* ]] || return 1
+    [[ "${value}" != *: || "${value}" == *:: ]] || return 1
+    hextets="$(ipv6_hextet_count "${value}")" || return 1
+    (( hextets < 8 )) || return 1
+  fi
+
+  return 0
+}
+
+validate_cidr_list() {
+  local key="$1"
+  local value="$2"
+  local cidr address prefix
+  local -a cidrs
+
+  [[ -n "${value}" ]] || return 0
+  validate_no_whitespace "${key}" "${value}"
+  validate_no_empty_comma_entries "${key}" "${value}"
+  if [[ ! "${value}" =~ ^[0-9A-Fa-f:.,/]+$ ]]; then
+    die "${key} must be a comma-separated CIDR list"
+  fi
+
+  IFS=',' read -r -a cidrs <<< "${value}"
+  for cidr in "${cidrs[@]}"; do
+    if [[ -z "${cidr}" || ! "${cidr}" =~ ^[0-9A-Fa-f:.]+/[0-9]{1,3}$ ]]; then
+      die "${key} contains an invalid CIDR entry: ${cidr}"
+    fi
+    address="${cidr%/*}"
+    prefix="${cidr##*/}"
+    if [[ "${address}" == *:* ]]; then
+      if ! is_ipv6_address "${address}" || (( 10#${prefix} > 128 )); then
+        die "${key} contains an invalid CIDR entry: ${cidr}"
+      fi
+    else
+      if ! is_ipv4_address "${address}" || (( 10#${prefix} > 32 )); then
+        die "${key} contains an invalid CIDR entry: ${cidr}"
+      fi
+    fi
+  done
+
+  return 0
+}
+
+validate_trusted_proxy_list() {
+  local key="$1"
+  local value="$2"
+  local entry address prefix max_prefix
+  local -a entries
+
+  [[ -n "${value}" ]] || return 0
+  validate_no_whitespace "${key}" "${value}"
+  validate_no_empty_comma_entries "${key}" "${value}"
+
+  IFS=',' read -r -a entries <<< "${value}"
+  for entry in "${entries[@]}"; do
+    case "${entry}" in
+      loopback|linklocal|uniquelocal)
+        continue
+        ;;
+      *)
+        ;;
+    esac
+
+    [[ -n "${entry}" ]] || die "${key} contains an invalid trusted proxy entry: ${entry}"
+    if [[ "${entry}" == */* ]]; then
+      address="${entry%/*}"
+      prefix="${entry##*/}"
+      [[ "${prefix}" =~ ^[0-9]{1,3}$ ]] || die "${key} contains an invalid trusted proxy entry: ${entry}"
+    else
+      address="${entry}"
+      prefix=""
+    fi
+
+    if [[ "${address}" == *:* ]]; then
+      is_ipv6_address "${address}" || die "${key} contains an invalid trusted proxy entry: ${entry}"
+      max_prefix=128
+    else
+      is_ipv4_address "${address}" || die "${key} contains an invalid trusted proxy entry: ${entry}"
+      max_prefix=32
+    fi
+
+    if [[ -n "${prefix}" ]] && (( 10#${prefix} > max_prefix )); then
+      die "${key} contains an invalid trusted proxy entry: ${entry}"
+    fi
+  done
+
+  return 0
+}
+
 validate_optional_bind_address() {
   [[ -n "${BIND_ADDRESS}" ]] || return 0
   validate_no_whitespace DOLLHOUSE_HOSTED_BIND_ADDRESS "${BIND_ADDRESS}"
@@ -625,7 +767,11 @@ validate_forwarded_hosted_inputs() {
   validate_no_whitespace DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
   validate_no_whitespace DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"
   validate_no_whitespace DOLLHOUSE_HTTP_ALLOWED_HOSTS "${ALLOWED_HOSTS}"
-  validate_no_whitespace DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  validate_trusted_proxy_list DOLLHOUSE_TRUSTED_PROXIES "${TRUSTED_PROXIES}"
+  if [[ -n "${CADDY_ACCESS_LOG}" ]]; then
+    validate_bool DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG "${CADDY_ACCESS_LOG}"
+  fi
+  validate_cidr_list DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES "${CADDY_TRUSTED_PROXIES}"
   validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME "${BOOTSTRAP_GITHUB_USERNAME}"
   validate_no_whitespace DOLLHOUSE_BOOTSTRAP_GITHUB_ID "${BOOTSTRAP_GITHUB_ID}"
   if [[ -n "${IMPORT_LEGACY_ENV}" ]]; then
@@ -822,7 +968,7 @@ run_remote_action() {
   local helper_auth_jwks_uri helper_auth_oidc_require_typ helper_auth_allowlist_seed_file
   local helper_mcp_port helper_image_tag helper_mem_limit helper_cpu_limit
   local helper_import_legacy_env helper_postgres_ready_timeout helper_verify_ready_timeout
-  local helper_allowed_hosts helper_trusted_proxies
+  local helper_allowed_hosts helper_trusted_proxies helper_caddy_access_log helper_caddy_trusted_proxies
   local helper_bootstrap_github_username helper_bootstrap_github_id
 
   helper_hostname=""
@@ -851,6 +997,8 @@ run_remote_action() {
   helper_verify_ready_timeout="${VERIFY_READY_TIMEOUT}"
   helper_allowed_hosts="${ALLOWED_HOSTS}"
   helper_trusted_proxies="${TRUSTED_PROXIES}"
+  helper_caddy_access_log="${CADDY_ACCESS_LOG}"
+  helper_caddy_trusted_proxies="${CADDY_TRUSTED_PROXIES}"
   helper_bootstrap_github_username="${BOOTSTRAP_GITHUB_USERNAME}"
   helper_bootstrap_github_id="${BOOTSTRAP_GITHUB_ID}"
   [[ "${HOSTNAME_SET}" != "true" ]] || helper_hostname="${HOSTNAME}"
@@ -902,6 +1050,8 @@ run_remote_action() {
     "${helper_verify_ready_timeout}"
     "${helper_allowed_hosts}"
     "${helper_trusted_proxies}"
+    "${helper_caddy_access_log}"
+    "${helper_caddy_trusted_proxies}"
     "${helper_bootstrap_github_username}"
     "${helper_bootstrap_github_id}"
   )
@@ -970,8 +1120,10 @@ postgres_ready_timeout="${32}"
 verify_ready_timeout="${33}"
 allowed_hosts="${34}"
 trusted_proxies="${35}"
-bootstrap_github_username="${36}"
-bootstrap_github_id="${37}"
+caddy_access_log="${36}"
+caddy_trusted_proxies="${37}"
+bootstrap_github_username="${38}"
+bootstrap_github_id="${39}"
 workdir=""
 
 remote_log() {
@@ -1251,6 +1403,8 @@ run_hosted_helper() {
   [[ -z "${verify_ready_timeout}" ]] || helper_env+=("DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT=${verify_ready_timeout}")
   [[ -z "${allowed_hosts}" ]] || helper_env+=("DOLLHOUSE_HTTP_ALLOWED_HOSTS=${allowed_hosts}")
   [[ -z "${trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_TRUSTED_PROXIES=${trusted_proxies}")
+  [[ -z "${caddy_access_log}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=${caddy_access_log}")
+  [[ -z "${caddy_trusted_proxies}" ]] || helper_env+=("DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${caddy_trusted_proxies}")
   [[ -z "${bootstrap_github_username}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME=${bootstrap_github_username}")
   [[ -z "${bootstrap_github_id}" ]] || helper_env+=("DOLLHOUSE_BOOTSTRAP_GITHUB_ID=${bootstrap_github_id}")
   [[ -z "${deploy_mode}" ]] || helper_env+=("DOLLHOUSE_HOSTED_MODE=${deploy_mode}")
@@ -1285,6 +1439,8 @@ run_hosted_helper() {
     unset DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT
     unset DOLLHOUSE_HTTP_ALLOWED_HOSTS
     unset DOLLHOUSE_TRUSTED_PROXIES
+    unset DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG
+    unset DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_ID
     unset DOLLHOUSE_AUTH_PROVIDER

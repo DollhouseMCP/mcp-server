@@ -90,6 +90,10 @@ index=$((index + 1))
 printf 'target=%s\n' "${target}" >> "${DOLLHOUSE_FAKE_SSH_LOG:?}"
 command_args=("${args[@]:$index}")
 remote_command="${command_args[*]}"
+if [[ "${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" == "true" ]]; then
+  export DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=stale
+  export DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=198.51.100.0/24
+fi
 bash -c "${remote_command}"
 EOF
 
@@ -223,6 +227,9 @@ set -euo pipefail
     "${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT+x}" "${DOLLHOUSE_HOSTED_VERIFY_READY_TIMEOUT:-}"
   printf 'allowed_hosts_set=%s allowed_hosts=%s trusted_proxies_set=%s trusted_proxies=%s ' \
     "${DOLLHOUSE_HTTP_ALLOWED_HOSTS+x}" "${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-}" "${DOLLHOUSE_TRUSTED_PROXIES+x}" "${DOLLHOUSE_TRUSTED_PROXIES:-}"
+  printf 'caddy_access_log_set=%s caddy_access_log=%s caddy_trusted_proxies_set=%s caddy_trusted_proxies=%s ' \
+    "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG+x}" "${DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG:-}" \
+    "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES+x}" "${DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES:-}"
   printf 'bootstrap_username_set=%s bootstrap_username=%s bootstrap_id_set=%s bootstrap_id=%s ' \
     "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME:-}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID+x}" "${DOLLHOUSE_BOOTSTRAP_GITHUB_ID:-}"
   printf 'auth_provider_set=%s auth_provider=%s auth_issuer_set=%s auth_issuer=%s auth_audience_set=%s auth_audience=%s ' \
@@ -336,6 +343,7 @@ run_remote() {
   DOLLHOUSE_FAKE_CURL_MCP_STATUS="${DOLLHOUSE_FAKE_CURL_MCP_STATUS:-401}" \
   DOLLHOUSE_FAKE_GIT_FAIL_REF="${DOLLHOUSE_FAKE_GIT_FAIL_REF:-}" \
   DOLLHOUSE_FAKE_KEYSCAN_EMPTY="${DOLLHOUSE_FAKE_KEYSCAN_EMPTY:-false}" \
+  DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV="${DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV:-false}" \
   DOLLHOUSE_FAKE_STATE_DIR="${FAKE_STATE_DIR}" \
   DOLLHOUSE_FAKE_PG_ISREADY_FAILS="${DOLLHOUSE_FAKE_PG_ISREADY_FAILS:-0}" \
   DOLLHOUSE_FAKE_PG_DUMP_FAILS="${DOLLHOUSE_FAKE_PG_DUMP_FAILS:-0}" \
@@ -496,9 +504,21 @@ reset_fake_state
 HOST_PROXY_OUTPUT="${TMP_ROOT}/host-proxy-overrides.out"
 DOLLHOUSE_TEST_ALLOWED_HOSTS=localhost,127.0.0.1,mcp.example.com,alt.example.com \
 DOLLHOUSE_TEST_TRUSTED_PROXIES=10.0.0.0/8,172.16.0.0/12 \
+  DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true \
+  DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=173.245.48.0/20,2606:4700::/32 \
   run_remote --skip-backup update > "${HOST_PROXY_OUTPUT}"
 assert_contains "${REMOTE_LOG}" "allowed_hosts_set=x allowed_hosts=localhost,127.0.0.1,mcp.example.com,alt.example.com"
 assert_contains "${REMOTE_LOG}" "trusted_proxies_set=x trusted_proxies=10.0.0.0/8,172.16.0.0/12"
+assert_contains "${REMOTE_LOG}" "caddy_access_log_set=x caddy_access_log=true"
+assert_contains "${REMOTE_LOG}" "caddy_trusted_proxies_set=x caddy_trusted_proxies=173.245.48.0/20,2606:4700::/32"
+
+log "checking stale remote Caddy environment is cleared before hosted helper"
+reset_fake_state
+DOLLHOUSE_FAKE_REMOTE_STALE_CADDY_ENV=true \
+  run_remote --skip-backup update > "${TMP_ROOT}/stale-caddy-env.out"
+assert_contains "${REMOTE_LOG}" "caddy_access_log_set= caddy_access_log= caddy_trusted_proxies_set= caddy_trusted_proxies="
+assert_not_contains "${REMOTE_LOG}" "caddy_access_log=stale"
+assert_not_contains "${REMOTE_LOG}" "caddy_trusted_proxies=198.51.100.0/24"
 
 log "checking remote runtime overrides reach hosted helper"
 reset_fake_state
@@ -670,6 +690,41 @@ if DOLLHOUSE_HOSTED_BIND_ADDRESS=localhost run_remote --dry-run update > "${BAD_
   fail "remote dry-run with hostname bind address unexpectedly succeeded"
 fi
 assert_contains "${BAD_REMOTE_BIND_OUTPUT}" "DOLLHOUSE_HOSTED_BIND_ADDRESS must be an IPv4 address"
+
+log "checking remote app trusted proxy validation"
+BAD_REMOTE_TRUSTED_PROXY_OUTPUT="${TMP_ROOT}/bad-remote-trusted-proxy.out"
+if DOLLHOUSE_TEST_TRUSTED_PROXIES='loopback,::::/64' run_remote --dry-run update > "${BAD_REMOTE_TRUSTED_PROXY_OUTPUT}" 2>&1; then
+  fail "remote dry-run with invalid app trusted proxy unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_TRUSTED_PROXY_OUTPUT}" "DOLLHOUSE_TRUSTED_PROXIES contains an invalid trusted proxy entry: ::::/64"
+
+log "checking remote app trusted proxy empty entry validation"
+BAD_REMOTE_EMPTY_TRUSTED_PROXY_OUTPUT="${TMP_ROOT}/bad-remote-empty-trusted-proxy.out"
+if DOLLHOUSE_TEST_TRUSTED_PROXIES='loopback,' run_remote --dry-run update > "${BAD_REMOTE_EMPTY_TRUSTED_PROXY_OUTPUT}" 2>&1; then
+  fail "remote dry-run with empty app trusted proxy unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_EMPTY_TRUSTED_PROXY_OUTPUT}" "DOLLHOUSE_TRUSTED_PROXIES must not contain empty comma-separated entries"
+
+log "checking remote Caddy access log validation"
+BAD_REMOTE_CADDY_LOG_OUTPUT="${TMP_ROOT}/bad-remote-caddy-log.out"
+if DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=maybe run_remote --dry-run update > "${BAD_REMOTE_CADDY_LOG_OUTPUT}" 2>&1; then
+  fail "remote dry-run with invalid Caddy access log setting unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_CADDY_LOG_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG must be 'true' or 'false'"
+
+log "checking remote Caddy trusted proxy CIDR validation"
+BAD_REMOTE_CADDY_CIDR_OUTPUT="${TMP_ROOT}/bad-remote-caddy-cidr.out"
+if DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='::::/64' run_remote --dry-run update > "${BAD_REMOTE_CADDY_CIDR_OUTPUT}" 2>&1; then
+  fail "remote dry-run with invalid Caddy trusted proxy CIDR unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_CADDY_CIDR_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES contains an invalid CIDR entry: ::::/64"
+
+log "checking remote Caddy trusted proxy empty entry validation"
+BAD_REMOTE_EMPTY_CADDY_CIDR_OUTPUT="${TMP_ROOT}/bad-remote-empty-caddy-cidr.out"
+if DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='173.245.48.0/20,' run_remote --dry-run update > "${BAD_REMOTE_EMPTY_CADDY_CIDR_OUTPUT}" 2>&1; then
+  fail "remote dry-run with empty Caddy trusted proxy CIDR unexpectedly succeeded"
+fi
+assert_contains "${BAD_REMOTE_EMPTY_CADDY_CIDR_OUTPUT}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES must not contain empty comma-separated entries"
 
 log "checking credential-bearing git URL rejection"
 : > "${SSH_LOG}"

@@ -104,7 +104,8 @@ services:
     command: ["npm", "run", "db:migrate"]
 
   caddy:
-    image: caddy:2
+    # trusted_proxies_strict requires Caddy 2.8 or newer.
+    image: caddy:2.8
     container_name: ${CADDY_CONTAINER_NAME}
     restart: unless-stopped
     depends_on:
@@ -144,6 +145,57 @@ caddy_ports_yaml() {
   return 0
 }
 
+caddy_trusted_proxies_args() {
+  printf '%s\n' "${CADDY_TRUSTED_PROXIES//,/ }"
+
+  return 0
+}
+
+caddy_global_options_block() {
+  [[ -n "${CADDY_TRUSTED_PROXIES}" ]] || return 0
+
+  cat <<EOF
+{
+	servers {
+		trusted_proxies static $(caddy_trusted_proxies_args)
+		trusted_proxies_strict
+	}
+}
+
+EOF
+
+  return 0
+}
+
+caddy_access_log_block() {
+  [[ "${CADDY_ACCESS_LOG}" == "true" ]] || return 0
+
+  cat <<'EOF'
+	log {
+		format filter {
+			request>uri query {
+				replace access_token REDACTED
+				replace client_secret REDACTED
+				replace code REDACTED
+				replace id_token REDACTED
+				replace password REDACTED
+				replace refresh_token REDACTED
+				replace session REDACTED
+				replace state REDACTED
+				replace ticket REDACTED
+				replace token REDACTED
+			}
+			request>headers>Authorization delete
+			request>headers>Cookie delete
+			wrap json
+		}
+	}
+
+EOF
+
+  return 0
+}
+
 write_caddyfile() {
   local site_address forwarded_proto
   case "${PROXY_MODE}" in
@@ -161,18 +213,22 @@ write_caddyfile() {
   esac
 
   cat > "${CADDY_FILE}" <<EOF
+$(caddy_global_options_block)
 ${site_address} {
-    encode gzip
+	encode gzip
 
-    reverse_proxy dollhousemcp:${MCP_PORT} {
-        header_up Host {host}
-        header_up X-Forwarded-Proto ${forwarded_proto}
-        transport http {
-            read_timeout 1h
-            write_timeout 1h
-            dial_timeout 30s
-        }
-    }
+$(caddy_access_log_block)
+	reverse_proxy dollhousemcp:${MCP_PORT} {
+		header_up Host {host}
+		header_up X-Forwarded-Proto ${forwarded_proto}
+		header_up X-Forwarded-For {client_ip}
+		header_up X-Real-IP {client_ip}
+		transport http {
+			read_timeout 1h
+			write_timeout 1h
+			dial_timeout 30s
+		}
+	}
 }
 EOF
 
