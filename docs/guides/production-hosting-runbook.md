@@ -313,7 +313,8 @@ services:
       - "3000"
 
   caddy:
-    image: caddy:2
+    # trusted_proxies_strict requires Caddy 2.8 or newer.
+    image: caddy:2.8
     restart: unless-stopped
     depends_on:
       - dollhousemcp
@@ -334,7 +335,7 @@ Notes on this compose:
 
 - **Postgres has no `ports:` mapping.** It is reachable from the `dollhousemcp` container over the default docker network but not from the host or the internet. Removing this is one of the easiest production mistakes — if you `ports: ["5432:5432"]` it, anyone who finds your host's IP can knock on the Postgres port.
 - **dollhousemcp uses `expose:` not `ports:`.** Same reasoning — Caddy reaches it inside the docker network. Adding `ports:` lets clients bypass Caddy and TLS.
-- **Image pinning.** Replace `:latest` with a digest (`@sha256:…`) for production. `latest` is a moving target — pinning is how you sleep at night.
+- **Image pinning.** Replace moving tags with digests (`@sha256:…`) for production. Caddy must stay on v2.8 or newer when using `trusted_proxies_strict`; the automated helper pins `caddy:2.8` and refreshes it before proxy restarts.
 - **`DOLLHOUSE_DATABASE_URL`** uses the `dollhouse_app` role (RLS-enforced), not `dollhouse` (superuser). The compose only creates the superuser. The first container start runs migrations as superuser (via `DOLLHOUSE_DATABASE_ADMIN_URL`), then `init-db.sql` creates the `dollhouse_app` role with `${POSTGRES_PASSWORD}`. See [A.7](#a7-bootstrap-the-database) for the bootstrap sequence.
 - **`DOLLHOUSE_DATABASE_ADMIN_URL` must point at a role with `BYPASSRLS` (or a superuser).** The audit-event, rate-limit, and audit-HMAC tables are configured with `FORCE ROW LEVEL SECURITY` and no permissive policy — they deny all reads/writes to non-bypass roles by design. System-context paths (`AuditHmacKeyResolver`, `PostgresRateLimitStore`, `DatabaseAuditSink`, the `dollhouse-audit` CLI) all route through this connection and will fail loudly if it's not privileged. The `dollhouse` superuser provisioned by `init-db.sql` satisfies this; a managed-host equivalent should use either a superuser or a role created with `WITH BYPASSRLS`.
 
@@ -415,7 +416,7 @@ For co-admins (e.g., the friend hosting the box), repeat for each. Bootstrap is 
 
 ### A.9 `Caddyfile`
 
-If the hostname is behind Cloudflare or another public edge proxy, configure Caddy's global `trusted_proxies static ...` block with that provider's complete current CIDR list. Keep `DOLLHOUSE_TRUSTED_PROXIES` scoped to the Docker/Caddy hop that directly connects to the app container. The hosted deploy helper renders this from `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES`.
+If the hostname is behind Cloudflare or another public edge proxy, configure Caddy's global `trusted_proxies static ...` block with that provider's complete current CIDR list. Keep `DOLLHOUSE_TRUSTED_PROXIES` scoped to the Docker/Caddy hop that directly connects to the app container. The hosted deploy helper renders this from `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES`. `trusted_proxies_strict` requires Caddy v2.8 or newer.
 
 For Cloudflare, fetch the current CIDRs before deployment:
 

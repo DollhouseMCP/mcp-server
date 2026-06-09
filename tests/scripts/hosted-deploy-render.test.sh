@@ -105,6 +105,7 @@ assert_line "${COMPOSE_FILE}" '    container_name: deploy'
 assert_line "${COMPOSE_FILE}" '    container_name: deploy-caddy'
 assert_contains "${COMPOSE_FILE}" 'image: deploy-hosted:alpha'
 assert_contains "${COMPOSE_FILE}" 'image: deploy-hosted:alpha-migrate'
+assert_contains "${COMPOSE_FILE}" 'image: caddy:2.8'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
@@ -119,13 +120,13 @@ assert_contains "${COMPOSE_FILE}" '      - "0.0.0.0:443:443"'
 assert_contains "${COMPOSE_FILE}" "dollhousemcp-migrate:"
 assert_contains "${COMPOSE_FILE}" "target: builder"
 assert_contains "${CADDY_FILE}" 'mcp.example.com {'
-assert_contains "${CADDY_FILE}" '    log {'
-assert_contains "${CADDY_FILE}" '            request>uri query {'
-assert_contains "${CADDY_FILE}" '                replace code REDACTED'
-assert_contains "${CADDY_FILE}" '                replace state REDACTED'
-assert_contains "${CADDY_FILE}" '            request>headers>Authorization delete'
-assert_contains "${CADDY_FILE}" '        header_up X-Forwarded-For {client_ip}'
-assert_contains "${CADDY_FILE}" '        header_up X-Real-IP {client_ip}'
+assert_contains "${CADDY_FILE}" 'log {'
+assert_contains "${CADDY_FILE}" 'request>uri query {'
+assert_contains "${CADDY_FILE}" 'replace code REDACTED'
+assert_contains "${CADDY_FILE}" 'replace state REDACTED'
+assert_contains "${CADDY_FILE}" 'request>headers>Authorization delete'
+assert_contains "${CADDY_FILE}" 'header_up X-Forwarded-For {client_ip}'
+assert_contains "${CADDY_FILE}" 'header_up X-Real-IP {client_ip}'
 assert_not_contains "${CADDY_FILE}" 'trusted_proxies static'
 assert_contains "${INIT_DB_FILE}" 'CREATE ROLE dollhouse_app'
 assert_contains "${INIT_DB_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
@@ -171,9 +172,9 @@ DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
 DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES="${CLOUDFLARE_SAMPLE_CIDRS}" \
   bash "${HOSTED_DEPLOY}" render
 assert_contains "${CLOUDFLARE_CADDY_FILE}" '{'
-assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 2400:cb00::/32 2a06:98c0::/29'
-assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies_strict'
-assert_contains "${CLOUDFLARE_CADDY_FILE}" '    log {'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" 'trusted_proxies static 173.245.48.0/20 103.21.244.0/22 2400:cb00::/32 2a06:98c0::/29'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" 'trusted_proxies_strict'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" 'log {'
 assert_contains "${CLOUDFLARE_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true'
 assert_contains "${CLOUDFLARE_ENV_FILE}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${CLOUDFLARE_SAMPLE_CIDRS}"
 
@@ -181,7 +182,7 @@ log "checking restated proxy mode preserves persisted Cloudflare edge CIDRs"
 DOLLHOUSE_HOSTED_DEPLOY_DIR="${CLOUDFLARE_DEPLOY_DIR}" \
 DOLLHOUSE_HOSTED_PROXY_MODE=caddy-tls \
   bash "${HOSTED_DEPLOY}" render
-assert_contains "${CLOUDFLARE_CADDY_FILE}" '        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 2400:cb00::/32 2a06:98c0::/29'
+assert_contains "${CLOUDFLARE_CADDY_FILE}" 'trusted_proxies static 173.245.48.0/20 103.21.244.0/22 2400:cb00::/32 2a06:98c0::/29'
 assert_contains "${CLOUDFLARE_ENV_FILE}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${CLOUDFLARE_SAMPLE_CIDRS}"
 
 log "checking Caddy trusted proxy CIDR validation"

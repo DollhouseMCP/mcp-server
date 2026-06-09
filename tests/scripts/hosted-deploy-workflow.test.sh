@@ -67,7 +67,7 @@ if [[ "${1:-}" == "compose" ]]; then
     shift 2
   done
   case "${1:-}" in
-    build|exec|ps|run|up)
+    build|exec|ps|pull|run|up)
       exit 0
       ;;
   esac
@@ -282,6 +282,7 @@ run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} build dollhousemcp dollhousemcp-migrate"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
 
@@ -293,6 +294,7 @@ previous_bundle="$(latest_dir 'server.prev-*')"
 [[ -n "${previous_bundle}" ]] || fail "expected update to retain a previous server bundle"
 assert_file_equals "${previous_bundle}/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --no-deps --force-recreate caddy"
 
 log "running rollback workflow"
@@ -301,6 +303,7 @@ assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 rollback_bundle="$(latest_dir 'server.rollback-from-*')"
 [[ -n "${rollback_bundle}" ]] || fail "expected rollback to retain the rolled-back current bundle"
 assert_file_equals "${rollback_bundle}/version.txt" "v2"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp caddy"
 
 log "checking invalid source error"

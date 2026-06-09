@@ -83,7 +83,15 @@ run_database_migrations() {
   return 0
 }
 
+refresh_caddy_image() {
+  log "refreshing caddy image"
+  compose pull caddy
+
+  return 0
+}
+
 restart_caddy_proxy() {
+  refresh_caddy_image
   log "refreshing caddy proxy"
   compose up -d --no-deps --force-recreate caddy
 
@@ -149,6 +157,7 @@ start_or_update() {
     compose up -d dollhousemcp
     restart_caddy_proxy
   else
+    refresh_caddy_image
     compose up -d
   fi
 
@@ -297,6 +306,7 @@ rollback_server() {
 
   build_app_image
   wait_for_postgres
+  refresh_caddy_image
   compose up -d dollhousemcp caddy
 
   return 0

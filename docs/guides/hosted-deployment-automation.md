@@ -253,6 +253,8 @@ All helper-managed Docker Compose commands run with `--env-file .env.production`
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 
+The generated Compose file pins the proxy service to `caddy:2.8` because edge proxy support uses Caddy's `trusted_proxies_strict` directive. The helper pulls that Caddy image before starting or recreating the proxy during install, update, and rollback so an older cached floating Caddy 2 image is not reused after edge CIDRs are enabled.
+
 The helper rejects credential-bearing `DOLLHOUSE_HOSTED_GIT_URL` values by default because credentials embedded in command arguments can leak through process listings or logs. The remote wrapper applies the same check before opening SSH. Use a git credential helper, deploy key, or `DOLLHOUSE_HOSTED_SOURCE_DIR` instead. If an operator has an explicit reason to allow this, set `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL=true`.
 
 ## Side-by-Side Canaries
@@ -406,7 +408,7 @@ If no bootstrap identity is supplied and no admin has been claimed yet, `/readyz
 
 ### `update`
 
-Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, ensures Postgres is ready, runs migrations, restarts the `dollhousemcp` service, and verifies:
+Renders files, stages a new server bundle, rebuilds the `dollhousemcp` image, ensures Postgres is ready, runs migrations, restarts the `dollhousemcp` service, refreshes/recreates the pinned Caddy proxy, and verifies:
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- update
@@ -442,7 +444,7 @@ Prefer `DOLLHOUSE_BOOTSTRAP_GITHUB_ID` when you already know the numeric GitHub 
 
 ### `rollback`
 
-Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, restarts `dollhousemcp` and Caddy, then verifies:
+Restores the newest retained `server.prev-*` bundle, keeps the current bundle as `server.rollback-from-*`, rebuilds the app image, refreshes the pinned Caddy proxy image, restarts `dollhousemcp` and Caddy, then verifies:
 
 ```bash
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com npm run hosted:deploy -- rollback
