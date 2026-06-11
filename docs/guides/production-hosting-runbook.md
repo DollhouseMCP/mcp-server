@@ -515,6 +515,11 @@ With a token (any authenticated user):
 
 For MCP client setup (Claude Code, Claude Desktop, Gemini CLI, etc.), see [Auth Server Setup → Connecting an MCP client](./auth-server-setup.md#connecting-an-mcp-client). Your hostname is `mcp.your-domain.com`; the rest of the per-client setup is identical.
 
+For Cloudflare-fronted alpha deployments, also run the
+[Cloudflare Alpha Smoke Test](./cloudflare-alpha-smoke-test.md). It extends
+these curl checks with a real streamable HTTP MCP client OAuth flow through the
+Cloudflare edge.
+
 ---
 
 ## Path B — Bare binary on a host with systemd

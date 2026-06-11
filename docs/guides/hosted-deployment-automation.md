@@ -95,6 +95,12 @@ DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com \
   npm run hosted:deploy -- verify
 ```
 
+For Cloudflare-fronted alpha deployments, follow the endpoint verification with
+the real-client [Cloudflare Alpha Smoke Test](./cloudflare-alpha-smoke-test.md).
+The smoke test covers OAuth discovery, GitHub sign-in, Dollhouse client consent,
+bearer-token use, MCP read calls, Cloudflare WAF/rate-limit inspection, and log
+redaction checks.
+
 Run an update on a remote host over SSH:
 
 ```bash
@@ -250,6 +256,9 @@ As of 2026-06-08, Cloudflare published these ranges for the hosted alpha deploym
 ```
 
 Cloudflare WAF and rate-limit rules are configured in Cloudflare, not by this helper. Before making a Cloudflare-fronted deployment generally available, validate that rules exist for auth callbacks, DCR/client registration, MCP endpoints, and admin surfaces, and that the rule actions are tested against legitimate OAuth and streamable HTTP clients.
+
+Use the [Cloudflare Alpha Smoke Test](./cloudflare-alpha-smoke-test.md) after
+changing those edge rules.
 
 All helper-managed Docker Compose commands run with `--env-file .env.production`. This matters because Compose normally reads `.env` for variable interpolation, while `env_file: .env.production` only controls container environment injection.
 
