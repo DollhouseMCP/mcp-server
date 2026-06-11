@@ -61,12 +61,15 @@ For another Cloudflare-fronted deployment, replace the base URL throughout.
   ```text
   /.well-known/*
   /reg
-  /authorize
+  /auth
   /token
   /interaction/*
   /auth/social/github/callback
   /mcp
   ```
+
+  `/auth` is the OAuth authorization endpoint advertised by discovery metadata.
+  GitHub-specific callback traffic still returns through `/auth/social/github/callback`.
 
 ## 1. Endpoint Preflight
 
@@ -250,7 +253,7 @@ The smoke test passes when:
 | Symptom | Likely cause | First place to check |
 |---|---|---|
 | `/readyz` returns `bootstrap_required` | first admin not bootstrapped, or bootstrap wrote to the wrong auth store | `bootstrap-admin`, `.env.production`, app logs |
-| Client never reaches GitHub | OAuth discovery, DCR, or WAF blocking `/.well-known/*`, `/reg`, or `/authorize` | browser network log, Cloudflare Security Events, Caddy logs |
+| Client never reaches GitHub | OAuth discovery, DCR, or WAF blocking `/.well-known/*`, `/reg`, or `/auth` | browser network log, Cloudflare Security Events, Caddy logs |
 | GitHub callback returns `github_callback_failed` | wrong GitHub client ID/secret or callback URL | GitHub OAuth app settings, app logs |
 | Consent page returns `invalid_interaction` | stale interaction URL, expired session, or repeated old callback | restart the client flow from a fresh browser/client state |
 | Consent click appears to do nothing | client/browser state is stale or backend returned an error not visible in the page | app logs, browser devtools, repeat from clean state |
