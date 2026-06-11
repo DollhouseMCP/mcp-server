@@ -256,7 +256,7 @@ The smoke test passes when:
 | Consent click appears to do nothing | client/browser state is stale or backend returned an error not visible in the page | app logs, browser devtools, repeat from clean state |
 | Client says connected but MCP calls 401 | bearer token not stored/sent, token expired, or issuer/public URL mismatch | client logs, `/token` response, `DOLLHOUSE_PUBLIC_BASE_URL` |
 | Client hits 403/429 only through Cloudflare | WAF, bot, cache, or rate-limit false positive | Cloudflare Security Events and rate-limit logs |
-| OAuth works but admin surfaces deny access | user authenticated but is not the bootstrapped/admin identity | allowlist/admin bootstrap state, `/auth/admin/me` |
+| OAuth works but admin surfaces deny access | user authenticated but is not the bootstrapped/admin identity | allowlist/admin bootstrap state, web console admin surfaces, app logs |
 | Direct origin succeeds | origin firewall or Cloudflare-origin lockdown missing | VPS firewall, provider firewall, Cloudflare DNS/proxy mode |
 
 ## 8. Test Record Template
@@ -297,6 +297,6 @@ Follow-up issues created:
 ```
 
 Create a GitHub issue for any failed item that is not an operator setup mistake.
-Label it with the relevant area (`area: security`, `area: testing`,
-`area: auth`, or hosted deployment labels as appropriate) and link it back to
+Label it with the relevant area (`area: security`, `area: testing`, `oauth`, or
+hosted deployment labels as appropriate) and link it back to
 [#2260](https://github.com/DollhouseMCP/mcp-server/issues/2260).
