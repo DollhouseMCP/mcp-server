@@ -409,7 +409,7 @@ validate_render_value() {
 validate_docker_log_max_size() {
   validate_no_whitespace DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE "${DOCKER_LOG_MAX_SIZE}"
   if [[ ! "${DOCKER_LOG_MAX_SIZE}" =~ ^[1-9][0-9]*[kKmMgG]$ ]]; then
-    die "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE must be a positive Docker log size such as 25m, got: ${DOCKER_LOG_MAX_SIZE}"
+    die "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE must be a positive Docker log size with suffix k, m, or g and no leading zero, such as 25m; got: ${DOCKER_LOG_MAX_SIZE}"
   fi
 
   return 0

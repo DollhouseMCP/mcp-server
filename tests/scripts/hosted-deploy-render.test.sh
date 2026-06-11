@@ -52,6 +52,28 @@ assert_occurrences() {
   [[ "${actual}" == "${count}" ]] || fail "expected ${file} to contain '${expected}' ${count} time(s), got ${actual}"
 }
 
+assert_service_contains() {
+  local file="$1"
+  local service="$2"
+  local expected="$3"
+
+  awk -v service_line="  ${service}:" -v expected="${expected}" '
+    $0 == service_line {
+      in_service = 1
+      next
+    }
+    in_service && $0 ~ /^  [A-Za-z0-9_-]+:$/ {
+      in_service = 0
+    }
+    in_service && index($0, expected) > 0 {
+      found = 1
+    }
+    END {
+      exit found ? 0 : 1
+    }
+  ' "${file}" || fail "expected ${file} service ${service} to contain: ${expected}"
+}
+
 file_mode() {
   local file="$1"
 
@@ -136,6 +158,10 @@ assert_contains "${COMPOSE_FILE}" '  driver: json-file'
 assert_contains "${COMPOSE_FILE}" '    max-size: "25m"'
 assert_contains "${COMPOSE_FILE}" '    max-file: "5"'
 assert_occurrences "${COMPOSE_FILE}" '    logging: *dollhouse-logging' "4"
+assert_service_contains "${COMPOSE_FILE}" postgres '    logging: *dollhouse-logging'
+assert_service_contains "${COMPOSE_FILE}" dollhousemcp '    logging: *dollhouse-logging'
+assert_service_contains "${COMPOSE_FILE}" dollhousemcp-migrate '    logging: *dollhouse-logging'
+assert_service_contains "${COMPOSE_FILE}" caddy '    logging: *dollhouse-logging'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
@@ -280,6 +306,18 @@ if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/log-bad-size-deploy" \
   fail "render with invalid Docker log max size unexpectedly succeeded"
 fi
 assert_contains "${LOG_BAD_SIZE_OUTPUT}" "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE must be a positive Docker log size"
+
+log "checking Docker log size leading zero validation"
+LOG_LEADING_ZERO_OUTPUT="${TMP_ROOT}/log-leading-zero.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/log-leading-zero-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=025m \
+    bash "${HOSTED_DEPLOY}" --dry-run render > "${LOG_LEADING_ZERO_OUTPUT}" 2>&1; then
+  fail "render with leading-zero Docker log max size unexpectedly succeeded"
+fi
+assert_contains "${LOG_LEADING_ZERO_OUTPUT}" "no leading zero"
 
 log "checking Docker log file count validation"
 LOG_BAD_FILE_OUTPUT="${TMP_ROOT}/log-bad-file.out"
