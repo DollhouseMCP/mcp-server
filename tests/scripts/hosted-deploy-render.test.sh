@@ -43,6 +43,15 @@ assert_not_contains() {
   fi
 }
 
+assert_occurrences() {
+  local file="$1"
+  local expected="$2"
+  local count="$3"
+  local actual
+  actual="$(grep -Fc "${expected}" "${file}" || true)"
+  [[ "${actual}" == "${count}" ]] || fail "expected ${file} to contain '${expected}' ${count} time(s), got ${actual}"
+}
+
 file_mode() {
   local file="$1"
 
@@ -125,6 +134,7 @@ assert_contains "${COMPOSE_FILE}" 'image: caddy:2.8'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
+assert_occurrences "${COMPOSE_FILE}" "DOLLHOUSE_AUTH_STORAGE_BACKEND: postgres" "2"
 assert_contains "${COMPOSE_FILE}" "./apply-post-migration-grants.sh:/usr/local/bin/apply-post-migration-grants:ro"
 assert_contains "${COMPOSE_FILE}" "./bootstrap-admin.sh:/usr/local/bin/dollhouse-bootstrap-admin:ro"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.com"

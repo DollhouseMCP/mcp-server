@@ -102,6 +102,7 @@ services:
       DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp
       DOLLHOUSE_DATABASE_ADMIN_URL: postgres://dollhouse:\${POSTGRES_ADMIN_PASSWORD}@postgres:5432/dollhousemcp
       DOLLHOUSE_DATABASE_SSL: disable
+      DOLLHOUSE_AUTH_STORAGE_BACKEND: postgres
     volumes:
       - ./bootstrap-admin.sh:/usr/local/bin/dollhouse-bootstrap-admin:ro
     command: ["npm", "run", "db:migrate"]
