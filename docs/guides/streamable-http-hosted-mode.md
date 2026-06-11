@@ -16,6 +16,12 @@ The embedded authorization server runs inside this transport when configured. It
 
 → [auth-server-setup.md](./auth-server-setup.md) — complete operator runbook covering filesystem vs Postgres storage, method selection (trivial-consent / local-password / magic-link / github), tunnels (Cloudflare / ngrok), reverse proxies, native HTTPS, and the security checklist.
 
+For Cloudflare-fronted alpha deployments, run the
+[Cloudflare Alpha Smoke Test](./cloudflare-alpha-smoke-test.md) after endpoint
+verification. It validates the real MCP client path: OAuth discovery, GitHub
+sign-in, Dollhouse client consent, bearer-token use, and read-only MCP calls
+through the edge.
+
 ## Current limitations
 
 - File-backed portfolio storage by default (Postgres backend available; see auth-server-setup.md for `DOLLHOUSE_STORAGE_BACKEND=database`)
