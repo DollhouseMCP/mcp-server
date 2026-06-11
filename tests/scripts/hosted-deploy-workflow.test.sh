@@ -241,6 +241,8 @@ DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 [[ ! -s "${CURL_LOG}" ]] || fail "dry-run install should not call curl"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would run database migrations"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would apply post-migration database grants"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/apply-post-migration-grants.sh to pass grant passwords through container environment"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would write ${DRY_RUN_DEPLOY_DIR}/bootstrap-admin.sh to use the admin database URL inside the maintenance container"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
 
@@ -298,7 +300,7 @@ run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} build dollhousemcp dollhousemcp-migrate"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres sh -c set -eu; : \"\${DOLLHOUSE_APP_DB_PASSWORD:?DOLLHOUSE_APP_DB_PASSWORD is required}\"; psql -v ON_ERROR_STOP=1 --username \"\${POSTGRES_USER}\" --dbname \"\${POSTGRES_DB}\" -v app_password=\"\${DOLLHOUSE_APP_DB_PASSWORD}\""
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
@@ -316,8 +318,8 @@ assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --no-deps --force-recreate
 
 log "running bootstrap-admin workflow"
 run_hosted_with_bootstrap bootstrap-admin octocat
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate sh -c DOLLHOUSE_DATABASE_URL=\"\${DOLLHOUSE_DATABASE_ADMIN_URL}\" exec node dist/cli/admin-bootstrap.js \"\$@\" dollhouse-admin-bootstrap --method github --github-username octocat"
-assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres sh -c set -eu; : \"\${DOLLHOUSE_APP_DB_PASSWORD:?DOLLHOUSE_APP_DB_PASSWORD is required}\"; psql -v ON_ERROR_STOP=1 --username \"\${POSTGRES_USER}\" --dbname \"\${POSTGRES_DB}\" -v app_password=\"\${DOLLHOUSE_APP_DB_PASSWORD}\""
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate /usr/local/bin/dollhouse-bootstrap-admin --method github --github-username octocat"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres /usr/local/bin/apply-post-migration-grants"
 
 log "running rollback workflow"
 run_hosted rollback

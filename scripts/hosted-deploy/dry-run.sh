@@ -14,7 +14,9 @@ describe_render_plan() {
   log "dry-run: would write ${COMPOSE_FILE}"
   log "dry-run: would write ${CADDY_FILE}"
   log "dry-run: would write ${INIT_DB_FILE} without embedding the app database password"
-  log "dry-run: would write ${POST_MIGRATION_GRANTS_FILE}"
+  log "dry-run: would write ${POST_MIGRATION_GRANTS_FILE} without embedding the app database password"
+  log "dry-run: would write ${POST_MIGRATION_GRANTS_SCRIPT_FILE} to pass grant passwords through container environment"
+  log "dry-run: would write ${BOOTSTRAP_ADMIN_SCRIPT_FILE} to use the admin database URL inside the maintenance container"
 
   return 0
 }

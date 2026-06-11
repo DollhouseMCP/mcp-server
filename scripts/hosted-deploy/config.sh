@@ -124,6 +124,8 @@ hosted_deploy_init_config() {
   CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
   INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
   POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/post-migration-grants.sql"
+  POST_MIGRATION_GRANTS_SCRIPT_FILE="${DEPLOY_DIR}/apply-post-migration-grants.sh"
+  BOOTSTRAP_ADMIN_SCRIPT_FILE="${DEPLOY_DIR}/bootstrap-admin.sh"
   SERVER_DIR="${DEPLOY_DIR}/server"
   APP_CONTAINER_NAME=""
   POSTGRES_CONTAINER_NAME=""

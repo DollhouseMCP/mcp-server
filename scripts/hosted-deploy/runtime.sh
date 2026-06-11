@@ -80,8 +80,7 @@ run_database_migrations() {
   log "running database migrations"
   compose run --rm dollhousemcp-migrate
   log "applying post-migration database grants"
-  compose exec -T postgres sh -c \
-    'set -eu; : "${DOLLHOUSE_APP_DB_PASSWORD:?DOLLHOUSE_APP_DB_PASSWORD is required}"; psql -v ON_ERROR_STOP=1 --username "${POSTGRES_USER}" --dbname "${POSTGRES_DB}" -v app_password="${DOLLHOUSE_APP_DB_PASSWORD}"' \
+  compose exec -T postgres /usr/local/bin/apply-post-migration-grants \
     < "${POST_MIGRATION_GRANTS_FILE}"
 
   return 0
@@ -136,8 +135,7 @@ run_bootstrap_admin() {
   log "bootstrapping GitHub admin"
   compose run --rm \
     dollhousemcp-migrate \
-    sh -c 'DOLLHOUSE_DATABASE_URL="${DOLLHOUSE_DATABASE_ADMIN_URL}" exec node dist/cli/admin-bootstrap.js "$@"' \
-    dollhouse-admin-bootstrap "${args[@]}"
+    /usr/local/bin/dollhouse-bootstrap-admin "${args[@]}"
 
   return 0
 }

@@ -20,6 +20,7 @@ services:
     volumes:
       - ./pgdata:/var/lib/postgresql/data
       - ./init-db.sh:/docker-entrypoint-initdb.d/00-create-roles.sh:ro
+      - ./apply-post-migration-grants.sh:/usr/local/bin/apply-post-migration-grants:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dollhouse -d dollhousemcp"]
       interval: 10s
@@ -101,6 +102,8 @@ services:
       DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp
       DOLLHOUSE_DATABASE_ADMIN_URL: postgres://dollhouse:\${POSTGRES_ADMIN_PASSWORD}@postgres:5432/dollhousemcp
       DOLLHOUSE_DATABASE_SSL: disable
+    volumes:
+      - ./bootstrap-admin.sh:/usr/local/bin/dollhouse-bootstrap-admin:ro
     command: ["npm", "run", "db:migrate"]
 
   caddy:
@@ -238,8 +241,8 @@ EOF
 
 write_init_db() {
   cat > "${INIT_DB_FILE}" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
+#!/bin/sh
+set -eu
 
 : "${POSTGRES_USER:?POSTGRES_USER is required}"
 : "${POSTGRES_DB:?POSTGRES_DB is required}"
@@ -265,6 +268,53 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
 SQL
 EOF
   chmod 0755 "${INIT_DB_FILE}"
+
+  return 0
+}
+
+write_post_migration_grants_script() {
+  cat > "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" <<'EOF'
+#!/bin/sh
+set -eu
+
+: "${POSTGRES_USER:?POSTGRES_USER is required}"
+: "${POSTGRES_DB:?POSTGRES_DB is required}"
+: "${DOLLHOUSE_APP_DB_PASSWORD:?DOLLHOUSE_APP_DB_PASSWORD is required}"
+
+psql -v ON_ERROR_STOP=1 \
+  --username "${POSTGRES_USER}" \
+  --dbname "${POSTGRES_DB}" \
+  -v app_password="${DOLLHOUSE_APP_DB_PASSWORD}"
+EOF
+  chmod 0755 "${POST_MIGRATION_GRANTS_SCRIPT_FILE}"
+
+  return 0
+}
+
+write_bootstrap_admin_script() {
+  cat > "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" <<'EOF'
+#!/bin/sh
+set -eu
+
+: "${DOLLHOUSE_DATABASE_ADMIN_URL:?DOLLHOUSE_DATABASE_ADMIN_URL is required}"
+
+export DOLLHOUSE_DATABASE_URL="${DOLLHOUSE_DATABASE_ADMIN_URL}"
+exec node dist/cli/admin-bootstrap.js "$@"
+EOF
+  chmod 0755 "${BOOTSTRAP_ADMIN_SCRIPT_FILE}"
+
+  return 0
+}
+
+validate_rendered_runtime_files() {
+  [[ -r "${INIT_DB_FILE}" && -x "${INIT_DB_FILE}" ]] || \
+    die "rendered ${INIT_DB_FILE} must be readable and executable by the Postgres entrypoint"
+  [[ -r "${POST_MIGRATION_GRANTS_FILE}" ]] || \
+    die "rendered ${POST_MIGRATION_GRANTS_FILE} must be readable for post-migration grants"
+  [[ -r "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" && -x "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" ]] || \
+    die "rendered ${POST_MIGRATION_GRANTS_SCRIPT_FILE} must be readable and executable in the Postgres container"
+  [[ -r "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" && -x "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" ]] || \
+    die "rendered ${BOOTSTRAP_ADMIN_SCRIPT_FILE} must be readable and executable in the maintenance container"
 
   return 0
 }
@@ -324,6 +374,9 @@ render_files() {
   write_caddyfile
   write_init_db
   write_post_migration_grants
+  write_post_migration_grants_script
+  write_bootstrap_admin_script
+  validate_rendered_runtime_files
   log "rendered deployment files in ${DEPLOY_DIR}"
 
   return 0

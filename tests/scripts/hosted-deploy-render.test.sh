@@ -101,6 +101,8 @@ COMPOSE_FILE="${DEPLOY_DIR}/compose.yml"
 CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
 INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
 POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/post-migration-grants.sql"
+POST_MIGRATION_GRANTS_SCRIPT_FILE="${DEPLOY_DIR}/apply-post-migration-grants.sh"
+BOOTSTRAP_ADMIN_SCRIPT_FILE="${DEPLOY_DIR}/bootstrap-admin.sh"
 
 log "rendering default alpha configuration"
 render_with_dcr "${DEPLOY_DIR}" ""
@@ -110,6 +112,8 @@ render_with_dcr "${DEPLOY_DIR}" ""
 [[ -f "${CADDY_FILE}" ]] || fail "missing ${CADDY_FILE}"
 [[ -f "${INIT_DB_FILE}" ]] || fail "missing ${INIT_DB_FILE}"
 [[ -f "${POST_MIGRATION_GRANTS_FILE}" ]] || fail "missing ${POST_MIGRATION_GRANTS_FILE}"
+[[ -f "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" ]] || fail "missing ${POST_MIGRATION_GRANTS_SCRIPT_FILE}"
+[[ -f "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" ]] || fail "missing ${BOOTSTRAP_ADMIN_SCRIPT_FILE}"
 
 assert_line "${COMPOSE_FILE}" 'name: deploy'
 assert_line "${COMPOSE_FILE}" '    container_name: deploy-postgres'
@@ -121,6 +125,8 @@ assert_contains "${COMPOSE_FILE}" 'image: caddy:2.8'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
+assert_contains "${COMPOSE_FILE}" "./apply-post-migration-grants.sh:/usr/local/bin/apply-post-migration-grants:ro"
+assert_contains "${COMPOSE_FILE}" "./bootstrap-admin.sh:/usr/local/bin/dollhouse-bootstrap-admin:ro"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_HTTP_ALLOWED_HOSTS: localhost,127.0.0.1,mcp.example.com"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_TRUSTED_PROXIES: 172.16.0.0/12"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_UNSAFE_NO_TLS: "true"'
@@ -153,11 +159,17 @@ assert_contains "${INIT_DB_FILE}" 'CREATE ROLE dollhouse_app'
 assert_contains "${INIT_DB_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
 [[ "$(file_mode "${INIT_DB_FILE}")" == "755" ]] || fail "init-db.sh should be mode 0755"
 [[ "$(file_mode "${POST_MIGRATION_GRANTS_FILE}")" == "644" ]] || fail "post-migration-grants.sql should be mode 0644"
+[[ "$(file_mode "${POST_MIGRATION_GRANTS_SCRIPT_FILE}")" == "755" ]] || fail "apply-post-migration-grants.sh should be mode 0755"
+[[ "$(file_mode "${BOOTSTRAP_ADMIN_SCRIPT_FILE}")" == "755" ]] || fail "bootstrap-admin.sh should be mode 0755"
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'CREATE ROLE dollhouse_app'
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" ":'app_password'"
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dollhouse_app'
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'REVOKE INSERT, UPDATE, DELETE ON TABLE users FROM dollhouse_app'
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO dollhouse_app'
+assert_contains "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
+assert_contains "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" 'psql -v ON_ERROR_STOP=1'
+assert_contains "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" 'DOLLHOUSE_DATABASE_ADMIN_URL'
+assert_contains "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" 'exec node dist/cli/admin-bootstrap.js "$@"'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=cloud'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_INSTANCE_NAME=deploy'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_IMAGE_TAG=deploy-hosted:alpha'
@@ -185,6 +197,12 @@ if grep -Fq "${first_postgres_password}" "${INIT_DB_FILE}"; then
 fi
 if grep -Fq "${first_postgres_password}" "${POST_MIGRATION_GRANTS_FILE}"; then
   fail "post-migration-grants.sql should not contain the generated app database password"
+fi
+if grep -Fq "${first_postgres_password}" "${POST_MIGRATION_GRANTS_SCRIPT_FILE}"; then
+  fail "apply-post-migration-grants.sh should not contain the generated app database password"
+fi
+if grep -Fq "${first_postgres_password}" "${BOOTSTRAP_ADMIN_SCRIPT_FILE}"; then
+  fail "bootstrap-admin.sh should not contain the generated app database password"
 fi
 
 log "rendering stricter DCR override"
