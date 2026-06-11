@@ -79,6 +79,11 @@ build_app_image() {
 run_database_migrations() {
   log "running database migrations"
   compose run --rm dollhousemcp-migrate
+  log "applying post-migration database grants"
+  [[ -r "${POST_MIGRATION_GRANTS_FILE}" ]] || \
+    die "post-migration grants file is not readable at ${POST_MIGRATION_GRANTS_FILE}; run render or install again"
+  compose exec -T postgres /usr/local/bin/apply-post-migration-grants \
+    < "${POST_MIGRATION_GRANTS_FILE}"
 
   return 0
 }
@@ -130,7 +135,9 @@ run_bootstrap_admin() {
   fi
 
   log "bootstrapping GitHub admin"
-  compose run --rm dollhousemcp npx dollhouse-admin-bootstrap "${args[@]}"
+  compose run --rm \
+    dollhousemcp-migrate \
+    /usr/local/bin/dollhouse-bootstrap-admin "${args[@]}"
 
   return 0
 }
