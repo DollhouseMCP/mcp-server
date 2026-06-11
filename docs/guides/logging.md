@@ -542,7 +542,13 @@ The category logs rotate themselves — by default once per day or once a file e
 
 The supervisor-captured stream is your responsibility:
 
-- **Docker**: configure log driver rotation in `daemon.json` or per-service in compose:
+- **Hosted Docker helper**: generated hosted Compose files set per-service
+  Docker `json-file` rotation by default: `max-size: "25m"` and
+  `max-file: "5"`. Override with `DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE` and
+  `DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE` before `render`, `install`, or
+  `update`.
+- **Manual Docker**: configure log driver rotation in `daemon.json` or
+  per-service in compose:
   ```yaml
   dollhousemcp:
     logging:

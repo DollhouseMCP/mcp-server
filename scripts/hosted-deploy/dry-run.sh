@@ -8,6 +8,7 @@ describe_render_plan() {
   validate_render_inputs
   log "dry-run: deployment mode=${DEPLOY_MODE} instance=${INSTANCE_NAME} proxy_mode=${PROXY_MODE} bind=${BIND_ADDRESS} public_url=${PUBLIC_BASE_URL}"
   log "dry-run: compose project=${INSTANCE_NAME} image=${IMAGE_TAG}"
+  log "dry-run: Docker json-file log rotation max-size=${DOCKER_LOG_MAX_SIZE} max-file=${DOCKER_LOG_MAX_FILE}"
   log "dry-run: auth provider=${AUTH_PROVIDER} methods=${AUTH_METHODS:-none} open_dcr=${OPEN_DCR} allowlist_required=${ALLOWLIST_REQUIRED}"
   log "dry-run: would render deployment files in ${DEPLOY_DIR}"
   log "dry-run: would preserve or create ${ENV_FILE}"

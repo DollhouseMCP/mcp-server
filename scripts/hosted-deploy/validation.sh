@@ -406,6 +406,24 @@ validate_render_value() {
   return 0
 }
 
+validate_docker_log_max_size() {
+  validate_no_whitespace DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE "${DOCKER_LOG_MAX_SIZE}"
+  if [[ ! "${DOCKER_LOG_MAX_SIZE}" =~ ^[1-9][0-9]*[kKmMgG]$ ]]; then
+    die "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE must be a positive Docker log size such as 25m, got: ${DOCKER_LOG_MAX_SIZE}"
+  fi
+
+  return 0
+}
+
+validate_docker_log_max_file() {
+  validate_no_whitespace DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE "${DOCKER_LOG_MAX_FILE}"
+  if [[ ! "${DOCKER_LOG_MAX_FILE}" =~ ^[1-9][0-9]*$ ]]; then
+    die "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE must be a positive integer, got: ${DOCKER_LOG_MAX_FILE}"
+  fi
+
+  return 0
+}
+
 validate_render_inputs() {
   resolve_mode_defaults
   validate_bool DOLLHOUSE_AUTH_OPEN_DCR "${OPEN_DCR}"
@@ -426,6 +444,8 @@ validate_render_inputs() {
   validate_render_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
   validate_render_value DOLLHOUSE_HOSTED_MEM_LIMIT "${MEM_LIMIT}"
   validate_render_value DOLLHOUSE_HOSTED_CPUS "${CPU_LIMIT}"
+  validate_docker_log_max_size
+  validate_docker_log_max_file
 
   return 0
 }
