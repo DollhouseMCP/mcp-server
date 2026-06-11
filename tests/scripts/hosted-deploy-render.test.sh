@@ -134,6 +134,7 @@ INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
 POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/post-migration-grants.sql"
 POST_MIGRATION_GRANTS_SCRIPT_FILE="${DEPLOY_DIR}/apply-post-migration-grants.sh"
 BOOTSTRAP_ADMIN_SCRIPT_FILE="${DEPLOY_DIR}/bootstrap-admin.sh"
+LOGGING_ANCHOR_LINE='    logging: *dollhouse-logging'
 
 log "rendering default alpha configuration"
 render_with_dcr "${DEPLOY_DIR}" ""
@@ -157,11 +158,11 @@ assert_contains "${COMPOSE_FILE}" 'x-dollhouse-logging: &dollhouse-logging'
 assert_contains "${COMPOSE_FILE}" '  driver: json-file'
 assert_contains "${COMPOSE_FILE}" '    max-size: "25m"'
 assert_contains "${COMPOSE_FILE}" '    max-file: "5"'
-assert_occurrences "${COMPOSE_FILE}" '    logging: *dollhouse-logging' "4"
-assert_service_contains "${COMPOSE_FILE}" postgres '    logging: *dollhouse-logging'
-assert_service_contains "${COMPOSE_FILE}" dollhousemcp '    logging: *dollhouse-logging'
-assert_service_contains "${COMPOSE_FILE}" dollhousemcp-migrate '    logging: *dollhouse-logging'
-assert_service_contains "${COMPOSE_FILE}" caddy '    logging: *dollhouse-logging'
+assert_occurrences "${COMPOSE_FILE}" "${LOGGING_ANCHOR_LINE}" "4"
+assert_service_contains "${COMPOSE_FILE}" postgres "${LOGGING_ANCHOR_LINE}"
+assert_service_contains "${COMPOSE_FILE}" dollhousemcp "${LOGGING_ANCHOR_LINE}"
+assert_service_contains "${COMPOSE_FILE}" dollhousemcp-migrate "${LOGGING_ANCHOR_LINE}"
+assert_service_contains "${COMPOSE_FILE}" caddy "${LOGGING_ANCHOR_LINE}"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
@@ -283,7 +284,7 @@ DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=3 \
   bash "${HOSTED_DEPLOY}" render
 assert_contains "${LOG_ROTATION_COMPOSE_FILE}" '    max-size: "10m"'
 assert_contains "${LOG_ROTATION_COMPOSE_FILE}" '    max-file: "3"'
-assert_occurrences "${LOG_ROTATION_COMPOSE_FILE}" '    logging: *dollhouse-logging' "4"
+assert_occurrences "${LOG_ROTATION_COMPOSE_FILE}" "${LOGGING_ANCHOR_LINE}" "4"
 assert_contains "${LOG_ROTATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=10m'
 assert_contains "${LOG_ROTATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=3'
 
