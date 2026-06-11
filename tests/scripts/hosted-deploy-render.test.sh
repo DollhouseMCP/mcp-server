@@ -43,6 +43,16 @@ assert_not_contains() {
   fi
 }
 
+file_mode() {
+  local file="$1"
+
+  if stat -c '%a' "${file}" >/dev/null 2>&1; then
+    stat -c '%a' "${file}"
+  else
+    stat -f '%Lp' "${file}"
+  fi
+}
+
 env_value() {
   local key="$1"
   local file="$2"
@@ -90,6 +100,7 @@ ENV_FILE="${DEPLOY_DIR}/.env.production"
 COMPOSE_FILE="${DEPLOY_DIR}/compose.yml"
 CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
 INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
+POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/post-migration-grants.sql"
 
 log "rendering default alpha configuration"
 render_with_dcr "${DEPLOY_DIR}" ""
@@ -98,6 +109,7 @@ render_with_dcr "${DEPLOY_DIR}" ""
 [[ -f "${COMPOSE_FILE}" ]] || fail "missing ${COMPOSE_FILE}"
 [[ -f "${CADDY_FILE}" ]] || fail "missing ${CADDY_FILE}"
 [[ -f "${INIT_DB_FILE}" ]] || fail "missing ${INIT_DB_FILE}"
+[[ -f "${POST_MIGRATION_GRANTS_FILE}" ]] || fail "missing ${POST_MIGRATION_GRANTS_FILE}"
 
 assert_line "${COMPOSE_FILE}" 'name: deploy'
 assert_line "${COMPOSE_FILE}" '    container_name: deploy-postgres'
@@ -139,6 +151,13 @@ assert_contains "${CADDY_FILE}" 'header_up X-Real-IP {client_ip}'
 assert_not_contains "${CADDY_FILE}" 'trusted_proxies static'
 assert_contains "${INIT_DB_FILE}" 'CREATE ROLE dollhouse_app'
 assert_contains "${INIT_DB_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
+[[ "$(file_mode "${INIT_DB_FILE}")" == "755" ]] || fail "init-db.sh should be mode 0755"
+[[ "$(file_mode "${POST_MIGRATION_GRANTS_FILE}")" == "644" ]] || fail "post-migration-grants.sql should be mode 0644"
+assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'CREATE ROLE dollhouse_app'
+assert_contains "${POST_MIGRATION_GRANTS_FILE}" ":'app_password'"
+assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dollhouse_app'
+assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'REVOKE INSERT, UPDATE, DELETE ON TABLE users FROM dollhouse_app'
+assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO dollhouse_app'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=cloud'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_INSTANCE_NAME=deploy'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_IMAGE_TAG=deploy-hosted:alpha'
@@ -163,6 +182,9 @@ if [[ ! "${first_master_key}" =~ ^[A-Za-z0-9+/]+={0,2}$ ]]; then
 fi
 if grep -Fq "${first_postgres_password}" "${INIT_DB_FILE}"; then
   fail "init-db.sh should not contain the generated app database password"
+fi
+if grep -Fq "${first_postgres_password}" "${POST_MIGRATION_GRANTS_FILE}"; then
+  fail "post-migration-grants.sql should not contain the generated app database password"
 fi
 
 log "rendering stricter DCR override"

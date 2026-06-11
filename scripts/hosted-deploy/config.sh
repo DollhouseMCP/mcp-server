@@ -123,6 +123,7 @@ hosted_deploy_init_config() {
   COMPOSE_FILE="${DEPLOY_DIR}/compose.yml"
   CADDY_FILE="${DEPLOY_DIR}/Caddyfile"
   INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
+  POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/post-migration-grants.sql"
   SERVER_DIR="${DEPLOY_DIR}/server"
   APP_CONTAINER_NAME=""
   POSTGRES_CONTAINER_NAME=""

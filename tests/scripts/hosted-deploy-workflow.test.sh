@@ -203,6 +203,21 @@ run_hosted() {
     bash "${HOSTED_DEPLOY}" "${action}"
 }
 
+run_hosted_with_bootstrap() {
+  local action="$1"
+  local username="$2"
+  PATH="${FAKE_BIN}:${PATH}" \
+  DOLLHOUSE_FAKE_DOCKER_LOG="${DOCKER_LOG}" \
+  DOLLHOUSE_FAKE_CURL_LOG="${CURL_LOG}" \
+  DOLLHOUSE_HOSTED_DEPLOY_DIR="${DEPLOY_DIR}" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+  DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+  DOLLHOUSE_BOOTSTRAP_GITHUB_USERNAME="${username}" \
+    bash "${HOSTED_DEPLOY}" "${action}"
+}
+
 write_fake_commands
 create_source_repo
 
@@ -225,6 +240,7 @@ DOLLHOUSE_HOSTED_SOURCE_DIR="${SOURCE_REPO}" \
 [[ ! -s "${DOCKER_LOG}" ]] || fail "dry-run install should not call docker"
 [[ ! -s "${CURL_LOG}" ]] || fail "dry-run install should not call curl"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would run database migrations"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would apply post-migration database grants"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would verify https://mcp.example.com/healthz"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would warn, not fail, if /readyz reports bootstrap_required"
 
@@ -282,6 +298,7 @@ run_hosted install
 assert_file_equals "${DEPLOY_DIR}/server/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} build dollhousemcp dollhousemcp-migrate"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres sh -c set -eu; : \"\${DOLLHOUSE_APP_DB_PASSWORD:?DOLLHOUSE_APP_DB_PASSWORD is required}\"; psql -v ON_ERROR_STOP=1 --username \"\${POSTGRES_USER}\" --dbname \"\${POSTGRES_DB}\" -v app_password=\"\${DOLLHOUSE_APP_DB_PASSWORD}\""
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d"
 assert_contains "${CURL_LOG}" "https://mcp.example.com/healthz"
@@ -296,6 +313,11 @@ assert_file_equals "${previous_bundle}/version.txt" "v1"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d dollhousemcp"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} pull caddy"
 assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} up -d --no-deps --force-recreate caddy"
+
+log "running bootstrap-admin workflow"
+run_hosted_with_bootstrap bootstrap-admin octocat
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} run --rm dollhousemcp-migrate sh -c DOLLHOUSE_DATABASE_URL=\"\${DOLLHOUSE_DATABASE_ADMIN_URL}\" exec node dist/cli/admin-bootstrap.js \"\$@\" dollhouse-admin-bootstrap --method github --github-username octocat"
+assert_contains "${DOCKER_LOG}" "${COMPOSE_CMD} exec -T postgres sh -c set -eu; : \"\${DOLLHOUSE_APP_DB_PASSWORD:?DOLLHOUSE_APP_DB_PASSWORD is required}\"; psql -v ON_ERROR_STOP=1 --username \"\${POSTGRES_USER}\" --dbname \"\${POSTGRES_DB}\" -v app_password=\"\${DOLLHOUSE_APP_DB_PASSWORD}\""
 
 log "running rollback workflow"
 run_hosted rollback

@@ -264,7 +264,50 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO dollhouse_app;
 SQL
 EOF
-  chmod 0750 "${INIT_DB_FILE}"
+  chmod 0755 "${INIT_DB_FILE}"
+
+  return 0
+}
+
+write_post_migration_grants() {
+  cat > "${POST_MIGRATION_GRANTS_FILE}" <<'EOF'
+-- Re-apply app-role grants after migrations create or alter objects.
+--
+-- The Postgres entrypoint init script runs only on first database creation.
+-- Migrations run later, so hosted deploys re-run these grants after every
+-- migration pass to make fresh installs and updates converge on the same role
+-- privileges.
+
+SELECT format(
+  'CREATE ROLE dollhouse_app WITH LOGIN PASSWORD %L NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS',
+  :'app_password'
+)
+WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname = 'dollhouse_app')
+\gexec
+ALTER ROLE dollhouse_app WITH PASSWORD :'app_password';
+
+GRANT CONNECT ON DATABASE dollhousemcp TO dollhouse_app;
+GRANT USAGE ON SCHEMA public TO dollhouse_app;
+
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dollhouse_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO dollhouse_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO dollhouse_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO dollhouse_app;
+
+REVOKE INSERT, UPDATE, DELETE ON TABLE users FROM dollhouse_app;
+
+DO $$
+BEGIN
+  EXECUTE 'GRANT USAGE ON SCHEMA drizzle TO dollhouse_app';
+  EXECUTE 'GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO dollhouse_app';
+EXCEPTION WHEN invalid_schema_name THEN
+  NULL;
+END
+$$;
+EOF
+  chmod 0644 "${POST_MIGRATION_GRANTS_FILE}"
 
   return 0
 }
@@ -280,6 +323,7 @@ render_files() {
   write_compose
   write_caddyfile
   write_init_db
+  write_post_migration_grants
   log "rendered deployment files in ${DEPLOY_DIR}"
 
   return 0
