@@ -308,13 +308,13 @@ EOF
 
 validate_rendered_runtime_files() {
   [[ -r "${INIT_DB_FILE}" && -x "${INIT_DB_FILE}" ]] || \
-    die "rendered ${INIT_DB_FILE} must be readable and executable by the Postgres entrypoint"
+    die "rendered ${INIT_DB_FILE} must be readable and executable by the Postgres entrypoint; expected mode 0755 or equivalent"
   [[ -r "${POST_MIGRATION_GRANTS_FILE}" ]] || \
-    die "rendered ${POST_MIGRATION_GRANTS_FILE} must be readable for post-migration grants"
+    die "rendered ${POST_MIGRATION_GRANTS_FILE} must be readable for post-migration grants; expected mode 0644 or equivalent"
   [[ -r "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" && -x "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" ]] || \
-    die "rendered ${POST_MIGRATION_GRANTS_SCRIPT_FILE} must be readable and executable in the Postgres container"
+    die "rendered ${POST_MIGRATION_GRANTS_SCRIPT_FILE} must be readable and executable in the Postgres container; expected mode 0755 or equivalent"
   [[ -r "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" && -x "${BOOTSTRAP_ADMIN_SCRIPT_FILE}" ]] || \
-    die "rendered ${BOOTSTRAP_ADMIN_SCRIPT_FILE} must be readable and executable in the maintenance container"
+    die "rendered ${BOOTSTRAP_ADMIN_SCRIPT_FILE} must be readable and executable in the maintenance container; expected mode 0755 or equivalent"
 
   return 0
 }
