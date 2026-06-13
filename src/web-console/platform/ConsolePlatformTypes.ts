@@ -112,6 +112,8 @@ export interface ConsoleStreamPolicy {
   readonly lastEventId: 'unsupported' | 'bounded';
   readonly heartbeatMs: number;
   readonly revalidateMs: number;
+  readonly maxLifetimeMs: number;
+  readonly backpressureDrainTimeoutMs: number;
   readonly maxEventBytes: number;
   readonly maxLastEventIdBytes: number;
 }

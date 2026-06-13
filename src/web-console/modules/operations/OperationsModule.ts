@@ -3,6 +3,7 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import type { IOperatorConfigStore } from '../../../storage/operatorConfig/IOperatorConfigStore.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
@@ -52,6 +53,8 @@ const OPERATIONS_STREAM_POLICY = {
   lastEventId: 'unsupported',
   heartbeatMs: 15_000,
   revalidateMs: 15_000,
+  maxLifetimeMs: 15 * 60_000,
+  backpressureDrainTimeoutMs: 30_000,
   maxEventBytes: 64 * 1024,
   maxLastEventIdBytes: 512,
 } as const;
@@ -194,7 +197,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         streamEventProjectors: {
           init: projectOperationalLogStreamInit,
           update: projectOperationalLog,
-          end: projectOperationalLogStreamEnd,
+          end: projectConsoleStreamEndStatus,
         },
         handler: req => {
           const lastEventId = parseConsoleLastEventId(req, OPERATIONS_STREAM_POLICY);
@@ -241,7 +244,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         streamEventProjectors: {
           init: projectOperationalMetricStreamInit,
           update: projectOperationalMetric,
-          end: projectOperationalStreamEnd,
+          end: projectConsoleStreamEndStatus,
         },
         handler: req => {
           const lastEventId = parseConsoleLastEventId(req, OPERATIONS_STREAM_POLICY);
@@ -311,10 +314,6 @@ function projectOperationalLogStreamInit(value: unknown): unknown {
   };
 }
 
-function projectOperationalLogStreamEnd(value: unknown): unknown {
-  return projectOperationalStreamEnd(value);
-}
-
 function projectOperationalMetricStreamData(value: unknown): unknown {
   return projectOperationalMetric(value);
 }
@@ -328,11 +327,6 @@ function projectOperationalMetricStreamInit(value: unknown): unknown {
     resume_supported: init.resume_supported === true,
     filters: projectMetricStreamFilters(init.filters),
   };
-}
-
-function projectOperationalStreamEnd(value: unknown): unknown {
-  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
-  return { status: end.status === 'complete' ? 'complete' : 'closed' };
 }
 
 function asOperationalLogStreamInit(value: unknown): {

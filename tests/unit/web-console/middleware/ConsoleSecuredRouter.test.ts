@@ -199,6 +199,8 @@ function fixtureModules(
         lastEventId: 'bounded',
         heartbeatMs: 60_000,
         revalidateMs: 10,
+        maxLifetimeMs: 15 * 60_000,
+        backpressureDrainTimeoutMs: 30_000,
         maxEventBytes: 65_536,
         maxLastEventIdBytes: 512,
       },

@@ -119,6 +119,71 @@ describe('ConsoleSseStream', () => {
     expect(response.writes.join('')).not.toContain('"item":2');
   });
 
+  it('waits for response drain before writing additional stream events', async () => {
+    const response = fakeResponse({
+      writeResult: chunk => !chunk.includes('"item":1'),
+    });
+
+    const stream = sendConsoleSseStream(
+      response,
+      sseEvents([
+        { event: 'update', data: { item: 1 } },
+        { event: 'update', data: { item: 2 } },
+        { event: 'end', data: { status: 'complete' } },
+      ]),
+      undefined,
+      {
+        now: () => NOW,
+        policy: {
+          ...DEFAULT_CONSOLE_STREAM_POLICY,
+          heartbeatMs: 60_000,
+          backpressureDrainTimeoutMs: 60_000,
+        },
+      },
+    );
+
+    await new Promise(resolve => setImmediate(resolve));
+    expect(response.writes.join('')).toContain('"item":1');
+    expect(response.writes.join('')).not.toContain('"item":2');
+
+    response.emit('drain');
+    await stream;
+    expect(response.writes.join('')).toContain('"item":2');
+    expect(response.writes.join('')).toContain('event: end');
+  });
+
+  it('reports and closes when response backpressure does not drain', async () => {
+    jest.useFakeTimers();
+    const response = fakeResponse({ writeResult: chunk => !chunk.includes('"item":1') });
+    const reportStreamError = jest.fn();
+    const stream = sendConsoleSseStream(
+      response,
+      sseEvents([
+        { event: 'update', data: { item: 1 } },
+        { event: 'update', data: { item: 2 } },
+      ]),
+      undefined,
+      {
+        now: () => NOW,
+        reportStreamError,
+        policy: {
+          ...DEFAULT_CONSOLE_STREAM_POLICY,
+          heartbeatMs: 60_000,
+          backpressureDrainTimeoutMs: 10,
+        },
+      },
+    );
+
+    await jest.advanceTimersByTimeAsync(10);
+    await stream;
+
+    expect(reportStreamError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Console SSE backpressure drain timed out',
+    }));
+    expect(response.end).toHaveBeenCalledTimes(1);
+    expect(response.writes.join('')).not.toContain('"item":2');
+  });
+
   it('stops writing when the request aborts', async () => {
     const response = fakeResponse();
     const request = new EventEmitter() as ConsoleRequest;
@@ -224,6 +289,31 @@ describe('ConsoleSseStream', () => {
     expect(response.writes.filter(write => write === ':hb\n\n')).toHaveLength(heartbeatWrites);
   });
 
+  it('closes long-lived streams at the configured maximum lifetime', async () => {
+    jest.useFakeTimers();
+    const response = fakeResponse();
+    const stream = sendConsoleSseStream(
+      response,
+      neverEvents(),
+      undefined,
+      {
+        now: () => NOW,
+        policy: {
+          ...DEFAULT_CONSOLE_STREAM_POLICY,
+          heartbeatMs: 60_000,
+          revalidateMs: 60_000,
+          maxLifetimeMs: 10,
+        },
+      },
+    );
+
+    await jest.advanceTimersByTimeAsync(10);
+    await stream;
+
+    expect(response.writes.join('')).toContain('event: end\ndata: {"status":"closed","reason":"max_lifetime"}');
+    expect(response.end).toHaveBeenCalledTimes(1);
+  });
+
   it('closes the stream when periodic revalidation fails', async () => {
     jest.useFakeTimers();
     const response = fakeResponse();
@@ -285,25 +375,48 @@ async function* delayedEvents(
   for (const event of events) yield event;
 }
 
-function fakeResponse(): Response & { writes: string[] } {
+function neverEvents(): AsyncIterable<ConsoleSseEvent> {
+  return {
+    [Symbol.asyncIterator]: () => ({
+      next: () => new Promise<IteratorResult<ConsoleSseEvent>>(() => {}),
+    }),
+  };
+}
+
+function fakeResponse(options: {
+  readonly writeResult?: (chunk: string) => boolean;
+} = {}): Response & { writes: string[] } {
   const emitter = new EventEmitter();
   const writes: string[] = [];
   let writableEnded = false;
-  return Object.assign(emitter, {
+  let writableNeedDrain = false;
+  const response = Object.assign(emitter, {
     writes,
-    get writableEnded() {
-      return writableEnded;
-    },
     status: jest.fn().mockReturnThis(),
     setHeader: jest.fn(),
     flushHeaders: jest.fn(),
     write: jest.fn((chunk: string) => {
       writes.push(chunk);
-      return true;
+      const accepted = options.writeResult ? options.writeResult(chunk) : true;
+      writableNeedDrain = !accepted;
+      return accepted;
     }),
     end: jest.fn(() => {
       writableEnded = true;
       emitter.emit('close');
     }),
+    emit: jest.fn((eventName: string | symbol, ...args: unknown[]) => {
+      if (eventName === 'drain') writableNeedDrain = false;
+      return EventEmitter.prototype.emit.call(emitter, eventName, ...args);
+    }),
   }) as unknown as Response & { writes: string[] };
+  Object.defineProperties(response, {
+    writableEnded: {
+      get: () => writableEnded,
+    },
+    writableNeedDrain: {
+      get: () => writableNeedDrain,
+    },
+  });
+  return response;
 }
