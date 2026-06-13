@@ -13,6 +13,7 @@ import {
   InMemoryConsoleSessionStore,
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
+  InMemoryRuntimeSessionControlStore,
   type ConsoleLoginFlowKind,
   type ConsolePrincipalSecurityState,
   type ConsoleOAuthCodeExchangeRequest,
@@ -123,6 +124,7 @@ function buildFixture(options: FixtureOptions = {}): {
     consoleOrigin: ORIGIN,
     adminAuditWriter: new InMemoryAdminAuditWriter(),
     idempotencyStore: new InMemoryIdempotencyStore(),
+    runtimeStore: new InMemoryRuntimeSessionControlStore(),
     idleTimeoutMs: 60 * 60 * 1000,
     now: options.now ?? (() => NOW),
   }));

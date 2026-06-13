@@ -16,6 +16,7 @@ import {
 } from './ExecutionPrivacyProjectors.js';
 
 const SELF_CAPABILITY = 'console:self';
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const EXECUTION_STREAM_POLICY = {
   lastEventId: 'unsupported',
   heartbeatMs: 15_000,
@@ -131,6 +132,9 @@ function withSessionId(
   if (typeof sessionId !== 'string' || sessionId.trim() === '') {
     return invalidRequest('session_id path parameter is required.');
   }
+  if (!isSessionId(sessionId)) {
+    return invalidRequest('session_id path parameter is invalid.');
+  }
   return action(sessionId);
 }
 
@@ -144,7 +148,14 @@ function withExecutionParams(
       typeof goalId !== 'string' || goalId.trim() === '') {
     return invalidRequest('session_id and goal_id path parameters are required.');
   }
+  if (!isSessionId(sessionId)) {
+    return invalidRequest('session_id path parameter is invalid.');
+  }
   return action(sessionId, goalId);
+}
+
+function isSessionId(value: string): boolean {
+  return SESSION_ID_PATTERN.test(value);
 }
 
 function invalidRequest(detail: string): ConsoleHandlerResult {

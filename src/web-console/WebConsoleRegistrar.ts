@@ -627,6 +627,7 @@ export class WebConsoleRegistrar {
       integrationPublicBaseUrl,
       adminAuditWriter,
       idempotencyStore: stores.idempotencyStore,
+      runtimeStore: stores.runtimeSessionControlStore,
       authPolicyStore,
       protectedCorrelationRateLimiter,
       apiV1MountState,
@@ -979,6 +980,7 @@ function createApiV1Mount(options: {
   readonly integrationPublicBaseUrl: string | null;
   readonly adminAuditWriter: IAdminAuditWriter;
   readonly idempotencyStore: IIdempotencyStore;
+  readonly runtimeStore: IRuntimeSessionControlStore;
   readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
   readonly apiV1MountState: Pick<WebConsoleApiV1Mount, 'mounted' | 'markMounted'>;
@@ -996,6 +998,7 @@ function createApiV1Mount(options: {
     consoleOrigin,
     adminAuditWriter: options.adminAuditWriter,
     idempotencyStore: options.idempotencyStore,
+    runtimeStore: options.runtimeStore,
     authPolicyStore: options.authPolicyStore,
     protectedCorrelationRateLimiter: options.protectedCorrelationRateLimiter,
     idleTimeoutMs: options.options.consoleSessionIdleTimeoutMs ?? 30 * 60 * 1000,
