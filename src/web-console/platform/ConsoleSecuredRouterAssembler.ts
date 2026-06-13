@@ -9,6 +9,7 @@ import {
   createConsoleAuthenticationMiddleware,
   createConsoleAuthorizationMiddleware,
   createConsoleCsrfProtectionMiddleware,
+  createConsoleOwnershipMiddleware,
   createConsoleRateLimitMiddleware,
   createConsoleSecurityHeadersMiddleware,
   executeWithConsoleIdempotency,
@@ -18,6 +19,7 @@ import type { IConsoleOpaqueValueService } from '../security/ConsoleOpaqueValues
 import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
+import type { IRuntimeSessionControlStore } from '../services/runtime/IRuntimeSessionControlStore.js';
 import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
 import type { ConsoleHttpMethod, ConsoleRouteDefinition , ConsoleRequest } from './ConsolePlatformTypes.js';
 import { isElevationValidForRoute } from './ConsolePlatformTypes.js';
@@ -38,6 +40,7 @@ export interface SecuredConsoleRouterOptions {
   readonly consoleOrigin: string;
   readonly adminAuditWriter: IAdminAuditWriter;
   readonly idempotencyStore: IIdempotencyStore;
+  readonly runtimeStore: IRuntimeSessionControlStore;
   readonly authPolicyStore?: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter?: ConsoleProtectedCorrelationRateLimiter | null;
   readonly idleTimeoutMs: number;
@@ -123,6 +126,7 @@ function middlewareForRoute(input: {
     ...(input.userContext ? [input.userContext] : []),
     input.csrf,
     createConsoleAuthorizationMiddleware(input.route, input.options),
+    createConsoleOwnershipMiddleware(input.route, input.options),
     createConsoleRateLimitMiddleware(input.route, input.options),
     createSecuredHandler(input.route, input.options),
   ];

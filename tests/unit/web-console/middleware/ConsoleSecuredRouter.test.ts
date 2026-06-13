@@ -12,6 +12,7 @@ import {
   InMemoryConsoleSessionStore,
   InMemoryConsoleAuthPolicyStore,
   InMemoryIdempotencyStore,
+  InMemoryRuntimeSessionControlStore,
   ConsoleStoreValidationError,
   ConsoleProtectedCorrelationRateLimitDependencyError,
   ConsoleProtectedCorrelationRateLimiter,
@@ -35,6 +36,10 @@ const AUDIT_CAPABILITY = 'console:admin:audit' as const;
 const CONTEXT_PATH = '/api/v1/me/context';
 const CHANGE_PATH = '/api/v1/me/change';
 const HEALTH_PATH = '/api/v1/health/ready';
+const OWNED_SESSION_ID = 'mcp-session-owned';
+const OTHER_SESSION_ID = 'mcp-session-other';
+const OWNED_SESSION_PATH = `/api/v1/me/sessions/${OWNED_SESSION_ID}/owned-fixture`;
+const OTHER_SESSION_PATH = `/api/v1/me/sessions/${OTHER_SESSION_ID}/owned-fixture`;
 const ADMIN_AUDIT_PATH = '/api/v1/admin/audit';
 const ADMIN_EXPORT_PATH = '/api/v1/admin/audit/export';
 const ADMIN_STREAM_PATH = '/api/v1/admin/audit/stream';
@@ -107,6 +112,19 @@ function fixtureModules(
           },
         };
       },
+    }, {
+      method: 'GET',
+      path: '/api/v1/me/sessions/:session_id/owned-fixture',
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'owned_session',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      handler: req => ({
+        status: 200,
+        body: { session_id: req.params.session_id },
+      }),
     }, {
       method: 'POST',
       path: CHANGE_PATH,
@@ -306,11 +324,32 @@ async function buildApp(
   nowProvider: () => Date = () => NOW,
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
+  const runtimeStore = new InMemoryRuntimeSessionControlStore();
   const idempotencyStore = new InMemoryIdempotencyStore();
   const onChange = jest.fn();
   const onAdminMutation = jest.fn();
   const onProtectedCorrelation = jest.fn();
   if (session) await sessionStore.create(session);
+  await runtimeStore.registerPresence({
+    sessionId: OWNED_SESSION_ID,
+    userId: USER_ID,
+    accountCorrelationId: '018f3d47-73ae-7f10-a0de-0742618d4fb3',
+    replicaId: 'replica-a',
+    transport: 'streamable-http',
+    startedAt: NOW,
+    lastActiveAt: NOW,
+    leaseUntil: IDLE_EXPIRY,
+  });
+  await runtimeStore.registerPresence({
+    sessionId: OTHER_SESSION_ID,
+    userId: '118f3d47-73ae-7f10-a0de-0742618d4fb4',
+    accountCorrelationId: '118f3d47-73ae-7f10-a0de-0742618d4fb5',
+    replicaId: 'replica-b',
+    transport: 'streamable-http',
+    startedAt: NOW,
+    lastActiveAt: NOW,
+    leaseUntil: IDLE_EXPIRY,
+  });
   const registry = new ConsoleModuleRegistry();
   fixtureModules(onChange, onAdminMutation, onProtectedCorrelation).forEach(module => registry.register(module));
   const adminAuditWriter = new InMemoryAdminAuditWriter();
@@ -323,6 +362,7 @@ async function buildApp(
     consoleOrigin: ORIGIN,
     adminAuditWriter,
     idempotencyStore,
+    runtimeStore,
     authPolicyStore,
     protectedCorrelationRateLimiter,
     idleTimeoutMs: 60 * 60 * 1000,
@@ -332,6 +372,7 @@ async function buildApp(
   return {
     app,
     sessionStore,
+    runtimeStore,
     adminAuditWriter,
     idempotencyStore,
     onChange,
@@ -452,6 +493,32 @@ describe('secured console router authentication', () => {
     expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
     expect(response.headers['permissions-policy']).toBe('geolocation=(), microphone=(), camera=()');
     expect(adminAuditWriter.getEvents()).toEqual([]);
+  });
+
+  it('allows owned-session routes only for sessions owned by the caller', async () => {
+    const { app, runtimeStore } = await buildApp();
+    const lookup = jest.spyOn(runtimeStore, 'findPresence');
+
+    const accepted = await request(app).get(OWNED_SESSION_PATH).set('Cookie', sessionCookie());
+    const rejected = await request(app).get(OTHER_SESSION_PATH).set('Cookie', sessionCookie());
+
+    expect(accepted.status).toBe(200);
+    expect(accepted.body).toEqual({ session_id: OWNED_SESSION_ID });
+    expect(rejected.status).toBe(404);
+    expect(rejected.body.code).toBe('not_found');
+    expect(lookup).toHaveBeenCalledWith(OWNED_SESSION_ID, NOW);
+    expect(lookup).toHaveBeenCalledWith(OTHER_SESSION_ID, NOW);
+  });
+
+  it('rejects owned-session routes for an unknown session with no presence', async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app)
+      .get('/api/v1/me/sessions/mcp-session-does-not-exist/owned-fixture')
+      .set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(404);
+    expect(response.body.code).toBe('not_found');
   });
 
   it.each([
