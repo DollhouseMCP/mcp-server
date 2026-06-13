@@ -22,7 +22,6 @@ const SECURITY_AUDIT_IDS = [
   'security.signing_keys.rotate',
   'security.signing_keys.retire',
   'security.signing_keys.delete',
-  'security.signing_keys.jobs.show',
   'security.auth_policy.show',
   'security.auth_policy.update',
   'security.users.totp.reset',
@@ -42,7 +41,6 @@ export function createSecurityAdminModule(options: SecurityAdminModuleOptions): 
     options.factorStore,
     options.invalidationStore,
     options.authPolicyStore,
-    undefined,
     options.now,
   );
   return {
@@ -116,18 +114,6 @@ export function createSecurityAdminModule(options: SecurityAdminModuleOptions): 
           firstString(req.params.kid) ?? '',
           req.body,
         ),
-      },
-      {
-        method: 'GET',
-        path: '/api/v1/admin/security/signing-keys/jobs/:id',
-        audience: 'admin',
-        requiredCapability: SECURITY_CAPABILITY,
-        elevation: 'admin_30m',
-        privacyClass: 'security_metadata',
-        idempotency: 'not_applicable',
-        auditOperation: 'security.signing_keys.jobs.show',
-        privacyProjector: projectSecuritySigningKeyJob,
-        handler: req => service.getSigningKeyJob(firstString(req.params.id) ?? ''),
       },
       {
         method: 'GET',

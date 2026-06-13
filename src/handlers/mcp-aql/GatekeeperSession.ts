@@ -447,14 +447,16 @@ export class GatekeeperSession {
   /**
    * Approve a pending CLI approval request.
    * Sets approvedAt, and promotes to session approvals if tool_session scope.
+   * Awaits the store persist so a crash cannot lose the recorded decision
+   * after the caller has been acknowledged.
    *
    * @returns The approved record, or undefined if not found
    */
-  approveCliRequest(
+  async approveCliRequest(
     requestId: string,
     scope: CliApprovalScope = 'single',
     approvedAt: string = new Date().toISOString(),
-  ): CliApprovalRecord | undefined {
+  ): Promise<CliApprovalRecord | undefined> {
     this.touch();
     this.expireStaleApprovals(true);
     const record = this.state.cliApprovals.get(requestId);
@@ -475,7 +477,7 @@ export class GatekeeperSession {
       if (scope === 'tool_session') {
         this.confirmationStore.saveCliSessionApproval(record.toolName, record);
       }
-      this.persistToStore();
+      await this.persistDecision();
     }
 
     return record;
@@ -483,10 +485,15 @@ export class GatekeeperSession {
 
   /**
    * Deny a pending CLI approval request.
+   * Awaits the store persist so a crash cannot lose the recorded decision
+   * after the caller has been acknowledged.
    *
    * @returns The denied record, or undefined if not found or already terminal
    */
-  denyCliRequest(requestId: string, deniedAt: string = new Date().toISOString()): CliApprovalRecord | undefined {
+  async denyCliRequest(
+    requestId: string,
+    deniedAt: string = new Date().toISOString(),
+  ): Promise<CliApprovalRecord | undefined> {
     this.touch();
     this.expireStaleApprovals(true);
     const record = this.state.cliApprovals.get(requestId);
@@ -498,7 +505,7 @@ export class GatekeeperSession {
 
     if (this.confirmationStore) {
       this.confirmationStore.saveCliApproval(requestId, record);
-      this.persistToStore();
+      await this.persistDecision();
     }
 
     return record;
@@ -575,8 +582,9 @@ export class GatekeeperSession {
 
   /**
    * Mark all pending CLI approvals cancelled because the owning session ended.
+   * Awaits the store persist so the cancellation decisions are durable.
    */
-  cancelPendingCliApprovals(cancelledAt: string = new Date().toISOString()): number {
+  async cancelPendingCliApprovals(cancelledAt: string = new Date().toISOString()): Promise<number> {
     this.touch();
     let cancelledCount = 0;
     for (const record of this.state.cliApprovals.values()) {
@@ -587,7 +595,7 @@ export class GatekeeperSession {
         this.confirmationStore.saveCliApproval(record.requestId, record);
       }
     }
-    if (cancelledCount > 0) this.persistToStore();
+    if (cancelledCount > 0) await this.persistDecision();
     return cancelledCount;
   }
 
@@ -675,12 +683,24 @@ export class GatekeeperSession {
   /**
    * Fire-and-forget persist to the backing store.
    * No-op when no confirmation store is configured (in-memory only mode).
+   * Reserved for housekeeping writes (expiry sweeps, consumption, purges)
+   * whose state is re-derivable; decision paths use persistDecision instead.
    */
   private persistToStore(): void {
     if (!this.confirmationStore) return;
     this.confirmationStore.persist().catch(error => {
       logger.warn('[GatekeeperSession] Failed to persist confirmation state', { error });
     });
+  }
+
+  /**
+   * Awaited persist for security-decision paths (approve/deny/cancel).
+   * Unlike persistToStore, failures propagate so a decision is never
+   * acknowledged to the caller unless it is durable.
+   */
+  private async persistDecision(): Promise<void> {
+    if (!this.confirmationStore) return;
+    await this.confirmationStore.persist();
   }
 }
 

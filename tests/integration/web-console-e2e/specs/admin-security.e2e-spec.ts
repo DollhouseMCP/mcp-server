@@ -20,16 +20,13 @@ describe('admin/security — signing keys', () => {
   // The 'invite' kind is safe to mutate in-suite: it is not used by forged
   // console sessions or the active AS token flow, and new invites use the new
   // active key after rotation (verified). We exercise the full lifecycle on it.
-  it('full lifecycle: rotate -> job -> retire superseded -> delete (force)', async () => {
+  it('full lifecycle: rotate -> retire superseded -> delete (force)', async () => {
     // Rotate twice so there is guaranteed to be a non-active (superseded) key,
     // regardless of whether the invite key existed before this spec ran.
     const rotate = await admin().post('/api/v1/admin/security/signing-keys/invite/rotate', { body: {} });
-    expect(rotate.status).toBe(202);
-    const jobId = rotate.body?.job_id ?? rotate.body?.id;
-    if (jobId) {
-      const job = await admin().get(`/api/v1/admin/security/signing-keys/jobs/${jobId}`);
-      expect(job.status).toBe(200);
-    }
+    expect(rotate.status).toBe(200);
+    // The operation completes synchronously: the response IS the final receipt.
+    expect(rotate.body?.status).toBe('completed');
     await admin().post('/api/v1/admin/security/signing-keys/invite/rotate', { body: {} });
 
     const kind = await admin().get('/api/v1/admin/security/signing-keys/invite');
@@ -40,10 +37,10 @@ describe('admin/security — signing keys', () => {
     if (!superseded) throw new Error('rotation should leave a superseded key');
 
     const retire = await admin().post(`/api/v1/admin/security/signing-keys/invite/${superseded.kid}/retire`, { body: {} });
-    expect(retire.status).toBe(202);
+    expect(retire.status).toBe(200);
 
     const del = await admin().delete(`/api/v1/admin/security/signing-keys/invite/${superseded.kid}`, { body: { force: true } });
-    expect([200, 202, 204]).toContain(del.status);
+    expect(del.status).toBe(200);
   });
 
   it('retiring an unknown signing key is 404', async () => {

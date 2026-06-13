@@ -34,19 +34,12 @@ const DEFAULT_AUTH_POLICY = Object.freeze({
   max_admin_elevation_seconds: 300,
 });
 
-interface LifecycleOverlay {
-  readonly jobs: Map<string, SecuritySigningKeyJobDto>;
-}
-
 export class SecurityAdminService {
   constructor(
     private readonly signingKeyStore: ISigningKeyStore,
     private readonly factorStore: IConsoleFactorStore,
     private readonly invalidationStore: IConsoleSecurityInvalidationStore,
     private readonly authPolicyStore: IConsoleAuthPolicyStore,
-    private readonly overlay: LifecycleOverlay = {
-      jobs: new Map(),
-    },
     private readonly now: () => Date = () => new Date(),
   ) {}
 
@@ -70,8 +63,10 @@ export class SecurityAdminService {
     if (!parsed) return notFound('Unknown signing key kind.');
     const write = await createSigningKeyWrite(parsed);
     const key = await this.signingKeyStore.rotate(write);
-    const job = this.recordJob(parsed, 'rotate', null, key.kid, null);
-    return { status: 202, body: job };
+    // The store write above is the durable operation; respond with the final
+    // receipt rather than a 202 + pollable job id (the work is synchronous).
+    const job = this.jobReceipt(parsed, 'rotate', null, key.kid, null);
+    return { status: 200, body: job };
   }
 
   async retireSigningKey(kind: string, kid: string): Promise<ConsoleHandlerResult> {
@@ -80,8 +75,8 @@ export class SecurityAdminService {
     const key = await this.signingKeyStore.getByKid(kid);
     if (key?.kind !== parsed) return notFound('Signing key was not found.');
     await this.signingKeyStore.retire(kid, this.now().getTime());
-    const job = this.recordJob(parsed, 'retire', kid, null, null);
-    return { status: 202, body: job };
+    const job = this.jobReceipt(parsed, 'retire', kid, null, null);
+    return { status: 200, body: job };
   }
 
   async deleteSigningKey(kind: string, kid: string, body: unknown): Promise<ConsoleHandlerResult> {
@@ -99,13 +94,8 @@ export class SecurityAdminService {
       return conflict('Signing key is still within hard-delete grace.');
     }
     await this.signingKeyStore.delete(kid, { force });
-    const job = this.recordJob(parsed, 'delete', kid, null, null);
-    return { status: 202, body: job };
-  }
-
-  getSigningKeyJob(id: string): ConsoleHandlerResult {
-    const job = isUuid(id) ? this.overlay.jobs.get(id) : undefined;
-    return job ? { status: 200, body: job } : notFound('Signing key job was not found.');
+    const job = this.jobReceipt(parsed, 'delete', kid, null, null);
+    return { status: 200, body: job };
   }
 
   async getAuthPolicy(): Promise<ConsoleHandlerResult> {
@@ -201,7 +191,12 @@ export class SecurityAdminService {
     };
   }
 
-  private recordJob(
+  /**
+   * Build the final receipt for a synchronously completed signing-key
+   * operation. The receipt is response-only — it is not retained, because the
+   * durable outcome already lives in the signing-key store.
+   */
+  private jobReceipt(
     kind: SigningKeyKind,
     action: SecuritySigningKeyJobDto['action'],
     targetKid: string | null,
@@ -209,7 +204,7 @@ export class SecurityAdminService {
     errorCode: string | null,
   ): SecuritySigningKeyJobDto {
     const at = this.now().toISOString();
-    const job: SecuritySigningKeyJobDto = {
+    return {
       id: randomUUID(),
       kind,
       action,
@@ -220,8 +215,6 @@ export class SecurityAdminService {
       result_kid: resultKid,
       error_code: errorCode,
     };
-    this.overlay.jobs.set(job.id, job);
-    return job;
   }
 
   private authPolicyDto(policy: ConsoleAuthPolicy): SecurityAuthPolicyDto {

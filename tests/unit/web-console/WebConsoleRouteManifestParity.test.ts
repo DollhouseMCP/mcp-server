@@ -141,7 +141,6 @@ const CONTRACT_ROUTES = [
   'POST /api/v1/admin/security/signing-keys/:kind/rotate',
   'POST /api/v1/admin/security/signing-keys/:kind/:kid/retire',
   'DELETE /api/v1/admin/security/signing-keys/:kind/:kid',
-  'GET /api/v1/admin/security/signing-keys/jobs/:id',
   'GET /api/v1/admin/security/auth-policy',
   'PUT /api/v1/admin/security/auth-policy',
   'POST /api/v1/admin/security/users/:user_id/factors/totp/reset',

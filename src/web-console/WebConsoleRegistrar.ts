@@ -369,7 +369,7 @@ export class WebConsoleRegistrar {
     const baseStores = await createConsoleStores(database);
     const stores = {
       ...baseStores,
-      portfolioStore: resolvePortfolioElementStore(container, this.options, baseStores.portfolioStore),
+      portfolioStore: resolvePortfolioElementStore(container, this.options, baseStores.portfolioStore, database),
       portfolioSyncJobStore: resolvePortfolioSyncJobStore(container, this.options, baseStores.portfolioSyncJobStore),
     };
     const adminAuditWriter = resolveAdminAuditWriter(database, container);
@@ -1923,10 +1923,27 @@ function resolveGitHubIntegrationProviderConfig(
   };
 }
 
+const MANAGER_BACKED_PORTFOLIO_REQUIRED_SERVICES = [
+  'UserIdResolver',
+  'PersonaManager',
+  'SkillManager',
+  'TemplateManager',
+  'AgentManager',
+  'MemoryManager',
+  'EnsembleManager',
+] as const;
+
+function missingPortfolioManagerServices(container: DiContainerFacade): string[] {
+  return MANAGER_BACKED_PORTFOLIO_REQUIRED_SERVICES.filter(
+    serviceName => !container.hasRegistration(serviceName),
+  );
+}
+
 function resolvePortfolioElementStore(
   container: DiContainerFacade,
   options: WebConsoleRegistrarOptions,
   fallback: IPortfolioElementStore,
+  database: DatabaseInstance | undefined,
 ): IPortfolioElementStore {
   if (options.portfolioStore !== undefined) return options.portfolioStore ?? fallback;
   if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioStore)) {
@@ -1936,22 +1953,25 @@ function resolvePortfolioElementStore(
     const store = createManagerBackedPortfolioElementStore(container);
     if (store) return markProductionAdapter(store, 'ManagerBackedPortfolioElementStore');
   }
+  if (database) {
+    // Fail closed: with a database configured every persistent store must be
+    // durable. Silently degrading the portfolio to the in-memory fallback would
+    // lose user data on restart while every sibling store persists.
+    const cause = options.enableManagerBackedPortfolioStore === false
+      ? 'the manager-backed portfolio store is disabled (enableManagerBackedPortfolioStore=false)'
+      : `missing container registrations: ${missingPortfolioManagerServices(container).join(', ')}`;
+    throw new Error(
+      `Database-backed web-console composition requires a durable portfolio store; ${cause}. ` +
+      'Register the element managers (or supply options.portfolioStore) before bootstrapping.',
+    );
+  }
   return fallback;
 }
 
 function createManagerBackedPortfolioElementStore(
   container: DiContainerFacade,
 ): ManagerBackedPortfolioElementStore | null {
-  const requiredServices = [
-    'UserIdResolver',
-    'PersonaManager',
-    'SkillManager',
-    'TemplateManager',
-    'AgentManager',
-    'MemoryManager',
-    'EnsembleManager',
-  ];
-  if (!requiredServices.every(serviceName => container.hasRegistration(serviceName))) return null;
+  if (missingPortfolioManagerServices(container).length > 0) return null;
   const managers: ManagerBackedPortfolioManagers = {
     personas: container.resolve<BaseElementManager<IElement>>('PersonaManager'),
     skills: container.resolve<BaseElementManager<IElement>>('SkillManager'),
