@@ -24,6 +24,14 @@ export const CONSOLE_ADMIN_AUDIT_ROLES = [
   'security_admin',
 ] as const satisfies readonly ConsoleAdminActorRole[];
 
+export const CONSOLE_ADMIN_AUDIT_RESULTS = [
+  'approved',
+  'failed',
+  'replayed',
+  'rejected',
+  'conflict',
+] as const satisfies readonly ConsoleAdminAuditResult[];
+
 export const MAX_ADMIN_AUDIT_REDACTED_JSON_BYTES = 4096;
 
 export interface ConsoleAdminAuditEvent {

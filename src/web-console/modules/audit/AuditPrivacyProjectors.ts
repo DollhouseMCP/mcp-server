@@ -13,7 +13,10 @@ import {
   stringField,
 } from '../../platform/ConsoleProjectorHelpers.js';
 import { CONSOLE_CAPABILITIES } from '../../platform/ConsolePlatformTypes.js';
-import { CONSOLE_ADMIN_AUDIT_ROLES } from '../../audit/IAdminAuditWriter.js';
+import {
+  CONSOLE_ADMIN_AUDIT_RESULTS,
+  CONSOLE_ADMIN_AUDIT_ROLES,
+} from '../../audit/IAdminAuditWriter.js';
 import type {
   ConsoleAdminActorRole,
   ConsoleAdminAuditResult,
@@ -157,16 +160,9 @@ function nullableCapabilityField(record: Readonly<Record<string, unknown>>, key:
 
 function auditResultField(record: Readonly<Record<string, unknown>>, key: string): ConsoleAdminAuditResult {
   const value = record[key];
-  if (
-    value === 'approved' ||
-    value === 'failed' ||
-    value === 'replayed' ||
-    value === 'rejected' ||
-    value === 'conflict'
-  ) {
-    return value;
-  }
-  return 'failed';
+  return typeof value === 'string' && (CONSOLE_ADMIN_AUDIT_RESULTS as readonly string[]).includes(value)
+    ? value as ConsoleAdminAuditResult
+    : 'failed';
 }
 
 function adminIntegrityField(record: Readonly<Record<string, unknown>>): AdminAuditEventDto['integrity'] {
