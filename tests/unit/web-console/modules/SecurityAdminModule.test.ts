@@ -99,7 +99,6 @@ describe('SecurityAdminModule', () => {
       { id: 'security.signing_keys.rotate' },
       { id: 'security.signing_keys.retire' },
       { id: 'security.signing_keys.delete' },
-      { id: 'security.signing_keys.jobs.show' },
       { id: 'security.auth_policy.show' },
       { id: 'security.auth_policy.update' },
       { id: 'security.users.totp.reset' },
@@ -133,18 +132,15 @@ describe('SecurityAdminModule', () => {
     });
   });
 
-  it('rotates signing keys, exposes a job, and never returns generated secret bytes', async () => {
+  it('rotates signing keys, returns the completed receipt synchronously, and never returns generated secret bytes', async () => {
     const { module, signingKeyStore } = await createModule();
     const rotateRoute = findRoute(module.routes, 'POST', '/api/v1/admin/security/signing-keys/:kind/rotate');
-    const jobRoute = findRoute(module.routes, 'GET', '/api/v1/admin/security/signing-keys/jobs/:id');
 
     const result = await rotateRoute.handler({ query: {}, params: { kind: 'cookie' } } as never);
     const job = projectSecuritySigningKeyJob(result.body);
-    const jobResult = await jobRoute.handler({ query: {}, params: { id: job.id } } as never);
 
-    expect(result.status).toBe(202);
+    expect(result.status).toBe(200);
     expect(job).toMatchObject({ kind: 'cookie', action: 'rotate', status: 'completed' });
-    expect(projectSecuritySigningKeyJob(jobResult.body)).toEqual(job);
     expect(JSON.stringify(result.body)).not.toContain('secret');
     expect(JSON.stringify(await signingKeyStore.getActive('cookie'))).toContain('secret');
     expect(JSON.stringify(projectSecuritySigningKeyList((await findRoute(
@@ -203,7 +199,7 @@ describe('SecurityAdminModule', () => {
       query: {},
       params: { kind: 'invite', kid },
       body: { emergency: true },
-    } as never)).resolves.toMatchObject({ status: 202 });
+    } as never)).resolves.toMatchObject({ status: 200 });
     await expect(signingKeyStore.getByKid(kid)).resolves.toBeNull();
   });
 

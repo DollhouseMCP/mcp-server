@@ -96,22 +96,21 @@ export class GatekeeperSessionApprovalStore implements SessionApprovalStore {
     return Promise.resolve(this.gatekeeper.getRegisteredSession(sessionId)?.getCliApproval(approvalId) ?? null);
   }
 
-  save(
+  async save(
     _userId: string,
     sessionId: string,
     approvalId: string,
     record: ConsoleApprovalRecord,
   ): Promise<void> {
     const session = this.gatekeeper.getRegisteredSession(sessionId);
-    if (!session) return Promise.resolve();
+    if (!session) return;
     if (record.deniedAt) {
-      session.denyCliRequest(approvalId, record.deniedAt);
-      return Promise.resolve();
+      await session.denyCliRequest(approvalId, record.deniedAt);
+      return;
     }
     if (record.approvedAt) {
-      session.approveCliRequest(approvalId, record.scope, record.approvedAt);
+      await session.approveCliRequest(approvalId, record.scope, record.approvedAt);
     }
-    return Promise.resolve();
   }
 }
 

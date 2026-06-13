@@ -27,12 +27,22 @@ async function csrfPost(page: Page, path: string): Promise<number> {
   return r.status();
 }
 
+// The AS shows an OAuth client-consent page after authentication; approve it
+// when present so the authorization completes and the BFF callback runs.
+async function approveClientConsentIfShown(page: Page): Promise<void> {
+  const approve = page.locator('button[value="authorize_oauth_client"]');
+  if (await approve.count()) {
+    await Promise.all([page.waitForLoadState('networkidle'), approve.click()]);
+  }
+}
+
 test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> logout', async ({ page }) => {
   // 1. LOGIN (local-password)
   await page.goto(`${BASE_URL}/api/v1/auth/login`, { waitUntil: 'domcontentloaded' });
   await page.fill('input[name="username"]', USER);
   await page.fill('input[name="password"]', SEED_PASSWORD);
   await Promise.all([page.waitForLoadState('networkidle'), page.click('button[value="login"]')]);
+  await approveClientConsentIfShown(page);
 
   expect(await status(page, '/api/v1/auth/me'), 'login establishes a session').toBe(200);
 
@@ -61,6 +71,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
     await page.fill('input[name="code"]', totp.generate());
     await Promise.all([page.waitForLoadState('networkidle'), page.click('button[type="submit"]')]);
   }
+  await approveClientConsentIfShown(page);
 
   // 5. ADMIN now reachable with fresh elevation
   expect(await status(page, OPERATE), 'admin reachable after step-up').toBe(200);

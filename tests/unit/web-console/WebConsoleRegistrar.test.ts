@@ -849,6 +849,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('UserConfigStore', productionAdapter());
     container.seed('SigningKeyStore', productionAdapter());
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    seedCanonicalPortfolioManagers(container);
 
     const composition = await new WebConsoleRegistrar({
       activationProfile: SHARED_HOSTED_PROFILE,
@@ -1393,6 +1394,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SigningKeyStore', new InMemorySigningKeyStore());
     const lifecycle = { registerPeriodicTask: jest.fn() };
     container.seed('LifecycleService', lifecycle);
+    seedCanonicalPortfolioManagers(container);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
     const composition = await new WebConsoleRegistrar({
@@ -1417,7 +1419,7 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.accountAdminStore.constructor.name).toBe('PostgresConsoleAccountAdminStore');
     expect(composition.accountAllowlistStore.constructor.name).toBe('PostgresConsoleAccountAllowlistStore');
     expect(composition.integrationStore.constructor.name).toBe('PostgresUserIntegrationStore');
-    expect(composition.portfolioStore.constructor.name).toBe('InMemoryPortfolioElementStore');
+    expect(composition.portfolioStore.constructor.name).toBe('ManagerBackedPortfolioElementStore');
     expect(composition.sessionActivationStateAdapter.constructor.name).toBe('PostgresSessionActivationStateAdapter');
     expect(composition.sessionActivationEventSink.constructor.name).toBe('PostgresSessionActivationEventSink');
     expect(composition.runtimeSessionControlStore.constructor.name).toBe('PostgresRuntimeSessionControlStore');
@@ -1435,6 +1437,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SystemDatabaseInstance', {});
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    seedCanonicalPortfolioManagers(container);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
     await expect(new WebConsoleRegistrar({
@@ -1447,11 +1450,49 @@ describe('WebConsoleRegistrar', () => {
     const container = new TestContainer();
     container.seed('SystemDatabaseInstance', {});
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    seedCanonicalPortfolioManagers(container);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
     await expect(new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 16),
       reportCleanupError: jest.fn(),
     }).bootstrapAndRegister(container)).rejects.toThrow('AuditHmacResolver');
+  });
+
+  it('fails clearly when a database is configured but the element managers are unregistered', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', {});
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
+    container.seed('SigningKeyStore', new InMemorySigningKeyStore());
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 18),
+      reportCleanupError: jest.fn(),
+    }).bootstrapAndRegister(container)).rejects.toThrow(
+      'Database-backed web-console composition requires a durable portfolio store; ' +
+      'missing container registrations: UserIdResolver, PersonaManager',
+    );
+  });
+
+  it('fails clearly when a database is configured and the manager-backed portfolio store is disabled', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', {});
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
+    container.seed('SigningKeyStore', new InMemorySigningKeyStore());
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    seedCanonicalPortfolioManagers(container);
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      enableManagerBackedPortfolioStore: false,
+      opaqueValueHmacKey: Buffer.alloc(32, 19),
+      reportCleanupError: jest.fn(),
+    }).bootstrapAndRegister(container)).rejects.toThrow(
+      'the manager-backed portfolio store is disabled (enableManagerBackedPortfolioStore=false)',
+    );
   });
 });
