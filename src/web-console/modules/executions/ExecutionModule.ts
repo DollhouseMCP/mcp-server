@@ -3,6 +3,7 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
@@ -19,6 +20,8 @@ const EXECUTION_STREAM_POLICY = {
   lastEventId: 'unsupported',
   heartbeatMs: 15_000,
   revalidateMs: 15_000,
+  maxLifetimeMs: 15 * 60_000,
+  backpressureDrainTimeoutMs: 30_000,
   maxEventBytes: 64 * 1024,
   maxLastEventIdBytes: 512,
 } as const;
@@ -76,7 +79,7 @@ export function createExecutionModule(options: ExecutionModuleOptions): ConsoleM
         streamEventProjectors: {
           init: projectExecutionStreamInit,
           update: projectSessionExecution,
-          end: projectExecutionStreamEnd,
+          end: projectConsoleStreamEndStatus,
         },
         handler: req => withExecutionParams(req, (sessionId, goalId) => {
           const lastEventId = parseConsoleLastEventId(req, EXECUTION_STREAM_POLICY);
@@ -118,11 +121,6 @@ function projectExecutionStreamInit(value: unknown): unknown {
     session_id: typeof record.session_id === 'string' ? record.session_id : '',
     goal_id: typeof record.goal_id === 'string' ? record.goal_id : '',
   };
-}
-
-function projectExecutionStreamEnd(value: unknown): unknown {
-  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
-  return { status: end.status === 'complete' ? 'complete' : 'closed' };
 }
 
 function withSessionId(

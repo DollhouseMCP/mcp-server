@@ -32,6 +32,7 @@ const AUDIT_SHOW = 'audit.show';
 const AUDIT_EXPORT = 'audit.export';
 const ADMIN_AUDIT_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const ADMIN_AUDIT_EXPORT_PATH = '/api/v1/admin/audit/admin/export';
+const TEST_CORRELATION_ID = 'correlation-1';
 
 function adminRow(overrides: Partial<AdminAuditRow> = {}): AdminAuditRow {
   const row = {
@@ -80,7 +81,7 @@ function approvalRow(overrides: Partial<ApprovalAuditEventDto> = {}): ApprovalAu
     operation: 'tool.execute',
     result: 'denied',
     decision_source: 'owner',
-    correlation_id: 'correlation-1',
+    correlation_id: TEST_CORRELATION_ID,
     integrity: {
       status: 'not_available',
       chain_key_id: null,
@@ -375,7 +376,7 @@ describe('AuditModule', () => {
       elevation_acr: null,
       elevation_amr: [],
       elevation_auth_time: null,
-      correlation_id: 'correlation-1',
+      correlation_id: TEST_CORRELATION_ID,
       endpoint: 'GET /api/v1/admin/audit/admin',
       operation: AUDIT_FIND,
       resource_kind: null,
@@ -412,7 +413,7 @@ describe('AuditModule', () => {
       elevation_acr: null,
       elevation_amr: [],
       elevation_auth_time: null,
-      correlation_id: 'correlation-1',
+      correlation_id: TEST_CORRELATION_ID,
       endpoint: 'GET /api/v1/admin/audit/admin',
       operation: 'audit.find',
       resource_kind: null,
@@ -433,6 +434,49 @@ describe('AuditModule', () => {
       },
     });
     expect(projected).not.toHaveProperty('cookie');
+  });
+
+  it('coerces unknown projected admin audit enum values to DTO fallbacks', () => {
+    const projected = projectAdminAuditEvent({
+      id: 'admin-event-1',
+      sequence_id: 1,
+      occurred_at: NOW.toISOString(),
+      actor_user_id: 'actor-1',
+      actor_sub: 'github_123',
+      actor_role: 'bogus',
+      actor_capability_role: 'bogus',
+      actor_console_session_hash: SESSION_HASH.toString('hex'),
+      capability: 'nope',
+      elevation_acr: null,
+      elevation_amr: [],
+      elevation_auth_time: null,
+      correlation_id: TEST_CORRELATION_ID,
+      endpoint: 'GET /api/v1/admin/audit/admin',
+      operation: AUDIT_FIND,
+      resource_kind: null,
+      resource_id: null,
+      target_user_id: null,
+      args_redacted: {},
+      result: 'something_unknown',
+      error_code: null,
+      result_detail_redacted: null,
+      client_ip: null,
+      user_agent: null,
+      chain_key_id: AUDIT_KEY_ID,
+      chain_prev: null,
+      chain_hmac: adminRow().chainHmac.toString('hex'),
+      integrity: {
+        status: 'verified',
+        reason: null,
+      },
+    });
+
+    expect(projected).toMatchObject({
+      actor_role: null,
+      actor_capability_role: 'auditor',
+      capability: AUDIT_CAPABILITY,
+      result: 'failed',
+    });
   });
 
   it('lists approval audit metadata without prompt, input, output, or digest fields', async () => {
@@ -459,7 +503,7 @@ describe('AuditModule', () => {
       operation: 'tool.execute',
       result: 'denied',
       decision_source: 'owner',
-      correlation_id: 'correlation-1',
+      correlation_id: TEST_CORRELATION_ID,
       integrity: {
         status: 'not_available',
         chain_key_id: null,

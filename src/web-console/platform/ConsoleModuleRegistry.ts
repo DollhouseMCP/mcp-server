@@ -32,6 +32,7 @@ const PUBLIC_HEALTH_PATH_PATTERN = /^\/api\/v1\/health(\/ready)?$/;
 const MAX_STREAM_EVENT_BYTES = 1024 * 1024;
 const MAX_STREAM_LAST_EVENT_ID_BYTES = 4096;
 const MAX_STREAM_INTERVAL_MS = 60_000;
+const MAX_STREAM_LIFETIME_MS = 24 * 60 * 60_000;
 
 type ValidatedConsoleRouteDefinition = ConsoleRouteDefinition & {
   readonly elevation: ConsoleElevationPolicy;
@@ -342,6 +343,8 @@ export class ConsoleModuleRegistry {
     }
     if (!isBoundedPositiveInteger(route.streamPolicy.heartbeatMs, MAX_STREAM_INTERVAL_MS) ||
         !isBoundedPositiveInteger(route.streamPolicy.revalidateMs, MAX_STREAM_INTERVAL_MS) ||
+        !isBoundedPositiveInteger(route.streamPolicy.maxLifetimeMs, MAX_STREAM_LIFETIME_MS) ||
+        !isBoundedPositiveInteger(route.streamPolicy.backpressureDrainTimeoutMs, MAX_STREAM_INTERVAL_MS) ||
         !isBoundedPositiveInteger(route.streamPolicy.maxEventBytes, MAX_STREAM_EVENT_BYTES) ||
         !isBoundedPositiveInteger(route.streamPolicy.maxLastEventIdBytes, MAX_STREAM_LAST_EVENT_ID_BYTES)) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" SSE route ${routeKey(route)} has invalid stream limits`);

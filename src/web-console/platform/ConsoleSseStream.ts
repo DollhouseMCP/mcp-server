@@ -6,6 +6,8 @@ export const DEFAULT_CONSOLE_STREAM_POLICY: ConsoleStreamPolicy = Object.freeze(
   lastEventId: 'bounded',
   heartbeatMs: 15_000,
   revalidateMs: 15_000,
+  maxLifetimeMs: 15 * 60_000,
+  backpressureDrainTimeoutMs: 30_000,
   maxEventBytes: 64 * 1024,
   maxLastEventIdBytes: 512,
 });
@@ -51,6 +53,8 @@ export async function sendConsoleSseStream(
   const abortSignal = abortController.signal;
   let heartbeat: NodeJS.Timeout | null = null;
   let revalidation: NodeJS.Timeout | null = null;
+  let maxLifetime: NodeJS.Timeout | null = null;
+  let writeChain: Promise<void> = Promise.resolve();
 
   response.status(200);
   response.setHeader('Content-Type', 'text/event-stream');
@@ -58,30 +62,47 @@ export async function sendConsoleSseStream(
   response.setHeader('Connection', 'keep-alive');
   response.flushHeaders();
 
-  const writeEvent = (event: ConsoleSseEvent): void => {
-    if (abortSignal.aborted) return;
-    response.write(serializeConsoleSseEvent(projectEvent(event, options.projectEvent), policy));
+  const writeRaw = (chunk: string): Promise<boolean> => {
+    const write = writeChain.then(
+      () => writeSseChunk(response, chunk, abortSignal, policy.backpressureDrainTimeoutMs),
+      () => writeSseChunk(response, chunk, abortSignal, policy.backpressureDrainTimeoutMs),
+    );
+    writeChain = write.then(() => {}, () => {});
+    return write;
   };
 
+  const writeEvent = (event: ConsoleSseEvent): Promise<boolean> => {
+    if (abortSignal.aborted) return Promise.resolve(false);
+    return writeRaw(serializeConsoleSseEvent(projectEvent(event, options.projectEvent), policy));
+  };
+  const iterator = stream[Symbol.asyncIterator]();
+
   try {
-    writeEvent({
+    await writeEvent({
       event: 'init',
       data: createInitData(init, options.now ?? (() => new Date())),
     });
-    heartbeat = startHeartbeat(response, abortSignal, policy);
+    heartbeat = startHeartbeat(writeRaw, abortController, policy, options);
     revalidation = startRevalidation(response, abortController, writeEvent, policy, options);
-    for await (const event of stream) {
-      if (abortSignal.aborted) break;
-      writeEvent(event);
+    maxLifetime = startMaxLifetime(response, abortController, writeEvent, policy, options);
+    while (!abortSignal.aborted) {
+      const next = await nextSseEvent(iterator, abortSignal);
+      if (next.done) break;
+      const event = next.value;
+      await writeEvent(event);
       if (event.event === 'error' || event.event === 'end') break;
     }
   } catch (error) {
     options.reportStreamError?.(error);
-    writeTerminalError(response, abortSignal);
+    if (!abortSignal.aborted) await writeTerminalError(writeEvent, abortSignal);
   } finally {
     if (heartbeat) clearInterval(heartbeat);
     if (revalidation) clearInterval(revalidation);
-    if (!abortSignal.aborted) response.end();
+    if (maxLifetime) clearTimeout(maxLifetime);
+    abortController.abort();
+    void iterator.return?.();
+    await writeChain;
+    if (!response.writableEnded) response.end();
   }
 }
 
@@ -139,13 +160,24 @@ function isSafeSseLineValue(value: string): boolean {
 }
 
 function startHeartbeat(
-  response: Response,
-  abortSignal: AbortSignal,
+  writeRaw: (chunk: string) => Promise<boolean>,
+  abortController: AbortController,
   policy: ConsoleStreamPolicy,
+  options: ConsoleSseSendOptions,
 ): NodeJS.Timeout | null {
   if (policy.heartbeatMs <= 0) return null;
+  let inFlight = false;
   const heartbeat = setInterval(() => {
-    if (!abortSignal.aborted) response.write(':hb\n\n');
+    if (abortController.signal.aborted || inFlight) return;
+    inFlight = true;
+    void writeRaw(':hb\n\n')
+      .catch(error => {
+        options.reportStreamError?.(error);
+        abortController.abort();
+      })
+      .finally(() => {
+        inFlight = false;
+      });
   }, policy.heartbeatMs);
   heartbeat.unref();
   return heartbeat;
@@ -154,16 +186,19 @@ function startHeartbeat(
 function startRevalidation(
   response: Response,
   abortController: AbortController,
-  writeEvent: (event: ConsoleSseEvent) => void,
+  writeEvent: (event: ConsoleSseEvent) => Promise<boolean>,
   policy: ConsoleStreamPolicy,
   options: ConsoleSseSendOptions,
 ): NodeJS.Timeout | null {
   if (!options.revalidate) return null;
+  let inFlight = false;
   const revalidation = setInterval(() => {
+    if (abortController.signal.aborted || inFlight) return;
+    inFlight = true;
     void options.revalidate?.()
-      .then(valid => {
+      .then(async valid => {
         if (!valid && !abortController.signal.aborted) {
-          writeEvent({
+          await writeEvent({
             event: 'error',
             data: {
               code: 'unauthenticated',
@@ -176,28 +211,150 @@ function startRevalidation(
       })
       .catch(error => {
         options.reportStreamError?.(error);
-        writeTerminalError(response, abortController.signal);
         abortController.abort();
         response.end();
+      })
+      .finally(() => {
+        inFlight = false;
       });
   }, policy.revalidateMs);
   revalidation.unref();
   return revalidation;
 }
 
-function writeTerminalError(response: Response, abortSignal: AbortSignal): void {
-  if (abortSignal.aborted || response.writableEnded) return;
+function startMaxLifetime(
+  response: Response,
+  abortController: AbortController,
+  writeEvent: (event: ConsoleSseEvent) => Promise<boolean>,
+  policy: ConsoleStreamPolicy,
+  options: ConsoleSseSendOptions,
+): NodeJS.Timeout | null {
+  if (policy.maxLifetimeMs <= 0) return null;
+  const maxLifetime = setTimeout(() => {
+    if (abortController.signal.aborted) return;
+    void writeEvent({
+      event: 'end',
+      data: {
+        status: 'closed',
+        reason: 'max_lifetime',
+      },
+    })
+      .catch(error => {
+        options.reportStreamError?.(error);
+      })
+      .finally(() => {
+        abortController.abort();
+        response.end();
+      });
+  }, policy.maxLifetimeMs);
+  maxLifetime.unref();
+  return maxLifetime;
+}
+
+async function writeTerminalError(
+  writeEvent: (event: ConsoleSseEvent) => Promise<boolean>,
+  abortSignal: AbortSignal,
+): Promise<void> {
+  if (abortSignal.aborted) return;
   try {
-    response.write(serializeConsoleSseEvent({
+    await writeEvent({
       event: 'error',
       data: {
         code: 'stream_error',
         detail: 'The stream could not continue.',
       },
-    }));
+    });
   } catch {
     // The stream is already failing; closing it is the stable fallback.
   }
+}
+
+async function nextSseEvent(
+  iterator: AsyncIterator<ConsoleSseEvent>,
+  abortSignal: AbortSignal,
+): Promise<IteratorResult<ConsoleSseEvent>> {
+  if (abortSignal.aborted) return { done: true, value: undefined };
+  return new Promise((resolve, reject) => {
+    const onAbort = (): void => resolve({ done: true, value: undefined });
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+    void iterator.next()
+      .then(result => {
+        abortSignal.removeEventListener('abort', onAbort);
+        resolve(result);
+      })
+      .catch(error => {
+        abortSignal.removeEventListener('abort', onAbort);
+        reject(error);
+      });
+  });
+}
+
+async function writeSseChunk(
+  response: Response,
+  chunk: string,
+  abortSignal: AbortSignal,
+  drainTimeoutMs: number,
+): Promise<boolean> {
+  if (abortSignal.aborted || response.writableEnded) return false;
+  const accepted = response.write(chunk);
+  if (accepted && !responseNeedsDrain(response)) return true;
+  await waitForResponseDrain(response, abortSignal, drainTimeoutMs);
+  return streamStillWritable(response, abortSignal);
+}
+
+function streamStillWritable(response: Response, abortSignal: AbortSignal): boolean {
+  return !abortSignal.aborted && !response.writableEnded;
+}
+
+function responseNeedsDrain(response: Response): boolean {
+  const writable = response as Response & {
+    readonly writableNeedDrain?: boolean;
+    readonly writableNeedsDrain?: boolean;
+  };
+  return writable.writableNeedDrain === true || writable.writableNeedsDrain === true;
+}
+
+function waitForResponseDrain(
+  response: Response,
+  abortSignal: AbortSignal,
+  drainTimeoutMs: number,
+): Promise<void> {
+  if (abortSignal.aborted || response.writableEnded) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timeout: NodeJS.Timeout | null = null;
+    const cleanup = (): void => {
+      response.off('drain', onDrain);
+      response.off('close', onClose);
+      response.off('error', onError);
+      abortSignal.removeEventListener('abort', onAbort);
+      if (timeout) clearTimeout(timeout);
+    };
+    const onDrain = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onClose = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onAbort = (): void => {
+      cleanup();
+      resolve();
+    };
+    const onError = (error: Error): void => {
+      cleanup();
+      reject(error);
+    };
+    response.once('drain', onDrain);
+    response.once('close', onClose);
+    response.once('error', onError);
+    abortSignal.addEventListener('abort', onAbort, { once: true });
+    timeout = setTimeout(() => {
+      cleanup();
+      reject(new Error('Console SSE backpressure drain timed out'));
+    }, drainTimeoutMs);
+    timeout.unref();
+  });
 }
 
 function createAbortController(response: Response, request?: Request): AbortController {

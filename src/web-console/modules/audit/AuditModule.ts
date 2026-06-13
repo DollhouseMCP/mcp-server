@@ -4,6 +4,7 @@ import type {
   ConsoleRequest,
   ConsoleSseEvent,
 } from '../../platform/ConsolePlatformTypes.js';
+import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import {
@@ -30,6 +31,8 @@ const AUDIT_STREAM_POLICY = {
   lastEventId: 'unsupported',
   heartbeatMs: 15_000,
   revalidateMs: 15_000,
+  maxLifetimeMs: 15 * 60_000,
+  backpressureDrainTimeoutMs: 30_000,
   maxEventBytes: 64 * 1024,
   maxLastEventIdBytes: 512,
 } as const;
@@ -78,7 +81,7 @@ export function createAuditModule(options: AuditModuleOptions): ConsoleModuleDes
         streamEventProjectors: {
           init: projectAdminAuditExportInit,
           update: projectAdminAuditEvent,
-          end: projectAdminAuditExportEnd,
+          end: projectConsoleStreamEndStatus,
         },
         handler: req => exportAdminAudit(req, options.adminAuditQuery),
       },
@@ -220,11 +223,6 @@ function projectAdminAuditExportInit(value: unknown): unknown {
       ? record.batch_size
       : 100,
   };
-}
-
-function projectAdminAuditExportEnd(value: unknown): unknown {
-  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
-  return { status: end.status === 'complete' ? 'complete' : 'closed' };
 }
 
 function boundedLimit(value: string | null, fallback: number): number {

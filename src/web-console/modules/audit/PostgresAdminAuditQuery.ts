@@ -3,8 +3,13 @@ import { sql } from 'drizzle-orm';
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import type { AuditHmacKeyMaterial } from '../../../security/auditHmacKey.js';
+import {
+  CONSOLE_ADMIN_AUDIT_RESULTS,
+  CONSOLE_ADMIN_AUDIT_ROLES,
+} from '../../audit/IAdminAuditWriter.js';
 import type { AdminAuditHmacKeyResolver } from '../../audit/PostgresAdminAuditWriter.js';
 import { verifyAdminAuditRow } from '../../audit/AdminAuditChain.js';
+import { CONSOLE_CAPABILITIES } from '../../platform/ConsolePlatformTypes.js';
 import type {
   AdminAuditEventDto,
   AuditPageDto,
@@ -52,54 +57,31 @@ export class PostgresAdminAuditQuery implements IAdminAuditQuery {
   ) {}
 
   async listAdminAudit(query: AuditListQuery): Promise<AuditPageDto<AdminAuditEventDto>> {
-    const offset = query.cursor ? decodeCursor(query.cursor) : 0;
-    const rows = await withSystemContext(this.db, tx => tx.execute(sql`
-        SELECT
-          id,
-          sequence_id,
-          occurred_at,
-          actor_user_id,
-          actor_sub,
-          actor_role,
-          actor_capability_role,
-          actor_console_session_hash,
-          capability,
-          elevation_acr,
-          elevation_amr,
-          elevation_auth_time,
-          endpoint,
-          operation,
-          resource_kind,
-          resource_id,
-          target_user_id,
-          args_redacted,
-          result,
-          error_code,
-          result_detail_redacted,
-          correlation_id,
-          client_ip,
-          user_agent,
-          chain_key_id,
-          chain_prev,
-          chain_hmac
-        FROM admin_audit_events
-        ORDER BY sequence_id ASC
-        LIMIT ${query.limit + 1}
-        OFFSET ${offset}
-      `)) as unknown as AdminAuditDbRow[];
-    const items = (await verifyAndProjectRows(rows.slice(0, query.limit), this.hmacKeyResolver)).items;
+    const afterSequenceId = query.cursor ? decodeCursor(query.cursor) : 0;
+    const rows = await fetchAdminAuditRowsAfter(this.db, query.limit + 1, afterSequenceId);
+    const pageRows = rows.slice(0, query.limit);
+    const seed = afterSequenceId > 0
+      ? await fetchPreviousChainSeed(this.db, pageRows)
+      : emptyChainSeed();
+    const items = (await verifyAndProjectRows(
+      pageRows,
+      this.hmacKeyResolver,
+      seed.previous,
+      seed.previousSequenceId,
+    )).items;
+    const lastItem = items.at(-1);
     return {
       items,
       page: {
         limit: query.limit,
         cursor: query.cursor,
-        next_cursor: rows.length > query.limit ? encodeCursor(offset + query.limit) : null,
+        next_cursor: rows.length > query.limit && lastItem ? encodeCursor(lastItem.sequence_id) : null,
       },
     };
   }
 
   async getAdminAudit(id: string): Promise<AdminAuditEventDto | null> {
-    const rows = await withSystemContext(this.db, tx => tx.execute(sql`
+    const rows = await executeAdminAuditRows(this.db, tx => tx.execute(sql`
         SELECT
           id,
           sequence_id,
@@ -131,7 +113,7 @@ export class PostgresAdminAuditQuery implements IAdminAuditQuery {
         FROM admin_audit_events
         WHERE id = ${id}
         LIMIT 1
-      `)) as unknown as AdminAuditDbRow[];
+      `));
     const row = rows.at(0);
     if (!row) return null;
     const keyMaterial = await resolveAuditKey(this.hmacKeyResolver, row.chain_key_id);
@@ -139,27 +121,107 @@ export class PostgresAdminAuditQuery implements IAdminAuditQuery {
   }
 
   async *streamAdminAudit(query: AuditExportQuery): AsyncIterable<AdminAuditEventDto> {
-    let offset = query.cursor ? decodeCursor(query.cursor) : 0;
+    let afterSequenceId = query.cursor ? decodeCursor(query.cursor) : 0;
     let previous: Buffer | null = null;
     let previousSequenceId: number | null = null;
-    if (offset > 0) {
-      const previousRow = await fetchAdminAuditRows(this.db, 1, offset - 1);
-      const row = previousRow.at(0);
-      if (row) {
-        previous = Buffer.from(row.chain_hmac);
-        previousSequenceId = Number(row.sequence_id);
-      }
-    }
+    let hasSeed = false;
     for (;;) {
-      const rows = await fetchAdminAuditRows(this.db, query.batchSize, offset);
+      const rows = await fetchAdminAuditRowsAfter(this.db, query.batchSize, afterSequenceId);
       if (rows.length === 0) return;
+      if (!hasSeed) {
+        const seed = afterSequenceId > 0
+          ? await fetchPreviousChainSeed(this.db, rows)
+          : emptyChainSeed();
+        previous = seed.previous;
+        previousSequenceId = seed.previousSequenceId;
+        hasSeed = true;
+      }
       const result = await verifyAndProjectRows(rows, this.hmacKeyResolver, previous, previousSequenceId);
       previous = result.previous;
       previousSequenceId = result.previousSequenceId;
       for (const item of result.items) yield item;
-      offset += rows.length;
+      afterSequenceId = previousSequenceId ?? afterSequenceId;
     }
   }
+}
+
+// drizzle's tx.execute returns a generic RowList that does not structurally
+// overlap AdminAuditDbRow[], so it must be narrowed through `unknown`. This
+// helper performs that single, necessary assertion in one place so call sites
+// stay cast-free.
+type AdminAuditTransaction = Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0];
+
+async function executeAdminAuditRows(
+  db: DatabaseInstance,
+  runQuery: (tx: AdminAuditTransaction) => Promise<unknown>,
+): Promise<AdminAuditDbRow[]> {
+  const result = await withSystemContext(db, runQuery);
+  return result as AdminAuditDbRow[];
+}
+
+async function fetchAdminAuditRowsAfter(
+  db: DatabaseInstance,
+  limit: number,
+  afterSequenceId: number,
+): Promise<readonly AdminAuditDbRow[]> {
+  return await executeAdminAuditRows(db, tx => tx.execute(sql`
+        SELECT
+          id,
+          sequence_id,
+          occurred_at,
+          actor_user_id,
+          actor_sub,
+          actor_role,
+          actor_capability_role,
+          actor_console_session_hash,
+          capability,
+          elevation_acr,
+          elevation_amr,
+          elevation_auth_time,
+          endpoint,
+          operation,
+          resource_kind,
+          resource_id,
+          target_user_id,
+          args_redacted,
+          result,
+          error_code,
+          result_detail_redacted,
+          correlation_id,
+          client_ip,
+          user_agent,
+          chain_key_id,
+          chain_prev,
+          chain_hmac
+        FROM admin_audit_events
+        WHERE sequence_id > ${afterSequenceId}
+        ORDER BY sequence_id ASC
+        LIMIT ${limit}
+      `));
+}
+
+async function fetchPreviousChainSeed(
+  db: DatabaseInstance,
+  rows: readonly AdminAuditDbRow[],
+): Promise<{
+  readonly previous: Buffer | null;
+  readonly previousSequenceId: number | null;
+}> {
+  const firstSequenceId = rows.at(0)?.sequence_id;
+  if (firstSequenceId === undefined) {
+    return { previous: null, previousSequenceId: null };
+  }
+  const row = await fetchPreviousAdminAuditRow(db, Number(firstSequenceId));
+  return row
+    ? { previous: Buffer.from(row.chain_hmac), previousSequenceId: Number(row.sequence_id) }
+    : { previous: null, previousSequenceId: null };
+}
+
+function emptyChainSeed(): {
+  readonly previous: Buffer | null;
+  readonly previousSequenceId: number | null;
+} {
+  return { previous: null, previousSequenceId: null };
 }
 
 async function verifyAndProjectRows(
@@ -178,6 +240,10 @@ async function verifyAndProjectRows(
   for (const row of rows) {
     const material = toChainMaterial(row);
     const keyMaterial = await resolveAuditKey(hmacKeyResolver, row.chain_key_id);
+    // Read-time verification covers this slice and its immediate predecessor edge.
+    // It detects tampering inside the returned rows plus adjacent sequence/chain gaps
+    // at the page boundary, but it is not a full-chain proof. A complete deletion or
+    // reorder audit needs a separate periodic full-chain scan.
     const integrity = verifyAdminAuditRow(material, keyMaterial, previous, previousSequenceId);
     previous = Buffer.from(row.chain_hmac);
     previousSequenceId = Number(row.sequence_id);
@@ -186,12 +252,11 @@ async function verifyAndProjectRows(
   return { items: projected, previous, previousSequenceId };
 }
 
-async function fetchAdminAuditRows(
+async function fetchPreviousAdminAuditRow(
   db: DatabaseInstance,
-  limit: number,
-  offset: number,
-): Promise<readonly AdminAuditDbRow[]> {
-  return await withSystemContext(db, tx => tx.execute(sql`
+  beforeSequenceId: number,
+): Promise<AdminAuditDbRow | null> {
+  const rows = await executeAdminAuditRows(db, tx => tx.execute(sql`
       SELECT
         id,
         sequence_id,
@@ -221,10 +286,11 @@ async function fetchAdminAuditRows(
         chain_prev,
         chain_hmac
       FROM admin_audit_events
-      ORDER BY sequence_id ASC
-      LIMIT ${limit}
-      OFFSET ${offset}
-    `)) as unknown as AdminAuditDbRow[];
+      WHERE sequence_id < ${beforeSequenceId}
+      ORDER BY sequence_id DESC
+      LIMIT 1
+    `));
+  return rows.at(0) ?? null;
 }
 
 async function resolveAuditKey(
@@ -307,8 +373,8 @@ function toChainMaterial(row: AdminAuditDbRow) {
   };
 }
 
-function encodeCursor(offset: number): string {
-  return Buffer.from(String(offset), 'utf8').toString('base64url');
+function encodeCursor(sequenceId: number): string {
+  return Buffer.from(String(sequenceId), 'utf8').toString('base64url');
 }
 
 function decodeCursor(cursor: string): number {
@@ -330,40 +396,19 @@ function jsonRecord(value: unknown): Readonly<Record<string, unknown>> {
 }
 
 function actorRole(value: string): AdminAuditEventDto['actor_capability_role'] {
-  if (
-    value === 'admin' ||
-    value === 'account_admin' ||
-    value === 'operator' ||
-    value === 'auditor' ||
-    value === 'security_admin'
-  ) {
-    return value;
-  }
-  return 'auditor';
+  return (CONSOLE_ADMIN_AUDIT_ROLES as readonly string[]).includes(value)
+    ? value as AdminAuditEventDto['actor_capability_role']
+    : 'auditor';
 }
 
 function capability(value: string): AdminAuditEventDto['capability'] {
-  if (
-    value === 'console:self' ||
-    value === 'console:admin:accounts' ||
-    value === 'console:admin:operate' ||
-    value === 'console:admin:audit' ||
-    value === 'console:admin:security'
-  ) {
-    return value;
-  }
-  return 'console:admin:audit';
+  return (CONSOLE_CAPABILITIES as readonly string[]).includes(value)
+    ? value as AdminAuditEventDto['capability']
+    : 'console:admin:audit';
 }
 
 function auditResult(value: string): AdminAuditEventDto['result'] {
-  if (
-    value === 'approved' ||
-    value === 'failed' ||
-    value === 'replayed' ||
-    value === 'rejected' ||
-    value === 'conflict'
-  ) {
-    return value;
-  }
-  return 'failed';
+  return (CONSOLE_ADMIN_AUDIT_RESULTS as readonly string[]).includes(value)
+    ? value as AdminAuditEventDto['result']
+    : 'failed';
 }
