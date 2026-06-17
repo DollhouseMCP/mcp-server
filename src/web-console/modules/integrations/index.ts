@@ -11,3 +11,4 @@ export * from './IntegrationPrivacyProjectors.js';
 export * from './IntegrationSecretContext.js';
 export * from './IntegrationService.js';
 export * from './IntegrationTokenRefreshService.js';
+export * from './IntegrationRequestGateway.js';

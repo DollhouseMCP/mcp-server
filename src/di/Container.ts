@@ -78,6 +78,19 @@ import type { PatternEncryptor } from "../security/encryption/PatternEncryptor.j
 import type { ContextTracker } from "../security/encryption/ContextTracker.js";
 import type { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver , SessionContext } from "../context/SessionContext.js";
+import type { IRateLimitStore } from "../auth/embedded-as/storage/IRateLimitStore.js";
+import { WEB_CONSOLE_SERVICE_NAMES } from "../web-console/WebConsoleRegistrar.js";
+import type { IIntegrationDescriptorStore, IUserIntegrationStore } from "../web-console/stores/index.js";
+import type { ISecretEncryptionService } from "../web-console/security/SecretEncryption.js";
+import { IntegrationProviderRegistry } from "../web-console/modules/integrations/IntegrationProviderRegistry.js";
+import {
+  createGitHubIntegrationProvider,
+  IntegrationRequestGateway,
+  IntegrationTokenRefreshService,
+  serializeGitHubIntegrationStatus,
+  type IIntegrationProvider,
+} from "../web-console/modules/integrations/index.js";
+import type { IGitHubIntegrationProvider } from "../web-console/modules/integrations/GitHubIntegrationProvider.js";
 import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
 import type { ITokenStore } from "../security/tokenStores/ITokenStore.js";
@@ -144,6 +157,7 @@ export interface HandlerBundle {
   toolRegistry: ToolRegistry;
   enhancedIndexHandler: EnhancedIndexHandler;
   mcpAqlHandler: MCPAQLHandler;
+  integrationRequestGateway?: IntegrationRequestGateway;
 }
 
 /**
@@ -1161,6 +1175,7 @@ export class DollhouseContainer {
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
+    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
 
     return {
       personaHandler,
@@ -1175,6 +1190,7 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry, // No tool registry in bootstrap-only mode
       enhancedIndexHandler,
       mcpAqlHandler,
+      integrationRequestGateway: integrationRequestGateway ?? undefined,
     };
   }
 
@@ -1185,7 +1201,7 @@ export class DollhouseContainer {
   public async createHandlers(server: LowLevelMcpServer): Promise<HandlerBundle> {
     const bundle = await this.bootstrapHandlers();
 
-    const toolRegistry = new ToolRegistry(server as never);
+    const toolRegistry = new ToolRegistry(server);
     const interfaceMode = env.MCP_INTERFACE_MODE;
     logger.info(`MCP Interface Mode: ${interfaceMode}`);
 
@@ -1203,7 +1219,7 @@ export class DollhouseContainer {
       enhancedIndexHandler: bundle.enhancedIndexHandler,
     });
 
-    this.resolve<ServerSetup>('ServerSetup').setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
+    this.resolve<ServerSetup>('ServerSetup').setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
 
     return {
       ...bundle,
@@ -1480,7 +1496,7 @@ export class DollhouseContainer {
     child.register('SessionResolver', () => (() => sessionContext));
     child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
     child.register('ToolRegistry', () => {
-        const registry = new ToolRegistry(child.resolve<LowLevelMcpServer>('Server') as never);
+        const registry = new ToolRegistry(child.resolve<LowLevelMcpServer>('Server'));
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
       return registry;
     });
@@ -1489,7 +1505,7 @@ export class DollhouseContainer {
     const server = child.resolve<LowLevelMcpServer>('Server');
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
-    serverSetup.setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
+    serverSetup.setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
     this.resolve<SessionContainerRegistry>('SessionContainerRegistry').register(sid, child);
 
     return {
@@ -1693,6 +1709,7 @@ export class DollhouseContainer {
       enumerable: true,
     });
 
+    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
     return {
       personaHandler,
       elementCrudHandler,
@@ -1706,7 +1723,48 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry,
       enhancedIndexHandler,
       mcpAqlHandler: new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker')),
+      integrationRequestGateway: integrationRequestGateway ?? undefined,
     };
+  }
+
+  private resolveIntegrationRequestGateway(): IntegrationRequestGateway | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    const integrationStore = this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore);
+    const descriptorStore = this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore);
+    const secretEncryption = this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption);
+    const rateLimitStore = this.hasRegistration('RateLimitStore')
+      ? this.resolve<IRateLimitStore>('RateLimitStore')
+      : null;
+    const providerRegistry = this.resolveIntegrationProviderRegistry();
+    const tokenRefresh = new IntegrationTokenRefreshService({
+      store: integrationStore,
+      providers: providerRegistry,
+      secretEncryption,
+    });
+    return new IntegrationRequestGateway({
+      integrationStore,
+      descriptorStore,
+      secretEncryption,
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      tokenRefresh,
+      rateLimitStore,
+    });
+  }
+
+  private resolveIntegrationProviderRegistry(): IntegrationProviderRegistry {
+    const providers: IIntegrationProvider[] = [];
+    if (this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider)) {
+      providers.push(createGitHubIntegrationProvider(
+        this.resolve<IGitHubIntegrationProvider>(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider),
+        serializeGitHubIntegrationStatus,
+      ));
+    }
+    return new IntegrationProviderRegistry(providers);
   }
 
   /**
@@ -1738,6 +1796,9 @@ export class DollhouseContainer {
       toolRegistry.registerBuildInfoTools(this.resolve('BuildInfoService'));
     } else {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
+    }
+    if (bundle.integrationRequestGateway) {
+      toolRegistry.registerIntegrationTools(bundle.integrationRequestGateway);
     }
   }
 
@@ -1776,13 +1837,13 @@ export class DollhouseContainer {
 
     if (interfaceMode === 'discrete') {
       // Current is discrete, calculate what mcpaql would be
-        const tempRegistry = new ToolRegistry({} as never);
+        const tempRegistry = new ToolRegistry({});
       tempRegistry.registerMCPAQLTools(mcpAqlHandler);
       alternativeTokens = tempRegistry.getToolTokenEstimate();
       alternativeToolCount = tempRegistry.getToolCount();
     } else {
       // Current is mcpaql, calculate what discrete would be
-        const tempRegistry = new ToolRegistry({} as never);
+        const tempRegistry = new ToolRegistry({});
       tempRegistry.registerPersonaTools(discreteHandlers.personaHandler);
       tempRegistry.registerElementTools(discreteHandlers.elementCrudHandler);
       tempRegistry.registerCollectionTools(discreteHandlers.collectionHandler);

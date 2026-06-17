@@ -2,9 +2,8 @@
  * Tool Registry for managing MCP tool definitions and handlers
  */
 
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ToolDefinition, ToolHandler } from "./types/ToolTypes.js";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolDefinition, ToolHandler } from "./types/ToolTypes.js";
 import { getAuthTools } from "../server/tools/AuthTools.js";
 import { getCollectionTools } from "../server/tools/CollectionTools.js";
 import { getConfigToolsV2 } from "../server/tools/ConfigToolsV2.js";
@@ -16,6 +15,7 @@ import type { BuildInfoService } from "../services/BuildInfoService.js";
 import { getPersonaExportImportTools } from "../server/tools/PersonaTools.js";
 import { getPortfolioTools } from "../server/tools/PortfolioTools.js";
 import { getMCPAQLTools } from "../server/tools/MCPAQLTools.js";
+import { getIntegrationTools } from "../server/tools/IntegrationTools.js";
 import type { PersonaHandler } from './PersonaHandler.js';
 import type { ElementCRUDHandler } from './ElementCRUDHandler.js';
 import type { CollectionHandler } from './CollectionHandler.js';
@@ -25,13 +25,14 @@ import type { ConfigHandler } from './ConfigHandler.js';
 import type { SyncHandler } from './SyncHandlerV2.js';
 import type { EnhancedIndexHandler } from './EnhancedIndexHandler.js';
 import type { MCPAQLHandler } from './mcp-aql/MCPAQLHandler.js';
+import type { IntegrationRequestGateway } from '../web-console/modules/integrations/IntegrationRequestGateway.js';
 
 // Re-export types for backward compatibility
 export type { ToolDefinition, ToolHandler };
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
-  constructor(_server: Server) {}
+  constructor(_server: unknown) {}
 
   /**
    * Register a tool with its definition and handler
@@ -87,6 +88,10 @@ export class ToolRegistry {
 
   registerMCPAQLTools(handler: MCPAQLHandler): void {
     this.registerMany(getMCPAQLTools(handler));
+  }
+
+  registerIntegrationTools(gateway: IntegrationRequestGateway): void {
+    this.registerMany(getIntegrationTools(gateway));
   }
 
   /**
