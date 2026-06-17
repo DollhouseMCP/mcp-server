@@ -4,8 +4,14 @@ import type { ISecretEncryptionService } from '../../security/SecretEncryption.j
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
 import type { IGitHubIntegrationProvider } from './GitHubIntegrationProvider.js';
+import {
+  createGitHubIntegrationProvider,
+  createUnavailableGitHubIntegrationProvider,
+} from './IntegrationProvider.js';
+import { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 import type { IIntegrationSecurityEventSink } from './IntegrationSecurityEvents.js';
 import { IntegrationService } from './IntegrationService.js';
+import { serializeGitHubIntegrationStatus } from './IntegrationDtos.js';
 import {
   projectGitHubIntegrationStatus,
   projectIntegrationConnect,
@@ -26,12 +32,17 @@ export interface IntegrationModuleOptions {
 }
 
 export function createIntegrationModule(options: IntegrationModuleOptions): ConsoleModuleDescriptor {
+  const providers = new IntegrationProviderRegistry([
+    options.githubProvider
+      ? createGitHubIntegrationProvider(options.githubProvider, serializeGitHubIntegrationStatus)
+      : createUnavailableGitHubIntegrationProvider(serializeGitHubIntegrationStatus),
+  ]);
   const service = new IntegrationService({
     store: options.integrationStore,
+    providers,
     loginTransactions: options.loginTransactions,
     opaqueValues: options.opaqueValues,
     secretEncryption: options.secretEncryption,
-    githubProvider: options.githubProvider,
     publicBaseUrl: options.publicBaseUrl,
     securityEventSink: options.securityEventSink,
     now: options.now,

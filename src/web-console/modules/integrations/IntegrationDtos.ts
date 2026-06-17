@@ -1,8 +1,10 @@
 import type {
   UserIntegrationErrorReason,
+  UserIntegrationProvider,
   UserIntegrationRecord,
   UserIntegrationStatus,
 } from '../../stores/IUserIntegrationStore.js';
+import type { IntegrationProviderCatalogDescriptor } from './IntegrationProvider.js';
 
 export type GitHubRepositorySelection = 'selected' | 'all' | 'unknown';
 export type GitHubContentsPermission = 'none' | 'read' | 'write';
@@ -27,10 +29,26 @@ export interface IntegrationListDto {
   readonly integrations: readonly GitHubIntegrationStatusDto[];
 }
 
-export function serializeIntegrationList(records: readonly UserIntegrationRecord[]): IntegrationListDto {
+export function serializeIntegrationList(
+  records: readonly UserIntegrationRecord[],
+  providers: readonly IntegrationProviderCatalogDescriptor[] = [{ id: 'github', displayName: 'GitHub', category: 'Source control' }],
+): IntegrationListDto {
   return {
-    integrations: [serializeGitHubIntegrationStatus(records[0] ?? null)],
+    integrations: providers.map(provider => serializeProviderStatus(
+      provider.id,
+      records.find(record => record.provider === provider.id) ?? null,
+    )),
   };
+}
+
+function serializeProviderStatus(
+  provider: UserIntegrationProvider,
+  record: UserIntegrationRecord | null,
+): GitHubIntegrationStatusDto {
+  if (provider === 'github') {
+    return serializeGitHubIntegrationStatus(record);
+  }
+  return serializeGitHubIntegrationStatus(null);
 }
 
 export function serializeGitHubIntegrationStatus(record: UserIntegrationRecord | null): GitHubIntegrationStatusDto {

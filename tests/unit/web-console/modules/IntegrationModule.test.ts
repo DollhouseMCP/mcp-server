@@ -8,6 +8,8 @@ import {
   InMemoryLoginTransactionStore,
   CONSOLE_INTEGRATION_STATE_COOKIE,
   CONSOLE_LOGIN_STATE_COOKIE,
+  IntegrationProviderRegistry,
+  IntegrationService,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
   type IGitHubIntegrationProvider,
@@ -242,6 +244,46 @@ describe('IntegrationModule', () => {
       status: 200,
       body: {
         integrations: [expect.objectContaining({ provider: 'github', status: 'disconnected' })],
+      },
+    });
+  });
+
+  it('lists registered provider catalog entries even when write provider is unavailable', async () => {
+    const store = new InMemoryUserIntegrationStore();
+    const module = createIntegrationModule({ integrationStore: store });
+    const list = findRoute(module.routes, LIST_PATH);
+
+    await expect(list.handler(consoleRequest())).resolves.toEqual({
+      status: 200,
+      body: {
+        integrations: [{
+          provider: 'github',
+          status: 'disconnected',
+          account_label: null,
+          repository_selection: 'unknown',
+          permissions: { contents: 'none' },
+          sync_directions: [],
+          error_reason: null,
+          connected_at: null,
+          last_sync_at: null,
+        }],
+      },
+    });
+  });
+
+  it('fails closed for an unregistered provider id', async () => {
+    const service = new IntegrationService({
+      store: new InMemoryUserIntegrationStore(),
+      providers: IntegrationProviderRegistry.empty(),
+    });
+
+    await expect(service.getProvider(
+      consoleRequest(),
+      'linear' as Parameters<IntegrationService['getProvider']>[1],
+    )).resolves.toMatchObject({
+      status: 404,
+      body: {
+        code: 'integration_provider_not_found',
       },
     });
   });

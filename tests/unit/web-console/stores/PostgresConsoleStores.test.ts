@@ -31,6 +31,12 @@ const { PostgresLoginTransactionStore } = await import(
 const { PostgresUserIntegrationStore } = await import(
   '../../../../src/web-console/stores/PostgresUserIntegrationStore.js'
 );
+const { PostgresIntegrationDescriptorStore } = await import(
+  '../../../../src/web-console/stores/PostgresIntegrationDescriptorStore.js'
+);
+const { PostgresIntegrationOpenApiSpecStore } = await import(
+  '../../../../src/web-console/stores/PostgresIntegrationOpenApiSpecStore.js'
+);
 const { PostgresPortfolioSyncJobStore } = await import(
   '../../../../src/web-console/stores/PostgresPortfolioSyncJobStore.js'
 );
@@ -72,6 +78,9 @@ const { PortfolioSyncAlreadyPendingError } = await import(
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
+const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
+const SPEC_ID = '1f518305-ae82-4fe2-a696-dfdd2d4d4025';
+const SPEC_HASH = 'a'.repeat(64);
 const PRIMARY_SUB = 'github_user-7';
 const AUDIT_KEY_ID = 'audit-key-test';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
@@ -157,6 +166,94 @@ function userIntegrationRow(overrides: Partial<UserIntegrationRecord> = {}) {
     connectedAt: NOW,
     lastSyncAt: null,
     revokedAt: null,
+    ...overrides,
+  };
+}
+
+function integrationDescriptorRow(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: DESCRIPTOR_ID,
+    provider: 'gmail',
+    ownership: 'byo',
+    ownerUserId: USER_ID,
+    displayName: 'Gmail',
+    category: 'email',
+    authStrategy: 'oauth2_authorization_code',
+    apiHosts: ['gmail.googleapis.com'],
+    oauth: {
+      authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      pkce: 'required',
+      refresh: 'rotating',
+      tokenExchange: { style: 'form' },
+      accountLabel: { field: 'email' },
+    },
+    staticApiKey: null,
+    clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    credentialKeyVersion: 'integration-key-v1',
+    operationPromotion: { operations: ['gmail.users.messages.list'] },
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function integrationDescriptorInput(overrides: Partial<Parameters<InstanceType<typeof PostgresIntegrationDescriptorStore>['upsert']>[0]> = {}) {
+  return {
+    provider: 'gmail',
+    ownership: 'byo' as const,
+    ownerUserId: USER_ID,
+    displayName: 'Gmail',
+    category: 'email',
+    authStrategy: 'oauth2_authorization_code' as const,
+    apiHosts: ['gmail.googleapis.com'],
+    oauth: {
+      authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      pkce: 'required' as const,
+      refresh: 'rotating' as const,
+      tokenExchange: { style: 'form' },
+      accountLabel: { field: 'email' },
+    },
+    staticApiKey: null,
+    clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    credentialKeyVersion: 'integration-key-v1',
+    operationPromotion: { operations: ['gmail.users.messages.list'] },
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function openApiSpecRow(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: SPEC_ID,
+    descriptorId: DESCRIPTOR_ID,
+    spec: {
+      openapi: '3.1.0',
+      paths: {},
+    },
+    sourceUrl: 'https://gmail.googleapis.com/openapi.json',
+    specHash: SPEC_HASH,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function openApiSpecInput(overrides: Partial<Parameters<InstanceType<typeof PostgresIntegrationOpenApiSpecStore>['upsert']>[0]> = {}) {
+  return {
+    descriptorId: DESCRIPTOR_ID,
+    spec: {
+      openapi: '3.1.0',
+      paths: {},
+    },
+    sourceUrl: 'https://gmail.googleapis.com/openapi.json',
+    specHash: SPEC_HASH,
+    createdAt: NOW,
+    updatedAt: NOW,
     ...overrides,
   };
 }
@@ -583,6 +680,126 @@ describe('PostgresUserIntegrationStore', () => {
       userId: USER_ID,
     });
     expect(chain.limit).toHaveBeenCalledWith(1);
+  });
+
+  it('maps generic provider integrations with scopes-only permission details', async () => {
+    const chain = selectingChain([userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+    })]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+    });
+  });
+
+  it('uses scopes-only default permissions for generic provider error rows', async () => {
+    transaction.update = jest.fn(() => returningChain([]));
+    transaction.insert = jest.fn((table) => insertChain([{
+      ...userIntegrationRow({
+        provider: 'linear',
+        authorizedPermissions: { scopes: [] },
+        status: 'error',
+        errorReason: 'provider_unavailable',
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        connectedAt: null,
+      }),
+      table,
+    }]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.recordError({
+      userId: USER_ID,
+      provider: 'linear',
+      errorReason: 'provider_unavailable',
+      occurredAt: NOW,
+    })).resolves.toMatchObject({
+      provider: 'linear',
+      authorizedPermissions: { scopes: [] },
+      status: 'error',
+    });
+  });
+});
+
+describe('PostgresIntegrationDescriptorStore', () => {
+  it('lists visible curated and BYO descriptors and clones encrypted secrets', async () => {
+    const row = integrationDescriptorRow();
+    const chain = selectingChain([row]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    const rows = await store.listVisible(USER_ID);
+    rows[0]?.clientSecretCiphertext?.fill(0);
+
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      provider: 'gmail',
+      ownership: 'byo',
+      apiHosts: ['gmail.googleapis.com'],
+    });
+    expect(row.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
+  });
+
+  it('upserts descriptors by owner/provider identity', async () => {
+    transaction.select = jest.fn(() => selectingChain([]));
+    transaction.insert = jest.fn(() => insertChain([integrationDescriptorRow()]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput())).resolves.toMatchObject({
+      provider: 'gmail',
+      ownerUserId: USER_ID,
+    });
+  });
+
+  it('rejects descriptor inputs before writing', async () => {
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({
+      apiHosts: ['127.0.0.1'],
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    expect(transaction.insert).toBeUndefined();
+  });
+});
+
+describe('PostgresIntegrationOpenApiSpecStore', () => {
+  it('finds specs by descriptor id and clones JSON content', async () => {
+    const row = openApiSpecRow();
+    const chain = selectingChain([row]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationOpenApiSpecStore({} as DatabaseInstance);
+
+    const found = await store.findByDescriptorId(DESCRIPTOR_ID);
+    (found?.spec.paths as Record<string, unknown>).tampered = true;
+
+    expect(found).toMatchObject({
+      descriptorId: DESCRIPTOR_ID,
+      specHash: SPEC_HASH,
+    });
+    expect(row.spec).toEqual({ openapi: '3.1.0', paths: {} });
+  });
+
+  it('upserts OpenAPI specs by descriptor id', async () => {
+    transaction.select = jest.fn(() => selectingChain([]));
+    transaction.insert = jest.fn(() => insertChain([openApiSpecRow()]));
+    const store = new PostgresIntegrationOpenApiSpecStore({} as DatabaseInstance);
+
+    await expect(store.upsert(openApiSpecInput())).resolves.toMatchObject({
+      descriptorId: DESCRIPTOR_ID,
+      specHash: SPEC_HASH,
+    });
+  });
+
+  it('rejects invalid specs before writing', async () => {
+    const store = new PostgresIntegrationOpenApiSpecStore({} as DatabaseInstance);
+
+    await expect(store.upsert(openApiSpecInput({
+      spec: { openapi: '3.1.0' },
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    expect(transaction.insert).toBeUndefined();
   });
 });
 

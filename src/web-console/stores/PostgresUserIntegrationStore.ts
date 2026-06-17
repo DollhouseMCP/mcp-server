@@ -5,6 +5,7 @@ import type { DatabaseInstance } from '../../database/connection.js';
 import { userIntegrations } from '../../database/schema/index.js';
 import {
   cloneUserIntegrationRecord,
+  GITHUB_USER_INTEGRATION_PROVIDER,
   type IUserIntegrationStore,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
@@ -94,10 +95,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         provider: input.provider,
         externalAccountLabel: null,
         externalInstallationId: null,
-        authorizedPermissions: {
-          repository_selection: 'unknown',
-          permissions: { contents: 'none' },
-        },
+        authorizedPermissions: defaultAuthorizedPermissions(input.provider),
         accessTokenCiphertext: null,
         refreshTokenCiphertext: null,
         credentialKeyVersion: null,
@@ -148,6 +146,16 @@ function validateConnectInput(input: UserIntegrationConnectInput): void {
     lastSyncAt: null,
     revokedAt: null,
   });
+}
+
+function defaultAuthorizedPermissions(provider: UserIntegrationProvider): Readonly<Record<string, unknown>> {
+  if (provider === GITHUB_USER_INTEGRATION_PROVIDER) {
+    return {
+      repository_selection: 'unknown',
+      permissions: { contents: 'none' },
+    };
+  }
+  return { scopes: [] };
 }
 
 function fromRow(row: typeof userIntegrations.$inferSelect): UserIntegrationRecord {

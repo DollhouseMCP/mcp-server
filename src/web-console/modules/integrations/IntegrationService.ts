@@ -14,35 +14,30 @@ import { normalizeConsoleReturnPath } from '../../platform/ConsoleReturnPaths.js
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
-import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
+import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import {
-  serializeGitHubIntegrationStatus,
   serializeIntegrationList,
 } from './IntegrationDtos.js';
-import type {
-  GitHubIntegrationContentsPermission,
-  GitHubIntegrationTokenExchangeResult,
-  IGitHubIntegrationProvider,
-} from './GitHubIntegrationProvider.js';
 import type {
   IIntegrationSecurityEventSink,
   IntegrationCallbackRejectedReason,
 } from './IntegrationSecurityEvents.js';
 import { integrationSecretContext, type IntegrationSecretContext } from './IntegrationSecretContext.js';
+import type { IIntegrationProvider } from './IntegrationProvider.js';
+import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 
 const INTEGRATION_TRANSACTION_TTL_MS = 10 * 60 * 1000;
 const PKCE_VERIFIER_BYTES = 32;
 const PKCE_SECRET_CLASS = 'pkce_verifier';
 const INTEGRATION_PATH = '/api/v1/me/integrations';
-const GITHUB_CALLBACK_PATH = `${INTEGRATION_PATH}/github/callback`;
 
 export class IntegrationService {
   constructor(private readonly options: {
     readonly store: IUserIntegrationStore;
+    readonly providers: IntegrationProviderRegistry;
     readonly loginTransactions?: ILoginTransactionStore | null;
     readonly opaqueValues?: IConsoleOpaqueValueService | null;
     readonly secretEncryption?: ISecretEncryptionService | null;
-    readonly githubProvider?: IGitHubIntegrationProvider | null;
     readonly publicBaseUrl?: string | null;
     readonly securityEventSink?: IIntegrationSecurityEventSink | null;
     readonly now?: () => Date;
@@ -53,23 +48,33 @@ export class IntegrationService {
     const records = await this.options.store.listByUser(auth.userId);
     return {
       status: 200,
-      body: serializeIntegrationList(records),
+      body: serializeIntegrationList(records, this.options.providers.listDescriptors()),
     };
   }
 
   async getGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    return this.getProvider(req, 'github');
+  }
+
+  async getProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const record = await this.options.store.findByProvider(auth.userId, 'github');
+    const provider = this.options.providers.get(providerId);
+    if (!provider) return providerNotFound(providerId);
+    const record = await this.options.store.findByProvider(auth.userId, providerId);
     return {
       status: 200,
-      body: serializeGitHubIntegrationStatus(record),
+      body: provider.projectStatus(record).body,
     };
   }
 
   async connectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    return this.connectProvider(req, 'github');
+  }
+
+  async connectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const deps = this.writeDependencies();
-    if (!deps) return serviceUnavailable('GitHub integration linking is not configured.');
+    const deps = this.writeDependencies(providerId);
+    if (!deps) return serviceUnavailable(`${providerId} integration linking is not configured.`);
     const now = this.now();
     const transactionId = deps.opaqueValues.createOpaqueValue();
     const state = deps.opaqueValues.createOpaqueValue();
@@ -100,12 +105,12 @@ export class IntegrationService {
       // window.location = authorize_url. (Slice B's /:provider/connect matches.)
       status: 200,
       body: {
-        authorize_url: deps.githubProvider.createAuthorizationUrl({
+        authorize_url: deps.provider.createAuthorizationUrl({
           state,
           codeChallenge: createPkceChallenge(pkceVerifier),
           codeChallengeMethod: 'S256',
           redirectUri,
-          contentsPermission,
+          requestedPermissions: contentsPermission,
         }),
       },
       cookies: [{ operation: 'set', name: CONSOLE_INTEGRATION_STATE_COOKIE, value: transactionId }],
@@ -113,14 +118,18 @@ export class IntegrationService {
   }
 
   async completeGitHubCallback(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    return this.completeProviderCallback(req, 'github');
+  }
+
+  async completeProviderCallback(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const deps = this.writeDependencies();
+    const deps = this.writeDependencies(providerId);
     if (!deps) return failedIntegrationCallback();
     const transactionId = readCookie(req.headers.cookie, CONSOLE_INTEGRATION_STATE_COOKIE);
     const code = singleQueryValue(req.query.code);
     const state = singleQueryValue(req.query.state);
     if (!transactionId || !code || !state) {
-      await this.recordCallbackRejected(auth.userId, 'missing');
+      await this.recordCallbackRejected(providerId, auth.userId, 'missing');
       return failedIntegrationCallback();
     }
 
@@ -133,18 +142,19 @@ export class IntegrationService {
     );
     if (transaction?.flowKind !== 'integration_link') {
       await this.recordCallbackRejected(
+        providerId,
         auth.userId,
         await this.classifyMissingTransaction(deps.loginTransactions, idHash, now),
       );
       return failedIntegrationCallback();
     }
     if (transaction.userId !== auth.userId) {
-      await this.recordCallbackRejected(auth.userId, 'user_mismatch');
+      await this.recordCallbackRejected(providerId, auth.userId, 'user_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
     if (!transaction.consoleSessionIdHash ||
         !buffersEqual(transaction.consoleSessionIdHash, auth.sessionIdHash)) {
-      await this.recordCallbackRejected(auth.userId, 'session_mismatch');
+      await this.recordCallbackRejected(providerId, auth.userId, 'session_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
 
@@ -155,21 +165,21 @@ export class IntegrationService {
         pkceContext(transactionId),
       ).toString('utf8');
     } catch {
-      await this.recordCallbackRejected(auth.userId, 'consumed');
+      await this.recordCallbackRejected(providerId, auth.userId, 'consumed');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
-    let exchanged: GitHubIntegrationTokenExchangeResult;
+    let exchanged;
     try {
-      exchanged = await deps.githubProvider.exchangeAuthorizationCode({
+      exchanged = await deps.provider.exchangeAuthorizationCode({
         code,
         codeVerifier: pkceVerifier,
         redirectUri: this.githubCallbackUri(),
-        installationId: singleQueryValue(req.query.installation_id),
+        providerCallbackParams: stringQueryParams(req.query),
       });
     } catch {
       await this.options.store.recordError({
         userId: auth.userId,
-        provider: 'github',
+        provider: providerId,
         errorReason: 'token_exchange_failed',
         occurredAt: this.now(),
       });
@@ -179,21 +189,18 @@ export class IntegrationService {
     const connectedAt = this.now();
     await this.options.store.connect({
       userId: auth.userId,
-      provider: 'github',
+      provider: providerId,
       externalAccountLabel: exchanged.accountLabel,
-      externalInstallationId: exchanged.installationId,
-      authorizedPermissions: {
-        repository_selection: exchanged.repositorySelection,
-        permissions: { contents: exchanged.contentsPermission },
-      },
+      externalInstallationId: exchanged.externalInstallationId,
+      authorizedPermissions: exchanged.authorizedPermissions,
       accessTokenCiphertext: deps.secretEncryption.encrypt(
         Buffer.from(exchanged.accessToken, 'utf8'),
-        integrationSecretContext('access_token', auth.userId, 'github'),
+        integrationSecretContext('access_token', auth.userId, providerId),
       ),
       refreshTokenCiphertext: exchanged.refreshToken
         ? deps.secretEncryption.encrypt(
           Buffer.from(exchanged.refreshToken, 'utf8'),
-          integrationSecretContext('refresh_token', auth.userId, 'github'),
+          integrationSecretContext('refresh_token', auth.userId, providerId),
         )
         : null,
       connectedAt,
@@ -207,52 +214,56 @@ export class IntegrationService {
   }
 
   async disconnectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    return this.disconnectProvider(req, 'github');
+  }
+
+  async disconnectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const deps = this.writeDependencies();
-    if (!deps) return serviceUnavailable('GitHub integration disconnect is not configured.');
-    const active = await this.options.store.findByProvider(auth.userId, 'github');
+    const deps = this.writeDependencies(providerId);
+    if (!deps) return serviceUnavailable(`${providerId} integration disconnect is not configured.`);
+    const active = await this.options.store.findByProvider(auth.userId, providerId);
     if (active) {
-      const revoked = await this.revokeRemoteGitHubCredentials(deps, auth, active);
+      const revoked = await this.revokeRemoteCredentials(deps, auth, active);
       if (!revoked) {
         const errorRecord = await this.options.store.recordError({
           userId: auth.userId,
-          provider: 'github',
+          provider: providerId,
           errorReason: 'revocation_failed',
           occurredAt: this.now(),
         });
         return {
           status: 200,
-          body: serializeGitHubIntegrationStatus(errorRecord),
+          body: deps.provider.projectStatus(errorRecord).body,
         };
       }
       await this.options.store.disconnect({
         userId: auth.userId,
-        provider: 'github',
+        provider: providerId,
         revokedAt: this.now(),
       });
     }
     return {
       status: 200,
-      body: serializeGitHubIntegrationStatus(null),
+      body: deps.provider.projectStatus(null).body,
     };
   }
 
-  private async revokeRemoteGitHubCredentials(
+  private async revokeRemoteCredentials(
     deps: NonNullable<ReturnType<IntegrationService['writeDependencies']>>,
     auth: ConsoleAuthenticatedContext,
     active: NonNullable<Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>>,
   ): Promise<boolean> {
     const accessToken = active.accessTokenCiphertext
-      ? decryptNullable(deps.secretEncryption, active.accessTokenCiphertext, integrationSecretContext('access_token', auth.userId, 'github'))
+      ? decryptNullable(deps.secretEncryption, active.accessTokenCiphertext, integrationSecretContext('access_token', auth.userId, active.provider))
       : null;
     const refreshToken = active.refreshTokenCiphertext
-      ? decryptNullable(deps.secretEncryption, active.refreshTokenCiphertext, integrationSecretContext('refresh_token', auth.userId, 'github'))
+      ? decryptNullable(deps.secretEncryption, active.refreshTokenCiphertext, integrationSecretContext('refresh_token', auth.userId, active.provider))
       : null;
     try {
-      await deps.githubProvider.revokeCredentials({
+      await deps.provider.revokeCredentials({
         accessToken,
         refreshToken,
-        installationId: active.externalInstallationId,
+        externalInstallationId: active.externalInstallationId,
       });
       return true;
     } catch {
@@ -263,24 +274,25 @@ export class IntegrationService {
     }
   }
 
-  private writeDependencies(): {
+  private writeDependencies(providerId: UserIntegrationProvider): {
     readonly loginTransactions: ILoginTransactionStore;
     readonly opaqueValues: IConsoleOpaqueValueService;
     readonly secretEncryption: ISecretEncryptionService;
-    readonly githubProvider: IGitHubIntegrationProvider;
+    readonly provider: IIntegrationProvider;
   } | null {
+    const provider = this.options.providers.get(providerId);
     if (!this.options.loginTransactions ||
         !this.options.opaqueValues ||
         !this.options.secretEncryption ||
-        !this.options.githubProvider ||
-        !this.options.publicBaseUrl) {
+        !this.options.publicBaseUrl ||
+        !provider?.authorizationConfigured) {
       return null;
     }
     return {
       loginTransactions: this.options.loginTransactions,
       opaqueValues: this.options.opaqueValues,
       secretEncryption: this.options.secretEncryption,
-      githubProvider: this.options.githubProvider,
+      provider,
     };
   }
 
@@ -296,6 +308,7 @@ export class IntegrationService {
   }
 
   private async recordCallbackRejected(
+    provider: UserIntegrationProvider,
     userId: string | null,
     reason: IntegrationCallbackRejectedReason,
   ): Promise<void> {
@@ -303,7 +316,7 @@ export class IntegrationService {
       await this.options.securityEventSink?.recordIntegrationCallbackRejected({
         type: 'console.auth.integration_callback_rejected.v1',
         userId,
-        provider: 'github',
+        provider,
         reason,
         occurredAt: this.now(),
       });
@@ -315,7 +328,7 @@ export class IntegrationService {
 
   private githubCallbackUri(): string {
     if (!this.options.publicBaseUrl) throw new Error('GitHub integration public base URL is not configured');
-    return new URL(GITHUB_CALLBACK_PATH, normalizeBaseUrl(this.options.publicBaseUrl)).toString();
+    return new URL(`${INTEGRATION_PATH}/github/callback`, normalizeBaseUrl(this.options.publicBaseUrl)).toString();
   }
 
   private now(): Date {
@@ -347,9 +360,9 @@ function decryptNullable(
   }
 }
 
-function requestedContentsPermission(body: unknown): GitHubIntegrationContentsPermission {
+function requestedContentsPermission(body: unknown): Readonly<Record<string, unknown>> {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
-  return record.contents_permission === 'write' ? 'write' : 'read';
+  return { contents_permission: record.contents_permission === 'write' ? 'write' : 'read' };
 }
 
 function readBodyReturnTo(body: unknown): string {
@@ -360,6 +373,27 @@ function readBodyReturnTo(body: unknown): string {
 function singleQueryValue(value: unknown): string | null {
   if (typeof value === 'string' && value !== '') return value;
   return null;
+}
+
+function stringQueryParams(query: Readonly<Record<string, unknown>>): Readonly<Record<string, string>> {
+  const params: Record<string, string> = {};
+  for (const [key, value] of Object.entries(query)) {
+    if (typeof value === 'string' && value !== '') params[key] = value;
+  }
+  return params;
+}
+
+function providerNotFound(providerId: string): ConsoleHandlerResult {
+  return {
+    status: 404,
+    body: {
+      type: 'about:blank',
+      title: 'Not found',
+      status: 404,
+      code: 'integration_provider_not_found',
+      detail: `Integration provider '${providerId}' is not registered.`,
+    },
+  };
 }
 
 function normalizeBaseUrl(value: string): string {
