@@ -181,6 +181,7 @@ function integrationDescriptorRow(overrides: Partial<Record<string, unknown>> = 
     authStrategy: 'oauth2_authorization_code',
     apiHosts: ['gmail.googleapis.com'],
     oauth: {
+      clientId: 'gmail-client-id',
       authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
@@ -209,6 +210,7 @@ function integrationDescriptorInput(overrides: Partial<Parameters<InstanceType<t
     authStrategy: 'oauth2_authorization_code' as const,
     apiHosts: ['gmail.googleapis.com'],
     oauth: {
+      clientId: 'gmail-client-id',
       authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
@@ -722,6 +724,72 @@ describe('PostgresUserIntegrationStore', () => {
       authorizedPermissions: { scopes: [] },
       status: 'error',
     });
+  });
+
+  it('locks an active integration before updating refreshed credentials', async () => {
+    const updated = userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+      credentialKeyVersion: 'integration-key-v2',
+    });
+    transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]));
+    transaction.update = jest.fn(() => returningChain([updated]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => ({
+        kind: 'refreshed',
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        credentialKeyVersion: 'integration-key-v2',
+      }),
+    })).resolves.toMatchObject({
+      kind: 'refreshed',
+      record: {
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        credentialKeyVersion: 'integration-key-v2',
+      },
+    });
+    const lockSql = transaction.execute.mock.calls[0]?.[0] as { queryChunks?: readonly unknown[] };
+    expect(JSON.stringify(lockSql.queryChunks)).toContain('FOR UPDATE');
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses a row refreshed by an earlier locked caller', async () => {
+    transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+    })]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => {
+        throw new Error('refresh should not run');
+      },
+    })).resolves.toMatchObject({
+      kind: 'reused',
+      record: {
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+      },
+    });
+    expect(transaction.update).toBeUndefined();
   });
 });
 

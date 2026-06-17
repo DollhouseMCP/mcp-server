@@ -1,6 +1,8 @@
 export * from './IntegrationDtos.js';
 export * from './GitHubIntegrationProvider.js';
 export * from './GitHubAppIntegrationProvider.js';
+export * from './ConfiguredOAuthIntegrationProvider.js';
+export * from './StaticApiKeyIntegrationProvider.js';
 export * from './IntegrationProvider.js';
 export * from './IntegrationProviderRegistry.js';
 export * from './IntegrationSecurityEvents.js';
@@ -8,3 +10,4 @@ export * from './IntegrationModule.js';
 export * from './IntegrationPrivacyProjectors.js';
 export * from './IntegrationSecretContext.js';
 export * from './IntegrationService.js';
+export * from './IntegrationTokenRefreshService.js';

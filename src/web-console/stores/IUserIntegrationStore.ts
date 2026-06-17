@@ -13,6 +13,7 @@ export const GITHUB_USER_INTEGRATION_PROVIDER = 'github' as const;
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'
+  | 'token_refresh_failed'
   | 'revocation_failed'
   | 'scope_denied'
   | 'provider_unavailable';
@@ -38,6 +39,7 @@ export interface IUserIntegrationStore {
   listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
+  refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
 }
@@ -50,8 +52,35 @@ export interface UserIntegrationConnectInput {
   readonly authorizedPermissions: Readonly<Record<string, unknown>>;
   readonly accessTokenCiphertext: Buffer;
   readonly refreshTokenCiphertext: Buffer | null;
+  readonly credentialKeyVersion?: string | null;
   readonly connectedAt: Date;
 }
+
+export interface UserIntegrationRefreshInput {
+  readonly userId: string;
+  readonly provider: UserIntegrationProvider;
+  readonly staleAccessTokenCiphertext: Buffer;
+  readonly refreshedAt: Date;
+  readonly refresh: (record: UserIntegrationRecord) => Promise<UserIntegrationRefreshDecision>;
+}
+
+export type UserIntegrationRefreshDecision =
+  | {
+      readonly kind: 'refreshed';
+      readonly accessTokenCiphertext: Buffer;
+      readonly refreshTokenCiphertext: Buffer | null;
+      readonly credentialKeyVersion?: string | null;
+    }
+  | {
+      readonly kind: 'failed';
+      readonly errorReason: Extract<UserIntegrationErrorReason, 'token_refresh_failed' | 'provider_unavailable'>;
+    };
+
+export type UserIntegrationRefreshResult =
+  | { readonly kind: 'missing'; readonly record: null }
+  | { readonly kind: 'reused'; readonly record: UserIntegrationRecord }
+  | { readonly kind: 'refreshed'; readonly record: UserIntegrationRecord }
+  | { readonly kind: 'failed'; readonly record: UserIntegrationRecord };
 
 export interface UserIntegrationDisconnectInput {
   readonly userId: string;
@@ -202,6 +231,7 @@ function assertNoUnsafePermissionKeys(value: Readonly<Record<string, unknown>>):
 
 function isIntegrationErrorReason(value: string): value is UserIntegrationErrorReason {
   return value === 'token_exchange_failed' ||
+    value === 'token_refresh_failed' ||
     value === 'revocation_failed' ||
     value === 'scope_denied' ||
     value === 'provider_unavailable';

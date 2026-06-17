@@ -145,6 +145,7 @@ export type UserIntegrationProvider = string;
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'
+  | 'token_refresh_failed'
   | 'revocation_failed'
   | 'scope_denied'
   | 'provider_unavailable';
@@ -232,6 +233,7 @@ export const userIntegrations = pgTable('user_integrations', {
       (${table.status} = 'error'
         AND ${table.errorReason} IN (
           'token_exchange_failed',
+          'token_refresh_failed',
           'revocation_failed',
           'scope_denied',
           'provider_unavailable'

@@ -119,6 +119,7 @@ function oauthDescriptorInput(overrides: Partial<Parameters<InMemoryIntegrationD
     authStrategy: 'oauth2_authorization_code' as const,
     apiHosts: ['gmail.googleapis.com'],
     oauth: {
+      clientId: 'gmail-client-id',
       authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
@@ -435,6 +436,84 @@ describe('InMemoryUserIntegrationStore', () => {
       provider: 'linear',
       authorizedPermissions: {
         scopes: ['read:issues', 'write:comments'],
+      },
+    });
+  });
+
+  it('serializes concurrent refresh and lets the losing caller reuse the fresh token', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+    let refreshCalls = 0;
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>(resolve => {
+      releaseRefresh = resolve;
+    });
+    const refresh = async () => {
+      refreshCalls += 1;
+      await refreshGate;
+      return {
+        kind: 'refreshed' as const,
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        credentialKeyVersion: 'integration-key-v2',
+      };
+    };
+
+    const first = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh,
+    });
+    const second = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh,
+    });
+    await Promise.resolve();
+    releaseRefresh();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ kind: 'refreshed' }),
+      expect.objectContaining({ kind: 'reused' }),
+    ]);
+    expect(refreshCalls).toBe(1);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      status: 'connected',
+      credentialKeyVersion: 'integration-key-v2',
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+    });
+  });
+
+  it('records refresh failure without deleting the previous encrypted credential', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => ({ kind: 'failed', errorReason: 'token_refresh_failed' }),
+    })).resolves.toMatchObject({
+      kind: 'failed',
+      record: {
+        status: 'error',
+        errorReason: 'token_refresh_failed',
+        accessTokenCiphertext: Buffer.from('stale-access'),
+        refreshTokenCiphertext: Buffer.from('stale-refresh'),
       },
     });
   });

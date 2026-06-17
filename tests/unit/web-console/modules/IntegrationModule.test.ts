@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   AeadSecretEncryptionService,
+  ConfiguredOAuthIntegrationProvider,
   createIntegrationModule,
   HmacConsoleOpaqueValueService,
   InMemoryUserIntegrationStore,
@@ -10,11 +11,14 @@ import {
   CONSOLE_LOGIN_STATE_COOKIE,
   IntegrationProviderRegistry,
   IntegrationService,
+  IntegrationTokenRefreshService,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
   type IGitHubIntegrationProvider,
   type IIntegrationSecurityEventSink,
   type IntegrationCallbackRejectedEvent,
+  StaticApiKeyIntegrationProvider,
+  type IntegrationDescriptorRecord,
   type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
 
@@ -28,6 +32,11 @@ const LIST_PATH = '/api/v1/me/integrations';
 const GITHUB_PATH = '/api/v1/me/integrations/github';
 const GITHUB_CONNECT_PATH = '/api/v1/me/integrations/github/connect';
 const GITHUB_CALLBACK_PATH = '/api/v1/me/integrations/github/callback';
+const GMAIL_PATH = '/api/v1/me/integrations/gmail';
+const GMAIL_CONNECT_PATH = '/api/v1/me/integrations/gmail/connect';
+const GMAIL_CALLBACK_PATH = '/api/v1/me/integrations/gmail/callback';
+const AIRTABLE_PATH = '/api/v1/me/integrations/airtable';
+const AIRTABLE_CONNECT_PATH = '/api/v1/me/integrations/airtable/connect';
 const PUBLIC_BASE_URL = 'https://console.example';
 const SETTINGS_INTEGRATIONS_PATH = '/settings/integrations';
 const PROVIDER_CODE = 'provider-code';
@@ -665,7 +674,283 @@ describe('IntegrationModule', () => {
       ownerId: `github:${OTHER_USER_ID}`,
     })).toThrow('authentication failed');
   });
+
+  it('connects a configured OAuth provider with shared PKCE transaction flow', async () => {
+    const fetchCalls: Array<{ readonly url: string; readonly init: RequestInit | undefined }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      fetchCalls.push({ url: String(url), init });
+      return new Response(JSON.stringify({
+        access_token: 'gmail-access-token-secret',
+        refresh_token: 'gmail-refresh-token-secret',
+        email: 'alice@example.com',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const provider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      fetch: fetchImpl,
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const module = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption,
+      configuredProviders: [provider],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      now: () => NOW,
+    });
+    const connect = findRoute(module.routes, GMAIL_CONNECT_PATH, 'POST');
+    const callback = findRoute(module.routes, GMAIL_CALLBACK_PATH);
+
+    const started = await connect.handler(consoleRequest({
+      body: { return_to: SETTINGS_INTEGRATIONS_PATH },
+    }));
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    expect(authorizeUrl.origin + authorizeUrl.pathname).toBe('https://accounts.example/oauth/authorize');
+    expect(authorizeUrl.searchParams.get('client_id')).toBe('gmail-client-id');
+    expect(authorizeUrl.searchParams.get('redirect_uri')).toBe(`${PUBLIC_BASE_URL}${GMAIL_CALLBACK_PATH}`);
+    expect(authorizeUrl.searchParams.get('code_challenge')).toBeTruthy();
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    const result = await callback.handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }));
+
+    expect(result).toEqual({
+      status: 302,
+      redirectTo: SETTINGS_INTEGRATIONS_PATH,
+      cookies: [{ operation: 'clear', name: CONSOLE_INTEGRATION_STATE_COOKIE }],
+    });
+    expect(fetchCalls[0]?.url).toBe('https://accounts.example/oauth/token');
+    expect(fetchCalls[0]?.init?.body?.toString()).toContain('code_verifier=');
+    const stored = await store.findByProvider(USER_ID, 'gmail');
+    expect(stored).toMatchObject({
+      provider: 'gmail',
+      externalAccountLabel: 'alice@example.com',
+      authorizedPermissions: { scopes: ['gmail.readonly'] },
+      refreshTokenCiphertext: expect.any(Buffer),
+    });
+    expect(stored?.accessTokenCiphertext?.toString('utf8')).not.toContain('gmail-access-token-secret');
+    expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), {
+      secretClass: 'integration_access_token',
+      ownerId: `gmail:${USER_ID}`,
+    }).toString('utf8')).toBe('gmail-access-token-secret');
+    const getGmail = findRoute(module.routes, GMAIL_PATH);
+    const status = await getGmail.handler(consoleRequest());
+    expect(status).toMatchObject({
+      status: 200,
+      body: {
+        provider: 'gmail',
+        display_name: 'Gmail',
+        status: 'connected',
+        account_label: 'alice@example.com',
+        scopes: ['gmail.readonly'],
+      },
+    });
+    expect(JSON.stringify(status.body)).not.toContain('token');
+    expect(JSON.stringify(status.body)).not.toContain('ciphertext');
+  });
+
+  it('stores and revokes static API key credentials without OAuth', async () => {
+    const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
+    const store = new InMemoryUserIntegrationStore();
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption,
+      configuredProviders: [provider],
+      now: () => NOW,
+    });
+    const connect = findRoute(module.routes, AIRTABLE_CONNECT_PATH, 'POST');
+    const disconnect = findRoute(module.routes, AIRTABLE_PATH, 'DELETE');
+
+    const connected = await connect.handler(consoleRequest({
+      body: {
+        api_key: 'airtable-api-key-secret',
+        account_label: 'Alice Airtable',
+      },
+    }));
+
+    expect(connected).toMatchObject({
+      status: 200,
+      body: {
+        provider: 'airtable',
+        display_name: 'Airtable',
+        status: 'connected',
+        account_label: 'Alice Airtable',
+        scopes: [],
+      },
+    });
+    expect(JSON.stringify(connected.body)).not.toContain('airtable-api-key-secret');
+    expect(JSON.stringify(connected.body)).not.toContain('ciphertext');
+    const stored = await store.findByProvider(USER_ID, 'airtable');
+    expect(stored).toMatchObject({
+      provider: 'airtable',
+      authorizedPermissions: { scopes: [] },
+      refreshTokenCiphertext: null,
+    });
+    expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), {
+      secretClass: 'integration_access_token',
+      ownerId: `airtable:${USER_ID}`,
+    }).toString('utf8')).toBe('airtable-api-key-secret');
+
+    const revoked = await disconnect.handler(consoleRequest());
+
+    expect(revoked).toMatchObject({
+      status: 200,
+      body: {
+        provider: 'airtable',
+        status: 'disconnected',
+        scopes: [],
+      },
+    });
+    await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
+  });
+
+  it('refreshes configured OAuth tokens through store-level single-flight helper', async () => {
+    const fetchCalls: Array<{ readonly url: string; readonly init: RequestInit | undefined }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      fetchCalls.push({ url: String(url), init });
+      return new Response(JSON.stringify({
+        access_token: 'gmail-fresh-access-token',
+        refresh_token: 'gmail-rotated-refresh-token',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    };
+    const provider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      fetch: fetchImpl,
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const staleAccessTokenCiphertext = secretEncryption.encrypt(
+      Buffer.from('gmail-stale-access-token', 'utf8'),
+      { secretClass: 'integration_access_token', ownerId: `gmail:${USER_ID}` },
+    );
+    await store.connect({
+      userId: USER_ID,
+      provider: 'gmail',
+      externalAccountLabel: 'alice@example.com',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['gmail.readonly'] },
+      accessTokenCiphertext: staleAccessTokenCiphertext,
+      refreshTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from('gmail-stale-refresh-token', 'utf8'),
+        { secretClass: 'integration_refresh_token', ownerId: `gmail:${USER_ID}` },
+      ),
+      connectedAt: NOW,
+    });
+    const service = new IntegrationTokenRefreshService({
+      store,
+      providers: new IntegrationProviderRegistry([provider]),
+      secretEncryption,
+      now: () => NOW,
+    });
+
+    const refreshed = await service.refreshOnDemand({
+      userId: USER_ID,
+      provider: 'gmail',
+      staleAccessTokenCiphertext,
+    });
+
+    expect(refreshed).toMatchObject({
+      kind: 'refreshed',
+      record: {
+        provider: 'gmail',
+        status: 'connected',
+        errorReason: null,
+      },
+    });
+    expect(fetchCalls[0]?.url).toBe('https://accounts.example/oauth/token');
+    expect(fetchCalls[0]?.init?.body?.toString()).toContain('grant_type=refresh_token');
+    const stored = await store.findByProvider(USER_ID, 'gmail');
+    expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), {
+      secretClass: 'integration_access_token',
+      ownerId: `gmail:${USER_ID}`,
+    }).toString('utf8')).toBe('gmail-fresh-access-token');
+    expect(secretEncryption.decrypt(stored?.refreshTokenCiphertext ?? Buffer.alloc(0), {
+      secretClass: 'integration_refresh_token',
+      ownerId: `gmail:${USER_ID}`,
+    }).toString('utf8')).toBe('gmail-rotated-refresh-token');
+  });
 });
+
+function oauthDescriptorFixture(): IntegrationDescriptorRecord {
+  return {
+    id: '00000000-0000-4000-8000-000000000101',
+    provider: 'gmail',
+    ownership: 'curated',
+    ownerUserId: null,
+    displayName: 'Gmail',
+    category: 'Email',
+    authStrategy: 'oauth2_authorization_code',
+    apiHosts: ['gmail.googleapis.com'],
+    oauth: {
+      clientId: 'gmail-client-id',
+      authorizationUrl: 'https://accounts.example/oauth/authorize',
+      tokenUrl: 'https://accounts.example/oauth/token',
+      scopes: ['gmail.readonly'],
+      pkce: 'required',
+      refresh: 'rotating',
+      tokenExchange: { style: 'form', clientAuth: 'body' },
+      accountLabel: { field: 'email' },
+    },
+    staticApiKey: null,
+    clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    credentialKeyVersion: 'integration-key-v1',
+    operationPromotion: {},
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
+
+function staticApiKeyDescriptorFixture(): IntegrationDescriptorRecord {
+  return {
+    id: '00000000-0000-4000-8000-000000000102',
+    provider: 'airtable',
+    ownership: 'curated',
+    ownerUserId: null,
+    displayName: 'Airtable',
+    category: 'Database',
+    authStrategy: 'static_api_key',
+    apiHosts: ['api.airtable.com'],
+    oauth: null,
+    staticApiKey: {
+      injection: {
+        location: 'header',
+        name: 'Authorization',
+        valuePrefix: 'Bearer ',
+      },
+    },
+    clientSecretCiphertext: null,
+    credentialKeyVersion: null,
+    operationPromotion: {},
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
+}
 
 function cookieValue(result: Awaited<ReturnType<ConsoleRouteDefinition['handler']>>, name: string): string | null {
   const cookie = result.cookies?.find(candidate => candidate.operation === 'set' && candidate.name === name);
