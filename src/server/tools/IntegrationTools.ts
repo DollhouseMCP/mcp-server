@@ -3,8 +3,13 @@ import {
   IntegrationRequestError,
   type IntegrationRequestGateway,
 } from '../../web-console/modules/integrations/IntegrationRequestGateway.js';
+import type { IntegrationRequestPolicyEnforcer } from '../../web-console/modules/integrations/IntegrationRequestPolicy.js';
+import { IntegrationPolicyUnavailableError } from '../../web-console/modules/integrations/IntegrationRequestPolicy.js';
 
-export function getIntegrationTools(gateway: IntegrationRequestGateway): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
+export function getIntegrationTools(
+  gateway: IntegrationRequestGateway,
+  policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
   return [{
     tool: {
       name: 'integration_request',
@@ -42,12 +47,33 @@ export function getIntegrationTools(gateway: IntegrationRequestGateway): Array<{
     },
     handler: async (args: unknown) => {
       try {
-        const result = await gateway.request(readArgs(args));
+        const request = readArgs(args);
+        const policy = policyEnforcer ? await policyEnforcer.authorize(request) : { allowed: true };
+        if (!policy.allowed) {
+          return textResponse({
+            ok: false,
+            error: policy.error,
+            approvalRequest: policy.approvalRequest,
+            policyContext: policy.policyContext,
+          });
+        }
+        const result = await gateway.request(request);
         return textResponse({
           ok: true,
           result,
+          approvalContext: policy.approvalContext,
         });
       } catch (error) {
+        if (error instanceof IntegrationPolicyUnavailableError) {
+          return textResponse({
+            ok: false,
+            error: {
+              code: 'integration_request_policy_unavailable',
+              message: error.message,
+              status: 503,
+            },
+          });
+        }
         if (error instanceof IntegrationRequestError) {
           return textResponse({
             ok: false,

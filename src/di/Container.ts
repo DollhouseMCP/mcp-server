@@ -85,6 +85,7 @@ import type { ISecretEncryptionService } from "../web-console/security/SecretEnc
 import { IntegrationProviderRegistry } from "../web-console/modules/integrations/IntegrationProviderRegistry.js";
 import {
   createGitHubIntegrationProvider,
+  IntegrationRequestPolicyEnforcer,
   IntegrationRequestGateway,
   IntegrationTokenRefreshService,
   serializeGitHubIntegrationStatus,
@@ -158,6 +159,7 @@ export interface HandlerBundle {
   enhancedIndexHandler: EnhancedIndexHandler;
   mcpAqlHandler: MCPAQLHandler;
   integrationRequestGateway?: IntegrationRequestGateway;
+  integrationRequestPolicyEnforcer?: IntegrationRequestPolicyEnforcer;
 }
 
 /**
@@ -1176,6 +1178,12 @@ export class DollhouseContainer {
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
     const integrationRequestGateway = this.resolveIntegrationRequestGateway();
+    const integrationRequestPolicyEnforcer = integrationRequestGateway
+      ? new IntegrationRequestPolicyEnforcer({
+        gatekeeper: handlerDeps.gatekeeper,
+        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+      })
+      : null;
 
     return {
       personaHandler,
@@ -1191,6 +1199,7 @@ export class DollhouseContainer {
       enhancedIndexHandler,
       mcpAqlHandler,
       integrationRequestGateway: integrationRequestGateway ?? undefined,
+      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
     };
   }
 
@@ -1709,7 +1718,14 @@ export class DollhouseContainer {
       enumerable: true,
     });
 
+    const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
     const integrationRequestGateway = this.resolveIntegrationRequestGateway();
+    const integrationRequestPolicyEnforcer = integrationRequestGateway
+      ? new IntegrationRequestPolicyEnforcer({
+        gatekeeper: handlerDeps.gatekeeper,
+        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+      })
+      : null;
     return {
       personaHandler,
       elementCrudHandler,
@@ -1722,8 +1738,9 @@ export class DollhouseContainer {
       syncHandler,
       toolRegistry: undefined as unknown as ToolRegistry,
       enhancedIndexHandler,
-      mcpAqlHandler: new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker')),
+      mcpAqlHandler,
       integrationRequestGateway: integrationRequestGateway ?? undefined,
+      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
     };
   }
 
@@ -1798,7 +1815,10 @@ export class DollhouseContainer {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
     }
     if (bundle.integrationRequestGateway) {
-      toolRegistry.registerIntegrationTools(bundle.integrationRequestGateway);
+      toolRegistry.registerIntegrationTools(
+        bundle.integrationRequestGateway,
+        bundle.integrationRequestPolicyEnforcer,
+      );
     }
   }
 

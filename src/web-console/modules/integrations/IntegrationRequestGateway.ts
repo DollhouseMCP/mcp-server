@@ -67,6 +67,18 @@ export interface IntegrationRequestResult {
   readonly status: number;
   readonly response: unknown;
   readonly refreshed: boolean;
+  readonly provenance: IntegrationRequestProvenance;
+}
+
+export interface IntegrationRequestProvenance {
+  readonly source: 'third_party_integration';
+  readonly trust: 'untrusted';
+  readonly provider: string;
+  readonly method: string;
+  readonly host: string;
+  readonly path: string;
+  readonly readWriteClass: 'read' | 'write';
+  readonly handling: 'data_only_not_instructions';
 }
 
 export interface IntegrationRequestAuditEvent {
@@ -351,6 +363,16 @@ export class IntegrationRequestGateway {
       status: response.status,
       response: response.body,
       refreshed,
+      provenance: {
+        source: 'third_party_integration',
+        trust: 'untrusted',
+        provider,
+        method,
+        host: url.hostname,
+        path: url.pathname,
+        readWriteClass: method === 'GET' ? 'read' : 'write',
+        handling: 'data_only_not_instructions',
+      },
     };
   }
 

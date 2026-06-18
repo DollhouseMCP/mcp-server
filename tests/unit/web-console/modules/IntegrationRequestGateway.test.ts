@@ -69,6 +69,16 @@ describe('IntegrationRequestGateway', () => {
         access_token: '[redacted]',
         nested: { api_key: '[redacted]' },
       },
+      provenance: {
+        source: 'third_party_integration',
+        trust: 'untrusted',
+        provider: 'gmail',
+        method: 'GET',
+        host: GMAIL_HOST,
+        path: '/gmail/v1/users/me/messages',
+        readWriteClass: 'read',
+        handling: 'data_only_not_instructions',
+      },
     });
     expect(JSON.stringify(result)).not.toContain('gmail-access-token');
     expect(gateway.audit.events).toEqual([

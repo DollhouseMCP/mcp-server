@@ -306,22 +306,11 @@ export function classifyTool(
 
   // MCP tool calls: auto-allow gatekeeper-essential and safe read-only operations, evaluate others
   if (toolName.startsWith('mcp__')) {
-    const operation = typeof toolInput.operation === 'string' ? toolInput.operation : '';
-    if (operation && GATEKEEPER_ESSENTIAL_OPERATIONS.has(operation)) {
-      return {
-        riskLevel: 'safe',
-        behavior: 'allow',
-        reason: `Gatekeeper-essential operation '${operation}' — cannot be blocked by permission_prompt`,
-      };
-    }
-    if (operation && SAFE_MCP_OPERATIONS.has(operation)) {
-      return {
-        riskLevel: 'safe',
-        behavior: 'allow',
-        reason: `Read-only MCP operation '${operation}'`,
-      };
-    }
-    return { riskLevel: 'moderate', behavior: 'evaluate', reason: 'MCP tool call requires policy evaluation' };
+    return classifyMcpToolCall(toolInput);
+  }
+
+  if (toolName === 'integration_request') {
+    return classifyIntegrationRequest(toolInput);
   }
 
   // Edit, Write, Agent, NotebookEdit, etc.: moderate risk
@@ -331,6 +320,38 @@ export function classifyTool(
 
   // Unknown tool: evaluate (permissive default for Phase 1)
   return { riskLevel: 'moderate', behavior: 'evaluate', reason: `Unknown tool '${toolName}', requires policy evaluation` };
+}
+
+/** Classify an `mcp__*` tool call by its operation. */
+function classifyMcpToolCall(toolInput: Record<string, unknown>): ToolClassificationResult {
+  const operation = typeof toolInput.operation === 'string' ? toolInput.operation : '';
+  if (operation && GATEKEEPER_ESSENTIAL_OPERATIONS.has(operation)) {
+    return {
+      riskLevel: 'safe',
+      behavior: 'allow',
+      reason: `Gatekeeper-essential operation '${operation}' — cannot be blocked by permission_prompt`,
+    };
+  }
+  if (operation && SAFE_MCP_OPERATIONS.has(operation)) {
+    return {
+      riskLevel: 'safe',
+      behavior: 'allow',
+      reason: `Read-only MCP operation '${operation}'`,
+    };
+  }
+  return { riskLevel: 'moderate', behavior: 'evaluate', reason: 'MCP tool call requires policy evaluation' };
+}
+
+/** Classify an `integration_request` tool call: reads are safe, writes are dangerous. */
+function classifyIntegrationRequest(toolInput: Record<string, unknown>): ToolClassificationResult {
+  const method = typeof toolInput.method === 'string' ? toolInput.method.toUpperCase() : '';
+  return {
+    riskLevel: method === 'GET' ? 'safe' : 'dangerous',
+    behavior: 'evaluate',
+    reason: method === 'GET'
+      ? 'Integration read request requires policy evaluation'
+      : 'Integration write request requires policy evaluation',
+  };
 }
 
 /**
@@ -410,7 +431,7 @@ const SENSITIVE_PATH_PREFIXES = [
  * Checks for home-directory sensitive paths, system paths, and parent traversals.
  */
 function isOutOfScopePath(targetPath: string): boolean {
-  const normalized = targetPath.replace(/\\/g, '/');
+  const normalized = targetPath.replaceAll('\\', '/');
 
   // Explicit sensitive paths
   for (const prefix of SENSITIVE_PATH_PREFIXES) {
@@ -419,12 +440,14 @@ function isOutOfScopePath(targetPath: string): boolean {
     }
   }
 
-  // Home directory references (~/...) that aren't relative to the project
-  if (normalized.startsWith('~/') || normalized.startsWith('/Users/') || normalized.startsWith('/home/')) {
-    // Heuristic: reading sensitive dotfiles/dirs outside a project.
-    // Targets known credential/config stores — avoids false positives for
-    // common project dotfiles like .github/, .vscode/, .eslintrc, etc.
-    if (/\/\.(ssh|gnupg|aws|azure|gcloud|kube|docker|npmrc|netrc|env|bash_history|zsh_history|credentials|password|secret)/i.test(normalized)) return true;
+  // Home directory references (~/...) that aren't relative to the project,
+  // targeting known credential/config stores — avoids false positives for
+  // common project dotfiles like .github/, .vscode/, .eslintrc, etc.
+  if (
+    (normalized.startsWith('~/') || normalized.startsWith('/Users/') || normalized.startsWith('/home/')) &&
+    /\/\.(ssh|gnupg|aws|azure|gcloud|kube|docker|npmrc|netrc|env|bash_history|zsh_history|credentials|password|secret)/i.test(normalized)
+  ) {
+    return true;
   }
 
   return false;
@@ -500,7 +523,28 @@ export function assessRisk(
     }
   }
 
+  if (hasUntrustedIntegrationProvenance(toolInput)) {
+    score = Math.min(100, score + 20);
+    factors.push('Untrusted integration provenance (+20)');
+  }
+
   return { score, irreversible, factors };
+}
+
+function hasUntrustedIntegrationProvenance(value: unknown, depth = 0): boolean {
+  if (depth > 6 || value === null || typeof value !== 'object') return false;
+  if (Array.isArray(value)) {
+    return value.some(item => hasUntrustedIntegrationProvenance(item, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  if (
+    record.source === 'third_party_integration' &&
+    record.trust === 'untrusted' &&
+    record.handling === 'data_only_not_instructions'
+  ) {
+    return true;
+  }
+  return Object.values(record).some(item => hasUntrustedIntegrationProvenance(item, depth + 1));
 }
 
 // ── Static Policy Data Export ─────────────────────────────────────
@@ -576,109 +620,16 @@ export function evaluateCliToolPolicy(
   const elementsWithAllowPatterns: string[] = [];
 
   for (const element of activeElements) {
-    const restrictions = element.metadata?.gatekeeper?.externalRestrictions;
-    const denyPatterns = restrictions?.denyPatterns;
-    const confirmPatterns = restrictions?.confirmPatterns;
-    const allowPatterns = restrictions?.allowPatterns;
-
-    const hasRestrictions = (Array.isArray(denyPatterns) && denyPatterns.length > 0)
-      || (Array.isArray(confirmPatterns) && confirmPatterns.length > 0)
-      || (Array.isArray(allowPatterns) && allowPatterns.length > 0);
-
-    if (!hasRestrictions) {
-      evaluatedElements.push({ type: element.type, name: element.name });
-      decisionChain.push(`${element.type} '${element.name}': no externalRestrictions`);
-      logger.debug(`[CliPolicy] ${element.type} '${element.name}': no externalRestrictions, skipping`);
-      continue;
+    const evaluation = evaluateElementRestrictions(element, matchTargets, evaluatedElements, decisionChain, startTime);
+    if ('terminal' in evaluation) {
+      return evaluation.terminal;
     }
-
-    logger.debug(`[CliPolicy] ${element.type} '${element.name}': evaluating (deny: ${Array.isArray(denyPatterns) ? denyPatterns.length : 0}, confirm: ${Array.isArray(confirmPatterns) ? confirmPatterns.length : 0}, allow: ${Array.isArray(allowPatterns) ? allowPatterns.length : 0} patterns)`);
-
-    // Step 1: Check denyPatterns (highest priority)
-    if (Array.isArray(denyPatterns)) {
-      for (const pattern of denyPatterns) {
-        if (typeof pattern !== 'string') continue;
-        for (const target of matchTargets) {
-          if (matchesPattern(target, pattern)) {
-            evaluatedElements.push({
-              type: element.type,
-              name: element.name,
-              matched: 'denyPatterns',
-              matchedPattern: pattern,
-              matchedTarget: target,
-            });
-            decisionChain.push(`DENY: ${element.type} '${element.name}' denyPattern '${pattern}' matches '${target}'`);
-            logger.debug(`[CliPolicy] DENY: ${element.type} '${element.name}' denyPattern '${pattern}' matched '${target}' (${elapsed(startTime)})`);
-            return {
-              behavior: 'deny',
-              message: `Denied by ${element.type} '${element.name}' policy: pattern '${pattern}' matches '${target}'`,
-              policyContext: { evaluatedElements, decisionChain },
-            };
-          }
-        }
-      }
-    }
-
-    // Step 1.5: Check confirmPatterns (requires approval — Issue #1660)
-    if (Array.isArray(confirmPatterns) && confirmPatterns.length > 0) {
-      for (const pattern of confirmPatterns) {
-        if (typeof pattern !== 'string') continue;
-        for (const target of matchTargets) {
-          if (matchesPattern(target, pattern)) {
-            evaluatedElements.push({
-              type: element.type,
-              name: element.name,
-              matched: 'confirmPatterns',
-              matchedPattern: pattern,
-              matchedTarget: target,
-            });
-            decisionChain.push(`CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matches '${target}'`);
-            logger.debug(`[CliPolicy] CONFIRM: ${element.type} '${element.name}' confirmPattern '${pattern}' matched '${target}' (${elapsed(startTime)})`);
-            return {
-              behavior: 'confirm' as const,
-              message: `Requires approval: ${element.type} '${element.name}' policy requires confirmation for pattern '${pattern}'`,
-              confirmSource: `${element.type}:${element.name}`,
-              policyContext: { evaluatedElements, decisionChain },
-            };
-          }
-        }
-      }
-    }
-
-    // Step 2: Check allowPatterns
-    if (Array.isArray(allowPatterns) && allowPatterns.length > 0) {
+    if (evaluation.hasAllowPatterns) {
       anyElementHasAllowPatterns = true;
       elementsWithAllowPatterns.push(`${element.type} '${element.name}'`);
-      let matchedAllow = false;
-
-      for (const pattern of allowPatterns) {
-        if (typeof pattern !== 'string') continue;
-        for (const target of matchTargets) {
-          if (matchesPattern(target, pattern)) {
-            evaluatedElements.push({
-              type: element.type,
-              name: element.name,
-              matched: 'allowPatterns',
-              matchedPattern: pattern,
-              matchedTarget: target,
-            });
-            decisionChain.push(`${element.type} '${element.name}': allowPattern '${pattern}' matches '${target}'`);
-            logger.debug(`[CliPolicy] ALLOW: ${element.type} '${element.name}' allowPattern '${pattern}' matched '${target}'`);
-            toolAllowedByAnyElement = true;
-            matchedAllow = true;
-            break;
-          }
-        }
-        if (matchedAllow) break;
+      if (evaluation.allowed) {
+        toolAllowedByAnyElement = true;
       }
-
-      if (!matchedAllow) {
-        evaluatedElements.push({ type: element.type, name: element.name });
-        decisionChain.push(`${element.type} '${element.name}': allowPatterns defined but no match`);
-      }
-    } else {
-      evaluatedElements.push({ type: element.type, name: element.name });
-      decisionChain.push(`${element.type} '${element.name}': denyPatterns checked, no match`);
     }
   }
 
@@ -706,6 +657,130 @@ export function evaluateCliToolPolicy(
     behavior: 'evaluate',
     policyContext: { evaluatedElements, decisionChain },
   };
+}
+
+interface ElementRestrictionEvaluation {
+  readonly hasAllowPatterns: boolean;
+  readonly allowed: boolean;
+}
+
+/**
+ * Find the first (pattern, target) pair that matches, scanning patterns then
+ * targets. Returns null for non-array/empty pattern lists or no match.
+ */
+function findPatternMatch(
+  patterns: unknown,
+  matchTargets: string[],
+): { pattern: string; target: string } | null {
+  if (!Array.isArray(patterns)) return null;
+  for (const pattern of patterns) {
+    if (typeof pattern !== 'string') continue;
+    for (const target of matchTargets) {
+      if (matchesPattern(target, pattern)) {
+        return { pattern, target };
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Evaluate one element's externalRestrictions against the match targets.
+ * Returns a terminal deny/confirm result, or allow-pattern tracking info.
+ * Pushes evaluation/decision entries as a side effect (identical to the prior
+ * inline behavior).
+ */
+function evaluateElementRestrictions(
+  element: ActiveElement,
+  matchTargets: string[],
+  evaluatedElements: PolicyEvaluationContext['evaluatedElements'],
+  decisionChain: string[],
+  startTime: number,
+): { terminal: CliToolPolicyResult } | ElementRestrictionEvaluation {
+  const restrictions = element.metadata.gatekeeper?.externalRestrictions;
+  const denyPatterns = restrictions?.denyPatterns;
+  const confirmPatterns = restrictions?.confirmPatterns;
+  const allowPatterns = restrictions?.allowPatterns;
+
+  const hasRestrictions = (Array.isArray(denyPatterns) && denyPatterns.length > 0)
+    || (Array.isArray(confirmPatterns) && confirmPatterns.length > 0)
+    || (Array.isArray(allowPatterns) && allowPatterns.length > 0);
+
+  if (!hasRestrictions) {
+    evaluatedElements.push({ type: element.type, name: element.name });
+    decisionChain.push(`${element.type} '${element.name}': no externalRestrictions`);
+    logger.debug(`[CliPolicy] ${element.type} '${element.name}': no externalRestrictions, skipping`);
+    return { hasAllowPatterns: false, allowed: false };
+  }
+
+  logger.debug(`[CliPolicy] ${element.type} '${element.name}': evaluating (deny: ${Array.isArray(denyPatterns) ? denyPatterns.length : 0}, confirm: ${Array.isArray(confirmPatterns) ? confirmPatterns.length : 0}, allow: ${Array.isArray(allowPatterns) ? allowPatterns.length : 0} patterns)`);
+
+  // Step 1: denyPatterns (highest priority)
+  const denyMatch = findPatternMatch(denyPatterns, matchTargets);
+  if (denyMatch) {
+    evaluatedElements.push({
+      type: element.type,
+      name: element.name,
+      matched: 'denyPatterns',
+      matchedPattern: denyMatch.pattern,
+      matchedTarget: denyMatch.target,
+    });
+    decisionChain.push(`DENY: ${element.type} '${element.name}' denyPattern '${denyMatch.pattern}' matches '${denyMatch.target}'`);
+    logger.debug(`[CliPolicy] DENY: ${element.type} '${element.name}' denyPattern '${denyMatch.pattern}' matched '${denyMatch.target}' (${elapsed(startTime)})`);
+    return {
+      terminal: {
+        behavior: 'deny',
+        message: `Denied by ${element.type} '${element.name}' policy: pattern '${denyMatch.pattern}' matches '${denyMatch.target}'`,
+        policyContext: { evaluatedElements, decisionChain },
+      },
+    };
+  }
+
+  // Step 1.5: confirmPatterns (requires approval — Issue #1660)
+  const confirmMatch = findPatternMatch(confirmPatterns, matchTargets);
+  if (confirmMatch) {
+    evaluatedElements.push({
+      type: element.type,
+      name: element.name,
+      matched: 'confirmPatterns',
+      matchedPattern: confirmMatch.pattern,
+      matchedTarget: confirmMatch.target,
+    });
+    decisionChain.push(`CONFIRM: ${element.type} '${element.name}' confirmPattern '${confirmMatch.pattern}' matches '${confirmMatch.target}'`);
+    logger.debug(`[CliPolicy] CONFIRM: ${element.type} '${element.name}' confirmPattern '${confirmMatch.pattern}' matched '${confirmMatch.target}' (${elapsed(startTime)})`);
+    return {
+      terminal: {
+        behavior: 'confirm' as const,
+        message: `Requires approval: ${element.type} '${element.name}' policy requires confirmation for pattern '${confirmMatch.pattern}'`,
+        confirmSource: `${element.type}:${element.name}`,
+        policyContext: { evaluatedElements, decisionChain },
+      },
+    };
+  }
+
+  // Step 2: allowPatterns
+  if (Array.isArray(allowPatterns) && allowPatterns.length > 0) {
+    const allowMatch = findPatternMatch(allowPatterns, matchTargets);
+    if (allowMatch) {
+      evaluatedElements.push({
+        type: element.type,
+        name: element.name,
+        matched: 'allowPatterns',
+        matchedPattern: allowMatch.pattern,
+        matchedTarget: allowMatch.target,
+      });
+      decisionChain.push(`${element.type} '${element.name}': allowPattern '${allowMatch.pattern}' matches '${allowMatch.target}'`);
+      logger.debug(`[CliPolicy] ALLOW: ${element.type} '${element.name}' allowPattern '${allowMatch.pattern}' matched '${allowMatch.target}'`);
+      return { hasAllowPatterns: true, allowed: true };
+    }
+    evaluatedElements.push({ type: element.type, name: element.name });
+    decisionChain.push(`${element.type} '${element.name}': allowPatterns defined but no match`);
+    return { hasAllowPatterns: true, allowed: false };
+  }
+
+  evaluatedElements.push({ type: element.type, name: element.name });
+  decisionChain.push(`${element.type} '${element.name}': denyPatterns checked, no match`);
+  return { hasAllowPatterns: false, allowed: false };
 }
 
 /** Format elapsed time since startTime in milliseconds. */
@@ -739,7 +814,7 @@ function sanitizeMatchInput(input: string): string {
   // This prevents bypass via combining characters or alternative representations.
   const normalized = input.normalize('NFC');
   // eslint-disable-next-line no-control-regex
-  return normalized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
+  return normalized.replaceAll(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]/g, '');
 }
 
 /**
@@ -764,7 +839,30 @@ function buildMatchTargets(
   } else if ((toolName === 'Edit' || toolName === 'Write') && typeof toolInput.file_path === 'string') {
     const sanitized = sanitizeMatchInput(toolInput.file_path.slice(0, MAX_MATCH_INPUT_LENGTH));
     targets.push(`${toolName}:${sanitized}`);
+  } else if (toolName === 'integration_request') {
+    targets.push(...buildIntegrationRequestMatchTargets(toolInput));
   }
 
   return targets;
+}
+
+function buildIntegrationRequestMatchTargets(toolInput: Record<string, unknown>): string[] {
+  const provider = typeof toolInput.provider === 'string'
+    ? sanitizeMatchInput(toolInput.provider.slice(0, MAX_MATCH_INPUT_LENGTH))
+    : '';
+  const method = typeof toolInput.method === 'string'
+    ? sanitizeMatchInput(toolInput.method.toUpperCase().slice(0, MAX_MATCH_INPUT_LENGTH))
+    : '';
+  const path = typeof toolInput.path === 'string'
+    ? sanitizeMatchInput(toolInput.path.slice(0, MAX_MATCH_INPUT_LENGTH))
+    : '';
+  const readWriteClass = typeof toolInput.read_write_class === 'string'
+    ? sanitizeMatchInput(toolInput.read_write_class.slice(0, MAX_MATCH_INPUT_LENGTH))
+    : '';
+  return [
+    readWriteClass ? `integration_request:${readWriteClass}` : null,
+    provider ? `integration_request:${provider}` : null,
+    provider && method ? `integration_request:${provider}:${method}` : null,
+    provider && method && path ? `integration_request:${provider}:${method}:${path}` : null,
+  ].filter((target): target is string => target !== null);
 }

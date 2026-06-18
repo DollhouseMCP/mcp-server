@@ -26,6 +26,7 @@ import type { SyncHandler } from './SyncHandlerV2.js';
 import type { EnhancedIndexHandler } from './EnhancedIndexHandler.js';
 import type { MCPAQLHandler } from './mcp-aql/MCPAQLHandler.js';
 import type { IntegrationRequestGateway } from '../web-console/modules/integrations/IntegrationRequestGateway.js';
+import type { IntegrationRequestPolicyEnforcer } from '../web-console/modules/integrations/IntegrationRequestPolicy.js';
 
 // Re-export types for backward compatibility
 export type { ToolDefinition, ToolHandler };
@@ -90,8 +91,11 @@ export class ToolRegistry {
     this.registerMany(getMCPAQLTools(handler));
   }
 
-  registerIntegrationTools(gateway: IntegrationRequestGateway): void {
-    this.registerMany(getIntegrationTools(gateway));
+  registerIntegrationTools(
+    gateway: IntegrationRequestGateway,
+    policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+  ): void {
+    this.registerMany(getIntegrationTools(gateway, policyEnforcer));
   }
 
   /**
