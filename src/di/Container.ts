@@ -80,11 +80,17 @@ import type { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver , SessionContext } from "../context/SessionContext.js";
 import type { IRateLimitStore } from "../auth/embedded-as/storage/IRateLimitStore.js";
 import { WEB_CONSOLE_SERVICE_NAMES } from "../web-console/WebConsoleRegistrar.js";
-import type { IIntegrationDescriptorStore, IUserIntegrationStore } from "../web-console/stores/index.js";
+import type {
+  IIntegrationDescriptorStore,
+  IIntegrationOpenApiSpecStore,
+  IPortfolioElementStore,
+  IUserIntegrationStore,
+} from "../web-console/stores/index.js";
 import type { ISecretEncryptionService } from "../web-console/security/SecretEncryption.js";
 import { IntegrationProviderRegistry } from "../web-console/modules/integrations/IntegrationProviderRegistry.js";
 import {
   createGitHubIntegrationProvider,
+  IntegrationOperationCatalog,
   IntegrationRequestPolicyEnforcer,
   IntegrationRequestGateway,
   IntegrationTokenRefreshService,
@@ -160,6 +166,7 @@ export interface HandlerBundle {
   mcpAqlHandler: MCPAQLHandler;
   integrationRequestGateway?: IntegrationRequestGateway;
   integrationRequestPolicyEnforcer?: IntegrationRequestPolicyEnforcer;
+  integrationOperationCatalog?: IntegrationOperationCatalog;
 }
 
 /**
@@ -1178,6 +1185,7 @@ export class DollhouseContainer {
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
     const integrationRequestGateway = this.resolveIntegrationRequestGateway();
+    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
     const integrationRequestPolicyEnforcer = integrationRequestGateway
       ? new IntegrationRequestPolicyEnforcer({
         gatekeeper: handlerDeps.gatekeeper,
@@ -1200,6 +1208,7 @@ export class DollhouseContainer {
       mcpAqlHandler,
       integrationRequestGateway: integrationRequestGateway ?? undefined,
       integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
+      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
     };
   }
 
@@ -1720,6 +1729,7 @@ export class DollhouseContainer {
 
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
     const integrationRequestGateway = this.resolveIntegrationRequestGateway();
+    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
     const integrationRequestPolicyEnforcer = integrationRequestGateway
       ? new IntegrationRequestPolicyEnforcer({
         gatekeeper: handlerDeps.gatekeeper,
@@ -1741,6 +1751,7 @@ export class DollhouseContainer {
       mcpAqlHandler,
       integrationRequestGateway: integrationRequestGateway ?? undefined,
       integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
+      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
     };
   }
 
@@ -1770,6 +1781,23 @@ export class DollhouseContainer {
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
       tokenRefresh,
       rateLimitStore,
+    });
+  }
+
+  private resolveIntegrationOperationCatalog(): IntegrationOperationCatalog | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioStore) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    return new IntegrationOperationCatalog({
+      integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
+      descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
+      specStore: this.resolve<IIntegrationOpenApiSpecStore>(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore),
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      portfolioStore: this.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore),
     });
   }
 
@@ -1818,6 +1846,7 @@ export class DollhouseContainer {
       toolRegistry.registerIntegrationTools(
         bundle.integrationRequestGateway,
         bundle.integrationRequestPolicyEnforcer,
+        bundle.integrationOperationCatalog,
       );
     }
   }

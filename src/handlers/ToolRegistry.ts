@@ -27,6 +27,7 @@ import type { EnhancedIndexHandler } from './EnhancedIndexHandler.js';
 import type { MCPAQLHandler } from './mcp-aql/MCPAQLHandler.js';
 import type { IntegrationRequestGateway } from '../web-console/modules/integrations/IntegrationRequestGateway.js';
 import type { IntegrationRequestPolicyEnforcer } from '../web-console/modules/integrations/IntegrationRequestPolicy.js';
+import type { IntegrationOperationCatalog } from '../web-console/modules/integrations/IntegrationOperationCatalog.js';
 
 // Re-export types for backward compatibility
 export type { ToolDefinition, ToolHandler };
@@ -94,8 +95,9 @@ export class ToolRegistry {
   registerIntegrationTools(
     gateway: IntegrationRequestGateway,
     policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+    operationCatalog?: IntegrationOperationCatalog | null,
   ): void {
-    this.registerMany(getIntegrationTools(gateway, policyEnforcer));
+    this.registerMany(getIntegrationTools(gateway, policyEnforcer, operationCatalog));
   }
 
   /**
