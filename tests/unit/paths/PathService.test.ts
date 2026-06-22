@@ -14,6 +14,21 @@ import { PathService } from '../../../src/paths/PathService.js';
 
 const USER_A = '00000000-0000-4000-8000-00000000000a';
 const USER_B = '00000000-0000-4000-8000-00000000000b';
+const HOME_DIR = '/home/u';
+const LEGACY_ROOT = '/home/u/.dollhouse';
+const PORTFOLIO_ROOT = '/home/u/DollhouseMCP';
+
+function child(root: string, ...segments: string[]): string {
+  return path.join(root, ...segments);
+}
+
+function resolvedChild(root: string, ...segments: string[]): string {
+  return path.join(path.resolve(root), ...segments);
+}
+
+function normalizePath(value: string): string {
+  return value.replaceAll(/[\\/]+/g, '/');
+}
 
 function build(opts: {
   userResolver?: FlatPathResolver | PerUserPathResolver;
@@ -21,12 +36,12 @@ function build(opts: {
   dataDirectoryOptions?: Parameters<PathService['resolveDataDir']>[1];
 } = {}): PathService {
   return new PathService({
-    userResolver: opts.userResolver ?? new PerUserPathResolver('/home/u/DollhouseMCP'),
+    userResolver: opts.userResolver ?? new PerUserPathResolver(PORTFOLIO_ROOT),
     packageLocator: new PackageResourceLocator(),
     userIdResolver: opts.userIdResolver ?? (() => USER_A),
     dataDirectoryOptions: {
       platform: 'linux',
-      homeDir: '/home/u',
+      homeDir: HOME_DIR,
       env: {},
       ...opts.dataDirectoryOptions,
     },
@@ -34,45 +49,45 @@ function build(opts: {
 }
 
 function buildFlatResolver() {
-  return new FlatPathResolver('/home/u/.dollhouse');
+  return new FlatPathResolver(LEGACY_ROOT);
 }
 
 describe('PathService', () => {
   describe('resolveDataDir', () => {
     it('resolves app-internal keys via resolveDataDirectory', () => {
       const svc = build();
-      expect(svc.resolveDataDir('config')).toBe('/home/u/.config/dollhousemcp');
-      expect(svc.resolveDataDir('cache')).toBe('/home/u/.cache/dollhousemcp');
-      expect(svc.resolveDataDir('state')).toBe('/home/u/.local/state/dollhousemcp');
+      expect(svc.resolveDataDir('config')).toBe(child(HOME_DIR, '.config', 'dollhousemcp'));
+      expect(svc.resolveDataDir('cache')).toBe(child(HOME_DIR, '.cache', 'dollhousemcp'));
+      expect(svc.resolveDataDir('state')).toBe(child(HOME_DIR, '.local', 'state', 'dollhousemcp'));
     });
 
     it('applies service-level dataDirectoryOptions to every call', () => {
       const svc = build({
         dataDirectoryOptions: {
           platform: 'linux',
-          homeDir: '/home/u',
-          legacyRoot: '/home/u/.dollhouse',
+          homeDir: HOME_DIR,
+          legacyRoot: LEGACY_ROOT,
           env: {},
         },
       });
-      expect(svc.resolveDataDir('portfolio-root')).toBe('/home/u/.dollhouse/portfolio');
-      expect(svc.resolveDataDir('state')).toBe('/home/u/.dollhouse/state');
+      expect(svc.resolveDataDir('portfolio-root')).toBe(resolvedChild(LEGACY_ROOT, 'portfolio'));
+      expect(svc.resolveDataDir('state')).toBe(resolvedChild(LEGACY_ROOT, 'state'));
     });
 
     it('per-call options override service-level options', () => {
       const svc = build({
         dataDirectoryOptions: {
           platform: 'linux',
-          homeDir: '/home/u',
-          legacyRoot: '/home/u/.dollhouse',
+          homeDir: HOME_DIR,
+          legacyRoot: LEGACY_ROOT,
           env: {},
         },
       });
       // Per-call passes no legacyRoot — but service-level still applies.
       // Per-call would need to explicitly override to disable; that's
       // intentional — service-level defaults stick unless overridden.
-      expect(svc.resolveDataDir('state')).toBe('/home/u/.dollhouse/state');
-      expect(svc.resolveDataDir('state', { homeDir: '/other' })).toBe('/home/u/.dollhouse/state');
+      expect(svc.resolveDataDir('state')).toBe(resolvedChild(LEGACY_ROOT, 'state'));
+      expect(svc.resolveDataDir('state', { homeDir: '/other' })).toBe(resolvedChild(LEGACY_ROOT, 'state'));
     });
   });
 
@@ -80,7 +95,7 @@ describe('PathService', () => {
     it('uses the userIdResolver when no explicit userId is passed', () => {
       const svc = build({ userIdResolver: () => USER_A });
       expect(svc.getUserPortfolioDir()).toBe(
-        `/home/u/DollhouseMCP/users/${USER_A}/portfolio`
+        child(PORTFOLIO_ROOT, 'users', USER_A, 'portfolio')
       );
     });
 
@@ -96,10 +111,10 @@ describe('PathService', () => {
     it('wires every per-user method through the user resolver', () => {
       const svc = build({ userIdResolver: () => USER_A });
       expect(svc.getUserElementDir(ElementType.PERSONA)).toContain('personas');
-      expect(svc.getUserStateDir()).toContain(`users/${USER_A}/state`);
-      expect(svc.getUserAuthDir()).toContain(`users/${USER_A}/auth`);
-      expect(svc.getUserBackupsDir()).toContain(`users/${USER_A}/backups`);
-      expect(svc.getUserSecurityDir()).toContain(`users/${USER_A}/security`);
+      expect(normalizePath(svc.getUserStateDir())).toContain(`users/${USER_A}/state`);
+      expect(normalizePath(svc.getUserAuthDir())).toContain(`users/${USER_A}/auth`);
+      expect(normalizePath(svc.getUserBackupsDir())).toContain(`users/${USER_A}/backups`);
+      expect(normalizePath(svc.getUserSecurityDir())).toContain(`users/${USER_A}/security`);
     });
   });
 
@@ -108,7 +123,7 @@ describe('PathService', () => {
       const resolver = jest.fn(() => USER_A);
       const svc = build({ userIdResolver: resolver });
       expect(svc.getUserPortfolioDir(USER_B)).toBe(
-        `/home/u/DollhouseMCP/users/${USER_B}/portfolio`
+        child(PORTFOLIO_ROOT, 'users', USER_B, 'portfolio')
       );
       // Resolver was not consulted when explicit userId passed.
       expect(resolver).not.toHaveBeenCalled();
@@ -129,7 +144,7 @@ describe('PathService', () => {
       const aPortfolio = svc.getUserPortfolioDir();
       const bPortfolio = svc.getUserPortfolioDir(USER_B);
       expect(aPortfolio).toBe(bPortfolio);
-      expect(aPortfolio).toBe('/home/u/.dollhouse/portfolio');
+      expect(aPortfolio).toBe(child(LEGACY_ROOT, 'portfolio'));
     });
   });
 
@@ -139,7 +154,7 @@ describe('PathService', () => {
       const result = svc.resolvePackageResource('seed-elements/memories/foo.yaml');
       // Exact path depends on where the test runs from, but it must
       // end with the relative segment.
-      expect(result).toMatch(/seed-elements\/memories\/foo\.yaml$/);
+      expect(normalizePath(result)).toMatch(/seed-elements\/memories\/foo\.yaml$/);
     });
 
     it('locate() returns null for nonexistent resources', async () => {

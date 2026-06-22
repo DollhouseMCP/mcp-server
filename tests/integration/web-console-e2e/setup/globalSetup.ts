@@ -82,7 +82,9 @@ async function provisionDatabase(): Promise<void> {
     cwd: process.cwd(),
     maxBuffer: 32 * 1024 * 1024,
   });
-  if (process.env.E2E_DEBUG) console.log('[console-e2e] migrate:\n' + stdout + (stderr ? '\n' + stderr : ''));
+  if (process.env.E2E_DEBUG) {
+    console.log('[console-e2e] migrate:', { stdout, stderr });
+  }
 
   await applyAppGrants();
 }

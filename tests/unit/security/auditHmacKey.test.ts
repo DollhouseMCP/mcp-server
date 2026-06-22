@@ -70,7 +70,9 @@ describe('AuditHmacKeyResolver — file mode', () => {
     expect(material.key.length).toBe(32);
 
     const stat = await fs.stat(rootDir);
-    expect(stat.mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') {
+      expect(stat.mode & 0o777).toBe(0o600);
+    }
     const persisted = await fs.readFile(rootDir, 'utf8');
     expect(persisted.trim()).toMatch(/^[0-9a-f]{64}$/);
   });

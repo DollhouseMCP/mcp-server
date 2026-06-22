@@ -186,25 +186,34 @@ export class FileSharedPoolWriteStrategy implements SharedPoolWriteStrategy {
     'personas', 'skills', 'templates', 'agents', 'memories', 'ensembles',
   ]);
 
-  async writeElement(request: SharedPoolInstallRequest, _contentHash: string): Promise<string> {
-    if (!FileSharedPoolWriteStrategy.VALID_ELEMENT_TYPES.has(request.elementType)) {
-      throw new Error(`Invalid element type for shared pool: ${request.elementType}`);
+  private static validateElementType(elementType: string): string {
+    if (!FileSharedPoolWriteStrategy.VALID_ELEMENT_TYPES.has(elementType)) {
+      throw new Error(`Invalid element type for shared pool: ${elementType}`);
+    }
+    return elementType;
+  }
+
+  private resolveSharedPoolPath(...segments: string[]): string {
+    const basePath = path.resolve(this.sharedPoolDir);
+    const resolvedPath = path.resolve(basePath, ...segments);
+
+    if (resolvedPath !== basePath && !resolvedPath.startsWith(basePath + path.sep)) {
+      throw new Error('Path traversal detected in shared pool path');
     }
 
-    const typeDir = path.join(this.sharedPoolDir, request.elementType);
+    return resolvedPath;
+  }
+
+  async writeElement(request: SharedPoolInstallRequest, _contentHash: string): Promise<string> {
+    const elementType = FileSharedPoolWriteStrategy.validateElementType(request.elementType);
+    const typeDir = this.resolveSharedPoolPath(elementType);
     await fs.mkdir(typeDir, { recursive: true });
 
     const safeName = path.basename(request.name.replaceAll('\\', '/').replaceAll('\0', ''));
     const filename = safeName.endsWith('.md') ? safeName : `${safeName}.md`;
-    const filePath = path.join(typeDir, filename);
+    const filePath = this.resolveSharedPoolPath(elementType, filename);
 
-    const resolvedPath = path.resolve(filePath);
-    const resolvedBase = path.resolve(this.sharedPoolDir);
-    if (!resolvedPath.startsWith(resolvedBase + path.sep)) {
-      throw new Error(`Path traversal detected in element name: ${request.name}`);
-    }
-
-    const relativePath = `${request.elementType}/${filename}`;
+    const relativePath = `${elementType}/${filename}`;
 
     const tmpPath = `${filePath}.tmp`;
     await fs.writeFile(tmpPath, request.content, 'utf-8');

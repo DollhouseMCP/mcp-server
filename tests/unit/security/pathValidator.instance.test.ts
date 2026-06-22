@@ -90,8 +90,10 @@ describe('PathValidator instance isolation (Issue #1948)', () => {
     });
 
     const target = path.join(userDir, 'element.md.tmp.12345');
+    const canonicalUserDir = await fs.realpath(userDir);
+    const canonicalTarget = path.join(canonicalUserDir, 'element.md.tmp.12345');
 
-    await expect(instance.enforceWritablePath(target)).resolves.toBe(target);
+    await expect(instance.enforceWritablePath(target)).resolves.toBe(canonicalTarget);
   });
 
   it('enforceWritablePath should reject paths outside writable dirs', async () => {

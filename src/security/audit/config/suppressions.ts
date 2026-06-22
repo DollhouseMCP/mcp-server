@@ -166,6 +166,16 @@ export const suppressions: Suppression[] = [
     reason: 'FALSE POSITIVE: Line 202 contains an intentional fake token (ghp_1234567890...) for security testing. Clearly marked with NOSONAR comment. Used to verify tokens are not exposed in error messages. PR #1'
   },
   {
+    rule: 'OWASP-A01-001',
+    file: 'tests/integration/web-console-e2e/setup/globalSetup.ts',
+    reason: 'FALSE POSITIVE: E2E harness uses explicitly dummy GitHub integration credentials to exercise local redirect construction without network access.'
+  },
+  {
+    rule: 'OWASP-A03-002',
+    file: 'tests/setup.ts',
+    reason: 'FALSE POSITIVE: Integration test harness runs a hardcoded drizzle migration command against a fixed local test database URL; no user input flows into the command.'
+  },
+  {
     rule: '*',
     file: 'tests/fixtures/testCredentials.ts',
     reason: 'Centralized test credentials file with intentionally fake values for testing'
@@ -248,6 +258,35 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-005',
     file: 'src/handlers/mcp-aql/MCPAQLHandler.ts',
     reason: 'INTENTIONAL: Import operation parses pure YAML data from export packages (not Markdown with frontmatter). Uses yaml.load with JSON_SCHEMA which prevents code execution and is appropriate for structured element data. SecureYamlParser cannot be used as it expects Markdown frontmatter format. PR #193'
+  },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/handlers/mcp-aql/ElementCRUDDispatcher.ts',
+    reason: 'INTENTIONAL: MCP-AQL export import parses pure YAML element payloads, not Markdown frontmatter. Uses yaml.load with JSON_SCHEMA to avoid executable/custom types and validates the result is an object before import.'
+  },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/storage/migration/configToDatabase.ts',
+    reason: 'INTENTIONAL: Legacy config migration parses pure YAML config files, not element Markdown. Uses FAILSAFE_SCHEMA and requires the parsed value to be an object before writing to stores.'
+  },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/web-console/stores/ManagerBackedPortfolioElementStore.ts',
+    reason: 'INTENTIONAL: Web-console store parses pure YAML export payloads with JSON_SCHEMA and falls back to SecureYamlParser for Markdown frontmatter. Parsed data is constrained to plain JSON-compatible structures for display/export handling.'
+  },
+  {
+    rule: 'DMCP-SEC-005',
+    file: 'src/web-console/ui/portfolio-detail.js',
+    reason: 'Client-side browser JavaScript. SecureYamlParser is a Node.js module unavailable in the browser; js-yaml CORE_SCHEMA avoids custom executable types and only renders server-supplied portfolio detail content.'
+  },
+
+  // ========================================
+  // Vendored Browser Library False Positives
+  // ========================================
+  {
+    rule: '*',
+    file: 'src/web-console/ui/vendor/**/*',
+    reason: 'Vendored minified browser libraries are pinned third-party assets; dependency provenance and updates are handled outside the project source-code pattern scanner.'
   },
 
   // ========================================
