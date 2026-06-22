@@ -2,11 +2,12 @@ import { Router } from 'express';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import { createConsoleRequestContextMiddleware , requireConsoleRequestContext } from './ConsoleRequestContext.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
+import { createConsoleUnicodeNormalizationMiddleware } from './ConsoleUnicodeNormalization.js';
 import type { ConsoleHttpMethod, ConsoleRequest, ConsoleRouteDefinition } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
 
-function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
+function registerRoute(router: Router, route: ConsoleRouteDefinition, normalizeUnicode: RequestHandler): void {
   const handler: RequestHandler = (request, response, next): void => {
     const consoleRequest = request as ConsoleRequest;
     void executeConsoleRoute(route, consoleRequest)
@@ -17,19 +18,19 @@ function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
 
   switch (method) {
     case 'GET':
-      router.get(route.path, handler);
+      router.get(route.path, normalizeUnicode, handler);
       return;
     case 'POST':
-      router.post(route.path, handler);
+      router.post(route.path, normalizeUnicode, handler);
       return;
     case 'PUT':
-      router.put(route.path, handler);
+      router.put(route.path, normalizeUnicode, handler);
       return;
     case 'PATCH':
-      router.patch(route.path, handler);
+      router.patch(route.path, normalizeUnicode, handler);
       return;
     case 'DELETE':
-      router.delete(route.path, handler);
+      router.delete(route.path, normalizeUnicode, handler);
       return;
   }
 }
@@ -41,10 +42,11 @@ function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
 export function assembleConsoleRouter(registry: ConsoleModuleRegistry): Router {
   const router = Router();
   router.use(createConsoleRequestContextMiddleware());
+  const normalizeUnicode = createConsoleUnicodeNormalizationMiddleware();
 
   for (const module of registry.getModules()) {
     for (const route of module.routes) {
-      registerRoute(router, route);
+      registerRoute(router, route, normalizeUnicode);
     }
   }
   const sendKnownProblem: ErrorRequestHandler = (error, request, response, next): void => {

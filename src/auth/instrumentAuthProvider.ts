@@ -20,6 +20,7 @@
 
 import type { IAuthProvider, AuthResult } from './IAuthProvider.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 const OP_VALIDATE = 'auth.validateToken';
 
@@ -36,8 +37,19 @@ export function instrumentAuthProvider(
   return new Proxy(provider, {
     get(target, prop, receiver) {
       if (prop === 'validate') {
-        return (token: string): Promise<AuthResult> =>
-          monitor.timeAuthOp(OP_VALIDATE, () => target.validate(token), target.name);
+        return async (token: string): Promise<AuthResult> => {
+          const result = await monitor.timeAuthOp(OP_VALIDATE, () => target.validate(token), target.name);
+          if (!result.ok) {
+            SecurityMonitor.logSecurityEvent({
+              type: 'TOKEN_VALIDATION_FAILURE',
+              severity: 'LOW',
+              source: 'instrumentAuthProvider',
+              details: `Instrumented provider token validation failed: ${target.name}`,
+              additionalData: { provider: target.name, reason: result.reason },
+            });
+          }
+          return result;
+        };
       }
       const value = Reflect.get(target, prop, receiver);
       return typeof value === 'function' ? value.bind(target) : value;

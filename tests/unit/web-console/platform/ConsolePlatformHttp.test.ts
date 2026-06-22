@@ -197,6 +197,48 @@ describe('console platform HTTP foundations', () => {
     expect(registry.createRouteManifest().routes.map(route => route.moduleId)).toEqual(['profile', 'settings']);
   });
 
+  it('normalizes route params, query values, and JSON body strings before handlers run', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'unicode',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'POST',
+        path: '/api/v1/me/unicode/:name',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        handler: req => ({
+          status: 200,
+          body: {
+            param: req.params.name,
+            query: req.query.q,
+            nested: (req.body as { nested: { label: string } }).nested.label,
+          },
+        }),
+      }],
+    });
+    const app = express();
+    app.use(express.json());
+    app.use(assembleConsoleRouter(registry));
+
+    const decomposedCafe = 'cafe\u0301';
+    const response = await request(app)
+      .post(`/api/v1/me/unicode/${encodeURIComponent(decomposedCafe)}?q=${encodeURIComponent(decomposedCafe)}`)
+      .send({ nested: { label: decomposedCafe } });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      param: 'café',
+      query: 'café',
+      nested: 'café',
+    });
+  });
+
   it('sends allowlisted handler headers', async () => {
     const registry = new ConsoleModuleRegistry();
     registry.register({

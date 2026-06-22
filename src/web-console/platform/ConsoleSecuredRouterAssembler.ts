@@ -25,6 +25,7 @@ import type { ConsoleHttpMethod, ConsoleRouteDefinition , ConsoleRequest } from 
 import { isElevationValidForRoute } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
+import { createConsoleUnicodeNormalizationMiddleware } from './ConsoleUnicodeNormalization.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
 import {
   createConsoleUserContextMiddleware,
@@ -58,6 +59,7 @@ export function assembleSecuredConsoleRouter(
   router.use(createConsoleSecurityHeadersMiddleware());
   const authenticate = createConsoleAuthenticationMiddleware(options);
   const csrf = createConsoleCsrfProtectionMiddleware(options);
+  const normalizeUnicode = createConsoleUnicodeNormalizationMiddleware();
   const userContext = options.userContext
     ? createConsoleUserContextMiddleware(options.userContext)
     : null;
@@ -67,6 +69,7 @@ export function assembleSecuredConsoleRouter(
       registerSecuredRoute(router, route, middlewareForRoute({
         route,
         options,
+        normalizeUnicode,
         authenticate,
         userContext,
         csrf,
@@ -113,14 +116,16 @@ export function assembleSecuredConsoleRouter(
 function middlewareForRoute(input: {
   readonly route: ConsoleRouteDefinition;
   readonly options: SecuredConsoleRouterOptions;
+  readonly normalizeUnicode: RequestHandler;
   readonly authenticate: RequestHandler;
   readonly userContext: RequestHandler | null;
   readonly csrf: RequestHandler;
 }): readonly RequestHandler[] {
   if (input.route.audience === 'public') {
-    return [createSecuredHandler(input.route, input.options)];
+    return [input.normalizeUnicode, createSecuredHandler(input.route, input.options)];
   }
   return [
+    input.normalizeUnicode,
     ...(input.route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(input.route, input.options)] : []),
     input.authenticate,
     ...(input.userContext ? [input.userContext] : []),

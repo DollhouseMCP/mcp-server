@@ -17,6 +17,18 @@
 const API_PREFIX = '/api/v1';
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
+function normalizeUnicode(value) {
+  if (typeof value === 'string') return value.normalize('NFC');
+  if (Array.isArray(value)) return value.map(item => normalizeUnicode(item));
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      key.normalize('NFC'),
+      normalizeUnicode(item),
+    ]));
+  }
+  return value;
+}
+
 /** Read a non-HttpOnly cookie (used for the dh_csrf double-submit token). */
 function readCookie(name) {
   const prefix = `${name}=`;
@@ -52,12 +64,13 @@ function parseProblemCode(body) {
  * required capability + step_up_url) before returning so the shell can react.
  */
 export async function request(method, path, options = {}) {
-  const res = await fetch(API_PREFIX + path, {
+  const normalizedBody = options.body === undefined ? undefined : normalizeUnicode(options.body);
+  const res = await fetch(API_PREFIX + normalizeUnicode(path), {
     method,
     credentials: 'same-origin',
     redirect: 'manual',
     headers: buildHeaders(method, options),
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: normalizedBody === undefined ? undefined : JSON.stringify(normalizedBody),
     signal: options.signal,
   });
 

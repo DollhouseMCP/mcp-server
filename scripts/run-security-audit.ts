@@ -76,8 +76,11 @@ async function runSecurityAudit() {
     // Suppressions file doesn't exist or is invalid - that's OK
   }
 
-  // Add suppressions for test files and custom suppressions
+  // Add suppressions for test files and custom suppressions without dropping
+  // the default CI suppressions loaded by SecurityAuditor.getDefaultConfig().
+  const defaultSuppressions = config.suppressions ?? [];
   config.suppressions = [
+    ...defaultSuppressions,
     {
       rule: 'CWE-89-001',
       file: '__tests__/**/*',

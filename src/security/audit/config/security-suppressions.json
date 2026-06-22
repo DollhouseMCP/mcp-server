@@ -109,6 +109,91 @@
       "rule": "DMCP-SEC-004",
       "file": "**/src/auto-dollhouse/index.ts",
       "reason": "Registration entry point only — resolves DI container references and wires deferred startup. No user input processing. All user input flows through MCPAQLHandler which normalizes at its boundary."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: ConsoleUnicodeNormalization middleware normalizes route params, query values, and JSON body strings for both secured and fixture console routers before handlers, modules, stores, or services run. Cookie/header credentials intentionally remain exact-match opaque values."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/ui/*.js",
+      "reason": "Browser console modules send requests through ui/api.js, which applies native NFC normalization to API paths and JSON payload strings before fetch. Server-side ConsoleUnicodeNormalization remains the authoritative boundary for all console route params, query values, and bodies."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/authMiddleware.ts",
+      "reason": "Bearer Authorization values are opaque credentials and must be exact-match validated, not Unicode-folded. MCP request payloads are normalized after authentication by StreamableHttpServer/ServerSetup before tool handlers see user content."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/IAuthProvider.ts",
+      "reason": "Interface contract only for auth providers. Concrete providers validate opaque token strings exactly; payload/user content normalization happens at HTTP/MCP request boundaries after authentication."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/instrumentAuthProvider.ts",
+      "reason": "Instrumentation decorator for IAuthProvider.validate(). It times and audit-logs provider validation outcomes but does not interpret user content; bearer tokens remain opaque exact-match credentials by design."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/**/*.ts",
+      "reason": "Embedded OAuth/OIDC authorization-server layer handles exact protocol artifacts (code, state, verifier, token, cookie bindings) where Unicode normalization would weaken comparisons. Human-visible fields are validated by method-specific policies; MCP/console payload content is normalized at its own ingress boundary."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/context/**/*.ts",
+      "reason": "Context policy/session context helpers receive normalized/validated identities from the auth and MCP ingress layers. They do not parse raw request bodies or free-form user text."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/database/**/*.ts",
+      "reason": "Database schema/RLS/user-context layer consumes typed IDs and records after validation at auth, console, or MCP boundaries. It does not accept raw request payloads directly."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/di/registrars/*.ts",
+      "reason": "DI registrar wiring only. Any strings here are service IDs/config keys; raw user input is normalized by the services/routes registered through the container."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/paths/**/*.ts",
+      "reason": "Path helpers validate strict ASCII identifier/path segments and reject unsafe Unicode rather than normalizing it into acceptable filesystem names. Upstream identity and request payload normalization happens before path resolution."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/server/sseTickets.ts",
+      "reason": "SSE tickets are random base64url opaque credentials bound to a stream name and must be exact-match redeemed once. Normalizing ticket values would weaken token comparison semantics."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/state/**/*.ts",
+      "reason": "State stores persist typed challenge/confirmation records after upstream validation. They do not parse raw request payload text; MCP/console ingress normalization happens before records reach this layer."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/storage/**/*.ts",
+      "reason": "Storage layers persist typed element/config/state records after MCP, web-console, or element-manager validation. They are not raw ingress points; Unicode normalization is enforced before persistence."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "eslint.config.js",
+      "reason": "Build-time ESLint configuration only. Contains rule metadata and file patterns, not production request handling or user-input processing."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/auth/embedded-as/EmbeddedAuthorizationServer.ts",
+      "reason": "validate() delegates token verification to EmbeddedASTokens, which now emits TOKEN_VALIDATION_FAILURE events via SecurityMonitor. This wrapper only composes the authorization-server routes and provider facade."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/elements/base/BaseElementManager.ts",
+      "reason": "BaseElementManager.validate() delegates to element-specific validators; load/save/delete audit events are emitted by composed element services and subtype hooks. This method is a pure validation facade, not an authorization decision point."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/web-console/stores/ManagerBackedPortfolioElementStore.ts",
+      "reason": "Read-side portfolio projection calls manager.validate() to compute validationStatus only. Console administrative mutations are audit-written by ConsoleSecuredRouterAssembler; element persistence operations retain their own element audit events."
     }
   ],
   "_comment": "Paths use glob patterns to match in both local and CI environments"

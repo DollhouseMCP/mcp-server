@@ -3,6 +3,7 @@ import {
   createDecipheriv,
   randomBytes,
 } from 'node:crypto';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 const ALGORITHM = 'aes-256-gcm';
 const ALGORITHM_ID = 1;
@@ -46,38 +47,47 @@ export class AeadSecretEncryptionService implements ISecretEncryptionService {
 
   encrypt(plaintext: Buffer, context: SecretEncryptionContext): Buffer {
     validateContext(context);
-    const keyId = Buffer.from(this.activeKey.keyId, 'utf8');
-    if (keyId.length > 255) throw new Error('Secret encryption key ID exceeds 255 bytes');
-    const nonce = randomBytes(NONCE_BYTES);
-    const cipher = createCipheriv(ALGORITHM, this.activeKey.key, nonce);
-    cipher.setAAD(additionalAuthenticatedData(context));
-    const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
-    const tag = cipher.getAuthTag();
-    return Buffer.concat([
-      Buffer.from([FORMAT_VERSION, ALGORITHM_ID, keyId.length]),
-      keyId,
-      nonce,
-      tag,
-      ciphertext,
-    ]);
+    try {
+      const keyId = Buffer.from(this.activeKey.keyId, 'utf8');
+      if (keyId.length > 255) throw new Error('Secret encryption key ID exceeds 255 bytes');
+      const nonce = randomBytes(NONCE_BYTES);
+      const cipher = createCipheriv(ALGORITHM, this.activeKey.key, nonce);
+      cipher.setAAD(additionalAuthenticatedData(context));
+      const ciphertext = Buffer.concat([cipher.update(plaintext), cipher.final()]);
+      const tag = cipher.getAuthTag();
+      return Buffer.concat([
+        Buffer.from([FORMAT_VERSION, ALGORITHM_ID, keyId.length]),
+        keyId,
+        nonce,
+        tag,
+        ciphertext,
+      ]);
+    } catch (error) {
+      logSecretCryptoFailure('encrypt', context, asError(error));
+      throw error;
+    }
   }
 
   decrypt(record: Buffer, context: SecretEncryptionContext): Buffer {
     validateContext(context);
     if (!Buffer.isBuffer(record) || record.length < 3 + NONCE_BYTES + TAG_BYTES) {
-      throw new Error('Invalid secret ciphertext record');
+      throw logSecretCryptoFailure('decrypt', context, new Error('Invalid secret ciphertext record'));
     }
     const version = record[0];
-    if (version !== FORMAT_VERSION) throw new Error('Unsupported secret ciphertext format version');
-    if (record[1] !== ALGORITHM_ID) throw new Error('Unsupported secret ciphertext algorithm');
+    if (version !== FORMAT_VERSION) {
+      throw logSecretCryptoFailure('decrypt', context, new Error('Unsupported secret ciphertext format version'));
+    }
+    if (record[1] !== ALGORITHM_ID) {
+      throw logSecretCryptoFailure('decrypt', context, new Error('Unsupported secret ciphertext algorithm'));
+    }
     const keyIdLength = record[2];
     const dataStart = 3 + keyIdLength;
     if (record.length < dataStart + NONCE_BYTES + TAG_BYTES) {
-      throw new Error('Invalid secret ciphertext record');
+      throw logSecretCryptoFailure('decrypt', context, new Error('Invalid secret ciphertext record'));
     }
     const keyId = record.subarray(3, dataStart).toString('utf8');
     const key = this.decryptKeys.get(keyId);
-    if (!key) throw new Error('Unknown secret encryption key ID');
+    if (!key) throw logSecretCryptoFailure('decrypt', context, new Error('Unknown secret encryption key ID'));
     const nonce = record.subarray(dataStart, dataStart + NONCE_BYTES);
     const tag = record.subarray(dataStart + NONCE_BYTES, dataStart + NONCE_BYTES + TAG_BYTES);
     const ciphertext = record.subarray(dataStart + NONCE_BYTES + TAG_BYTES);
@@ -87,7 +97,7 @@ export class AeadSecretEncryptionService implements ISecretEncryptionService {
       decipher.setAuthTag(tag);
       return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
     } catch {
-      throw new Error('Secret ciphertext authentication failed');
+      throw logSecretCryptoFailure('decrypt', context, new Error('Secret ciphertext authentication failed'));
     }
   }
 }
@@ -112,4 +122,27 @@ function validateKey(key: AeadSecretKey): void {
   if (key.keyId.trim() === '' || key.key.length !== 32) {
     throw new Error('Secret encryption keys require a key ID and exactly 32 bytes');
   }
+}
+
+function logSecretCryptoFailure(
+  operation: 'encrypt' | 'decrypt',
+  context: SecretEncryptionContext,
+  error: Error,
+): Error {
+  SecurityMonitor.logSecurityEvent({
+    type: 'OPERATION_FAILED',
+    severity: 'HIGH',
+    source: 'AeadSecretEncryptionService',
+    details: `Secret ${operation} operation failed`,
+    additionalData: {
+      operation,
+      secretClass: context.secretClass,
+      error: error.message,
+    },
+  });
+  return error;
+}
+
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
 }
