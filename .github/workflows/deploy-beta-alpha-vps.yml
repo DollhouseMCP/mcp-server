@@ -1,0 +1,184 @@
+name: Deploy Beta to Alpha VPS
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Remote deployment action'
+        required: true
+        type: choice
+        default: update
+        options:
+          - update
+          - verify
+          - rollback
+      git_ref:
+        description: 'Beta branch or beta tag to deploy'
+        required: true
+        type: string
+        default: beta
+      dry_run:
+        description: 'Preview the deployment without opening SSH or changing the VPS'
+        required: true
+        type: boolean
+        default: false
+      skip_backup:
+        description: 'Skip remote backup before update/rollback only when another backup exists'
+        required: true
+        type: boolean
+        default: false
+      log_level:
+        description: 'Hosted deploy logging mode'
+        required: true
+        type: choice
+        default: info
+        options:
+          - info
+          - debug
+          - quiet
+
+concurrency:
+  group: beta-alpha-vps-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy beta to alpha VPS
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: alpha
+      url: https://mcp.dollhousemcp.com
+
+    env:
+      DOLLHOUSE_PUBLIC_BASE_URL: ${{ vars.DOLLHOUSE_ALPHA_PUBLIC_BASE_URL || 'https://mcp.dollhousemcp.com' }}
+      DOLLHOUSE_HOSTED_HOSTNAME: ${{ vars.DOLLHOUSE_ALPHA_HOSTNAME || 'mcp.dollhousemcp.com' }}
+      DOLLHOUSE_HOSTED_MODE: cloud
+      DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES: ${{ vars.DOLLHOUSE_ALPHA_CADDY_TRUSTED_PROXIES }}
+      DOLLHOUSE_REMOTE_SSH_TARGET: ${{ secrets.DOLLHOUSE_ALPHA_SSH_TARGET }}
+      DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY: ${{ secrets.DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY }}
+      DOLLHOUSE_ALPHA_KNOWN_HOSTS: ${{ secrets.DOLLHOUSE_ALPHA_KNOWN_HOSTS }}
+
+    steps:
+      - name: Checkout workflow source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Validate deployment request
+        shell: bash
+        env:
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_LOG_LEVEL: ${{ inputs.log_level }}
+        run: |
+          case "${INPUT_ACTION}" in
+            update|verify|rollback)
+              ;;
+            *)
+              echo "::error::Unsupported action: ${INPUT_ACTION}"
+              exit 1
+              ;;
+          esac
+
+          case "${INPUT_GIT_REF}" in
+            beta|refs/heads/beta|v*-beta.*)
+              ;;
+            *)
+              echo "::error::Deployments from this workflow are limited to beta or v*-beta.* tags; got ${INPUT_GIT_REF}"
+              exit 1
+              ;;
+          esac
+
+          case "${INPUT_LOG_LEVEL}" in
+            info|debug|quiet)
+              ;;
+            *)
+              echo "::error::Unsupported log level: ${INPUT_LOG_LEVEL}"
+              exit 1
+              ;;
+          esac
+
+          if [[ -z "${DOLLHOUSE_REMOTE_SSH_TARGET}" ]]; then
+            echo "::error::Missing environment secret DOLLHOUSE_ALPHA_SSH_TARGET"
+            exit 1
+          fi
+          if [[ -z "${DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY}" ]]; then
+            echo "::error::Missing environment secret DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY"
+            exit 1
+          fi
+          if [[ -z "${DOLLHOUSE_ALPHA_KNOWN_HOSTS}" ]]; then
+            echo "::error::Missing environment secret DOLLHOUSE_ALPHA_KNOWN_HOSTS"
+            exit 1
+          fi
+
+      - name: Prepare SSH material
+        shell: bash
+        run: |
+          key_file="${RUNNER_TEMP}/dollhouse_alpha_key"
+          known_hosts_file="${RUNNER_TEMP}/dollhouse_alpha_known_hosts"
+
+          umask 077
+          printf '%s\n' "${DOLLHOUSE_ALPHA_SSH_PRIVATE_KEY}" > "${key_file}"
+          printf '%s\n' "${DOLLHOUSE_ALPHA_KNOWN_HOSTS}" > "${known_hosts_file}"
+          chmod 0600 "${key_file}" "${known_hosts_file}"
+
+          echo "DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE=${key_file}" >> "$GITHUB_ENV"
+          echo "DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=${known_hosts_file}" >> "$GITHUB_ENV"
+
+      - name: Run hosted remote deploy
+        shell: bash
+        env:
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+          INPUT_SKIP_BACKUP: ${{ inputs.skip_backup }}
+          INPUT_LOG_LEVEL: ${{ inputs.log_level }}
+        run: |
+          args=(
+            --target "${DOLLHOUSE_REMOTE_SSH_TARGET}"
+            --identity-file "${DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE}"
+            --known-hosts "${DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE}"
+            --hostname "${DOLLHOUSE_HOSTED_HOSTNAME}"
+            --ref "${INPUT_GIT_REF}"
+          )
+
+          if [[ "${INPUT_DRY_RUN}" == "true" ]]; then
+            args+=(--dry-run)
+          fi
+
+          if [[ "${INPUT_SKIP_BACKUP}" == "true" ]]; then
+            args+=(--skip-backup)
+          fi
+
+          args+=("${INPUT_ACTION}")
+
+          DOLLHOUSE_HOSTED_GIT_REF="${INPUT_GIT_REF}" \
+          DOLLHOUSE_HOSTED_LOG_LEVEL="${INPUT_LOG_LEVEL}" \
+            npm run hosted:remote -- "${args[@]}"
+
+      - name: Verify public alpha endpoint
+        if: inputs.dry_run != true
+        shell: bash
+        run: |
+          DOLLHOUSE_PUBLIC_BASE_URL="${DOLLHOUSE_PUBLIC_BASE_URL}" npm run hosted:deploy -- verify
+
+      - name: Deployment summary
+        if: always()
+        shell: bash
+        env:
+          INPUT_ACTION: ${{ inputs.action }}
+          INPUT_GIT_REF: ${{ inputs.git_ref }}
+          INPUT_DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          {
+            echo "## Beta Alpha VPS Deployment"
+            echo ""
+            echo "- Action: \`${INPUT_ACTION}\`"
+            echo "- Ref: \`${INPUT_GIT_REF}\`"
+            echo "- Dry run: \`${INPUT_DRY_RUN}\`"
+            echo "- Public URL: ${DOLLHOUSE_PUBLIC_BASE_URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -95,6 +95,34 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve GitHub Packages dist-tag
+        id: package_dist_tag
+        shell: bash
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          case "${PACKAGE_VERSION}" in
+            *-alpha.*)
+              dist_tag="alpha"
+              ;;
+            *-beta.*)
+              dist_tag="beta"
+              ;;
+            *-rc.*)
+              dist_tag="next"
+              ;;
+            *-*)
+              echo "::error::Unsupported prerelease channel in ${PACKAGE_VERSION}; expected -alpha., -beta., or -rc."
+              exit 1
+              ;;
+            *)
+              dist_tag="latest"
+              ;;
+          esac
+
+          echo "dist_tag=${dist_tag}" >> "$GITHUB_OUTPUT"
+          echo "GitHub Packages dist-tag: ${dist_tag}"
+
       - name: Publish to GitHub Packages
         if: steps.check_version.outputs.already_published == 'false'
         shell: bash
@@ -102,7 +130,7 @@ jobs:
           # Publish to GitHub Packages
           # Registry is configured via setup-node step's registry-url parameter
           # NODE_AUTH_TOKEN provides authentication to GitHub Packages
-          npm publish
+          npm publish --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -125,4 +153,5 @@ jobs:
         shell: bash
         run: |
           echo "✅ Successfully published to GitHub Packages!"
+          echo "🏷️ Dist-tag: ${{ steps.package_dist_tag.outputs.dist_tag }}"
           echo "📦 Package will appear in the repository's Packages section"

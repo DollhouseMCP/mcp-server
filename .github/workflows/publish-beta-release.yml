@@ -1,0 +1,187 @@
+name: Publish Beta Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact beta version already committed in package.json and manifest.json'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes for the GitHub prerelease'
+        required: false
+        type: string
+      dry_run:
+        description: 'Validate without creating a tag or publishing artifacts'
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: beta-release-publish
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish-beta:
+    name: Publish beta release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: beta-publish
+      url: https://github.com/DollhouseMCP/mcp-server/releases
+
+    steps:
+      - name: Checkout beta branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate beta release inputs
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          if [[ "${GITHUB_REF_NAME}" != "beta" ]]; then
+            echo "::error::Run this workflow from the beta branch, not ${GITHUB_REF_NAME}"
+            exit 1
+          fi
+
+          package_version="$(jq -r '.version' package.json)"
+          manifest_version="$(jq -r '.version' manifest.json)"
+
+          if [[ "${package_version}" != "${INPUT_VERSION}" ]]; then
+            echo "::error::Input version ${INPUT_VERSION} does not match package.json version ${package_version}"
+            exit 1
+          fi
+
+          if [[ "${manifest_version}" != "${package_version}" ]]; then
+            echo "::error::manifest.json version ${manifest_version} does not match package.json version ${package_version}"
+            exit 1
+          fi
+
+          if [[ ! "${package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9A-Za-z.-]+$ ]]; then
+            echo "::error::Beta publish requires a SemVer prerelease like 2.1.0-beta.1; got ${package_version}"
+            exit 1
+          fi
+
+          tag_name="v${package_version}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag_name}" >/dev/null 2>&1; then
+            echo "::error::Tag ${tag_name} already exists"
+            exit 1
+          fi
+
+          if gh release view "${tag_name}" >/dev/null 2>&1; then
+            echo "::error::Release ${tag_name} already exists"
+            exit 1
+          fi
+
+          if npm view "@dollhousemcp/mcp-server@${package_version}" version >/dev/null 2>&1; then
+            echo "::error::npm version ${package_version} already exists"
+            exit 1
+          fi
+
+          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify default-branch release workflows are prerelease-safe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main:refs/remotes/origin/main --depth=1
+
+          if ! git show origin/main:.github/workflows/publish-npm.yml | grep -F -- '--tag "${DIST_TAG}"' >/dev/null; then
+            echo "::error::Default branch publish-npm.yml is not prerelease-safe yet. Merge the dist-tag guard before creating a public beta prerelease."
+            exit 1
+          fi
+
+          if ! git show origin/main:.github/workflows/publish-github-packages.yml | grep -F -- 'steps.package_dist_tag.outputs.dist_tag' >/dev/null; then
+            echo "::error::Default branch publish-github-packages.yml is not prerelease-safe yet. Merge the dist-tag guard before creating a public beta prerelease."
+            exit 1
+          fi
+
+          if ! git show origin/main:.github/workflows/publish-mcp-registry.yml | grep -F -- "github.event.release.prerelease != true" >/dev/null; then
+            echo "::error::Default branch publish-mcp-registry.yml does not skip prereleases yet."
+            exit 1
+          fi
+
+      - name: Prepare beta release notes
+        shell: bash
+        env:
+          RELEASE_NOTES: ${{ inputs.release_notes }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          {
+            echo "## DollhouseMCP ${TAG_NAME}"
+            echo ""
+            if [[ -n "${RELEASE_NOTES}" ]]; then
+              printf '%s\n' "${RELEASE_NOTES}"
+            else
+              echo "Beta release from the hosted HTTP beta branch."
+            fi
+            echo ""
+            echo "## Install"
+            echo ""
+            echo '```bash'
+            echo "npm install @dollhousemcp/mcp-server@beta"
+            echo "npm install @dollhousemcp/mcp-server@${VERSION}"
+            echo '```'
+            echo ""
+            echo "This prerelease is intentionally published to the npm \`beta\` dist-tag, not \`latest\`."
+            echo "The .mcpb Desktop Extension bundle is attached by the release bundle workflow."
+          } > beta-release-notes.md
+
+      - name: Dry-run summary
+        if: inputs.dry_run == true
+        shell: bash
+        run: |
+          {
+            echo "## Beta Publish Dry Run"
+            echo ""
+            echo "- Version: \`${{ steps.release.outputs.version }}\`"
+            echo "- Tag: \`${{ steps.release.outputs.tag_name }}\`"
+            echo "- Would create GitHub prerelease: yes"
+            echo "- Downstream npm dist-tag: \`beta\`"
+            echo "- Downstream bundle: \`dollhousemcp-${{ steps.release.outputs.version }}.mcpb\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          cat beta-release-notes.md
+
+      - name: Create beta tag and GitHub prerelease
+        if: inputs.dry_run != true
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git tag -a "${TAG_NAME}" -m "DollhouseMCP ${TAG_NAME}"
+          git push origin "refs/tags/${TAG_NAME}"
+
+          gh release create "${TAG_NAME}" \
+            --target "${GITHUB_SHA}" \
+            --title "DollhouseMCP ${TAG_NAME}" \
+            --notes-file beta-release-notes.md \
+            --prerelease
+
+      - name: Publish summary
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "## Beta Publish"
+            echo ""
+            echo "- Version: \`${{ steps.release.outputs.version }}\`"
+            echo "- Tag: \`${{ steps.release.outputs.tag_name }}\`"
+            echo "- Dry run: \`${{ inputs.dry_run }}\`"
+            echo ""
+            echo "A non-dry-run publish creates the beta tag and GitHub prerelease. Existing release/tag workflows then publish npm/GitHub Packages with the beta dist-tag and attach the .mcpb bundle."
+          } >> "$GITHUB_STEP_SUMMARY"
