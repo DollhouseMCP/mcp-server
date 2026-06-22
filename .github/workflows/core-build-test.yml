@@ -3,9 +3,9 @@ name: Core Build & Test
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, beta]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, beta]
   workflow_dispatch:
 
 permissions:
