@@ -3,7 +3,6 @@
  * Implements automated security auditing for DollhouseMCP (Issue #53)
  */
 
-// import { SecurityMonitor } from '../securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { 
   SecurityAuditConfig, 

@@ -35,6 +35,7 @@ const SELF_CAPABILITY = 'console:self' as const;
 const AUDIT_CAPABILITY = 'console:admin:audit' as const;
 const CONTEXT_PATH = '/api/v1/me/context';
 const CHANGE_PATH = '/api/v1/me/change';
+const UNICODE_CHANGE_PREFIX = '/api/v1/me/unicode-change';
 const HEALTH_PATH = '/api/v1/health/ready';
 const OWNED_SESSION_ID = 'mcp-session-owned';
 const OTHER_SESSION_ID = 'mcp-session-other';
@@ -137,6 +138,20 @@ function fixtureModules(
       handler: () => {
         onChange?.();
         return { status: 200, body: { changed: true } };
+      },
+    }, {
+      method: 'POST',
+      path: `${UNICODE_CHANGE_PREFIX}/:name`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      pathParamValueNormalization: { name: 'nfc' },
+      handler: req => {
+        onChange?.();
+        return { status: 200, body: { changed: true, name: req.params.name, query: req.query.q } };
       },
     }],
   }, {
@@ -854,6 +869,30 @@ describe('secured console router browser protections', () => {
     expect(first.status).toBe(200);
     expect(replay.status).toBe(200);
     expect(replay.body).toEqual({ changed: true });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays Unicode-equivalent normalized targets without reporting idempotency mismatch', async () => {
+    const { app, onChange } = await buildApp();
+    const headers = {
+      Cookie: csrfCookies(),
+      [CSRF_HEADER]: CSRF_VALUE,
+      Origin: ORIGIN,
+      [CONSOLE_REQUEST_HEADER]: '1',
+      [IDEMPOTENCY_HEADER]: IDEMPOTENCY_KEY,
+    };
+    const decomposedName = 'α-cafe\u0301';
+    const composedName = 'α-café';
+    const target = (name: string) =>
+      `${UNICODE_CHANGE_PREFIX}/${encodeURIComponent(name)}?q=${encodeURIComponent(name)}`;
+
+    const first = await request(app).post(target(decomposedName)).set(headers).send({ value: 1 });
+    const replay = await request(app).post(target(composedName)).set(headers).send({ value: 1 });
+
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({ changed: true, name: composedName, query: 'a-café' });
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 

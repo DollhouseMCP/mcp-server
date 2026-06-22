@@ -282,8 +282,9 @@ describe('console platform HTTP foundations', () => {
     expect(response.body).toEqual({ name: 'α-café' });
   });
 
-  it('normalizes route params without invoking prototype setters', async () => {
+  it('rejects reserved route params before they can invoke prototype setters', async () => {
     const registry = new ConsoleModuleRegistry();
+    const handler = jest.fn(() => ({ status: 200, body: {} }));
     registry.register({
       id: 'prototype-param',
       apiVersion: 'v1',
@@ -297,20 +298,7 @@ describe('console platform HTTP foundations', () => {
         elevation: 'none',
         privacyClass: 'self_private',
         idempotency: 'not_applicable',
-        handler: req => {
-          const params = req.params as Record<string, unknown>;
-          const paramsPrototype = Object.getPrototypeOf(params) as { readonly role?: unknown } | null;
-          const cleanObject = {} as { readonly role?: unknown };
-          return {
-            status: 200,
-            body: {
-              ownProto: Object.prototype.hasOwnProperty.call(params, '__proto__'),
-              protoValue: params.__proto__,
-              prototypeRole: typeof paramsPrototype?.role === 'string' ? paramsPrototype.role : null,
-              globalPrototypeRole: typeof cleanObject.role === 'string' ? cleanObject.role : null,
-            },
-          };
-        },
+        handler,
       }],
     });
     const app = express();
@@ -318,17 +306,17 @@ describe('console platform HTTP foundations', () => {
 
     const response = await request(app).get('/api/v1/me/prototype-param/not-admin');
 
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({
-      ownProto: true,
-      protoValue: 'not-admin',
-      prototypeRole: null,
-      globalPrototypeRole: null,
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'invalid_request',
+      detail: 'Request contains a reserved Unicode-normalized field',
     });
+    expect(handler).not.toHaveBeenCalled();
   });
 
-  it('normalizes JSON bodies without invoking prototype setters', async () => {
+  it('rejects reserved JSON body keys before they can invoke prototype setters', async () => {
     const registry = new ConsoleModuleRegistry();
+    const handler = jest.fn(() => ({ status: 200, body: {} }));
     registry.register({
       id: 'prototype-guard',
       apiVersion: 'v1',
@@ -342,27 +330,7 @@ describe('console platform HTTP foundations', () => {
         elevation: 'none',
         privacyClass: 'self_private',
         idempotency: 'not_applicable',
-        handler: req => {
-          const body = req.body as Record<string, unknown>;
-          const nested = body.nested as Record<string, unknown>;
-          const bodyPrototype = Object.getPrototypeOf(body) as { readonly role?: unknown } | null;
-          const nestedPrototype = Object.getPrototypeOf(nested) as { readonly role?: unknown } | null;
-          const cleanObject = {} as { readonly role?: unknown };
-
-          return {
-            status: 200,
-            body: {
-              bodyOwnProto: Object.prototype.hasOwnProperty.call(body, '__proto__'),
-              bodyPrototypeIsNull: bodyPrototype === null,
-              bodyPrototypeRole: typeof bodyPrototype?.role === 'string' ? bodyPrototype.role : null,
-              nestedOwnProto: Object.prototype.hasOwnProperty.call(nested, '__proto__'),
-              nestedPrototypeIsNull: nestedPrototype === null,
-              nestedPrototypeRole: typeof nestedPrototype?.role === 'string' ? nestedPrototype.role : null,
-              globalPrototypeRole: typeof cleanObject.role === 'string' ? cleanObject.role : null,
-              label: nested.label,
-            },
-          };
-        },
+        handler,
       }],
     });
     const app = express();
@@ -374,17 +342,12 @@ describe('console platform HTTP foundations', () => {
       .set('Content-Type', 'application/json')
       .send('{"__proto__":{"role":"admin"},"nested":{"label":"cafe\\u0301","__proto__":{"role":"nested-admin"}}}');
 
-    expect(response.status).toBe(200);
-    expect(response.body).toEqual({
-      bodyOwnProto: true,
-      bodyPrototypeIsNull: true,
-      bodyPrototypeRole: null,
-      nestedOwnProto: true,
-      nestedPrototypeIsNull: true,
-      nestedPrototypeRole: null,
-      globalPrototypeRole: null,
-      label: 'cafe\u0301',
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'invalid_request',
+      detail: 'Request contains a reserved Unicode-normalized field',
     });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('sends allowlisted handler headers', async () => {

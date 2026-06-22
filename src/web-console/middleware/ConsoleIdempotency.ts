@@ -1,8 +1,14 @@
 import { createHash } from 'node:crypto';
 
 import { requireConsoleAuthentication } from './ConsoleAuthentication.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import type { ConsoleAdminAuditResult } from '../audit/IAdminAuditWriter.js';
-import type { ConsoleHandlerResult, ConsoleRequest, ConsoleRouteDefinition } from '../platform/ConsolePlatformTypes.js';
+import type {
+  ConsoleHandlerResult,
+  ConsolePathParamValueNormalization,
+  ConsoleRequest,
+  ConsoleRouteDefinition,
+} from '../platform/ConsolePlatformTypes.js';
 import type { ConsoleProblemInput } from '../platform/ProblemResponses.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import { ConsoleStoreValidationError, assertUuid } from '../stores/ConsoleStoreValidation.js';
@@ -57,7 +63,7 @@ export async function executeWithConsoleIdempotency(
     consoleSessionIdHash: requireConsoleAuthentication(req).sessionIdHash,
     idempotencyKey,
     httpMethod: route.method,
-    canonicalTarget: canonicalRequestTarget(req),
+    canonicalTarget: canonicalRequestTarget(req, route),
     requestFingerprint,
     createdAt: now,
     expiresAt: new Date(now.getTime() + RETENTION_MS),
@@ -108,13 +114,14 @@ export async function executeWithConsoleIdempotency(
   }
 }
 
-export function canonicalRequestTarget(req: ConsoleRequest): string {
+export function canonicalRequestTarget(req: ConsoleRequest, route?: ConsoleRouteDefinition): string {
   const parsed = new URL(req.originalUrl, 'https://console.invalid');
-  const sortedQuery = [...parsed.searchParams.entries()]
+  const sortedQuery = canonicalQueryEntries(parsed)
     .sort(([leftName, leftValue], [rightName, rightValue]) =>
       compareCodeUnits(leftName, rightName) || compareCodeUnits(leftValue, rightValue));
   const search = new URLSearchParams(sortedQuery).toString();
-  return search ? `${parsed.pathname}?${search}` : parsed.pathname;
+  const pathname = route ? canonicalPathname(req, route, parsed.pathname) : parsed.pathname;
+  return search ? `${pathname}?${search}` : pathname;
 }
 
 export function fingerprintBody(body: unknown): Buffer {
@@ -158,6 +165,47 @@ function validationProblem(detail: string): ConsoleIdempotentExecution {
 
 function singleHeader(value: string | string[] | undefined): string | undefined {
   return typeof value === 'string' ? value : undefined;
+}
+
+function canonicalPathname(req: ConsoleRequest, route: ConsoleRouteDefinition, fallbackPathname: string): string {
+  const routeSegments = route.path.split('/');
+  const fallbackSegments = fallbackPathname.split('/');
+  if (routeSegments.length !== fallbackSegments.length) return fallbackPathname;
+  return routeSegments.map((routeSegment, index) => {
+    if (!routeSegment.startsWith(':')) return fallbackSegments[index];
+    const paramName = routeParamName(routeSegment);
+    const value = typeof req.params[paramName] === 'string'
+      ? req.params[paramName]
+      : decodePathSegment(fallbackSegments[index]);
+    const mode = route.pathParamValueNormalization?.[paramName] ?? 'security';
+    return encodeURIComponent(normalizePathParamValue(value, mode));
+  }).join('/');
+}
+
+function routeParamName(routeSegment: string): string {
+  return routeSegment.slice(1).replace(/\?$/, '');
+}
+
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment);
+  } catch {
+    return segment;
+  }
+}
+
+function normalizePathParamValue(value: string, mode: ConsolePathParamValueNormalization): string {
+  return mode === 'nfc'
+    ? value.normalize('NFC')
+    : UnicodeValidator.normalize(value).normalizedContent;
+}
+
+function canonicalQueryEntries(parsed: URL): [string, string][] {
+  return [...parsed.searchParams.entries()]
+    .map(([key, value]) => [
+      UnicodeValidator.normalize(key).normalizedContent,
+      UnicodeValidator.normalize(value).normalizedContent,
+    ]);
 }
 
 function compareCodeUnits(left: string, right: string): number {

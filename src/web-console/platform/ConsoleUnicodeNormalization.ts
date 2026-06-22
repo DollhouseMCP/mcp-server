@@ -8,6 +8,7 @@ type StringNormalizationMode = ConsolePathParamValueNormalization | 'preserve';
 
 const MAX_BODY_NORMALIZATION_DEPTH = 64;
 const MAX_BODY_NORMALIZATION_NODES = 10_000;
+const PROTOTYPE_POLLUTING_KEYS = new Set(['__proto__', '__defineGetter__', '__defineSetter__']);
 
 interface ConsoleUnicodeNormalizationOptions {
   readonly params?: boolean;
@@ -136,6 +137,9 @@ function checkBodyTraversal(options: NormalizeValueOptions, depth: number): void
 }
 
 function assertNoNormalizedKeyCollision(seen: Set<string>, key: string): void {
+  if (PROTOTYPE_POLLUTING_KEYS.has(key)) {
+    throw new ConsoleStoreValidationError('Request contains a reserved Unicode-normalized field');
+  }
   if (seen.has(key)) {
     throw new ConsoleStoreValidationError('Request contains duplicate Unicode-equivalent fields');
   }

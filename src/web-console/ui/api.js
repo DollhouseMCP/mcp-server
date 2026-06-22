@@ -16,14 +16,28 @@
 
 const API_PREFIX = '/api/v1';
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const RESERVED_NORMALIZED_KEYS = new Set(['__proto__', '__defineGetter__', '__defineSetter__']);
+
+function assertCanWriteNormalizedKey(seen, key) {
+  if (RESERVED_NORMALIZED_KEYS.has(key)) {
+    throw new Error('Request contains a reserved Unicode-normalized field');
+  }
+  if (seen.has(key)) {
+    throw new Error('Request contains duplicate Unicode-equivalent fields');
+  }
+  seen.add(key);
+}
 
 function normalizeUnicode(value) {
   if (typeof value === 'string') return value.normalize('NFC');
   if (Array.isArray(value)) return value.map(item => normalizeUnicode(item));
   if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
     const normalized = Object.create(null);
+    const seen = new Set();
     for (const [key, item] of Object.entries(value)) {
-      Object.defineProperty(normalized, key.normalize('NFC'), {
+      const normalizedKey = key.normalize('NFC');
+      assertCanWriteNormalizedKey(seen, normalizedKey);
+      Object.defineProperty(normalized, normalizedKey, {
         value: normalizeUnicode(item),
         configurable: true,
         enumerable: true,
@@ -40,8 +54,11 @@ function normalizeBodyKeys(value) {
   if (Array.isArray(value)) return value.map(item => normalizeBodyKeys(item));
   if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
     const normalized = Object.create(null);
+    const seen = new Set();
     for (const [key, item] of Object.entries(value)) {
-      Object.defineProperty(normalized, key.normalize('NFC'), {
+      const normalizedKey = key.normalize('NFC');
+      assertCanWriteNormalizedKey(seen, normalizedKey);
+      Object.defineProperty(normalized, normalizedKey, {
         value: normalizeBodyKeys(item),
         configurable: true,
         enumerable: true,

@@ -259,10 +259,10 @@ export class IntegrationService {
     active: NonNullable<Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>>,
   ): Promise<boolean> {
     const accessToken = active.accessTokenCiphertext
-      ? decryptNullable(deps.secretEncryption, active.accessTokenCiphertext, integrationSecretContext('access_token', auth.userId, 'github'))
+      ? decryptNullable(deps.secretEncryption, active.accessTokenCiphertext, integrationSecretContext('access_token', auth.userId, 'github'), auth.userId, 'github')
       : null;
     const refreshToken = active.refreshTokenCiphertext
-      ? decryptNullable(deps.secretEncryption, active.refreshTokenCiphertext, integrationSecretContext('refresh_token', auth.userId, 'github'))
+      ? decryptNullable(deps.secretEncryption, active.refreshTokenCiphertext, integrationSecretContext('refresh_token', auth.userId, 'github'), auth.userId, 'github')
       : null;
     try {
       await deps.githubProvider.revokeCredentials({
@@ -359,10 +359,17 @@ function decryptNullable(
   secretEncryption: ISecretEncryptionService,
   ciphertext: Buffer,
   context: IntegrationSecretContext,
+  userId: string,
+  provider: 'github',
 ): string | null {
   try {
     return secretEncryption.decrypt(ciphertext, context).toString('utf8');
   } catch {
+    logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration credential decrypt failed', {
+      userId,
+      provider,
+      secretClass: context.secretClass,
+    });
     return null;
   }
 }
