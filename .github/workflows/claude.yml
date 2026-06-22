@@ -35,8 +35,9 @@ jobs:
         uses: anthropics/claude-code-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Use the Claude Code Sonnet alias so the action follows the current supported Sonnet model.
-          model: "sonnet"
+          # The beta action currently installs an older Claude Code runtime whose
+          # sonnet alias resolves to a retired model, so pin a current Sonnet ID.
+          model: "claude-sonnet-4-6"
 
           # This is an optional setting that allows Claude to read CI results on PRs
           additional_permissions: |
