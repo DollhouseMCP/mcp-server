@@ -13,6 +13,8 @@ name: Publish to GitHub Packages
 # 4. Authentication issues → should proceed to publish (fails safely if duplicate)
 
 on:
+  release:
+    types: [published]
   push:
     tags:
       - 'v*'  # Triggers on version tags like v1.2.3
@@ -128,6 +130,23 @@ jobs:
 
           echo "dist_tag=${dist_tag}" >> "$GITHUB_OUTPUT"
           echo "GitHub Packages dist-tag: ${dist_tag}"
+
+      - name: Guard GitHub Packages release channel
+        if: ${{ github.event_name == 'release' }}
+        shell: bash
+        env:
+          DIST_TAG: ${{ steps.package_dist_tag.outputs.dist_tag }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [[ "${RELEASE_PRERELEASE}" == "true" && "${DIST_TAG}" == "latest" ]]; then
+            echo "::error::Refusing to publish a GitHub prerelease to GitHub Packages latest"
+            exit 1
+          fi
+
+          if [[ "${RELEASE_PRERELEASE}" != "true" && "${DIST_TAG}" != "latest" ]]; then
+            echo "::error::Prerelease version must be published from a GitHub prerelease"
+            exit 1
+          fi
 
       - name: Publish to GitHub Packages
         if: ${{ steps.check_version.outputs.already_published == 'false' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}

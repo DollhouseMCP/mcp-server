@@ -80,7 +80,7 @@ jobs:
             exit 1
           fi
 
-          if npm view "@dollhousemcp/mcp-server@${package_version}" version >/dev/null 2>&1; then
+          if npm view "@dollhousemcp/mcp-server@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
             echo "::error::npm version ${package_version} already exists"
             exit 1
           fi
