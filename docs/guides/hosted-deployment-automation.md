@@ -200,6 +200,8 @@ Common environment variables:
 | `DOLLHOUSE_TRUSTED_PROXIES` | Comma-separated trusted proxy CIDRs passed to the app | Docker bridge CIDR `172.16.0.0/12` |
 | `DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG` | Enable Caddy access logs with OAuth/token query values redacted | `true` for `cloud`/`enterprise`, `false` for `lan` |
 | `DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES` | Comma-separated edge proxy CIDRs Caddy may trust for client IP headers, for example Cloudflare ranges | none |
+| `DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE` | Docker `json-file` stdout/stderr rotation size for generated Compose services | `25m` |
+| `DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE` | Docker `json-file` stdout/stderr rotated file count for generated Compose services | `5` |
 | `DOLLHOUSE_HOSTED_SOURCE_DIR` | Local repo source to deploy | current repo when available |
 | `DOLLHOUSE_HOSTED_GIT_URL` | Repo cloned when no source dir is available | GitHub mcp-server repo |
 | `DOLLHOUSE_HOSTED_GIT_REF` | Branch/ref cloned when no source dir is available | `codex/hosted-http-integration` |
@@ -261,6 +263,15 @@ Use the [Cloudflare Alpha Smoke Test](./cloudflare-alpha-smoke-test.md) after
 changing those edge rules.
 
 All helper-managed Docker Compose commands run with `--env-file .env.production`. This matters because Compose normally reads `.env` for variable interpolation, while `env_file: .env.production` only controls container environment injection.
+
+Generated Compose files set per-service Docker `json-file` log rotation for
+Postgres, DollhouseMCP, the migration container, and Caddy. This preserves
+container-native `docker compose logs` behavior while bounding stdout/stderr
+growth on long-running hosts. The defaults keep up to five 25 MB files per
+container; set `DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE` and
+`DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE` before `render`, `install`, or `update`
+to change that local retention policy. Centralized log shipping and longer
+retention are separate production/beta concerns.
 
 The generated Postgres init script is a shell script (`init-db.sh`) rather than a password-filled SQL file. It receives the app role password through `DOLLHOUSE_APP_DB_PASSWORD` at container init time and passes it to `psql` as a variable, so the generated init script itself does not contain the app database password.
 

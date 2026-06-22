@@ -5,11 +5,18 @@ write_compose() {
   cat > "${COMPOSE_FILE}" <<EOF
 name: ${INSTANCE_NAME}
 
+x-dollhouse-logging: &dollhouse-logging
+  driver: json-file
+  options:
+    max-size: "${DOCKER_LOG_MAX_SIZE}"
+    max-file: "${DOCKER_LOG_MAX_FILE}"
+
 services:
   postgres:
     image: postgres:17-alpine
     container_name: ${POSTGRES_CONTAINER_NAME}
     restart: unless-stopped
+    logging: *dollhouse-logging
     env_file:
       - .env.production
     environment:
@@ -35,6 +42,7 @@ services:
     image: ${IMAGE_TAG}
     container_name: ${APP_CONTAINER_NAME}
     restart: unless-stopped
+    logging: *dollhouse-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -92,6 +100,7 @@ services:
     image: ${IMAGE_TAG}-migrate
     profiles:
       - maintenance
+    logging: *dollhouse-logging
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,6 +121,7 @@ services:
     image: caddy:2.8
     container_name: ${CADDY_CONTAINER_NAME}
     restart: unless-stopped
+    logging: *dollhouse-logging
     depends_on:
       - dollhousemcp
     ports:
