@@ -35,6 +35,24 @@ function normalizeUnicode(value) {
   return value;
 }
 
+function normalizeBodyKeys(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(item => normalizeBodyKeys(item));
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const normalized = Object.create(null);
+    for (const [key, item] of Object.entries(value)) {
+      Object.defineProperty(normalized, key.normalize('NFC'), {
+        value: normalizeBodyKeys(item),
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
+    }
+    return normalized;
+  }
+  return value;
+}
+
 /** Read a non-HttpOnly cookie (used for the dh_csrf double-submit token). */
 function readCookie(name) {
   const prefix = `${name}=`;
@@ -70,7 +88,7 @@ function parseProblemCode(body) {
  * required capability + step_up_url) before returning so the shell can react.
  */
 export async function request(method, path, options = {}) {
-  const normalizedBody = options.body === undefined ? undefined : normalizeUnicode(options.body);
+  const normalizedBody = options.body === undefined ? undefined : normalizeBodyKeys(options.body);
   const res = await fetch(API_PREFIX + normalizeUnicode(path), {
     method,
     credentials: 'same-origin',

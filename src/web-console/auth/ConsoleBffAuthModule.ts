@@ -1,4 +1,4 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -557,5 +557,5 @@ function requireAuthentication(req: ConsoleRequest): ConsoleAuthenticatedContext
 }
 
 function buffersEqual(left: Buffer, right: Buffer): boolean {
-  return left.length === right.length && left.equals(right);
+  return left.length === right.length && timingSafeEqual(left, right);
 }

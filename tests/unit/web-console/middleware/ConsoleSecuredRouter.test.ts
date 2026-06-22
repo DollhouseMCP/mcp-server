@@ -452,6 +452,10 @@ function adminTransactionMutationRequest(app: express.Express, key: string = IDE
     .set(IDEMPOTENCY_HEADER, key);
 }
 
+function nestedJson(depth: number): string {
+  return '{"child":'.repeat(depth) + 'null' + '}'.repeat(depth);
+}
+
 describe('secured console router authentication', () => {
   it('serves public readiness without browser authentication', async () => {
     const { app, sessionStore } = await buildApp(null);
@@ -552,6 +556,17 @@ describe('secured console router authentication', () => {
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
     expect(response.headers['permissions-policy']).toBe('geolocation=(), microphone=(), camera=()');
+  });
+
+  it('authenticates protected routes before walking JSON request bodies', async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Content-Type', 'application/json')
+      .send(nestedJson(80));
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
   });
 
   it('fails closed when the login subject maps to a disabled principal', async () => {

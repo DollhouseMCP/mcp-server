@@ -429,7 +429,7 @@ function toProjectRelativeAuditPath(filePath: string): string {
 
 function globPatternToRegex(pattern: string): RegExp {
   const escaped = pattern
-    .replaceAll(/[\\^$.()+?{}[\]|]/g, '\\$&')
+    .replaceAll(/[\\^$.()+?{}[\]|]/g, String.raw`\$&`)
     .replaceAll('**', '\0')
     .replaceAll('*', '[^/]*')
     .replaceAll('\0/', '(?:.*/)?')

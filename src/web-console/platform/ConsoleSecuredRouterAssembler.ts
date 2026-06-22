@@ -59,7 +59,8 @@ export function assembleSecuredConsoleRouter(
   router.use(createConsoleSecurityHeadersMiddleware());
   const authenticate = createConsoleAuthenticationMiddleware(options);
   const csrf = createConsoleCsrfProtectionMiddleware(options);
-  const normalizeUnicode = createConsoleUnicodeNormalizationMiddleware();
+  const normalizeRequestTarget = createConsoleUnicodeNormalizationMiddleware({ body: 'off' });
+  const normalizeBody = createConsoleUnicodeNormalizationMiddleware({ params: false, query: false, body: 'keys' });
   const userContext = options.userContext
     ? createConsoleUserContextMiddleware(options.userContext)
     : null;
@@ -69,7 +70,8 @@ export function assembleSecuredConsoleRouter(
       registerSecuredRoute(router, route, middlewareForRoute({
         route,
         options,
-        normalizeUnicode,
+        normalizeRequestTarget,
+        normalizeBody,
         authenticate,
         userContext,
         csrf,
@@ -116,18 +118,20 @@ export function assembleSecuredConsoleRouter(
 function middlewareForRoute(input: {
   readonly route: ConsoleRouteDefinition;
   readonly options: SecuredConsoleRouterOptions;
-  readonly normalizeUnicode: RequestHandler;
+  readonly normalizeRequestTarget: RequestHandler;
+  readonly normalizeBody: RequestHandler;
   readonly authenticate: RequestHandler;
   readonly userContext: RequestHandler | null;
   readonly csrf: RequestHandler;
 }): readonly RequestHandler[] {
   if (input.route.audience === 'public') {
-    return [input.normalizeUnicode, createSecuredHandler(input.route, input.options)];
+    return [input.normalizeRequestTarget, input.normalizeBody, createSecuredHandler(input.route, input.options)];
   }
   return [
-    input.normalizeUnicode,
+    input.normalizeRequestTarget,
     ...(input.route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(input.route, input.options)] : []),
     input.authenticate,
+    input.normalizeBody,
     ...(input.userContext ? [input.userContext] : []),
     input.csrf,
     createConsoleAuthorizationMiddleware(input.route, input.options),

@@ -197,7 +197,7 @@ describe('console platform HTTP foundations', () => {
     expect(registry.createRouteManifest().routes.map(route => route.moduleId)).toEqual(['profile', 'settings']);
   });
 
-  it('normalizes route params, query values, and JSON body strings before handlers run', async () => {
+  it('normalizes route params, query values, and JSON body keys while preserving body strings', async () => {
     const registry = new ConsoleModuleRegistry();
     registry.register({
       id: 'unicode',
@@ -217,7 +217,9 @@ describe('console platform HTTP foundations', () => {
           body: {
             param: req.params.name,
             query: req.query.q,
+            keyed: (req.body as Record<string, unknown>)['café'],
             nested: (req.body as { nested: { label: string } }).nested.label,
+            content: (req.body as { content: string }).content,
           },
         }),
       }],
@@ -227,15 +229,22 @@ describe('console platform HTTP foundations', () => {
     app.use(assembleConsoleRouter(registry));
 
     const decomposedCafe = 'cafe\u0301';
+    const familyEmoji = 'family: 👨‍👩‍👧‍👦';
     const response = await request(app)
       .post(`/api/v1/me/unicode/${encodeURIComponent(decomposedCafe)}?q=${encodeURIComponent(decomposedCafe)}`)
-      .send({ nested: { label: decomposedCafe } });
+      .send({
+        [decomposedCafe]: 'body-key-normalized',
+        nested: { label: decomposedCafe },
+        content: familyEmoji,
+      });
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       param: 'café',
       query: 'café',
-      nested: 'café',
+      keyed: 'body-key-normalized',
+      nested: decomposedCafe,
+      content: familyEmoji,
     });
   });
 
@@ -295,7 +304,7 @@ describe('console platform HTTP foundations', () => {
       nestedPrototypeIsNull: true,
       nestedPrototypeRole: null,
       globalPrototypeRole: null,
-      label: 'café',
+      label: 'cafe\u0301',
     });
   });
 
