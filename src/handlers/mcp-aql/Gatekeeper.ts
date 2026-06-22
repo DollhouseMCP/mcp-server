@@ -187,10 +187,14 @@ export class Gatekeeper {
 
   /**
    * Remove a session's GatekeeperSession.
-   * Called by Container during session disconnect.
+   * Called by Container during session disconnect. Cancellation persistence is
+   * not awaited here — no caller is waiting on an acknowledgement during
+   * teardown, and disposal must not block on storage — but failures are logged.
    */
   disposeSession(sessionId: string): void {
-    this.sessionRegistry.get(sessionId)?.cancelPendingCliApprovals();
+    this.sessionRegistry.get(sessionId)?.cancelPendingCliApprovals().catch((error: unknown) => {
+      logger.warn('[Gatekeeper] Failed to persist pending-approval cancellation during session disposal', { error });
+    });
     this.sessionRegistry.dispose(sessionId);
   }
 
@@ -454,14 +458,15 @@ export class Gatekeeper {
 
   /**
    * Approve a pending CLI approval request.
+   * Resolves once the decision is durably persisted.
    */
-  approveCliRequest(
+  async approveCliRequest(
     requestId: string,
     scope: CliApprovalScope = 'single',
     approvedAt?: string,
-  ): CliApprovalRecord | undefined {
+  ): Promise<CliApprovalRecord | undefined> {
     const session = this.resolveSession();
-    const record = session.approveCliRequest(requestId, scope, approvedAt);
+    const record = await session.approveCliRequest(requestId, scope, approvedAt);
 
     if (record) {
       SecurityMonitor.logSecurityEvent({

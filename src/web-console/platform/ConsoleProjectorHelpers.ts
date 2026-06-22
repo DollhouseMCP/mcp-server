@@ -32,3 +32,8 @@ export function optionalStringField(record: UnknownRecord, key: string): Record<
   const value = record[key];
   return typeof value === 'string' && value !== '' ? { [key]: value } : {};
 }
+
+export function projectConsoleStreamEndStatus(value: unknown): { readonly status: 'complete' | 'closed' } {
+  const record = objectValue(value);
+  return { status: record.status === 'complete' ? 'complete' : 'closed' };
+}

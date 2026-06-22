@@ -3,6 +3,7 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
@@ -21,6 +22,8 @@ const SESSION_TELEMETRY_STREAM_POLICY = {
   lastEventId: 'unsupported',
   heartbeatMs: 15_000,
   revalidateMs: 15_000,
+  maxLifetimeMs: 15 * 60_000,
+  backpressureDrainTimeoutMs: 30_000,
   maxEventBytes: 64 * 1024,
   maxLastEventIdBytes: 512,
 } as const;
@@ -66,7 +69,7 @@ export function createSessionTelemetryModule(options: SessionTelemetryModuleOpti
         streamEventProjectors: {
           init: projectLogStreamInit,
           update: projectUserActivity,
-          end: projectStreamEnd,
+          end: projectConsoleStreamEndStatus,
         },
         handler: req => withSessionId(req, sessionId => {
           const lastEventId = parseConsoleLastEventId(req, SESSION_TELEMETRY_STREAM_POLICY);
@@ -114,7 +117,7 @@ export function createSessionTelemetryModule(options: SessionTelemetryModuleOpti
         streamEventProjectors: {
           init: projectMetricStreamInit,
           update: projectUserMetric,
-          end: projectStreamEnd,
+          end: projectConsoleStreamEndStatus,
         },
         handler: req => withSessionId(req, sessionId => {
           const lastEventId = parseConsoleLastEventId(req, SESSION_TELEMETRY_STREAM_POLICY);
@@ -160,11 +163,6 @@ function projectMetricStreamInit(value: unknown): unknown {
     session_id: typeof record.session_id === 'string' ? record.session_id : '',
     filters: projectMetricStreamFilters(record.filters),
   };
-}
-
-function projectStreamEnd(value: unknown): unknown {
-  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
-  return { status: end.status === 'complete' ? 'complete' : 'closed' };
 }
 
 function projectStreamFilters(value: unknown): unknown {

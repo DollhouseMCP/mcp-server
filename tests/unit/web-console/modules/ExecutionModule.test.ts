@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import {
   ConsoleModuleRegistry,
@@ -224,6 +224,26 @@ describe('ExecutionModule', () => {
     }))).resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
   });
 
+  it('rejects invalid execution session IDs before service ownership checks', async () => {
+    const { module, runtimeStore } = await fixture();
+    const listRoute = findRoute(module.routes, 'GET', EXECUTION_LIST_PATH);
+    const detailRoute = findRoute(module.routes, 'GET', EXECUTION_DETAIL_PATH);
+    const lookup = jest.spyOn(runtimeStore, 'findPresence');
+
+    await expect(Promise.resolve(listRoute.handler(request({ params: { session_id: 'bad session id' } }))))
+      .resolves.toMatchObject({
+        status: 400,
+        body: { code: 'invalid_request', detail: 'session_id path parameter is invalid.' },
+      });
+    await expect(Promise.resolve(detailRoute.handler(request({
+      params: { session_id: '../bad', goal_id: GOAL_ID },
+    })))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request', detail: 'session_id path parameter is invalid.' },
+    });
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it('streams owner-private execution updates with projection and owned-session revalidation', async () => {
     const { module, runtimeStore } = await fixture();
     const route = findRoute(module.routes, 'GET', EXECUTION_STREAM_PATH);
@@ -317,6 +337,21 @@ describe('ExecutionModule', () => {
       params: { session_id: SESSION_ID, goal_id: 'bad goal id' },
       headers: {},
     }))).resolves.toMatchObject({ status: 422 });
+  });
+
+  it('rejects invalid execution stream session IDs before opening a stream', async () => {
+    const { module, runtimeStore } = await fixture();
+    const route = findRoute(module.routes, 'GET', EXECUTION_STREAM_PATH);
+    const lookup = jest.spyOn(runtimeStore, 'findPresence');
+
+    await expect(Promise.resolve(route.handler(request({
+      params: { session_id: 'bad session id', goal_id: GOAL_ID },
+      headers: {},
+    })))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request', detail: 'session_id path parameter is invalid.' },
+    });
+    expect(lookup).not.toHaveBeenCalled();
   });
 
   it('returns not found when the execution stream target does not exist', async () => {

@@ -9,5 +9,6 @@ export * from './ConsoleAdminAudit.js';
 export * from './ConsoleCookies.js';
 export * from './ConsoleCsrfProtection.js';
 export * from './ConsoleIdempotency.js';
+export * from './ConsoleOwnership.js';
 export * from './ConsoleRateLimit.js';
 export * from './ConsoleSecurityHeaders.js';

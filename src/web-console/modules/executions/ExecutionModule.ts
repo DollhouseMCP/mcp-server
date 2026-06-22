@@ -3,6 +3,7 @@ import type {
   ConsoleModuleDescriptor,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
@@ -15,10 +16,13 @@ import {
 } from './ExecutionPrivacyProjectors.js';
 
 const SELF_CAPABILITY = 'console:self';
+const SESSION_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const EXECUTION_STREAM_POLICY = {
   lastEventId: 'unsupported',
   heartbeatMs: 15_000,
   revalidateMs: 15_000,
+  maxLifetimeMs: 15 * 60_000,
+  backpressureDrainTimeoutMs: 30_000,
   maxEventBytes: 64 * 1024,
   maxLastEventIdBytes: 512,
 } as const;
@@ -76,7 +80,7 @@ export function createExecutionModule(options: ExecutionModuleOptions): ConsoleM
         streamEventProjectors: {
           init: projectExecutionStreamInit,
           update: projectSessionExecution,
-          end: projectExecutionStreamEnd,
+          end: projectConsoleStreamEndStatus,
         },
         handler: req => withExecutionParams(req, (sessionId, goalId) => {
           const lastEventId = parseConsoleLastEventId(req, EXECUTION_STREAM_POLICY);
@@ -120,11 +124,6 @@ function projectExecutionStreamInit(value: unknown): unknown {
   };
 }
 
-function projectExecutionStreamEnd(value: unknown): unknown {
-  const end = value && typeof value === 'object' ? value as { readonly status?: unknown } : {};
-  return { status: end.status === 'complete' ? 'complete' : 'closed' };
-}
-
 function withSessionId(
   req: ConsoleRequest,
   action: (sessionId: string) => Promise<ConsoleHandlerResult>,
@@ -132,6 +131,9 @@ function withSessionId(
   const sessionId = req.params.session_id;
   if (typeof sessionId !== 'string' || sessionId.trim() === '') {
     return invalidRequest('session_id path parameter is required.');
+  }
+  if (!isSessionId(sessionId)) {
+    return invalidRequest('session_id path parameter is invalid.');
   }
   return action(sessionId);
 }
@@ -146,7 +148,14 @@ function withExecutionParams(
       typeof goalId !== 'string' || goalId.trim() === '') {
     return invalidRequest('session_id and goal_id path parameters are required.');
   }
+  if (!isSessionId(sessionId)) {
+    return invalidRequest('session_id path parameter is invalid.');
+  }
   return action(sessionId, goalId);
+}
+
+function isSessionId(value: string): boolean {
+  return SESSION_ID_PATTERN.test(value);
 }
 
 function invalidRequest(detail: string): ConsoleHandlerResult {

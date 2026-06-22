@@ -98,7 +98,7 @@ export class GatekeeperHandler {
   constructor(private readonly deps: GatekeeperHandlerDeps) {}
 
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
-    const handlers: Record<string, () => unknown> = {
+    const handlers: Partial<Record<string, () => unknown>> = {
       confirm: () => this.confirm(params),
       verify: () => this.verify(params),
       releaseDeadlock: () => this.releaseDeadlock(params),
@@ -114,7 +114,7 @@ export class GatekeeperHandler {
     if (!handler) {
       throw new Error(`Unknown Gatekeeper method: ${method}`);
     }
-    return handler();
+    return await handler();
   }
 
   private async confirm(params: Record<string, unknown>): Promise<unknown> {
@@ -204,7 +204,7 @@ export class GatekeeperHandler {
     }
   }
 
-  private async verify(params: Record<string, unknown>): Promise<unknown> {
+  private verify(params: Record<string, unknown>): unknown {
     this.deps.verificationMetrics.recordAttempt();
     const attemptTimestamp = Date.now();
     const challengeId = validateRequiredString(params, 'challenge_id', 'the verification challenge ID');
@@ -607,7 +607,7 @@ export class GatekeeperHandler {
       return null;
     }
     const policySource = activeElements
-      .filter(el => el.metadata?.gatekeeper?.externalRestrictions?.approvalPolicy?.requireApproval?.length)
+      .filter(el => el.metadata.gatekeeper?.externalRestrictions?.approvalPolicy?.requireApproval?.length)
       .map(el => `${el.type}:${el.name}`)
       .join(', ') || 'env:DOLLHOUSE_CLI_APPROVAL_POLICY';
     return this.createApprovalRequest(toolName, toolInput, classification, activeElements, {
@@ -713,7 +713,7 @@ export class GatekeeperHandler {
 
   private async getEffectiveCliPolicies(params: Record<string, unknown>): Promise<unknown> {
     const toolName = params.tool_name as string | undefined;
-    const toolInput = (params.tool_input as Record<string, unknown>) ?? {};
+    const toolInput = (params.tool_input as Record<string, unknown> | undefined) ?? {};
     const reportSessionId = typeof params.session_id === 'string' ? params.session_id : undefined;
     const reportingScope = params.reporting_scope === 'dashboard';
     const policyElements = reportingScope && !toolName
@@ -750,16 +750,16 @@ export class GatekeeperHandler {
       return {
         type: el.type,
         name: el.name,
-        allowPatterns: el.metadata?.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
-        confirmPatterns: el.metadata?.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
-        denyPatterns: el.metadata?.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
-        allowOperations: el.metadata?.gatekeeper?.allow ?? [],
-        confirmOperations: el.metadata?.gatekeeper?.confirm ?? [],
-        denyOperations: el.metadata?.gatekeeper?.deny ?? [],
-        description: el.metadata?.gatekeeper?.externalRestrictions?.description ?? null,
+        allowPatterns: el.metadata.gatekeeper?.externalRestrictions?.allowPatterns ?? [],
+        confirmPatterns: el.metadata.gatekeeper?.externalRestrictions?.confirmPatterns ?? [],
+        denyPatterns: el.metadata.gatekeeper?.externalRestrictions?.denyPatterns ?? [],
+        allowOperations: el.metadata.gatekeeper?.allow ?? [],
+        confirmOperations: el.metadata.gatekeeper?.confirm ?? [],
+        denyOperations: el.metadata.gatekeeper?.deny ?? [],
+        description: el.metadata.gatekeeper?.externalRestrictions?.description ?? null,
         invalidGatekeeperPolicy: !!diagnostics,
         invalidGatekeeperMessage: diagnostics?.message,
-        sessionIds: (el.metadata as Record<string, unknown>)?.sessionIds ?? undefined,
+        sessionIds: (el.metadata as Record<string, unknown>).sessionIds ?? undefined,
       };
     });
   }
@@ -875,18 +875,19 @@ export class GatekeeperHandler {
     };
   }
 
-  private approveCliPermission(params: Record<string, unknown>): unknown {
+  private async approveCliPermission(params: Record<string, unknown>): Promise<unknown> {
     const requestId = validateRequiredString(
       params,
       'request_id',
       'the approval request ID from permission_prompt deny response (format: cli-<UUID>)'
     );
-    const scope = (params.scope as CliApprovalScope) ?? 'single';
-    if (scope !== 'single' && scope !== 'tool_session') {
-      throw new Error(`Invalid scope "${scope}". Must be "single" or "tool_session".`);
+    const rawScope = params.scope ?? 'single';
+    if (rawScope !== 'single' && rawScope !== 'tool_session') {
+      throw new Error(`Invalid scope ${JSON.stringify(rawScope)}. Must be "single" or "tool_session".`);
     }
+    const scope: CliApprovalScope = rawScope;
 
-    const record = this.deps.gatekeeper.approveCliRequest(requestId, scope);
+    const record = await this.deps.gatekeeper.approveCliRequest(requestId, scope);
     if (!record) {
       throw new Error(`No pending approval for "${requestId}". It may have expired or already been approved.`);
     }
