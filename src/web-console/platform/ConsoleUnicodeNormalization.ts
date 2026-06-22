@@ -24,7 +24,7 @@ function normalizeRecordInPlace(value: MutableRecord): void {
     if (normalizedKey !== key) {
       delete value[key];
     }
-    value[normalizedKey] = normalizedValue;
+    defineDataProperty(value, normalizedKey, normalizedValue);
   }
 }
 
@@ -42,12 +42,21 @@ function normalizeValue(value: unknown): unknown {
 }
 
 function normalizePlainObject(value: MutableRecord): MutableRecord {
-  const normalized: MutableRecord = {};
+  const normalized = Object.create(null) as MutableRecord;
   for (const [key, item] of Object.entries(value)) {
     const normalizedKey = UnicodeValidator.normalize(key).normalizedContent;
-    normalized[normalizedKey] = normalizeValue(item);
+    defineDataProperty(normalized, normalizedKey, normalizeValue(item));
   }
   return normalized;
+}
+
+function defineDataProperty(target: MutableRecord, key: string, value: unknown): void {
+  Object.defineProperty(target, key, {
+    value,
+    configurable: true,
+    enumerable: true,
+    writable: true,
+  });
 }
 
 function isPlainObject(value: unknown): value is MutableRecord {

@@ -21,10 +21,16 @@ function normalizeUnicode(value) {
   if (typeof value === 'string') return value.normalize('NFC');
   if (Array.isArray(value)) return value.map(item => normalizeUnicode(item));
   if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
-      key.normalize('NFC'),
-      normalizeUnicode(item),
-    ]));
+    const normalized = Object.create(null);
+    for (const [key, item] of Object.entries(value)) {
+      Object.defineProperty(normalized, key.normalize('NFC'), {
+        value: normalizeUnicode(item),
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
+    }
+    return normalized;
   }
   return value;
 }

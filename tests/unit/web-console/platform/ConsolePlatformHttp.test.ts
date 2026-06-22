@@ -239,6 +239,66 @@ describe('console platform HTTP foundations', () => {
     });
   });
 
+  it('normalizes JSON bodies without invoking prototype setters', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'prototype-guard',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'POST',
+        path: '/api/v1/me/prototype-guard',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        handler: req => {
+          const body = req.body as Record<string, unknown>;
+          const nested = body.nested as Record<string, unknown>;
+          const bodyPrototype = Object.getPrototypeOf(body) as { readonly role?: unknown } | null;
+          const nestedPrototype = Object.getPrototypeOf(nested) as { readonly role?: unknown } | null;
+          const cleanObject = {} as { readonly role?: unknown };
+
+          return {
+            status: 200,
+            body: {
+              bodyOwnProto: Object.prototype.hasOwnProperty.call(body, '__proto__'),
+              bodyPrototypeIsNull: bodyPrototype === null,
+              bodyPrototypeRole: typeof bodyPrototype?.role === 'string' ? bodyPrototype.role : null,
+              nestedOwnProto: Object.prototype.hasOwnProperty.call(nested, '__proto__'),
+              nestedPrototypeIsNull: nestedPrototype === null,
+              nestedPrototypeRole: typeof nestedPrototype?.role === 'string' ? nestedPrototype.role : null,
+              globalPrototypeRole: typeof cleanObject.role === 'string' ? cleanObject.role : null,
+              label: nested.label,
+            },
+          };
+        },
+      }],
+    });
+    const app = express();
+    app.use(express.json());
+    app.use(assembleConsoleRouter(registry));
+
+    const response = await request(app)
+      .post('/api/v1/me/prototype-guard')
+      .set('Content-Type', 'application/json')
+      .send('{"__proto__":{"role":"admin"},"nested":{"label":"cafe\\u0301","__proto__":{"role":"nested-admin"}}}');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      bodyOwnProto: true,
+      bodyPrototypeIsNull: true,
+      bodyPrototypeRole: null,
+      nestedOwnProto: true,
+      nestedPrototypeIsNull: true,
+      nestedPrototypeRole: null,
+      globalPrototypeRole: null,
+      label: 'café',
+    });
+  });
+
   it('sends allowlisted handler headers', async () => {
     const registry = new ConsoleModuleRegistry();
     registry.register({
