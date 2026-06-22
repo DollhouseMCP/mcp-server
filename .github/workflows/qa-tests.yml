@@ -3,7 +3,7 @@ name: QA Tests
 
 on:
   pull_request:
-    branches: [develop]
+    branches: [develop, beta]
   workflow_dispatch:
 
 permissions:
