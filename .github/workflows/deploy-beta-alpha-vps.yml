@@ -84,14 +84,12 @@ jobs:
               ;;
           esac
 
-          case "${INPUT_GIT_REF}" in
-            beta|refs/heads/beta|v*-beta.*)
-              ;;
-            *)
-              echo "::error::Deployments from this workflow are limited to beta or v*-beta.* tags; got ${INPUT_GIT_REF}"
-              exit 1
-              ;;
-          esac
+          if [[ "${INPUT_GIT_REF}" != "beta" \
+              && "${INPUT_GIT_REF}" != "refs/heads/beta" \
+              && ! "${INPUT_GIT_REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9A-Za-z.-]+$ ]]; then
+            echo "::error::Deployments from this workflow are limited to beta, refs/heads/beta, or SemVer v*-beta.* tags; got ${INPUT_GIT_REF}"
+            exit 1
+          fi
 
           case "${INPUT_LOG_LEVEL}" in
             info|debug|quiet)
