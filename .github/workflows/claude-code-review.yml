@@ -42,8 +42,9 @@ jobs:
           # the Claude GitHub App OIDC exchange, which requires default-branch parity.
           github_token: ${{ github.token }}
 
-          # Use the Claude Code Sonnet alias so the action follows the current supported Sonnet model.
-          model: "sonnet"
+          # The beta action currently installs an older Claude Code runtime whose
+          # sonnet alias resolves to a retired model, so pin a current Sonnet ID.
+          model: "claude-sonnet-4-6"
           
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
