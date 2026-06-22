@@ -133,7 +133,12 @@
     {
       "rule": "DMCP-SEC-004",
       "file": "src/auth/instrumentAuthProvider.ts",
-      "reason": "Instrumentation decorator for IAuthProvider.validate(). It times and audit-logs provider validation outcomes but does not interpret user content; bearer tokens remain opaque exact-match credentials by design."
+      "reason": "Instrumentation decorator for IAuthProvider.validate(). It times provider validation outcomes but does not interpret user content; bearer tokens remain opaque exact-match credentials by design."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/auth/instrumentAuthProvider.ts",
+      "reason": "Performance-only instrumentation wrapper. Concrete auth providers own TOKEN_VALIDATION_FAILURE audit logging with issuer/key/provider context, and this wrapper intentionally avoids duplicate security events."
     },
     {
       "rule": "DMCP-SEC-004",

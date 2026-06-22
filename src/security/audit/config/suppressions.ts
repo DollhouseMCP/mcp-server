@@ -1044,6 +1044,16 @@ export const suppressions: Suppression[] = [
     file: '**/scripts/test-capability-index.js',
     reason: 'Test script loading test personas with hardcoded paths - not production code'
   },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/auth/instrumentAuthProvider.ts',
+    reason: 'Performance-only instrumentation wrapper. Concrete auth providers own TOKEN_VALIDATION_FAILURE audit logging with issuer/key/provider context, and this wrapper intentionally avoids duplicate security events.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: '**/src/auth/instrumentAuthProvider.ts',
+    reason: 'Performance-only instrumentation wrapper. Concrete auth providers own TOKEN_VALIDATION_FAILURE audit logging with issuer/key/provider context, and this wrapper intentionally avoids duplicate security events.'
+  },
 
   // ========================================
   // packages/safety Suppressions

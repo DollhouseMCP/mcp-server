@@ -59,7 +59,6 @@ export function assembleSecuredConsoleRouter(
   router.use(createConsoleSecurityHeadersMiddleware());
   const authenticate = createConsoleAuthenticationMiddleware(options);
   const csrf = createConsoleCsrfProtectionMiddleware(options);
-  const normalizeRequestTarget = createConsoleUnicodeNormalizationMiddleware({ body: 'off' });
   const normalizeBody = createConsoleUnicodeNormalizationMiddleware({ params: false, query: false, body: 'keys' });
   const userContext = options.userContext
     ? createConsoleUserContextMiddleware(options.userContext)
@@ -70,7 +69,6 @@ export function assembleSecuredConsoleRouter(
       registerSecuredRoute(router, route, middlewareForRoute({
         route,
         options,
-        normalizeRequestTarget,
         normalizeBody,
         authenticate,
         userContext,
@@ -118,17 +116,20 @@ export function assembleSecuredConsoleRouter(
 function middlewareForRoute(input: {
   readonly route: ConsoleRouteDefinition;
   readonly options: SecuredConsoleRouterOptions;
-  readonly normalizeRequestTarget: RequestHandler;
   readonly normalizeBody: RequestHandler;
   readonly authenticate: RequestHandler;
   readonly userContext: RequestHandler | null;
   readonly csrf: RequestHandler;
 }): readonly RequestHandler[] {
+  const normalizeRequestTarget = createConsoleUnicodeNormalizationMiddleware({
+    body: 'off',
+    pathParamValueNormalization: input.route.pathParamValueNormalization,
+  });
   if (input.route.audience === 'public') {
-    return [input.normalizeRequestTarget, input.normalizeBody, createSecuredHandler(input.route, input.options)];
+    return [normalizeRequestTarget, input.normalizeBody, createSecuredHandler(input.route, input.options)];
   }
   return [
-    input.normalizeRequestTarget,
+    normalizeRequestTarget,
     ...(input.route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(input.route, input.options)] : []),
     input.authenticate,
     input.normalizeBody,

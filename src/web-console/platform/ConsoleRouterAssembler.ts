@@ -7,7 +7,10 @@ import type { ConsoleHttpMethod, ConsoleRequest, ConsoleRouteDefinition } from '
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.js';
 
-function registerRoute(router: Router, route: ConsoleRouteDefinition, normalizeUnicode: RequestHandler): void {
+function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
+  const normalizeUnicode = createConsoleUnicodeNormalizationMiddleware({
+    pathParamValueNormalization: route.pathParamValueNormalization,
+  });
   const handler: RequestHandler = (request, response, next): void => {
     const consoleRequest = request as ConsoleRequest;
     void executeConsoleRoute(route, consoleRequest)
@@ -42,11 +45,10 @@ function registerRoute(router: Router, route: ConsoleRouteDefinition, normalizeU
 export function assembleConsoleRouter(registry: ConsoleModuleRegistry): Router {
   const router = Router();
   router.use(createConsoleRequestContextMiddleware());
-  const normalizeUnicode = createConsoleUnicodeNormalizationMiddleware();
 
   for (const module of registry.getModules()) {
     for (const route of module.routes) {
-      registerRoute(router, route, normalizeUnicode);
+      registerRoute(router, route);
     }
   }
   const sendKnownProblem: ErrorRequestHandler = (error, request, response, next): void => {

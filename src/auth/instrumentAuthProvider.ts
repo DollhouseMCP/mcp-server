@@ -9,9 +9,10 @@
  * because IAuthProvider is the outer abstraction the HTTP middleware
  * calls on every request.
  *
- * Same design intent as instrumentAuthMethod: wrap from outside so the
- * concrete provider class file is untouched (no SonarCloud complexity
- * re-flag on the existing validate() bodies).
+ * Audit logging remains owned by concrete providers because they have the
+ * issuer/key/source context operators need. This wrapper is performance-only
+ * so one validation failure does not emit duplicate TOKEN_VALIDATION_FAILURE
+ * events when a concrete provider already logged the failure.
  *
  * When `monitor` is undefined, returns the original provider untouched.
  *
@@ -20,7 +21,6 @@
 
 import type { IAuthProvider, AuthResult } from './IAuthProvider.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
-import { SecurityMonitor } from '../security/securityMonitor.js';
 
 const OP_VALIDATE = 'auth.validateToken';
 
@@ -37,19 +37,8 @@ export function instrumentAuthProvider(
   return new Proxy(provider, {
     get(target, prop, receiver) {
       if (prop === 'validate') {
-        return async (token: string): Promise<AuthResult> => {
-          const result = await monitor.timeAuthOp(OP_VALIDATE, () => target.validate(token), target.name);
-          if (!result.ok) {
-            SecurityMonitor.logSecurityEvent({
-              type: 'TOKEN_VALIDATION_FAILURE',
-              severity: 'LOW',
-              source: 'instrumentAuthProvider',
-              details: `Instrumented provider token validation failed: ${target.name}`,
-              additionalData: { provider: target.name, reason: result.reason },
-            });
-          }
-          return result;
-        };
+        return (token: string): Promise<AuthResult> =>
+          monitor.timeAuthOp(OP_VALIDATE, () => target.validate(token), target.name);
       }
       const value = Reflect.get(target, prop, receiver);
       return typeof value === 'function' ? value.bind(target) : value;

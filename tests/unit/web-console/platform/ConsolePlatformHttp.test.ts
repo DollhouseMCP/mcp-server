@@ -248,6 +248,85 @@ describe('console platform HTTP foundations', () => {
     });
   });
 
+  it('preserves free-form route param confusables while applying canonical NFC', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'freeform-param',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'GET',
+        path: '/api/v1/me/freeform/:name',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        pathParamValueNormalization: { name: 'nfc' },
+        handler: req => ({
+          status: 200,
+          body: {
+            name: req.params.name,
+          },
+        }),
+      }],
+    });
+    const app = express();
+    app.use(assembleConsoleRouter(registry));
+
+    const response = await request(app)
+      .get(`/api/v1/me/freeform/${encodeURIComponent('α-cafe\u0301')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ name: 'α-café' });
+  });
+
+  it('normalizes route params without invoking prototype setters', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'prototype-param',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'GET',
+        path: '/api/v1/me/prototype-param/:__proto__',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        handler: req => {
+          const params = req.params as Record<string, unknown>;
+          const paramsPrototype = Object.getPrototypeOf(params) as { readonly role?: unknown } | null;
+          const cleanObject = {} as { readonly role?: unknown };
+          return {
+            status: 200,
+            body: {
+              ownProto: Object.prototype.hasOwnProperty.call(params, '__proto__'),
+              protoValue: params.__proto__,
+              prototypeRole: typeof paramsPrototype?.role === 'string' ? paramsPrototype.role : null,
+              globalPrototypeRole: typeof cleanObject.role === 'string' ? cleanObject.role : null,
+            },
+          };
+        },
+      }],
+    });
+    const app = express();
+    app.use(assembleConsoleRouter(registry));
+
+    const response = await request(app).get('/api/v1/me/prototype-param/not-admin');
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      ownProto: true,
+      protoValue: 'not-admin',
+      prototypeRole: null,
+      globalPrototypeRole: null,
+    });
+  });
+
   it('normalizes JSON bodies without invoking prototype setters', async () => {
     const registry = new ConsoleModuleRegistry();
     registry.register({

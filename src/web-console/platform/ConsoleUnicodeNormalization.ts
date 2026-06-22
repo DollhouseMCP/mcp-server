@@ -1,20 +1,24 @@
 import type { RequestHandler } from 'express';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { ConsoleStoreValidationError } from '../stores/ConsoleStoreValidation.js';
+import type { ConsolePathParamValueNormalization } from './ConsolePlatformTypes.js';
 
 type MutableRecord = Record<string, unknown>;
+type StringNormalizationMode = ConsolePathParamValueNormalization | 'preserve';
 
 const MAX_BODY_NORMALIZATION_DEPTH = 64;
 const MAX_BODY_NORMALIZATION_NODES = 10_000;
 
 interface ConsoleUnicodeNormalizationOptions {
   readonly params?: boolean;
+  readonly pathParamValueNormalization?: Readonly<Record<string, ConsolePathParamValueNormalization>>;
   readonly query?: boolean;
   readonly body?: 'keys' | 'off';
 }
 
 interface NormalizeValueOptions {
-  readonly strings: 'normalize' | 'preserve';
+  readonly strings: StringNormalizationMode;
+  readonly stringModesByKey?: Readonly<Record<string, StringNormalizationMode>>;
   readonly bodyState?: {
     nodes: number;
   };
@@ -28,15 +32,19 @@ export function createConsoleUnicodeNormalizationMiddleware(
   const normalizeParams = options.params ?? true;
   const normalizeQuery = options.query ?? true;
   const bodyMode = options.body ?? 'keys';
+  const pathParamValueNormalization = options.pathParamValueNormalization;
 
   return (request, _response, next): void => {
     try {
       if (normalizeParams) {
-        normalizeRecordInPlace(request.params as MutableRecord, { strings: 'normalize' });
+        normalizeRecordInPlace(request.params as MutableRecord, {
+          strings: 'security',
+          stringModesByKey: pathParamValueNormalization,
+        });
       }
       if (normalizeQuery) {
         Object.defineProperty(request, 'query', {
-          value: normalizeValue(request.query, { strings: 'normalize' }),
+          value: normalizeValue(request.query, { strings: 'security' }),
           configurable: true,
           enumerable: true,
           writable: true,
@@ -66,7 +74,7 @@ function normalizeRecordInPlace(value: MutableRecord, options: NormalizeValueOpt
   for (const [key, item] of entries) {
     const normalizedKey = UnicodeValidator.normalize(key).normalizedContent;
     assertNoNormalizedKeyCollision(seen, normalizedKey);
-    const normalizedValue = normalizeValue(item, options, 1);
+    const normalizedValue = normalizeValue(item, optionsForKey(options, key, normalizedKey), 1);
     defineDataProperty(value, normalizedKey, normalizedValue);
   }
 }
@@ -74,9 +82,7 @@ function normalizeRecordInPlace(value: MutableRecord, options: NormalizeValueOpt
 function normalizeValue(value: unknown, options: NormalizeValueOptions, depth = 0): unknown {
   checkBodyTraversal(options, depth);
   if (typeof value === 'string') {
-    return options.strings === 'normalize'
-      ? UnicodeValidator.normalize(value).normalizedContent
-      : value;
+    return normalizeString(value, options.strings);
   }
   if (Array.isArray(value)) {
     return value.map(item => normalizeValue(item, options, depth + 1));
@@ -85,6 +91,26 @@ function normalizeValue(value: unknown, options: NormalizeValueOptions, depth = 
     return normalizePlainObject(value, options, depth);
   }
   return value;
+}
+
+function optionsForKey(
+  options: NormalizeValueOptions,
+  key: string,
+  normalizedKey: string,
+): NormalizeValueOptions {
+  const mode = options.stringModesByKey?.[key] ?? options.stringModesByKey?.[normalizedKey];
+  return mode === undefined ? options : { ...options, strings: mode };
+}
+
+function normalizeString(value: string, mode: StringNormalizationMode): string {
+  switch (mode) {
+    case 'security':
+      return UnicodeValidator.normalize(value).normalizedContent;
+    case 'nfc':
+      return value.normalize('NFC');
+    case 'preserve':
+      return value;
+  }
 }
 
 function normalizePlainObject(value: MutableRecord, options: NormalizeValueOptions, depth: number): MutableRecord {

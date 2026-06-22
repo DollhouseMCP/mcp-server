@@ -1349,6 +1349,23 @@ describe('secured console router rate limiting', () => {
     expect(onProtectedCorrelation).not.toHaveBeenCalled();
   });
 
+  it('authenticates protected routes before walking deeply nested JSON bodies', async () => {
+    const { app, onChange } = await buildApp(record());
+    const deepBody = `${'{"nested":'.repeat(80)}null${'}'.repeat(80)}`;
+
+    const response = await request(app)
+      .post(CHANGE_PATH)
+      .set('Content-Type', 'application/json')
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY)
+      .send(deepBody);
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('fails closed on protected rate-limit dependency errors', async () => {
     const limiter = protectedCorrelationLimiter();
     jest.spyOn(limiter, 'consume').mockRejectedValue(
