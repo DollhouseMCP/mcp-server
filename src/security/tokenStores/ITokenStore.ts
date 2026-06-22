@@ -9,4 +9,3 @@ export interface ITokenStore {
   retrieveToken(userId: string): Promise<string | null>;
   deleteToken(userId: string): Promise<void>;
 }
-

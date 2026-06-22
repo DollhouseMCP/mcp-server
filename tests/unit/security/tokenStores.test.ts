@@ -79,4 +79,3 @@ describe('EnvVarMasterKeyProvider', () => {
     expect(() => new EnvVarMasterKeyProvider(Buffer.alloc(31).toString('base64'))).toThrow(/32 bytes/);
   });
 });
-

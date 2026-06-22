@@ -46,14 +46,14 @@ export class GitHubAuthHandler {
           if (currentStatus.isAuthenticated) {
             return this.alreadyConnectedResponse(currentStatus);
           }
-          
+
           this.logAuthFlowInitiated();
           const deviceResponse = await this.initiateDeviceFlowForSetup();
           const clientId = await this.resolveHelperClientId();
           if (!clientId) return this.missingClientIdResponse();
           const spawnFailure = await this.startOAuthHelper(deviceResponse, clientId);
           if (spawnFailure) return spawnFailure;
-          
+
           return {
             content: [{
               type: "text",
@@ -63,14 +63,14 @@ export class GitHubAuthHandler {
             }]
           };
         } catch (error) {
-          logger.error('OAUTH_INDEX_2806: Main catch block - authentication setup failed', { 
+          logger.error('OAUTH_INDEX_2806: Main catch block - authentication setup failed', {
             error,
             errorType: error?.constructor?.name,
             errorMessage: error instanceof Error ? error.message : 'Unknown'
           });
-          
+
           const errorMessage = error instanceof Error ? error.message : UNKNOWN_ERROR;
-          
+
           return {
             content: [{
               type: "text",
@@ -276,7 +276,7 @@ export class GitHubAuthHandler {
         try {
           const helperHealth = await this.checkOAuthHelperHealth();
           const status = await this.githubAuthManager.getAuthStatus();
-          
+
           if (status.isAuthenticated) {
             await this.cleanupOAuthHelperStateIfPresent(helperHealth.exists);
             return this.githubConnectedResponse(status);
@@ -402,20 +402,20 @@ export class GitHubAuthHandler {
           const stateFile = this.getOAuthHelperStateFile();
           const logFile = this.getOAuthHelperLogFile();
           const pidFile = this.getOAuthHelperPidFile();
-          
+
           let statusText = this.formatOAuthHelperStatus(health);
           statusText += this.formatOAuthHelperFileLocations(health, stateFile, logFile, pidFile);
           statusText += await this.formatVerboseOAuthHelperLog(verbose, health.hasLog, logFile);
           statusText += this.formatOAuthHelperTroubleshooting(health, logFile);
           statusText += this.formatOAuthHelperCleanup(health, stateFile, logFile, pidFile);
-          
+
           return {
             content: [{
               type: "text",
               text: this.prefix(statusText)
             }]
           };
-          
+
         } catch (error) {
           logger.error('Failed to get OAuth helper status', { error });
           return {
@@ -454,7 +454,7 @@ export class GitHubAuthHandler {
         if (!health.processAlive) {
           statusText += `⚠️ **WARNING:** Process appears to have stopped!\n` +
             `The helper process (PID ${health.pid}) is not responding.\n` +
-            `You may need to run 
+            `You may need to run
 setup_github_auth
  again.\n\n`;
         }
@@ -467,7 +467,7 @@ setup_github_auth
           `**Process ID:** ${health.pid}\n` +
           `**Started:** ${health.startTime?.toLocaleString()}\n` +
           `**Expired:** ${health.expiresAt?.toLocaleString()}\n\n` +
-          `The authentication request has expired. Run 
+          `The authentication request has expired. Run
 setup_github_auth
  to try again.\n\n`;
     }
@@ -514,7 +514,7 @@ setup_github_auth
         return `**🔧 Troubleshooting Tips:**\n` +
           `1. The helper process may have crashed\n` +
           `2. Check the log file for errors: ${logFile}\n` +
-          `3. Try running 
+          `3. Try running
 setup_github_auth
  again\n` +
           `4. Ensure DOLLHOUSE_GITHUB_CLIENT_ID is set\n` +
@@ -539,7 +539,7 @@ setup_github_auth
     private async checkOAuthHelperHealth() {
         const logFile = this.getOAuthHelperLogFile();
         const health = this.emptyOAuthHelperHealth();
-        
+
         try {
           this.populateOAuthHelperHealth(health, await this.readOAuthHelperState());
           this.updateOAuthHelperActivity(health);
@@ -548,7 +548,7 @@ setup_github_auth
         } catch (error) {
           this.logOAuthHelperHealthReadError(error);
         }
-        
+
         return health;
     }
 
@@ -651,7 +651,7 @@ setup_github_auth
           });
 
           await this.githubAuthManager.clearAuthentication();
-          
+
           return {
             content: [{
               type: "text",
@@ -682,18 +682,18 @@ setup_github_auth
         try {
           const configManager = this.configManager;
           await configManager.initialize();
-          
+
           if (!client_id) {
             return this.currentOAuthConfigResponse(configManager);
           }
-          
+
           if (!ConfigManager.validateClientId(client_id)) {
             return this.invalidClientIdResponse();
           }
-          
+
           await configManager.setGitHubClientId(client_id);
           return this.oauthConfiguredResponse(client_id);
-          
+
         } catch (error) {
           logger.error('Failed to configure OAuth', { error });
           return {

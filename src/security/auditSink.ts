@@ -61,4 +61,3 @@ export class FileAuditSink implements AuditSink {
     }
   }
 }
-
