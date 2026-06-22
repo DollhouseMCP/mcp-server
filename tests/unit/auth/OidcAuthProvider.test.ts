@@ -16,7 +16,7 @@
  * provider is mounted.
  */
 
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, jest } from '@jest/globals';
 import {
   SignJWT,
   exportJWK,
@@ -25,6 +25,7 @@ import {
   type JWTVerifyGetKey,
 } from 'jose';
 import { OidcAuthProvider } from '../../../src/auth/OidcAuthProvider.js';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 
 const ISSUER = 'https://tenant.example.com/';
 const AUDIENCE = 'mcp-resource';
@@ -173,6 +174,28 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     expect(result.ok).toBe(false);
     if (!result.ok) {
       expect(result.reason).toMatch(/mcp scope/);
+    }
+  });
+
+  it('logs verified tokens rejected by provider authorization checks', async () => {
+    const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    try {
+      const token = await mintToken({ scope: 'openid profile' });
+      const result = await provider.validate(token);
+
+      expect(result.ok).toBe(false);
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'TOKEN_VALIDATION_FAILURE',
+        severity: 'MEDIUM',
+        source: 'OidcAuthProvider.validate',
+        additionalData: expect.objectContaining({
+          provider: 'oidc:tenant.example.com',
+          issuer: ISSUER,
+          reason: 'token missing mcp scope',
+        }),
+      }));
+    } finally {
+      logSpy.mockRestore();
     }
   });
 

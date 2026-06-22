@@ -129,18 +129,26 @@ export class OidcAuthProvider implements IAuthProvider {
         algorithms: [...this.algorithms],
         ...(this.requireAccessTokenTyp ? { typ: 'at+jwt' } : {}),
       });
-      return buildOidcAuthResult(payload);
+      const result = buildOidcAuthResult(payload);
+      if (!result.ok) {
+        this.logTokenValidationFailure(result.reason);
+      }
+      return result;
     } catch (error) {
       const reason = mapOidcVerifyError(error);
-      SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_VALIDATION_FAILURE',
-        severity: 'MEDIUM',
-        source: 'OidcAuthProvider.validate',
-        details: 'OIDC access token validation failed',
-        additionalData: { provider: this.name, issuer: this.issuer, reason },
-      });
+      this.logTokenValidationFailure(reason);
       return { ok: false, reason };
     }
+  }
+
+  private logTokenValidationFailure(reason: string): void {
+    SecurityMonitor.logSecurityEvent({
+      type: 'TOKEN_VALIDATION_FAILURE',
+      severity: 'MEDIUM',
+      source: 'OidcAuthProvider.validate',
+      details: 'OIDC access token validation failed',
+      additionalData: { provider: this.name, issuer: this.issuer, reason },
+    });
   }
 }
 

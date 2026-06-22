@@ -94,10 +94,18 @@ export class EmbeddedASTokens {
     await this.ensureInitialized();
     try {
       const protectedHeader = decodeProtectedHeader(token);
-      if (!protectedHeader.kid) return { ok: false, reason: 'token missing kid header' };
+      if (!protectedHeader.kid) {
+        return logEmbeddedTokenValidationResult(
+          { ok: false, reason: 'token missing kid header' },
+          'EmbeddedASTokens.validateWithStore',
+        );
+      }
       const key = await requiredSigningKeyStore(this.signingKeyStore).getByKid(protectedHeader.kid);
       if (!(key?.kind === 'jwks' && key.retiredAt === undefined)) {
-        return { ok: false, reason: 'unknown key id' };
+        return logEmbeddedTokenValidationResult(
+          { ok: false, reason: 'unknown key id' },
+          'EmbeddedASTokens.validateWithStore',
+        );
       }
       const keyset = signingKeyToKeyset(key);
       const { publicSigningKey } = await importSigningKeys(keyset);
