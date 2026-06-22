@@ -25,15 +25,27 @@ export class MigrationManager {
   private portfolioManager: PortfolioManager;
   private fileLockManager: FileLockManager;
   private fileOperations: FileOperationsService;
+  /**
+   * Phase 4.5 follow-up: optional storage-layer factory. When present AND
+   * the factory produces a writable (database-backed) layer, `migratePersona`
+   * writes through it instead of the legacy filesystem path. Narrow scope —
+   * this migration only fires for legacy v1→v2 deployments where
+   * `hasLegacyPersonas() && !portfolioExists()`. Fresh DB-mode containerized
+   * deployments never hit this path, but rounding out the cluster keeps the
+   * storage-layer routing pattern consistent across all element-write sites.
+   */
+  private readonly storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
 
   constructor(
     portfolioManager: PortfolioManager,
     fileLockManager: FileLockManager,
-    fileOperationsService: FileOperationsService
+    fileOperationsService: FileOperationsService,
+    storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory,
   ) {
     this.portfolioManager = portfolioManager;
     this.fileLockManager = fileLockManager;
     this.fileOperations = fileOperationsService;
+    this.storageLayerFactory = storageLayerFactory;
   }
   
   /**
@@ -272,15 +284,35 @@ export class MigrationManager {
     }
     
     const validatedContent = validationResult.sanitizedContent || normalizedContent;
-    
-    // SECURITY FIX: Replace direct write with atomic operation
-    // FIXED: Race condition vulnerability in file writes during migration
-    // Original issue: Line 147 used non-atomic fs.writeFile operation
-    // Security impact: Race conditions could cause data corruption or partial writes
-    // Fix: Replaced with FileOperationsService.writeFile for guaranteed atomicity
-    await this.fileOperations.writeFile(newPath, validatedContent, {
-      source: 'MigrationManager.migratePersona'
-    });
+
+    // Phase 4.5 follow-up: when a storage-layer factory is wired AND it
+    // produces a writable layer, persist through it instead of the legacy
+    // filesystem write. Without this, DB-mode operators upgrading from v1
+    // would have their migrated personas land on the per-user portfolio
+    // dir (filesystem) instead of in Postgres. Narrow path but rounds out
+    // the cluster.
+    const { persistElementViaFactory } = await import('../storage/persistElementViaFactory.js');
+    const elementDir = path.dirname(newPath);
+    const elementName = path.basename(normalizedFilename, path.extname(normalizedFilename));
+    const persistedViaStorageLayer = await persistElementViaFactory(
+      this.storageLayerFactory,
+      ElementType.PERSONA,
+      elementName,
+      validatedContent,
+      { elementDir, fileExtension: path.extname(normalizedFilename) || '.md', scanCooldownMs: 0 },
+      { exclusive: false },
+    );
+
+    if (!persistedViaStorageLayer) {
+      // SECURITY FIX: Replace direct write with atomic operation
+      // FIXED: Race condition vulnerability in file writes during migration
+      // Original issue: Line 147 used non-atomic fs.writeFile operation
+      // Security impact: Race conditions could cause data corruption or partial writes
+      // Fix: Replaced with FileOperationsService.writeFile for guaranteed atomicity
+      await this.fileOperations.writeFile(newPath, validatedContent, {
+        source: 'MigrationManager.migratePersona'
+      });
+    }
     
     // SECURITY FIX: DMCP-SEC-006 - Log file operations for security audit trail
     SecurityMonitor.logSecurityEvent({

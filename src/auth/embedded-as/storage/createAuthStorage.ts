@@ -1,0 +1,159 @@
+/**
+ * createAuthStorage — backend-selection factory for IAuthStorageLayer.
+ *
+ * Resolution order:
+ *   1. Explicit `backend` option (test injection point).
+ *   2. `DOLLHOUSE_AUTH_STORAGE_BACKEND` env var (`memory|filesystem|postgres`).
+ *   3. `NODE_ENV === 'test'` → memory (no disk artifacts during tests).
+ *   4. Default: `filesystem`.
+ *
+ * Three backends ship in §8.1:
+ *   - InMemoryAuthStorageLayer — solo dev / tests; non-durable.
+ *   - FilesystemAuthStorageLayer — atomic-write + lock under
+ *     `resolveDataDirectory('state')` (XDG / Library / LOCALAPPDATA, with
+ *     legacy `~/.dollhouse/state/auth/` honored when `legacyRoot` is
+ *     supplied). The default for solo / small-team deployments.
+ *   - PostgresAuthStorageLayer — Drizzle-backed; the recommended choice
+ *     for hosted / multi-instance deployments. Reuses the Phase 4
+ *     database connection injected by the caller; this factory imports
+ *     it lazily so memory/filesystem callers don't pay the Drizzle cost.
+ *
+ * Safety guard: methods that require durable storage (local-account,
+ * magic-link) refuse to start with the in-memory backend in non-test
+ * environments unless `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true` is
+ * explicitly set. The intent is to prevent operators from silently
+ * losing user credentials on restart.
+ *
+ * @module auth/embedded-as/storage/createAuthStorage
+ */
+
+import * as path from 'node:path';
+import { env } from '../../../config/env.js';
+import { logger } from '../../../utils/logger.js';
+import { resolveDataDirectory } from '../../../paths/resolveDataDirectory.js';
+import type { DatabaseInstance } from '../../../database/connection.js';
+import type { IAuthStorageLayer } from './IAuthStorageLayer.js';
+import { InMemoryAuthStorageLayer } from './InMemoryAuthStorageLayer.js';
+import { FilesystemAuthStorageLayer } from './FilesystemAuthStorageLayer.js';
+
+export type AuthStorageBackend = 'memory' | 'filesystem' | 'postgres';
+
+export interface CreateAuthStorageOptions {
+  /** Force a specific backend; bypasses env-var detection. */
+  backend?: AuthStorageBackend;
+  /** Override storage root for the filesystem backend (tests pass a tmpdir). */
+  rootDir?: string;
+  /**
+   * Forwarded to `resolveDataDirectory` for the filesystem backend.
+   * Set when an existing `~/.dollhouse/` install is detected so paths
+   * resolve to the legacy layout instead of the platform default.
+   */
+  legacyRoot?: string;
+  /**
+   * Active method ids that drive the safety guard. When this list
+   * contains a durable-data method (local-password, magic-link) and
+   * the chosen backend is `memory` (in a non-test environment), the
+   * factory throws unless `allowMemoryWithDurableMethods` is set.
+   */
+  methods?: readonly string[];
+  /** Test/operator escape for the safety guard. Logged at warn. */
+  allowMemoryWithDurableMethods?: boolean;
+  /**
+   * Drizzle DB instance, required when backend='postgres'. Resolved from
+   * the DI container ('Database') in production wiring; tests pass a
+   * scratch instance.
+   */
+  database?: DatabaseInstance;
+}
+
+/** Methods whose data must survive a restart for the deployment to be sane. */
+export const DURABLE_AUTH_METHODS: ReadonlySet<string> = new Set([
+  'local-password',
+  'magic-link',
+]);
+
+export async function createAuthStorage(
+  options: CreateAuthStorageOptions = {},
+): Promise<IAuthStorageLayer> {
+  const backend = pickBackend(options);
+
+  const requiresDurable = (options.methods ?? []).some(m => DURABLE_AUTH_METHODS.has(m));
+  if (backend === 'memory' && requiresDurable) {
+    const allowed = options.allowMemoryWithDurableMethods
+      ?? env.DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE;
+    if (!allowed) {
+      throw new Error(
+        `Auth storage backend 'memory' refused for methods that require durable state: ` +
+        `${(options.methods ?? []).filter(m => DURABLE_AUTH_METHODS.has(m)).join(', ')}. ` +
+        `Set DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem (or postgres when available), ` +
+        `or DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true to override (not recommended; ` +
+        `accounts and refresh tokens are lost on restart).`,
+      );
+    }
+    logger.warn(
+      '[AuthStorage] memory backend is allowing durable-data methods — accounts and ' +
+      'refresh tokens will be lost on restart. Set DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem to fix.',
+    );
+  }
+
+  switch (backend) {
+    case 'memory':
+      logger.info('[AuthStorage] backend=memory (in-process state, lost on restart)');
+      return new InMemoryAuthStorageLayer();
+
+    case 'filesystem': {
+      const rootDir = options.rootDir
+        ?? path.join(resolveDataDirectory('state', { legacyRoot: options.legacyRoot }), 'auth');
+      logger.info('[AuthStorage] backend=filesystem', { rootDir });
+      return new FilesystemAuthStorageLayer({ rootDir });
+    }
+
+    case 'postgres': {
+      if (!options.database) {
+        // Phase 9 M2/Q5: spell out the cross-config dependency. The
+        // Postgres auth backend reuses the same DatabaseInstance that
+        // DatabaseServiceRegistrar registers, which only runs when
+        // DOLLHOUSE_STORAGE_BACKEND=database. Selecting auth=postgres
+        // without portfolio=database silently failed before this fix —
+        // now operators get a single clear startup error pointing at
+        // the configuration mismatch instead of "database option
+        // required" with no context.
+        throw new Error(
+          'DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres requires a database connection ' +
+          'that the auth registrar can resolve from the DI container. Today the only ' +
+          'registrant is DatabaseServiceRegistrar, which only runs when ' +
+          'DOLLHOUSE_STORAGE_BACKEND=database. Either set both env vars to use the ' +
+          'shared connection, or use DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem (the ' +
+          'default for non-DB deployments). A standalone auth-only Postgres pool is ' +
+          'a follow-up; not §8.1 scope.',
+        );
+      }
+      // Lazy import so the postgres dependency isn't pulled into bundles
+      // for filesystem/memory deployments.
+      const { PostgresAuthStorageLayer } = await import('./PostgresAuthStorageLayer.js');
+      logger.info('[AuthStorage] backend=postgres');
+      // Round 5 / M10: operators selecting postgres usually do so with
+      // HA intent (multi-replica behind a load balancer). The
+      // rate-limit Map in LocalLoginRateLimiter is still process-local,
+      // so brute-force protection is per-replica, not per-cluster. Surface
+      // this as a startup warning so deployments don't silently lose
+      // protection. Distributed rate-limit is a §8.2 follow-up.
+      logger.warn(
+        '[AuthStorage] Postgres backend selected, but rate-limit state is still ' +
+        'process-local. Brute-force protection is per-replica, not per-cluster. A ' +
+        'distributed rate-limit backing store is a §8.2 follow-up.',
+      );
+      return new PostgresAuthStorageLayer({ db: options.database });
+    }
+  }
+}
+
+function pickBackend(options: CreateAuthStorageOptions): AuthStorageBackend {
+  if (options.backend) return options.backend;
+  // Cycle 19 / B2: env-var read now goes through the Zod schema (env.ts);
+  // the schema's z.enum rejects typos at config parse with a clear error
+  // before this site is reached. NODE_ENV is also schema-validated.
+  if (env.DOLLHOUSE_AUTH_STORAGE_BACKEND) return env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
+  if (env.NODE_ENV === 'test') return 'memory';
+  return 'filesystem';
+}

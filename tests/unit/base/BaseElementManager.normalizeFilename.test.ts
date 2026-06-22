@@ -27,6 +27,7 @@ import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { ValidationRegistry } from '../../../src/services/validation/ValidationRegistry.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Mock dependencies
 jest.mock('../../../src/security/fileLockManager.js');
@@ -153,7 +154,7 @@ describe('BaseElementManager.normalizeFilename()', () => {
     manager = new TestableElementManager(
       portfolioManager,
       fileLockManager,
-      { elementDirOverride: tempDir },
+      { elementDirOverride: tempDir, storageLayerFactory: createTestStorageFactory(fileOperationsService) },
       fileOperationsService,
       validationRegistry
     );

@@ -3,7 +3,6 @@
  * Manages agent CRUD operations, metadata sanitization, and state persistence.
  */
 
-import { FileOperationsService } from '../../services/FileOperationsService.js';
 import * as path from 'path';
 
 import { Agent } from './Agent.js';
@@ -44,7 +43,37 @@ import {
   createDangerZoneOperation,
   createExecutionContext,
 } from './safetyTierService.js';
-import { BaseElementManager } from '../base/BaseElementManager.js';
+import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
+import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { AGENT_STATE_MAX_YAML_SIZE, FileAgentStateStore } from '../../storage/FileAgentStateStore.js';
+import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
+
+/**
+ * Minimal interface for an element manager resolved by name.
+ * The resolver returns heterogeneous managers (PersonaManager, SkillManager, etc.)
+ * — this captures the common surface needed by getElementContent().
+ */
+export interface ResolvedElementManager {
+  list(): Promise<Array<{
+    metadata: { name: string; [key: string]: unknown };
+    content?: string;
+    instructions?: string;
+    getEntries?: () => unknown[];
+    elements?: Record<string, unknown>;
+    extensions?: Record<string, unknown>;
+  }>>;
+}
+
+export interface AgentManagerDeps extends ElementManagerDeps {
+  baseDir: string;
+  stateStore?: IAgentStateStore;
+  /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
+  elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
+  /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
+  dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
+  verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+}
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
@@ -53,15 +82,11 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { ContentValidator } from '../../security/contentValidator.js';
 import { InputNormalizer } from '../../security/InputNormalizer.js';
 import { SafeRegex } from '../../security/dosProtection.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
 import { logger } from '../../utils/logger.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
-import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -69,8 +94,7 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
-const STATE_FILE_EXTENSION = '.state.yaml';
-const MAX_YAML_SIZE = 64 * 1024;
+const MAX_YAML_SIZE = AGENT_STATE_MAX_YAML_SIZE;
 const MAX_FILE_SIZE = 100 * 1024;
 
 // Issue #83: Centralized active element limits (configurable via env vars)
@@ -82,54 +106,98 @@ interface ElementCreationResult {
   element?: Agent;
 }
 
-interface ParsedAgentFile {
-  metadata: AgentMetadata;
-  content: string;
-}
-
 type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & {
   content?: string;
 };
 
+interface PreparedCreateInput {
+  referenceContent: unknown;
+  normalizedMetadata: Partial<AgentMetadataV2>;
+}
+
+interface SanitizedCreateInput {
+  name: string;
+  description: string;
+  instructions: string;
+}
+
+interface ActivationResult {
+  activeElements: Record<string, Array<{ name: string; content: string }>>;
+  activationWarnings: Array<{ elementType: string; elementName: string; error: string }>;
+}
+
 export class AgentManager extends BaseElementManager<Agent> {
-  private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
+  private readonly stateStore: IAgentStateStore;
+  private readonly hydratedAgents = new WeakSet<Agent>();
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
   private metadataService: MetadataService;
-  // Track active agents by name (stable identifier)
-  private activeAgentNames: Set<string> = new Set();
+  // Fallback for tests/callers that don't inject the registry
+  private readonly _localActiveAgentNames: Set<string> = new Set();
 
-  // Static resolver for element manager lookup (DI pattern)
-  // This allows Agent instances to resolve managers without tight coupling
-  private static elementManagerResolver?: (managerName: string) => any;
+  // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+  private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
+  private _dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+  private static warnedDbModeOrphanedStateFiles = false;
 
-  // Issue #402: Static resolver for DangerZoneEnforcer (DI pattern)
-  private static dangerZoneEnforcerResolver?: () => import('./types.js').DangerZoneBlocker;
+  constructor(deps: AgentManagerDeps) {
+    const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
+    super(
+      ElementType.AGENT,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        elementDirOverride,
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
+        storageLayerFactory: deps.storageLayerFactory,
+        getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
+    this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.serializationService = deps.serializationService;
+    this.metadataService = deps.metadataService;
+    this.stateStore = deps.stateStore || this.createDefaultStateStore(deps);
+    // Issue #1948: Instance-injected dependencies (replaces static resolvers)
+    this._elementManagerResolver = deps.elementManagerResolver;
+    this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
+    this._verificationStore = deps.verificationStore;
+  }
 
-  // Issue #142: Static resolver for VerificationStore (DI pattern)
-  private static verificationStoreResolver?: () => { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
+  /**
+   * State sidecars live under the active element directory. This must resolve
+   * dynamically because HTTP sessions route elementDir to a per-user subtree.
+   */
+  private get stateDir(): string {
+    return path.join(this.elementDir, STATE_DIRECTORY);
+  }
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    fileLockManager: FileLockManager,
-    baseDir: string,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    serializationService: SerializationService,
-    metadataService: MetadataService,
-    fileWatchService?: FileWatchService,
-    memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
-  ) {
-    const elementDirOverride = path.join(baseDir, ElementType.AGENT);
-    super(ElementType.AGENT, portfolioManager, fileLockManager, { elementDirOverride, fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
-    this.stateDir = path.join(this.elementDir, STATE_DIRECTORY);
-    this.triggerValidationService = validationRegistry.getTriggerValidationService();
-    this.validationService = validationRegistry.getValidationService();
-    this.serializationService = serializationService;
-    this.metadataService = metadataService;
+  private createDefaultStateStore(deps: AgentManagerDeps): IAgentStateStore {
+    return new FileAgentStateStore({
+      stateDir: () => this.stateDir,
+      fileLockManager: deps.fileLockManager,
+      fileOperations: deps.fileOperationsService,
+      serializationService: deps.serializationService,
+      stateCache: this.stateCache,
+      maxYamlSize: MAX_YAML_SIZE,
+    });
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('agents', this._localActiveAgentNames);
   }
 
   protected override getElementLabel(): string {
@@ -137,49 +205,25 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Configure the element manager resolver for element-agnostic activation
-   * This is called by the DI container during initialization
-   * Follows the same pattern as Memory.configureMemoryManagerResolver
-   *
-   * @param resolver Function that takes a manager name and returns the manager instance
+   * Issue #1948: Set element manager resolver on this instance.
+   * Primarily for tests that need to configure after construction.
    */
-  public static setElementManagerResolver(resolver: (managerName: string) => any): void {
-    AgentManager.elementManagerResolver = resolver;
+  setElementManagerResolver(resolver: (managerName: string) => ResolvedElementManager | null): void {
+    this._elementManagerResolver = resolver;
   }
 
-  /**
-   * Issue #402: Set DangerZoneEnforcer resolver for DI injection.
-   * Called by the DI container during initialization.
-   */
-  public static setDangerZoneEnforcerResolver(resolver: () => import('./types.js').DangerZoneBlocker): void {
-    AgentManager.dangerZoneEnforcerResolver = resolver;
+  /** Issue #1948: Set DangerZoneEnforcer on this instance. */
+  setDangerZoneEnforcerInstance(enforcer: import('./types.js').DangerZoneBlocker): void {
+    this._dangerZoneEnforcer = enforcer;
   }
 
-  /**
-   * Issue #142: Set VerificationStore resolver for DI injection.
-   * Called by the DI container during initialization.
-   */
-  public static setVerificationStoreResolver(resolver: () => { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }): void {
-    AgentManager.verificationStoreResolver = resolver;
+  /** Issue #1948: Set VerificationStore on this instance. */
+  setVerificationStoreInstance(store: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void }): void {
+    this._verificationStore = store;
   }
 
-  /**
-   * Get the element manager resolver
-   * @private
-   */
-  private static getElementManagerResolver(): ((managerName: string) => any) | undefined {
-    return AgentManager.elementManagerResolver;
-  }
-
-  /**
-   * Reset static resolvers (for test cleanup)
-   * Call this in afterEach hooks to prevent test isolation issues
-   */
-  public static resetResolvers(): void {
-    AgentManager.elementManagerResolver = undefined;
-    AgentManager.dangerZoneEnforcerResolver = undefined;
-    AgentManager.verificationStoreResolver = undefined;
-  }
+  /** @deprecated Issue #1948: Static resolvers removed. Use constructor injection. */
+  public static resetResolvers(): void { /* no-op */ }
 
   /**
    * Prepare directory structure for agents and state files.
@@ -201,94 +245,28 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): Promise<ElementCreationResult> {
     try {
       await this.initialize();
-
-      // Normalize goal input before validation - LLMs may pass string or object
-      // Strip 'content' from metadata to prevent it from overwriting the positional
-      // content param (which is the agent's instructions text) in the validation call.
-      const { content: referenceContent, ...metadataWithoutContent } = metadata ?? {};
-      const normalizedMetadata: Partial<AgentMetadataV2> = {
-        ...metadataWithoutContent
-      };
-      if (metadata?.goal !== undefined) {
-        normalizedMetadata.goal = this.normalizeGoalInput(
-          metadata.goal as string | Partial<AgentGoalConfig>
-        );
-      }
-
-      // Use specialized validator for input validation.
-      // Agents support dual-field creation: behavioral instructions and optional
-      // reference content. Validation prefers behavioral instructions when both
-      // fields are present so existing instruction-first agents keep their
-      // current semantics while content-only agents still validate correctly.
-      const validationInput: Record<string, unknown> = {
+      const preparedInput = this.prepareCreateInput(metadata);
+      const validationFailure = await this.validateAgentCreateInput(
         name,
         description,
-        ...normalizedMetadata
-      };
-      const primaryText = this.getPrimaryValidationText(content, referenceContent);
-      validationInput.content = primaryText ?? '';
-      const validationResult = await this.validator.validateCreate(validationInput);
-
-      if (!validationResult.isValid) {
-        return {
-          success: false,
-          message: `Validation failed: ${validationResult.errors.join(', ')}`
-        };
+        content,
+        preparedInput
+      );
+      if (validationFailure) {
+        return validationFailure;
       }
 
-      // Log warnings if any
-      if (validationResult.warnings && validationResult.warnings.length > 0) {
-        logger.warn(`Agent creation warnings: ${validationResult.warnings.join(', ')}`);
-      }
-
-      // Sanitize inputs for element creation
-      const sanitizedName = sanitizeInput(UnicodeValidator.normalize(name).normalizedContent, 100);
-      const sanitizedDescription = sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH);
-      // Use ContentValidator for multi-line content to preserve formatting (newlines, tabs)
-      // while still detecting prompt injection attacks
-      const contentValidation = ContentValidator.validateAndSanitize(content, { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' });
-      const sanitizedInstructions = contentValidation.sanitizedContent || '';
-
-      if (!this.validateElementName(sanitizedName)) {
-        return {
-          success: false,
-          message: 'Invalid agent name. Use only letters, numbers, hyphens, and underscores.'
-        };
-      }
-
-      const filename = this.getFilename(sanitizedName);
-      const agent = new Agent({
-        ...normalizedMetadata,
-        name: sanitizedName,
-        description: sanitizedDescription
-      }, this.metadataService);
-
-      agent.metadata.author = normalizedMetadata?.author ?? this.getCurrentUserForAttribution();
-      agent.extensions = {
-        ...agent.extensions,
-        specializations: normalizedMetadata?.specializations ?? agent.extensions?.specializations ?? [],
-        decisionFramework: normalizedMetadata?.decisionFramework ?? agent.extensions?.decisionFramework,
-        riskTolerance: normalizedMetadata?.riskTolerance ?? agent.extensions?.riskTolerance,
-        learningEnabled: normalizedMetadata?.learningEnabled ?? agent.extensions?.learningEnabled,
-      };
-      // Promote instructions to first-class property (no longer in extensions)
-      agent.instructions = sanitizedInstructions;
-      // Also keep in extensions for backward compat during transition
-      agent.extensions.instructions = sanitizedInstructions;
-
-      // Set reference content if provided (v2.0 dual-field architecture)
-      if (typeof referenceContent === 'string' && referenceContent.trim().length > 0) {
-        const contentValidationResult = ContentValidator.validateAndSanitize(
-          referenceContent,
-          { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' }
+      const sanitizedInput = this.sanitizeAgentCreateInput(name, description, content);
+      if (!this.validateElementName(sanitizedInput.name)) {
+        return AgentManager.createFailure(
+          'Invalid agent name. Use only letters, numbers, hyphens, and underscores.'
         );
-        if (!contentValidationResult.isValid) {
-          return {
-            success: false,
-            message: `Validation failed: ${(contentValidationResult.detectedPatterns || ['Content validation failed']).join(', ')}`
-          };
-        }
-        agent.content = contentValidationResult.sanitizedContent || '';
+      }
+
+      const agent = this.buildAgentFromCreateInput(sanitizedInput, preparedInput.normalizedMetadata);
+      const referenceFailure = this.assignReferenceContent(agent, preparedInput.referenceContent);
+      if (referenceFailure) {
+        return referenceFailure;
       }
 
       // Issue #727: Validate and normalize V2 fields BEFORE assignment.
@@ -296,89 +274,46 @@ export class AgentManager extends BaseElementManager<Agent> {
       // this.validator.validateCreate) is the first. The validator catches camelCase
       // invalid values; this method also normalizes snake_case keys (which the validator
       // doesn't see) and validates them. Both layers are needed. See Issue #730.
-      const metadataV2 = normalizedMetadata as Partial<AgentMetadataV2> | undefined;
-      if (metadataV2) {
-        const v2Errors = this.validateV2FieldsForCreate(metadataV2);
-        if (v2Errors.length > 0) {
-          return {
-            success: false,
-            message: `V2 field validation failed: ${v2Errors.join('; ')}`
-          };
-        }
+      const metadataV2 = preparedInput.normalizedMetadata;
+      const v2Errors = this.validateV2FieldsForCreate(metadataV2);
+      if (v2Errors.length > 0) {
+        return AgentManager.createFailure(`V2 field validation failed: ${v2Errors.join('; ')}`);
       }
 
       // V2 FIELDS: Store V2-specific fields in agent metadata (not just extensions)
       // This enables V2 agent creation via MCP-AQL create_element operation
-      if (metadataV2?.goal) {
-        (agent.metadata as AgentMetadataV2).goal = metadataV2.goal;
-      }
-      if (metadataV2?.activates) {
-        (agent.metadata as AgentMetadataV2).activates = metadataV2.activates;
-      }
-      if (metadataV2?.tools) {
-        (agent.metadata as AgentMetadataV2).tools = metadataV2.tools;
-      }
-      if (metadataV2?.systemPrompt) {
-        (agent.metadata as AgentMetadataV2).systemPrompt = metadataV2.systemPrompt;
-      }
-      if (metadataV2?.autonomy) {
-        (agent.metadata as AgentMetadataV2).autonomy = metadataV2.autonomy;
-      }
-      // Issue #449: Persist gatekeeper policy for Gatekeeper enforcement during execution
-      if (metadataV2?.gatekeeper) {
-        (agent.metadata as AgentMetadataV2).gatekeeper = metadataV2.gatekeeper;
-      }
-      // Issue #722: Persist resilience policy (was missing from V2 field assignments)
-      if (metadataV2?.resilience) {
-        (agent.metadata as AgentMetadataV2).resilience = metadataV2.resilience;
-      }
+      this.assignV2MetadataFields(agent, metadataV2);
 
       // Issue #613: Check metadata name uniqueness (not just filename)
       const existingAgents = await this.list();
       const duplicate = existingAgents.find(a =>
-        a.metadata.name.toLowerCase() === sanitizedName.toLowerCase()
+        a.metadata.name.toLowerCase() === sanitizedInput.name.toLowerCase()
       );
       if (duplicate) {
         return {
           success: false,
-          message: `Agent '${sanitizedName}' already exists`
+          message: `Agent '${sanitizedInput.name}' already exists`
         };
       }
 
-      // Serialize the agent content first
-      const serializedContent = await this.serializeElement(agent);
-      const absolutePath = this.resolveAbsolutePath(filename);
-
-      // Use atomic file creation to prevent TOCTOU race conditions
-      // This replaces the previous check-then-write pattern with a single atomic operation
-      const created = await this.fileOperations.createFileExclusive(absolutePath, serializedContent, {
-        source: 'AgentManager.create'
-      });
-
-      if (!created) {
-        return {
-          success: false,
-          message: `Agent '${sanitizedName}' already exists`
-        };
-      }
-
-      // Cache the element after successful creation
-      this.cacheElement(agent, filename);
-      await this.storageLayer.notifySaved(filename, absolutePath);
-      // Note: No reload() here — cacheElement() stores the element correctly.
-      // See Issue #491 for why PersonaManager's reload-after-create was removed.
+      // Save through the standard pipeline with exclusive flag for atomic create-or-fail.
+      // In file mode, this uses createFileExclusive (wx flag) to prevent TOCTOU races.
+      // In DB mode, the storage layer does a plain INSERT and converts the 23505 unique-
+      // constraint violation into an "already exists" error. The duplicate check above via
+      // list() catches the common case; exclusive handles concurrent-create races.
+      await this.save(agent, this.getFilename(sanitizedInput.name), { exclusive: true });
 
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_CREATED',
         severity: 'LOW',
         source: 'AgentManager.create',
-        details: `Agent '${sanitizedName}' created`,
+        details: `Agent '${sanitizedInput.name}' created`,
         additionalData: { agentId: agent.id }
       });
 
       return {
         success: true,
-        message: `🤖 **${sanitizedName}** by ${agent.metadata.author || 'anonymous'}`,
+        message: `🤖 **${sanitizedInput.name}** by ${agent.metadata.author || 'anonymous'}`,
         element: agent
       };
     } catch (error) {
@@ -390,6 +325,114 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
   }
 
+  private static createFailure(message: string): ElementCreationResult {
+    return { success: false, message };
+  }
+
+  private prepareCreateInput(metadata?: AgentCreateMetadata): PreparedCreateInput {
+    // Strip 'content' from metadata to prevent it from overwriting the positional
+    // content param, which is the agent's behavioral instructions text.
+    const { content: referenceContent, ...metadataWithoutContent } = metadata ?? {};
+    const normalizedMetadata: Partial<AgentMetadataV2> = {
+      ...metadataWithoutContent
+    };
+    if (metadata?.goal !== undefined) {
+      normalizedMetadata.goal = this.normalizeGoalInput(metadata.goal);
+    }
+    return { referenceContent, normalizedMetadata };
+  }
+
+  private async validateAgentCreateInput(
+    name: string,
+    description: string,
+    content: string,
+    preparedInput: PreparedCreateInput
+  ): Promise<ElementCreationResult | null> {
+    const validationInput: Record<string, unknown> = {
+      name,
+      description,
+      ...preparedInput.normalizedMetadata,
+      content: this.getPrimaryValidationText(content, preparedInput.referenceContent) ?? '',
+    };
+    const validationResult = await this.validator.validateCreate(validationInput);
+
+    if (!validationResult.isValid) {
+      return AgentManager.createFailure(`Validation failed: ${validationResult.errors.join(', ')}`);
+    }
+    if (validationResult.warnings && validationResult.warnings.length > 0) {
+      logger.warn(`Agent creation warnings: ${validationResult.warnings.join(', ')}`);
+    }
+    return null;
+  }
+
+  private sanitizeAgentCreateInput(
+    name: string,
+    description: string,
+    content: string
+  ): SanitizedCreateInput {
+    const contentValidation = ContentValidator.validateAndSanitize(
+      content,
+      { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' }
+    );
+    return {
+      name: sanitizeInput(UnicodeValidator.normalize(name).normalizedContent, 100),
+      description: sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH),
+      instructions: contentValidation.sanitizedContent || '',
+    };
+  }
+
+  private buildAgentFromCreateInput(
+    sanitizedInput: SanitizedCreateInput,
+    normalizedMetadata: Partial<AgentMetadataV2>
+  ): Agent {
+    const agent = new Agent({
+      ...normalizedMetadata,
+      name: sanitizedInput.name,
+      description: sanitizedInput.description
+    }, this.metadataService);
+
+    agent.metadata.author = normalizedMetadata.author ?? this.getCurrentUserForAttribution();
+    agent.extensions = {
+      ...agent.extensions,
+      specializations: normalizedMetadata.specializations ?? agent.extensions?.specializations ?? [],
+      decisionFramework: normalizedMetadata.decisionFramework ?? agent.extensions?.decisionFramework,
+      riskTolerance: normalizedMetadata.riskTolerance ?? agent.extensions?.riskTolerance,
+      learningEnabled: normalizedMetadata.learningEnabled ?? agent.extensions?.learningEnabled,
+    };
+    agent.instructions = sanitizedInput.instructions;
+    agent.extensions.instructions = sanitizedInput.instructions;
+    return agent;
+  }
+
+  private assignReferenceContent(agent: Agent, referenceContent: unknown): ElementCreationResult | null {
+    if (typeof referenceContent !== 'string' || referenceContent.trim().length === 0) {
+      return null;
+    }
+
+    const contentValidationResult = ContentValidator.validateAndSanitize(
+      referenceContent,
+      { maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH, contentContext: 'agent' }
+    );
+    if (!contentValidationResult.isValid) {
+      return AgentManager.createFailure(
+        `Validation failed: ${(contentValidationResult.detectedPatterns || ['Content validation failed']).join(', ')}`
+      );
+    }
+    agent.content = contentValidationResult.sanitizedContent || '';
+    return null;
+  }
+
+  private assignV2MetadataFields(agent: Agent, metadataV2: Partial<AgentMetadataV2>): void {
+    const target = agent.metadata as AgentMetadataV2;
+    if (metadataV2.goal) target.goal = metadataV2.goal;
+    if (metadataV2.activates) target.activates = metadataV2.activates;
+    if (metadataV2.tools) target.tools = metadataV2.tools;
+    if (metadataV2.systemPrompt) target.systemPrompt = metadataV2.systemPrompt;
+    if (metadataV2.autonomy) target.autonomy = metadataV2.autonomy;
+    if (metadataV2.gatekeeper) target.gatekeeper = metadataV2.gatekeeper;
+    if (metadataV2.resilience) target.resilience = metadataV2.resilience;
+  }
+
   /**
    * Read an agent by name (without extension).
    *
@@ -399,12 +442,29 @@ export class AgentManager extends BaseElementManager<Agent> {
   async read(name: string): Promise<Agent | null> {
     try {
       const sanitizedName = sanitizeInput(name, 100);
-      const filename = this.getFilename(sanitizedName);
-      return await this.load(filename);
+      // Use findByName — consults the storage-layer index (name → UUID in DB
+      // mode, name → filename in file mode) instead of assuming a filename
+      // shape. Passing a filename straight to load() breaks in DB mode where
+      // load expects the element UUID, not a ".md" path.
+      const found = await this.findByName(sanitizedName);
+      if (found) {
+        await this.ensureStateHydrated(found);
+        return found;
+      }
+      // Fallback: flexible matching via list scan (#607) — for legacy files
+      // whose on-disk name diverges from their metadata name.
+      const flexible = await this.readFlexibly(name);
+      if (flexible) {
+        await this.ensureStateHydrated(flexible);
+      }
+      return flexible;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        // Fallback: flexible matching via list scan (#607)
-        return this.readFlexibly(name);
+        const flexible = await this.readFlexibly(name);
+        if (flexible) {
+          await this.ensureStateHydrated(flexible);
+        }
+        return flexible;
       }
       throw error;
     }
@@ -612,14 +672,28 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Load an agent file, enforcing size and format checks.
+   * Load an agent, then hydrate its runtime state from the .state.yaml sidecar.
+   *
+   * Delegates the read/parse/cache pipeline to super.load() so we inherit the
+   * base class's DB/file branching, invalidElements tracking (Issue #708),
+   * load-error event emission, and suppressed-repeat-error dedup. Agent-specific
+   * work (path normalization, size guard, state hydration) runs around it.
    */
   override async load(filePath: string): Promise<Agent> {
     const sanitizedInput = sanitizeInput(filePath, 255);
+
+    // DB mode: the storage layer indexes by UUID, not filesystem path. Pass the
+    // input through unchanged — appending `.md` or running file-system path
+    // validation would yield `UUID.md` that the DB storage layer can't match.
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return super.load(sanitizedInput);
+    }
+
     const relativePath = sanitizedInput.endsWith(AGENT_FILE_EXTENSION)
       ? sanitizedInput
       : this.getFilename(sanitizeInput(sanitizedInput, 100));
 
+    // Agent-specific path validation (defense-in-depth on top of base normalization).
     try {
       validatePath(relativePath, this.elementDir);
     } catch (error) {
@@ -627,57 +701,86 @@ export class AgentManager extends BaseElementManager<Agent> {
       throw new Error(`Invalid agent path: ${error instanceof Error ? error.message : 'Invalid path'}`);
     }
 
-    const fullPath = this.resolveAbsolutePath(relativePath);
+    return super.load(relativePath);
+  }
 
-    try {
-      const content = await this.fileOperations.readFile(fullPath, { encoding: 'utf-8' });
-
-      if (content.length > MAX_FILE_SIZE) {
-        throw new Error(`Agent file exceeds maximum size of ${MAX_FILE_SIZE} bytes`);
-      }
-
-      const parsed = this.parseAgentFile(content);
-      const metadata = await this.parseMetadata(parsed.metadata);
-      const agent = this.createElement(metadata, parsed.content);
-
-      this.cacheElement(agent, relativePath);
-      await this.hydrateAgentState(agent, this.stripExtension(relativePath));
-
-      SecurityMonitor.logSecurityEvent({
-        type: 'ELEMENT_LOADED',
-        severity: 'LOW',
-        source: `${this.constructor.name}.load`,
-        details: `${this.getElementLabelCapitalized()} loaded: ${agent.metadata.name} v${agent.metadata.version || 'unknown'}`,
-        additionalData: {
-          agentId: agent.id,
-          agentName: agent.metadata.name,
-          version: agent.metadata.version,
-          author: agent.metadata.author,
-        }
-      });
-
-      return agent;
-    } catch (error) {
-      logger.error(`Failed to load agent from ${fullPath}:`, error);
-      throw error;
+  /**
+   * Agent-specific content parser.
+   *
+   * Uses SerializationService.parseFrontmatter (strict) rather than the base
+   * class's SecureYamlParser.safeMatter (lenient). Agents require the file to
+   * contain a YAML object at the frontmatter position; SerializationService
+   * throws "YAML must contain an object" when the content is malformed — a
+   * diagnostic we want to preserve for operators and callers.
+   */
+  protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
+    if (content.length > MAX_FILE_SIZE) {
+      throw new Error(`Agent file exceeds maximum size of ${MAX_FILE_SIZE} bytes`);
     }
+    const result = this.serializationService.parseFrontmatter(content, {
+      maxYamlSize: MAX_YAML_SIZE,
+      validateContent: false,
+      source: 'AgentManager.parseContent',
+    });
+    return {
+      data: result.data as Record<string, unknown>,
+      content: result.content.trim(),
+    };
+  }
+
+  /**
+   * Post-load hook: hydrate runtime state from the .state.yaml sidecar
+   * (DB-mode state persistence lands in a later Phase 4 step). Size is
+   * enforced in parseContent, which runs before this hook.
+   */
+  protected override async afterLoad(
+    agent: Agent,
+    filePath: string,
+  ): Promise<void> {
+    if (isWritableStorageLayer(this.storageLayer)) {
+      await this.warnOnceForDbModeOrphanedStateFiles();
+    } else {
+      await this.hydrateAgentState(agent, this.stripExtension(filePath));
+    }
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_LOADED',
+      severity: 'LOW',
+      source: `${this.constructor.name}.afterLoad`,
+      details: `${this.getElementLabelCapitalized()} loaded: ${agent.metadata.name} v${agent.metadata.version || 'unknown'}`,
+      additionalData: {
+        agentId: agent.id,
+        agentName: agent.metadata.name,
+        version: agent.metadata.version,
+        author: agent.metadata.author,
+      }
+    });
   }
 
   /**
    * Override BaseElementManager.save to persist state when required.
    */
-  override async save(agent: Agent, filePath: string): Promise<void> {
-    const sanitizedPath = filePath.endsWith(AGENT_FILE_EXTENSION)
+  override async save(agent: Agent, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+    // In DB mode, filePath is a UUID — pass it through unchanged. Appending
+    // `.md` would break storage-layer lookups which index by UUID, not path.
+    // In file mode, normalize to a `<name>.md` filename for on-disk storage.
+    const isDb = isWritableStorageLayer(this.storageLayer);
+    const sanitizedPath = isDb
       ? sanitizeInput(filePath, 255)
-      : this.getFilename(sanitizeInput(filePath, 100));
+      : this.normalizeAgentFilePath(filePath);
 
-    await this.ensureStateDirectory();
-    await super.save(agent, sanitizedPath);
+    await super.save(agent, sanitizedPath, options);
 
+    // State persistence uses the agent's logical name (not path/UUID) so that
+    // .state.yaml sidecar files stay stable across file/DB mode.
     if (agent.needsStatePersistence()) {
-      const newVersion = await this.saveAgentState(this.stripExtension(sanitizedPath), agent.getState());
+      const stateName = isDb
+        ? agent.metadata.name
+        : this.stripExtension(sanitizedPath);
+      const newVersion = await this.saveAgentState(agent, stateName, agent.getState());
       agent[COMMIT_PERSISTED_VERSION](newVersion);  // Sync agent's internal version (Issue #123 fix)
       agent.markStatePersisted();
+      this.hydratedAgents.add(agent);
     }
   }
 
@@ -702,9 +805,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       return false;
     }
 
-    const newVersion = await this.saveAgentState(name, agent.getState());
+    const newVersion = await this.saveAgentState(agent, name, agent.getState());
     agent[COMMIT_PERSISTED_VERSION](newVersion);
     agent.markStatePersisted();
+    this.hydratedAgents.add(agent);
     return true;
   }
 
@@ -715,39 +819,35 @@ export class AgentManager extends BaseElementManager<Agent> {
    * the normalized filename used for state file creation/loading.
    */
   override async delete(filePath: string): Promise<void> {
-    const sanitizedPath = filePath.endsWith(AGENT_FILE_EXTENSION)
+    // DB mode: filePath is a UUID, don't force `.md` extension.
+    const isDb = isWritableStorageLayer(this.storageLayer);
+    const sanitizedPath = isDb
       ? sanitizeInput(filePath, 255)
-      : this.getFilename(sanitizeInput(filePath, 100));
-    const name = this.stripExtension(sanitizedPath);
+      : this.normalizeAgentFilePath(filePath);
+    // State-file name derives from the agent's logical name in DB mode, or
+    // from the stripped filename in file mode.
+    const existing = await this.load(sanitizedPath).catch(() => null);
+    const name = isDb
+      ? existing?.metadata.name ?? sanitizedPath
+      : this.stripExtension(sanitizedPath);
+    const agentElementId = isDb ? sanitizedPath : existing?.id ?? sanitizedPath;
     await super.delete(sanitizedPath);
 
-    // FIX: Normalize name for consistent state file deletion
-    const normalizedName = this.normalizeFilename(name);
-    const statePath = path.join(this.stateDir, `${normalizedName}${STATE_FILE_EXTENSION}`);
-    try {
-      // Back up the state file before deleting it
-      if (this.backupService) {
-        const result = await this.backupService.backupBeforeDelete(statePath, ElementType.AGENT);
-        if (!result.movedOriginal) {
-          await this.fileOperations.deleteFile(statePath, ElementType.AGENT, {
-            source: 'AgentManager.delete (state file)'
-          });
-        }
-      } else {
-        await this.fileOperations.deleteFile(statePath, ElementType.AGENT, {
-          source: 'AgentManager.delete (state file)'
-        });
-      }
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
-    }
-    // FIX: Use normalized name as cache key for consistent cache cleanup
-    this.stateCache.delete(normalizedName);
+    await this.stateStore.delete({ name, agentElementId });
+  }
+
+  private normalizeAgentFilePath(filePath: string): string {
+    return filePath.endsWith(AGENT_FILE_EXTENSION)
+      ? sanitizeInput(filePath, 255)
+      : this.getFilename(sanitizeInput(filePath, 100));
   }
 
   override async exists(filePath: string): Promise<boolean> {
+    // DB mode: the storage layer looks up by UUID or name via its index, not by
+    // filename. Pass through unchanged.
+    if (isWritableStorageLayer(this.storageLayer)) {
+      return super.exists(sanitizeInput(filePath, 255));
+    }
     const sanitizedPath = filePath.endsWith(AGENT_FILE_EXTENSION)
       ? sanitizeInput(filePath, 255)
       : this.getFilename(sanitizeInput(filePath, 100));
@@ -771,12 +871,12 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Override list to apply active status based on activeAgentNames set
    */
-  override async list(): Promise<Agent[]> {
-    const agents = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<Agent[]> {
+    const agents = await super.list(options);
 
     // Apply active status to agents that are in the active set (by name)
     for (const agent of agents) {
-      if (this.activeAgentNames.has(agent.metadata.name)) {
+      if (this.getActivationSet().has(agent.metadata.name)) {
         // Activate the agent to set status to ACTIVE
         await agent.activate();
       }
@@ -808,7 +908,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.checkAndCleanupActiveSet();
 
     // Add to active set (by name, which is stable across reloads)
-    this.activeAgentNames.add(agent.metadata.name);
+    this.getActivationSet().add(agent.metadata.name);
 
     // Update agent status in memory
     await agent.activate();
@@ -857,7 +957,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     // Remove from active set
-    this.activeAgentNames.delete(agent.metadata.name);
+    this.getActivationSet().delete(agent.metadata.name);
 
     // Update agent status in memory
     await agent.deactivate();
@@ -889,7 +989,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   async getActiveAgents(): Promise<Agent[]> {
     const agents = await this.list();
-    return agents.filter(a => this.activeAgentNames.has(a.metadata.name));
+    return agents.filter(a => this.getActivationSet().has(a.metadata.name));
   }
 
   /**
@@ -917,239 +1017,48 @@ export class AgentManager extends BaseElementManager<Agent> {
     } = {}
   ): Promise<ExecuteAgentResult> {
     try {
-      // 1. Load agent by name
-      const agent = await this.read(name);
-      if (!agent) {
-        // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
-        throw new ElementNotFoundError('Agent', name);
-      }
-
-      // Get metadata as v2 (may have goal config)
-      let metadata = agent.metadata as AgentMetadataV2;
-
-      // Check if this is a v2.0 agent with goal configuration
-      // If not, auto-convert V1 to V2 in place (Issue #587)
-      if (!metadata.goal || !metadata.goal.template) {
-        if (isV1Agent(metadata)) {
-          const instructions = agent.extensions?.instructions || '';
-          const conversionResult = convertV1ToV2(metadata, instructions);
-
-          if (conversionResult.converted) {
-            // Merge converted metadata onto the existing agent (in-place)
-            Object.assign(metadata, conversionResult.metadata);
-            Object.assign(agent.metadata, conversionResult.metadata);
-
-            // Log conversion warnings
-            if (conversionResult.warnings.length > 0) {
-              logger.warn(`Agent '${name}' auto-converted from V1 to V2 in place`, {
-                warnings: conversionResult.warnings,
-              });
-            }
-
-            // Save the upgraded agent back to its original file
-            const upgradedFilename = this.getFilename(sanitizeInput(name, 100));
-            await this.save(agent, upgradedFilename);
-            logger.info(`Agent '${name}' converted from V1 to V2 and saved in place`);
-          } else {
-            throw new Error(
-              `Agent '${name}' cannot be executed: missing goal.template and conversion failed.`
-            );
-          }
-        } else {
-          throw new Error(
-            `Agent '${name}' is not a v2.0 agent. Missing goal.template configuration.`
-          );
-        }
-      }
+      const agent = await this.loadExecutableAgent(name);
+      const metadata = agent.metadata as AgentMetadataV2;
 
       // 2. Clone parameters to prevent mutation of caller's object (Issue #118)
       const clonedParameters = structuredClone(parameters);
-
-      // 2b. Security validation of template parameters (Issue #103)
-      this.validateParameterSecurity(clonedParameters);
-
-      // 3. Validate parameters against goal.parameters schema
-      this.validateParameters(metadata.goal, clonedParameters, {
+      this.validateExecutionParameters(metadata.goal, clonedParameters, {
         agentName: name,
         operationName: context.operationName ?? 'execute_agent',
       });
-
-      // 4. Render goal template by replacing {parameter} placeholders
       const renderedGoal = this.renderGoalTemplate(metadata.goal.template, clonedParameters);
-
-      // 4b. Detect unmatched placeholders after rendering (Issue #126)
       const unmatchedPlaceholders = this.detectUnmatchedPlaceholders(renderedGoal);
-      if (unmatchedPlaceholders.length > 0) {
-        logger.warn('Unmatched template placeholders detected after rendering', {
-          agentName: name,
-          unmatched: unmatchedPlaceholders,
-        });
-      }
-
-      // 5. Create execution context BEFORE activating elements (Issue #109 - circular activation detection)
+      this.logUnmatchedPlaceholders(name, unmatchedPlaceholders);
       const executionContext = createExecutionContext(name);
+      await this.assertNoStaticActivationCycle(name, metadata);
 
-      // 5b. Static activation cycle detection (Issue #374)
-      if (metadata.activates?.agents?.length) {
-        const cyclePath = await this.detectActivationCycles(name, metadata.activates.agents);
-        if (cyclePath) {
-          const cycleStart = cyclePath.indexOf(cyclePath[cyclePath.length - 1]);
-          const cycle = cyclePath.slice(cycleStart);
-          throw new Error(AgentManager.formatCircularActivationError(cycle));
-        }
-      }
-
-      // 6. Activate elements (element-agnostic)
-      const activeElements: Record<string, Array<{ name: string; content: string }>> = {};
-      const activationWarnings: Array<{ elementType: string; elementName: string; error: string }> = [];
-
-      if (metadata.activates) {
-        for (const [elementType, elementNames] of Object.entries(metadata.activates)) {
-          if (!elementNames || elementNames.length === 0) {
-            continue;
-          }
-
-          activeElements[elementType] = [];
-
-          for (const elementName of elementNames) {
-            try {
-              const elementContent = await this.getElementContent(elementType, elementName, executionContext);
-              activeElements[elementType].push({
-                name: elementName,
-                content: elementContent
-              });
-            } catch (error) {
-              // HIGH-1: Re-throw circular activation errors immediately (Issue #109)
-              if (error instanceof Error && error.message.includes('Circular agent activation detected')) {
-                throw error;
-              }
-              const errorMessage = error instanceof Error ? error.message : String(error);
-              activationWarnings.push({ elementType, elementName, error: errorMessage });
-              logger.warn(`Agent '${name}': failed to activate ${elementType} '${elementName}' — ${errorMessage}`);
-              // Continue with other elements rather than failing completely
-            }
-          }
-        }
-      }
-
-      // 7. Build the result with all context (initialize with default safety tier)
-      const result: ExecuteAgentResult = {
-        agentName: name,
-        goal: renderedGoal,
-        activeElements,
-        activationWarnings: activationWarnings.length > 0 ? activationWarnings : undefined,
-        // Issue #126: Warn about unmatched template placeholders
-        templateWarnings: unmatchedPlaceholders.length > 0
-          ? unmatchedPlaceholders.map(p => `Unmatched template placeholder: {${p}}`)
-          : undefined,
-        availableTools: metadata.tools?.allowed || [],
-        successCriteria: metadata.goal.successCriteria || [],
-        systemPrompt: metadata.systemPrompt,
-        safetyTier: 'advisory', // Default, will be updated below
-      };
-
-      // 8. Create and persist the goal for LLM tracking
-      // This allows record_agent_step to find and update the goal
-
-      // Create the goal using agent.addGoal() which handles validation and sanitization
-      const newGoal = agent.addGoal({
-        description: renderedGoal,
-        priority: 'medium',
-        importance: 5,
-        urgency: 5,
-      });
-
-      // Set goal status to in_progress since execution has started
-      newGoal.status = 'in_progress';
-
-      const execSanitizedName = sanitizeInput(name, 100);
-      await this.save(agent, this.getFilename(execSanitizedName));
-
-      // Store goalId in result for LLM to use with record_agent_step
-      result.goalId = newGoal.id;
-
-      // Fix #445: Include stateVersion so subsequent calls can do version-aware operations
-      const postSaveState = agent.getState();
-      result.stateVersion = postSaveState.stateVersion || 1;
-
-      // Call validateGoalSecurity and add warnings to result
-      const securityValidation = agent.validateGoalSecurity(renderedGoal);
-      if (securityValidation.warnings && securityValidation.warnings.length > 0) {
-        result.securityWarnings = securityValidation.warnings;
-      }
-
-      // Call evaluateConstraints and add to result
-      result.constraints = agent.evaluateConstraints(newGoal);
-
-      // Call assessRisk and add to result
-      result.riskAssessment = agent.assessRisk('execute', newGoal, {});
-
-      // Call calculatePriorityScore and add to result
-      result.priorityScore = agent.calculatePriorityScore(newGoal);
-
-      // 9. Determine safety tier based on risk assessment and security warnings
-      // (Note: executionContext already created earlier for circular detection)
-      const safetyTierResult = determineSafetyTier(
-        result.riskAssessment?.score || 0,
-        result.securityWarnings || [],
+      const activationResult = await this.activateAgentElements(name, metadata, executionContext);
+      const result = this.createExecuteAgentResult(
+        name,
         renderedGoal,
-        DEFAULT_SAFETY_CONFIG,
-        executionContext
+        metadata,
+        unmatchedPlaceholders,
+        activationResult
       );
-
-      // 10. Set safety tier and related fields
-      result.safetyTier = safetyTierResult.tier;
-      result.safetyTierResult = safetyTierResult;
-      result.executionContext = executionContext;
-
-      // 11. Add tier-specific responses
-      switch (safetyTierResult.tier) {
-        case 'confirm':
-          result.confirmationRequired = createConfirmationRequest(
-            'Operation requires confirmation',
-            safetyTierResult.factors
-          );
-          break;
-
-        case 'verify':
-          result.verificationRequired = createVerificationChallenge(
-            safetyTierResult.factors.join('; '),
-            'display_code'
-          );
-          break;
-
-        case 'danger_zone':
-          result.dangerZoneBlocked = createDangerZoneOperation(
-            'agent_execution',
-            safetyTierResult.factors.join('; '),
-            DEFAULT_SAFETY_CONFIG.dangerZone.enabled
-          );
-          // Also add verification if not blocked
-          if (!result.dangerZoneBlocked.blocked) {
-            result.verificationRequired = result.dangerZoneBlocked.verificationRequired;
-          }
-          break;
-
-        case 'advisory':
-        default:
-          // No additional action needed for advisory tier
-          break;
-      }
+      const newGoal = await this.persistExecutionGoal(agent, name, renderedGoal, result);
+      this.populateExecutionAnalysis(agent, newGoal, renderedGoal, result);
+      this.applySafetyTier(renderedGoal, executionContext, result);
+      const safetyTierResult = result.safetyTierResult;
 
       SecurityMonitor.logSecurityEvent({
         type: 'AGENT_EXECUTED',
         severity: 'LOW',
         source: 'AgentManager.executeAgent',
-        details: `Agent executed: ${name} v${agent.metadata.version || 'unknown'} (safety: ${safetyTierResult.tier})`,
+        details: `Agent executed: ${name} v${agent.metadata.version || 'unknown'} (safety: ${result.safetyTier})`,
         additionalData: {
           agentId: agent.id,
           agentName: name,
           version: agent.metadata.version,
           author: agent.metadata.author,
-          safetyTier: safetyTierResult.tier,
-          riskScore: safetyTierResult.riskScore,
+          safetyTier: result.safetyTier,
+          riskScore: safetyTierResult?.riskScore,
           parameterKeys: Object.keys(parameters || {}),
-          goalCount: (metadata as any).goal?.parameters?.length || 0,
+          goalCount: metadata.goal?.parameters?.length || 0,
         }
       });
 
@@ -1157,6 +1066,255 @@ export class AgentManager extends BaseElementManager<Agent> {
     } catch (error) {
       logger.error(`Failed to execute agent '${name}':`, error);
       throw error;
+    }
+  }
+
+  private async loadExecutableAgent(name: string): Promise<Agent> {
+    const agent = await this.read(name);
+    if (!agent) {
+      throw new ElementNotFoundError('Agent', name);
+    }
+
+    const metadata = agent.metadata as AgentMetadataV2;
+    if (metadata.goal?.template) {
+      return agent;
+    }
+    await this.convertLegacyAgentForExecution(agent, name, metadata);
+    return agent;
+  }
+
+  private async convertLegacyAgentForExecution(
+    agent: Agent,
+    name: string,
+    metadata: AgentMetadataV2
+  ): Promise<void> {
+    if (!isV1Agent(metadata)) {
+      throw new Error(
+        `Agent '${name}' is not a v2.0 agent. Missing goal.template configuration.`
+      );
+    }
+
+    const conversionResult = convertV1ToV2(metadata, agent.extensions?.instructions || '');
+    if (!conversionResult.converted) {
+      throw new Error(
+        `Agent '${name}' cannot be executed: missing goal.template and conversion failed.`
+      );
+    }
+
+    Object.assign(metadata, conversionResult.metadata);
+    Object.assign(agent.metadata, conversionResult.metadata);
+    if (conversionResult.warnings.length > 0) {
+      logger.warn(`Agent '${name}' auto-converted from V1 to V2 in place`, {
+        warnings: conversionResult.warnings,
+      });
+    }
+    await this.save(agent, this.getFilename(sanitizeInput(name, 100)));
+    logger.info(`Agent '${name}' converted from V1 to V2 and saved in place`);
+  }
+
+  private validateExecutionParameters(
+    goal: AgentGoalConfig,
+    parameters: Record<string, unknown>,
+    context: {
+      agentName?: string;
+      operationName?: 'execute_agent' | 'continue_execution';
+    }
+  ): void {
+    this.validateParameterSecurity(parameters);
+    this.validateParameters(goal, parameters, context);
+  }
+
+  private logUnmatchedPlaceholders(name: string, unmatchedPlaceholders: string[]): void {
+    if (unmatchedPlaceholders.length === 0) {
+      return;
+    }
+    logger.warn('Unmatched template placeholders detected after rendering', {
+      agentName: name,
+      unmatched: unmatchedPlaceholders,
+    });
+  }
+
+  private async assertNoStaticActivationCycle(
+    name: string,
+    metadata: AgentMetadataV2
+  ): Promise<void> {
+    if (!metadata.activates?.agents?.length) {
+      return;
+    }
+    const cyclePath = await this.detectActivationCycles(name, metadata.activates.agents);
+    if (!cyclePath) {
+      return;
+    }
+    const cycleStart = cyclePath.indexOf(cyclePath[cyclePath.length - 1]);
+    const cycle = cyclePath.slice(cycleStart);
+    throw new Error(AgentManager.formatCircularActivationError(cycle));
+  }
+
+  private async activateAgentElements(
+    agentName: string,
+    metadata: AgentMetadataV2,
+    executionContext: ExecutionContext
+  ): Promise<ActivationResult> {
+    if (!metadata.activates) {
+      return { activeElements: {}, activationWarnings: [] };
+    }
+
+    const activeElements: ActivationResult['activeElements'] = {};
+    const activationWarnings: ActivationResult['activationWarnings'] = [];
+
+    for (const [elementType, elementNames] of Object.entries(metadata.activates)) {
+      if (!elementNames || elementNames.length === 0) continue;
+      const group = await this.activateElementGroup(agentName, elementType, elementNames, executionContext);
+      activeElements[elementType] = group.items;
+      activationWarnings.push(...group.warnings);
+    }
+    return { activeElements, activationWarnings };
+  }
+
+  private async activateElementGroup(
+    agentName: string,
+    elementType: string,
+    elementNames: string[],
+    executionContext: ExecutionContext,
+  ): Promise<{ items: ActivationResult['activeElements'][string]; warnings: ActivationResult['activationWarnings'] }> {
+    const items: ActivationResult['activeElements'][string] = [];
+    const warnings: ActivationResult['activationWarnings'] = [];
+
+    for (const elementName of elementNames) {
+      const outcome = await this.activateSingleElement(agentName, elementType, elementName, executionContext);
+      if (outcome.item) items.push(outcome.item);
+      if (outcome.warning) warnings.push(outcome.warning);
+    }
+    return { items, warnings };
+  }
+
+  private async activateSingleElement(
+    agentName: string,
+    elementType: string,
+    elementName: string,
+    executionContext: ExecutionContext,
+  ): Promise<{ item?: ActivationResult['activeElements'][string][number]; warning?: ActivationResult['activationWarnings'][number] }> {
+    try {
+      const elementContent = await this.getElementContent(elementType, elementName, executionContext);
+      return { item: { name: elementName, content: elementContent } };
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Circular agent activation detected')) {
+        throw error;
+      }
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.warn(`Agent '${agentName}': failed to activate ${elementType} '${elementName}' — ${errorMessage}`);
+      return { warning: { elementType, elementName, error: errorMessage } };
+    }
+  }
+
+  private createExecuteAgentResult(
+    name: string,
+    renderedGoal: string,
+    metadata: AgentMetadataV2,
+    unmatchedPlaceholders: string[],
+    activationResult: ActivationResult
+  ): ExecuteAgentResult {
+    return {
+      agentName: name,
+      goal: renderedGoal,
+      activeElements: activationResult.activeElements,
+      activationWarnings: activationResult.activationWarnings.length > 0
+        ? activationResult.activationWarnings
+        : undefined,
+      templateWarnings: unmatchedPlaceholders.length > 0
+        ? unmatchedPlaceholders.map(p => `Unmatched template placeholder: {${p}}`)
+        : undefined,
+      availableTools: metadata.tools?.allowed || [],
+      successCriteria: metadata.goal.successCriteria || [],
+      systemPrompt: metadata.systemPrompt,
+      safetyTier: 'advisory',
+    };
+  }
+
+  private async persistExecutionGoal(
+    agent: Agent,
+    name: string,
+    renderedGoal: string,
+    result: ExecuteAgentResult
+  ): Promise<AgentGoal> {
+    const newGoal = agent.addGoal({
+      description: renderedGoal,
+      priority: 'medium',
+      importance: 5,
+      urgency: 5,
+    });
+    newGoal.status = 'in_progress';
+    await this.save(agent, this.getFilename(sanitizeInput(name, 100)));
+
+    result.goalId = newGoal.id;
+    result.stateVersion = agent.getState().stateVersion || 1;
+    return newGoal;
+  }
+
+  private populateExecutionAnalysis(
+    agent: Agent,
+    newGoal: AgentGoal,
+    renderedGoal: string,
+    result: ExecuteAgentResult
+  ): void {
+    const securityValidation = agent.validateGoalSecurity(renderedGoal);
+    if (securityValidation.warnings && securityValidation.warnings.length > 0) {
+      result.securityWarnings = securityValidation.warnings;
+    }
+    result.constraints = agent.evaluateConstraints(newGoal);
+    result.riskAssessment = agent.assessRisk('execute', newGoal, {});
+    result.priorityScore = agent.calculatePriorityScore(newGoal);
+  }
+
+  private applySafetyTier(
+    renderedGoal: string,
+    executionContext: ExecutionContext,
+    result: ExecuteAgentResult
+  ): void {
+    const safetyTierResult = determineSafetyTier(
+      result.riskAssessment?.score || 0,
+      result.securityWarnings || [],
+      renderedGoal,
+      DEFAULT_SAFETY_CONFIG,
+      executionContext
+    );
+
+    result.safetyTier = safetyTierResult.tier;
+    result.safetyTierResult = safetyTierResult;
+    result.executionContext = executionContext;
+    this.applySafetyTierResponse(safetyTierResult, result);
+  }
+
+  private applySafetyTierResponse(
+    safetyTierResult: ReturnType<typeof determineSafetyTier>,
+    result: ExecuteAgentResult
+  ): void {
+    switch (safetyTierResult.tier) {
+      case 'confirm':
+        result.confirmationRequired = createConfirmationRequest(
+          'Operation requires confirmation',
+          safetyTierResult.factors
+        );
+        break;
+      case 'verify':
+        result.verificationRequired = createVerificationChallenge(
+          safetyTierResult.factors.join('; '),
+          'display_code'
+        );
+        break;
+      case 'danger_zone':
+        result.dangerZoneBlocked = createDangerZoneOperation(
+          'agent_execution',
+          safetyTierResult.factors.join('; '),
+          DEFAULT_SAFETY_CONFIG.dangerZone.enabled
+        );
+        if (!result.dangerZoneBlocked.blocked) {
+          result.verificationRequired = result.dangerZoneBlocked.verificationRequired;
+        }
+        break;
+      case 'advisory':
+      default:
+        break;
     }
   }
 
@@ -1196,7 +1354,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     // Apply normalized values back (in-place, since we already cloned)
-    const normalizedData = normalized.data as Record<string, unknown>;
+    const normalizedData = normalized.data;
     for (const [key, value] of Object.entries(normalizedData)) {
       parameters[key] = value;
     }
@@ -1221,59 +1379,73 @@ export class AgentManager extends BaseElementManager<Agent> {
     } = {}
   ): void {
     const paramDefs = goalConfig.parameters || [];
+    this.assertRequiredParametersPresent(paramDefs, parameters, context);
+    for (const [key, value] of Object.entries(parameters)) {
+      this.validateProvidedParameter(key, value, paramDefs);
+    }
+    this.applyParameterDefaults(paramDefs, parameters);
+  }
+
+  private assertRequiredParametersPresent(
+    paramDefs: AgentGoalParameter[],
+    parameters: Record<string, unknown>,
+    context: {
+      agentName?: string;
+      operationName?: 'execute_agent' | 'continue_execution';
+    }
+  ): void {
     const requiredParamNames = paramDefs
       .filter(paramDef => paramDef.required)
       .map(paramDef => paramDef.name);
-
-    // Check all required parameters are present
     const missingRequired = requiredParamNames.filter(paramName => !(paramName in parameters));
-    if (missingRequired.length > 0) {
-      throw new Error(
-        this.formatMissingRequiredParametersError(
-          missingRequired,
-          requiredParamNames,
-          context
-        )
-      );
+    if (missingRequired.length === 0) {
+      return;
+    }
+    throw new Error(
+      this.formatMissingRequiredParametersError(
+        missingRequired,
+        requiredParamNames,
+        context
+      )
+    );
+  }
+
+  private validateProvidedParameter(
+    key: string,
+    value: unknown,
+    paramDefs: AgentGoalParameter[]
+  ): void {
+    const paramDef = paramDefs.find(p => p.name === key);
+    if (!paramDef) {
+      logger.warn(`Unknown parameter '${key}' provided to agent`);
+      return;
     }
 
-    // Type check provided parameters
-    for (const [key, value] of Object.entries(parameters)) {
-      const paramDef = paramDefs.find(p => p.name === key);
-      if (!paramDef) {
-        logger.warn(`Unknown parameter '${key}' provided to agent`);
-        continue;
-      }
-
-      // Type validation
-      const actualType = typeof value;
-      if (paramDef.type === 'string' && actualType !== 'string') {
-        throw new Error(
-          `Parameter '${key}' must be a string, got ${actualType}`
-        );
-      }
-      if (paramDef.type === 'number' && actualType !== 'number') {
-        throw new Error(
-          `Parameter '${key}' must be a number, got ${actualType}`
-        );
-      }
-      if (paramDef.type === 'boolean' && actualType !== 'boolean') {
-        throw new Error(
-          `Parameter '${key}' must be a boolean, got ${actualType}`
-        );
-      }
-
-      // Advisory length warning for string values (defense-in-depth, does not throw)
-      if (actualType === 'string' && (value as string).length > AGENT_LIMITS.MAX_GOAL_LENGTH) {
-        logger.warn('Parameter string value exceeds MAX_GOAL_LENGTH (advisory)', {
-          paramName: key,
-          valueLength: (value as string).length,
-          maxLength: AGENT_LIMITS.MAX_GOAL_LENGTH,
-        });
-      }
+    const actualType = typeof value;
+    if (
+      (paramDef.type === 'string' || paramDef.type === 'number' || paramDef.type === 'boolean') &&
+      paramDef.type !== actualType
+    ) {
+      throw new Error(`Parameter '${key}' must be a ${paramDef.type}, got ${actualType}`);
     }
+    this.warnForOversizedStringParameter(key, value, actualType);
+  }
 
-    // Apply defaults for optional parameters not provided
+  private warnForOversizedStringParameter(key: string, value: unknown, actualType: string): void {
+    if (actualType !== 'string' || (value as string).length <= AGENT_LIMITS.MAX_GOAL_LENGTH) {
+      return;
+    }
+    logger.warn('Parameter string value exceeds MAX_GOAL_LENGTH (advisory)', {
+      paramName: key,
+      valueLength: (value as string).length,
+      maxLength: AGENT_LIMITS.MAX_GOAL_LENGTH,
+    });
+  }
+
+  private applyParameterDefaults(
+    paramDefs: AgentGoalParameter[],
+    parameters: Record<string, unknown>
+  ): void {
     for (const paramDef of paramDefs) {
       if (!paramDef.required && !(paramDef.name in parameters) && paramDef.default !== undefined) {
         parameters[paramDef.name] = paramDef.default;
@@ -1400,102 +1572,142 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): Promise<string[] | null> {
     // Cache loaded agents to avoid redundant I/O during DFS
     const agentCache = new Map<string, string[] | null>();
-
-    // Helper: load an agent's activates.agents list (cached)
-    const getActivatedAgents = async (name: string): Promise<string[]> => {
-      const cacheKey = name.toLowerCase();
-      if (agentCache.has(cacheKey)) {
-        return agentCache.get(cacheKey) || [];
-      }
-      try {
-        const agent = await this.read(name);
-        if (!agent) {
-          logger.warn(`Agent '${name}' referenced in activates.agents could not be resolved during cycle detection`);
-          agentCache.set(cacheKey, null);
-          return [];
-        }
-        const meta = agent.metadata as AgentMetadataV2;
-        const agents = meta.activates?.agents || [];
-        agentCache.set(cacheKey, agents);
-        return agents;
-      } catch {
-        logger.warn(`Agent '${name}' referenced in activates.agents could not be resolved during cycle detection`);
-        agentCache.set(cacheKey, null);
-        return [];
-      }
-    };
-
-    // Tracks nodes whose entire subtree has been explored without finding a cycle.
-    // Prevents exponential re-exploration in diamond/convergent graphs.
     const fullyExplored = new Set<string>();
     let nodesVisited = 0;
-
-    // DFS — stack entries: [currentAgent, pathSoFar, pathSetLower]
-    // pathSetLower is a Set<string> of lowercased names for O(1) cycle checks
-    const stack: Array<[string, string[], Set<string>]> = [];
-
-    const rootLower = rootName.toLowerCase();
-    for (const child of activatedAgents) {
-      // Self-loop: agent directly activates itself
-      if (child.toLowerCase() === rootLower) {
-        return [rootName, child];
-      }
-      const pathSet = new Set<string>([rootLower, child.toLowerCase()]);
-      stack.push([child, [rootName, child], pathSet]);
+    const initial = AgentManager.createActivationCycleStack(rootName, activatedAgents);
+    if (initial.selfLoop) {
+      return initial.selfLoop;
     }
 
-    while (stack.length > 0) {
-      const [current, currentPath, pathSet] = stack.pop()!;
-
+    while (initial.stack.length > 0) {
+      const entry = initial.stack.pop();
+      if (!entry) {
+        continue;
+      }
       nodesVisited++;
-      if (nodesVisited > AgentManager.MAX_NODES_VISITED) {
-        logger.warn(
-          `Activation cycle detection for '${rootName}' aborted: exceeded ${AgentManager.MAX_NODES_VISITED} nodes visited. ` +
-          `The activation graph may be too large.`
-        );
+      const decision = AgentManager.getCycleDetectionDecision(rootName, entry.path, nodesVisited);
+      if (decision === 'abort') {
         return null;
       }
-
-      if (currentPath.length > AgentManager.MAX_ACTIVATION_DEPTH + 1) {
-        logger.warn(
-          `Activation cycle detection for '${rootName}' hit depth limit of ${AgentManager.MAX_ACTIVATION_DEPTH}. ` +
-          `Skipping deeper branches.`
-        );
+      if (decision === 'skip') {
         continue;
       }
-
-      const currentLower = current.toLowerCase();
-      if (fullyExplored.has(currentLower)) {
-        continue;
-      }
-
-      // Load this agent's activations
-      const children = await getActivatedAgents(current);
-
-      let foundCycle = false;
-      for (const child of children) {
-        const childLower = child.toLowerCase();
-
-        // Check for cycle: does this child appear earlier in the path?
-        if (pathSet.has(childLower)) {
-          return [...currentPath, child];
-        }
-
-        if (!fullyExplored.has(childLower)) {
-          const newPathSet = new Set(pathSet);
-          newPathSet.add(childLower);
-          stack.push([child, [...currentPath, child], newPathSet]);
-          foundCycle = true; // has children to explore, not fully explored yet
-        }
-      }
-
-      // If no unexplored children, this node's subtree is cycle-free
-      if (!foundCycle) {
-        fullyExplored.add(currentLower);
+      const cycle = await this.expandActivationCycleEntry(entry, fullyExplored, agentCache, initial.stack);
+      if (cycle) {
+        return cycle;
       }
     }
 
     return null;
+  }
+
+  private static createActivationCycleStack(
+    rootName: string,
+    activatedAgents: string[]
+  ): {
+    stack: Array<{ current: string; path: string[]; pathSet: Set<string> }>;
+    selfLoop: string[] | null;
+  } {
+    const stack: Array<{ current: string; path: string[]; pathSet: Set<string> }> = [];
+    const rootLower = rootName.toLowerCase();
+    for (const child of activatedAgents) {
+      if (child.toLowerCase() === rootLower) {
+        return { stack, selfLoop: [rootName, child] };
+      }
+      stack.push({
+        current: child,
+        path: [rootName, child],
+        pathSet: new Set<string>([rootLower, child.toLowerCase()]),
+      });
+    }
+    return { stack, selfLoop: null };
+  }
+
+  private static getCycleDetectionDecision(
+    rootName: string,
+    currentPath: string[],
+    nodesVisited: number
+  ): 'continue' | 'skip' | 'abort' {
+    if (nodesVisited > AgentManager.MAX_NODES_VISITED) {
+      logger.warn(
+        `Activation cycle detection for '${rootName}' aborted: exceeded ${AgentManager.MAX_NODES_VISITED} nodes visited. ` +
+        `The activation graph may be too large.`
+      );
+      return 'abort';
+    }
+
+    if (currentPath.length > AgentManager.MAX_ACTIVATION_DEPTH + 1) {
+      logger.warn(
+        `Activation cycle detection for '${rootName}' hit depth limit of ${AgentManager.MAX_ACTIVATION_DEPTH}. ` +
+        `Skipping deeper branches.`
+      );
+      return 'skip';
+    }
+    return 'continue';
+  }
+
+  private async expandActivationCycleEntry(
+    entry: { current: string; path: string[]; pathSet: Set<string> },
+    fullyExplored: Set<string>,
+    agentCache: Map<string, string[] | null>,
+    stack: Array<{ current: string; path: string[]; pathSet: Set<string> }>
+  ): Promise<string[] | null> {
+    const currentLower = entry.current.toLowerCase();
+    if (fullyExplored.has(currentLower)) {
+      return null;
+    }
+
+    const children = await this.getCachedActivatedAgents(entry.current, agentCache);
+    const expansion = AgentManager.enqueueActivationChildren(entry, children, fullyExplored, stack);
+    if (!expansion.foundUnexplored) {
+      fullyExplored.add(currentLower);
+    }
+    return expansion.cyclePath;
+  }
+
+  private async getCachedActivatedAgents(
+    name: string,
+    agentCache: Map<string, string[] | null>
+  ): Promise<string[]> {
+    const cacheKey = name.toLowerCase();
+    if (agentCache.has(cacheKey)) {
+      return agentCache.get(cacheKey) || [];
+    }
+    try {
+      const agent = await this.read(name);
+      const agents = agent ? (agent.metadata as AgentMetadataV2).activates?.agents || [] : null;
+      if (!agents) {
+        logger.warn(`Agent '${name}' referenced in activates.agents could not be resolved during cycle detection`);
+      }
+      agentCache.set(cacheKey, agents);
+      return agents || [];
+    } catch {
+      logger.warn(`Agent '${name}' referenced in activates.agents could not be resolved during cycle detection`);
+      agentCache.set(cacheKey, null);
+      return [];
+    }
+  }
+
+  private static enqueueActivationChildren(
+    entry: { current: string; path: string[]; pathSet: Set<string> },
+    children: string[],
+    fullyExplored: Set<string>,
+    stack: Array<{ current: string; path: string[]; pathSet: Set<string> }>
+  ): { cyclePath: string[] | null; foundUnexplored: boolean } {
+    let foundUnexplored = false;
+    for (const child of children) {
+      const childLower = child.toLowerCase();
+      if (entry.pathSet.has(childLower)) {
+        return { cyclePath: [...entry.path, child], foundUnexplored: true };
+      }
+      if (!fullyExplored.has(childLower)) {
+        const newPathSet = new Set(entry.pathSet);
+        newPathSet.add(childLower);
+        stack.push({ current: child, path: [...entry.path, child], pathSet: newPathSet });
+        foundUnexplored = true;
+      }
+    }
+    return { cyclePath: null, foundUnexplored };
   }
 
   /**
@@ -1507,8 +1719,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     elementName: string,
     executionContext?: ExecutionContext
   ): Promise<string> {
-    // Get the static resolver
-    const resolver = AgentManager.getElementManagerResolver();
+    // Issue #1948: Use instance-injected resolver instead of static
+    const resolver = this._elementManagerResolver;
     if (!resolver) {
       logger.warn(`Element manager resolver not configured - cannot activate ${elementType}/${elementName}`);
       return `[Element manager resolver not configured for ${elementType}/${elementName}]`;
@@ -1556,7 +1768,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Get all elements of this type
       const elements = await manager.list();
-      const element = elements.find((e: any) => e.metadata.name === elementName);
+      const element = elements.find(e => e.metadata.name === elementName);
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);
@@ -1571,7 +1783,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           return element.instructions || '';
 
         case 'memories': {
-          const entries = element.getEntries();
+          const entries = element.getEntries?.() ?? [];
           return `Memory '${elementName}' with ${entries.length} entries`;
         }
 
@@ -1586,8 +1798,8 @@ export class AgentManager extends BaseElementManager<Agent> {
         }
 
         case 'agents': {
-          const instructions = element.extensions?.instructions || '';
-          return instructions;
+          const raw = element.extensions?.instructions;
+          return typeof raw === 'string' ? raw : '';
         }
 
         default:
@@ -1608,12 +1820,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('agents');
 
     // Below threshold — no action needed
-    if (this.activeAgentNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeAgentNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active agents limit reached (${max}). ` +
         `Consider deactivating unused agents or setting DOLLHOUSE_MAX_ACTIVE_AGENTS to a higher value.`
@@ -1623,11 +1835,11 @@ export class AgentManager extends BaseElementManager<Agent> {
         type: 'AGENT_ACTIVATED',
         severity: 'MEDIUM',
         source: 'AgentManager.checkAndCleanupActiveSet',
-        details: `Active agents limit reached (${this.activeAgentNames.size}/${max})`,
+        details: `Active agents limit reached (${this.getActivationSet().size}/${max})`,
         additionalData: {
-          activeCount: this.activeAgentNames.size,
+          activeCount: this.getActivationSet().size,
           maxAllowed: max,
-          activeAgentNames: Array.from(this.activeAgentNames),
+          activeAgentNames: Array.from(this.getActivationSet()),
         }
       });
     }
@@ -1643,19 +1855,19 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async cleanupStaleActiveAgents(): Promise<void> {
     try {
-      const startSize = this.activeAgentNames.size;
+      const startSize = this.getActivationSet().size;
       const agents = await this.list();
       const existingAgentNames = new Set(agents.map(a => a.metadata.name));
 
       const staleNames: string[] = [];
-      for (const activeName of this.activeAgentNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingAgentNames.has(activeName)) {
-          this.activeAgentNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeAgentNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {
@@ -1706,78 +1918,21 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @returns The new state version after successful save
    * @protected Only accessible by subclasses (e.g., TestableAgentManager for testing)
    */
-  protected async saveAgentState(name: string, state: AgentState): Promise<number> {
-    await this.ensureStateDirectory();
-
-    // FIX: Normalize name for consistent state file naming
-    const normalizedName = this.normalizeFilename(name);
-    const filePath = path.join(this.stateDir, `${normalizedName}${STATE_FILE_EXTENSION}`);
-
-    // FIX (Issue #107 - CRIT-2): Acquire file lock to prevent TOCTOU race condition
-    // The lock covers the entire read-compare-write sequence to ensure atomicity
-    await this.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
-      // FIX: Optimistic locking check (Issue #24)
-      // Load existing state to compare versions before overwriting
-      const existingState = await this.loadAgentState(name);
-      if (existingState && existingState.stateVersion !== undefined && state.stateVersion !== undefined) {
-        // Check if our state is based on the current version
-        // If versions don't match, it means another process updated the state
-        if (existingState.stateVersion > state.stateVersion) {
-          logger.warn(`State version conflict detected for agent ${name}`, {
-            existingVersion: existingState.stateVersion,
-            attemptedVersion: state.stateVersion
-          });
-
-          SecurityMonitor.logSecurityEvent({
-            type: 'MEMORY_SAVE_FAILED',
-            severity: 'MEDIUM',
-            source: 'AgentManager.saveAgentState',
-            details: `State version conflict: attempted to save stale state`,
-            additionalData: {
-              agentName: name,
-              existingVersion: existingState.stateVersion,
-              attemptedVersion: state.stateVersion
-            }
-          });
-
-          throw new Error(
-            `State version conflict: current version is ${existingState.stateVersion}, ` +
-            `but attempted to save version ${state.stateVersion}. ` +
-            `State may have been modified concurrently.`
-          );
-        }
-      }
-
-      // FIX (Issue #123): Increment version BEFORE serialization, not during operations
-      // This ensures version only increments on successful save
-      state.stateVersion = (state.stateVersion || 0) + 1;
-
-      const serializedState = this.prepareStateForSerialization(state);
-
-      const yamlContent = this.serializationService.dumpYaml(serializedState, {
-        schema: 'json',  // Fix #914: failsafe corrupts booleans/numbers in agent state
-        noRefs: true,
-        sortKeys: true
-      });
-
-      // Validate size
-      this.serializationService.validateSize(yamlContent, MAX_YAML_SIZE, 'Agent state');
-
-      await this.fileOperations.writeFile(filePath, yamlContent, { encoding: 'utf-8' });
-      // FIX: Use normalized name as cache key for consistent lookups
-      this.stateCache.set(normalizedName, state);
-
-      logger.debug(`Agent state saved successfully`, {
-        agentName: name,
-        normalizedName,
-        stateVersion: state.stateVersion,
-        goalCount: state.goals?.length ?? 0
-      });
-    });
-
-    // Return the new version for caller to sync agent's internal state
-    // stateVersion is guaranteed to be a number after the increment above
-    return state.stateVersion!;
+  protected async saveAgentState(name: string, state: AgentState): Promise<number>;
+  protected async saveAgentState(agent: Agent, name: string, state: AgentState): Promise<number>;
+  protected async saveAgentState(
+    agentOrName: Agent | string,
+    nameOrState: string | AgentState,
+    maybeState?: AgentState,
+  ): Promise<number> {
+    const agent = typeof agentOrName === 'string' ? null : agentOrName;
+    const name = typeof agentOrName === 'string' ? agentOrName : nameOrState as string;
+    const state = typeof agentOrName === 'string' ? nameOrState as AgentState : maybeState!;
+    return this.stateStore.save(
+      { name, agentElementId: agent ? this.getAgentElementId(agent, name) : name },
+      state,
+      state.stateVersion ?? 0,
+    );
   }
 
   /**
@@ -1790,8 +1945,15 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private async hydrateAgentState(agent: Agent, name: string): Promise<void> {
-    const state = await this.loadAgentState(name);
+    const state = await this.stateStore.load({
+      name,
+      agentElementId: this.getAgentElementId(agent, name),
+    });
     if (!state) {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        agent[COMMIT_PERSISTED_VERSION](0);
+      }
+      this.hydratedAgents.add(agent);
       return;
     }
 
@@ -1799,66 +1961,70 @@ export class AgentManager extends BaseElementManager<Agent> {
     serialized.state = state;
     agent.deserialize(JSON.stringify(serialized));
     agent.markStatePersisted();
+    this.hydratedAgents.add(agent);
   }
 
-  private async loadAgentState(name: string): Promise<AgentState | null> {
-    // FIX: Normalize name for consistent state file lookups
-    const normalizedName = this.normalizeFilename(name);
-
-    if (this.stateCache.has(normalizedName)) {
-      return this.stateCache.get(normalizedName)!;
+  private getAgentElementId(agent: Agent, name: string): string {
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return agent.id;
     }
-
-    const stateFilename = `${normalizedName}${STATE_FILE_EXTENSION}`;
-    const statePath = path.join(this.stateDir, stateFilename);
-
-    try {
-      const content = await this.fileOperations.readFile(statePath, { encoding: 'utf-8' });
-
-      // Use SerializationService for YAML parsing
-      // State files are pure YAML but parseFrontmatter handles both formats
-      const result = this.serializationService.parseFrontmatter(content, {
-        maxYamlSize: MAX_YAML_SIZE,
-        validateContent: true,
-        source: 'AgentManager.loadAgentState'
-      });
-
-      const state = result.data as AgentState;
-      this.normalizeLoadedState(state);
-      // FIX: Use normalized name as cache key for consistent lookups
-      this.stateCache.set(normalizedName, state);
-      return state;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
-      logger.error(`Failed to load agent state: ${name}`, error);
-      return null;
-    }
+    return this.storageLayer.getPathByName(agent.metadata.name)
+      ?? this.storageLayer.getPathByName(name)
+      ?? agent.id;
   }
 
-  private async ensureStateDirectory(): Promise<void> {
-    await this.fileOperations.createDirectory(this.stateDir);
+  async ensureStateHydrated(agent: Agent): Promise<void> {
+    if (!isWritableStorageLayer(this.storageLayer) || this.hydratedAgents.has(agent)) {
+      return;
+    }
+    await this.hydrateAgentState(agent, agent.metadata.name);
+  }
+
+  private async warnOnceForDbModeOrphanedStateFiles(): Promise<void> {
+    if (AgentManager.warnedDbModeOrphanedStateFiles) {
+      return;
+    }
+    AgentManager.warnedDbModeOrphanedStateFiles = true;
+    const defaultFileStore = new FileAgentStateStore({
+      stateDir: () => this.stateDir,
+      fileLockManager: this.fileLockManager,
+      fileOperations: this.fileOperations,
+      serializationService: this.serializationService,
+      stateCache: this.stateCache,
+      maxYamlSize: MAX_YAML_SIZE,
+    });
+    await defaultFileStore.warnIfOrphanedStateFiles();
   }
 
   protected override async parseMetadata(data: any): Promise<AgentMetadata> {
-    const metadata = { ...(data as any) };
+    const metadata = { ...data };
+    this.normalizeAndValidateMetadataHeader(metadata);
+    this.validateMetadataTextFields(metadata);
+    this.validateMetadataSpecializations(metadata);
+    this.validateMetadataTriggersAndPolicy(metadata);
+    const agentName = metadata.name || 'unknown';
+    this.normalizeAndValidateGoal(metadata, agentName);
+    this.validateActivatesMetadata(metadata, agentName);
+    this.validateToolsMetadata(metadata, agentName);
+    this.normalizeAndValidateSystemPrompt(metadata, agentName);
+    this.promoteRootAutonomyFields(metadata, agentName);
+    this.validateAutonomyMetadata(metadata, agentName);
+    this.validateResilienceMetadata(metadata, agentName);
+    this.validateTagsMetadata(metadata, agentName);
 
-    // --- START: Backward Compatibility Fix for Legacy Agent Types ---
-    // Legacy agent definition files might use 'agent' (singular) instead of
-    // ElementType.AGENT ('agents'). This converts the singular form to the
-    // correct plural enum value to ensure backward compatibility.
+    return metadata as AgentMetadata;
+  }
+
+  private normalizeAndValidateMetadataHeader(metadata: Record<string, any>): void {
     if (metadata.type === 'agent') {
       metadata.type = ElementType.AGENT;
     }
-    // --- END: Backward Compatibility Fix ---
-
-    // Validate that the type is now ElementType.AGENT (plural)
     if (metadata.type && metadata.type !== ElementType.AGENT) {
       throw new Error(`Invalid element type: expected '${ElementType.AGENT}', got '${metadata.type}'`);
     }
+  }
 
-    // REFACTORED: Use ValidationService for name validation
+  private validateMetadataTextFields(metadata: Record<string, any>): void {
     if (metadata.name) {
       const nameResult = this.validationService.validateAndSanitizeInput(metadata.name, {
         maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
@@ -1870,8 +2036,6 @@ export class AgentManager extends BaseElementManager<Agent> {
       metadata.name = nameResult.sanitizedValue;
     }
 
-    // REFACTORED: Use ValidationService for description validation
-    // FIX: Must specify fieldType: 'description' to allow punctuation like colons, semicolons, etc.
     if (metadata.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadata.description, {
         maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
@@ -1883,24 +2047,28 @@ export class AgentManager extends BaseElementManager<Agent> {
       }
       metadata.description = descResult.sanitizedValue;
     }
+  }
 
-    // REFACTORED: Use ValidationService for specializations array
-    if (Array.isArray(metadata.specializations)) {
-      const validatedSpecializations: string[] = [];
-      for (const value of metadata.specializations) {
-        const result = this.validationService.validateAndSanitizeInput(String(value), {
-          maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH,
-          allowSpaces: true
-        });
-        if (!result.isValid) {
-          throw new Error(`Invalid specialization "${value}": ${result.errors?.join(', ')}`);
-        }
-        validatedSpecializations.push(result.sanitizedValue!);
-      }
-      metadata.specializations = validatedSpecializations;
+  private validateMetadataSpecializations(metadata: Record<string, any>): void {
+    if (!Array.isArray(metadata.specializations)) {
+      return;
     }
 
-    // KEEP: TriggerValidationService (already using service pattern)
+    const validatedSpecializations: string[] = [];
+    for (const value of metadata.specializations) {
+      const result = this.validationService.validateAndSanitizeInput(String(value), {
+        maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH,
+        allowSpaces: true
+      });
+      if (!result.isValid) {
+        throw new Error(`Invalid specialization "${value}": ${result.errors?.join(', ')}`);
+      }
+      validatedSpecializations.push(result.sanitizedValue!);
+    }
+    metadata.specializations = validatedSpecializations;
+  }
+
+  private validateMetadataTriggersAndPolicy(metadata: Record<string, any>): void {
     if (metadata.triggers && Array.isArray(metadata.triggers)) {
       const validationResult = this.triggerValidationService.validateTriggers(
         metadata.triggers,
@@ -1909,215 +2077,210 @@ export class AgentManager extends BaseElementManager<Agent> {
       );
       metadata.triggers = validationResult.validTriggers;
     }
-
-    // Issue #676: Sanitize gatekeeper policy on load to prevent prompt-injection attacks
-    // Malformed policies are stripped and logged as security events (never reach enforcement)
     if (metadata.gatekeeper) {
-      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'agent', metadata as Record<string, unknown>);
+      metadata.gatekeeper = sanitizeGatekeeperPolicy(
+        metadata.gatekeeper,
+        metadata.name || 'unknown',
+        'agent',
+        metadata as Record<string, unknown>
+      );
     }
+  }
 
-    // Issue #722: Validate V2 agent fields on load — structural checks, strip malformed data.
-    // Fail-open: corrupted fields are removed and logged, not thrown. This prevents
-    // bad data from reaching execution time while keeping the agent loadable.
-    const agentName = metadata.name || 'unknown';
-
-    // Issue #697: Normalize `goals` (plural) → `goal` (singular)
+  private normalizeAndValidateGoal(metadata: Record<string, any>, agentName: string): void {
     if (metadata.goals !== undefined && metadata.goal === undefined) {
       metadata.goal = metadata.goals;
       delete metadata.goals;
       logger.warn(`[parseMetadata] Agent '${agentName}': migrated 'goals' (plural) to 'goal'`);
     } else if (metadata.goals !== undefined) {
-      // `goal` already set — drop the redundant plural form
       delete metadata.goals;
     }
 
-    if (metadata.goal) {
-      if (typeof metadata.goal === 'object' && typeof metadata.goal.template === 'string') {
-        // Issue #725: Normalize snake_case goal sub-fields
-        normalizeGoalKeys(metadata.goal as unknown as Record<string, unknown>);
+    if (!metadata.goal) {
+      return;
+    }
+    if (typeof metadata.goal === 'object' && typeof metadata.goal.template === 'string') {
+      normalizeGoalKeys(metadata.goal as unknown as Record<string, unknown>);
+      this.stripMalformedGoalArrays(metadata.goal, agentName);
+      return;
+    }
+    if (typeof metadata.goal !== 'string') {
+      logger.warn(`[parseMetadata] Agent '${agentName}': goal is malformed (no template), stripping`);
+      delete metadata.goal;
+    }
+  }
 
-        // Validate parameters array if present
-        if (metadata.goal.parameters && !Array.isArray(metadata.goal.parameters)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': goal.parameters is not an array, stripping`);
-          delete metadata.goal.parameters;
-        }
-        // Validate successCriteria array if present
-        if (metadata.goal.successCriteria && !Array.isArray(metadata.goal.successCriteria)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': goal.successCriteria is not an array, stripping`);
-          delete metadata.goal.successCriteria;
-        }
-      } else if (typeof metadata.goal !== 'string') {
-        // goal must be a string or an object with template — anything else is invalid
-        logger.warn(`[parseMetadata] Agent '${agentName}': goal is malformed (no template), stripping`);
-        delete metadata.goal;
+  private stripMalformedGoalArrays(goal: Record<string, any>, agentName: string): void {
+    if (goal.parameters && !Array.isArray(goal.parameters)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': goal.parameters is not an array, stripping`);
+      delete goal.parameters;
+    }
+    if (goal.successCriteria && !Array.isArray(goal.successCriteria)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': goal.successCriteria is not an array, stripping`);
+      delete goal.successCriteria;
+    }
+  }
+
+  private validateActivatesMetadata(metadata: Record<string, any>, agentName: string): void {
+    if (!metadata.activates) {
+      return;
+    }
+    if (typeof metadata.activates !== 'object' || Array.isArray(metadata.activates)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': activates is not an object, stripping`);
+      delete metadata.activates;
+      return;
+    }
+    for (const [key, value] of Object.entries(metadata.activates)) {
+      if (value !== undefined && !Array.isArray(value)) {
+        logger.warn(`[parseMetadata] Agent '${agentName}': activates.${key} is not an array, stripping`);
+        delete metadata.activates[key];
       }
     }
+  }
 
-    if (metadata.activates) {
-      if (typeof metadata.activates !== 'object' || Array.isArray(metadata.activates)) {
-        logger.warn(`[parseMetadata] Agent '${agentName}': activates is not an object, stripping`);
-        delete metadata.activates;
-      } else {
-        // Each key should map to a string array
-        for (const [key, value] of Object.entries(metadata.activates)) {
-          if (value !== undefined && !Array.isArray(value)) {
-            logger.warn(`[parseMetadata] Agent '${agentName}': activates.${key} is not an array, stripping`);
-            delete metadata.activates[key];
-          }
-        }
-      }
+  private validateToolsMetadata(metadata: Record<string, any>, agentName: string): void {
+    if (!metadata.tools) {
+      return;
     }
+    if (typeof metadata.tools !== 'object' || Array.isArray(metadata.tools)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': tools is not an object, stripping`);
+      delete metadata.tools;
+      return;
+    }
+    if (!Array.isArray(metadata.tools.allowed)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': tools.allowed is not an array, stripping tools`);
+      delete metadata.tools;
+      return;
+    }
+    if (metadata.tools.denied !== undefined && !Array.isArray(metadata.tools.denied)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': tools.denied is not an array, stripping`);
+      delete metadata.tools.denied;
+    }
+  }
 
-    if (metadata.tools) {
-      if (typeof metadata.tools !== 'object' || Array.isArray(metadata.tools)) {
-        logger.warn(`[parseMetadata] Agent '${agentName}': tools is not an object, stripping`);
-        delete metadata.tools;
-      } else if (!Array.isArray(metadata.tools.allowed)) {
-        logger.warn(`[parseMetadata] Agent '${agentName}': tools.allowed is not an array, stripping tools`);
-        delete metadata.tools;
-      } else {
-        // Gap 3: Validate tools.denied is an array if present
-        if (metadata.tools.denied !== undefined && !Array.isArray(metadata.tools.denied)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': tools.denied is not an array, stripping`);
-          delete metadata.tools.denied;
-        }
-      }
+  private normalizeAndValidateSystemPrompt(metadata: Record<string, any>, agentName: string): void {
+    if (metadata.system_prompt !== undefined && metadata.systemPrompt === undefined) {
+      metadata.systemPrompt = metadata.system_prompt;
     }
-
-    // Issue #725: Normalize system_prompt → systemPrompt (LLMs commonly use snake_case)
-    const anyMeta = metadata as Record<string, unknown>;
-    if (anyMeta.system_prompt !== undefined && metadata.systemPrompt === undefined) {
-      anyMeta.systemPrompt = anyMeta.system_prompt;
-    }
-    delete anyMeta.system_prompt;
+    delete metadata.system_prompt;
 
     if (metadata.systemPrompt !== undefined && typeof metadata.systemPrompt !== 'string') {
       logger.warn(`[parseMetadata] Agent '${agentName}': systemPrompt is not a string, stripping`);
       delete metadata.systemPrompt;
     }
+  }
 
-    // Issue #697: Promote root-level V1 autonomy fields into the `autonomy` block.
-    // V1 agents stored riskTolerance and maxAutonomousSteps at the metadata root.
-    // V2 nests them under `autonomy`. This promotion ensures downstream code only
-    // checks one location. The existing autonomy validation below validates values.
-    // Precedence: camelCase variants are listed before snake_case/short forms, so
-    // e.g. `riskTolerance` wins over `risk_tolerance` if both appear at root.
-    {
-      const rootAutonomyFields: ReadonlyArray<readonly [string, string]> = [
-        ['riskTolerance', 'riskTolerance'],
-        ['risk_tolerance', 'riskTolerance'],
-        ['maxAutonomousSteps', 'maxAutonomousSteps'],
-        ['max_autonomous_steps', 'maxAutonomousSteps'],
-        ['maxSteps', 'maxAutonomousSteps'],
-      ] as const;
-      let promoted = false;
-      for (const [rootKey, autonomyKey] of rootAutonomyFields) {
-        if (anyMeta[rootKey] !== undefined) {
-          if (!metadata.autonomy) {
-            metadata.autonomy = {};
-          }
-          const aBlock = metadata.autonomy as Record<string, unknown>;
-          if (aBlock[autonomyKey] === undefined) {
-            aBlock[autonomyKey] = anyMeta[rootKey];
-            promoted = true;
-          }
-          delete anyMeta[rootKey];
+  private promoteRootAutonomyFields(metadata: Record<string, any>, agentName: string): void {
+    const rootAutonomyFields: ReadonlyArray<readonly [string, string]> = [
+      ['riskTolerance', 'riskTolerance'],
+      ['risk_tolerance', 'riskTolerance'],
+      ['maxAutonomousSteps', 'maxAutonomousSteps'],
+      ['max_autonomous_steps', 'maxAutonomousSteps'],
+      ['maxSteps', 'maxAutonomousSteps'],
+    ] as const;
+    let promoted = false;
+    for (const [rootKey, autonomyKey] of rootAutonomyFields) {
+      if (metadata[rootKey] !== undefined) {
+        metadata.autonomy ??= {};
+        const aBlock = metadata.autonomy as Record<string, unknown>;
+        if (aBlock[autonomyKey] === undefined) {
+          aBlock[autonomyKey] = metadata[rootKey];
+          promoted = true;
         }
-      }
-      if (promoted) {
-        logger.warn(`[parseMetadata] Agent '${agentName}': promoted root-level autonomy fields into autonomy block`);
+        delete metadata[rootKey];
       }
     }
+    if (promoted) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': promoted root-level autonomy fields into autonomy block`);
+    }
+  }
 
-    if (metadata.autonomy) {
-      if (typeof metadata.autonomy !== 'object' || Array.isArray(metadata.autonomy)) {
-        logger.warn(`[parseMetadata] Agent '${agentName}': autonomy is not an object, stripping`);
-        delete metadata.autonomy;
-      } else {
-        // Issue #730: Shared normalization (was duplicated in parseMetadata + validateV2FieldsForCreate)
-        const a = metadata.autonomy as Record<string, unknown>;
-        normalizeAutonomyKeys(a);
-
-        // Validate specific fields
-        // Gap 4: Validate riskTolerance enum (uses shared constants from Issue #727)
-        if (a.riskTolerance !== undefined &&
-            !isOneOf(a.riskTolerance, RISK_TOLERANCE_LEVELS)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': autonomy.riskTolerance '${a.riskTolerance}' is invalid, stripping`);
-          delete a.riskTolerance;
-        }
-        if (a.maxAutonomousSteps !== undefined &&
-            typeof a.maxAutonomousSteps !== 'number') {
-          logger.warn(`[parseMetadata] Agent '${agentName}': autonomy.maxAutonomousSteps is not a number, stripping`);
-          delete a.maxAutonomousSteps;
-        }
-        if (a.requiresApproval !== undefined &&
-            !Array.isArray(a.requiresApproval)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': autonomy.requiresApproval is not an array, stripping`);
-          delete a.requiresApproval;
-        }
-        if (a.autoApprove !== undefined &&
-            !Array.isArray(a.autoApprove)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': autonomy.autoApprove is not an array, stripping`);
-          delete a.autoApprove;
-        }
-      }
+  private validateAutonomyMetadata(metadata: Record<string, any>, agentName: string): void {
+    if (!metadata.autonomy) {
+      return;
+    }
+    if (typeof metadata.autonomy !== 'object' || Array.isArray(metadata.autonomy)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': autonomy is not an object, stripping`);
+      delete metadata.autonomy;
+      return;
     }
 
-    if (metadata.resilience) {
-      if (typeof metadata.resilience !== 'object' || Array.isArray(metadata.resilience)) {
-        logger.warn(`[parseMetadata] Agent '${agentName}': resilience is not an object, stripping`);
-        delete metadata.resilience;
-      } else {
-        // Issue #730: Shared normalization (was duplicated in parseMetadata + validateV2FieldsForCreate)
-        const r = metadata.resilience as Record<string, unknown>;
-        normalizeResilienceKeys(r);
+    const a = metadata.autonomy as Record<string, unknown>;
+    normalizeAutonomyKeys(a);
+    this.stripInvalidEnumField(a, 'riskTolerance', RISK_TOLERANCE_LEVELS, `autonomy.riskTolerance`, agentName);
+    this.stripInvalidTypedField(a, 'maxAutonomousSteps', 'number', `autonomy.maxAutonomousSteps`, agentName);
+    this.stripInvalidArrayField(a, 'requiresApproval', `autonomy.requiresApproval`, agentName);
+    this.stripInvalidArrayField(a, 'autoApprove', `autonomy.autoApprove`, agentName);
+  }
 
-        // Issue #727: Use shared enum constants for resilience validation
-        if (r.onStepLimitReached !== undefined &&
-            !isOneOf(r.onStepLimitReached, STEP_LIMIT_ACTIONS)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': resilience.onStepLimitReached '${r.onStepLimitReached}' is invalid, stripping`);
-          delete r.onStepLimitReached;
-        }
-        if (r.onExecutionFailure !== undefined &&
-            !isOneOf(r.onExecutionFailure, EXECUTION_FAILURE_ACTIONS)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': resilience.onExecutionFailure '${r.onExecutionFailure}' is invalid, stripping`);
-          delete r.onExecutionFailure;
-        }
-        if (r.maxRetries !== undefined &&
-            typeof r.maxRetries !== 'number') {
-          logger.warn(`[parseMetadata] Agent '${agentName}': resilience.maxRetries is not a number, stripping`);
-          delete r.maxRetries;
-        }
-        if (r.maxContinuations !== undefined &&
-            typeof r.maxContinuations !== 'number') {
-          logger.warn(`[parseMetadata] Agent '${agentName}': resilience.maxContinuations is not a number, stripping`);
-          delete r.maxContinuations;
-        }
-        // Gap 5: Validate retryBackoff enum and preserveState boolean (shared constants from Issue #727)
-        if (r.retryBackoff !== undefined &&
-            !isOneOf(r.retryBackoff, BACKOFF_STRATEGIES)) {
-          logger.warn(`[parseMetadata] Agent '${agentName}': resilience.retryBackoff '${r.retryBackoff}' is invalid, stripping`);
-          delete r.retryBackoff;
-        }
-        if (r.preserveState !== undefined &&
-            typeof r.preserveState !== 'boolean') {
-          logger.warn(`[parseMetadata] Agent '${agentName}': resilience.preserveState is not a boolean, stripping`);
-          delete r.preserveState;
-        }
-      }
+  private validateResilienceMetadata(metadata: Record<string, any>, agentName: string): void {
+    if (!metadata.resilience) {
+      return;
+    }
+    if (typeof metadata.resilience !== 'object' || Array.isArray(metadata.resilience)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': resilience is not an object, stripping`);
+      delete metadata.resilience;
+      return;
     }
 
-    // Tags: validate as string array (common field, all element types)
-    if (metadata.tags !== undefined) {
-      if (!Array.isArray(metadata.tags)) {
-        logger.warn(`[parseMetadata] Agent '${agentName}': tags is not an array, stripping`);
-        delete metadata.tags;
-      } else {
-        metadata.tags = metadata.tags.filter((t: unknown) => typeof t === 'string');
-      }
-    }
+    const r = metadata.resilience as Record<string, unknown>;
+    normalizeResilienceKeys(r);
+    this.stripInvalidEnumField(r, 'onStepLimitReached', STEP_LIMIT_ACTIONS, `resilience.onStepLimitReached`, agentName);
+    this.stripInvalidEnumField(r, 'onExecutionFailure', EXECUTION_FAILURE_ACTIONS, `resilience.onExecutionFailure`, agentName);
+    this.stripInvalidTypedField(r, 'maxRetries', 'number', `resilience.maxRetries`, agentName);
+    this.stripInvalidTypedField(r, 'maxContinuations', 'number', `resilience.maxContinuations`, agentName);
+    this.stripInvalidEnumField(r, 'retryBackoff', BACKOFF_STRATEGIES, `resilience.retryBackoff`, agentName);
+    this.stripInvalidTypedField(r, 'preserveState', 'boolean', `resilience.preserveState`, agentName);
+  }
 
-    return metadata as AgentMetadata;
+  private stripInvalidEnumField(
+    record: Record<string, unknown>,
+    key: string,
+    allowedValues: readonly string[],
+    label: string,
+    agentName: string
+  ): void {
+    if (record[key] !== undefined && !isOneOf(record[key], allowedValues)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': ${label} ${JSON.stringify(record[key])} is invalid, stripping`);
+      delete record[key];
+    }
+  }
+
+  private stripInvalidTypedField(
+    record: Record<string, unknown>,
+    key: string,
+    expectedType: 'number' | 'boolean',
+    label: string,
+    agentName: string
+  ): void {
+    if (record[key] !== undefined && typeof record[key] !== expectedType) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': ${label} is not a ${expectedType}, stripping`);
+      delete record[key];
+    }
+  }
+
+  private stripInvalidArrayField(
+    record: Record<string, unknown>,
+    key: string,
+    label: string,
+    agentName: string
+  ): void {
+    if (record[key] !== undefined && !Array.isArray(record[key])) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': ${label} is not an array, stripping`);
+      delete record[key];
+    }
+  }
+
+  private validateTagsMetadata(metadata: Record<string, any>, agentName: string): void {
+    if (metadata.tags === undefined) {
+      return;
+    }
+    if (!Array.isArray(metadata.tags)) {
+      logger.warn(`[parseMetadata] Agent '${agentName}': tags is not an array, stripping`);
+      delete metadata.tags;
+      return;
+    }
+    metadata.tags = metadata.tags.filter((t: unknown) => typeof t === 'string');
   }
 
   protected override createElement(metadata: AgentMetadata, bodyContent: string): Agent {
@@ -2144,81 +2307,11 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   protected override async serializeElement(agent: Agent): Promise<string> {
-    // Start with base metadata fields (always present)
-    const metadata: Record<string, unknown> = {
-      name: agent.metadata.name,
-      type: toSingularLabel(ElementType.AGENT),
-      unique_id: agent.id,
-      version: agent.metadata.version,
-      author: agent.metadata.author,
-      created: agent.metadata.created ?? new Date().toISOString(),
-      modified: agent.metadata.modified ?? new Date().toISOString(),
-      description: agent.metadata.description,
-      format_version: 'v2',  // Fix #912: Explicit format marker
-    };
-
-    // Cast to check for v2 fields
+    const metadata = this.buildBaseSerializedMetadata(agent);
     const metadataV2 = agent.metadata as AgentMetadataV2;
-
-    // Add v2 fields if present (goal is required in v2, others optional)
-    if (metadataV2.goal) {
-      metadata.goal = metadataV2.goal;
-    }
-    if (metadataV2.activates) {
-      metadata.activates = metadataV2.activates;
-    }
-    if (metadataV2.tools) {
-      metadata.tools = metadataV2.tools;
-    }
-    if (metadataV2.systemPrompt) {
-      metadata.systemPrompt = metadataV2.systemPrompt;
-    }
-    if (metadataV2.autonomy) {
-      metadata.autonomy = metadataV2.autonomy;
-    }
-    // Issue #449: Serialize gatekeeper policy to YAML frontmatter
-    if (metadataV2.gatekeeper) {
-      metadata.gatekeeper = metadataV2.gatekeeper;
-    }
-    // Issue #526: Serialize resilience policy to YAML frontmatter
-    if (metadataV2.resilience) {
-      metadata.resilience = metadataV2.resilience;
-    }
-
-    // Issue #722: Only serialize v1 fields for agents WITHOUT a goal (legacy v1 agents).
-    // V2 agents (with goal) should not carry deprecated v1 baggage like
-    // decisionFramework, riskTolerance, learningEnabled, maxConcurrentGoals.
-    // The Agent constructor still applies these defaults at runtime for backward
-    // compat when reading old files — but we don't write them into new v2 agents.
-    const isV2Agent = !!metadataV2.goal;
-    if (!isV2Agent) {
-      if (metadataV2.decisionFramework) {
-        metadata.decisionFramework = metadataV2.decisionFramework;
-      }
-      if (metadataV2.riskTolerance) {
-        metadata.riskTolerance = metadataV2.riskTolerance;
-      }
-      if (metadataV2.learningEnabled !== undefined) {
-        metadata.learningEnabled = metadataV2.learningEnabled;
-      }
-      if (metadataV2.maxConcurrentGoals !== undefined) {
-        metadata.maxConcurrentGoals = metadataV2.maxConcurrentGoals;
-      }
-    }
-    // specializations is not a deprecated v1 field — always serialize
-    if (metadataV2.specializations) {
-      metadata.specializations = metadataV2.specializations;
-    }
-    // Issue #722: Serialize tags and triggers to YAML frontmatter
-    if (metadataV2.tags && Array.isArray(metadataV2.tags) && metadataV2.tags.length > 0) {
-      metadata.tags = metadataV2.tags;
-    }
-    if (metadataV2.triggers) {
-      metadata.triggers = metadataV2.triggers;
-    }
-    if (metadataV2.ruleEngineConfig !== undefined) {
-      metadata.ruleEngineConfig = metadataV2.ruleEngineConfig;
-    }
+    this.addSerializedV2Metadata(metadata, metadataV2);
+    this.addSerializedLegacyMetadata(metadata, metadataV2);
+    this.addSerializedCommonMetadata(metadata, metadataV2);
 
     // v2.0 format: instructions in YAML frontmatter, content as body
     const instructions = agent.instructions ||
@@ -2236,6 +2329,58 @@ export class AgentManager extends BaseElementManager<Agent> {
       cleaningStrategy: 'remove-both',  // Remove both null and undefined
       sortKeys: true
     });
+  }
+
+  private buildBaseSerializedMetadata(agent: Agent): Record<string, unknown> {
+    return {
+      name: agent.metadata.name,
+      type: toSingularLabel(ElementType.AGENT),
+      unique_id: agent.id,
+      version: agent.metadata.version,
+      author: agent.metadata.author,
+      created: agent.metadata.created ?? new Date().toISOString(),
+      modified: agent.metadata.modified ?? new Date().toISOString(),
+      description: agent.metadata.description,
+      format_version: 'v2',
+    };
+  }
+
+  private addSerializedV2Metadata(
+    metadata: Record<string, unknown>,
+    metadataV2: AgentMetadataV2
+  ): void {
+    if (metadataV2.goal) metadata.goal = metadataV2.goal;
+    if (metadataV2.activates) metadata.activates = metadataV2.activates;
+    if (metadataV2.tools) metadata.tools = metadataV2.tools;
+    if (metadataV2.systemPrompt) metadata.systemPrompt = metadataV2.systemPrompt;
+    if (metadataV2.autonomy) metadata.autonomy = metadataV2.autonomy;
+    if (metadataV2.gatekeeper) metadata.gatekeeper = metadataV2.gatekeeper;
+    if (metadataV2.resilience) metadata.resilience = metadataV2.resilience;
+  }
+
+  private addSerializedLegacyMetadata(
+    metadata: Record<string, unknown>,
+    metadataV2: AgentMetadataV2
+  ): void {
+    if (metadataV2.goal) {
+      return;
+    }
+    if (metadataV2.decisionFramework) metadata.decisionFramework = metadataV2.decisionFramework;
+    if (metadataV2.riskTolerance) metadata.riskTolerance = metadataV2.riskTolerance;
+    if (metadataV2.learningEnabled !== undefined) metadata.learningEnabled = metadataV2.learningEnabled;
+    if (metadataV2.maxConcurrentGoals !== undefined) metadata.maxConcurrentGoals = metadataV2.maxConcurrentGoals;
+  }
+
+  private addSerializedCommonMetadata(
+    metadata: Record<string, unknown>,
+    metadataV2: AgentMetadataV2
+  ): void {
+    if (metadataV2.specializations) metadata.specializations = metadataV2.specializations;
+    if (metadataV2.tags && Array.isArray(metadataV2.tags) && metadataV2.tags.length > 0) {
+      metadata.tags = metadataV2.tags;
+    }
+    if (metadataV2.triggers) metadata.triggers = metadataV2.triggers;
+    if (metadataV2.ruleEngineConfig !== undefined) metadata.ruleEngineConfig = metadataV2.ruleEngineConfig;
   }
 
   private buildDefaultInstructions(agent: Agent): string {
@@ -2284,104 +2429,124 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private validateV2FieldsForCreate(metadata: Partial<AgentMetadataV2>): string[] {
     const errors: string[] = [];
+    this.validateCreateTools(metadata, errors);
+    this.validateCreateSystemPrompt(metadata, errors);
+    this.validateCreateAutonomy(metadata, errors);
+    this.validateCreateResilience(metadata, errors);
+    this.validateCreateActivates(metadata, errors);
+    return errors;
+  }
 
-    // --- tools ---
-    if (metadata.tools !== undefined) {
-      if (typeof metadata.tools !== 'object' || Array.isArray(metadata.tools) || metadata.tools === null) {
-        errors.push('tools must be an object with allowed/denied arrays');
-      } else {
-        if (!Array.isArray(metadata.tools.allowed)) {
-          errors.push('tools.allowed is required and must be an array of strings');
-        }
-        if (metadata.tools.denied !== undefined && !Array.isArray(metadata.tools.denied)) {
-          errors.push('tools.denied must be an array of strings');
-        }
-      }
+  private validateCreateTools(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
+    if (metadata.tools === undefined) {
+      return;
     }
+    if (typeof metadata.tools !== 'object' || Array.isArray(metadata.tools) || metadata.tools === null) {
+      errors.push('tools must be an object with allowed/denied arrays');
+      return;
+    }
+    if (!Array.isArray(metadata.tools.allowed)) {
+      errors.push('tools.allowed is required and must be an array of strings');
+    }
+    if (metadata.tools.denied !== undefined && !Array.isArray(metadata.tools.denied)) {
+      errors.push('tools.denied must be an array of strings');
+    }
+  }
 
-    // --- systemPrompt ---
+  private validateCreateSystemPrompt(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
     if (metadata.systemPrompt !== undefined && typeof metadata.systemPrompt !== 'string') {
       errors.push('systemPrompt must be a string');
     }
-    // snake_case variant (Issue #725: normalized at dispatcher level eventually)
-    const anyMeta = metadata as Record<string, unknown>;
+
+    const anyMeta: Record<string, unknown> = metadata;
     if (anyMeta.system_prompt !== undefined && metadata.systemPrompt === undefined) {
       if (typeof anyMeta.system_prompt === 'string') {
-        metadata.systemPrompt = anyMeta.system_prompt as string;
+        metadata.systemPrompt = anyMeta.system_prompt;
       } else {
         errors.push('system_prompt must be a string');
       }
       delete anyMeta.system_prompt;
     }
+  }
 
-    // --- autonomy ---
-    if (metadata.autonomy !== undefined) {
-      if (typeof metadata.autonomy !== 'object' || Array.isArray(metadata.autonomy) || metadata.autonomy === null) {
-        errors.push('autonomy must be an object');
-      } else {
-        // Issue #730: Shared normalization
-        const a = metadata.autonomy as Record<string, unknown>;
-        normalizeAutonomyKeys(a);
-
-        // Validate after normalization
-        if (a.riskTolerance !== undefined &&
-            !isOneOf(a.riskTolerance, RISK_TOLERANCE_LEVELS)) {
-          errors.push(`autonomy.riskTolerance must be one of: ${RISK_TOLERANCE_LEVELS.join(', ')} (got '${a.riskTolerance}')`);
-        }
-        if (a.maxAutonomousSteps !== undefined && typeof a.maxAutonomousSteps !== 'number') {
-          errors.push('autonomy.maxAutonomousSteps must be a number');
-        }
-        if (a.requiresApproval !== undefined && !Array.isArray(a.requiresApproval)) {
-          errors.push('autonomy.requiresApproval must be an array of strings');
-        }
-        if (a.autoApprove !== undefined && !Array.isArray(a.autoApprove)) {
-          errors.push('autonomy.autoApprove must be an array of strings');
-        }
-      }
+  private validateCreateAutonomy(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
+    if (metadata.autonomy === undefined) {
+      return;
+    }
+    if (typeof metadata.autonomy !== 'object' || Array.isArray(metadata.autonomy) || metadata.autonomy === null) {
+      errors.push('autonomy must be an object');
+      return;
     }
 
-    // --- resilience ---
-    if (metadata.resilience !== undefined) {
-      if (typeof metadata.resilience !== 'object' || Array.isArray(metadata.resilience) || metadata.resilience === null) {
-        errors.push('resilience must be an object');
-      } else {
-        // Issue #730: Shared normalization
-        const r = metadata.resilience as Record<string, unknown>;
-        normalizeResilienceKeys(r);
+    const a = metadata.autonomy as Record<string, unknown>;
+    normalizeAutonomyKeys(a);
+    this.addEnumValidationError(a, 'riskTolerance', RISK_TOLERANCE_LEVELS, 'autonomy.riskTolerance', errors);
+    this.addTypeValidationError(a, 'maxAutonomousSteps', 'number', 'autonomy.maxAutonomousSteps', errors);
+    this.addArrayValidationError(a, 'requiresApproval', 'autonomy.requiresApproval', errors);
+    this.addArrayValidationError(a, 'autoApprove', 'autonomy.autoApprove', errors);
+  }
 
-        // Validate after normalization
-        if (r.onStepLimitReached !== undefined &&
-            !isOneOf(r.onStepLimitReached, STEP_LIMIT_ACTIONS)) {
-          errors.push(`resilience.onStepLimitReached must be one of: ${STEP_LIMIT_ACTIONS.join(', ')} (got '${r.onStepLimitReached}')`);
-        }
-        if (r.onExecutionFailure !== undefined &&
-            !isOneOf(r.onExecutionFailure, EXECUTION_FAILURE_ACTIONS)) {
-          errors.push(`resilience.onExecutionFailure must be one of: ${EXECUTION_FAILURE_ACTIONS.join(', ')} (got '${r.onExecutionFailure}')`);
-        }
-        if (r.maxRetries !== undefined && typeof r.maxRetries !== 'number') {
-          errors.push('resilience.maxRetries must be a number');
-        }
-        if (r.maxContinuations !== undefined && typeof r.maxContinuations !== 'number') {
-          errors.push('resilience.maxContinuations must be a number');
-        }
-        if (r.retryBackoff !== undefined &&
-            !isOneOf(r.retryBackoff, BACKOFF_STRATEGIES)) {
-          errors.push(`resilience.retryBackoff must be one of: ${BACKOFF_STRATEGIES.join(', ')} (got '${r.retryBackoff}')`);
-        }
-        if (r.preserveState !== undefined && typeof r.preserveState !== 'boolean') {
-          errors.push('resilience.preserveState must be a boolean');
-        }
-      }
+  private validateCreateResilience(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
+    if (metadata.resilience === undefined) {
+      return;
+    }
+    if (typeof metadata.resilience !== 'object' || Array.isArray(metadata.resilience) || metadata.resilience === null) {
+      errors.push('resilience must be an object');
+      return;
     }
 
-    // --- activates ---
-    if (metadata.activates !== undefined) {
-      if (typeof metadata.activates !== 'object' || Array.isArray(metadata.activates) || metadata.activates === null) {
-        errors.push('activates must be an object with skills/personas/memories/templates/ensembles arrays');
-      }
-    }
+    const r = metadata.resilience as Record<string, unknown>;
+    normalizeResilienceKeys(r);
+    this.addEnumValidationError(r, 'onStepLimitReached', STEP_LIMIT_ACTIONS, 'resilience.onStepLimitReached', errors);
+    this.addEnumValidationError(r, 'onExecutionFailure', EXECUTION_FAILURE_ACTIONS, 'resilience.onExecutionFailure', errors);
+    this.addTypeValidationError(r, 'maxRetries', 'number', 'resilience.maxRetries', errors);
+    this.addTypeValidationError(r, 'maxContinuations', 'number', 'resilience.maxContinuations', errors);
+    this.addEnumValidationError(r, 'retryBackoff', BACKOFF_STRATEGIES, 'resilience.retryBackoff', errors);
+    this.addTypeValidationError(r, 'preserveState', 'boolean', 'resilience.preserveState', errors);
+  }
 
-    return errors;
+  private validateCreateActivates(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
+    if (
+      metadata.activates !== undefined &&
+      (typeof metadata.activates !== 'object' || Array.isArray(metadata.activates) || metadata.activates === null)
+    ) {
+      errors.push('activates must be an object with skills/personas/memories/templates/ensembles arrays');
+    }
+  }
+
+  private addEnumValidationError(
+    record: Record<string, unknown>,
+    key: string,
+    allowedValues: readonly string[],
+    label: string,
+    errors: string[]
+  ): void {
+    if (record[key] !== undefined && !isOneOf(record[key], allowedValues)) {
+      errors.push(`${label} must be one of: ${allowedValues.join(', ')} (got ${JSON.stringify(record[key])})`);
+    }
+  }
+
+  private addTypeValidationError(
+    record: Record<string, unknown>,
+    key: string,
+    expectedType: 'number' | 'boolean',
+    label: string,
+    errors: string[]
+  ): void {
+    if (record[key] !== undefined && typeof record[key] !== expectedType) {
+      errors.push(`${label} must be a ${expectedType}`);
+    }
+  }
+
+  private addArrayValidationError(
+    record: Record<string, unknown>,
+    key: string,
+    label: string,
+    errors: string[]
+  ): void {
+    if (record[key] !== undefined && !Array.isArray(record[key])) {
+      errors.push(`${label} must be an array of strings`);
+    }
   }
 
   /**
@@ -2414,8 +2579,8 @@ export class AgentManager extends BaseElementManager<Agent> {
       const validParamTypes = ['string', 'number', 'boolean'] as const;
       const validatedParams: AgentGoalParameter[] = (goal.parameters || []).map((p, index) => {
         const name = typeof p.name === 'string' ? p.name : `param_${index}`;
-        const type = validParamTypes.includes(p.type as typeof validParamTypes[number])
-          ? p.type as 'string' | 'number' | 'boolean'
+        const type = validParamTypes.includes(p.type)
+          ? p.type
           : 'string';
         const required = typeof p.required === 'boolean' ? p.required : false;
 
@@ -2446,21 +2611,6 @@ export class AgentManager extends BaseElementManager<Agent> {
     return undefined;
   }
 
-  private parseAgentFile(content: string): ParsedAgentFile {
-    // Use SerializationService for frontmatter parsing
-    const result = this.serializationService.parseFrontmatter(content, {
-      maxYamlSize: MAX_YAML_SIZE,
-      validateContent: false,
-      source: 'AgentManager.parseAgentFile'
-    });
-
-    // SerializationService ensures frontmatter exists, or throws error
-    return {
-      metadata: result.data as AgentMetadata,
-      content: result.content.trim()
-    };
-  }
-
 
   /**
    * Get the filename for an agent element.
@@ -2489,93 +2639,6 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private getCurrentUserForAttribution(): string {
     return this.metadataService.getCurrentUser();
-  }
-
-  private prepareStateForSerialization(state: AgentState): Record<string, unknown> {
-    return {
-      ...state,
-      lastActive: state.lastActive instanceof Date ? state.lastActive.toISOString() : state.lastActive,
-      sessionCount: String(state.sessionCount ?? 0),
-      stateVersion: state.stateVersion !== undefined ? String(state.stateVersion) : '1',  // Include version for optimistic locking
-      goals: state.goals.map(goal => ({
-        ...goal,
-        createdAt: goal.createdAt instanceof Date ? goal.createdAt.toISOString() : goal.createdAt,
-        updatedAt: goal.updatedAt instanceof Date ? goal.updatedAt.toISOString() : goal.updatedAt,
-        completedAt: goal.completedAt instanceof Date ? goal.completedAt.toISOString() : goal.completedAt,
-        importance: goal.importance !== undefined ? String(goal.importance) : undefined,
-        urgency: goal.urgency !== undefined ? String(goal.urgency) : undefined,
-        estimatedEffort: goal.estimatedEffort !== undefined ? String(goal.estimatedEffort) : undefined
-      })),
-      decisions: state.decisions.map(decision => ({
-        ...decision,
-        timestamp: decision.timestamp instanceof Date ? decision.timestamp.toISOString() : decision.timestamp,
-        confidence: decision.confidence !== undefined ? String(decision.confidence) : undefined
-      }))
-    };
-  }
-
-  private normalizeLoadedState(state: AgentState): void {
-    // FIX (Issue #123): Default missing arrays to prevent TypeError
-    // If state file is missing goals/decisions/context, default to empty arrays/objects
-    if (!state.goals) {
-      state.goals = [];
-    }
-    if (!state.decisions) {
-      state.decisions = [];
-    }
-    if (!state.context) {
-      state.context = {};
-    }
-
-    if (state.sessionCount !== undefined) {
-      state.sessionCount = Number.parseInt(String(state.sessionCount), 10);
-    }
-
-    // Parse stateVersion for optimistic locking (Issue #24)
-    if (state.stateVersion !== undefined) {
-      state.stateVersion = Number.parseInt(String(state.stateVersion), 10);
-    } else {
-      // Default to version 1 if not present (for backward compatibility)
-      state.stateVersion = 1;
-    }
-
-    if (state.lastActive) {
-      state.lastActive = new Date(state.lastActive);
-    }
-
-    if (state.goals) {
-      state.goals.forEach(goal => {
-        if (goal.importance !== undefined) {
-          goal.importance = Number.parseInt(String(goal.importance), 10);
-        }
-        if (goal.urgency !== undefined) {
-          goal.urgency = Number.parseInt(String(goal.urgency), 10);
-        }
-        if (goal.estimatedEffort !== undefined) {
-          goal.estimatedEffort = Number.parseFloat(String(goal.estimatedEffort));
-        }
-        if (goal.createdAt) {
-          goal.createdAt = new Date(goal.createdAt);
-        }
-        if (goal.updatedAt) {
-          goal.updatedAt = new Date(goal.updatedAt);
-        }
-        if (goal.completedAt) {
-          goal.completedAt = new Date(goal.completedAt);
-        }
-      });
-    }
-
-    if (state.decisions) {
-      state.decisions.forEach(decision => {
-        if (decision.confidence !== undefined) {
-          decision.confidence = Number.parseFloat(String(decision.confidence));
-        }
-        if (decision.timestamp) {
-          decision.timestamp = new Date(decision.timestamp);
-        }
-      });
-    }
   }
 
   /**
@@ -2680,8 +2743,9 @@ export class AgentManager extends BaseElementManager<Agent> {
       currentStepOutcome: params.outcome,
       nextActionHint: params.nextActionHint,
       riskScore: params.riskScore,
-      dangerZoneEnforcer: AgentManager.dangerZoneEnforcerResolver?.(),
-      verificationStore: AgentManager.verificationStoreResolver?.(),
+      dangerZoneEnforcer: this._dangerZoneEnforcer,
+      verificationStore: this._verificationStore,
+      sessionId: this.contextTracker?.getSessionContext()?.sessionId,
       goalDescription: activeGoal.description,
       goalId: activeGoal.id,
     });

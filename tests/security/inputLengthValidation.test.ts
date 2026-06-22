@@ -86,8 +86,13 @@ describe('Input Length Validation', () => {
       
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
+      // Phase 4.5 PoC fix: the error message now includes the actual
+      // got-length for operator diagnostics ("(got 1025)"). Match the
+      // stable prefix instead of pinning the exact string.
       expect(result.detectedPatterns).toEqual(
-        expect.arrayContaining(['customField: Field exceeds maximum length of 1024 characters'])
+        expect.arrayContaining([
+          expect.stringContaining('customField: Field exceeds maximum length of 1024 characters'),
+        ]),
       );
     });
 
@@ -113,8 +118,8 @@ describe('Input Length Validation', () => {
       expect(result.isValid).toBe(false);
       expect(result.detectedPatterns).toEqual(
         expect.arrayContaining([
-          `description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
-        ])
+          expect.stringContaining(`description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`),
+        ]),
       );
     });
   });

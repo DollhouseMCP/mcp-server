@@ -27,7 +27,7 @@ import { MEMORY_SECURITY_EVENTS } from './constants.js';
  */
 export function generateMemoryId(): string {
   const timestamp = Date.now();
-  const random = Math.random().toString(36).substr(2, 9);
+  const random = crypto.randomBytes(6).toString('hex');
   return `mem_${timestamp}_${random}`;
 }
 

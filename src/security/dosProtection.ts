@@ -463,43 +463,63 @@ export class DOSProtection {
   }
 
   /**
-   * Rate limiting for expensive operations
+   * Rate limiting for expensive operations.
+   * Instance-based to avoid shared state across sessions.
    */
-  private static readonly operationCounts = new Map<string, number>();
-  private static resetInterval: NodeJS.Timeout | null = null;
+  private static _rateLimiter: DOSRateLimiter | null = null;
+
+  private static get rateLimiter(): DOSRateLimiter {
+    this._rateLimiter ??= new DOSRateLimiter();
+    return this._rateLimiter;
+  }
 
   static rateLimit(
     operation: string,
     maxPerMinute: number = 100
   ): boolean {
-    // Initialize reset interval if needed
-    this.resetInterval ??= setInterval(() => {
-      this.operationCounts.clear();
-    }, RATE_LIMIT_RESET_MS);
-    if (this.resetInterval && typeof this.resetInterval.unref === 'function') {
-      this.resetInterval.unref();
-    }
-
-    const count = this.operationCounts.get(operation) || 0;
-    if (count >= maxPerMinute) {
-      console.warn(`[DOSProtection] Rate limit exceeded for ${operation}`);
-      return false;
-    }
-
-    this.operationCounts.set(operation, count + 1);
-    return true;
+    return this.rateLimiter.rateLimit(operation, maxPerMinute);
   }
 
   /**
    * Cleanup resources
    */
   static cleanup(): void {
-    if (this.resetInterval) {
-      clearInterval(this.resetInterval);
-      this.resetInterval = null;
-    }
-    this.operationCounts.clear();
+    this._rateLimiter?.dispose();
+    this._rateLimiter = null;
     SafeRegex.clearCache();
+  }
+}
+
+/**
+ * Instance-based rate limiter. Interval initialized in constructor (no TOCTOU).
+ * Can be registered in the DI container for session-scoped rate limiting.
+ */
+export class DOSRateLimiter {
+  private readonly operationCounts = new Map<string, number>();
+  private readonly resetInterval: NodeJS.Timeout;
+
+  constructor(resetMs: number = RATE_LIMIT_RESET_MS) {
+    this.resetInterval = setInterval(() => {
+      this.operationCounts.clear();
+    }, resetMs);
+    if (typeof this.resetInterval.unref === 'function') {
+      this.resetInterval.unref();
+    }
+  }
+
+  rateLimit(operation: string, maxPerMinute: number = 100): boolean {
+    const count = this.operationCounts.get(operation) || 0;
+    if (count >= maxPerMinute) {
+      console.warn(`[DOSProtection] Rate limit exceeded for ${operation}`);
+      return false;
+    }
+    this.operationCounts.set(operation, count + 1);
+    return true;
+  }
+
+  dispose(): void {
+    clearInterval(this.resetInterval);
+    this.operationCounts.clear();
   }
 }
 

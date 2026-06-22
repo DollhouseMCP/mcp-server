@@ -165,6 +165,23 @@ export interface CliApprovalPolicy {
 }
 
 /**
+ * Caller-supplied inputs for creating a CLI approval request. Bundled
+ * into one object so the Gatekeeper / GatekeeperSession entry points
+ * stay under the static-analysis parameter cap and so adding new
+ * approval-policy fields doesn't require breaking every call site.
+ */
+export interface CreateCliApprovalArgs {
+  toolName: string;
+  toolInput: Record<string, unknown>;
+  riskLevel: string;
+  riskScore: number;
+  irreversible: boolean;
+  denyReason: string;
+  policySource?: string;
+  ttlMs?: number;
+}
+
+/**
  * Record of a CLI tool approval request.
  * Created when permission_prompt encounters a tool that requires approval.
  */
@@ -173,8 +190,12 @@ export interface CliApprovalRecord {
   requestId: string;
   /** The tool that was requested */
   toolName: string;
-  /** The tool input parameters */
-  toolInput: Record<string, unknown>;
+  /** Safe redacted digest of the tool input parameters */
+  toolInputDigest: Record<string, unknown>;
+  /** HMAC-SHA256 over canonical raw tool input, prefixed with key id */
+  toolInputHash: string;
+  /** Raw tool input parameters. Present only when explicitly retained. */
+  toolInputDetail?: Record<string, unknown>;
   /** Risk level from classification */
   riskLevel: string;
   /** Numeric risk score (0-100) */
@@ -185,6 +206,12 @@ export interface CliApprovalRecord {
   requestedAt: string;
   /** When the request was approved (undefined if pending) */
   approvedAt?: string;
+  /** When the request was denied by the owner through a console approval surface */
+  deniedAt?: string;
+  /** When the pending request became terminal due to TTL expiry */
+  expiredAt?: string;
+  /** When the request was cancelled because its owning session terminated */
+  cancelledAt?: string;
   /** Whether this approval has been consumed */
   consumed: boolean;
   /** Approval scope */

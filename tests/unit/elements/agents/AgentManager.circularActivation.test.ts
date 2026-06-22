@@ -28,6 +28,8 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -238,12 +240,7 @@ This agent activates personas (no cycles).
     // Mock FileOperationsService
     const fileStore = new Map<string, string>(); // Track written files
 
-    const mockFileOperations = {
-      createDirectory: jest.fn().mockResolvedValue(undefined),
-      exists: jest.fn().mockImplementation((filePath: string) => {
-        return Promise.resolve(fileStore.has(filePath));
-      }),
-      readFile: jest.fn().mockImplementation((filePath: string) => {
+    const readFileImpl = jest.fn().mockImplementation((filePath: string) => {
         // Check if file was written to fileStore first
         if (fileStore.has(filePath)) {
           return Promise.resolve(fileStore.get(filePath)!);
@@ -310,7 +307,13 @@ activates:
 `);
         }
         return Promise.reject(new Error('File not found'));
+      });
+    const mockFileOperations: any = {
+      createDirectory: jest.fn().mockResolvedValue(undefined),
+      exists: jest.fn().mockImplementation((filePath: string) => {
+        return Promise.resolve(fileStore.has(filePath));
       }),
+      readFile: readFileImpl,
       writeFile: jest.fn().mockImplementation((filePath: string, content: string) => {
         fileStore.set(filePath, content);
         return Promise.resolve(undefined);
@@ -321,6 +324,9 @@ activates:
       validatePath: jest.fn().mockReturnValue(true),
       createFileExclusive: jest.fn().mockResolvedValue(true)
     };
+    // BaseElementManager.load uses readElementFile. Wire it dynamically so tests
+    // that replace mockFileOperations.readFile later still take effect.
+    mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
     container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
@@ -332,19 +338,10 @@ activates:
       metadataService
     ));
 
-    // Create AgentManager instance
-    const agentManagerInstance = new AgentManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      portfolioPath,
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      container.resolve('MetadataService')
-    );
-
-    // Set up element manager resolver for activating elements
-    AgentManager.setElementManagerResolver((managerName: string) => {
+    // Issue #1948: Element manager resolver passed via constructor deps.
+    // Uses lazy reference to agentManagerInstance for self-referential activation.
+    let agentManagerInstance: AgentManager;
+    const elementManagerResolver = (managerName: string) => {
       if (managerName === 'PersonaManager') {
         return {
           list: async () => [{
@@ -354,10 +351,22 @@ activates:
         } as any;
       }
       if (managerName === 'AgentManager') {
-        // Return the same agent manager to enable agent-to-agent activation
         return agentManagerInstance;
       }
       return null;
+    };
+
+    agentManagerInstance = new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+      elementManagerResolver,
     });
 
     container.register('AgentManager', () => agentManagerInstance);

@@ -33,6 +33,10 @@ jest.mock('../../../src/security/securityMonitor.js');
 jest.mock('../../../src/utils/logger.js');
 
 import { logger as _logger } from '../../../src/utils/logger.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
+
+const cacheKeyFor = (manager: unknown, elementId: string): string =>
+  `${(manager as { getCacheNamespace: () => string }).getCacheNamespace()}:${elementId}`;
 
 // Test element for concrete implementation
 interface TestElementMetadata {
@@ -87,9 +91,9 @@ class TestElementManager extends BaseElementManager<TestElement> {
     fileLockManager: FileLockManager,
     fileOperationsService: FileOperationsService,
     validationRegistry: ValidationRegistry,
-    options: BaseElementManagerOptions = {}
+    options: Partial<BaseElementManagerOptions> = {}
   ) {
-    super(elementType, portfolioManager, fileLockManager, options, fileOperationsService, validationRegistry);
+    super(elementType, portfolioManager, fileLockManager, { eventDispatcher: new ElementEventDispatcher(), ...options }, fileOperationsService, validationRegistry);
   }
 
   protected async parseMetadata(data: any): Promise<TestElementMetadata & { description: string }> {
@@ -164,7 +168,10 @@ describe('BaseElementManager - Requirements & Contract', () => {
     );
 
     createManager = (opts?: BaseElementManagerOptions) =>
-      new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, fileOperationsService, validationRegistry, opts);
+      new TestElementManager(ElementType.SKILL, portfolioManager, fileLockManager, fileOperationsService, validationRegistry, {
+        storageLayerFactory: createTestStorageFactory(fileOperationsService),
+        ...opts,
+      });
 
     manager = createManager();
 
@@ -175,6 +182,9 @@ describe('BaseElementManager - Requirements & Contract', () => {
     fileLockManager.atomicReadFile = jest.fn(async (filePath: string) => {
       return fs.readFile(filePath, 'utf-8');
     }) as any;
+    (fileLockManager as any).withLock = jest.fn(
+      async (_resource: string, fn: () => Promise<unknown>) => fn()
+    );
     (SecurityMonitor as any).logSecurityEvent = jest.fn();
 
     jest.clearAllMocks();
@@ -629,7 +639,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       await manager.save(element, testPath);
 
       // Cache should contain the saved element
-      expect((manager as any).elements.has(element.id)).toBe(true);
+      expect((manager as any).elements.has(cacheKeyFor(manager, element.id))).toBe(true);
     });
 
     it('removes an element from the cache when deleting', async () => {
@@ -1022,7 +1032,8 @@ describe('BaseElementManager - Requirements & Contract', () => {
 
       failingManager = new FailingTestManager(
         ElementType.SKILL, portfolioManager, fileLockManager,
-        fileOperationsService, validationRegistry
+        fileOperationsService, validationRegistry,
+        { storageLayerFactory: createTestStorageFactory(fileOperationsService) }
       );
       fileLockManager.atomicReadFile = jest.fn(async (filePath: string) => {
         return fs.readFile(filePath, 'utf-8');
@@ -1079,7 +1090,7 @@ describe('BaseElementManager - Requirements & Contract', () => {
       const dispatchManager = new FailingDispatchManager(
         ElementType.SKILL, portfolioManager, fileLockManager,
         fileOperationsService, validationRegistry,
-        { eventDispatcher: dispatcher },
+        { eventDispatcher: dispatcher, storageLayerFactory: createTestStorageFactory(fileOperationsService) },
       );
 
       await fs.writeFile(

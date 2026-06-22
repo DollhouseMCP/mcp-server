@@ -5,21 +5,18 @@
  */
 
 import { BaseElementManager } from '../base/BaseElementManager.js';
-import { Skill, SkillMetadata } from './Skill.js';
+import type { ElementManagerDeps } from '../base/BaseElementManager.js';
+import { Skill } from './Skill.js';
+import type { SkillMetadata } from './Skill.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
 import { logger } from '../../utils/logger.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
-import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
-import { ValidationService } from '../../services/validation/ValidationService.js';
-import { SerializationService } from '../../services/SerializationService.js';
-import { MetadataService } from '../../services/MetadataService.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
-import { FileWatchService } from '../../services/FileWatchService.js';
+import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
+import type { ValidationService } from '../../services/validation/ValidationService.js';
+import type { SerializationService } from '../../services/SerializationService.js';
+import type { MetadataService } from '../../services/MetadataService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
@@ -31,29 +28,43 @@ const TRIGGER_VALIDATION_REGEX = /^[a-zA-Z0-9\-_@.]+$/;
 
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
-
 export class SkillManager extends BaseElementManager<Skill> {
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
-  // Track active skills by name (stable identifier)
-  private activeSkillNames: Set<string> = new Set();
+  private readonly metadataService: MetadataService;
+  // Fallback for tests/callers that don't inject the registry
+  private readonly _localActiveSkillNames: Set<string> = new Set();
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    fileLockManager: FileLockManager,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    serializationService: SerializationService,
-    private metadataService: MetadataService,
-    fileWatchService?: FileWatchService,
-    memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
-  ) {
-    super(ElementType.SKILL, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
-    this.triggerValidationService = validationRegistry.getTriggerValidationService();
-    this.validationService = validationRegistry.getValidationService();
-    this.serializationService = serializationService;
+  constructor(deps: ElementManagerDeps) {
+    super(
+      ElementType.SKILL,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
+        storageLayerFactory: deps.storageLayerFactory,
+        getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
+    this.metadataService = deps.metadataService;
+    this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.serializationService = deps.serializationService;
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('skills', this._localActiveSkillNames);
   }
 
   protected override getElementLabel(): string {
@@ -73,7 +84,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Skill creation warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -83,7 +94,10 @@ export class SkillManager extends BaseElementManager<Skill> {
       maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
       allowSpaces: true
     });
-    const sanitizedName = nameResult.sanitizedValue!;
+    const sanitizedName = nameResult.sanitizedValue;
+    if (!sanitizedName) {
+      throw new Error('Skill name validation did not return a sanitized value');
+    }
 
     // Use inherited getElementFilename() for consistent filename normalization
     const filename = this.getElementFilename(sanitizedName);
@@ -129,15 +143,16 @@ export class SkillManager extends BaseElementManager<Skill> {
   }
 
   /**
-   * Import a skill from YAML or JSON input formats.
+   * Import a skill from Markdown/YAML frontmatter or JSON input formats.
    */
-  async importElement(data: string, format: 'yaml' | 'json' = 'yaml'): Promise<Skill> {
+  async importElement(data: string, format: 'yaml' | 'json' | 'markdown' = 'yaml'): Promise<Skill> {
+    await Promise.resolve();
     try {
       let metadata: any;
       let instructions: string;
 
-      if (format === 'yaml') {
-        // Use SerializationService for YAML parsing
+      if (format === 'yaml' || format === 'markdown') {
+        // Use SerializationService for YAML frontmatter parsing
         const result = this.serializationService.parseFrontmatter(data, {
           maxYamlSize: 64 * 1024,
           validateContent: true,
@@ -177,9 +192,13 @@ export class SkillManager extends BaseElementManager<Skill> {
   }
 
   /**
-   * Export a skill to YAML or JSON.
+   * Export a skill to Markdown/YAML frontmatter, YAML, or JSON.
    */
-  async exportElement(element: Skill, format: 'yaml' | 'json' = 'yaml'): Promise<string> {
+  async exportElement(element: Skill, format: 'yaml' | 'json' | 'markdown' = 'yaml'): Promise<string> {
+    if (format === 'markdown') {
+      return this.serializeElement(element);
+    }
+
     if (format === 'yaml') {
       const data = {
         metadata: element.metadata,
@@ -214,7 +233,7 @@ export class SkillManager extends BaseElementManager<Skill> {
   /**
    * Validate and normalize metadata parsed from frontmatter.
    */
-  protected async parseMetadata(data: any): Promise<SkillMetadata> {
+  protected parseMetadata(data: any): Promise<SkillMetadata> {
     const metadata = { ...(data as SkillMetadata) };
 
     if (Array.isArray(data?.triggers)) {
@@ -229,10 +248,10 @@ export class SkillManager extends BaseElementManager<Skill> {
     // Issue #676: Sanitize gatekeeper policy on load to prevent prompt-injection attacks
     // Malformed policies are stripped and logged as security events (never reach enforcement)
     if (metadata.gatekeeper) {
-      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'skill', metadata as Record<string, unknown>);
+      metadata.gatekeeper = sanitizeGatekeeperPolicy(metadata.gatekeeper, metadata.name || 'unknown', 'skill', metadata);
     }
 
-    return metadata;
+    return Promise.resolve(metadata);
   }
 
   /**
@@ -265,7 +284,7 @@ export class SkillManager extends BaseElementManager<Skill> {
    * Serialize a skill to markdown with frontmatter.
    * v2.0 format: instructions in YAML frontmatter, content as body.
    */
-  protected async serializeElement(element: Skill): Promise<string> {
+  protected serializeElement(element: Skill): Promise<string> {
     // Prepare metadata with version and instructions
     const metadata: Record<string, any> = { ...element.metadata };
     // Issue #755: Serialize type as singular and persist unique_id
@@ -284,17 +303,18 @@ export class SkillManager extends BaseElementManager<Skill> {
     // Body is the reference content
     const body = element.content || this.buildDefaultBody(element);
 
-    return this.serializationService.createFrontmatter(metadata, body, {
+    return Promise.resolve(this.serializationService.createFrontmatter(metadata, body, {
       method: 'matter',
       cleanMetadata: true,
       cleaningStrategy: 'remove-both',  // Fix #913: standardize across all managers
       schema: 'json'  // Fix #914: failsafe corrupts booleans/numbers to strings
-    });
+    }));
   }
 
   private buildDefaultBody(skill: Skill): string {
-    const name = (skill.metadata.name ?? '').trim();
-    const description = (skill.metadata.description ?? '').trim();
+    const metadata = skill.metadata as Partial<SkillMetadata>;
+    const name = (metadata.name ?? '').trim();
+    const description = (metadata.description ?? '').trim();
     const lines: string[] = [];
     if (name) {
       lines.push(`# ${name}`);
@@ -309,12 +329,12 @@ export class SkillManager extends BaseElementManager<Skill> {
   /**
    * Override list() to apply active status to skills
    */
-  override async list(): Promise<Skill[]> {
-    const skills = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<Skill[]> {
+    const skills = await super.list(options);
 
     // Apply active status to skills that are in the active set (by name)
     for (const skill of skills) {
-      if (this.activeSkillNames.has(skill.metadata.name)) {
+      if (this.getActivationSet().has(skill.metadata.name)) {
         // Access the protected _status field and set to ACTIVE (value 2)
         await skill.activate();
       }
@@ -347,7 +367,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     this.checkAndCleanupActiveSet();
 
     // Add to active set (by name, which is stable across reloads)
-    this.activeSkillNames.add(skill.metadata.name);
+    this.getActivationSet().add(skill.metadata.name);
 
     // Update skill status in memory
     await skill.activate();
@@ -388,7 +408,7 @@ export class SkillManager extends BaseElementManager<Skill> {
     }
 
     // Remove from active set
-    this.activeSkillNames.delete(skill.metadata.name);
+    this.getActivationSet().delete(skill.metadata.name);
 
     // Update skill status in memory
     await skill.deactivate();
@@ -407,7 +427,7 @@ export class SkillManager extends BaseElementManager<Skill> {
    */
   async getActiveSkills(): Promise<Skill[]> {
     const results: Skill[] = [];
-    for (const name of this.activeSkillNames) {
+    for (const name of this.getActivationSet()) {
       const skill = await this.findByName(name);
       if (skill) results.push(skill);
     }
@@ -436,12 +456,12 @@ export class SkillManager extends BaseElementManager<Skill> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('skills');
 
     // Below threshold — no action needed
-    if (this.activeSkillNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeSkillNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active skills limit reached (${max}). ` +
         `Consider deactivating unused skills or setting DOLLHOUSE_MAX_ACTIVE_SKILLS to a higher value.`
@@ -451,7 +471,7 @@ export class SkillManager extends BaseElementManager<Skill> {
         type: 'ELEMENT_CREATED',
         severity: 'MEDIUM',
         source: 'SkillManager.checkAndCleanupActiveSet',
-        details: `Active skills limit reached: ${this.activeSkillNames.size}/${max}`
+        details: `Active skills limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
@@ -471,20 +491,20 @@ export class SkillManager extends BaseElementManager<Skill> {
    */
   private async cleanupStaleActiveSkills(): Promise<void> {
     try {
-      const startSize = this.activeSkillNames.size;
+      const startSize = this.getActivationSet().size;
       const skills = await this.list();
       const existingSkillNames = new Set(skills.map(s => s.metadata.name));
 
       // Remove any active skill names that no longer exist in portfolio
       const staleNames: string[] = [];
-      for (const activeName of this.activeSkillNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingSkillNames.has(activeName)) {
-          this.activeSkillNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeSkillNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {

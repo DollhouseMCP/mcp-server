@@ -47,7 +47,11 @@ const config = {
 
   // Setup and teardown
   globalSetup: '<rootDir>/tests/setup.ts',
-  globalTeardown: '<rootDir>/tests/teardown.ts'
+  globalTeardown: '<rootDir>/tests/teardown.ts',
+
+  // Per-worker env setup — runs before any test imports so LOG_LEVEL is
+  // visible to module-level env config evaluation (src/config/env.ts).
+  setupFiles: ['<rootDir>/tests/setupEnv.integration.cjs']
 };
 
 if (hasVMModules) {

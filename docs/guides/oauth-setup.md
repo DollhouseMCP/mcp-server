@@ -1,6 +1,13 @@
-# OAuth Setup Guide for DollhouseMCP
+# OAuth Setup Guide for DollhouseMCP — Portfolio Sync
 
-This guide explains how to configure GitHub OAuth for the DollhouseMCP server.
+> **DollhouseMCP has two GitHub OAuth features. This guide covers one of them.**
+>
+> - **This guide** — *portfolio sync*. The DollhouseMCP server authenticates *to* GitHub *as you*, so it can read/write your GitHub portfolio repository. Uses GitHub's device flow. Configured via `DOLLHOUSE_GITHUB_CLIENT_ID`. Driven by the `setup_github_auth` MCP tool.
+> - **User authentication** — users authenticate *to* a DollhouseMCP server, with GitHub as the identity provider. Uses GitHub's web flow with a registered callback URL. Configured via `DOLLHOUSE_AUTH_GITHUB_CLIENT_ID` and `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET`. See [auth-server-setup.md](./auth-server-setup.md) for the full operator runbook, or [deployment-configuration.md § Embedded authorization server](./deployment-configuration.md#embedded-authorization-server-dollhouse_auth_providerembedded) for the env-var reference.
+>
+> The two features want different OAuth-app shapes (device flow vs web flow) and use separate env vars so operators can register distinct apps. The legacy `DOLLHOUSE_GITHUB_CLIENT_ID` / `_SECRET` pair still works as a fallback for the user-auth flow with a deprecation warning, but new deployments should use the `DOLLHOUSE_AUTH_*` pair for clarity.
+
+This guide explains how to configure GitHub OAuth for the **portfolio-sync** feature.
 
 ## Quick Start (Most Users)
 
@@ -136,7 +143,7 @@ If you're setting up your own instance, follow the administrator instructions ab
 1. **Device Flow**: When you authenticate, the server uses GitHub's device flow (an OAuth 2.0 authentication method for devices without browsers, where you enter a code on another device)
 2. **User Code**: You'll receive a code like `AB12-CD34`
 3. **Authorization**: Visit https://github.com/login/device and enter your code
-4. **Token Storage**: Once authorized, your token is stored securely in `~/.dollhouse/.auth/`
+4. **Token Storage**: Once authorized, your token is stored securely in your user auth directory as `github_token.enc` in file mode, or in the database `user_oauth_tokens` table with envelope encryption when `DOLLHOUSE_STORAGE_BACKEND=database`
 5. **Persistence**: Authentication persists across server restarts
 
 ## Testing Your OAuth Setup

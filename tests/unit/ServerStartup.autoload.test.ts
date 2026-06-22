@@ -22,9 +22,11 @@ import { ValidationService } from '../../src/services/validation/ValidationServi
 import { TriggerValidationService } from '../../src/services/validation/TriggerValidationService.js';
 import { ValidationRegistry } from '../../src/services/validation/ValidationRegistry.js';
 import { OperationalTelemetry } from '../../src/telemetry/OperationalTelemetry.js';
+import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
 import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
+import { createTestStorageFactory } from '../helpers/createTestStorageFactory.js';
 
 describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
   let testDir: string;
@@ -88,14 +90,16 @@ describe('ServerStartup - Auto-Load Integration (Issue #1430)', () => {
     );
 
     // Create MemoryManager with all required dependencies
-    memoryManager = new MemoryManager(
+    memoryManager = new MemoryManager({
       portfolioManager,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
-      metadataService
-    );
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+    });
 
     // Create MigrationManager and OperationalTelemetry for ServerStartup
     const migrationManager = new MigrationManager(portfolioManager, fileLockManager);

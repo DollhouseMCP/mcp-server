@@ -9,7 +9,7 @@
  * docs/architecture/permission-hook-platform-contracts.md.
  */
 
-import { describe, expect, it, afterEach } from '@jest/globals';
+import { describe, expect, it, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -17,9 +17,6 @@ import * as http from 'node:http';
 import { spawn } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 
-const RUN_DIR = path.join(os.homedir(), '.dollhouse', 'run');
-const PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
-const PID_PORT_FILE = path.join(RUN_DIR, `permission-server-${process.pid}.port`);
 // Hook script lives in the repo at scripts/ — works on both dev machines and CI
 const HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-dollhouse.sh');
 const CURSOR_HOOK_SCRIPT = path.join(process.cwd(), 'scripts', 'pretooluse-cursor.sh');
@@ -30,6 +27,24 @@ const SAFE_TEST_PATH = '/usr/bin:/bin:/usr/sbin:/sbin';
 const BASH_BINARY = '/bin/bash';
 
 describe('Permission Server Integration', () => {
+  // Use a unique tmp dir as the run directory for every test (DOLLHOUSE_RUN_DIR
+  // override). Without this, parallel test execution races against
+  // tests/unit/web/portDiscovery.test.ts on the shared `permission-server.port`.
+  let RUN_DIR: string;
+  let PORT_FILE: string;
+  let PID_PORT_FILE: string;
+
+  beforeEach(async () => {
+    RUN_DIR = await fs.mkdtemp(path.join(os.tmpdir(), 'permsrv-integ-'));
+    PORT_FILE = path.join(RUN_DIR, 'permission-server.port');
+    PID_PORT_FILE = path.join(RUN_DIR, `permission-server-${process.pid}.port`);
+    process.env.DOLLHOUSE_RUN_DIR = RUN_DIR;
+  });
+
+  afterEach(async () => {
+    delete process.env.DOLLHOUSE_RUN_DIR;
+    if (RUN_DIR) await fs.rm(RUN_DIR, { recursive: true, force: true });
+  });
 
   describe('end-to-end HTTP endpoint', () => {
     let server: http.Server | undefined;
@@ -248,7 +263,7 @@ describe('Permission Server Integration', () => {
       const mockServer = http.createServer((req, res) => {
         if (req.method === 'POST' && req.url === '/api/evaluate_permission') {
           let body = '';
-          req.on('data', chunk => { body += chunk; });
+          req.on('data', (chunk: Buffer) => { body += chunk.toString(); });
           req.on('end', () => {
             capturedBody = JSON.parse(body);
             res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -278,6 +293,7 @@ describe('Permission Server Integration', () => {
             HOME: tempHome,
             PATH: SAFE_TEST_PATH,
             DOLLHOUSE_SESSION_ID: 'session-hook-test',
+            DOLLHOUSE_RUN_DIR: tempRunDir,
           },
           stdio: ['pipe', 'pipe', 'pipe'],
         });
@@ -403,7 +419,7 @@ describe('Permission Server Integration', () => {
           tool_name: 'Bash',
           tool_input: { command: 'git push --force' },
         },
-        { HOME: tempHome },
+        { HOME: tempHome, DOLLHOUSE_RUN_DIR: tempRunDir },
       );
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
@@ -449,7 +465,7 @@ describe('Permission Server Integration', () => {
           tool_name: 'Edit',
           tool_input: { file_path: 'src/index.ts' },
         },
-        { HOME: tempHome },
+        { HOME: tempHome, DOLLHOUSE_RUN_DIR: tempRunDir },
       );
 
       await new Promise<void>(resolve => mockServer.close(() => resolve()));
@@ -1144,6 +1160,7 @@ function runHookScript(
           os.tmpdir(),
           `permission-hook-test-${process.pid}-${Date.now()}-${randomUUID()}.jsonl`,
         ),
+        DOLLHOUSE_RUN_DIR: process.env.DOLLHOUSE_RUN_DIR ?? '',
         ...envOverrides,
       },
       stdio: ['pipe', 'pipe', 'pipe'],

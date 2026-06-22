@@ -21,8 +21,7 @@ import { Ensemble, EnsembleMetadata, EnsembleElement } from './Ensemble.js';
 import { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
-import { BaseElementManager } from '../base/BaseElementManager.js';
-import { FileLockManager } from '../../security/fileLockManager.js';
+import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import {
@@ -36,13 +35,9 @@ import {
   ACTIVATION_MODES
 } from './constants.js';
 import type { ActivationStrategy, ConflictResolutionStrategy, ElementRole, ActivationMode } from './types.js';
-import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
-import { FileOperationsService } from '../../services/FileOperationsService.js';
-import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { VALIDATION_PATTERNS, SECURITY_LIMITS } from '../../security/constants.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -78,24 +73,39 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly ensemblesDir: string;
   private validationService: ValidationService;
   private serializationService: SerializationService;
-  private activeEnsembleNames: Set<string> = new Set();
+  private readonly metadataService: MetadataService;
+  private readonly _localActiveEnsembleNames: Set<string> = new Set();
   private readonly legacyElementFieldWarnings: Set<string> = new Set();
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    fileLockManager: FileLockManager,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    serializationService: SerializationService,
-    private metadataService: MetadataService,
-    fileWatchService?: FileWatchService,
-    memoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget,
-    backupService?: import('../../services/BackupService.js').BackupService
-  ) {
-    super(ElementType.ENSEMBLE, portfolioManager, fileLockManager, { fileWatchService, memoryBudget, backupService }, fileOperationsService, validationRegistry);
+  constructor(deps: ElementManagerDeps) {
+    super(
+      ElementType.ENSEMBLE,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
+        storageLayerFactory: deps.storageLayerFactory,
+        getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
     this.ensemblesDir = this.elementDir;
-    this.validationService = validationRegistry.getValidationService();
-    this.serializationService = serializationService;
+    this.metadataService = deps.metadataService;
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.serializationService = deps.serializationService;
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('ensembles', this._localActiveEnsembleNames);
   }
 
   protected override getElementLabel(): string {
@@ -897,14 +907,14 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   }
 
   /**
-   * Override list to apply active status based on activeEnsembleNames set
+   * Override list to apply active status based on the per-session activation set
    */
-  override async list(): Promise<Ensemble[]> {
-    const ensembles = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<Ensemble[]> {
+    const ensembles = await super.list(options);
 
-    // Apply ACTIVE status to ensembles in the activeEnsembleNames set
+    // Apply ACTIVE status to ensembles in the per-session activation set
     for (const ensemble of ensembles) {
-      if (this.activeEnsembleNames.has(ensemble.metadata.name)) {
+      if (this.getActivationSet().has(ensemble.metadata.name)) {
         // Call activate() to set status to ACTIVE
         await ensemble.activate();
       }
@@ -943,7 +953,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     // MEMORY LEAK FIX: Check if cleanup is needed before adding
     this.checkAndCleanupActiveSet();
 
-    this.activeEnsembleNames.add(ensemble.metadata.name);
+    this.getActivationSet().add(ensemble.metadata.name);
 
     // Set ensemble status to active
     await ensemble.activate();
@@ -974,7 +984,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    */
   async deactivateEnsemble(identifier: string): Promise<{ success: boolean; message: string; ensemble?: Ensemble }> {
     // No scanAndEvict() here — intentional. Deactivation only needs the ensemble's
-    // name (to remove from activeEnsembleNames) and calls deactivate() which sets
+    // name (to remove from the per-session activation set) and calls deactivate() which sets
     // a status flag. It does not consume the elements list, so stale cached element
     // data has no effect on correctness. Compare with activateEnsemble(), which
     // ingests the full element list to orchestrate sub-element loading and must
@@ -991,7 +1001,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       };
     }
 
-    this.activeEnsembleNames.delete(ensemble.metadata.name);
+    this.getActivationSet().delete(ensemble.metadata.name);
 
     // Set ensemble status to inactive
     await ensemble.deactivate();
@@ -1018,7 +1028,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    */
   async getActiveEnsembles(): Promise<Ensemble[]> {
     const results: Ensemble[] = [];
-    for (const name of this.activeEnsembleNames) {
+    for (const name of this.getActivationSet()) {
       const ensemble = await this.findByName(name);
       if (ensemble) results.push(ensemble);
     }
@@ -1034,12 +1044,12 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('ensembles');
 
     // Below threshold — no action needed
-    if (this.activeEnsembleNames.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeEnsembleNames.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active ensembles limit reached (${max}). ` +
         `Consider deactivating unused ensembles or setting DOLLHOUSE_MAX_ACTIVE_ENSEMBLES to a higher value.`
@@ -1049,7 +1059,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         type: 'ELEMENT_CREATED',
         severity: 'MEDIUM',
         source: 'EnsembleManager.checkAndCleanupActiveSet',
-        details: `Active ensembles limit reached: ${this.activeEnsembleNames.size}/${max}`
+        details: `Active ensembles limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
@@ -1064,19 +1074,19 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    */
   private async cleanupStaleActiveEnsembles(): Promise<void> {
     try {
-      const startSize = this.activeEnsembleNames.size;
+      const startSize = this.getActivationSet().size;
       const ensembles = await this.list();
       const existingEnsembleNames = new Set(ensembles.map(e => e.metadata.name));
 
       const staleNames: string[] = [];
-      for (const activeName of this.activeEnsembleNames) {
+      for (const activeName of this.getActivationSet()) {
         if (!existingEnsembleNames.has(activeName)) {
-          this.activeEnsembleNames.delete(activeName);
+          this.getActivationSet().delete(activeName);
           staleNames.push(activeName);
         }
       }
 
-      const endSize = this.activeEnsembleNames.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {

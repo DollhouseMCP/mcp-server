@@ -6,8 +6,8 @@
 import { ConfigManager } from './ConfigManager.js';
 import { logger } from '../utils/logger.js';
 import { readFileSync } from 'fs';
-import { fileURLToPath } from 'url';
-import { dirname, join } from 'path';
+import { join } from 'node:path';
+import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
 
 export class ConfigWizardCheck {
   private hasCheckedWizard: boolean = false;
@@ -24,9 +24,8 @@ export class ConfigWizardCheck {
    */
   private getCurrentVersion(): string {
     try {
-      const __filename = fileURLToPath(import.meta.url);
-      const __dirname = dirname(__filename);
-      const packagePath = join(__dirname, '..', '..', 'package.json');
+      const locator = new PackageResourceLocator();
+      const packagePath = join(locator.getPackageRoot(), 'package.json');
       const packageJson = JSON.parse(readFileSync(packagePath, 'utf-8'));
       return packageJson.version;
     } catch (error) {

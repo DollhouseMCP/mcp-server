@@ -3,35 +3,40 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { Persona, PersonaMetadata } from '../types/persona.js';
-import { PersonaElement, PersonaElementMetadata } from './PersonaElement.js';
+import type { Persona, PersonaMetadata } from '../types/persona.js';
+import type { PersonaElementMetadata } from './PersonaElement.js';
+import { PersonaElement } from './PersonaElement.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { validateFilename, sanitizeInput, validateContentSize } from '../security/InputValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
-import { PathValidator } from '../security/pathValidator.js';
-import { FileLockManager } from '../security/fileLockManager.js';
+// Issue #1948: PathValidator import removed — initialized via DI container, not PersonaManager
+import type { FileLockManager } from '../security/fileLockManager.js';
 import { SecureErrorHandler } from '../security/errorHandler.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { IndicatorConfig, formatIndicator } from '../config/indicator-config.js';
-import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
+import type { IndicatorConfig} from '../config/indicator-config.js';
+import { formatIndicator } from '../config/indicator-config.js';
+import type { PortfolioManager} from '../portfolio/PortfolioManager.js';
+import { ElementType } from '../portfolio/PortfolioManager.js';
 import { toSingularLabel } from '../utils/elementTypeNormalization.js';
-import { StateChangeNotifier, type PersonaStateChangeType } from '../services/StateChangeNotifier.js';
+import type { StateChangeNotifier, PersonaStateChangeType } from '../services/StateChangeNotifier.js';
+import type { SessionActivationState, SessionUserIdentity } from '../state/SessionActivationState.js';
 import { generateUniqueId } from '../utils/filesystem.js';
 import { logger } from '../utils/logger.js';
 import { isDefaultPersona } from '../constants/defaultPersonas.js';
-import { PersonaImporter, ImportResult } from './export-import/PersonaImporter.js';
-import { BaseElementManager, type BaseElementManagerOptions } from '../elements/base/BaseElementManager.js';
+import type { PersonaImporter, ImportResult } from './export-import/PersonaImporter.js';
+import { BaseElementManager, type ElementManagerDeps } from '../elements/base/BaseElementManager.js';
 import { VALIDATION_CONSTANTS } from '../elements/base/ElementValidation.js';
 import { normalizeVersion } from '../elements/BaseElement.js';
-import { ValidationRegistry } from '../services/validation/ValidationRegistry.js';
-import { TriggerValidationService } from '../services/validation/TriggerValidationService.js';
-import { ValidationService } from '../services/validation/ValidationService.js';
-import { MetadataService } from '../services/MetadataService.js';
+import type { TriggerValidationService } from '../services/validation/TriggerValidationService.js';
+import type { ValidationService } from '../services/validation/ValidationService.js';
+import type { MetadataService } from '../services/MetadataService.js';
 import { SerializationService } from '../services/SerializationService.js';
-import { FileOperationsService } from '../services/FileOperationsService.js';
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../config/active-element-limits.js';
+import type { ContextTracker } from '../security/encryption/ContextTracker.js';
+// STDIO_DEFAULT_USER_ID guard removed in Phase 3 (Issue #1946) — SessionContext is now the identity authority
+import { SYSTEM_CONTEXT } from '../context/ContextPolicy.js';
 
 /**
  * Validated and sanitized persona input data
@@ -47,18 +52,160 @@ interface ValidatedPersonaInputs {
   author: string;
 }
 
-interface PersonaManagerOptions extends BaseElementManagerOptions {
+
+export interface PersonaManagerDeps extends ElementManagerDeps {
+  indicatorConfig: IndicatorConfig;
   personaImporter?: PersonaImporter;
   notifier?: StateChangeNotifier;
+  contextTracker?: ContextTracker;
+}
+
+/**
+ * Validate + sanitize an edit-value through the security pipeline
+ * (Unicode normalization → ContentValidator). Logs a CONTENT_INJECTION_ATTEMPT
+ * security event on rejection. Throws on any validation failure; returns
+ * the sanitized value on success. Extracted from editPersona to keep its
+ * cognitive complexity ≤15 (S3776).
+ */
+function validateAndSanitizeEditValue(value: string, fieldName: string): string {
+  const unicodeResult = UnicodeValidator.normalize(value);
+  if (!unicodeResult.isValid && unicodeResult.severity === 'critical') {
+    throw new Error(`Value contains dangerous Unicode patterns: ${unicodeResult.detectedIssues?.join(', ')}`);
+  }
+  const valueValidation = ContentValidator.validateAndSanitize(unicodeResult.normalizedContent);
+  if (!valueValidation.isValid) {
+    SecurityMonitor.logSecurityEvent({
+      type: 'CONTENT_INJECTION_ATTEMPT',
+      severity: 'MEDIUM',
+      source: 'PersonaManager.editPersona',
+      details: `Edit value validation failed: ${valueValidation.detectedPatterns?.join(', ')}`,
+      additionalData: {
+        field: fieldName,
+        severity: valueValidation.severity,
+      },
+    });
+    throw new Error(`Security Validation Failed: The new value contains prohibited content: ${valueValidation.detectedPatterns?.join(', ')}`);
+  }
+  return valueValidation.sanitizedContent || unicodeResult.normalizedContent;
+}
+
+/**
+ * Dispatch a sanitized edit value into the matching persona field.
+ * Mutates `persona` in place. Extracted from editPersona to keep its
+ * cognitive complexity ≤15 (S3776).
+ */
+function applyEditValueToPersona(
+  persona: PersonaElement,
+  field: string,
+  sanitizedValue: string,
+): void {
+  if (field === 'instructions') {
+    persona.instructions = sanitizedValue;
+    return;
+  }
+  if (field === 'triggers') {
+    persona.metadata.triggers = sanitizedValue
+      .split(',')
+      .map(t => sanitizeInput(t.trim(), 50))
+      .filter(t => t.length > 0);
+    return;
+  }
+  if (field === 'name') {
+    persona.metadata.name = sanitizeInput(sanitizedValue, 100);
+    return;
+  }
+  if (field === 'category') {
+    persona.metadata.category = sanitizeInput(sanitizedValue, 50).toLowerCase() || 'general';
+    return;
+  }
+  if (field === 'description') {
+    persona.metadata.description = sanitizedValue;
+    return;
+  }
+  if (field === 'version') {
+    persona.metadata.version = sanitizedValue;
+    persona.version = sanitizedValue;
+  }
+}
+
+/**
+ * Auto-increment a persona's version following semver rules. Pre-release
+ * versions bump the pre-release counter; standard versions bump patch.
+ * Returns the new version string. Extracted from editPersona to keep
+ * its cognitive complexity ≤15 (S3776).
+ */
+function bumpPatchVersion(currentVersion: string | undefined): string {
+  if (!currentVersion) return '1.0.0';
+  const normalized = normalizeVersion(String(currentVersion));
+  const versionMatch = normalized.match(/^(\d+)\.(\d+)\.(\d+)(-.*)?$/);
+  if (!versionMatch) return '1.0.1';
+
+  const [, major, minor, patch, preRelease] = versionMatch;
+  if (!preRelease) {
+    return `${major}.${minor}.${Number.parseInt(patch) + 1}`;
+  }
+
+  const preReleaseMatch = preRelease.match(/^-([a-zA-Z]+)\.?(\d+)?$/);
+  if (!preReleaseMatch) {
+    return `${major}.${minor}.${Number.parseInt(patch) + 1}`;
+  }
+  const [, preReleaseType, preReleaseNum] = preReleaseMatch;
+  const nextNum = Number.parseInt(preReleaseNum || '0') + 1;
+  return `${major}.${minor}.${patch}-${preReleaseType}.${nextNum}`;
+}
+
+/**
+ * Whether a body already opens with the element's `# name` title heading (after
+ * any leading whitespace). Used to keep the serialize-time heading prepend
+ * idempotent across the multiple serialize passes a single write performs.
+ */
+function bodyOpensWithHeading(body: string, name: string): boolean {
+  const firstLine = body.replace(/^\s+/, '').split('\n', 1)[0] ?? '';
+  return firstLine.trim() === `# ${name}`;
+}
+
+/**
+ * Validate and sanitize a username for setUserIdentity. Applies Unicode
+ * normalization, refuses critical Unicode patterns, enforces the
+ * project-wide username format (3-50 chars, alphanumeric + `-` + `_`),
+ * and returns the sanitized value. Throws on any rejection. Extracted
+ * from setUserIdentity for the cognitive-complexity refactor.
+ */
+function validateAndSanitizeUsername(username: string): string {
+  const usernameUnicode = UnicodeValidator.normalize(username);
+  if (!usernameUnicode.isValid && usernameUnicode.severity === 'critical') {
+    throw new Error(`Username contains dangerous Unicode patterns: ${usernameUnicode.detectedIssues?.join(', ')}`);
+  }
+  const usernameRegex = /^[a-zA-Z0-9\-_]{3,50}$/;
+  if (!usernameRegex.test(usernameUnicode.normalizedContent)) {
+    throw new Error(
+      'Invalid username format. Must be 3-50 characters, alphanumeric with hyphens/underscores only'
+    );
+  }
+  return sanitizeInput(usernameUnicode.normalizedContent, 50);
+}
+
+/**
+ * Validate an email's Unicode normalization + format. Throws on any
+ * rejection. Caller is responsible for storing the normalized value.
+ * Extracted from setUserIdentity for the cognitive-complexity refactor.
+ */
+function validateEmail(email: string): void {
+  const emailUnicode = UnicodeValidator.normalize(email);
+  if (!emailUnicode.isValid && emailUnicode.severity === 'critical') {
+    throw new Error(`Email contains dangerous Unicode patterns: ${emailUnicode.detectedIssues?.join(', ')}`);
+  }
+  const emailRegex = /^[^\s@]+@[^\s@][^\s.@]*\.[^\s@]+$/;
+  if (!emailRegex.test(emailUnicode.normalizedContent)) {
+    throw new Error('Invalid email format');
+  }
 }
 
 export class PersonaManager extends BaseElementManager<PersonaElement> {
-  /**
-   * Track active personas by filename (stable identifier)
-   * Issue #281: Changed from single active persona to Set for multiple active
-   */
-  private activePersonas: Set<string> = new Set();
-  private currentUser: string | null = null;
+  // Fallback for tests/callers that don't inject the registry
+  private readonly _localActivePersonas: Set<string> = new Set();
+  // Fallback identity for when no registry is injected (tests)
+  private _localUserIdentity?: SessionUserIdentity;
   private indicatorConfig: IndicatorConfig;
   protected override portfolioManager: PortfolioManager;
   protected override fileLockManager: FileLockManager;
@@ -71,30 +218,70 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   private metadataService: MetadataService;
   private readonly serializationService: SerializationService;
 
-  constructor(
-    portfolioManager: PortfolioManager,
-    indicatorConfig: IndicatorConfig,
-    fileLockManager: FileLockManager,
-    fileOperationsService: FileOperationsService,
-    validationRegistry: ValidationRegistry,
-    metadataService: MetadataService,
-    personaImporter?: PersonaImporter,
-    notifier?: StateChangeNotifier,
-    baseOptions: PersonaManagerOptions = {}
-  ) {
-    super(ElementType.PERSONA, portfolioManager, fileLockManager, baseOptions, fileOperationsService, validationRegistry);
-    this.portfolioManager = portfolioManager;
-    this.fileLockManager = fileLockManager;
+  constructor(deps: PersonaManagerDeps) {
+    super(
+      ElementType.PERSONA,
+      deps.portfolioManager,
+      deps.fileLockManager,
+      {
+        eventDispatcher: deps.eventDispatcher,
+        fileWatchService: deps.fileWatchService,
+        memoryBudget: deps.memoryBudget,
+        backupService: deps.backupService,
+        backupServiceProvider: deps.backupServiceProvider,
+        contextTracker: deps.contextTracker,
+        activationRegistry: deps.activationRegistry,
+        storageLayerFactory: deps.storageLayerFactory,
+        getCurrentUserId: deps.getCurrentUserId,
+        publicElementDiscovery: deps.publicElementDiscovery,
+      },
+      deps.fileOperationsService,
+      deps.validationRegistry,
+    );
+    this.portfolioManager = deps.portfolioManager;
+    this.fileLockManager = deps.fileLockManager;
 
-    this.indicatorConfig = indicatorConfig;
-    this.personaImporter = baseOptions.personaImporter ?? personaImporter;
-    this.notifier = baseOptions.notifier ?? notifier;
+    this.indicatorConfig = deps.indicatorConfig;
+    this.personaImporter = deps.personaImporter;
+    this.notifier = deps.notifier;
     this.personasDir = this.portfolioManager.getElementDir(ElementType.PERSONA);
-    this.triggerValidationService = validationRegistry.getTriggerValidationService();
-    this.validationService = validationRegistry.getValidationService();
-    this.metadataService = metadataService;
+    this.triggerValidationService = deps.validationRegistry.getTriggerValidationService();
+    this.validationService = deps.validationRegistry.getValidationService();
+    this.metadataService = deps.metadataService;
     this.serializationService = new SerializationService();
     this.initializePathValidator();
+  }
+
+  /** Issue #1946: Per-session activation state via base class helper. */
+  private getActivationSet(): Set<string> {
+    return this.resolveActivationSet('personas', this._localActivePersonas);
+  }
+
+  /**
+   * Get the full SessionActivationState for the current session.
+   * Used for identity override access (userIdentity field).
+   * Issue #1946: Per-session identity.
+   */
+  private getSessionActivationState(): SessionActivationState | undefined {
+    if (!this.activationRegistry) return undefined;
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId
+      ?? this.activationRegistry.getDefaultSessionId();
+    return this.activationRegistry.getOrCreate(sessionId);
+  }
+
+  /** Get the current session's user identity override (with local fallback). */
+  private getSessionUserIdentity(): SessionUserIdentity | undefined {
+    return this.getSessionActivationState()?.userIdentity ?? this._localUserIdentity;
+  }
+
+  /** Set the current session's user identity override (with local fallback). */
+  private setSessionUserIdentity(identity: SessionUserIdentity | undefined): void {
+    const state = this.getSessionActivationState();
+    if (state) {
+      state.userIdentity = identity;
+    } else {
+      this._localUserIdentity = identity;
+    }
   }
 
   /**
@@ -124,10 +311,10 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
 
     // Check if active personas still exist after reload
     // Issue #281: Support multiple active personas
-    for (const activeFilename of [...this.activePersonas]) {
+    for (const activeFilename of [...this.getActivationSet()]) { // NOSONAR — spread required: loop body calls .delete() on the Set
       const stillExists = personas.some(p => this.deriveFilename(p) === activeFilename);
       if (!stillExists) {
-        this.activePersonas.delete(activeFilename);
+        this.getActivationSet().delete(activeFilename);
         this.notifyPersonaChange('persona-deactivated', activeFilename, null);
       }
     }
@@ -139,8 +326,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     const base =
-      persona.metadata?.unique_id ||
-      this.normalizeFilename(persona.metadata?.name || 'persona');
+      persona.metadata.unique_id ||
+      this.normalizeFilename(persona.metadata.name || 'persona');
 
     return base.endsWith('.md') ? base : `${base}.md`;
   }
@@ -187,7 +374,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   private normalizePersonaForSave(persona: PersonaElement): void {
-    const metadata: PersonaMetadata = { ...(persona.metadata ?? {}) };
+    const metadata: PersonaMetadata = { ...persona.metadata };
 
     // Sanitize name first (before MetadataService)
     const sanitizedName =
@@ -254,7 +441,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   getPersonas(): Map<string, Persona> {
     const map = new Map<string, Persona>();
-    for (const persona of this.elements.values()) {
+    for (const persona of this.getCachedElementsForCurrentNamespace()) {
       map.set(persona.filename, persona);
     }
     return map;
@@ -264,8 +451,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * List all personas as an array
    * Ensures all personas have filenames set
    */
-  override async list(): Promise<PersonaElement[]> {
-    const personas = await super.list();
+  override async list(options?: { includePublic?: boolean }): Promise<PersonaElement[]> {
+    const personas = await super.list(options);
     // Ensure filenames are set using deriveFilename logic
     for (const persona of personas) {
       if (!persona.filename) {
@@ -322,7 +509,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Strategy 1: Exact filename match (with or without .md)
     if (filename === trimmed || filename === filenameWithExt) return true;
     // Strategy 2: Name match (case-insensitive)
-    if (persona.metadata.name?.toLowerCase() === lower) return true;
+    if (persona.metadata.name.toLowerCase() === lower) return true;
     // Strategy 3: Unique ID match
     if (persona.id === trimmed || persona.metadata.unique_id === trimmed) return true;
 
@@ -334,7 +521,23 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return undefined;
     }
 
-    return this.elements.values().find(p => this.matchesIdentifier(p, identifier));
+    const candidate = this.getCachedElementsForCurrentNamespace()
+      .find(p => this.matchesIdentifier(p, identifier));
+
+    if (candidate) {
+      // Issue #843 follow-up: the iteration above scans cache values
+      // without going through LRUCache.get(), so the LRU never sees the
+      // access — hits don't get recorded and frequently-read personas
+      // can be evicted before stale ones under memory pressure. Touch
+      // the entry by ID so the LRU promotes it to MRU and bumps its
+      // internal hit counter.
+      this.touchCachedElement(candidate.id);
+      this.cacheMissMetrics.cacheHits++;
+    } else {
+      this.cacheMissMetrics.cacheMisses++;
+    }
+
+    return candidate;
   }
 
   /** In-flight disk lookups to prevent duplicate reads for the same identifier */
@@ -353,14 +556,13 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * share a single disk read to avoid redundant I/O in bridge/swarm scenarios.
    */
   async findPersonaAsync(identifier: string): Promise<PersonaElement | undefined> {
-    // Fast path: check LRU cache (synchronous, O(cache size))
+    // Fast path: check LRU cache (synchronous, O(cache size)).
+    // findPersona() now records hit/miss in cacheMissMetrics and touches
+    // the LRU on hit, so we don't double-count here.
     const cached = this.findPersona(identifier);
     if (cached) {
-      this.cacheMissMetrics.cacheHits++;
       return cached;
     }
-
-    this.cacheMissMetrics.cacheMisses++;
 
     // Deduplicate concurrent disk lookups for the same identifier
     const lookupKey = identifier.trim().toLowerCase();
@@ -419,7 +621,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Issue #281: Add to set instead of replacing
-    const wasAlreadyActive = this.activePersonas.has(persona.filename);
+    const wasAlreadyActive = this.getActivationSet().has(persona.filename);
     if (wasAlreadyActive) {
       return {
         success: true,
@@ -431,7 +633,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     // Issue #83: Check if cleanup is needed before adding
     this.checkAndCleanupActiveSet();
 
-    this.activePersonas.add(persona.filename);
+    this.getActivationSet().add(persona.filename);
     this.notifyPersonaChange('persona-activated', null, persona.filename);
 
     // SECURITY: Phase 4.4 - Log persona activation event
@@ -441,7 +643,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       source: 'PersonaManager.activatePersona',
       details: `Persona activated: ${persona.metadata.name}`,
       additionalData: {
-        activeCount: this.activePersonas.size,
+        activeCount: this.getActivationSet().size,
         filename: persona.filename
       }
     });
@@ -470,7 +672,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   deactivatePersona(identifier?: string): { success: boolean; message: string } {
     // If no identifier provided, return error (breaking change from single-active)
     if (!identifier) {
-      if (this.activePersonas.size === 0) {
+      if (this.getActivationSet().size === 0) {
         return {
           success: false,
           message: "No persona is currently active"
@@ -491,15 +693,15 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Issue #281: Return success=true for idempotent behavior (persona already inactive)
-    if (!this.activePersonas.has(persona.filename)) {
+    if (!this.getActivationSet().has(persona.filename)) {
       return {
         success: true,
         message: `Persona '${persona.metadata.name}' is already inactive`
       };
     }
 
-    const deleted = this.activePersonas.delete(persona.filename);
-    logger.debug(`[PersonaManager.deactivatePersona] deleted: ${deleted}, new size: ${this.activePersonas.size}`);
+    const deleted = this.getActivationSet().delete(persona.filename);
+    logger.debug(`[PersonaManager.deactivatePersona] deleted: ${deleted}, new size: ${this.getActivationSet().size}`);
     this.notifyPersonaChange('persona-deactivated', persona.filename, null);
 
     // Emit deactivation event for subscribers
@@ -523,8 +725,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: With multiple active personas, returns the first one
    */
   getActivePersona(): PersonaElement | null {
-    if (this.activePersonas.size === 0) return null;
-    const firstActive = this.activePersonas.values().next().value;
+    if (this.getActivationSet().size === 0) return null;
+    const firstActive = this.getActivationSet().values().next().value;
     return firstActive ? this.findPersona(firstActive) || null : null;
   }
 
@@ -534,7 +736,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   getActivePersonas(): PersonaElement[] {
     const personas: PersonaElement[] = [];
-    for (const filename of this.activePersonas) {
+    for (const filename of this.getActivationSet()) {
       const persona = this.findPersona(filename);
       if (persona) {
         personas.push(persona);
@@ -548,8 +750,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: For backward compatibility, returns first active persona ID
    */
   getActivePersonaId(): string | null {
-    if (this.activePersonas.size === 0) return null;
-    return this.activePersonas.values().next().value ?? null;
+    if (this.getActivationSet().size === 0) return null;
+    return this.getActivationSet().values().next().value ?? null;
   }
 
   /**
@@ -557,7 +759,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: New method to get all active persona IDs
    */
   getActivePersonaIds(): string[] {
-    return [...this.activePersonas];
+    return [...this.getActivationSet()];
   }
 
   /**
@@ -567,7 +769,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   isPersonaActive(identifier: string): boolean {
     const persona = this.findPersona(identifier);
     if (!persona) return false;
-    return this.activePersonas.has(persona.filename);
+    return this.getActivationSet().has(persona.filename);
   }
   
   /**
@@ -575,10 +777,10 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * Issue #281: Now supports multiple active personas - concatenates all indicators
    */
   getPersonaIndicator(): string {
-    if (this.activePersonas.size === 0) return "";
+    if (this.getActivationSet().size === 0) return "";
 
     const indicators: string[] = [];
-    for (const filename of this.activePersonas) {
+    for (const filename of this.getActivationSet()) {
       const persona = this.findPersona(filename);
       if (persona) {
         const indicator = formatIndicator(this.indicatorConfig, {
@@ -620,7 +822,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       description: validatedInputs.description,
       unique_id: validatedInputs.uniqueId,
       author: validatedInputs.author,
-      triggers: validatedInputs.triggers || metadataOverrides?.triggers,
+      triggers: validatedInputs.triggers,
       version: metadataOverrides?.version || "1.0.0",
       age_rating: metadataOverrides?.age_rating || "all",
       content_flags: metadataOverrides?.content_flags || ["user-created"],
@@ -634,37 +836,51 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     };
 
     if (metadataOverrides) {
-      if (typeof metadataOverrides.category === 'string') {
-        // SECURITY FIX: Use ValidationService to validate BEFORE sanitization
-        const categoryResult = this.validationService.validateCategory(metadataOverrides.category);
-        if (categoryResult.isValid && categoryResult.sanitizedValue) {
-          metadata.category = categoryResult.sanitizedValue.toLowerCase();
-        }
-      }
-
-      if (Array.isArray(metadataOverrides.triggers) && metadataOverrides.triggers.length > 0) {
-        // Use TriggerValidationService to apply proper validation
-        const validationResult = this.triggerValidationService.validateTriggers(
-          metadataOverrides.triggers,
-          ElementType.PERSONA,
-          metadata.name
-        );
-        // CRITICAL: Preserve undefined behavior
-        metadata.triggers = validationResult.validTriggers.length > 0
-          ? validationResult.validTriggers
-          : undefined;
-      }
-
-      if (typeof metadataOverrides.age_rating === 'string') {
-        const sanitizedAgeRating = sanitizeInput(metadataOverrides.age_rating, 10);
-        if (sanitizedAgeRating) {
-          metadata.age_rating = sanitizedAgeRating.toLowerCase();
-        }
-      }
+      this.applyMetadataOverrideSanitization(metadata, metadataOverrides);
     }
 
     // Convert legacy PersonaMetadata to PersonaElementMetadata before returning
     return this.toPersonaElementMetadata(metadata);
+  }
+
+  /**
+   * Apply override-specific sanitization (category, triggers, age_rating)
+   * to a partially-built metadata object. Extracted from
+   * buildPersonaMetadata to keep its cognitive complexity ≤15 (S3776);
+   * each override case applies independent validation and would inflate
+   * the host function otherwise.
+   */
+  private applyMetadataOverrideSanitization(
+    metadata: PersonaMetadata,
+    metadataOverrides: Partial<PersonaMetadata>,
+  ): void {
+    if (typeof metadataOverrides.category === 'string') {
+      // SECURITY FIX: Use ValidationService to validate BEFORE sanitization
+      const categoryResult = this.validationService.validateCategory(metadataOverrides.category);
+      if (categoryResult.isValid && categoryResult.sanitizedValue) {
+        metadata.category = categoryResult.sanitizedValue.toLowerCase();
+      }
+    }
+
+    if (Array.isArray(metadataOverrides.triggers) && metadataOverrides.triggers.length > 0) {
+      // Use TriggerValidationService to apply proper validation
+      const validationResult = this.triggerValidationService.validateTriggers(
+        metadataOverrides.triggers,
+        ElementType.PERSONA,
+        metadata.name
+      );
+      // CRITICAL: Preserve undefined behavior
+      metadata.triggers = validationResult.validTriggers.length > 0
+        ? validationResult.validTriggers
+        : undefined;
+    }
+
+    if (typeof metadataOverrides.age_rating === 'string') {
+      const sanitizedAgeRating = sanitizeInput(metadataOverrides.age_rating, 10);
+      if (sanitizedAgeRating) {
+        metadata.age_rating = sanitizedAgeRating.toLowerCase();
+      }
+    }
   }
 
   /**
@@ -727,7 +943,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       // SECURITY: Phase 4.4 - Log validation failures
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
-        severity: instructionsValidation.severity?.toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' || 'MEDIUM',
+        severity: (instructionsValidation.severity?.toUpperCase() as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL' | undefined) ?? 'MEDIUM',
         source: 'PersonaManager.validatePersonaInputs',
         details: `Content validation failed: ${instructionsValidation.detectedPatterns?.join(', ')}`,
         additionalData: {
@@ -791,9 +1007,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return;
     }
 
-    const dangerousKeys = ['__proto__', 'constructor', 'prototype'];
+    const dangerousKeys = new Set(['__proto__', 'constructor', 'prototype']);
     const foundDangerousKeys = Object.keys(metadata).filter(
-      key => dangerousKeys.includes(key)
+      key => dangerousKeys.has(key)
     );
 
     if (foundDangerousKeys.length > 0) {
@@ -881,7 +1097,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Persona creation warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -968,7 +1184,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Persona edit warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -990,81 +1206,12 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     let editablePersona = this.clonePersona(persona, { writableCopy: isDefault });
 
     try {
-      // SECURITY: Phase 4.3 - Apply Unicode validation to edit values
-      const unicodeResult = UnicodeValidator.normalize(value);
-      if (!unicodeResult.isValid && unicodeResult.severity === 'critical') {
-        throw new Error(`Value contains dangerous Unicode patterns: ${unicodeResult.detectedIssues?.join(', ')}`);
-      }
+      const sanitizedValue = validateAndSanitizeEditValue(value, normalizedField);
+      applyEditValueToPersona(editablePersona, normalizedField, sanitizedValue);
 
-      const valueValidation = ContentValidator.validateAndSanitize(unicodeResult.normalizedContent);
-      // SECURITY: Phase 4.1 - Block ALL invalid content, not just critical
-      if (!valueValidation.isValid) {
-        // SECURITY: Phase 4.4 - Log validation failures
-        SecurityMonitor.logSecurityEvent({
-          type: 'CONTENT_INJECTION_ATTEMPT',
-          severity: 'MEDIUM',
-          source: 'PersonaManager.editPersona',
-          details: `Edit value validation failed: ${valueValidation.detectedPatterns?.join(', ')}`,
-          additionalData: {
-            field: normalizedField,
-            severity: valueValidation.severity
-          }
-        });
-        throw new Error(`Security Validation Failed: The new value contains prohibited content: ${valueValidation.detectedPatterns?.join(', ')}`);
-      }
-
-      let sanitizedValue = valueValidation.sanitizedContent || unicodeResult.normalizedContent;
-      
-      if (normalizedField === 'instructions') {
-        editablePersona.instructions = sanitizedValue;
-      } else if (normalizedField === 'triggers') {
-        editablePersona.metadata.triggers = sanitizedValue
-          .split(',')
-          .map(t => sanitizeInput(t.trim(), 50))
-          .filter(t => t.length > 0);
-      } else if (normalizedField === 'name') {
-        editablePersona.metadata.name = sanitizeInput(sanitizedValue, 100);
-      } else if (normalizedField === 'category') {
-        editablePersona.metadata.category =
-          sanitizeInput(sanitizedValue, 50)?.toLowerCase() || 'general';
-      } else if (normalizedField === 'description') {
-        editablePersona.metadata.description = sanitizedValue;
-      } else if (normalizedField === 'version') {
-        editablePersona.metadata.version = sanitizedValue;
-        editablePersona.version = sanitizedValue;
-      }
-
-      // Auto-increment version if not explicitly setting version field
+      // Auto-increment version when an unrelated field changed
       if (normalizedField !== 'version') {
-        if (editablePersona.version) {
-          // Normalize to 3-part format first (handles legacy "1.0" format)
-          const normalized = normalizeVersion(String(editablePersona.version));
-          const versionMatch = normalized.match(/^(\d+)\.(\d+)\.(\d+)(-.*)?$/);
-
-          if (versionMatch) {
-            const [, major, minor, patch, preRelease] = versionMatch;
-
-            if (preRelease) {
-              // Increment pre-release version
-              const preReleaseMatch = preRelease.match(/^-([a-zA-Z]+)\.?(\d+)?$/);
-              if (preReleaseMatch) {
-                const [, preReleaseType, preReleaseNum] = preReleaseMatch;
-                const nextNum = Number.parseInt(preReleaseNum || '0') + 1;
-                editablePersona.version = `${major}.${minor}.${patch}-${preReleaseType}.${nextNum}`;
-              } else {
-                editablePersona.version = `${major}.${minor}.${Number.parseInt(patch) + 1}`;
-              }
-            } else {
-              // Standard version, bump patch
-              editablePersona.version = `${major}.${minor}.${Number.parseInt(patch) + 1}`;
-            }
-          } else {
-            editablePersona.version = '1.0.1';
-          }
-        } else {
-          editablePersona.version = '1.0.0';
-        }
-        // Sync to metadata
+        editablePersona.version = bumpPatchVersion(editablePersona.version);
         editablePersona.metadata.version = editablePersona.version;
       }
 
@@ -1087,8 +1234,8 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         additionalData: {
           field: normalizedField,
           isDefaultPersonaCopy: isDefault,
-          oldValue: persona.content?.substring(0, 50),
-          newValue: editablePersona.content?.substring(0, 50)
+          oldValue: persona.content.substring(0, 50),
+          newValue: editablePersona.content.substring(0, 50)
         }
       });
 
@@ -1189,68 +1336,56 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * SECURITY: Phase 4.6 - Added username and email validation
    */
   setUserIdentity(username: string | null, email?: string): void {
-    if (username) {
-      // SECURITY: Phase 4.3 - Apply Unicode normalization FIRST
-      const usernameUnicode = UnicodeValidator.normalize(username);
-      if (!usernameUnicode.isValid && usernameUnicode.severity === 'critical') {
-        throw new Error(`Username contains dangerous Unicode patterns: ${usernameUnicode.detectedIssues?.join(', ')}`);
-      }
-
-      // SECURITY: Phase 4.6 - Validate username format AFTER normalization (alphanumeric, hyphens, underscores)
-      const usernameRegex = /^[a-zA-Z0-9\-_]{3,50}$/;
-      if (!usernameRegex.test(usernameUnicode.normalizedContent)) {
-        throw new Error(
-          'Invalid username format. Must be 3-50 characters, alphanumeric with hyphens/underscores only'
-        );
-      }
-
-      // Sanitize username
-      const validUsername = sanitizeInput(usernameUnicode.normalizedContent, 50);
-
-      if (email) {
-        // SECURITY: Phase 4.3 - Apply Unicode normalization FIRST
-        const emailUnicode = UnicodeValidator.normalize(email);
-        if (!emailUnicode.isValid && emailUnicode.severity === 'critical') {
-          throw new Error(`Email contains dangerous Unicode patterns: ${emailUnicode.detectedIssues?.join(', ')}`);
-        }
-
-        // SECURITY: Phase 4.6 - Validate email format AFTER normalization
-        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-        if (!emailRegex.test(emailUnicode.normalizedContent)) {
-          throw new Error('Invalid email format');
-        }
-
-        // Sanitize email
-        const validEmail = sanitizeInput(emailUnicode.normalizedContent, 100);
-        process.env.DOLLHOUSE_EMAIL = validEmail;
-      }
-
-      const previous = this.currentUser;
-      this.currentUser = validUsername;
-      process.env.DOLLHOUSE_USER = validUsername;
-      this.metadataService.setCurrentUser(validUsername);  // Sync with MetadataService
-
-      logger.info('User identity set', { username: validUsername });
-      this.notifyPersonaChange('user-changed', previous, this.currentUser);
-    } else {
-      const previous = this.currentUser;
-      this.currentUser = null;
-      delete process.env.DOLLHOUSE_USER;
-      delete process.env.DOLLHOUSE_EMAIL;
-      this.metadataService.setCurrentUser(null);  // Sync with MetadataService
-
+    if (!username) {
+      const previous = this.getSessionUserIdentity()?.username ?? null;
+      this.setSessionUserIdentity(undefined);
       logger.info('User identity cleared');
-      this.notifyPersonaChange('user-changed', previous, this.currentUser);
+      this.notifyPersonaChange('user-changed', previous, null);
+      return;
     }
+
+    const validUsername = validateAndSanitizeUsername(username);
+    if (email) {
+      validateEmail(email);  // throws on bad format; value is sanitized below
+    }
+
+    // Issue #1946: Write identity to session-scoped state only (no singleton, no process.env)
+    const previous = this.getSessionUserIdentity()?.username ?? null;
+    this.setSessionUserIdentity({
+      username: validUsername,
+      ...(email ? { email: sanitizeInput(UnicodeValidator.normalize(email).normalizedContent, 100) } : {}),
+    });
+
+    logger.info('User identity set', { username: validUsername });
+    this.notifyPersonaChange('user-changed', previous, validUsername);
   }
   
   /**
    * Get current user identity
    */
   getUserIdentity(): { username: string | null; email: string | null } {
+    // Priority 1: Session-scoped identity override (from set_user_identity)
+    const userIdentity = this.getSessionUserIdentity();
+    if (userIdentity) {
+      return {
+        username: userIdentity.username,
+        email: userIdentity.email || null,
+      };
+    }
+
+    // Priority 2: SessionContext identity (HTTP auth, DOLLHOUSE_USER at startup)
+    const session = this.contextTracker?.getSessionContext();
+    if (session && session.userId !== SYSTEM_CONTEXT.userId) {
+      return {
+        username: session.displayName || session.userId,
+        email: session.email || null,
+      };
+    }
+
+    // Priority 3: MetadataService fallback (OS username → anonymous ID)
     return {
-      username: process.env.DOLLHOUSE_USER || null,
-      email: process.env.DOLLHOUSE_EMAIL || null
+      username: this.metadataService.getCurrentUser(),
+      email: null,
     };
   }
   
@@ -1280,11 +1415,19 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    * REFACTORED: Now delegates to MetadataService for consistent user attribution
    */
   public getCurrentUserForAttribution(): string {
-    // Only sync if PersonaManager has an explicitly-set user;
-    // otherwise let MetadataService resolve via its own fallback chain.
-    if (this.currentUser) {
-      this.metadataService.setCurrentUser(this.currentUser);
+    // Priority 1: Session-scoped identity override (from set_user_identity)
+    const userIdentity = this.getSessionUserIdentity();
+    if (userIdentity) {
+      return userIdentity.username;
     }
+
+    // Priority 2: SessionContext identity (HTTP auth, DOLLHOUSE_USER at startup)
+    const session = this.contextTracker?.getSessionContext();
+    if (session && session.userId !== SYSTEM_CONTEXT.userId) {
+      return session.displayName || session.userId;
+    }
+
+    // Priority 3: MetadataService fallback chain (OS username → anonymous ID)
     return this.metadataService.getCurrentUser();
   }
   
@@ -1295,8 +1438,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   override dispose(): void {
     // Issue #281: Clear the active personas set
-    this.activePersonas.clear();
-    this.currentUser = null;
+    this.getActivationSet().clear();
 
     // CRITICAL: Clean up base class resources (file watchers, caches)
     super.dispose();
@@ -1311,12 +1453,12 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('personas');
 
     // Below threshold — no action needed
-    if (this.activePersonas.size < cleanupThreshold) {
+    if (this.getActivationSet().size < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activePersonas.size >= max) {
+    if (this.getActivationSet().size >= max) {
       logger.warn(
         `Active personas limit reached (${max}). ` +
         `Consider deactivating unused personas or setting DOLLHOUSE_MAX_ACTIVE_PERSONAS to a higher value.`
@@ -1326,7 +1468,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
         type: 'ELEMENT_CREATED',
         severity: 'MEDIUM',
         source: 'PersonaManager.checkAndCleanupActiveSet',
-        details: `Active personas limit reached: ${this.activePersonas.size}/${max}`
+        details: `Active personas limit reached: ${this.getActivationSet().size}/${max}`
       });
     }
 
@@ -1341,17 +1483,17 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
    */
   private cleanupStaleActivePersonas(): void {
     try {
-      const startSize = this.activePersonas.size;
+      const startSize = this.getActivationSet().size;
       const staleFilenames: string[] = [];
 
-      for (const activeFilename of this.activePersonas) {
+      for (const activeFilename of this.getActivationSet()) {
         if (!this.findPersona(activeFilename)) {
-          this.activePersonas.delete(activeFilename);
+          this.getActivationSet().delete(activeFilename);
           staleFilenames.push(activeFilename);
         }
       }
 
-      const endSize = this.activePersonas.size;
+      const endSize = this.getActivationSet().size;
       const removed = startSize - endSize;
 
       if (removed > 0) {
@@ -1393,27 +1535,24 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       return;
     }
 
+    const session = this.contextTracker?.getSessionContext();
     this.notifier.notifyPersonaChange({
       type,
       previousValue,
       newValue,
-      timestamp: new Date()
+      timestamp: new Date(),
+      ...(session ? { userId: session.userId, sessionId: session.sessionId } : {}),
     });
   }
 
+  /**
+   * Issue #1948: PathValidator is now initialized by the DI container as an
+   * instance-based service. This method is kept as a no-op to avoid removing
+   * all 7 call sites in one step. The calls are harmless and can be removed
+   * in a future cleanup.
+   */
   private initializePathValidator(): void {
-    if (this.pathValidatorInitialized) {
-      return;
-    }
-
-    try {
-      PathValidator.initialize(this.personasDir);
-      this.pathValidatorInitialized = true;
-    } catch (error) {
-      logger.warn('[PersonaManager] Failed to initialize PathValidator', {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
+    // No-op: PathValidator initialized via DI container (Issue #1948)
   }
 
   /**
@@ -1425,9 +1564,9 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   override async delete(filePath: string): Promise<void> {
     // Issue #281: Auto-deactivate before deletion
     // This allows deleting active personas without requiring explicit deactivation
-    const wasActive = this.activePersonas.has(filePath);
+    const wasActive = this.getActivationSet().has(filePath);
     if (wasActive) {
-      this.activePersonas.delete(filePath);
+      this.getActivationSet().delete(filePath);
     }
 
     await super.delete(filePath);
@@ -1492,7 +1631,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       }
 
       const personaToSave = this.createElement(elementMetadata, result.persona.content);
-      personaToSave.filename = result.persona.filename ?? personaToSave.filename;
+      personaToSave.filename = result.persona.filename;
       personaToSave.unique_id = result.persona.unique_id;
       personaToSave.id = personaToSave.unique_id;
 
@@ -1519,13 +1658,17 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   private toPersonaElementMetadata(metadata: PersonaMetadata): PersonaElementMetadata {
     const { filename, ...metadataWithoutFilename } = metadata; // Strip filename from legacy data
 
+    // Legacy/imported metadata is cast to PersonaMetadata upstream but may omit
+    // fields at runtime (parsed YAML/JSON), so default defensively through a
+    // Partial view — the declared type alone would mark these defaults dead.
+    const source = metadata as Partial<PersonaMetadata>;
     return {
       ...metadataWithoutFilename,
       type: ElementType.PERSONA,
-      name: metadata.name ?? 'Untitled Persona',
-      description: metadata.description ?? '',
-      age_rating: (metadata.age_rating as 'all' | '13+' | '18+') ?? 'all',
-      generation_method: (metadata.generation_method as 'human' | 'ChatGPT' | 'Claude' | 'hybrid') ?? 'human'
+      name: source.name ?? 'Untitled Persona',
+      description: source.description ?? '',
+      age_rating: (source.age_rating as 'all' | '13+' | '18+' | undefined) ?? 'all',
+      generation_method: (source.generation_method as 'human' | 'ChatGPT' | 'Claude' | 'hybrid' | undefined) ?? 'human'
     };
   }
 
@@ -1604,14 +1747,20 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
       metadata.instructions = element.instructions;
     }
 
-    // Build body: content (reference material) below '---', with name heading
+    // Build body: content (reference material) below '---', with name heading.
+    // The prepend is idempotent: an element round-trips through serialize more
+    // than once per write (save, then record projection), and the v1→v2 format
+    // flip turns a previously-serialized body into `content` — so re-adding the
+    // heading unconditionally would stack duplicate "# name" titles on each pass.
     const name = element.metadata.name;
     const bodyContent = element.content || '';
-    const description = (element.metadata.description ?? '').trim();
+    const description = element.metadata.description.trim();
 
     let body: string;
     if (bodyContent.trim()) {
-      body = `# ${name}\n\n${bodyContent}`;
+      body = bodyOpensWithHeading(bodyContent, name)
+        ? bodyContent.replace(/^\s+/, '')
+        : `# ${name}\n\n${bodyContent}`;
     } else if (description) {
       body = `# ${name}\n\n${description}`;
     } else {
@@ -1710,7 +1859,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     }
 
     // Issue #281: Check if persona is in the active set
-    if (this.activePersonas.has(element.filename)) {
+    if (this.getActivationSet().has(element.filename)) {
       return {
         allowed: false,
         reason: 'Cannot delete an active persona. Deactivate it first.'

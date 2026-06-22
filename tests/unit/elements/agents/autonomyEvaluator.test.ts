@@ -430,7 +430,8 @@ describe('AutonomyEvaluator', () => {
             goalDescription: 'Automate cleanup tasks',
             goalId: 'goal-xyz',
             safetyFactors: expect.arrayContaining(['Safety tier: danger_zone']),
-          })
+          }),
+          undefined
         );
       });
 
@@ -460,7 +461,8 @@ describe('AutonomyEvaluator', () => {
             stepNumber: 0,
             goalDescription: undefined,
             goalId: undefined,
-          })
+          }),
+          undefined
         );
       });
 

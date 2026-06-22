@@ -5,6 +5,7 @@ This directory contains Docker configuration files for running and testing the D
 ## 📋 Table of Contents
 
 - [Quick Start](#quick-start)
+- [HTTP Hosted Mode](#http-hosted-mode)
 - [Environment Configuration](#environment-configuration)
 - [Available Docker Files](#available-docker-files)
 - [Common Commands](#common-commands)
@@ -51,6 +52,27 @@ docker-compose up
 ```bash
 cp docker/test-environment.env docker/test-environment.env.backup
 ```
+
+## 🌐 HTTP Hosted Mode
+
+DollhouseMCP can run as a hosted HTTP server using Streamable HTTP transport. This enables multiple MCP clients to connect to a single containerized server instance.
+
+```bash
+# Quick start with Docker Compose
+docker compose -f docker-compose.http.yml up --build
+
+# Or run directly
+docker run --rm -p 3000:3000 \
+  -e DOLLHOUSE_TRANSPORT=streamable-http \
+  -e DOLLHOUSE_HTTP_HOST=0.0.0.0 \
+  dollhousemcp:http
+```
+
+MCP endpoint: `http://localhost:3000/mcp`
+
+Health check: `curl http://localhost:3000/healthz`
+
+For full deployment guide including environment variables, security configuration, and architecture details, see [Streamable HTTP Hosted Mode](../docs/guides/streamable-http-hosted-mode.md).
 
 ## ⚙️ Environment Configuration
 

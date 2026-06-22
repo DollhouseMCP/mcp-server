@@ -25,15 +25,25 @@ import { logger } from '../utils/logger.js';
 /** Default maximum port attempts before giving up */
 const DEFAULT_MAX_PORT_ATTEMPTS = 10;
 
-/** Directory for runtime state files (port discovery, PID files) */
-const RUN_DIR = join(homedir(), '.dollhouse', 'run');
+/**
+ * Resolve the runtime-state directory (port files, PID files).
+ *
+ * Reads the DOLLHOUSE_RUN_DIR env var on each call so tests and deployments
+ * can override without restarting the process. Falls back to the legacy
+ * `~/.dollhouse/run/` location. When Step 4.5's `resolveDataDirectory()`
+ * lands, this becomes a thin wrapper over `resolveDataDirectory('run')`.
+ */
+function getRunDir(): string {
+  return process.env.DOLLHOUSE_RUN_DIR || join(homedir(), '.dollhouse', 'run');
+}
+
 const LATEST_PORT_FILENAME = 'permission-server.port';
 
-function pidPortFilePath(dir: string = RUN_DIR, pid: number = process.pid): string {
+function pidPortFilePath(dir: string = getRunDir(), pid: number = process.pid): string {
   return join(dir, `permission-server-${pid}.port`);
 }
 
-function latestPortFilePath(dir: string = RUN_DIR): string {
+function latestPortFilePath(dir: string = getRunDir()): string {
   return join(dir, LATEST_PORT_FILENAME);
 }
 
@@ -113,9 +123,10 @@ export async function findAvailablePort(
  * @returns Path to the PID-keyed port file
  */
 export async function writePortFile(port: number): Promise<string> {
-  await mkdir(RUN_DIR, { recursive: true });
-  const pidFile = pidPortFilePath();
-  const latestFile = latestPortFilePath();
+  const runDir = getRunDir();
+  await mkdir(runDir, { recursive: true });
+  const pidFile = pidPortFilePath(runDir);
+  const latestFile = latestPortFilePath(runDir);
   await writeFile(pidFile, String(port), 'utf-8');
   await writeFile(latestFile, String(port), 'utf-8');
   portFilePath = pidFile;
@@ -130,7 +141,7 @@ export async function writePortFile(port: number): Promise<string> {
  * already matched the active port.
  */
 export async function ensureLatestPortFile(port: number, customDir?: string): Promise<boolean> {
-  const dir = customDir || RUN_DIR;
+  const dir = customDir || getRunDir();
   const latestFile = latestPortFilePath(dir);
   const desiredValue = String(port);
 
@@ -186,7 +197,7 @@ export function registerPortCleanup(): void {
  */
 export async function sweepStalePortFiles(customDir?: string): Promise<number> {
   try {
-    const dir = customDir || RUN_DIR;
+    const dir = customDir || getRunDir();
     await mkdir(dir, { recursive: true });
     const files = await readdir(dir);
     const PORT_FILE_RE = /^permission-server-(\d+)\.port$/;

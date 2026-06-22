@@ -10,6 +10,10 @@ export interface PersonaStateChangeEvent {
   previousValue: string | null;
   newValue: string | null;
   timestamp: Date;
+  /** Session user identity, populated by the caller from SessionContext. */
+  userId?: string;
+  /** Session identifier, populated by the caller from SessionContext. */
+  sessionId?: string;
 }
 
 /**

@@ -28,6 +28,8 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -88,7 +90,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
     container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
     container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
 
-    const mockFileOperations = {
+    const mockFileOperations: any = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockResolvedValue(false),
       readFile: jest.fn().mockResolvedValue(''),
@@ -99,6 +101,9 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       validatePath: jest.fn().mockReturnValue(true),
       createFileExclusive: jest.fn().mockResolvedValue(true)
     };
+    // BaseElementManager.load uses readElementFile. Wire dynamically so tests
+    // that reassign readFile propagate to the element-read path.
+    mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
     container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     container.register('SerializationService', () => new SerializationService());
@@ -109,15 +114,17 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       metadataService
     ));
 
-    container.register('AgentManager', () => new TestableAgentManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      portfolioPath,
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      container.resolve('MetadataService')
-    ));
+    container.register('AgentManager', () => new TestableAgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+    }));
 
     agentManager = container.resolve<AgentManager>('AgentManager');
     fileOperationsService = container.resolve<FileOperationsService>('FileOperationsService') as jest.Mocked<FileOperationsService>;

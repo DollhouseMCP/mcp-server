@@ -23,6 +23,9 @@ import fs from 'fs/promises';
 import os from 'os';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -79,14 +82,17 @@ describe('autoIncrementVersion for PersonaManager', () => {
     );
 
     // Initialize PersonaManager
-    personaManager = new PersonaManager(
+    personaManager = new PersonaManager({
       portfolioManager,
-      DEFAULT_INDICATOR_CONFIG,
+      indicatorConfig: DEFAULT_INDICATOR_CONFIG,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
-      metadataService
-    );
+      serializationService: new SerializationService(),
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+    });
 
     // Create mock context
     context = {

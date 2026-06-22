@@ -320,7 +320,7 @@ describe('console token CLI operations', () => {
 
       try {
         await store.rotatePrimary('123456');
-        fail('Expected TotpError');
+        throw new Error('Expected TotpError');
       } catch (err) {
         expect(err).toBeInstanceOf(TotpError);
         expect((err as TotpError).code).toBe('TOTP_REQUIRED');
@@ -334,7 +334,7 @@ describe('console token CLI operations', () => {
 
       try {
         await store.rotatePrimary('000000');
-        fail('Expected TotpError');
+        throw new Error('Expected TotpError');
       } catch (err) {
         expect(err).toBeInstanceOf(TotpError);
         expect((err as TotpError).code).toBe('INVALID_TOTP_CODE');

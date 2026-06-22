@@ -137,46 +137,17 @@ async function deleteMemory(
     await memory.deactivate();
   }
 
-  const fileOps = context.fileOperations;
-  const memoryDir = context.portfolioManager.getElementDir(ElementType.MEMORY);
   const memoryName = memory.metadata.name;
 
-  // Build list of candidate file paths and find the actual file
-  const fileCandidates = await buildMemoryPathCandidates(memory, memoryDir, fileOps);
-  const memoryPath = await firstExisting(fileOps, fileCandidates);
-
-  if (!memoryPath) {
-    return {
-      content: [{
-        type: "text",
-        text: `❌ Memory file '${memoryName}.yaml' not found in portfolio`
-      }]
-    };
-  }
-
-  // Back up the memory file before deleting (non-fatal)
-  let movedByBackup = false;
-  if (context.backupService) {
-    try {
-      const result = await context.backupService.backupBeforeDelete(memoryPath, ElementType.MEMORY);
-      movedByBackup = !!result.movedOriginal;
-    } catch (err) {
-      logger.warn(`[deleteMemory] Backup failed: ${err}`);
-    }
-  }
-
-  // Only delete if backup didn't already move the file
-  if (!movedByBackup) {
-    await fileOps.deleteFile(memoryPath, ElementType.MEMORY, { source: 'deleteElement.deleteMemory' });
-  }
-
-  // Invalidate memory manager caches so the storage layer index
-  // reflects the deletion (the handler bypasses memoryManager.delete()).
+  // Delegate to manager — handles file mode, DB mode, path resolution, file lock, events
+  const filePath = memory.getFilePath() || memoryName;
+  await context.memoryManager.delete(filePath);
   context.memoryManager.clearCache();
 
-  // Clean up storage data if requested
+  // Clean up storage data if requested (handler-level concern, not manager's)
   if (deleteData) {
-    await cleanupMemoryStorage(memoryDir, memoryName, fileOps);
+    const memoryDir = context.portfolioManager.getElementDir(ElementType.MEMORY);
+    await cleanupMemoryStorage(memoryDir, memoryName, context.fileOperations);
   }
 
   logger.info(`Memory deleted: ${memoryName}${deleteData ? ' (with storage)' : ''}`);
@@ -188,45 +159,8 @@ async function deleteMemory(
   };
 }
 
-/**
- * Build list of candidate file paths where a memory file might exist.
- * Checks persisted path, date-organized folders, and root memory directory.
- */
-async function buildMemoryPathCandidates(
-  memory: any,
-  memoryDir: string,
-  fileOps: IFileOperationsService
-): Promise<string[]> {
-  const candidates: string[] = [];
-  const memoryName = memory.metadata.name;
-
-  // Check for persisted file path on the memory object
-  const persistedPath = typeof memory.getFilePath === 'function'
-    ? memory.getFilePath()
-    : (memory as any).filePath;
-
-  if (persistedPath && typeof persistedPath === 'string') {
-    candidates.push(path.isAbsolute(persistedPath) ? persistedPath : path.join(memoryDir, persistedPath));
-  }
-
-  // Add today's date folder and root folder as fallbacks
-  const today = new Date().toISOString().split('T')[0];
-  candidates.push(path.join(memoryDir, today, `${memoryName}.yaml`));
-  candidates.push(path.join(memoryDir, `${memoryName}.yaml`));
-
-  // Scan for date-organized directories and add them (most recent first)
-  try {
-    const dirs = await fileOps.listDirectory(memoryDir);
-    const dateDirs = dirs.filter(d => /^\d{4}-\d{2}-\d{2}$/.test(d));
-    for (const dir of dateDirs.reverse()) {
-      candidates.unshift(path.join(memoryDir, dir, `${memoryName}.yaml`));
-    }
-  } catch {
-    // Directory listing failed - continue with existing candidates
-  }
-
-  return candidates;
-}
+// buildMemoryPathCandidates removed — path resolution now handled by MemoryManager.delete()
+// via validateAndResolvePath() (file mode) or storage layer (DB mode).
 
 /**
  * Clean up memory storage data file (.storage directory).
@@ -369,11 +303,4 @@ async function removeDataFiles(
   return results;
 }
 
-async function firstExisting(fileOps: IFileOperationsService, paths: string[]) {
-  for (const candidate of paths) {
-    if (await fileOps.exists(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
+// firstExisting removed — no longer needed (path resolution moved to MemoryManager).

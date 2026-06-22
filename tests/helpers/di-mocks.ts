@@ -38,11 +38,13 @@ import { MemoryManager } from '../../src/elements/memories/MemoryManager.js';
 import { EnsembleManager } from '../../src/elements/ensembles/EnsembleManager.js';
 import { PersonaManager } from '../../src/persona/PersonaManager.js';
 import { FileWatchService } from '../../src/services/FileWatchService.js';
+import { createTestStorageFactory } from './createTestStorageFactory.js';
 import { TokenManager } from '../../src/security/tokenManager.js';
 import { PortfolioRepoManager } from '../../src/portfolio/PortfolioRepoManager.js';
 import type { IndicatorConfig } from '../../src/config/indicator-config.js';
 import type { PersonaImporter } from '../../src/persona/export-import/PersonaImporter.js';
 import type { StateChangeNotifier } from '../../src/services/StateChangeNotifier.js';
+import { ElementEventDispatcher } from '../../src/events/ElementEventDispatcher.js';
 
 /**
  * Create a real MetadataService for tests.
@@ -509,15 +511,17 @@ export function createRealSkillManager(
     metadataService
   );
 
-  return new SkillManager(
+  return new SkillManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
+  });
 }
 
 /**
@@ -544,15 +548,17 @@ export function createRealTemplateManager(
     metadataService
   );
 
-  return new TemplateManager(
+  return new TemplateManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
+  });
 }
 
 /**
@@ -579,15 +585,17 @@ export function createRealMemoryManager(
     metadataService
   );
 
-  return new MemoryManager(
+  return new MemoryManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
+  });
 }
 
 /**
@@ -614,15 +622,17 @@ export function createRealEnsembleManager(
     metadataService
   );
 
-  return new EnsembleManager(
+  return new EnsembleManager({
     portfolioManager,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
+  });
 }
 
 /**
@@ -662,16 +672,18 @@ export function createRealAgentManager(
   // Use portfolioDir as baseDir if not specified
   const agentBaseDir = baseDir ?? portfolioDir;
 
-  return new AgentManager(
+  return new AgentManager({
     portfolioManager,
     fileLockManager,
-    agentBaseDir,
-    fileOperations,
+    baseDir: agentBaseDir,
+    fileOperationsService: fileOperations,
     validationRegistry,
     serializationService,
     metadataService,
-    fileWatchService
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
+  });
 }
 
 /**
@@ -721,17 +733,20 @@ export function createRealPersonaManager(
     bracketStyle: 'square'
   };
 
-  return new PersonaManager(
+  return new PersonaManager({
     portfolioManager,
     indicatorConfig,
     fileLockManager,
-    fileOperations,
+    fileOperationsService: fileOperations,
     validationRegistry,
+    serializationService: new SerializationService(),
     metadataService,
-    overrides?.personaImporter,
-    overrides?.notifier,
-    { fileWatchService } // baseOptions
-  );
+    eventDispatcher: new ElementEventDispatcher(),
+    fileWatchService,
+    personaImporter: overrides?.personaImporter,
+    notifier: overrides?.notifier,
+    storageLayerFactory: createTestStorageFactory(fileOperations),
+  });
 }
 
 /**

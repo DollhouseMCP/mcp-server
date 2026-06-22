@@ -28,8 +28,10 @@ import { ValidationRegistry } from '../../../../src/services/validation/Validati
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import type { ExecuteAgentResult } from '../../../../src/elements/agents/types.js';
 import { AGENT_LIMITS } from '../../../../src/elements/agents/constants.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -74,14 +76,15 @@ describe('AgentManager.executeAgent', () => {
     container.register<FileLockManager>('FileLockManager', () => fileLockManager);
 
     // Mock FileOperationsService with fileStore-backed read/write/exists
-    const mockFileOperations = {
+    const readFileImpl = jest.fn().mockImplementation(async (filePath: string) => {
+      const stored = fileStore.get(filePath);
+      if (stored !== undefined) return stored;
+      return '';
+    });
+    const mockFileOperations: any = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockImplementation(async (filePath: string) => fileStore.has(filePath)),
-      readFile: jest.fn().mockImplementation(async (filePath: string) => {
-        const stored = fileStore.get(filePath);
-        if (stored !== undefined) return stored;
-        return '';
-      }),
+      readFile: readFileImpl,
       writeFile: jest.fn().mockImplementation(async (filePath: string, content: string) => {
         fileStore.set(filePath, content);
       }),
@@ -91,6 +94,9 @@ describe('AgentManager.executeAgent', () => {
       validatePath: jest.fn().mockReturnValue(true),
       createFileExclusive: jest.fn().mockResolvedValue(true)
     };
+    // BaseElementManager.load uses readElementFile. Wire dynamically so tests
+    // that reassign readFile later propagate to the element-read path.
+    mockFileOperations.readElementFile = jest.fn((...args: unknown[]) => mockFileOperations.readFile(...args));
     container.register<FileOperationsService>('FileOperationsService', () => mockFileOperations as any);
 
     // Register DI services
@@ -103,18 +109,8 @@ describe('AgentManager.executeAgent', () => {
     ));
 
     // Create AgentManager instance
-    const agentManagerInstance = new AgentManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      portfolioPath,
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      container.resolve('MetadataService')
-    );
-
-    // Set up element manager resolver for activating elements (using static method)
-    AgentManager.setElementManagerResolver((managerName: string) => {
+    // Issue #1948: Element manager resolver passed via constructor deps instead of static setter
+    const elementManagerResolver = (managerName: string) => {
       if (managerName === 'PersonaManager') {
         return {
           list: async () => {
@@ -188,6 +184,19 @@ describe('AgentManager.executeAgent', () => {
         } as any;
       }
       return null;
+    };
+
+    const agentManagerInstance = new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+      elementManagerResolver,
     });
 
     container.register('AgentManager', () => agentManagerInstance);
@@ -1130,9 +1139,8 @@ activates:
     });
 
     it('should still activate other elements when one fails (partial failure)', async () => {
-      // Set up element manager resolver that succeeds for code-reviewer but fails for nonexistent
-      AgentManager.resetResolvers();
-      AgentManager.setElementManagerResolver((managerName: string) => {
+      // Issue #1948: Use instance method to reconfigure resolver for this test
+      agentManager.setElementManagerResolver((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [

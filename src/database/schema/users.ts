@@ -1,0 +1,61 @@
+/**
+ * Users and User Settings Schema
+ *
+ * Core identity tables for multi-user deployments.
+ * users: authentication identity (populated by auth provider)
+ * user_settings: per-user configuration (GitHub, sync, autoload, retention)
+ *
+ * @since v2.2.0 — Phase 4, Step 4.1
+ */
+
+import { pgTable, uuid, varchar, timestamp, jsonb, bigint, uniqueIndex } from 'drizzle-orm/pg-core';
+import { sql } from 'drizzle-orm';
+
+export const users = pgTable('users', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  externalId: varchar('external_id', { length: 255 }),
+  username: varchar('username', { length: 255 }).notNull(),
+  email: varchar('email', { length: 255 }),
+  displayName: varchar('display_name', { length: 255 }),
+  disabledAt: timestamp('disabled_at', { withTimezone: true }),
+  // Tombstone marker. Set when an account is deleted but its row must survive to
+  // anchor the tamper-evident audit chain (the row is scrubbed of PII). NULL is
+  // a live account; deleted rows are excluded from the account directory.
+  deletedAt: timestamp('deleted_at', { withTimezone: true }),
+  authzVersion: bigint('authz_version', { mode: 'number' }).notNull().default(1),
+  accountCorrelationId: uuid('account_correlation_id').notNull().defaultRandom(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+}, (table) => [
+  uniqueIndex('idx_users_username').on(table.username),
+  uniqueIndex('idx_users_account_correlation_id').on(table.accountCorrelationId),
+]);
+
+// Identity fields (username, email, displayName) live exclusively in the
+// users table. Join on users.id when display information is needed alongside
+// settings — the PK-to-FK join cost is negligible.
+//
+// Phase 4.5 extension: added wizard/display/collection/autoActivate/sourcePriority
+// jsonb sections so this table can hold the full ConfigManager per-user
+// surface (was previously only the four original sections, which had no
+// runtime references — the table was scaffolded in Phase 4 but never wired).
+// See migration 0013_user_settings_extension.sql.
+export const userSettings = pgTable('user_settings', {
+  userId: uuid('user_id').primaryKey().references(() => users.id, { onDelete: 'cascade' }),
+  githubConfig: jsonb('github_config').notNull().default({}),
+  syncConfig: jsonb('sync_config').notNull().default({}),
+  autoloadConfig: jsonb('autoload_config').notNull().default({}),
+  retentionConfig: jsonb('retention_config').notNull().default({}),
+  // Phase 4.5 additions:
+  wizardConfig: jsonb('wizard_config').notNull().default({}),
+  displayConfig: jsonb('display_config').notNull().default({}),
+  collectionConfig: jsonb('collection_config').notNull().default({}),
+  autoActivateConfig: jsonb('auto_activate_config').notNull().default({}),
+  sourcePriorityConfig: jsonb('source_priority_config').notNull().default({}),
+  // Phase 4.5 / Phase G addendum: holds ConfigManager's `user.*` section
+  // (operator-set / wizard-captured identity). Distinct from users.username
+  // / users.email which is the OAuth-canonical identity.
+  userIdentityConfig: jsonb('user_identity_config').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+});

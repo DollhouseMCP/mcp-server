@@ -28,6 +28,8 @@ jest.mock('../../../src/utils/logger.js', () => ({
 
 import { ServerSetup } from '../../../src/server/ServerSetup.js';
 import { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
+import type { SessionContext } from '../../../src/context/SessionContext.js';
+import { createStdioSession } from '../../../src/context/StdioSession.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -332,6 +334,121 @@ describe('ServerSetup', () => {
       await callHandler({ params: { name: 'test_tool', arguments: {} } });
 
       expect(mockTools.test_tool).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('session context propagation', () => {
+    it('should return undefined getSessionContext when no resolver is provided', async () => {
+      let capturedSession: SessionContext | undefined;
+      const mockTools = {
+        test_tool: jest.fn(async () => {
+          capturedSession = contextTracker.getSessionContext();
+          return { content: [{ type: 'text', text: 'ok' }] };
+        }),
+      };
+
+      const server = createMockServer();
+      const registry = createMockToolRegistry(mockTools);
+      serverSetup.setupServer(server as any, registry as any);
+
+      const callHandler = server.getCallToolHandler();
+      await callHandler({ params: { name: 'test_tool', arguments: {} } });
+
+      expect(capturedSession).toBeUndefined();
+    });
+
+    it('should provide SessionContext inside handler when resolver is given', async () => {
+      const stdioSession = createStdioSession();
+      const setupWithSession = new ServerSetup(contextTracker, () => stdioSession);
+
+      let capturedSession: SessionContext | undefined;
+      const mockTools = {
+        test_tool: jest.fn(async () => {
+          capturedSession = contextTracker.getSessionContext();
+          return { content: [{ type: 'text', text: 'ok' }] };
+        }),
+      };
+
+      const server = createMockServer();
+      const registry = createMockToolRegistry(mockTools);
+      setupWithSession.setupServer(server as any, registry as any);
+
+      const callHandler = server.getCallToolHandler();
+      await callHandler({ params: { name: 'test_tool', arguments: {} } });
+
+      expect(capturedSession).toBeDefined();
+      expect(capturedSession!.transport).toBe('stdio');
+      expect(capturedSession!.tenantId).toBeNull();
+      expect(Object.isFrozen(capturedSession)).toBe(true);
+    });
+
+    it('should clear session context after handler completes', async () => {
+      const stdioSession = createStdioSession();
+      const setupWithSession = new ServerSetup(contextTracker, () => stdioSession);
+
+      const mockTools = {
+        test_tool: jest.fn(async () => {
+          return { content: [{ type: 'text', text: 'ok' }] };
+        }),
+      };
+
+      const server = createMockServer();
+      const registry = createMockToolRegistry(mockTools);
+      setupWithSession.setupServer(server as any, registry as any);
+
+      const callHandler = server.getCallToolHandler();
+      await callHandler({ params: { name: 'test_tool', arguments: {} } });
+
+      expect(contextTracker.getSessionContext()).toBeUndefined();
+    });
+
+    it('should preserve llm-request type and toolName metadata with session', async () => {
+      const stdioSession = createStdioSession();
+      const setupWithSession = new ServerSetup(contextTracker, () => stdioSession);
+
+      let capturedContext: any;
+      const mockTools = {
+        my_tool: jest.fn(async () => {
+          capturedContext = contextTracker.getContext();
+          return { content: [{ type: 'text', text: 'ok' }] };
+        }),
+      };
+
+      const server = createMockServer();
+      const registry = createMockToolRegistry(mockTools);
+      setupWithSession.setupServer(server as any, registry as any);
+
+      const callHandler = server.getCallToolHandler();
+      await callHandler({ params: { name: 'my_tool', arguments: {} } });
+
+      expect(capturedContext.type).toBe('llm-request');
+      expect(capturedContext.metadata).toEqual({ toolName: 'my_tool' });
+      expect(capturedContext.session).toBeDefined();
+    });
+
+    it('should return the same session across multiple calls', async () => {
+      const stdioSession = createStdioSession();
+      const setupWithSession = new ServerSetup(contextTracker, () => stdioSession);
+
+      const sessions: (SessionContext | undefined)[] = [];
+      const mockTools = {
+        test_tool: jest.fn(async () => {
+          sessions.push(contextTracker.getSessionContext());
+          return { content: [{ type: 'text', text: 'ok' }] };
+        }),
+      };
+
+      const server = createMockServer();
+      const registry = createMockToolRegistry(mockTools);
+      setupWithSession.setupServer(server as any, registry as any);
+
+      const callHandler = server.getCallToolHandler();
+      await callHandler({ params: { name: 'test_tool', arguments: {} } });
+      await callHandler({ params: { name: 'test_tool', arguments: {} } });
+
+      expect(sessions).toHaveLength(2);
+      expect(sessions[0]!.userId).toBe(sessions[1]!.userId);
+      expect(sessions[0]!.sessionId).toBe(sessions[1]!.sessionId);
     });
   });
 });

@@ -17,6 +17,8 @@ import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
 import { createPortfolioTestEnvironment, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import { createTestMetadataService } from '../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService: MetadataService = createTestMetadataService();
@@ -40,15 +42,17 @@ describe('SkillManager (BaseElementManager integration)', () => {
       metadataService
     );
 
-    manager = new SkillManager(
-      env.portfolioManager,
+    manager = new SkillManager({
+      portfolioManager: env.portfolioManager,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
       metadataService,
-      fileWatchService
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+      fileWatchService,
+      storageLayerFactory: createTestStorageFactory(fileOperationsService),
+    });
 
     skillsDir = env.portfolioManager.getElementDir(ElementType.SKILL);
     await fs.mkdir(skillsDir, { recursive: true });

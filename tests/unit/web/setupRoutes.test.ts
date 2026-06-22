@@ -1925,7 +1925,7 @@ describe('Setup Tab — Channel Selector Interactions', () => {
     return document.querySelector('[data-install-client="claude"]') as HTMLButtonElement | null;
   }
 
-  function getNotice(): HTMLElement | null {
+  function _getNotice(): HTMLElement | null {
     return document.querySelector('#setup-panel-claude-desktop .setup-installed-notice');
   }
 
@@ -2076,7 +2076,8 @@ describe('Setup Tab — Channel Selector Interactions', () => {
     beforeAll(() => switchMethod('permissions'));
 
     it('hides the generic installed notice in permissions mode', () => {
-      const notice = getNotice();
+      const panel = document.getElementById('setup-panel-claude-desktop');
+      const notice = panel?.querySelector('.setup-installed-notice');
       expect(notice ?? null).toBeNull();
     });
 

@@ -18,7 +18,9 @@ import { PortfolioManager } from '../../../src/portfolio/PortfolioManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { ValidationRegistry } from '../../../src/services/validation/ValidationRegistry.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
 import { logger } from '../../../src/utils/logger.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Mock dependencies
 jest.mock('../../../src/security/fileLockManager.js');
@@ -76,7 +78,7 @@ class TestableElementManager extends BaseElementManager<TestElement> {
       ElementType.SKILL, // Use SKILL for testing
       portfolioManager,
       fileLockManager,
-      options,
+      { ...options, eventDispatcher: options.eventDispatcher ?? new ElementEventDispatcher() },
       fileOperationsService,
       validationRegistry
     );
@@ -160,7 +162,7 @@ describe('BaseElementManager load() without naming convention enforcement', () =
     manager = new TestableElementManager(
       portfolioManager,
       fileLockManager,
-      { elementDirOverride: tempDir },
+      { elementDirOverride: tempDir, eventDispatcher: new ElementEventDispatcher(), storageLayerFactory: createTestStorageFactory(fileOperationsService) },
       fileOperationsService,
       validationRegistry
     );

@@ -7,7 +7,8 @@ export class PlainTextFormatter implements ILogFormatter {
     const ts = entry.timestamp.replace('T', ' ').replace('Z', '');
     const level = entry.level.toUpperCase();
     const corrId = entry.correlationId ? ` [${entry.correlationId}]` : '';
-    let output = `[${ts}] [${level}] [${entry.source}]${corrId} ${entry.message}\n`;
+    const sessId = entry.sessionId ? ` [${entry.sessionId}]` : '';
+    let output = `[${ts}] [${level}] [${entry.source}]${corrId}${sessId} ${entry.message}\n`;
 
     if (entry.error) {
       output += `  ${entry.error.name}: ${entry.error.message}\n`;

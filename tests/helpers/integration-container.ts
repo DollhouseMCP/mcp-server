@@ -4,6 +4,26 @@ import path from 'path';
 
 import { DollhouseContainer } from '../../src/di/Container.js';
 import { PortfolioManager } from '../../src/portfolio/PortfolioManager.js';
+import { InMemoryOperatorConfigStore } from '../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
+import { InMemoryUserConfigStore } from '../../src/storage/userConfig/InMemoryUserConfigStore.js';
+import { InMemorySharedCacheStore } from '../../src/storage/sharedCache/InMemorySharedCacheStore.js';
+
+// Phase 4.5 / Phase G: ConfigManager now resolves OperatorConfigStore +
+// UserConfigStore from the container. `preparePortfolio()` is what wires
+// StorageServiceRegistrar in production; these helpers don't run that
+// path, so register InMemory stores up front so any test that resolves
+// ConfigManager (directly or transitively) gets a working façade.
+function registerStorageStubs(container: DollhouseContainer): void {
+  if (!container.hasRegistration('OperatorConfigStore')) {
+    container.register('OperatorConfigStore', () => new InMemoryOperatorConfigStore());
+  }
+  if (!container.hasRegistration('UserConfigStore')) {
+    container.register('UserConfigStore', () => new InMemoryUserConfigStore());
+  }
+  if (!container.hasRegistration('SharedCacheStore')) {
+    container.register('SharedCacheStore', () => new InMemorySharedCacheStore());
+  }
+}
 
 export interface IntegrationContainerOptions {
   /**
@@ -92,11 +112,14 @@ export async function createIsolatedContainer(
 
   const previousPortfolioDir = process.env.DOLLHOUSE_PORTFOLIO_DIR;
   const previousHome = process.env.HOME;
+  const previousHomeDirEnv = process.env.DOLLHOUSE_HOME_DIR;
 
   process.env.DOLLHOUSE_PORTFOLIO_DIR = portfolioDir;
   process.env.HOME = tempRoot;
+  process.env.DOLLHOUSE_HOME_DIR = tempRoot;
 
   const container = new DollhouseContainer();
+  registerStorageStubs(container);
 
   return {
     container,
@@ -104,16 +127,22 @@ export async function createIsolatedContainer(
     dispose: async () => {
       await container.dispose();
 
-      if (previousPortfolioDir !== undefined) {
-        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
-      } else {
+      if (previousPortfolioDir === undefined) {
         delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      } else {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
       }
 
-      if (previousHome !== undefined) {
-        process.env.HOME = previousHome;
-      } else {
+      if (previousHome === undefined) {
         delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+
+      if (previousHomeDirEnv === undefined) {
+        delete process.env.DOLLHOUSE_HOME_DIR;
+      } else {
+        process.env.DOLLHOUSE_HOME_DIR = previousHomeDirEnv;
       }
 
       await rm(tempRoot, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
@@ -138,13 +167,16 @@ export async function createIntegrationContainer(
   process.env.DOLLHOUSE_PORTFOLIO_DIR = portfolioDir;
 
   const previousHome = process.env.HOME;
+  const previousDollhouseHomeDir = process.env.DOLLHOUSE_HOME_DIR;
   const derivedHome = options.homeDir
     ?? (tempRoot ? tempRoot : path.resolve(portfolioDir, '..', '..'));
   if (derivedHome) {
     process.env.HOME = derivedHome;
+    process.env.DOLLHOUSE_HOME_DIR = derivedHome;
   }
 
   const container = new DollhouseContainer();
+  registerStorageStubs(container);
   const portfolioManager = container.resolve<PortfolioManager>('PortfolioManager');
 
   if (shouldInit) {
@@ -157,16 +189,22 @@ export async function createIntegrationContainer(
     portfolioDir,
     dispose: async () => {
       await container.dispose();
-      if (previousPortfolioDir) {
-        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
-      } else {
+      if (previousPortfolioDir === undefined) {
         delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+      } else {
+        process.env.DOLLHOUSE_PORTFOLIO_DIR = previousPortfolioDir;
       }
 
-      if (previousHome) {
-        process.env.HOME = previousHome;
-      } else {
+      if (previousHome === undefined) {
         delete process.env.HOME;
+      } else {
+        process.env.HOME = previousHome;
+      }
+
+      if (previousDollhouseHomeDir === undefined) {
+        delete process.env.DOLLHOUSE_HOME_DIR;
+      } else {
+        process.env.DOLLHOUSE_HOME_DIR = previousDollhouseHomeDir;
       }
 
       if (tempRoot) {

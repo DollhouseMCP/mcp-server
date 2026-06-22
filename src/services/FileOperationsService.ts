@@ -6,6 +6,12 @@ import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
 import { validatePath } from '../security/InputValidator.js';
 
+interface ActiveSessionContainerRegistry {
+  getActiveContainer(): {
+    resolve<T>(name: string): T;
+  } | undefined;
+}
+
 export interface FileReadOptions {
   encoding?: BufferEncoding;
   source?: string;
@@ -156,11 +162,16 @@ export class FileOperationsService implements IFileOperationsService {
   private fileLockManager: FileLockManager;
   private readonly defaultMaxFileSize: number;
   private config: FileOperationsConfig;
+  private sessionContainerRegistryProvider?: () => ActiveSessionContainerRegistry | undefined;
 
   constructor(fileLockManager: FileLockManager, config?: FileOperationsConfig) {
     this.fileLockManager = fileLockManager;
     this.config = config ?? { verboseAudit: false };
     this.defaultMaxFileSize = config?.maxFileSize ?? (10 * 1024 * 1024); // 10MB default
+  }
+
+  setSessionContainerRegistryProvider(provider: () => ActiveSessionContainerRegistry | undefined): void {
+    this.sessionContainerRegistryProvider = provider;
   }
 
   async readFile(filePath: string, options: FileReadOptions = {}): Promise<string> {
@@ -205,12 +216,13 @@ export class FileOperationsService implements IFileOperationsService {
 
   async writeFile(filePath: string, content: string, options: FileWriteOptions = {}): Promise<void> {
     try {
+      const validatedPath = await this.enforceWriteAllowlist(filePath, 'writeFile');
       const maxSize = options.maxSize ?? this.defaultMaxFileSize;
       if (content.length > maxSize) {
         throw new Error(`Content exceeds maximum size of ${maxSize} bytes`);
       }
 
-      await this.fileLockManager.atomicWriteFile(filePath, content, {
+      await this.fileLockManager.atomicWriteFile(validatedPath, content, {
         encoding: options.encoding ?? 'utf-8'
       });
 
@@ -218,7 +230,7 @@ export class FileOperationsService implements IFileOperationsService {
         type: 'FILE_WRITTEN',
         severity: 'LOW',
         source: options.source ?? 'FileOperationsService.writeFile',
-        details: `File written successfully: ${path.basename(filePath)}`
+        details: `File written successfully: ${path.basename(validatedPath)}`
       });
     } catch (error) {
       logger.error(`Failed to write file: ${filePath}`, error);
@@ -228,14 +240,15 @@ export class FileOperationsService implements IFileOperationsService {
 
   async deleteFile(filePath: string, elementType?: ElementType, options: FileOperationOptions = {}): Promise<void> {
     try {
-      await fs.unlink(filePath);
+      const validatedPath = await this.enforceWriteAllowlist(filePath, 'deleteFile');
+      await fs.unlink(validatedPath);
       
       if (elementType) {
         SecurityMonitor.logSecurityEvent({
           type: 'FILE_DELETED',
           severity: 'MEDIUM',
           source: options.source ?? 'FileOperationsService.deleteFile',
-          details: `Deleted ${elementType} file: ${path.basename(filePath)}`
+          details: `Deleted ${elementType} file: ${path.basename(validatedPath)}`
         });
       }
     } catch (error) {
@@ -250,7 +263,8 @@ export class FileOperationsService implements IFileOperationsService {
 
   async createDirectory(directoryPath: string): Promise<void> {
     try {
-      await fs.mkdir(directoryPath, { recursive: true });
+      const validatedPath = await this.enforceWriteAllowlist(directoryPath, 'createDirectory');
+      await fs.mkdir(validatedPath, { recursive: true });
     } catch (error) {
       logger.error(`Failed to create directory: ${directoryPath}`, error);
       throw error;
@@ -300,7 +314,9 @@ export class FileOperationsService implements IFileOperationsService {
 
   async renameFile(oldPath: string, newPath: string): Promise<void> {
     try {
-      await fs.rename(oldPath, newPath);
+      const validatedOldPath = await this.enforceWriteAllowlist(oldPath, 'renameFile:source');
+      const validatedNewPath = await this.enforceWriteAllowlist(newPath, 'renameFile:destination');
+      await fs.rename(validatedOldPath, validatedNewPath);
     } catch (error) {
       logger.error(`Failed to rename file from ${oldPath} to ${newPath}`, error);
       throw error;
@@ -330,6 +346,7 @@ export class FileOperationsService implements IFileOperationsService {
 
   async createFileExclusive(filePath: string, content: string, options: FileWriteOptions = {}): Promise<boolean> {
     try {
+      const validatedPath = await this.enforceWriteAllowlist(filePath, 'createFileExclusive');
       const maxSize = options.maxSize ?? this.defaultMaxFileSize;
       if (content.length > maxSize) {
         throw new Error(`Content exceeds maximum size of ${maxSize} bytes`);
@@ -337,7 +354,7 @@ export class FileOperationsService implements IFileOperationsService {
 
       // Use 'wx' flag for atomic creation - fails if file already exists
       // This prevents TOCTOU race conditions
-      const fileHandle = await fs.open(filePath, 'wx');
+      const fileHandle = await fs.open(validatedPath, 'wx');
       try {
         await fileHandle.writeFile(content, { encoding: options.encoding ?? 'utf-8' });
       } finally {
@@ -348,7 +365,7 @@ export class FileOperationsService implements IFileOperationsService {
         type: 'FILE_WRITTEN',
         severity: 'LOW',
         source: options.source ?? 'FileOperationsService.createFileExclusive',
-        details: `File created exclusively: ${path.basename(filePath)}`
+        details: `File created exclusively: ${path.basename(validatedPath)}`
       });
 
       return true;
@@ -364,16 +381,17 @@ export class FileOperationsService implements IFileOperationsService {
 
   async copyFile(sourcePath: string, destPath: string, options: FileOperationOptions = {}): Promise<void> {
     try {
+      const validatedDestPath = await this.enforceWriteAllowlist(destPath, 'copyFile:destination');
       // Ensure destination directory exists
-      await this.createDirectory(path.dirname(destPath));
+      await this.createDirectory(path.dirname(validatedDestPath));
 
-      await fs.copyFile(sourcePath, destPath);
+      await fs.copyFile(sourcePath, validatedDestPath);
 
       SecurityMonitor.logSecurityEvent({
         type: 'FILE_WRITTEN',
         severity: 'LOW',
         source: options.source ?? 'FileOperationsService.copyFile',
-        details: `File copied: ${path.basename(sourcePath)} -> ${path.basename(destPath)}`
+        details: `File copied: ${path.basename(sourcePath)} -> ${path.basename(validatedDestPath)}`
       });
     } catch (error) {
       logger.error(`Failed to copy file from ${sourcePath} to ${destPath}`, error);
@@ -383,13 +401,14 @@ export class FileOperationsService implements IFileOperationsService {
 
   async chmod(filePath: string, mode: number, options: FileOperationOptions = {}): Promise<void> {
     try {
-      await fs.chmod(filePath, mode);
+      const validatedPath = await this.enforceWriteAllowlist(filePath, 'chmod');
+      await fs.chmod(validatedPath, mode);
 
       SecurityMonitor.logSecurityEvent({
         type: 'FILE_WRITTEN',
         severity: 'LOW',
         source: options.source ?? 'FileOperationsService.chmod',
-        details: `File permissions changed: ${path.basename(filePath)} to ${mode.toString(8)}`
+        details: `File permissions changed: ${path.basename(validatedPath)} to ${mode.toString(8)}`
       });
     } catch (error) {
       logger.error(`Failed to change permissions for ${filePath}`, error);
@@ -399,7 +418,8 @@ export class FileOperationsService implements IFileOperationsService {
 
   async appendFile(filePath: string, content: string, options: FileWriteOptions = {}): Promise<void> {
     try {
-      await fs.appendFile(filePath, content, { encoding: options.encoding ?? 'utf-8' });
+      const validatedPath = await this.enforceWriteAllowlist(filePath, 'appendFile');
+      await fs.appendFile(validatedPath, content, { encoding: options.encoding ?? 'utf-8' });
 
       // Only log if verbose audit is enabled to avoid log spam for telemetry
       if (this.config.verboseAudit) {
@@ -407,11 +427,34 @@ export class FileOperationsService implements IFileOperationsService {
           type: 'FILE_WRITTEN',
           severity: 'LOW',
           source: options.source ?? 'FileOperationsService.appendFile',
-          details: `Content appended to file: ${path.basename(filePath)}`
+          details: `Content appended to file: ${path.basename(validatedPath)}`
         });
       }
     } catch (error) {
       logger.error(`Failed to append to file: ${filePath}`, error);
+      throw error;
+    }
+  }
+
+  private async enforceWriteAllowlist(filePath: string, opName: string): Promise<string> {
+    const activeContainer = this.sessionContainerRegistryProvider?.()?.getActiveContainer();
+    if (!activeContainer) {
+      return filePath;
+    }
+
+    try {
+      const pathValidator = activeContainer.resolve<{
+        enforceWritablePath(filePath: string): Promise<string>;
+      }>('PathValidator');
+      return await pathValidator.enforceWritablePath(filePath);
+    } catch (error) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'WRITE_SANDBOX_VIOLATION',
+        severity: 'HIGH',
+        source: 'FileOperationsService.enforceWriteAllowlist',
+        details: `Write sandbox violation during ${opName}: ${path.basename(filePath)}`,
+        additionalData: { operation: opName },
+      });
       throw error;
     }
   }

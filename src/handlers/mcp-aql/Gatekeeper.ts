@@ -16,11 +16,14 @@
  * - Audit logging for all decisions
  */
 
-import { CRUDEndpoint, getRoute } from './OperationRouter.js';
+import { getRoute } from './OperationRouter.js';
+import type { CRUDEndpoint } from './OperationRouter.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { GatekeeperSession, type ClientInfo } from './GatekeeperSession.js';
 import { GatekeeperConfig, type GatekeeperConfigOptions } from './GatekeeperConfig.js';
+import type { AuditHmacResolver } from '../../security/toolRedaction.js';
+import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 import {
   PermissionLevel,
   GatekeeperErrorCode,
@@ -29,6 +32,7 @@ import {
   type GatekeeperAuditEntry,
   type CliApprovalRecord,
   type CliApprovalScope,
+  type CreateCliApprovalArgs,
 } from './GatekeeperTypes.js';
 import {
   getDefaultPermissionLevel,
@@ -60,15 +64,76 @@ export interface EnforceInput {
 }
 
 /**
+ * Per-session GatekeeperSession registry.
+ * Maps sessionId → GatekeeperSession. Used by Gatekeeper to resolve
+ * the correct session's confirmation/approval state at call time.
+ *
+ * Issue #1947: Per-session Gatekeeper isolation.
+ */
+class GatekeeperSessionRegistry {
+  private readonly sessions = new Map<string, GatekeeperSession>();
+  private readonly defaultId: string;
+  private readonly auditHmacResolver?: AuditHmacResolver;
+
+  constructor(defaultSessionId: string, auditHmacResolver?: AuditHmacResolver) {
+    this.defaultId = defaultSessionId;
+    this.auditHmacResolver = auditHmacResolver;
+  }
+
+  /** Register a pre-built GatekeeperSession for a session. */
+  register(sessionId: string, session: GatekeeperSession): void {
+    this.sessions.set(sessionId, session);
+    logger.debug(`[GatekeeperSessionRegistry] Registered session '${sessionId}'`);
+  }
+
+  /** Get or lazily create a GatekeeperSession for a session. */
+  getOrCreate(sessionId: string, config: GatekeeperConfig, clientInfo?: ClientInfo): GatekeeperSession {
+    let session = this.sessions.get(sessionId);
+    if (!session) {
+      session = new GatekeeperSession(clientInfo, config.maxSessionConfirmations, undefined, undefined, sessionId, this.auditHmacResolver);
+      this.sessions.set(sessionId, session);
+      logger.warn(
+        `[GatekeeperSessionRegistry] Auto-created session '${sessionId}' without persistence store. ` +
+        `This may indicate a DI configuration issue — sessions should be registered via Container.`
+      );
+    }
+    return session;
+  }
+
+  /** Get a session, or undefined if not registered. */
+  get(sessionId: string): GatekeeperSession | undefined {
+    return this.sessions.get(sessionId);
+  }
+
+  /** Remove a session (called on disconnect). */
+  dispose(sessionId: string): void {
+    if (this.sessions.delete(sessionId)) {
+      logger.debug(`[GatekeeperSessionRegistry] Disposed session '${sessionId}'`);
+    }
+  }
+
+  /** Default session ID for background/startup contexts. */
+  getDefaultSessionId(): string {
+    return this.defaultId;
+  }
+}
+
+/**
  * Gatekeeper Policy Engine.
  *
  * Central enforcement point for MCP-AQL access control.
  * Validates that operations are called correctly and enforces
  * permission policies based on operation type and active elements.
+ *
+ * Issue #1947: Gatekeeper resolves per-session GatekeeperSession via
+ * ContextTracker. Each session gets its own confirmation state, CLI
+ * approvals, and permission prompt tracking.
  */
 export class Gatekeeper {
-  private readonly session: GatekeeperSession;
   private readonly config: GatekeeperConfig;
+  private readonly sessionRegistry: GatekeeperSessionRegistry;
+  private readonly contextTracker?: ContextTracker;
+  private readonly defaultClientInfo?: ClientInfo;
 
   /**
    * Permission flags for each CRUDE endpoint.
@@ -79,43 +144,86 @@ export class Gatekeeper {
     READ: { readOnly: true, destructive: false },
     UPDATE: { readOnly: false, destructive: true },
     DELETE: { readOnly: false, destructive: true },
-    EXECUTE: { readOnly: false, destructive: true },  // Potentially destructive - agents can perform any action
+    EXECUTE: { readOnly: false, destructive: true },
   };
 
   constructor(
     clientInfo?: ClientInfo,
-    configOptions?: GatekeeperConfigOptions
+    configOptions?: GatekeeperConfigOptions,
+    contextTracker?: ContextTracker,
+    defaultSessionId?: string,
+    auditHmacResolver?: AuditHmacResolver,
   ) {
     this.config = new GatekeeperConfig(configOptions);
-    this.session = new GatekeeperSession(clientInfo, this.config.maxSessionConfirmations);
+    this.contextTracker = contextTracker;
+    this.defaultClientInfo = clientInfo;
+    this.sessionRegistry = new GatekeeperSessionRegistry(defaultSessionId ?? 'default', auditHmacResolver);
+  }
+
+  /**
+   * Resolve the current session's GatekeeperSession.
+   * Uses ContextTracker to find the sessionId, falls back to default.
+   */
+  private resolveSession(): GatekeeperSession {
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId
+      ?? this.sessionRegistry.getDefaultSessionId();
+    return this.sessionRegistry.getOrCreate(sessionId, this.config, this.defaultClientInfo);
+  }
+
+  /**
+   * Register a pre-built GatekeeperSession for a session.
+   * Called by Container during session creation.
+   */
+  registerSession(sessionId: string, session: GatekeeperSession): void {
+    this.sessionRegistry.register(sessionId, session);
+  }
+
+  /**
+   * Return a registered live session without creating a fallback session.
+   */
+  getRegisteredSession(sessionId: string): GatekeeperSession | undefined {
+    return this.sessionRegistry.get(sessionId);
+  }
+
+  /**
+   * Remove a session's GatekeeperSession.
+   * Called by Container during session disconnect. Cancellation persistence is
+   * not awaited here — no caller is waiting on an acknowledgement during
+   * teardown, and disposal must not block on storage — but failures are logged.
+   */
+  disposeSession(sessionId: string): void {
+    this.sessionRegistry.get(sessionId)?.cancelPendingCliApprovals().catch((error: unknown) => {
+      logger.warn('[Gatekeeper] Failed to persist pending-approval cancellation during session disposal', { error });
+    });
+    this.sessionRegistry.dispose(sessionId);
   }
 
   /**
    * Get the session ID for this Gatekeeper instance.
    */
   get sessionId(): string {
-    return this.session.sessionId;
+    return this.resolveSession().sessionId;
   }
 
   /**
    * Get a summary of the current session.
    */
   getSessionSummary(): ReturnType<GatekeeperSession['getSummary']> {
-    return this.session.getSummary();
+    return this.resolveSession().getSummary();
   }
 
   /**
    * Whether permission_prompt has been invoked this session (Issue #625 Phase 4).
    */
   get isPermissionPromptActive(): boolean {
-    return this.session.isPermissionPromptActive;
+    return this.resolveSession().isPermissionPromptActive;
   }
 
   /**
    * Mark that permission_prompt has been invoked (Issue #625 Phase 4).
    */
   markPermissionPromptActive(): void {
-    this.session.markPermissionPromptActive();
+    this.resolveSession().markPermissionPromptActive();
   }
 
   /**
@@ -129,6 +237,13 @@ export class Gatekeeper {
    * @throws Error if operation unknown or endpoint mismatch
    */
   validateRoute(operation: string, calledEndpoint: CRUDEndpoint): void {
+    this.validateRouteWithSession(operation, calledEndpoint, this.resolveSession());
+  }
+
+  /**
+   * Internal route validation with pre-resolved session (avoids double-resolve in enforce()).
+   */
+  private validateRouteWithSession(operation: string, calledEndpoint: CRUDEndpoint, session: GatekeeperSession): void {
     const route = getRoute(operation);
 
     if (!route) {
@@ -137,14 +252,14 @@ export class Gatekeeper {
         permissionLevel: PermissionLevel.DENY,
         errorCode: GatekeeperErrorCode.UNKNOWN_OPERATION,
         reason: `Unknown operation: "${operation}"`,
-      });
+      }, undefined, session);
 
       SecurityMonitor.logSecurityEvent({
         type: 'UPDATE_SECURITY_VIOLATION',
         severity: 'MEDIUM',
         source: 'Gatekeeper.validateRoute',
         details: `Unknown operation: "${operation}"`,
-        additionalData: { operation, calledEndpoint, sessionId: this.session.sessionId },
+        additionalData: { operation, calledEndpoint, sessionId: session.sessionId },
       });
 
       throw new Error(
@@ -161,7 +276,7 @@ export class Gatekeeper {
         suggestion: `Use mcp_aql_${route.endpoint.toLowerCase()} instead of mcp_aql_${calledEndpoint.toLowerCase()}`,
       };
 
-      this.logAuditEvent(operation, calledEndpoint, decision);
+      this.logAuditEvent(operation, calledEndpoint, decision, undefined, session);
 
       SecurityMonitor.logSecurityEvent({
         type: 'UPDATE_SECURITY_VIOLATION',
@@ -173,7 +288,7 @@ export class Gatekeeper {
           expectedEndpoint: route.endpoint,
           actualEndpoint: calledEndpoint,
           permissionReason: this.getPermissionReason(route.endpoint),
-          sessionId: this.session.sessionId,
+          sessionId: session.sessionId,
         },
       });
 
@@ -200,10 +315,12 @@ export class Gatekeeper {
    */
   enforce(input: EnforceInput): GatekeeperDecision {
     const { operation, endpoint, elementType, activeElements = [], skipElementPolicies = false } = input;
+    const session = this.resolveSession();
 
     // Layer 1: Route validation (throws if invalid)
+    // Uses pre-resolved session to avoid double-resolve
     try {
-      this.validateRoute(operation, endpoint);
+      this.validateRouteWithSession(operation, endpoint, session);
     } catch (error) {
       // Convert thrown error to decision for consistent return type
       return {
@@ -239,12 +356,12 @@ export class Gatekeeper {
     // If element policy denies, return immediately
     if (policyResult.permissionLevel === PermissionLevel.DENY) {
       const decision = createDecisionFromPolicy(operation, policyResult, elementType);
-      this.logAuditEvent(operation, endpoint, decision, elementType);
+      this.logAuditEvent(operation, endpoint, decision, elementType, session);
       return decision;
     }
 
-    // Layer 3: Check session confirmations
-    const confirmation = this.session.checkConfirmation(operation, elementType);
+    // Layer 3: Check session confirmations (per-session via registry)
+    const confirmation = session.checkConfirmation(operation, elementType);
     if (confirmation) {
       const decision: GatekeeperDecision = {
         allowed: true,
@@ -252,13 +369,13 @@ export class Gatekeeper {
         reason: `Operation "${operation}" approved via session confirmation`,
         policySource: 'session_confirmation',
       };
-      this.logAuditEvent(operation, endpoint, decision, elementType);
+      this.logAuditEvent(operation, endpoint, decision, elementType, session);
       return decision;
     }
 
     // Layer 4: Apply default/element policy
     const decision = createDecisionFromPolicy(operation, policyResult, elementType);
-    this.logAuditEvent(operation, endpoint, decision, elementType);
+    this.logAuditEvent(operation, endpoint, decision, elementType, session);
     return decision;
   }
 
@@ -275,7 +392,8 @@ export class Gatekeeper {
     level: PermissionLevel.CONFIRM_SESSION | PermissionLevel.CONFIRM_SINGLE_USE,
     elementType?: string
   ): void {
-    this.session.recordConfirmation(operation, level, elementType);
+    const session = this.resolveSession();
+    session.recordConfirmation(operation, level, elementType);
 
     SecurityMonitor.logSecurityEvent({
       type: 'CONFIRMATION_RECORDED',
@@ -286,7 +404,7 @@ export class Gatekeeper {
         operation,
         permissionLevel: level,
         elementType,
-        sessionId: this.session.sessionId,
+        sessionId: session.sessionId,
       },
     });
   }
@@ -299,7 +417,7 @@ export class Gatekeeper {
    * @returns true if a confirmation was revoked
    */
   revokeConfirmation(operation: string, elementType?: string): boolean {
-    return this.session.revokeConfirmation(operation, elementType);
+    return this.resolveSession().revokeConfirmation(operation, elementType);
   }
 
   /**
@@ -307,7 +425,7 @@ export class Gatekeeper {
    * Useful when security-sensitive changes occur.
    */
   revokeAllConfirmations(): void {
-    this.session.revokeAllConfirmations();
+    this.resolveSession().revokeAllConfirmations();
   }
 
   // ── CLI Approval Delegation (Issue #625 Phase 3) ──────────────
@@ -316,26 +434,23 @@ export class Gatekeeper {
    * Create a CLI approval request.
    * Delegates to session and logs the event.
    */
-  createCliApprovalRequest(
-    toolName: string,
-    toolInput: Record<string, unknown>,
-    riskLevel: string,
-    riskScore: number,
-    irreversible: boolean,
-    denyReason: string,
-    policySource?: string,
-    ttlMs?: number,
-  ): string {
-    const requestId = this.session.createCliApprovalRequest(
-      toolName, toolInput, riskLevel, riskScore, irreversible, denyReason, policySource, ttlMs
-    );
+  async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
+    const session = this.resolveSession();
+    const requestId = await session.createCliApprovalRequest(args);
 
     SecurityMonitor.logSecurityEvent({
       type: 'CLI_APPROVAL_REQUESTED',
       severity: 'MEDIUM',
       source: 'Gatekeeper.createCliApprovalRequest',
-      details: `CLI approval requested for ${toolName}: ${denyReason}`,
-      additionalData: { requestId, toolName, riskLevel, riskScore, irreversible, sessionId: this.session.sessionId },
+      details: `CLI approval requested for ${args.toolName}: ${args.denyReason}`,
+      additionalData: {
+        requestId,
+        toolName: args.toolName,
+        riskLevel: args.riskLevel,
+        riskScore: args.riskScore,
+        irreversible: args.irreversible,
+        sessionId: session.sessionId,
+      },
     });
 
     return requestId;
@@ -343,9 +458,15 @@ export class Gatekeeper {
 
   /**
    * Approve a pending CLI approval request.
+   * Resolves once the decision is durably persisted.
    */
-  approveCliRequest(requestId: string, scope: CliApprovalScope = 'single'): CliApprovalRecord | undefined {
-    const record = this.session.approveCliRequest(requestId, scope);
+  async approveCliRequest(
+    requestId: string,
+    scope: CliApprovalScope = 'single',
+    approvedAt?: string,
+  ): Promise<CliApprovalRecord | undefined> {
+    const session = this.resolveSession();
+    const record = await session.approveCliRequest(requestId, scope, approvedAt);
 
     if (record) {
       SecurityMonitor.logSecurityEvent({
@@ -353,7 +474,7 @@ export class Gatekeeper {
         severity: 'MEDIUM',
         source: 'Gatekeeper.approveCliRequest',
         details: `CLI approval granted for ${record.toolName} (scope: ${scope})`,
-        additionalData: { requestId, toolName: record.toolName, scope, sessionId: this.session.sessionId },
+        additionalData: { requestId, toolName: record.toolName, scope, sessionId: session.sessionId },
       });
     }
 
@@ -364,7 +485,8 @@ export class Gatekeeper {
    * Check if a CLI tool call has a valid approval.
    */
   checkCliApproval(toolName: string, toolInput: Record<string, unknown>): CliApprovalRecord | undefined {
-    const record = this.session.checkCliApproval(toolName, toolInput);
+    const session = this.resolveSession();
+    const record = session.checkCliApproval(toolName, toolInput);
 
     if (record) {
       SecurityMonitor.logSecurityEvent({
@@ -372,7 +494,7 @@ export class Gatekeeper {
         severity: 'LOW',
         source: 'Gatekeeper.checkCliApproval',
         details: `CLI approval consumed for ${toolName} (scope: ${record.scope})`,
-        additionalData: { requestId: record.requestId, toolName, scope: record.scope, sessionId: this.session.sessionId },
+        additionalData: { requestId: record.requestId, toolName, scope: record.scope, sessionId: session.sessionId },
       });
     }
 
@@ -383,7 +505,7 @@ export class Gatekeeper {
    * Get all pending CLI approval requests.
    */
   getPendingCliApprovals(): CliApprovalRecord[] {
-    return this.session.getPendingCliApprovals();
+    return this.resolveSession().getPendingCliApprovals();
   }
 
   /**
@@ -407,34 +529,15 @@ export class Gatekeeper {
    * @deprecated Use instance method validateRoute() or enforce() instead
    */
   static validate(operation: string, calledEndpoint: CRUDEndpoint): void {
+    // Lightweight route validation without session-scoped audit logging.
+    // For full enforcement with audit events, use the instance method enforce().
     const route = getRoute(operation);
-
     if (!route) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'UPDATE_SECURITY_VIOLATION',
-        severity: 'MEDIUM',
-        source: 'Gatekeeper.validate',
-        details: `Unknown operation: "${operation}"`,
-        additionalData: { operation, calledEndpoint },
-      });
       throw new Error(
         `Unknown operation: "${operation}". See tool descriptions for available operations on each endpoint.`
       );
     }
-
     if (route.endpoint !== calledEndpoint) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'UPDATE_SECURITY_VIOLATION',
-        severity: 'HIGH',
-        source: 'Gatekeeper.validate',
-        details: `Security violation: Operation "${operation}" called via wrong endpoint`,
-        additionalData: {
-          operation,
-          expectedEndpoint: route.endpoint,
-          actualEndpoint: calledEndpoint,
-          permissionReason: Gatekeeper.getPermissionReasonStatic(route.endpoint),
-        },
-      });
       throw new Error(
         `Security violation: Operation "${operation}" must be called via mcp_aql_${route.endpoint.toLowerCase()} endpoint, ` +
           `not mcp_aql_${calledEndpoint.toLowerCase()}. ` +
@@ -490,20 +593,22 @@ export class Gatekeeper {
     operation: string,
     endpoint: CRUDEndpoint,
     decision: GatekeeperDecision,
-    elementType?: string
+    elementType?: string,
+    session?: GatekeeperSession,
   ): void {
     if (!this.config.enableAuditLogging) {
       return;
     }
 
+    const resolvedSession = session ?? this.resolveSession();
     const auditEntry: GatekeeperAuditEntry = {
       timestamp: new Date().toISOString(),
-      sessionId: this.session.sessionId,
+      sessionId: resolvedSession.sessionId,
       operation,
       endpoint,
       elementType,
       decision,
-      clientInfo: this.session.clientInfo,
+      clientInfo: resolvedSession.clientInfo,
     };
 
     // Only log security events for denied decisions — allowed ops are normal traffic

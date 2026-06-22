@@ -22,12 +22,12 @@ export function getConfigToolsV2(server: ConfigToolsHandler): Array<{ tool: Tool
           properties: {
             action: {
               type: "string",
-              enum: ["get", "set", "reset", "export", "import", "wizard"],
+              enum: ["get", "set", "delete", "reset", "export", "import", "wizard"],
               description: "The configuration action to perform"
             },
             setting: {
               type: "string",
-              description: "Dot-notation path to setting (e.g., 'user.username', 'sync.enabled'). Required for 'set' action, optional for 'get'."
+              description: "Dot-notation path to setting (e.g., 'user.username', 'sync.enabled'). Required for 'set' and 'delete' actions, optional for 'get'."
             },
             value: {
               description: "Value to set (required for 'set' action). Can be string, number, boolean, or object."

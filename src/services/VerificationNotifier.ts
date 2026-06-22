@@ -38,6 +38,12 @@ export class VerificationNotifier implements IVerificationNotifier {
    * - Never logs the code itself
    */
   showCode(code: string, reason: string): void {
+    // Test-environment escape hatch: HTTP integration tests run unattended
+    // and must not pop an OS dialog that waits for human input. The real
+    // dialog still fires in stdio and production deployments (env var unset).
+    if (process.env.DOLLHOUSE_SUPPRESS_VERIFICATION_DIALOG === 'true') {
+      return;
+    }
     let currentPlatform = 'unknown';
     try {
       currentPlatform = platform();

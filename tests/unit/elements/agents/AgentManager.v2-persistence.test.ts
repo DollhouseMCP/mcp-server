@@ -38,6 +38,8 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { normalizeAutonomyKeys, normalizeResilienceKeys, normalizeGoalKeys, isOneOf } from '../../../../src/elements/agents/constants.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -171,10 +173,31 @@ describe('AgentManager v2 Metadata Persistence', () => {
 
     container = new DollhouseContainer();
     container.register<PortfolioManager>('PortfolioManager', () => mockPortfolioManager as any);
-    container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
 
-    // Use real FileOperationsService for this test
-    container.register<FileOperationsService>('FileOperationsService', () => new FileOperationsService());
+    // Configure FileLockManager mock to execute callbacks (withLock pass-through).
+    // Tests need actual file writes to verify V2 field persistence on disk.
+    const mockFileLockManager = new FileLockManager();
+    (mockFileLockManager as any).withLock = jest.fn(
+      async (_resource: string, operation: () => Promise<unknown>) => operation()
+    );
+    (mockFileLockManager as any).atomicWriteFile = jest.fn(
+      async (filePath: string, content: string, options?: any) => {
+        const fsImport = await import('node:fs/promises');
+        await fsImport.writeFile(filePath, content, options);
+      }
+    );
+    (mockFileLockManager as any).atomicReadFile = jest.fn(
+      async (filePath: string, options?: any) => {
+        const fsImport = await import('node:fs/promises');
+        return fsImport.readFile(filePath, options);
+      }
+    );
+    container.register<FileLockManager>('FileLockManager', () => mockFileLockManager);
+
+    // Use real FileOperationsService for this test (needs the FileLockManager for writeFile)
+    container.register<FileOperationsService>('FileOperationsService', () =>
+      new FileOperationsService(container.resolve('FileLockManager'))
+    );
 
     // Register DI services
     serializationService = new SerializationService();
@@ -186,15 +209,17 @@ describe('AgentManager v2 Metadata Persistence', () => {
       metadataService
     ));
 
-    container.register('AgentManager', () => new AgentManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      portfolioPath,
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      container.resolve('MetadataService')
-    ));
+    container.register('AgentManager', () => new AgentManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      baseDir: portfolioPath,
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService: container.resolve('MetadataService'),
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+    }));
 
     agentManager = container.resolve<AgentManager>('AgentManager');
   });

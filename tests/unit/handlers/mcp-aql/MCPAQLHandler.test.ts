@@ -13,6 +13,15 @@ import type { OperationInput, ResponseMeta } from '../../../../src/handlers/mcp-
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { logger } from '../../../../src/utils/logger.js';
 
+const TEST_PERSONA_NAME = 'test-persona';
+const TEST_PERSONA_DESCRIPTION = 'A test persona';
+const TEST_CONTENT = 'Test content';
+const TEST_MEMORY_NAME = 'test-memory';
+const PERMISSION_VIOLATIONS_DESC = 'Permission violations';
+const SECURITY_VIOLATION_ERROR = 'Security violation';
+const BASH_GIT_PUSH_PATTERN = 'Bash:git push*';
+const LOCKED_PERSONA_NAME = 'locked-persona';
+
 /**
  * Create a mock Gatekeeper that validates routes but auto-approves all policies.
  * Used for existing tests that don't focus on policy enforcement.
@@ -51,7 +60,7 @@ describe('MCPAQLHandler', () => {
         createElement: jest.fn().mockResolvedValue({ name: 'test-element' }),
         listElements: jest.fn().mockResolvedValue([]),
         getElements: jest.fn().mockResolvedValue([
-          { metadata: { name: 'test-persona', description: 'A test persona' }, content: 'Test content' },
+          { metadata: { name: TEST_PERSONA_NAME, description: TEST_PERSONA_DESCRIPTION }, content: TEST_CONTENT },
         ]),
         getElementDetails: jest.fn().mockResolvedValue({ name: 'test', type: 'persona' }),
         editElement: jest.fn().mockResolvedValue({ updated: true }),
@@ -71,7 +80,7 @@ describe('MCPAQLHandler', () => {
       },
       memoryManager: {
         find: jest.fn().mockResolvedValue({
-          metadata: { name: 'test-memory' },
+          metadata: { name: TEST_MEMORY_NAME },
           addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
         }),
@@ -115,7 +124,7 @@ describe('MCPAQLHandler', () => {
             element_name: 'Test Element',
             element_type: 'persona',
             description: 'Test description',
-            content: 'Test content',
+            content: TEST_CONTENT,
           },
         };
 
@@ -131,7 +140,7 @@ describe('MCPAQLHandler', () => {
               elementName: 'Test Element',
               elementType: 'persona',
               description: 'Test description',
-              content: 'Test content',
+              content: TEST_CONTENT,
             })
           );
         }
@@ -163,7 +172,7 @@ describe('MCPAQLHandler', () => {
         const input: OperationInput = {
           operation: 'activate_element',
           params: {
-            element_name: 'test-persona',
+            element_name: TEST_PERSONA_NAME,
             element_type: 'persona',
           },
         };
@@ -174,7 +183,7 @@ describe('MCPAQLHandler', () => {
         if (result.success) {
           expect(result.data).toEqual({ activated: true });
           expect(mockRegistry.elementCRUD.activateElement).toHaveBeenCalledWith(
-            'test-persona',
+            TEST_PERSONA_NAME,
             'persona',
             undefined
           );
@@ -185,7 +194,7 @@ describe('MCPAQLHandler', () => {
         const input: OperationInput = {
           operation: 'activate_element',
           params: {
-            element_name: 'test-persona',
+            element_name: TEST_PERSONA_NAME,
             element_type: 'persona',
             context: { key: 'value' },
           },
@@ -194,7 +203,7 @@ describe('MCPAQLHandler', () => {
         await handler.handleRead(input);
 
         expect(mockRegistry.elementCRUD.activateElement).toHaveBeenCalledWith(
-          'test-persona',
+          TEST_PERSONA_NAME,
           'persona',
           { key: 'value' }
         );
@@ -206,7 +215,7 @@ describe('MCPAQLHandler', () => {
         const input: OperationInput = {
           operation: 'addEntry',
           params: {
-            element_name: 'test-memory',
+            element_name: TEST_MEMORY_NAME,
             content: 'Test entry content',
             tags: ['tag1', 'tag2'],
             metadata: { key: 'value' },
@@ -229,7 +238,7 @@ describe('MCPAQLHandler', () => {
           operation: 'addEntry',
           params: {
             element_name: 'nonexistent-memory',
-            content: 'Test content',
+            content: TEST_CONTENT,
           },
         };
 
@@ -264,12 +273,12 @@ describe('MCPAQLHandler', () => {
           exportVersion: '1.0',
           exportedAt: new Date().toISOString(),
           elementType: 'personas',
-          elementName: 'test-persona',
+          elementName: TEST_PERSONA_NAME,
           format: 'json',
           data: JSON.stringify({
             name: 'Test Persona',
             description: 'A test persona for import',
-            content: 'Test content',
+            content: TEST_CONTENT,
           }),
         };
 
@@ -293,7 +302,7 @@ describe('MCPAQLHandler', () => {
       });
     });
 
-    describe('Permission violations', () => {
+    describe(PERMISSION_VIOLATIONS_DESC, () => {
       it('should reject READ operations via CREATE endpoint', async () => {
         const input: OperationInput = {
           operation: 'list_elements',
@@ -304,7 +313,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
           expect(result.error).toContain('list_elements');
           expect(result.error).toContain('mcp_aql_read');
           expect(result.error).toContain('not mcp_aql_create');
@@ -321,7 +330,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
           expect(result.error).toContain('mcp_aql_update');
         }
       });
@@ -336,7 +345,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
           expect(result.error).toContain('mcp_aql_delete');
         }
       });
@@ -357,7 +366,7 @@ describe('MCPAQLHandler', () => {
               deny: ['delete_*'],
               externalRestrictions: {
                 allowPatterns: ['Bash:git status*'],
-                confirmPatterns: ['Bash:git push*'],
+                confirmPatterns: [BASH_GIT_PUSH_PATTERN],
                 denyPatterns: ['Bash:rm*'],
                 description: 'Safer shell access',
               },
@@ -377,13 +386,13 @@ describe('MCPAQLHandler', () => {
         expect(data.combinedAllowOperations).toEqual(['read_*']);
         expect(data.combinedConfirmOperations).toEqual(['edit_*']);
         expect(data.combinedDenyOperations).toEqual(['delete_*']);
-        expect(data.combinedConfirmPatterns).toEqual(['Bash:git push*']);
+        expect(data.combinedConfirmPatterns).toEqual([BASH_GIT_PUSH_PATTERN]);
         expect(data.elements).toEqual([
           expect.objectContaining({
             allowOperations: ['read_*'],
             confirmOperations: ['edit_*'],
             denyOperations: ['delete_*'],
-            confirmPatterns: ['Bash:git push*'],
+            confirmPatterns: [BASH_GIT_PUSH_PATTERN],
           }),
         ]);
       }
@@ -399,7 +408,7 @@ describe('MCPAQLHandler', () => {
             gatekeeper: {
               externalRestrictions: {
                 denyPatterns: ['Bash:curl*'],
-                confirmPatterns: ['Bash:git push*'],
+                confirmPatterns: [BASH_GIT_PUSH_PATTERN],
               },
             },
           },
@@ -420,7 +429,7 @@ describe('MCPAQLHandler', () => {
       if (result.success) {
         const data = result.data as Record<string, unknown>;
         expect(data.combinedDenyPatterns).toEqual(['Bash:curl*']);
-        expect(data.combinedConfirmPatterns).toEqual(['Bash:git push*']);
+        expect(data.combinedConfirmPatterns).toEqual([BASH_GIT_PUSH_PATTERN]);
       }
     });
   });
@@ -495,14 +504,14 @@ describe('MCPAQLHandler', () => {
       it('should get element by name via get_element', async () => {
         const input: OperationInput = {
           operation: 'get_element',
-          params: { element_name: 'test-persona', element_type: 'persona' },
+          params: { element_name: TEST_PERSONA_NAME, element_type: 'persona' },
         };
 
         const result = await handler.handleRead(input);
 
         expect(result.success).toBe(true);
         expect(mockRegistry.elementCRUD.getElementDetails).toHaveBeenCalledWith(
-          'test-persona',
+          TEST_PERSONA_NAME,
           'persona'
         );
       });
@@ -510,14 +519,14 @@ describe('MCPAQLHandler', () => {
       it('should get element details via get_element_details', async () => {
         const input: OperationInput = {
           operation: 'get_element_details',
-          params: { element_name: 'test-persona', element_type: 'persona' },
+          params: { element_name: TEST_PERSONA_NAME, element_type: 'persona' },
         };
 
         const result = await handler.handleRead(input);
 
         expect(result.success).toBe(true);
         expect(mockRegistry.elementCRUD.getElementDetails).toHaveBeenCalledWith(
-          'test-persona',
+          TEST_PERSONA_NAME,
           'persona'
         );
       });
@@ -527,7 +536,7 @@ describe('MCPAQLHandler', () => {
       it('should validate an element', async () => {
         const input: OperationInput = {
           operation: 'validate_element',
-          params: { element_name: 'test-persona', element_type: 'persona', strict: true },
+          params: { element_name: TEST_PERSONA_NAME, element_type: 'persona', strict: true },
         };
 
         const result = await handler.handleRead(input);
@@ -536,7 +545,7 @@ describe('MCPAQLHandler', () => {
         // Issue #290: mapTo converts element_name->elementName, element_type->elementType
         expect(mockRegistry.elementCRUD.validateElement).toHaveBeenCalledWith(
           expect.objectContaining({
-            elementName: 'test-persona',
+            elementName: TEST_PERSONA_NAME,
             elementType: 'persona',
             strict: true,
           })
@@ -546,7 +555,7 @@ describe('MCPAQLHandler', () => {
       it('should handle validation without strict flag', async () => {
         const input: OperationInput = {
           operation: 'validate_element',
-          params: { element_name: 'test-persona', element_type: 'persona' },
+          params: { element_name: TEST_PERSONA_NAME, element_type: 'persona' },
         };
 
         await handler.handleRead(input);
@@ -554,7 +563,7 @@ describe('MCPAQLHandler', () => {
         // Issue #290: mapTo converts element_name->elementName, element_type->elementType
         expect(mockRegistry.elementCRUD.validateElement).toHaveBeenCalledWith(
           expect.objectContaining({
-            elementName: 'test-persona',
+            elementName: TEST_PERSONA_NAME,
             elementType: 'persona',
           })
         );
@@ -579,14 +588,14 @@ describe('MCPAQLHandler', () => {
       it('should deactivate an element', async () => {
         const input: OperationInput = {
           operation: 'deactivate_element',
-          params: { element_name: 'test-persona', element_type: 'persona' },
+          params: { element_name: TEST_PERSONA_NAME, element_type: 'persona' },
         };
 
         const result = await handler.handleRead(input);
 
         expect(result.success).toBe(true);
         expect(mockRegistry.elementCRUD.deactivateElement).toHaveBeenCalledWith(
-          'test-persona',
+          TEST_PERSONA_NAME,
           'persona'
         );
       });
@@ -636,7 +645,7 @@ describe('MCPAQLHandler', () => {
         const input: OperationInput = {
           operation: 'export_element',
           elementType: 'persona' as any,
-          params: { element_name: 'test-persona', format: 'json' },
+          params: { element_name: TEST_PERSONA_NAME, format: 'json' },
         };
 
         const result = await handler.handleRead(input);
@@ -773,7 +782,7 @@ describe('MCPAQLHandler', () => {
     });
 
     describe('query_elements operation', () => {
-      it('should require elementType parameter', async () => {
+      it('should require element_type parameter', async () => {
         const input: OperationInput = {
           operation: 'query_elements',
           params: { page: 1 },
@@ -783,7 +792,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('elementType is required');
+          expect(result.error).toContain('element_type is required');
         }
       });
 
@@ -1058,7 +1067,7 @@ describe('MCPAQLHandler', () => {
       });
     });
 
-    describe('Permission violations', () => {
+    describe(PERMISSION_VIOLATIONS_DESC, () => {
       it('should reject CREATE operations via READ endpoint', async () => {
         const input: OperationInput = {
           operation: 'create_element',
@@ -1069,7 +1078,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
           expect(result.error).toContain('mcp_aql_create');
         }
       });
@@ -1084,7 +1093,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
 
@@ -1098,7 +1107,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
     });
@@ -1110,7 +1119,7 @@ describe('MCPAQLHandler', () => {
         const input: OperationInput = {
           operation: 'edit_element',
           params: {
-            element_name: 'test-persona',
+            element_name: TEST_PERSONA_NAME,
             element_type: 'persona',
             input: { description: 'Updated description' },
           },
@@ -1125,7 +1134,7 @@ describe('MCPAQLHandler', () => {
         // Issue #290: mapTo converts element_name->elementName, element_type->elementType
         expect(mockRegistry.elementCRUD.editElement).toHaveBeenCalledWith(
           expect.objectContaining({
-            elementName: 'test-persona',
+            elementName: TEST_PERSONA_NAME,
             elementType: 'persona',
             input: { description: 'Updated description' },
           })
@@ -1136,7 +1145,7 @@ describe('MCPAQLHandler', () => {
         const input: OperationInput = {
           operation: 'edit_element',
           params: {
-            element_name: 'test-persona',
+            element_name: TEST_PERSONA_NAME,
             element_type: 'persona',
             input: { metadata: { priority: 5 } },
           },
@@ -1152,7 +1161,7 @@ describe('MCPAQLHandler', () => {
       });
     });
 
-    describe('Permission violations', () => {
+    describe(PERMISSION_VIOLATIONS_DESC, () => {
       it('should reject CREATE operations via UPDATE endpoint', async () => {
         const input: OperationInput = {
           operation: 'create_element',
@@ -1163,7 +1172,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
           expect(result.error).toContain('mcp_aql_create');
         }
       });
@@ -1178,7 +1187,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
 
@@ -1192,7 +1201,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
     });
@@ -1204,7 +1213,7 @@ describe('MCPAQLHandler', () => {
         const input: OperationInput = {
           operation: 'delete_element',
           params: {
-            element_name: 'test-persona',
+            element_name: TEST_PERSONA_NAME,
             element_type: 'persona',
             deleteData: true,
           },
@@ -1219,7 +1228,7 @@ describe('MCPAQLHandler', () => {
         // Issue #290: mapTo converts element_name->elementName, element_type->elementType
         expect(mockRegistry.elementCRUD.deleteElement).toHaveBeenCalledWith(
           expect.objectContaining({
-            elementName: 'test-persona',
+            elementName: TEST_PERSONA_NAME,
             elementType: 'persona',
             deleteData: true,
           })
@@ -1229,7 +1238,7 @@ describe('MCPAQLHandler', () => {
       it('should handle delete without deleteData flag', async () => {
         const input: OperationInput = {
           operation: 'delete_element',
-          params: { element_name: 'test-persona', element_type: 'persona' },
+          params: { element_name: TEST_PERSONA_NAME, element_type: 'persona' },
         };
 
         await handler.handleDelete(input);
@@ -1237,7 +1246,7 @@ describe('MCPAQLHandler', () => {
         // Issue #290: mapTo converts element_name->elementName, element_type->elementType
         expect(mockRegistry.elementCRUD.deleteElement).toHaveBeenCalledWith(
           expect.objectContaining({
-            elementName: 'test-persona',
+            elementName: TEST_PERSONA_NAME,
             elementType: 'persona',
           })
         );
@@ -1250,7 +1259,7 @@ describe('MCPAQLHandler', () => {
       it('should clear memory entries', async () => {
         const input: OperationInput = {
           operation: 'clear',
-          params: { element_name: 'test-memory' },
+          params: { element_name: TEST_MEMORY_NAME },
         };
 
         const result = await handler.handleDelete(input);
@@ -1276,7 +1285,7 @@ describe('MCPAQLHandler', () => {
       });
     });
 
-    describe('Permission violations', () => {
+    describe(PERMISSION_VIOLATIONS_DESC, () => {
       it('should reject CREATE operations via DELETE endpoint', async () => {
         const input: OperationInput = {
           operation: 'create_element',
@@ -1287,7 +1296,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
           expect(result.error).toContain('mcp_aql_create');
         }
       });
@@ -1302,7 +1311,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
 
@@ -1316,7 +1325,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
     });
@@ -1386,7 +1395,7 @@ describe('MCPAQLHandler', () => {
       });
     });
 
-    describe('Permission violations', () => {
+    describe(PERMISSION_VIOLATIONS_DESC, () => {
       it('should reject CREATE operations via EXECUTE endpoint', async () => {
         const input: OperationInput = {
           operation: 'create_element',
@@ -1397,7 +1406,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
 
@@ -1411,7 +1420,7 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(false);
         if (!result.success) {
-          expect(result.error).toContain('Security violation');
+          expect(result.error).toContain(SECURITY_VIOLATION_ERROR);
         }
       });
     });
@@ -1633,7 +1642,7 @@ describe('MCPAQLHandler', () => {
         },
         memoryManager: {
           find: jest.fn().mockResolvedValue({
-            metadata: { name: 'test-memory' },
+            metadata: { name: TEST_MEMORY_NAME },
             addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
             clearAll: jest.fn().mockResolvedValue({ cleared: true }),
           }),
@@ -1966,7 +1975,8 @@ describe('MCPAQLHandler', () => {
         }));
       }
       expect(mockVerificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'XYZ789');
-      expect(mockDangerZoneEnforcer.unblock).toHaveBeenCalledWith('code-reviewer', VALID_CHALLENGE_ID);
+      // Issue #1947: unblock now receives sessionId as third arg (undefined in tests without session context)
+      expect(mockDangerZoneEnforcer.unblock).toHaveBeenCalledWith('code-reviewer', VALID_CHALLENGE_ID, undefined);
     });
 
     it('should fail with incorrect code', async () => {
@@ -2404,11 +2414,11 @@ describe('MCPAQLHandler', () => {
         ...mockRegistry.elementCRUD,
         releaseDeadlock: jest.fn().mockResolvedValue({
           sessionId: 'test-session',
-          activeBeforeReset: [{ type: 'persona', name: 'locked-persona' }],
-          deactivated: [{ type: 'persona', name: 'locked-persona' }],
+          activeBeforeReset: [{ type: 'persona', name: LOCKED_PERSONA_NAME }],
+          deactivated: [{ type: 'persona', name: LOCKED_PERSONA_NAME }],
           failed: [],
           likelyDeadlockCause: {
-            sandboxingElement: { type: 'persona', name: 'locked-persona' },
+            sandboxingElement: { type: 'persona', name: LOCKED_PERSONA_NAME },
             advisoryElements: [],
           },
           persistedStateCleared: true,
@@ -2432,10 +2442,10 @@ describe('MCPAQLHandler', () => {
         expect(result.data).toEqual(expect.objectContaining({
           released: true,
           persistedStateCleared: true,
-          activeBeforeReset: [{ type: 'persona', element_name: 'locked-persona' }],
-          deactivated: [{ type: 'persona', element_name: 'locked-persona' }],
+          activeBeforeReset: [{ type: 'persona', element_name: LOCKED_PERSONA_NAME }],
+          deactivated: [{ type: 'persona', element_name: LOCKED_PERSONA_NAME }],
           likelyDeadlockCause: {
-            sandboxingElement: { type: 'persona', element_name: 'locked-persona' },
+            sandboxingElement: { type: 'persona', element_name: LOCKED_PERSONA_NAME },
             advisoryElements: [],
           },
           snapshotFile: '/opt/dollhouse/test-data/deadlock-relief-test.json',
@@ -2540,10 +2550,10 @@ describe('MCPAQLHandler', () => {
       const tracker = trackHandler as any;
       const loggerWarnSpy = jest.spyOn(logger, 'warn');
 
-      tracker.trackSaveFrequency('test-memory');
+      tracker.trackSaveFrequency(TEST_MEMORY_NAME);
 
-      expect(tracker.saveFrequencyCounters.has('test-memory')).toBe(true);
-      expect(tracker.saveFrequencyCounters.get('test-memory').timestamps.length).toBe(1);
+      expect(tracker.saveFrequencyCounters.has('default:test-memory')).toBe(true);
+      expect(tracker.saveFrequencyCounters.get('default:test-memory').timestamps.length).toBe(1);
       // Should not warn for a single call
       expect(loggerWarnSpy).not.toHaveBeenCalledWith(
         expect.stringContaining('Save frequency warn threshold'),
@@ -2562,8 +2572,8 @@ describe('MCPAQLHandler', () => {
 
       // All three should have been tracked under the same key
       expect(tracker.saveFrequencyCounters.size).toBe(1);
-      expect(tracker.saveFrequencyCounters.has('mymemory')).toBe(true);
-      expect(tracker.saveFrequencyCounters.get('mymemory').timestamps.length).toBe(3);
+      expect(tracker.saveFrequencyCounters.has('default:mymemory')).toBe(true);
+      expect(tracker.saveFrequencyCounters.get('default:mymemory').timestamps.length).toBe(3);
     });
 
     it('should set warned flag when warn threshold is reached', () => {
@@ -2577,7 +2587,7 @@ describe('MCPAQLHandler', () => {
         tracker.trackSaveFrequency('heavy-memory');
       }
 
-      const counter = tracker.saveFrequencyCounters.get('heavy-memory');
+      const counter = tracker.saveFrequencyCounters.get('default:heavy-memory');
       expect(counter.warned).toBe(true);
       expect(loggerWarnSpy).toHaveBeenCalledWith(
         '[MCPAQLHandler] Save frequency warn threshold exceeded',
@@ -2603,7 +2613,7 @@ describe('MCPAQLHandler', () => {
         tracker.trackSaveFrequency('runaway-memory');
       }
 
-      const counter = tracker.saveFrequencyCounters.get('runaway-memory');
+      const counter = tracker.saveFrequencyCounters.get('default:runaway-memory');
       expect(counter.critical).toBe(true);
       expect(loggerErrorSpy).toHaveBeenCalledWith(
         '[MCPAQLHandler] Save frequency critical threshold exceeded',
@@ -2629,7 +2639,7 @@ describe('MCPAQLHandler', () => {
 
       // Manually set up a counter with stale timestamps that will be pruned
       const oldTimestamp = Date.now() - 120000; // 2 minutes ago (outside default 60s window)
-      tracker.saveFrequencyCounters.set('recovery-memory', {
+      tracker.saveFrequencyCounters.set('default:recovery-memory', {
         timestamps: Array(60).fill(oldTimestamp),
         warned: true,
         critical: true,
@@ -2638,7 +2648,7 @@ describe('MCPAQLHandler', () => {
       // One new call — stale timestamps get pruned, count drops to 1
       tracker.trackSaveFrequency('recovery-memory');
 
-      const counter = tracker.saveFrequencyCounters.get('recovery-memory');
+      const counter = tracker.saveFrequencyCounters.get('default:recovery-memory');
       expect(counter.timestamps.length).toBe(1);
       expect(counter.warned).toBe(false);
       expect(counter.critical).toBe(false);
@@ -2662,7 +2672,7 @@ describe('MCPAQLHandler', () => {
 
       expect(tracker.saveFrequencyCounters.size).toBe(500);
       expect(tracker.saveFrequencyCounters.has('memory-0')).toBe(false);
-      expect(tracker.saveFrequencyCounters.has('memory-overflow')).toBe(true);
+      expect(tracker.saveFrequencyCounters.has('default:memory-overflow')).toBe(true);
     });
 
     it('should not warn again after warned flag is already set', () => {
@@ -2690,6 +2700,54 @@ describe('MCPAQLHandler', () => {
       expect(newWarnCallCount).toBe(warnCallCount);
 
       loggerWarnSpy.mockRestore();
+    });
+  });
+
+  describe('session isolation', () => {
+    it('should produce session-prefixed keys via sessionKey()', () => {
+      const h = handler as any;
+
+      const key = h.sessionKey('my-agent');
+      expect(key).toBe('default:my-agent');
+      expect(key).toContain(':');
+    });
+
+    it('should isolate abortedGoals between sessions', () => {
+      const h = handler as any;
+
+      // Session A aborts a goal
+      h.abortedGoals.add('default:goal-123');
+
+      // Session B's goal with the same ID is independent
+      h.abortedGoals.add('session-b:goal-123');
+
+      expect(h.abortedGoals.has('default:goal-123')).toBe(true);
+      expect(h.abortedGoals.has('session-b:goal-123')).toBe(true);
+
+      // Removing Session A's goal doesn't affect Session B
+      h.abortedGoals.delete('default:goal-123');
+      expect(h.abortedGoals.has('default:goal-123')).toBe(false);
+      expect(h.abortedGoals.has('session-b:goal-123')).toBe(true);
+    });
+
+    it('should isolate executingAgents between sessions', () => {
+      const h = handler as any;
+
+      // Session A starts agent "coder"
+      h.executingAgents.set('session-a:coder', { name: 'coder', startedAt: Date.now() });
+
+      // Session B starts the same agent name
+      h.executingAgents.set('session-b:coder', { name: 'coder', startedAt: Date.now() });
+
+      // Both exist independently
+      expect(h.executingAgents.has('session-a:coder')).toBe(true);
+      expect(h.executingAgents.has('session-b:coder')).toBe(true);
+      expect(h.executingAgents.size).toBe(2);
+
+      // Deleting Session A doesn't affect Session B
+      h.executingAgents.delete('session-a:coder');
+      expect(h.executingAgents.has('session-a:coder')).toBe(false);
+      expect(h.executingAgents.has('session-b:coder')).toBe(true);
     });
   });
 });

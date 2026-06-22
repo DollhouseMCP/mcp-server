@@ -37,6 +37,8 @@ import { ElementStatus } from '../../../src/types/elements/index.js';
 import { createPortfolioTestEnvironment, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import { createTestMetadataService } from '../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../src/services/MetadataService.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService: MetadataService = createTestMetadataService();
@@ -68,27 +70,31 @@ describe('Ensemble Activation Integration Tests', () => {
     );
 
     // Initialize real managers with proper DI
-    ensembleManager = new EnsembleManager(
-      env.portfolioManager,
+    ensembleManager = new EnsembleManager({
+      portfolioManager: env.portfolioManager,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
       metadataService,
-      fileWatchService
-    );
-    skillManager = new SkillManager(
-      env.portfolioManager,
+      eventDispatcher: new ElementEventDispatcher(),
+      fileWatchService,
+      storageLayerFactory: createTestStorageFactory(fileOperationsService),
+    });
+    skillManager = new SkillManager({
+      portfolioManager: env.portfolioManager,
       fileLockManager,
       fileOperationsService,
       validationRegistry,
       serializationService,
       metadataService,
-      fileWatchService
-    );
-    personaManager = new PersonaManager(
-      env.portfolioManager,
-      {
+      eventDispatcher: new ElementEventDispatcher(),
+      fileWatchService,
+      storageLayerFactory: createTestStorageFactory(fileOperationsService),
+    });
+    personaManager = new PersonaManager({
+      portfolioManager: env.portfolioManager,
+      indicatorConfig: {
         enabled: true,
         style: 'full',
         showEmoji: true,
@@ -99,15 +105,16 @@ describe('Ensemble Activation Integration Tests', () => {
         separator: ' | ',
         emoji: '🎭',
         bracketStyle: 'square'
-      }, // indicator config
+      },
       fileLockManager,
       fileOperationsService,
       validationRegistry,
+      serializationService,
       metadataService,
-      undefined, // personaImporter
-      undefined, // notifier
-      { fileWatchService } // baseOptions
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+      fileWatchService,
+      storageLayerFactory: createTestStorageFactory(fileOperationsService),
+    });
 
     // Get element directories
     ensemblesDir = env.portfolioManager.getElementDir(ElementType.ENSEMBLE);

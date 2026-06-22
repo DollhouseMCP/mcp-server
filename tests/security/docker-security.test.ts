@@ -178,16 +178,13 @@ suite('Docker Security Hardening', () => {
   });
   
   describe('Security Best Practices', () => {
-    let dockerfileContent: string;
     let composeContent: string;
-    
+
     beforeAll(() => {
-      dockerfileContent = fs.readFileSync(dockerfilePath, 'utf-8');
       composeContent = fs.readFileSync(dockerComposePath, 'utf-8');
     });
     
-    it('should not expose any ports', () => {
-      expect(dockerfileContent).not.toMatch(/EXPOSE\s+\d+/);
+    it('should not expose ports in stdio compose (HTTP has its own compose)', () => {
       expect(composeContent).not.toContain('ports:');
     });
     
@@ -228,6 +225,58 @@ suite('Docker Security Hardening', () => {
       expect(devSection).toContain('cap_add:');
       expect(devSection).toContain('- DAC_OVERRIDE');
       expect(devSection).toContain('- CHOWN');
+    });
+  });
+
+  describe('HTTP Hosted Mode Docker Configuration', () => {
+    let dockerfileContent: string;
+    const httpComposePath = path.join(process.cwd(), 'docker/docker-compose.http.yml');
+
+    beforeAll(() => {
+      dockerfileContent = fs.readFileSync(dockerfilePath, 'utf-8');
+    });
+
+    it('should include HEALTHCHECK directive in Dockerfile', () => {
+      expect(dockerfileContent).toContain('HEALTHCHECK');
+      expect(dockerfileContent).toContain('/healthz');
+    });
+
+    it('should include EXPOSE directive for HTTP port', () => {
+      expect(dockerfileContent).toMatch(/EXPOSE\s+3000/);
+    });
+
+    it('should have HTTP compose file', () => {
+      expect(fs.existsSync(httpComposePath)).toBe(true);
+    });
+
+    it('should bind to 0.0.0.0 in HTTP compose (required for container networking)', () => {
+      const httpCompose = fs.readFileSync(httpComposePath, 'utf-8');
+      expect(httpCompose).toContain('DOLLHOUSE_HTTP_HOST=0.0.0.0');
+    });
+
+    it('should expose port in HTTP compose', () => {
+      const httpCompose = fs.readFileSync(httpComposePath, 'utf-8');
+      expect(httpCompose).toContain('ports:');
+      expect(httpCompose).toMatch(/"3000:3000"/);
+    });
+
+    it('should set streamable-http transport in HTTP compose', () => {
+      const httpCompose = fs.readFileSync(httpComposePath, 'utf-8');
+      expect(httpCompose).toContain('DOLLHOUSE_TRANSPORT=streamable-http');
+    });
+
+    it('should maintain security hardening in HTTP compose', () => {
+      const httpCompose = fs.readFileSync(httpComposePath, 'utf-8');
+      expect(httpCompose).toContain('cap_drop:');
+      expect(httpCompose).toContain('- ALL');
+      expect(httpCompose).toContain('no-new-privileges:true');
+      expect(httpCompose).toContain('read_only: true');
+      expect(httpCompose).toContain('user: "1001:1001"');
+    });
+
+    it('should use restart policy suitable for long-running HTTP server', () => {
+      const httpCompose = fs.readFileSync(httpComposePath, 'utf-8');
+      expect(httpCompose).toContain('restart: unless-stopped');
     });
   });
 });

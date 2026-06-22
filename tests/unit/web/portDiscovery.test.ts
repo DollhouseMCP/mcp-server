@@ -6,9 +6,9 @@
  */
 
 import { createServer } from 'node:net';
-import { readFile, unlink, stat } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, unlink, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { tmpdir } from 'node:os';
 import { findAvailablePort, writePortFile, cleanupPortFile, discoverAndBindPort, ensureLatestPortFile } from '../../../src/web/portDiscovery.js';
 
 const MAX_PORT_ATTEMPTS = 10;
@@ -61,6 +61,22 @@ async function reserveBlockedPortRange(rangeSize: number): Promise<{
 }
 
 describe('portDiscovery', () => {
+  // Use a unique tmp dir as the run directory for every test in this file
+  // (DOLLHOUSE_RUN_DIR override). This isolates the port-file writes from
+  // any other test that touches the real ~/.dollhouse/run/ — without this,
+  // permissionServerIntegration.test.ts running concurrently used to clobber
+  // the shared `permission-server.port` and produce ENOENT failures.
+  let runDir: string;
+
+  beforeEach(async () => {
+    runDir = await mkdtemp(join(tmpdir(), 'portDiscovery-test-'));
+    process.env.DOLLHOUSE_RUN_DIR = runDir;
+  });
+
+  afterEach(async () => {
+    delete process.env.DOLLHOUSE_RUN_DIR;
+    if (runDir) await rm(runDir, { recursive: true, force: true });
+  });
   describe('findAvailablePort', () => {
     it('should return the requested port when available', async () => {
       // Use a high port unlikely to be in use
@@ -99,7 +115,6 @@ describe('portDiscovery', () => {
   });
 
   describe('writePortFile and cleanupPortFile', () => {
-    const runDir = join(homedir(), '.dollhouse', 'run');
     let writtenFile: string;
 
     afterEach(async () => {
@@ -146,14 +161,14 @@ describe('portDiscovery', () => {
     afterEach(async () => {
       await cleanupPortFile();
       try {
-        await unlink(join(homedir(), '.dollhouse', 'run', 'permission-server.port'));
+        await unlink(join(runDir, 'permission-server.port'));
       } catch { /* may not exist */ }
     });
 
     it('should return a port and write port file', async () => {
       const port = await discoverAndBindPort(49170);
-      const pidFile = join(homedir(), '.dollhouse', 'run', `permission-server-${process.pid}.port`);
-      const latestFile = join(homedir(), '.dollhouse', 'run', 'permission-server.port');
+      const pidFile = join(runDir, `permission-server-${process.pid}.port`);
+      const latestFile = join(runDir, 'permission-server.port');
 
       expect(port).toBeDefined();
       expect(port).toBeGreaterThanOrEqual(49170);

@@ -5,7 +5,7 @@
 # tool_input field names differ from Claude Code. This adapter normalizes the
 # most relevant built-in tool names into Dollhouse's existing permission model.
 
-RUN_DIR="$HOME/.dollhouse/run"
+RUN_DIR="${DOLLHOUSE_RUN_DIR:-$HOME/.dollhouse/run}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
 source "$SCRIPT_DIR/permission-hook-config.sh"

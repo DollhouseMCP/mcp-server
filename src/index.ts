@@ -6,14 +6,25 @@ import { env } from './config/env.js';
 
 import * as path from 'path';
 import { realpathSync } from 'node:fs';
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import { createHash } from 'node:crypto';
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { ErrorHandler } from "./utils/ErrorHandler.js";
 import { logger } from "./utils/logger.js";
+import { resolveSessionIdentity } from "./services/sessionIdentity.js";
 import { DollhouseContainer } from "./di/Container.js";
+import {
+  createStreamableHttpRuntime,
+  getStreamableHttpRuntimeOptions,
+  getRequestedTransportName,
+  type StreamableHttpRuntimeOptions,
+  type StreamableHttpRuntimeHandle,
+  type McpClientInfo,
+} from './server/StreamableHttpServer.js';
+import { createHttpSession } from './context/HttpSession.js';
 import { ElementType } from "./portfolio/PortfolioManager.js";
-import { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
+import type { OperationalTelemetry, StartupTimer } from "./telemetry/index.js";
 import { PACKAGE_VERSION } from "./generated/version.js";
+import { joinUrl } from './auth/oauth/url.js';
 import type { IndicatorConfig } from "./config/indicator-config.js";
 import type { IToolHandler } from "./server/index.js";
 import type { ToolRegistry } from "./handlers/ToolRegistry.js";
@@ -27,39 +38,81 @@ import type { IdentityHandler } from "./handlers/IdentityHandler.js";
 import type { ConfigHandler } from "./handlers/ConfigHandler.js";
 import type { SyncHandler } from "./handlers/SyncHandlerV2.js";
 import type { EnhancedIndexHandler } from "./handlers/EnhancedIndexHandler.js";
+import type { ResourceHandler } from './handlers/ResourceHandler.js';
+import type { WebConsoleComposition } from './web-console/WebConsoleRegistrar.js';
+import type { RuntimeMcpSessionControlService } from './web-console/services/runtime/index.js';
+import type { ServerSetup } from './server/ServerSetup.js';
+import type { IngestRoutesResult } from './web/console/IngestRoutes.js';
+import type { MemoryLogSink } from './logging/sinks/MemoryLogSink.js';
+import type { MemoryMetricsSink } from './metrics/sinks/MemoryMetricsSink.js';
+import type { LogManager } from './logging/LogManager.js';
+import type { MCPAQLHandler } from './handlers/mcp-aql/MCPAQLHandler.js';
+import type { RequestHandler, Router } from 'express';
+import type { ContextTracker } from './security/encryption/ContextTracker.js';
+import type { UserIdentityService } from './services/UserIdentityService.js';
+import type { SessionActivationRegistry } from './state/SessionActivationState.js';
+import type { TlsConfig } from './server/TlsConfig.js';
+import type { PerformanceMonitor } from './utils/PerformanceMonitor.js';
 import { ConfigManager } from "./config/ConfigManager.js";
-import { FileOperationsService } from "./services/FileOperationsService.js";
-import { FileLockManager } from "./security/fileLockManager.js";
 import * as os from "os";
 import type { EnsembleElement } from "./elements/ensembles/types.js";
+import { validateUserId } from './paths/validateUserId.js';
 
-// Defensive error handling for npx/CLI execution
-process.on('uncaughtException', (error) => {
-  logger.error('Unhandled exception detected', {
-    error: error instanceof Error ? error.message : String(error),
-    stack: error instanceof Error ? error.stack : undefined
-  });
-  console.error('[DollhouseMCP] Server startup failed');
-  process.exit(1);
-});
+// Transport-aware error handlers.
+// Issue #1948: Process lifecycle managed by LifecycleService singleton.
+// The service is created eagerly here (before DI container) because error
+// handlers must be installed before any async work begins.
+import { LifecycleService } from './lifecycle/LifecycleService.js';
 
-process.on('unhandledRejection', (reason, promise) => {
-  logger.error('Unhandled promise rejection detected', {
-    reason: reason instanceof Error ? reason.message : String(reason),
-    stack: reason instanceof Error ? reason.stack : undefined,
-    promise
-  });
-  console.error('[DollhouseMCP] Server startup failed');
-  process.exit(1);
-});
+type LowLevelMcpServer = {
+  connect(transport: StdioServerTransport): Promise<void>;
+};
+
+const _lifecycleService = new LifecycleService();
+_lifecycleService.installErrorHandlers();
+
+/** The singleton LifecycleService instance. Exported for DI container registration. */
+export { _lifecycleService as lifecycleService };
+
+/** Check if HTTP mode error handling is active. Re-exported for backward compat. */
+export function isHttpModeActive(): boolean {
+  return _lifecycleService.isHttpModeActive();
+}
+
+/** Activate HTTP mode error handling. Re-exported for backward compat. */
+export function setHttpModeActive(active: boolean): void {
+  _lifecycleService.setHttpModeActive(active);
+}
 
 // Only log execution environment in debug mode
-if (process.env.DOLLHOUSE_DEBUG) {
+if (env.DOLLHOUSE_DEBUG) {
   console.error('[DollhouseMCP] Debug mode enabled');
 }
 
+/**
+ * Convert an authenticated subject into a path-safe internal user id for
+ * file-mode HTTP sessions. Embedded/local providers already issue safe
+ * subjects (e.g. github_123), but generic OIDC subjects often contain
+ * provider separators, URLs, or exceed our path segment limits. Preserve
+ * safe subjects for readability; hash unsafe ones into a stable ID.
+ */
+function toPathSafeAuthUserId(subject: string, providerName: string | undefined): string {
+  try {
+    return validateUserId(subject);
+  } catch {
+    const digest = createHash('sha256')
+      .update(providerName ?? 'auth')
+      .update('\0')
+      .update(subject)
+      .digest('base64url')
+      .slice(0, 43);
+    return `auth_${digest}`;
+  }
+}
+
 export class DollhouseMCPServer implements IToolHandler {
-  private server: Server;
+  private server: LowLevelMcpServer | undefined;
+  private readonly capabilities: Record<string, unknown>;
   public personasDir: string | null;
   private currentUser: string | null = null;
   private isInitialized: boolean = false;
@@ -76,58 +129,65 @@ export class DollhouseMCPServer implements IToolHandler {
   private identityHandler?: IdentityHandler;
   private configHandler?: ConfigHandler;
   private syncHandler?: SyncHandler;
-  private resourceHandler?: import('./handlers/ResourceHandler.js').ResourceHandler;
+  private resourceHandler?: ResourceHandler;
 
   /**
    * Create a new DollhouseMCPServer instance
    *
    * @param container DollhouseContainer instance for dependency injection.
-   *                  Use `new DollhouseContainer()` for production or
+   *                  Use `new DollhouseContainer(_lifecycleService)` for production or
    *                  `createIntegrationContainer().container` for tests.
    */
   constructor(container: DollhouseContainer) {
     // Build capabilities object conditionally based on configuration
     // Resources are disabled by default (advertise_resources: false)
-    const capabilities: any = {
+    const capabilities: Record<string, unknown> = {
       tools: {},
     };
 
-    // Check if resources should be advertised
-    // This is a future-proof implementation - resources are opt-in
+    // Check if resources should be advertised. Resources are opt-in.
+    //
+    // Phase 4.5: this runs before the DI container exists, so we can't
+    // resolve a real ConfigManager (which now requires async-constructed
+    // stores). Instead we peek the YAML file directly. In DB-backend mode
+    // the file doesn't exist and we get the safe default (false) — operators
+    // wanting advertise=true in DB mode would set it post-startup via the
+    // dollhouse_config tool, then restart for the capability to take effect.
     try {
-      // Initialize ConfigManager to check resource settings
-      // Note: Config may not be fully initialized yet, so we check synchronously
-      // If config is not initialized, defaults (advertise_resources: false) apply
-      const fileLockManager = new FileLockManager();
-      const fileOperations = new FileOperationsService(fileLockManager);
-      const configManager = new ConfigManager(fileOperations, os);
-      const resourcesConfig = configManager.getSetting<any>('elements.enhanced_index.resources');
-
-      if (resourcesConfig?.advertise_resources === true) {
+      if (ConfigManager.peekResourcesAdvertiseFlag()) {
         capabilities.resources = {};
         logger.info('[DollhouseMCP] MCP Resources capability advertised (enabled via config)');
       } else {
         logger.info('[DollhouseMCP] MCP Resources capability NOT advertised (disabled by default)');
       }
     } catch (error) {
-      // Config not initialized yet - use safe default (no resources)
       const errorMessage = error instanceof Error ? error.message : String(error);
-      logger.debug(`[DollhouseMCP] Config not initialized yet, resources capability disabled by default: ${errorMessage}`);
+      logger.debug(`[DollhouseMCP] Resources capability disabled by default: ${errorMessage}`);
     }
 
-    this.server = new Server(
+    this.capabilities = capabilities;
+    this.personasDir = null;
+    this.currentUser = process.env.DOLLHOUSE_USER || null;
+    this.container = container;
+  }
+
+  private async getServer(): Promise<LowLevelMcpServer> {
+    if (this.server) return this.server;
+    const serverModule = await import('@modelcontextprotocol/sdk/server/index.js') as Record<string, unknown>;
+    const LowLevelServer = serverModule['Server'] as new (
+      info: { name: string; version: string },
+      options: { capabilities: Record<string, unknown> },
+    ) => LowLevelMcpServer;
+    this.server = new LowLevelServer(
       {
         name: "dollhousemcp",
         version: PACKAGE_VERSION,
       },
       {
-        capabilities,
+        capabilities: this.capabilities,
       }
     );
-
-    this.personasDir = null;
-    this.currentUser = process.env.DOLLHOUSE_USER || null;
-    this.container = container;
+    return this.server;
   }
   
   private async initializePortfolio(): Promise<void> {
@@ -142,7 +202,8 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   private async completeInitialization(): Promise<void> {
     // Create handlers with server instance - all state managed by services
-    const handlers = await this.container.createHandlers(this.server);
+    const server = await this.getServer();
+    const handlers = await this.container.createHandlers(server);
 
     this.personaHandler = handlers.personaHandler;
     this.elementCRUDHandler = handlers.elementCrudHandler;
@@ -163,6 +224,53 @@ export class DollhouseMCPServer implements IToolHandler {
     this.isInitialized = true;
   }
 
+  private requireInitializedHandler<T>(handler: T | undefined, name: string): T {
+    if (!handler) {
+      throw new Error(`${name} is not initialized`);
+    }
+    return handler;
+  }
+
+  private get personaHandlerOrThrow(): PersonaHandler {
+    return this.requireInitializedHandler(this.personaHandler, 'PersonaHandler');
+  }
+
+  private get elementCrudHandlerOrThrow(): ElementCRUDHandler {
+    return this.requireInitializedHandler(this.elementCRUDHandler, 'ElementCRUDHandler');
+  }
+
+  private get collectionHandlerOrThrow(): CollectionHandler {
+    return this.requireInitializedHandler(this.collectionHandler, 'CollectionHandler');
+  }
+
+  private get portfolioHandlerOrThrow(): PortfolioHandler {
+    return this.requireInitializedHandler(this.portfolioHandler, 'PortfolioHandler');
+  }
+
+  private get githubAuthHandlerOrThrow(): GitHubAuthHandler {
+    return this.requireInitializedHandler(this.githubAuthHandler, 'GitHubAuthHandler');
+  }
+
+  private get displayConfigHandlerOrThrow(): DisplayConfigHandler {
+    return this.requireInitializedHandler(this.displayConfigHandler, 'DisplayConfigHandler');
+  }
+
+  private get identityHandlerOrThrow(): IdentityHandler {
+    return this.requireInitializedHandler(this.identityHandler, 'IdentityHandler');
+  }
+
+  private get configHandlerOrThrow(): ConfigHandler {
+    return this.requireInitializedHandler(this.configHandler, 'ConfigHandler');
+  }
+
+  private get syncHandlerOrThrow(): SyncHandler {
+    return this.requireInitializedHandler(this.syncHandler, 'SyncHandler');
+  }
+
+  private get enhancedIndexHandlerOrThrow(): EnhancedIndexHandler {
+    return this.requireInitializedHandler(this.enhancedIndexHandler, 'EnhancedIndexHandler');
+  }
+
   /**
    * Initialize MCP Resources handlers if enabled in configuration
    * This is separate from other handlers because it requires dynamic import
@@ -174,7 +282,7 @@ export class DollhouseMCPServer implements IToolHandler {
       const configManager = this.container.resolve<ConfigManager>('ConfigManager');
 
       this.resourceHandler = new ResourceHandler(configManager);
-      await this.resourceHandler.initialize(this.server);
+      await this.resourceHandler.initialize(await this.getServer() as never);
     } catch (error) {
       // Resources are optional - don't fail server startup if they can't be initialized
       logger.warn('[DollhouseMCP] Failed to initialize resource handlers, continuing without resources');
@@ -216,7 +324,7 @@ export class DollhouseMCPServer implements IToolHandler {
   
   async listPersonas() {
     await this.ensureInitialized();
-    return this.personaHandler!.listPersonas();
+    return this.personaHandlerOrThrow.listPersonas();
   }
 
   // Use activateElement(name, 'persona'), deactivateElement(name, 'persona'),
@@ -225,18 +333,18 @@ export class DollhouseMCPServer implements IToolHandler {
 
   async reloadPersonas() {
     await this.ensureInitialized();
-    return this.personaHandler!.reloadPersonas();
+    return this.personaHandlerOrThrow.reloadPersonas();
   }
 
   // ===== Element Methods (Generic for all element types) =====
   
   async listElements(type: string) {
     try {
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
       if (normalizedType === ElementType.PERSONA) {
         return this.listPersonas();
       }
-      return this.elementCRUDHandler!.listElements(normalizedType);
+      return this.elementCrudHandlerOrThrow.listElements(normalizedType);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.listElements', error, { type });
       return {
@@ -252,8 +360,8 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX: Issue #281 - Route all element types through elementCRUDHandler
       // PersonaHandler.activatePersona is deprecated; PersonaActivationStrategy handles personas
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-      return this.elementCRUDHandler!.activateElement(name, normalizedType, context);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+      return this.elementCrudHandlerOrThrow.activateElement(name, normalizedType, context);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.activateElement', error, { type, name });
       return {
@@ -269,8 +377,8 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX: Issue #281 - Route all element types through elementCRUDHandler
       // PersonaHandler.getActivePersona is deprecated; PersonaActivationStrategy handles personas
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-      return this.elementCRUDHandler!.getActiveElements(normalizedType);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+      return this.elementCrudHandlerOrThrow.getActiveElements(normalizedType);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.getActiveElements', error, { type });
       return {
@@ -286,8 +394,8 @@ export class DollhouseMCPServer implements IToolHandler {
     try {
       // FIX: Issue #281 - Route all element types through elementCRUDHandler
       // PersonaHandler.deactivatePersona is deprecated; PersonaActivationStrategy handles personas
-      const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-      return this.elementCRUDHandler!.deactivateElement(name, normalizedType);
+      const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+      return this.elementCrudHandlerOrThrow.deactivateElement(name, normalizedType);
     } catch (error) {
       ErrorHandler.logError('DollhouseMCPServer.deactivateElement', error, { type, name });
       return {
@@ -302,24 +410,24 @@ export class DollhouseMCPServer implements IToolHandler {
   async getElementDetails(name: string, type: string) {
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.getPersonaDetails is deprecated; PersonaActivationStrategy handles personas
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(type);
-    return this.elementCRUDHandler!.getElementDetails(name, normalizedType);
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(type);
+    return this.elementCrudHandlerOrThrow.getElementDetails(name, normalizedType);
   }
   
   async reloadElements(type: string) {
     await this.ensureInitialized();
-    return this.elementCRUDHandler!.reloadElements(type);
+    return this.elementCrudHandlerOrThrow.reloadElements(type);
   }
 
   // Element-specific methods
   async renderTemplate(name: string, variables: Record<string, any>) {
     await this.ensureInitialized();
-    return this.elementCRUDHandler!.renderTemplate(name, variables);
+    return this.elementCrudHandlerOrThrow.renderTemplate(name, variables);
   }
 
   async executeAgent(name: string, parameters: Record<string, any>) {
     await this.ensureInitialized();
-    return this.elementCRUDHandler!.executeAgent(name, parameters);
+    return this.elementCrudHandlerOrThrow.executeAgent(name, parameters);
   }
   
   /**
@@ -331,116 +439,116 @@ export class DollhouseMCPServer implements IToolHandler {
     // FIX: Issue #20 - Remove persona special case, route all element creation through ElementCRUDHandler
     // This ensures consistent duplicate checking and error handling for all element types
     // FIX: Issue #278 - Support elements parameter for ensembles
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.createElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.createElement({...args, type: normalizedType});
   }
 
   async editElement(args: {name: string; type: string; input: Record<string, unknown>}) {
     await this.ensureInitialized();
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.editPersona is deprecated; elementCRUDHandler handles personas via PersonaActivationStrategy
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.editElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.editElement({...args, type: normalizedType});
   }
 
   async validateElement(args: {name: string; type: string; strict?: boolean}) {
     await this.ensureInitialized();
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.validatePersona is deprecated; elementCRUDHandler handles personas
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.validateElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.validateElement({...args, type: normalizedType});
   }
 
   async deleteElement(args: {name: string; type: string; deleteData?: boolean}) {
     await this.ensureInitialized();
     // FIX: Issue #276 - Route all element types through elementCRUDHandler for consistent error handling
     // PersonaHandler.deletePersona is deprecated; elementCRUDHandler handles personas via dedicated delete path
-    const normalizedType = this.elementCRUDHandler!.normalizeElementType(args.type);
-    return this.elementCRUDHandler!.deleteElement({...args, type: normalizedType});
+    const normalizedType = this.elementCrudHandlerOrThrow.normalizeElementType(args.type);
+    return this.elementCrudHandlerOrThrow.deleteElement({...args, type: normalizedType});
   }
 
   async browseCollection(section?: string, type?: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.browseCollection(section, type);
+    return this.collectionHandlerOrThrow.browseCollection(section, type);
   }
 
   async searchCollection(query: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.searchCollection(query);
+    return this.collectionHandlerOrThrow.searchCollection(query);
   }
 
   async searchCollectionEnhanced(query: string, options: any = {}) {
     await this.ensureInitialized();
-    return this.collectionHandler!.searchCollectionEnhanced(query, options);
+    return this.collectionHandlerOrThrow.searchCollectionEnhanced(query, options);
   }
 
   async getCollectionContent(path: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.getCollectionContent(path);
+    return this.collectionHandlerOrThrow.getCollectionContent(path);
   }
 
   async installContent(inputPath: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.installContent(inputPath);
+    return this.collectionHandlerOrThrow.installContent(inputPath);
   }
 
   async submitContent(contentIdentifier: string) {
     await this.ensureInitialized();
-    return this.collectionHandler!.submitContent(contentIdentifier);
+    return this.collectionHandlerOrThrow.submitContent(contentIdentifier);
   }
 
   async getCollectionCacheHealth() {
     await this.ensureInitialized();
-    return this.collectionHandler!.getCollectionCacheHealth();
+    return this.collectionHandlerOrThrow.getCollectionCacheHealth();
   }
 
   // User identity management - delegated to IdentityHandler
   async setUserIdentity(username: string, email?: string) {
     await this.ensureInitialized();
-    return this.identityHandler!.setUserIdentity(username, email);
+    return this.identityHandlerOrThrow.setUserIdentity(username, email);
   }
 
   async getUserIdentity() {
     await this.ensureInitialized();
-    return this.identityHandler!.getUserIdentity();
+    return this.identityHandlerOrThrow.getUserIdentity();
   }
 
   async clearUserIdentity() {
     await this.ensureInitialized();
-    return this.identityHandler!.clearUserIdentity();
+    return this.identityHandlerOrThrow.clearUserIdentity();
   }
 
   private getCurrentUserForAttribution(): string {
-    return this.identityHandler!.getCurrentUserForAttribution();
+    return this.identityHandlerOrThrow.getCurrentUserForAttribution();
   }
 
   // GitHub authentication management
   async setupGitHubAuth() {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.setupGitHubAuth();
+    return this.githubAuthHandlerOrThrow.setupGitHubAuth();
   }
   
   async checkGitHubAuth() {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.checkGitHubAuth();
+    return this.githubAuthHandlerOrThrow.checkGitHubAuth();
   }
   
   async getOAuthHelperStatus(verbose: boolean = false) {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.getOAuthHelperStatus(verbose);
+    return this.githubAuthHandlerOrThrow.getOAuthHelperStatus(verbose);
   }
   
 
   
   async clearGitHubAuth() {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.clearGitHubAuth();
+    return this.githubAuthHandlerOrThrow.clearGitHubAuth();
   }
 
   // OAuth configuration management
   async configureOAuth(client_id?: string) {
     await this.ensureInitialized();
-    return this.githubAuthHandler!.configureOAuth(client_id);
+    return this.githubAuthHandlerOrThrow.configureOAuth(client_id);
   }
 
 
@@ -457,7 +565,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async configureIndicator(config: Partial<IndicatorConfig>) {
     await this.ensureInitialized();
-    return this.displayConfigHandler!.configureIndicator(config);
+    return this.displayConfigHandlerOrThrow.configureIndicator(config);
   }
 
   /**
@@ -465,7 +573,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async getIndicatorConfig() {
     await this.ensureInitialized();
-    return this.displayConfigHandler!.getIndicatorConfig();
+    return this.displayConfigHandlerOrThrow.getIndicatorConfig();
   }
 
   /**
@@ -473,7 +581,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async configureCollectionSubmission(autoSubmit: boolean) {
     await this.ensureInitialized();
-    return this.collectionHandler!.configureCollectionSubmission(autoSubmit);
+    return this.collectionHandlerOrThrow.configureCollectionSubmission(autoSubmit);
   }
 
   /**
@@ -481,7 +589,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async getCollectionSubmissionConfig() {
     await this.ensureInitialized();
-    return this.collectionHandler!.getCollectionSubmissionConfig();
+    return this.collectionHandlerOrThrow.getCollectionSubmissionConfig();
   }
 
 
@@ -490,7 +598,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async exportPersona(personaName: string) {
     await this.ensureInitialized();
-    return this.personaHandler!.exportPersona(personaName);
+    return this.personaHandlerOrThrow.exportPersona(personaName);
   }
 
   /**
@@ -498,7 +606,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async exportAllPersonas(includeDefaults = true) {
     await this.ensureInitialized();
-    return this.personaHandler!.exportAllPersonas(includeDefaults);
+    return this.personaHandlerOrThrow.exportAllPersonas(includeDefaults);
   }
 
   /**
@@ -506,7 +614,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async importPersona(source: string, overwrite = false) {
     await this.ensureInitialized();
-    return this.personaHandler!.importPersona(source, overwrite);
+    return this.personaHandlerOrThrow.importPersona(source, overwrite);
   }
 
 
@@ -519,7 +627,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async portfolioStatus(username?: string) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.portfolioStatus(username);
+    return this.portfolioHandlerOrThrow.portfolioStatus(username);
   }
 
   /**
@@ -527,7 +635,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async initPortfolio(options: {repositoryName?: string; private?: boolean; description?: string}) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.initPortfolio(options);
+    return this.portfolioHandlerOrThrow.initPortfolio(options);
   }
 
   /**
@@ -535,7 +643,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async portfolioConfig(options: {autoSync?: boolean; defaultVisibility?: string; autoSubmit?: boolean; repositoryName?: string}) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.portfolioConfig(options);
+    return this.portfolioHandlerOrThrow.portfolioConfig(options);
   }
 
   /**
@@ -549,7 +657,7 @@ export class DollhouseMCPServer implements IToolHandler {
     confirmDeletions?: boolean;
   }) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.syncPortfolio(options);
+    return this.portfolioHandlerOrThrow.syncPortfolio(options);
   }
 
   /**
@@ -557,7 +665,7 @@ export class DollhouseMCPServer implements IToolHandler {
   */
   async handleConfigOperation(options: any) {
     await this.ensureInitialized();
-    return this.configHandler!.handleConfigOperation(options);
+    return this.configHandlerOrThrow.handleConfigOperation(options);
   }
 
   /**
@@ -565,7 +673,7 @@ export class DollhouseMCPServer implements IToolHandler {
    */
   async handleSyncOperation(options: any) {
     await this.ensureInitialized();
-    return this.syncHandler!.handleSyncOperation(options);
+    return this.syncHandlerOrThrow.handleSyncOperation(options);
   }
 
   async dispose(): Promise<void> {
@@ -587,7 +695,7 @@ export class DollhouseMCPServer implements IToolHandler {
     includeDescriptions?: boolean;
   }) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.searchPortfolio(options);
+    return this.portfolioHandlerOrThrow.searchPortfolio(options);
   }
 
   /**
@@ -603,7 +711,7 @@ export class DollhouseMCPServer implements IToolHandler {
     sortBy?: string;
   }) {
     await this.ensureInitialized();
-    return this.portfolioHandler!.searchAll(options);
+    return this.portfolioHandlerOrThrow.searchAll(options);
   }
 
   /**
@@ -615,7 +723,7 @@ export class DollhouseMCPServer implements IToolHandler {
     limit: number;
     threshold: number;
   }) {
-    return this.enhancedIndexHandler!.findSimilarElements(options);
+    return this.enhancedIndexHandlerOrThrow.findSimilarElements(options);
   }
 
   /**
@@ -626,7 +734,7 @@ export class DollhouseMCPServer implements IToolHandler {
     elementType?: string;
     relationshipTypes?: string[];
   }) {
-    return this.enhancedIndexHandler!.getElementRelationships(options);
+    return this.enhancedIndexHandlerOrThrow.getElementRelationships(options);
   }
 
   /**
@@ -636,14 +744,14 @@ export class DollhouseMCPServer implements IToolHandler {
     verb: string;
     limit: number;
   }) {
-    return this.enhancedIndexHandler!.searchByVerb(options);
+    return this.enhancedIndexHandlerOrThrow.searchByVerb(options);
   }
 
   /**
    * Get statistics about Enhanced Index relationships
    */
   async getRelationshipStats() {
-    return this.enhancedIndexHandler!.getRelationshipStats();
+    return this.enhancedIndexHandlerOrThrow.getRelationshipStats();
   }
 
   async run() {
@@ -706,7 +814,8 @@ export class DollhouseMCPServer implements IToolHandler {
 
     // Connect ASAP — tools are registered, server can accept requests
     timer.startPhase('mcp_connect', true);
-    await this.server.connect(transport);
+    const server = await this.getServer();
+    await server.connect(transport);
     timer.endPhase('mcp_connect');
     timer.markConnect();
 
@@ -725,11 +834,11 @@ export class DollhouseMCPServer implements IToolHandler {
     deferredPromise.catch(err => logger.warn('[Startup] Deferred setup error:', err));
 
     // Issue #706 Phase 4: Wire deferred promise into ServerSetup for request buffering
-    const serverSetup = this.container.resolve<import('./server/ServerSetup.js').ServerSetup>('ServerSetup');
+    const serverSetup = this.container.resolve<ServerSetup>('ServerSetup');
     serverSetup.setDeferredSetupPromise(deferredPromise);
 
     // Log startup timing after deferred setup completes
-    deferredPromise.then(async () => {
+    deferredPromise.then(() => {
       const report = timer.getReport();
       logger.info(`[Startup] Full report: connect at ${report.connectAtMs}ms, ` +
         `critical ${report.criticalPathMs}ms, deferred ${report.deferredMs}ms, ` +
@@ -747,12 +856,12 @@ export class DollhouseMCPServer implements IToolHandler {
 // Bug fix: npx creates symlinks in .bin/ (e.g. .bin/mcp-server → dist/index.js).
 // Node.js keeps the symlink path in process.argv[1], so without resolving it,
 // isDirectExecution missed the dist/index.js suffix and the server never started.
-const rawScriptPath = process.argv?.[1] ?? '';
+const rawScriptPath = process.argv[1] ?? '';
 let scriptPath = rawScriptPath ? path.normalize(rawScriptPath) : '';
 try {
   scriptPath = realpathSync(scriptPath);
 } catch {
-  if (process.env.DOLLHOUSE_DEBUG) {
+  if (env.DOLLHOUSE_DEBUG) {
     console.error(`[DEBUG] Symlink resolution failed for ${rawScriptPath} — using original path`);
   }
 }
@@ -769,8 +878,7 @@ const binName = path.basename(rawScriptPath);
 const isCliExecution = binName === 'dollhousemcp' || binName === 'mcp-server';
 const isTest = process.env.JEST_WORKER_ID; // This is set when Jest runs tests
 const isTestMode = process.env.TEST_MODE === 'true'; // Check for TEST_MODE environment variable
-const dollhouseDebugFlag = process.env.DOLLHOUSE_DEBUG?.toLowerCase();
-const isDebugStartupLogging = dollhouseDebugFlag === 'true' || dollhouseDebugFlag === '1';
+const isDebugStartupLogging = env.DOLLHOUSE_DEBUG;
 
 // Progressive startup with retries for npx/CLI execution
 const STARTUP_DELAYS = [10, 50, 100, 200]; // Progressive delays in ms
@@ -780,7 +888,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     console.error("DEBUG: startServerWithRetry called.");
   }
   try {
-    const container = new DollhouseContainer();
+    const container = new DollhouseContainer(_lifecycleService);
     const server = new DollhouseMCPServer(container);
     await server.run();
   } catch (error) {
@@ -794,7 +902,7 @@ async function startServerWithRetry(retriesLeft = STARTUP_DELAYS.length): Promis
     // Final failure - minimal error message for security
     // Note: Using console.error here is intentional as it's the final error before exit
     console.error("[DollhouseMCP] Server startup failed",
-      process.env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
+      env.DOLLHOUSE_DEBUG ? error : (error as Error).message || 'unknown error');
     process.exit(1);
   }
 }
@@ -827,164 +935,603 @@ async function resolvePortFromConfig(): Promise<number | undefined> {
   }
 }
 
-if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
-  // Issue #704: --web flag starts the portfolio web UI instead of MCP server
-  const isWebMode = process.argv.includes('--web');
-  if (isWebMode) {
-    // Issue #796: Bootstrap DI container for web-only mode so API routes
-    // go through MCPAQLHandler (validated, cached, gatekeeper-checked)
+/**
+ * Bootstrap a shared DollhouseContainer for HTTP mode.
+ * Called once at startup — the container is shared across the web console
+ * and all HTTP sessions.
+ */
+async function bootstrapHttpContainer(): Promise<DollhouseContainer> {
+  const container = new DollhouseContainer(_lifecycleService);
+  await container.preparePortfolio();
+  await container.bootstrapHttpHandlers();
+  await container.completeSinkSetup();
+  // Mark deferred setup as complete — HTTP mode runs completeSinkSetup()
+  // directly (skipping completeConsoleSetup which handles leader election).
+  // Without this, BuildInfoService reports "Initializing" indefinitely.
+  container.deferredSetupComplete = true;
+  return container;
+}
+
+/**
+ * Start the web console alongside the HTTP transport.
+ * Runs on a separate port (DOLLHOUSE_WEB_CONSOLE_PORT, default 41715) and
+ * provides the management UI for monitoring HTTP sessions, logs, and metrics.
+ *
+ * @returns IngestRoutesResult for wiring HTTP session lifecycle into the console
+ */
+const HTTP_CONSOLE_LOG_PREFIX = '[HTTP Console]';
+
+/**
+ * Try to resolve an optional service from the container, logging a
+ * debug message with the shared prefix when the registration is absent.
+ * Extracted to bring `startHttpConsole` cognitive complexity ≤15 (S3776)
+ * and to keep all "not registered → use fallback" warnings on one line.
+ */
+function tryResolveOptional<T>(
+  container: DollhouseContainer,
+  registration: string,
+  description: string,
+): T | undefined {
+  try {
+    return container.resolve<T>(registration);
+  } catch (e) {
+    logger.debug(`${HTTP_CONSOLE_LOG_PREFIX} ${description}`, { error: (e as Error).message });
+    return undefined;
+  }
+}
+
+async function startHttpConsole(
+  container: DollhouseContainer,
+): Promise<IngestRoutesResult> {
+  const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
+
+  // Resolve sinks from the shared container
+  let memorySink = tryResolveOptional<MemoryLogSink>(
+    container, 'MemoryLogSink', 'MemoryLogSink not registered, using fallback',
+  );
+  let metricsSink = tryResolveOptional<MemoryMetricsSink>(
+    container, 'MemoryMetricsSink', 'MemoryMetricsSink not registered, using fallback',
+  );
+  const logManager = tryResolveOptional<LogManager>(
+    container, 'LogManager', 'LogManager not registered',
+  );
+
+  // Fallback sinks if not available from the container
+  if (!memorySink) {
+    const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
+    memorySink = new MemoryLogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
+  }
+  if (!metricsSink) {
+    const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
+    metricsSink = new MemoryMetricsSink(240);
+  }
+
+  // Create ingest routes for session tracking
+  const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (_entry) => { /* wired after web server starts */ },
+  });
+  ingestResult.registerConsoleSession();
+
+  // Initialize console token store for auth
+  const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
+  const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
+  const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  try {
+    await tokenStore.ensureInitialized(pickRandomTokenName());
+  } catch (err) {
+    logger.warn(`${HTTP_CONSOLE_LOG_PREFIX} Failed to initialize console token store`, err);
+  }
+
+  // Resolve web console port
+  const resolvedPort = await resolvePortFromConfig() ?? env.DOLLHOUSE_WEB_CONSOLE_PORT;
+
+  // Resolve MCP-AQL handler for gateway routes
+  const mcpAqlHandler = tryResolveOptional<MCPAQLHandler>(
+    container, 'mcpAqlHandler', 'MCPAQLHandler not registered',
+  );
+
+  // Wire unified auth into the console when DOLLHOUSE_AUTH_ENABLED is on
+  // (Phase 9 M4/Q7). Without this, MCP transport routes are protected
+  // by the unified middleware but /api console routes fall back to the
+  // separate console-token surface. Pulling AuthMiddleware from the DI
+  // container keeps both surfaces on the same identity. Optional —
+  // when auth isn't registered (auth disabled), startWebServer keeps
+  // its existing console-token-only behavior.
+  const unifiedAuthMiddleware = container.hasRegistration('AuthMiddleware')
+    ? container.resolve<RequestHandler>('AuthMiddleware')
+    : undefined;
+  // ContextTracker is required for per-request session scoping on /api so DB
+  // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
+  // but every DB-touching handler throws "No session context is active".
+  const contextTracker = container.hasRegistration('ContextTracker')
+    ? container.resolve<ContextTracker>('ContextTracker')
+    : undefined;
+
+  // Start the web server
+  const { startWebServer } = await import('./web/server.js');
+  const webResult = await startWebServer({
+    portfolioDir,
+    port: resolvedPort,
+    openBrowser: false,
+    mcpAqlHandler,
+    memorySink,
+    metricsSink,
+    additionalRouters: [ingestResult.router],
+    tokenStore,
+    unifiedAuthMiddleware,
+    contextTracker,
+  });
+
+  // Wire WebSSELogSink so live log entries reach the browser
+  if (webResult.logBroadcast && logManager) {
+    const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
+    logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    logger.info('[WebUI] WebSSELogSink registered — log entries will flow to /api/logs/stream');
+  } else {
+    logger.warn(
+      `[WebUI] WebSSELogSink NOT registered — live log stream will not receive entries. ` +
+      `logBroadcast=${webResult.logBroadcast ? 'set' : 'MISSING'}, logManager=${logManager ? 'set' : 'MISSING'}`,
+    );
+  }
+
+  return ingestResult;
+}
+
+/**
+ * Start DollhouseMCP in Streamable HTTP transport mode.
+ *
+ * Uses a shared DollhouseContainer for all HTTP sessions. If a web console
+ * IngestRoutesResult is provided, HTTP session lifecycle events are forwarded
+ * to the console's session registry.
+ */
+async function startStreamableHttpServer(
+  options: StreamableHttpRuntimeOptions = {},
+  params?: { container?: DollhouseContainer; ingestRoutes?: IngestRoutesResult },
+): Promise<StreamableHttpRuntimeHandle> {
+  const container = params?.container ?? await bootstrapHttpContainer();
+  const ingestRoutes = params?.ingestRoutes;
+
+  // Activate HTTP mode error handling (no process.exit on uncaught exceptions)
+  setHttpModeActive(true);
+
+  // Resolve auth middleware if enabled (unified JWT auth for HTTP transport)
+  const authMiddleware = container.hasRegistration('AuthMiddleware')
+    ? container.resolve<RequestHandler>('AuthMiddleware')
+    : undefined;
+  const authProvider = container.hasRegistration('AuthProvider')
+    ? container.resolve<unknown>('AuthProvider')
+    : undefined;
+  const authProviderName = (() => {
+    if (typeof authProvider !== 'object' || authProvider === null || !('name' in authProvider)) {
+      return;
+    }
+    const rawName = (authProvider as { name?: unknown }).name;
+    return typeof rawName === 'string' ? rawName : 'auth';
+  })();
+  const oauthProvider = isEmbeddedOAuthProvider(authProvider) ? authProvider : undefined;
+
+  // Fallback userId for unauthenticated sessions (DB mode bootstrap user)
+  const fallbackUserId = container.hasRegistration('BootstrappedUserId')
+    ? container.resolve<string>('BootstrappedUserId')
+    : undefined;
+
+  // Resolve UserIdentityService for auth-driven DB user creation
+  const userIdentityService = container.hasRegistration('UserIdentityService')
+    ? container.resolve<UserIdentityService>('UserIdentityService')
+    : undefined;
+
+  const activationRegistry = container.hasRegistration('SessionActivationRegistry')
+    ? container.resolve<SessionActivationRegistry>('SessionActivationRegistry')
+    : undefined;
+  const runtimeSessionControl = await resolveRuntimeMcpSessionControl(container);
+
+  return createStreamableHttpRuntime(async (transport, authClaims, clientInfo) => {
+    // SECURITY: fail-closed per-user isolation. Authenticated HTTP
+    // sessions must never collapse onto the unauthenticated fallback user.
     //
-    // Suppress terminal output in --web mode unless DOLLHOUSE_DEBUG is set.
-    // All logs are still captured in MemoryLogSink and visible in the Logs tab —
-    // the terminal only needs the console URL banner, not a wall of startup noise.
-    if (!process.env.DOLLHOUSE_DEBUG && !process.env.ENABLE_DEBUG) {
+    // Resolution order:
+    //   1. DB mode + UserIdentityService.resolveOrCreateUser succeeds → UUID.
+    //   2. DB mode + resolve fails → abort session setup; continuing with a
+    //      non-UUID subject would poison RLS-scoped state.
+    //   3. File mode → path-safe stable id derived from authClaims.sub.
+    //   4. No authClaims at all (auth disabled) → fallbackUserId.
+    let sessionUserId = fallbackUserId;
+    let resolvedDbUserId = false;
+    if (authClaims?.sub) {
+      if (userIdentityService) {
+        try {
+          // Resolve via the auth_account link (not username==sub) so this MCP
+          // session and the web console converge on the SAME users row for this
+          // identity — every machine on one OAuth identity is one account.
+          sessionUserId = await userIdentityService.resolveUserForSub(
+            authClaims.sub,
+            authClaims.displayName,
+          );
+          resolvedDbUserId = true;
+        } catch (err) {
+          logger.error(`[HTTP] Failed to resolve DB user for '${authClaims.sub}': ${err instanceof Error ? err.message : String(err)}`);
+          throw new Error('Failed to resolve database user for authenticated HTTP session');
+        }
+      } else {
+        // File mode: no DB UUID resolution layer. Use a stable path-safe
+        // internal ID so generic OIDC subjects cannot break path resolution.
+        sessionUserId = toPathSafeAuthUserId(authClaims.sub, authProviderName);
+      }
+    }
+
+    const sessionContext = createHttpSession({
+      userId: sessionUserId,
+      displayName: authClaims?.displayName,
+      email: authClaims?.email,
+      tenantId: authClaims?.tenantId,
+      // JWT `roles` claim threads through here so ConfigManager can admin-gate
+      // per-host operator-config writes downstream. Round 5 pre-claim flow
+      // stamps `roles: ['admin']` on the JWT for the bootstrapped admin sub.
+      roles: authClaims?.roles,
+    });
+    const { server, dispose: disposeServer } = await container.createServerForHttpSession(sessionContext);
+    await server.connect(transport);
+
+    // Store the resolved DB UUID on the session activation state so
+    // UserIdResolver picks it up for RLS-scoped queries.
+    if (resolvedDbUserId && activationRegistry) {
+      const state = activationRegistry.getOrCreate(sessionContext.sessionId);
+      state.dbUserId = sessionUserId;
+    }
+
+    const runtimeSession = runtimeSessionControl
+      ? await resolveRuntimeSessionRegistration(runtimeSessionControl.composition, sessionUserId, clientInfo)
+      : undefined;
+
+    logger.info('[HTTP] Session connected', {
+      sessionId: sessionContext.sessionId,
+      userId: sessionContext.userId,
+      authenticated: !!authClaims,
+    });
+
+    return {
+      // The transport adopts this as its mcp-session-id, unifying the id used
+      // for runtime presence, the client-facing session header, and the logs
+      // tagged with this SessionContext (so Sessions↔Logs cross-linking lines up).
+      contextSessionId: sessionContext.sessionId,
+      runtimeSession,
+      dispose: async () => {
+        logger.info('[HTTP] Session disposing', { sessionId: sessionContext.sessionId });
+        await disposeServer();
+      },
+    };
+  }, {
+    ...options,
+    authMiddleware,
+    oauthProvider,
+    tlsConfig: container.hasRegistration('TlsConfig')
+      ? container.resolve<TlsConfig>('TlsConfig')
+      : undefined,
+    // Forward PerformanceMonitor so /healthz can surface auth-flow timing
+    // aggregates alongside session telemetry. Resolved from the container
+    // which ObservabilityServiceRegistrar wires unconditionally.
+    performanceMonitor: container.hasRegistration('PerformanceMonitor')
+      ? container.resolve<PerformanceMonitor>('PerformanceMonitor')
+      : undefined,
+    webConsoleApiV1: resolveWebConsoleApiV1Mount(container),
+    runtimeSessionControl: runtimeSessionControl?.service,
+    registerSignalHandlers: true,
+    onSessionCreated: (sessionId) => {
+      ingestRoutes?.registerHttpSession(sessionId, Date.now());
+    },
+    onSessionDisposed: (sessionId) => {
+      ingestRoutes?.deregisterHttpSession(sessionId);
+    },
+  });
+}
+
+function resolveWebConsoleApiV1Mount(
+  container: DollhouseContainer,
+): StreamableHttpRuntimeOptions['webConsoleApiV1'] {
+  if (!container.hasRegistration('WebConsoleComposition')) return undefined;
+  const composition = container.resolve<WebConsoleComposition>('WebConsoleComposition');
+  if (!composition.apiV1Mount) return undefined;
+  return {
+    router: composition.apiV1Mount.router,
+    markMounted: composition.apiV1Mount.markMounted,
+  };
+}
+
+async function resolveRuntimeMcpSessionControl(
+  container: DollhouseContainer,
+): Promise<{
+  service: RuntimeMcpSessionControlService;
+  composition: WebConsoleComposition;
+} | undefined> {
+  if (!container.hasRegistration('WebConsoleComposition')) return undefined;
+  const composition = container.resolve<WebConsoleComposition>('WebConsoleComposition');
+  const { RuntimeMcpSessionControlService, runtimePresenceLeaseMsFor } =
+    await import('./web-console/services/runtime/index.js');
+  return {
+    composition,
+    service: new RuntimeMcpSessionControlService({
+      store: composition.runtimeSessionControlStore,
+      replicaId: resolveRuntimeReplicaId(),
+      // Presence visibility must track the transport session lifetime, so the
+      // lease is sized to the idle timeout (the streamable-http session stays
+      // alive that long even when idle). Otherwise idle-but-connected agents
+      // blink out of `/me/sessions` between requests.
+      leaseDurationMs: runtimePresenceLeaseMsFor(env.DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS),
+    }),
+  };
+}
+
+async function resolveRuntimeSessionRegistration(
+  composition: WebConsoleComposition,
+  userId: string | undefined,
+  clientInfo: McpClientInfo | undefined,
+): Promise<{
+  readonly userId: string;
+  readonly accountCorrelationId: string;
+  readonly clientInfo?: McpClientInfo | null;
+} | undefined> {
+  if (!userId) return undefined;
+  try {
+    const principal = await composition.accountAdminStore.findPrincipal(userId);
+    if (!principal || principal.disabledAt) return undefined;
+    return {
+      userId: principal.userId,
+      accountCorrelationId: principal.accountCorrelationId,
+      // Carry the MCP client's self-reported name/version so the console
+      // Sessions/Logs views label the connection (e.g. "Claude Code 1.2.3")
+      // instead of a bare session UUID.
+      clientInfo: clientInfo ?? null,
+    };
+  } catch (error) {
+    logger.warn('[HTTP] Runtime session registration skipped; principal metadata unavailable', {
+      userId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  }
+}
+
+function resolveRuntimeReplicaId(): string {
+  // v1 hosted runtime is single-process per replica. Multi-process worker
+  // deployments should set DOLLHOUSE_REPLICA_ID per worker so durable command
+  // routing targets the process that owns the in-memory transport registry.
+  const raw = process.env.DOLLHOUSE_REPLICA_ID || process.env.HOSTNAME || os.hostname() || `pid-${process.pid}`;
+  if (raw.length <= 128) return raw;
+  const hash = createHash('sha256').update(raw).digest('hex').slice(0, 16);
+  const prefix = raw.slice(0, 111);
+  const replicaId = `${prefix}-${hash}`;
+  logger.warn('[HTTP] Runtime replica id exceeded 128 characters; using hash-suffixed truncation', {
+    originalLength: raw.length,
+    replicaId,
+  });
+  return replicaId;
+}
+
+function isEmbeddedOAuthProvider(value: unknown): value is {
+  setPublicBaseUrl?: (publicBaseUrl: string) => void;
+  createRouter: () => Router;
+  isReadyForTraffic?: () => Promise<boolean>;
+} {
+  return typeof value === 'object'
+    && value !== null
+    && typeof (value as { createRouter?: unknown }).createRouter === 'function';
+}
+
+/**
+ * Bootstrap the DI container for --web standalone mode with graceful
+ * degradation. Returns the container and resolved services, or fallback
+ * sinks if the container fails to initialize.
+ */
+async function bootstrapWebContainer(): Promise<{
+  container?: DollhouseContainer;
+  mcpAqlHandler?: MCPAQLHandler;
+  memorySink: MemoryLogSink;
+  metricsSink: MemoryMetricsSink;
+  logManager?: LogManager;
+}> {
+  let container: DollhouseContainer | undefined;
+  let mcpAqlHandler;
+  let memorySink: MemoryLogSink | undefined;
+  let metricsSink: MemoryMetricsSink | undefined;
+  let logManager: LogManager | undefined;
+
+  try {
+    container = new DollhouseContainer(_lifecycleService);
+    await container.preparePortfolio();
+    const bundle = await container.bootstrapHandlers();
+    await container.completeSinkSetup();
+
+    try {
+      const { sweepStalePortFiles } = await import('./web/portDiscovery.js');
+      await sweepStalePortFiles();
+    } catch { /* non-fatal */ }
+
+    mcpAqlHandler = bundle.mcpAqlHandler;
+    try { memorySink = container.resolve<MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
+    try { metricsSink = container.resolve<MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
+    try { logManager = container.resolve<LogManager>('LogManager'); } catch { /* not registered */ }
+  } catch (err) {
+    console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
+    console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
+  }
+
+  // Fallback sinks if container bootstrap failed
+  if (!memorySink) {
+    const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
+    memorySink = new MemoryLogSink({ appCapacity: 10000, securityCapacity: 5000, perfCapacity: 2000, telemetryCapacity: 1000 });
+  }
+  if (!metricsSink) {
+    const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
+    metricsSink = new MemoryMetricsSink(240);
+    try {
+      container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager').registerSink(metricsSink);
+    } catch { /* MetricsManager may be unavailable in degraded startup */ }
+  }
+
+  return { container, mcpAqlHandler, memorySink, metricsSink, logManager };
+}
+
+/**
+ * Listen for quit commands on stdin (standalone --web and HTTP modes).
+ * Only active when stdin is a TTY (not piped).
+ */
+function listenForQuitCommands(): void {
+  if (!process.stdin.isTTY) return;
+  process.stdin.setEncoding('utf-8');
+  process.stdin.resume();
+  let quitDebounce: ReturnType<typeof setTimeout> | null = null;
+  process.stdin.on('data', (data: string) => {
+    const cmd = data.trim().toLowerCase();
+    if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') {
+      if (quitDebounce) return;
+      quitDebounce = setTimeout(() => { quitDebounce = null; }, 200);
+      console.error('\n  Shutting down DollhouseMCP...\n');
+      process.exit(0);
+    }
+  });
+}
+
+/**
+ * Start DollhouseMCP in standalone --web mode.
+ * Runs the portfolio web UI without an MCP transport connection.
+ */
+async function startWebStandaloneMode(): Promise<void> {
+  const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
+  const portArg = process.argv.find(a => a.startsWith('--port='));
+  const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
+  const noBrowser = process.argv.includes('--no-open');
+
+  // Pre-flight: kill any stale process squatting on our port (#1850)
+  const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
+  try {
+    const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');
+    if (await recoverStalePort(targetPort)) {
+      console.error(`  Cleared stale process from port ${targetPort}\n`);
+    }
+  } catch (err) {
+    console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  const { container, mcpAqlHandler, memorySink, metricsSink, logManager } = await bootstrapWebContainer();
+
+  const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
+  const ingestResult = createIngestRoutes({
+    logBroadcast: (_entry) => { /* wired after server starts */ },
+    metricsOnSnapshot: (snapshot) => { metricsSink.onSnapshot(snapshot); },
+  });
+  ingestResult.registerConsoleSession();
+
+  const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
+  const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
+  const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
+  try {
+    await tokenStore.ensureInitialized(pickRandomTokenName());
+  } catch (err) {
+    console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
+  }
+
+  const resolvedPort = cliPort || await resolvePortFromConfig();
+  const sessionIdentity = resolveSessionIdentity();
+  // Phase 9 M4/Q7: same wiring as startHttpConsole — pull AuthMiddleware
+  // from the container so /api routes share the unified-auth surface
+  // when DOLLHOUSE_AUTH_ENABLED is on. Without this, standalone web mode
+  // would protect MCP routes (if any) but leave /api on the console
+  // token only.
+  const unifiedAuthMiddleware = container?.hasRegistration('AuthMiddleware')
+    ? container.resolve<RequestHandler>('AuthMiddleware')
+    : undefined;
+  // ContextTracker is required for per-request session scoping on /api so DB
+  // ops satisfy UserContext.assertHasContext(). Without it the auth flow works
+  // but every DB-touching handler throws "No session context is active".
+  const contextTracker = container?.hasRegistration('ContextTracker')
+    ? container.resolve<ContextTracker>('ContextTracker')
+    : undefined;
+  const { startWebServer } = await import('./web/server.js');
+  const webResult = await startWebServer({
+    portfolioDir,
+    port: resolvedPort,
+    openBrowser: !noBrowser,
+    mcpAqlHandler,
+    memorySink,
+    metricsSink,
+    additionalRouters: [ingestResult.router],
+    tokenStore,
+    sessionId: sessionIdentity.sessionId,
+    runtimeSessionId: sessionIdentity.runtimeSessionId,
+    unifiedAuthMiddleware,
+    contextTracker,
+  });
+
+  if (webResult.logBroadcast && logManager) {
+    const { WebSSELogSink } = await import('./web/sinks/WebSSELogSink.js');
+    logManager.registerSink(new WebSSELogSink(webResult.logBroadcast));
+    logger.info('[WebUI] WebSSELogSink registered — log entries will flow to /api/logs/stream');
+  } else {
+    logger.warn(
+      `[WebUI] WebSSELogSink NOT registered — live log stream will not receive entries. ` +
+      `logBroadcast=${webResult.logBroadcast ? 'set' : 'MISSING'}, logManager=${logManager ? 'set' : 'MISSING'}`,
+    );
+  }
+
+  listenForQuitCommands();
+}
+
+/**
+ * Start DollhouseMCP in Streamable HTTP mode with optional web console.
+ */
+async function startHttpMode(): Promise<void> {
+  const options = getStreamableHttpRuntimeOptions();
+  const container = await bootstrapHttpContainer();
+
+  let ingestRoutes: IngestRoutesResult | undefined;
+  if (env.DOLLHOUSE_HTTP_WEB_CONSOLE) {
+    try {
+      ingestRoutes = await startHttpConsole(container);
+      console.error(`[DollhouseMCP] Management console at http://127.0.0.1:${env.DOLLHOUSE_WEB_CONSOLE_PORT}`);
+    } catch (err) {
+      console.error('[DollhouseMCP] Web console failed to start (HTTP transport will continue):', (err as Error).message || err);
+    }
+  }
+
+  const runtime = await startStreamableHttpServer(options, { container, ingestRoutes });
+  console.error(`[DollhouseMCP] Streamable HTTP server listening on ${runtime.url}`);
+  const connectorUrl = env.DOLLHOUSE_PUBLIC_BASE_URL
+    ? joinUrl(env.DOLLHOUSE_PUBLIC_BASE_URL, runtime.mcpPath)
+    : runtime.url;
+  console.error(`[DollhouseMCP] Claude connector URL: ${connectorUrl}`);
+  if (!env.DOLLHOUSE_PUBLIC_BASE_URL) {
+    console.error('[DollhouseMCP] For claude.ai, expose this server through HTTPS and set DOLLHOUSE_PUBLIC_BASE_URL. Cloudflare Tunnel works for the first public setup path.');
+  }
+}
+
+/**
+ * Main entry point dispatcher. Selects the startup mode based on CLI flags
+ * and environment, then runs the appropriate async startup function.
+ */
+async function main(): Promise<void> {
+  const isWebMode = process.argv.includes('--web');
+
+  if (isWebMode) {
+    if (!env.DOLLHOUSE_DEBUG && !env.ENABLE_DEBUG) {
       logger.setMinLevel('error');
     }
-
-    (async () => {
-      const portfolioDir = path.join(os.homedir(), '.dollhouse', 'portfolio');
-      // CLI flag parsed early; config file resolved after container bootstrap (#1840)
-      const portArg = process.argv.find(a => a.startsWith('--port='));
-      const cliPort = portArg ? Number.parseInt(portArg.split('=')[1], 10) : undefined;
-      const noBrowser = process.argv.includes('--no-open');
-
-      // Pre-flight: kill any stale DollhouseMCP process squatting on our port
-      // BEFORE any container/server setup. This is the definitive fix for #1850 —
-      // clear the port first, then start cleanly.
-      // Race condition note: a new process could grab the port between kill and
-      // our bind, but recoverStalePort's TOCTOU mitigation (500ms lock file
-      // re-read) and bindAndListen's own recovery handle that edge case.
-      const targetPort = cliPort || env.DOLLHOUSE_WEB_CONSOLE_PORT;
-      try {
-        const { recoverStalePort } = await import('./web/console/StaleProcessRecovery.js');
-        const recovered = await recoverStalePort(targetPort);
-        if (recovered) {
-          console.error(`  Cleared stale process from port ${targetPort}\n`);
-        }
-      } catch (err) {
-        // Non-fatal — bindAndListen will handle EADDRINUSE as a fallback.
-        // Log so operators can diagnose recovery failures.
-        console.error(`[DollhouseMCP] Pre-flight port recovery failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-
-      let container: DollhouseContainer | undefined;
-      let mcpAqlHandler;
-      let memorySink: import('./logging/sinks/MemoryLogSink.js').MemoryLogSink | undefined;
-      let metricsSink: import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink | undefined;
-      try {
-        container = new DollhouseContainer();
-        await container.preparePortfolio();
-        const bundle = await container.bootstrapHandlers();
-
-        // Wire sinks, hooks, collectors, and security — skip only leader election
-        // and permission server. Standalone --web mode IS the server (#1866).
-        await container.completeSinkSetup();
-
-        // Sweep stale port files (normally done in completeConsoleSetup)
-        try {
-          const { sweepStalePortFiles } = await import('./web/portDiscovery.js');
-          await sweepStalePortFiles();
-        } catch { /* non-fatal */ }
-
-        mcpAqlHandler = bundle.mcpAqlHandler;
-        try { memorySink = container.resolve<import('./logging/sinks/MemoryLogSink.js').MemoryLogSink>('MemoryLogSink'); } catch { /* not registered */ }
-        try { metricsSink = container.resolve<import('./metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink>('MemoryMetricsSink'); } catch { /* not registered */ }
-      } catch (err) {
-        console.error("[DollhouseMCP] Container bootstrap failed — web routes will use direct filesystem access.");
-        console.error("[DollhouseMCP] Reason:", (err as Error).message || err);
-        console.error("[DollhouseMCP] This may indicate a corrupt portfolio or missing dependencies.");
-      }
-
-      // Fallback sinks if container bootstrap failed entirely —
-      // standalone --web mode still needs working logs and metrics tabs
-      if (!memorySink) {
-        const { MemoryLogSink } = await import('./logging/sinks/MemoryLogSink.js');
-        memorySink = new MemoryLogSink({
-          appCapacity: 10000,
-          securityCapacity: 5000,
-          perfCapacity: 2000,
-          telemetryCapacity: 1000,
-        });
-      }
-      if (!metricsSink) {
-        const { MemoryMetricsSink } = await import('./metrics/sinks/MemoryMetricsSink.js');
-        metricsSink = new MemoryMetricsSink(240);
-        try {
-          const metricsManager = container?.resolve<{ registerSink: (sink: typeof metricsSink) => void }>('MetricsManager');
-          metricsManager?.registerSink(metricsSink);
-        } catch {
-          // MetricsManager may be unavailable in the degraded startup path.
-        }
-      }
-
-      // Set up ingest routes so --web mode has a session registry (#1805).
-      // Without this, the session indicator is always empty in standalone mode.
-      const { createIngestRoutes } = await import('./web/console/IngestRoutes.js');
-      const ingestResult = createIngestRoutes({
-        logBroadcast: (_entry) => { /* wired after server starts */ },
-        metricsOnSnapshot: (snapshot) => { metricsSink?.onSnapshot(snapshot); },
-      });
-      ingestResult.registerConsoleSession();
-
-      // Initialize console token store so Auth tab routes mount (#1825).
-      // Mirrors UnifiedConsole.ts:startAsLeader() — without this,
-      // /api/console/totp and /api/console/token return 404.
-      const { ConsoleTokenStore } = await import('./web/console/consoleToken.js');
-      const { pickRandomTokenName } = await import('./web/console/SessionNames.js');
-      const tokenStore = new ConsoleTokenStore(env.DOLLHOUSE_CONSOLE_TOKEN_FILE);
-      try {
-        await tokenStore.ensureInitialized(pickRandomTokenName());
-      } catch (err) {
-        console.error('[DollhouseMCP] Failed to initialize console token store — Auth tab will be non-functional', err);
-      }
-
-      // Resolve port: CLI flag → config file → env var → default (#1840)
-      const resolvedPort = cliPort || await resolvePortFromConfig();
-      const activationStore = container?.resolve<{ getSessionId: () => string; getRuntimeSessionId: () => string }>('ActivationStore');
-
-      const { startWebServer } = await import('./web/server.js');
-      await startWebServer({
-        portfolioDir,
-        port: resolvedPort,
-        openBrowser: !noBrowser,
-        mcpAqlHandler,
-        memorySink,
-        metricsSink,
-        additionalRouters: [ingestResult.router],
-        tokenStore,
-        sessionId: activationStore?.getSessionId(),
-        runtimeSessionId: activationStore?.getRuntimeSessionId(),
-      });
-
-      // Listen for quit commands on stdin (standalone --web mode only).
-      // In MCP stdio mode, stdin is consumed by the JSON-RPC transport.
-      if (process.stdin.isTTY) {
-        process.stdin.setEncoding('utf-8');
-        process.stdin.resume();
-        let quitDebounce: ReturnType<typeof setTimeout> | null = null;
-        process.stdin.on('data', (data: string) => {
-          const cmd = data.trim().toLowerCase();
-          if (cmd === 'q' || cmd === 'quit' || cmd === 'exit') {
-            // Debounce rapid inputs (e.g., accidental double-tap)
-            if (quitDebounce) return;
-            quitDebounce = setTimeout(() => { quitDebounce = null; }, 200);
-            console.error('\n  Shutting down DollhouseMCP...\n');
-            process.exit(0);
-          }
-        });
-      }
-    })().catch(err => {
-      console.error("[DollhouseMCP] Web UI failed to start:", err);
-      process.exit(1);
-    });
-  } else {
-    if (isDebugStartupLogging) {
-      console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");
-    }
-    startServerWithRetry().catch(() => {
-      // Note: Using console.error here is intentional as it's the final error before exit
-      console.error("[DollhouseMCP] Server startup failed");
-      process.exit(1);
-    });
+    return startWebStandaloneMode();
   }
+
+  if (getRequestedTransportName() === 'streamable-http') {
+    return startHttpMode();
+  }
+
+  if (isDebugStartupLogging) {
+    console.error("DEBUG: Server startup condition met. Calling startServerWithRetry.");
+  }
+  return startServerWithRetry();
+}
+
+if ((isDirectExecution || isNpxExecution || isCliExecution) && (!isTest || isTestMode)) {
+  main().catch(err => { // NOSONAR — top-level await breaks Jest CJS transform; .catch() is required here
+    console.error('[DollhouseMCP] Server startup failed:', err instanceof Error ? err.message : err);
+    process.exit(1);
+  });
 }

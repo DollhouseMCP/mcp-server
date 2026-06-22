@@ -1,0 +1,34 @@
+-- Round 5 / B1: Add `roles` column to auth_accounts.
+--
+-- StoredAccount.roles?: string[] is defined in IAuthStorageLayer.ts and
+-- set to ['admin'] by every IAuthMethod on first bootstrap-admin login.
+-- extraTokenClaims reads account.roles to emit the JWT `roles` claim.
+-- Without this column, Postgres deployments silently drop roles on
+-- upsert and the admin's JWT never carries the role.
+--
+-- Default `'[]'::jsonb` so existing rows get the empty-array sentinel
+-- automatically; no backfill needed. The column is NOT NULL so callers
+-- never have to handle a null/undefined distinction at the storage
+-- layer (StoredAccount.roles stays optional in the TS type — the
+-- mapper coerces empty array to undefined and back, matching what
+-- InMemory and Filesystem already do).
+--
+-- Forward path: PG11+ treats this as metadata-only (default stored in
+-- pg_attrdef, served from catalog for unwritten rows). No table
+-- rewrite, no ACCESS EXCLUSIVE lock beyond milliseconds.
+--
+-- ROLLBACK PATH (manual; not part of Drizzle's auto-migration):
+--   ALTER TABLE auth_accounts DROP COLUMN roles;
+-- This is also metadata-only on PG11+. CRITICAL: do NOT roll back this
+-- migration without simultaneously reverting the application code that
+-- reads `account.roles` (chiefly `extraTokenClaims` in
+-- EmbeddedAuthorizationServer.ts). A drop without code revert crashes
+-- every token-issuance request with `Cannot read properties of
+-- undefined (reading 'roles')` — effectively a rolling auth outage.
+-- Keep this column for the lifetime of the §8.1+ codebase.
+--
+-- Depends on: 0009_auth_tables.sql
+-- §8.1 Round 5
+
+ALTER TABLE "auth_accounts"
+  ADD COLUMN IF NOT EXISTS "roles" JSONB NOT NULL DEFAULT '[]'::jsonb;

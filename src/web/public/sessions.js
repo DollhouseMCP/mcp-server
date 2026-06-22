@@ -705,10 +705,10 @@
         clientBadge.textContent = 'No client';
         clientBadge.dataset.status = 'negative';
         clientBadge.title = 'No live MCP client is currently attached';
-      } else if (s.kind === 'mcp') {
+      } else if (s.kind === 'mcp' || s.kind === 'http') {
         clientBadge.textContent = '\u2713 Client';
         clientBadge.dataset.status = 'positive';
-        clientBadge.title = 'MCP client attached';
+        clientBadge.title = s.kind === 'http' ? 'HTTP MCP client' : 'MCP client attached';
       } else {
         clientBadge.textContent = '\u2717 No client';
         clientBadge.dataset.status = 'negative';
@@ -726,17 +726,29 @@
 
       item.appendChild(clientWrap);
 
+      // Transport indicator for HTTP sessions
+      if (s.kind === 'http') {
+        var transportBadge = document.createElement('span');
+        transportBadge.className = 'session-status-badge';
+        transportBadge.textContent = 'HTTP';
+        transportBadge.dataset.status = 'positive';
+        transportBadge.title = 'Connected via Streamable HTTP transport';
+        item.appendChild(transportBadge);
+      }
+
       var uptimeEl = document.createElement('span');
       uptimeEl.className = 'session-dropdown-uptime';
       uptimeEl.dataset.startedAt = s.startedAt;
       uptimeEl.textContent = isPolicyOnlySession(s) ? 'saved' : formatUptime(s.startedAt);
       item.appendChild(uptimeEl);
 
+      // Kill button — only for stdio MCP sessions (HTTP and console sessions
+      // share the server process, so SIGTERM would kill everything)
       var killBtn = document.createElement('button');
       killBtn.className = 'session-kill-btn';
       killBtn.type = 'button';
       killBtn.textContent = '\u00D7';
-      if (isPolicyOnlySession(s)) {
+      if (isPolicyOnlySession(s) || s.kind === 'http' || s.kind === 'console') {
         killBtn.disabled = true;
         killBtn.style.visibility = 'hidden';
       } else {

@@ -4,16 +4,22 @@
  * Manages per-connection session state for the Gatekeeper Policy Engine.
  * Each MCP client connection gets a separate session with isolated state.
  *
- * CRITICAL: Session state is IN-MEMORY only.
- * - Confirmations are NOT persisted to disk
+ * Session state defaults to IN-MEMORY only (crash = fresh session).
+ * When an IConfirmationStore is provided (Issue #1945), mutating
+ * operations write through to the backing store for persistence
+ * across restarts. The in-memory Maps remain the hot path.
+ *
  * - Each Claude Code / Claude Desktop / etc. = separate session
  * - No cross-session policy leakage
- * - Crash = fresh session (security-first decision)
+ * - Without a backing store, crash = fresh session (security-first default)
  */
 
 import { randomUUID } from 'crypto';
-import type { ConfirmationRecord, PermissionLevel, CliApprovalRecord, CliApprovalScope } from './GatekeeperTypes.js';
+import type { ConfirmationRecord, PermissionLevel, CliApprovalRecord, CliApprovalScope, CreateCliApprovalArgs } from './GatekeeperTypes.js';
 import { env } from '../../config/env.js';
+import type { IConfirmationStore } from '../../state/IConfirmationStore.js';
+import { logger } from '../../utils/logger.js';
+import { redactToolInput, type AuditHmacResolver } from '../../security/toolRedaction.js';
 
 /**
  * Client information from MCP capabilities.
@@ -86,17 +92,32 @@ const MAX_APPROVAL_TTL_MS = 86_400_000;
 /** Throttle interval for expiry sweeps (10 seconds) */
 const EXPIRY_SWEEP_INTERVAL_MS = 10_000;
 
+/** Retain terminal approval records briefly so idempotent retries can observe them. */
+const TERMINAL_APPROVAL_RETENTION_MS = 86_400_000;
+
 export class GatekeeperSession {
   private readonly state: GatekeeperSessionState;
   private readonly maxConfirmations: number;
   private readonly maxCliApprovals: number;
+  private readonly confirmationStore?: IConfirmationStore;
+  private readonly auditHmacResolver?: AuditHmacResolver;
   private lastExpirySweep = 0;
 
-  constructor(clientInfo?: ClientInfo, maxConfirmations: number = 100, maxCliApprovals: number = DEFAULT_MAX_CLI_APPROVALS) {
+  constructor(
+    clientInfo?: ClientInfo,
+    maxConfirmations: number = 100,
+    maxCliApprovals: number = DEFAULT_MAX_CLI_APPROVALS,
+    confirmationStore?: IConfirmationStore,
+    /** Issue #1947: Use caller-provided sessionId instead of generating a random one. */
+    sessionId?: string,
+    auditHmacResolver?: AuditHmacResolver,
+  ) {
     this.maxConfirmations = maxConfirmations;
     this.maxCliApprovals = maxCliApprovals;
+    this.confirmationStore = confirmationStore;
+    this.auditHmacResolver = auditHmacResolver;
     this.state = {
-      sessionId: randomUUID(),
+      sessionId: sessionId ?? randomUUID(),
       clientInfo,
       createdAt: new Date().toISOString(),
       lastActivity: new Date().toISOString(),
@@ -105,6 +126,53 @@ export class GatekeeperSession {
       cliSessionApprovals: new Map(),
       permissionPromptActive: false,
     };
+  }
+
+  /**
+   * Issue #1947: Restore persisted state from the backing store.
+   * Populates in-memory Maps from disk so confirmations survive restarts.
+   * Must be called after construction if persistence is desired.
+   */
+  async initialize(): Promise<void> {
+    if (!this.confirmationStore) return;
+
+    try {
+      await this.confirmationStore.initialize();
+
+      // Restore confirmations
+      for (const record of this.confirmationStore.getAllConfirmations()) {
+        const key = record.elementType
+          ? `${record.operation}:${record.elementType}`
+          : record.operation;
+        this.state.confirmations.set(key, record);
+      }
+
+      // Restore CLI approvals
+      for (const record of this.confirmationStore.getAllCliApprovals()) {
+        this.state.cliApprovals.set(record.requestId, record);
+      }
+
+      // Restore session-scoped CLI approvals (tool_session promoted approvals)
+      for (const record of this.confirmationStore.getAllCliSessionApprovals()) {
+        this.state.cliSessionApprovals.set(record.toolName, record);
+      }
+
+      // Restore permission prompt state
+      if (this.confirmationStore.getPermissionPromptActive()) {
+        this.state.permissionPromptActive = true;
+      }
+
+      const totalRestored = this.state.confirmations.size +
+        this.state.cliApprovals.size +
+        this.state.cliSessionApprovals.size;
+      if (totalRestored > 0) {
+        logger.info(
+          `[GatekeeperSession] Restored ${totalRestored} record(s) for session '${this.state.sessionId}'`
+        );
+      }
+    } catch (error) {
+      logger.warn('[GatekeeperSession] Failed to restore persisted state, starting fresh', { error });
+    }
   }
 
   /**
@@ -149,6 +217,11 @@ export class GatekeeperSession {
    */
   markPermissionPromptActive(): void {
     this.state.permissionPromptActive = true;
+
+    if (this.confirmationStore) {
+      this.confirmationStore.savePermissionPromptActive(true);
+      this.persistToStore();
+    }
   }
 
   /**
@@ -183,13 +256,19 @@ export class GatekeeperSession {
     }
 
     const key = this.getConfirmationKey(operation, elementType);
-    this.state.confirmations.set(key, {
+    const record: ConfirmationRecord = {
       operation,
       confirmedAt: new Date().toISOString(),
       permissionLevel,
       useCount: 0,
       elementType,
-    });
+    };
+    this.state.confirmations.set(key, record);
+
+    if (this.confirmationStore) {
+      this.confirmationStore.saveConfirmation(key, record);
+      this.persistToStore();
+    }
   }
 
   /**
@@ -229,11 +308,12 @@ export class GatekeeperSession {
 
     // For CONFIRM_SINGLE_USE, invalidate after first use
     if (confirmation.permissionLevel === 'CONFIRM_SINGLE_USE') {
-      // Delete whichever key matched (scoped or unscoped)
-      if (this.state.confirmations.has(key)) {
-        this.state.confirmations.delete(key);
-      } else {
-        this.state.confirmations.delete(operation);
+      const deleteKey = this.state.confirmations.has(key) ? key : operation;
+      this.state.confirmations.delete(deleteKey);
+
+      if (this.confirmationStore) {
+        this.confirmationStore.deleteConfirmation(deleteKey);
+        this.persistToStore();
       }
     }
 
@@ -263,7 +343,14 @@ export class GatekeeperSession {
   revokeConfirmation(operation: string, elementType?: string): boolean {
     this.touch();
     const key = this.getConfirmationKey(operation, elementType);
-    return this.state.confirmations.delete(key);
+    const deleted = this.state.confirmations.delete(key);
+
+    if (deleted && this.confirmationStore) {
+      this.confirmationStore.deleteConfirmation(key);
+      this.persistToStore();
+    }
+
+    return deleted;
   }
 
   /**
@@ -273,6 +360,11 @@ export class GatekeeperSession {
   revokeAllConfirmations(): void {
     this.touch();
     this.state.confirmations.clear();
+
+    if (this.confirmationStore) {
+      this.confirmationStore.clearAllConfirmations();
+      this.persistToStore();
+    }
   }
 
   /**
@@ -289,16 +381,8 @@ export class GatekeeperSession {
    * Create a CLI approval request.
    * Returns a unique request ID (format: cli-<UUIDv4>).
    */
-  createCliApprovalRequest(
-    toolName: string,
-    toolInput: Record<string, unknown>,
-    riskLevel: string,
-    riskScore: number,
-    irreversible: boolean,
-    denyReason: string,
-    policySource?: string,
-    ttlMs?: number,
-  ): string {
+  async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
+    const { toolName, toolInput, riskLevel, riskScore, irreversible, denyReason, policySource, ttlMs } = args;
     this.touch();
     this.expireStaleApprovals(true); // Force sweep on write path to ensure capacity
 
@@ -311,14 +395,35 @@ export class GatekeeperSession {
     }
 
     const requestId = `cli-${randomUUID()}`;
+    if (!this.auditHmacResolver) {
+      throw new Error(
+        'GatekeeperSession.createCliApprovalRequest requires an AuditHmacResolver. ' +
+        'Inject one via the constructor (root path: SecurityServiceRegistrar registers the resolver in the DI container).',
+      );
+    }
+    let redacted: Awaited<ReturnType<typeof redactToolInput>>;
+    try {
+      redacted = await redactToolInput(toolName, toolInput, this.auditHmacResolver);
+    } catch (cause) {
+      // The resolver fails closed on missing/corrupt keys, DB unavailability,
+      // or filesystem errors. Re-wrap so the operator sees an audit-prefixed
+      // message instead of a raw Drizzle / fs error from deep in the stack.
+      throw new Error(
+        `[Audit] Failed to redact tool input for ${toolName} — approval cannot be recorded: ` +
+        `${cause instanceof Error ? cause.message : String(cause)}`,
+        { cause: cause instanceof Error ? cause : undefined },
+      );
+    }
     // Clamp ttlMs to valid bounds (1s-24h) if provided
-    const clampedTtl = ttlMs != null
-      ? Math.max(MIN_APPROVAL_TTL_MS, Math.min(MAX_APPROVAL_TTL_MS, ttlMs))
-      : undefined;
+    const clampedTtl = ttlMs == null
+      ? undefined
+      : Math.max(MIN_APPROVAL_TTL_MS, Math.min(MAX_APPROVAL_TTL_MS, ttlMs));
     const record: CliApprovalRecord = {
       requestId,
       toolName,
-      toolInput,
+      toolInputDigest: redacted.digest,
+      toolInputHash: redacted.hash,
+      toolInputDetail: env.DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT ? redacted.detail : undefined,
       riskLevel,
       riskScore,
       irreversible,
@@ -330,23 +435,36 @@ export class GatekeeperSession {
       ttlMs: clampedTtl,
     };
     this.state.cliApprovals.set(requestId, record);
+
+    if (this.confirmationStore) {
+      this.confirmationStore.saveCliApproval(requestId, record);
+      this.persistToStore();
+    }
+
     return requestId;
   }
 
   /**
    * Approve a pending CLI approval request.
    * Sets approvedAt, and promotes to session approvals if tool_session scope.
+   * Awaits the store persist so a crash cannot lose the recorded decision
+   * after the caller has been acknowledged.
    *
    * @returns The approved record, or undefined if not found
    */
-  approveCliRequest(requestId: string, scope: CliApprovalScope = 'single'): CliApprovalRecord | undefined {
+  async approveCliRequest(
+    requestId: string,
+    scope: CliApprovalScope = 'single',
+    approvedAt: string = new Date().toISOString(),
+  ): Promise<CliApprovalRecord | undefined> {
     this.touch();
+    this.expireStaleApprovals(true);
     const record = this.state.cliApprovals.get(requestId);
-    if (!record || record.approvedAt) {
+    if (!record || !isPendingCliApproval(record)) {
       return undefined;
     }
 
-    record.approvedAt = new Date().toISOString();
+    record.approvedAt = approvedAt;
     record.scope = scope;
 
     // Promote to session approvals if tool_session scope
@@ -354,7 +472,59 @@ export class GatekeeperSession {
       this.state.cliSessionApprovals.set(record.toolName, record);
     }
 
+    if (this.confirmationStore) {
+      this.confirmationStore.saveCliApproval(requestId, record);
+      if (scope === 'tool_session') {
+        this.confirmationStore.saveCliSessionApproval(record.toolName, record);
+      }
+      await this.persistDecision();
+    }
+
     return record;
+  }
+
+  /**
+   * Deny a pending CLI approval request.
+   * Awaits the store persist so a crash cannot lose the recorded decision
+   * after the caller has been acknowledged.
+   *
+   * @returns The denied record, or undefined if not found or already terminal
+   */
+  async denyCliRequest(
+    requestId: string,
+    deniedAt: string = new Date().toISOString(),
+  ): Promise<CliApprovalRecord | undefined> {
+    this.touch();
+    this.expireStaleApprovals(true);
+    const record = this.state.cliApprovals.get(requestId);
+    if (!record || !isPendingCliApproval(record)) {
+      return undefined;
+    }
+
+    record.deniedAt = deniedAt;
+
+    if (this.confirmationStore) {
+      this.confirmationStore.saveCliApproval(requestId, record);
+      await this.persistDecision();
+    }
+
+    return record;
+  }
+
+  /**
+   * Get a CLI approval request without changing its state.
+   */
+  getCliApproval(requestId: string): CliApprovalRecord | undefined {
+    this.expireStaleApprovals(true);
+    return this.state.cliApprovals.get(requestId);
+  }
+
+  /**
+   * Get all retained CLI approval requests for this session.
+   */
+  getAllCliApprovals(): CliApprovalRecord[] {
+    this.expireStaleApprovals(true);
+    return Array.from(this.state.cliApprovals.values());
   }
 
   /**
@@ -371,14 +541,22 @@ export class GatekeeperSession {
     // Fast path: check session-scoped approvals by tool name
     const sessionApproval = this.state.cliSessionApprovals.get(toolName);
     if (sessionApproval) {
+      if (!isUsableCliApproval(sessionApproval)) {
+        this.state.cliSessionApprovals.delete(toolName);
+        return undefined;
+      }
       return sessionApproval;
     }
 
     // Check individual approvals
     for (const [, record] of this.state.cliApprovals) {
-      if (record.toolName === toolName && record.approvedAt && !record.consumed) {
+      if (record.toolName === toolName && !record.consumed && isUsableCliApproval(record)) {
         if (record.scope === 'single') {
           record.consumed = true;
+          if (this.confirmationStore) {
+            this.confirmationStore.saveCliApproval(record.requestId, record);
+            this.persistToStore();
+          }
         }
         return record;
       }
@@ -395,11 +573,30 @@ export class GatekeeperSession {
     this.expireStaleApprovals(true);
     const pending: CliApprovalRecord[] = [];
     for (const [, record] of this.state.cliApprovals) {
-      if (!record.approvedAt) {
+      if (isPendingCliApproval(record)) {
         pending.push(record);
       }
     }
     return pending;
+  }
+
+  /**
+   * Mark all pending CLI approvals cancelled because the owning session ended.
+   * Awaits the store persist so the cancellation decisions are durable.
+   */
+  async cancelPendingCliApprovals(cancelledAt: string = new Date().toISOString()): Promise<number> {
+    this.touch();
+    let cancelledCount = 0;
+    for (const record of this.state.cliApprovals.values()) {
+      if (!isPendingCliApproval(record)) continue;
+      record.cancelledAt = cancelledAt;
+      cancelledCount++;
+      if (this.confirmationStore) {
+        this.confirmationStore.saveCliApproval(record.requestId, record);
+      }
+    }
+    if (cancelledCount > 0) await this.persistDecision();
+    return cancelledCount;
   }
 
   /**
@@ -414,12 +611,40 @@ export class GatekeeperSession {
     this.lastExpirySweep = now;
 
     for (const [key, record] of this.state.cliApprovals) {
-      const ttl = record.ttlMs ?? DEFAULT_APPROVAL_TTL_MS;
-      const age = now - new Date(record.requestedAt).getTime();
-      // Evict stale pending requests AND consumed single-use approvals (#1782)
-      if (age > ttl && (!record.approvedAt || record.consumed)) {
-        this.state.cliApprovals.delete(key);
-      }
+      if (this.markExpiredIfStale(record, now)) continue;
+      if (this.purgeTerminalIfOld(key, record, now)) continue;
+      this.evictConsumedIfStale(key, record, now);
+    }
+  }
+
+  private markExpiredIfStale(record: CliApprovalRecord, now: number): boolean {
+    if (!isPendingCliApproval(record) || approvalAge(record, now) <= approvalTtl(record)) return false;
+    record.expiredAt = new Date(recordedExpiryTime(record)).toISOString();
+    if (this.confirmationStore) {
+      this.confirmationStore.saveCliApproval(record.requestId, record);
+      this.persistToStore();
+    }
+    return true;
+  }
+
+  private purgeTerminalIfOld(key: string, record: CliApprovalRecord, now: number): boolean {
+    if (!isPurgeableTerminalCliApproval(record) || now - terminalTime(record) <= TERMINAL_APPROVAL_RETENTION_MS) {
+      return false;
+    }
+    this.state.cliApprovals.delete(key);
+    this.state.cliSessionApprovals.delete(record.toolName);
+    if (this.confirmationStore) {
+      this.confirmationStore.deleteCliApproval(record.requestId);
+      this.persistToStore();
+    }
+    return true;
+  }
+
+  private evictConsumedIfStale(key: string, record: CliApprovalRecord, now: number): void {
+    // Evict consumed single-use approvals (#1782), but preserve terminal
+    // states so decision retries return stable results.
+    if (record.consumed && approvalAge(record, now) > approvalTtl(record)) {
+      this.state.cliApprovals.delete(key);
     }
   }
 
@@ -454,4 +679,56 @@ export class GatekeeperSession {
   private getConfirmationKey(operation: string, elementType?: string): string {
     return elementType ? `${operation}:${elementType}` : operation;
   }
+
+  /**
+   * Fire-and-forget persist to the backing store.
+   * No-op when no confirmation store is configured (in-memory only mode).
+   * Reserved for housekeeping writes (expiry sweeps, consumption, purges)
+   * whose state is re-derivable; decision paths use persistDecision instead.
+   */
+  private persistToStore(): void {
+    if (!this.confirmationStore) return;
+    this.confirmationStore.persist().catch(error => {
+      logger.warn('[GatekeeperSession] Failed to persist confirmation state', { error });
+    });
+  }
+
+  /**
+   * Awaited persist for security-decision paths (approve/deny/cancel).
+   * Unlike persistToStore, failures propagate so a decision is never
+   * acknowledged to the caller unless it is durable.
+   */
+  private async persistDecision(): Promise<void> {
+    if (!this.confirmationStore) return;
+    await this.confirmationStore.persist();
+  }
+}
+
+function isPendingCliApproval(record: CliApprovalRecord): boolean {
+  return !record.approvedAt && !record.deniedAt && !record.expiredAt && !record.cancelledAt;
+}
+
+function isUsableCliApproval(record: CliApprovalRecord): boolean {
+  return Boolean(record.approvedAt) && !record.deniedAt && !record.expiredAt && !record.cancelledAt;
+}
+
+function isPurgeableTerminalCliApproval(record: CliApprovalRecord): boolean {
+  return Boolean(record.deniedAt || record.expiredAt || record.cancelledAt);
+}
+
+function recordedExpiryTime(record: CliApprovalRecord): number {
+  return new Date(record.requestedAt).getTime() + approvalTtl(record);
+}
+
+function terminalTime(record: CliApprovalRecord): number {
+  const timestamp = record.deniedAt ?? record.expiredAt ?? record.cancelledAt ?? record.requestedAt;
+  return new Date(timestamp).getTime();
+}
+
+function approvalAge(record: CliApprovalRecord, now: number): number {
+  return now - new Date(record.requestedAt).getTime();
+}
+
+function approvalTtl(record: CliApprovalRecord): number {
+  return record.ttlMs ?? DEFAULT_APPROVAL_TTL_MS;
 }

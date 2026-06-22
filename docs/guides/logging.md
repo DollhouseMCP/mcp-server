@@ -27,6 +27,7 @@
 - [Automatic Redaction](#automatic-redaction)
 - [Environment Variable Reference](#environment-variable-reference)
 - [Example Configurations](#example-configurations)
+- [Operational Logging in Production](#operational-logging-in-production)
 - [Troubleshooting](#troubleshooting)
 
 ---
@@ -511,6 +512,125 @@ Add environment variables to your Claude Desktop `claude_desktop_config.json`:
   }
 }
 ```
+
+---
+
+## Operational Logging in Production
+
+This section covers logging for hosted deployments — where logs land on the host, how to rotate them, how to ship them somewhere durable, and how to correlate a user's report to a specific request.
+
+For the [Production Hosting Runbook](./production-hosting-runbook.md) deploy shapes (container behind Caddy, bare binary with systemd, Cloudflare Tunnel), the in-process logging story is unchanged — the server still writes structured logs to `DOLLHOUSE_LOG_DIR` and serves them via the in-memory buffer + browser viewer. What changes is the operator's view of those logs and how they get off the host for retention and search.
+
+### Where logs land
+
+Two log streams exist on every deployment:
+
+1. **In-process category logs** — written by `LogManager` to `DOLLHOUSE_LOG_DIR` as `application-YYYY-MM-DD.log`, `security-YYYY-MM-DD.log`, etc. These are the structured logs you query via `query_logs` and the browser viewer.
+2. **Process stdout/stderr** — boot messages, uncaught errors, third-party library output. These bypass `LogManager` and are captured by whatever process supervisor is running the server.
+
+Where each lands per deployment shape:
+
+| Deployment | Category logs (`DOLLHOUSE_LOG_DIR`) | stdout/stderr |
+|---|---|---|
+| Container (Path A) | Inside the container at `/home/node/.dollhouse/logs/`. Mount out via volume `./logs:/home/node/.dollhouse/logs` to expose on the host. | `docker compose logs dollhousemcp` — captured by Docker's log driver. |
+| Bare binary with systemd (Path B) | `/var/log/dollhousemcp/` (set explicitly via `DOLLHOUSE_LOG_DIR` in the env file). | `/var/log/dollhousemcp/server.log` + `server.err` (set via `StandardOutput=append:` in the systemd unit), plus `journalctl -u dollhousemcp`. |
+| Cloudflare Tunnel | Same as Path A or B (tunnel doesn't change log locations). Cloudflare also captures edge-level access logs via Logpush (paid feature). | Same as Path A or B. |
+
+### Rotation
+
+The category logs rotate themselves — by default once per day or once a file exceeds `DOLLHOUSE_LOG_FILE_MAX_SIZE` (100 MB). Retention is bounded by `DOLLHOUSE_LOG_RETENTION_DAYS` (30 days default; 7 for security logs). You don't need an external rotation tool for these.
+
+The supervisor-captured stream is your responsibility:
+
+- **Hosted Docker helper**: generated hosted Compose files set per-service
+  Docker `json-file` rotation by default: `max-size: "25m"` and
+  `max-file: "5"`. Override with `DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE` and
+  `DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE` before `render`, `install`, or
+  `update`.
+- **Manual Docker**: configure log driver rotation in `daemon.json` or
+  per-service in compose:
+  ```yaml
+  dollhousemcp:
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "10"
+  ```
+- **systemd / journald**: journald rotates by `SystemMaxUse=` in `journald.conf` (default 4 GB or 10% of disk, whichever is smaller). The `StandardOutput=append:/var/log/dollhousemcp/server.log` path needs logrotate. See the example in [Production Hosting Runbook → B.6](./production-hosting-runbook.md#b6-log-rotation).
+
+### Shipping logs off-host
+
+For anything beyond a hobbyist single-host deploy, ship the category logs to a durable log host. Why ship:
+
+- **Disk doesn't grow unbounded.** Retention bounds are local; off-host you can keep more.
+- **Search across restarts.** Container or systemd restarts can lose in-memory buffer state; the disk files survive but searching them requires SSH access.
+- **Cross-host correlation.** Multi-replica deploys produce per-host log streams; a central log host gives you one searchable view.
+- **Independent of the deploy.** If the deploy is down, the logs from before the outage are still queryable.
+
+#### Option 1: Better Stack (formerly Logtail)
+
+Free tier handles ~1 GB/month. Follow Better Stack's "Vector source" setup — they ship a docker image and bare-host script that tail a directory and forward to their hosted Loki. Point the agent at either:
+
+- Container: the host-mounted `./logs` directory (requires you to mount `./logs:/home/node/.dollhouse/logs` on the dollhousemcp service)
+- Bare binary: `/var/log/dollhousemcp/` directly
+
+The agent image and config flags drift; follow [betterstack.com/docs/logs](https://betterstack.com/docs/logs/) for current details.
+
+#### Option 2: Grafana Cloud (free tier)
+
+Loki + Promtail (`grafana/promtail`). Promtail tails the log directory and ships entries to a hosted Loki instance. Same mount pattern as Better Stack. Free tier is 50 GB/month logs + 14-day retention — usually enough for a small deploy. Follow [grafana.com/docs/loki/latest/send-data/promtail/](https://grafana.com/docs/loki/latest/send-data/promtail/) for current config.
+
+#### Option 3: Self-hosted Loki / Elastic / Vector
+
+Same shipping agents (Promtail / Fluent Bit / Vector) pointed at your own Loki or Elasticsearch instance. Worthwhile only if you already operate one — running a logging stack for a single MCP deploy is overkill.
+
+#### What NOT to ship
+
+The `security-*.log` files contain `[REDACTED]` markers where the LogManager has already stripped Bearer tokens, passwords, etc. The redaction is conservative but not exhaustive — review your specific deployment for any custom fields before shipping security logs to a third-party host. The `application-*.log` and `performance-*.log` files are generally safer; `telemetry-*.log` is by design upload-able (it's what `DOLLHOUSE_TELEMETRY_ENABLED=true` would send anyway).
+
+### Correlating a user complaint to a request
+
+When a user says "it broke at 3:42pm," the fastest path to root cause:
+
+1. **Get the user's session ID** if you can. The web console exposes it; MCP clients usually have a `Mcp-Session-Id` header you can ask the user to copy.
+2. **Search by correlation ID.** Every MCP request gets a UUID `correlationId` that flows through every log entry for that request (handler entry/exit, downstream service calls, errors). See [Correlation IDs](#correlation-ids) above for the format.
+3. **If you only have a timestamp**, narrow by `traceTime`:
+   ```bash
+   # Container
+   docker compose exec dollhousemcp grep -E "2026-05-15T19:4[0-5]" /home/node/.dollhouse/logs/application-2026-05-15.log
+
+   # Bare-binary
+   grep -E "2026-05-15T19:4[0-5]" /var/log/dollhousemcp/application-2026-05-15.log
+   ```
+4. **For shipped logs**, use the log host's query UI — Better Stack and Grafana Cloud both support time-range + free-text search.
+
+### Common production debug scenarios
+
+**"Sign-in started but never completed."** The user reached the consent page but didn't get a token. Search the `security` log for entries tagged `auth.social.identity_changed`, `auth.callback`, or the user's GitHub username/email. Common causes: GitHub OAuth callback URL mismatch (the user's browser saw a different hostname than `DOLLHOUSE_PUBLIC_BASE_URL`), or the user's GitHub account doesn't expose a verified primary email.
+
+**"MCP client says 401 immediately."** Check the `application` log for the request's correlation ID. If you don't see the request at all, the token never made it past the load balancer (allowed-hosts check, missing Authorization header, etc.). If you see it and a "Bearer token invalid" message, the token expired or was issued under a different JWKS `kid` (after a key rotation).
+
+**"All users got logged out simultaneously."** Check `security` / `application` logs for `[EmbeddedAuthorizationServer] mode-switch detected; OAuth state cleared, cookie secret rotated` — that's the diagnostic for the deliberate-invalidation behavior triggered by an env-var change (e.g., `DOLLHOUSE_AUTH_METHODS` was modified). If absent, check the JWKS endpoint (`curl https://your-host/jwks`) and compare the published `kid` against what's in `auth_signing_keys`; a mismatch indicates a botched rotation.
+
+**"Server became unresponsive."** Check `performance` log for memory snapshots leading up to the incident. Look at the last `/healthz` response time — if it climbed steadily, that's a memory pressure or DB-pool exhaustion shape. Check `application` log for a flood of one type of error around the same time.
+
+**"Postgres connection errors after a deploy."** Check the application log for `[Database] connection refused` — usually means a password rotation that didn't roll all the way through, or a migration that's holding a long lock. `docker compose exec postgres psql -U dollhouse -d dollhousemcp -c "SELECT * FROM pg_stat_activity WHERE state != 'idle'"` shows in-flight queries.
+
+### Alerting
+
+Practical alerts for a small deploy:
+
+| Alert | Trigger | Why |
+|---|---|---|
+| Uptime | External probe on `/healthz` fails for 60s | Server is down or unreachable |
+| Readiness | External probe on `/readyz` returns 503 for 5 min | Stuck mid-migration, bootstrap incomplete, DB unreachable |
+| Auth failure rate | More than 10 `401`s per minute over 5 min | Possible credential-stuffing or token-invalidation event |
+| 5xx rate | `/mcp` 5xx > 5% of requests over 5 min | Server-side error spike — investigate the application log |
+| Disk usage | Host disk > 80% | Postgres growth + log retention; either compact or extend |
+| Cert renewal | Caddy / certbot last-renewal > 80 days old | Renewal pipeline broken; cert will expire |
+
+The log-shipping hosts (Better Stack, Grafana Cloud) all support log-pattern-based alerts. The uptime/readiness probe is best served by an independent service (UptimeRobot, Healthchecks.io, the log host's synthetics) — alerting from the same host that's monitoring itself is the classic "alarm is broken when you most need it."
 
 ---
 

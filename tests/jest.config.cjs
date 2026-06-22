@@ -26,6 +26,7 @@ const config = {
   testPathIgnorePatterns: [
     '/node_modules/',
     '/tests/integration/',   // Integration tests run via jest.integration.config.cjs
+    '/tests/e2e/',           // E2E tests run via jest.e2e.config.cjs (require live credentials)
     '/tests/performance/',   // Performance tests run separately to avoid resource contention
     '/tests/playwright/'     // Playwright browser tests run via npx playwright test
   ],

@@ -14,9 +14,11 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { DollhouseContainer } from '../../../../src/di/Container.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
+import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
+import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService = createTestMetadataService();
@@ -46,14 +48,16 @@ describe('MemoryManager Repair Utilities (Issue #39)', () => {
       new TriggerValidationService(),
       metadataService
     ));
-    container.register('MemoryManager', () => new MemoryManager(
-      container.resolve('PortfolioManager'),
-      container.resolve('FileLockManager'),
-      container.resolve('FileOperationsService'),
-      container.resolve('ValidationRegistry'),
-      container.resolve('SerializationService'),
-      metadataService
-    ));
+    container.register('MemoryManager', () => new MemoryManager({
+      portfolioManager: container.resolve('PortfolioManager'),
+      fileLockManager: container.resolve('FileLockManager'),
+      fileOperationsService: container.resolve('FileOperationsService'),
+      validationRegistry: container.resolve('ValidationRegistry'),
+      serializationService: container.resolve('SerializationService'),
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+    }));
 
     // Resolve instances from container
     manager = container.resolve('MemoryManager');

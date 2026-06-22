@@ -15,8 +15,10 @@
 #
 # Set DOLLHOUSE_HOOK_DEBUG=1 for debug logging to stderr.
 # Set DOLLHOUSE_HOOK_PLATFORM to override the platform sent to the server.
+# Set DOLLHOUSE_RUN_DIR to override the runtime-state directory (used by tests
+# to isolate port-file writes from the shared ~/.dollhouse/run/ location).
 
-RUN_DIR="$HOME/.dollhouse/run"
+RUN_DIR="${DOLLHOUSE_RUN_DIR:-$HOME/.dollhouse/run}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
 source "$SCRIPT_DIR/permission-hook-config.sh"

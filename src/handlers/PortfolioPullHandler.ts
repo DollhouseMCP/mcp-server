@@ -44,6 +44,16 @@ export interface PortfolioPullHandlerDependencies {
   downloader: PortfolioDownloader;
   fileOperations: IFileOperationsService;
   tokenManager: TokenManager;
+  /**
+   * Phase 4.5 follow-up: optional storage-layer factory. When present AND
+   * the factory produces a writable (database-backed) layer for the element
+   * type, `downloadAndSaveElement` writes through it instead of the legacy
+   * filesystem-only `fileOperations.writeFile` path. This closes the bug
+   * where portfolio pulls in DB mode landed on per-user portfolio files
+   * (often tmpfs in containerized deployments) and vanished on every
+   * restart. Same correctness pattern as the ElementInstaller fix.
+   */
+  storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
 }
 
 export class PortfolioPullHandler {
@@ -55,6 +65,7 @@ export class PortfolioPullHandler {
   private downloader: PortfolioDownloader;
   private readonly fileOperations: IFileOperationsService;
   private readonly tokenManager: TokenManager;
+  private readonly storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
 
   constructor(dependencies: PortfolioPullHandlerDependencies) {
     if (!dependencies.portfolioManager) {
@@ -75,6 +86,7 @@ export class PortfolioPullHandler {
     this.downloader = dependencies.downloader;
     this.fileOperations = dependencies.fileOperations;
     this.tokenManager = dependencies.tokenManager;
+    this.storageLayerFactory = dependencies.storageLayerFactory;
   }
 
   /**
@@ -396,13 +408,31 @@ export class PortfolioPullHandler {
     const fileName = path.basename(action.path);
     const filePath = path.join(elementDir, fileName);
 
-    // Ensure parent directory exists before writing (defensive check)
-    await this.fileOperations.createDirectory(elementDir);
+    // Phase 4.5 follow-up: when a storage-layer factory is wired AND it
+    // produces a writable layer for this element type, persist through it
+    // instead of writing to filesystem. Without this, DB-mode pulls land
+    // on the per-user portfolio dir (typically tmpfs in containers) and
+    // vanish on every restart. Filesystem-mode deployments fall through.
+    const { persistElementViaFactory } = await import('../storage/persistElementViaFactory.js');
+    const elementName = path.basename(action.path, path.extname(action.path));
+    const persistedViaStorageLayer = await persistElementViaFactory(
+      this.storageLayerFactory,
+      action.type,
+      elementName,
+      elementData.content,
+      { elementDir, fileExtension: path.extname(fileName) || '.md', scanCooldownMs: 0 },
+      { exclusive: false },
+    );
 
-    await this.fileOperations.writeFile(filePath, elementData.content, {
-      encoding: 'utf-8',
-      source: 'PortfolioPullHandler.downloadAndSaveElement'
-    });
+    if (!persistedViaStorageLayer) {
+      // Ensure parent directory exists before writing (defensive check)
+      await this.fileOperations.createDirectory(elementDir);
+
+      await this.fileOperations.writeFile(filePath, elementData.content, {
+        encoding: 'utf-8',
+        source: 'PortfolioPullHandler.downloadAndSaveElement'
+      });
+    }
 
     // SECURITY: Log successful save for audit trail
     SecurityMonitor.logSecurityEvent({

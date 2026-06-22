@@ -40,7 +40,9 @@ See [Security Testing Guide](./testing.md) for details.
 ### Token & OAuth Protection
 
 - **Secure Token Handling**
-  - GitHub tokens are encrypted at rest under `~/.dollhouse/.auth/` via the `TokenManager`.
+  - In file mode, GitHub tokens are encrypted at rest under each user's auth directory as `github_token.enc` via `TokenManager` and `FileTokenStore`.
+  - In database mode, GitHub tokens are stored in `user_oauth_tokens` with per-token envelope encryption: a fresh DEK encrypts the token, and `DOLLHOUSE_MASTER_ENCRYPTION_KEY` wraps the DEK.
+  - Existing filesystem token files are not auto-migrated into the database. When database mode detects a legacy `github_token.enc`, it logs a high-severity security event; operators should manually re-authenticate or explicitly migrate after auditing the source file.
   - Automatic redaction in all logs and error messages.
   - Format validation plus rate-limited scope checks prevent brute-force validation attempts.
 
@@ -48,6 +50,11 @@ See [Security Testing Guide](./testing.md) for details.
   - GitHub device flow with explicit scope validation.
   - OAuth helper persists tokens securely and refreshes them from encrypted storage when required.
   - Retry backoff and rate-limit awareness keep GitHub API usage within safe limits.
+
+- **Database Auth State Isolation**
+  - Embedded authorization-server tables such as `auth_accounts`, `auth_kv`, and `auth_signing_keys` are system-internal infrastructure and intentionally do not use per-user RLS policies.
+  - All access to those tables goes through `withSystemContext`, which now verifies the PostgreSQL role has `SUPERUSER` or `BYPASSRLS` before running work.
+  - Hosted database deployments use a separate admin/system connection for this state; the normal app role (`NOBYPASSRLS`) fails loudly if it is accidentally wired into system-context auth storage.
 
 ### Content Security
 

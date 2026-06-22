@@ -11,6 +11,8 @@ import { describe, it, expect, beforeEach, jest, afterEach } from '@jest/globals
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { ConfigManager } from '../../../src/config/ConfigManager.js';
 import { ConfigWizard } from '../../../src/config/ConfigWizard.js';
+import { InMemoryOperatorConfigStore } from '../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
+import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -36,9 +38,16 @@ describe('ConfigWizard', () => {
     // Register ConfigManager and ConfigWizard in DI container using di-mocks helper
     const fileOperationsService = createTestFileOperationsService();
     container.register('FileOperationsService', () => fileOperationsService);
+    // Phase 4.5: ConfigManager now requires injected stores. Tests use
+    // in-memory stores so they're isolated and don't touch disk.
+    const operatorStore = new InMemoryOperatorConfigStore();
+    const userStore = new InMemoryUserConfigStore();
     container.register('ConfigManager', () => new ConfigManager(
       container.resolve('FileOperationsService'),
-      os
+      os,
+      operatorStore,
+      userStore,
+      null,
     ));
     container.register('ConfigWizard', () => new ConfigWizard(container.resolve('ConfigManager')));
 

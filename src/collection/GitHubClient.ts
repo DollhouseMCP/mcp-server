@@ -7,15 +7,33 @@ import { APICache } from '../cache/APICache.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { TokenManager } from '../security/tokenManager.js';
 
+/** Default hosts that are always allowed for GitHub API access. */
+const DEFAULT_ALLOWED_HOSTS: ReadonlySet<string> = new Set([
+  'api.github.com',
+  'raw.githubusercontent.com',
+]);
+
 export class GitHubClient {
   private apiCache: APICache;
   private rateLimitTracker: Map<string, number[]>;
   private tokenManager: TokenManager;
+  private readonly allowedHosts: ReadonlySet<string>;
 
-  constructor(apiCache: APICache, rateLimitTracker: Map<string, number[]>, tokenManager: TokenManager) {
+  constructor(
+    apiCache: APICache,
+    rateLimitTracker: Map<string, number[]>,
+    tokenManager: TokenManager,
+    additionalAllowedHosts?: readonly string[],
+  ) {
     this.apiCache = apiCache;
     this.rateLimitTracker = rateLimitTracker;
     this.tokenManager = tokenManager;
+
+    if (additionalAllowedHosts && additionalAllowedHosts.length > 0) {
+      this.allowedHosts = new Set([...DEFAULT_ALLOWED_HOSTS, ...additionalAllowedHosts]);
+    } else {
+      this.allowedHosts = DEFAULT_ALLOWED_HOSTS;
+    }
   }
   
   /**
@@ -43,10 +61,12 @@ export class GitHubClient {
     let timeoutId: NodeJS.Timeout | null = null;
     const controller = new AbortController();
 
-    // Validate URL is a GitHub API or content endpoint to prevent SSRF
+    // Validate URL hostname against the allowlist to prevent SSRF.
+    // Default: api.github.com + raw.githubusercontent.com.
+    // Deployments can extend via DOLLHOUSE_COLLECTION_ALLOWLIST env var.
     const parsedUrl = new URL(url);
-    if (!['api.github.com', 'raw.githubusercontent.com'].includes(parsedUrl.hostname)) {
-      throw new Error(`GitHubClient: Refusing to fetch non-GitHub URL: ${parsedUrl.hostname}`);
+    if (!this.allowedHosts.has(parsedUrl.hostname)) {
+      throw new Error(`GitHubClient: Refusing to fetch non-allowed URL: ${parsedUrl.hostname}`);
     }
 
     try {

@@ -46,7 +46,23 @@ export class CollectionHandler {
         private readonly initService: InitializationService,
         private readonly indicatorService: PersonaIndicatorService,
         private readonly fileOperations: FileOperationsService
-    ) {}
+    ) {
+        // Initialize from env var at construction, then manage via instance state.
+        // Removes process.env mutation during runtime — prevents cross-session contamination.
+        this._autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+    }
+
+    private _autoSubmitEnabled: boolean;
+
+    /** Whether auto-submit to collection is enabled. */
+    public isAutoSubmitEnabled(): boolean {
+        return this._autoSubmitEnabled;
+    }
+
+    /** Set auto-submit state. Used by configureCollectionSubmission and PortfolioHandler. */
+    public setAutoSubmitEnabled(enabled: boolean): void {
+        this._autoSubmitEnabled = enabled;
+    }
 
     public async browseCollection(section?: string, type?: string) {
         try {
@@ -253,15 +269,19 @@ export class CollectionHandler {
             ],
           };
         } catch (error) {
-          const sanitized = SecureErrorHandler.sanitizeError(error);
-          return {
-            content: [
-              {
-                type: "text",
-                text: `${this.indicatorService.getPersonaIndicator()}❌ Error installing AI customization element: ${sanitized.message}`,
-              },
-            ],
-          };
+          // Phase 4.5 PoC verification fix: previously this catch swallowed
+          // the error into a text-response (with a sad-face emoji) and let
+          // the MCP-AQL dispatcher see "success". Operators saw "installed"
+          // in their MCP response while the install had actually thrown
+          // (validation, network, etc.) and nothing landed in storage.
+          //
+          // Now: still sanitize for safe logging, but re-throw so the
+          // dispatcher's outer catch converts the failure into the proper
+          // OperationFailure shape with the message preserved. The
+          // dispatcher already formats a user-readable error message; we
+          // don't duplicate that here.
+          SecureErrorHandler.sanitizeError(error); // logs the full detail
+          throw error;
         }
     }
 
@@ -544,12 +564,7 @@ export class CollectionHandler {
      */
     public async configureCollectionSubmission(autoSubmit: boolean) {
       try {
-        // Store the configuration in environment variable
-        if (autoSubmit) {
-          process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
-        } else {
-          delete process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION;
-        }
+        this._autoSubmitEnabled = autoSubmit;
 
         const message = autoSubmit
           ? "✅ Collection submission enabled! Content will automatically be submitted to the DollhouseMCP collection after portfolio upload."
@@ -581,7 +596,7 @@ export class CollectionHandler {
      * Shows whether auto-submit is enabled or disabled
      */
     public async getCollectionSubmissionConfig() {
-      const autoSubmitEnabled = process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION === 'true';
+      const autoSubmitEnabled = this._autoSubmitEnabled;
 
       const message = `**Collection Submission Configuration**\n\n` +
         `• **Auto-submit**: ${autoSubmitEnabled ? '✅ Enabled' : '❌ Disabled'}\n\n` +

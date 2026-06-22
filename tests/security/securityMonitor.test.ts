@@ -17,7 +17,6 @@ describe('SecurityMonitor', () => {
     
     // Clear any existing events
     SecurityMonitor.clearAllEventsForTesting();
-    SecurityMonitor['eventCount'] = 0;
   });
 
   afterEach(() => {

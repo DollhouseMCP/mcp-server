@@ -83,6 +83,10 @@ export class BuildInfoService {
   private startupTimer: StartupTimer | null = null;
   /** Issue #706: Callback to check deferred setup status. */
   private deferredSetupChecker: (() => boolean) | null = null;
+  /** Issue #1948: Cache git info (constant for process lifetime). */
+  private _cachedGitInfo: { commit?: string; branch?: string } | null = null;
+  /** Issue #1948: Cache docker info (constant for process lifetime). */
+  private _cachedDockerInfo: { isDocker: boolean; info?: string } | null = null;
 
   constructor(fileOperations: IFileOperationsService) {
     this.startTime = new Date();
@@ -373,16 +377,20 @@ export class BuildInfoService {
    * Data source: Git CLI output (system-controlled), no user input
    */
   private async getGitInfo(): Promise<{ commit?: string; branch?: string }> {
+    // Issue #1948: Cache on first call — git info is constant for process lifetime
+    if (this._cachedGitInfo) return this._cachedGitInfo;
     try {
       // SECURITY NOTE: Git commands return system-controlled data - not user input
       // Git commit hashes and branch names are controlled by git, no Unicode normalization needed
-      const commit = child_process.execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
-      const branch = child_process.execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
-      
-      return { commit, branch };
+      const commit = child_process.execSync('git rev-parse --short HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
+      const branch = child_process.execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
+
+      this._cachedGitInfo = { commit, branch };
+      return this._cachedGitInfo;
     } catch {
       // Not in a git repository or git not available
-      return {};
+      this._cachedGitInfo = {};
+      return this._cachedGitInfo;
     }
   }
 
@@ -391,6 +399,8 @@ export class BuildInfoService {
    * Data source: System cgroup files (container-controlled), no user input
    */
   private async getDockerInfo(): Promise<{ isDocker: boolean; info?: string }> {
+    // Issue #1948: Cache on first call — docker info is constant for process lifetime
+    if (this._cachedDockerInfo) return this._cachedDockerInfo;
     try {
       // SECURITY NOTE: Reading system cgroup file - controlled by container runtime, not user input
       // Container runtime generates this file content, no Unicode normalization needed
@@ -408,16 +418,19 @@ export class BuildInfoService {
           .pop()
           ?.substring(0, 12);
         
-        return {
+        this._cachedDockerInfo = {
           isDocker: true,
           info: containerId ? `Container ID: ${containerId}` : 'Running in Docker'
         };
+        return this._cachedDockerInfo;
       }
-      
-      return { isDocker: false };
+
+      this._cachedDockerInfo = { isDocker: false };
+      return this._cachedDockerInfo;
     } catch {
       // Not in Docker or /proc not available
-      return { isDocker: false };
+      this._cachedDockerInfo = { isDocker: false };
+      return this._cachedDockerInfo;
     }
   }
 

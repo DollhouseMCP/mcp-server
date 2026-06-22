@@ -10,6 +10,8 @@ import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { ConfigManager } from '../config/ConfigManager.js';
+import { env } from '../config/env.js';
+import { createHash } from 'node:crypto';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -62,6 +64,11 @@ export class GitHubAuthManager {
   private activePolling: AbortController | null = null;
   private tokenManager: TokenManager;
 
+  private userInfoCacheKey(token: string): string {
+    const tokenHash = createHash('sha256').update(token).digest('hex').slice(0, 16);
+    return `${this.USER_URL}:token:${tokenHash}`;
+  }
+
   constructor(apiCache: APICache, configManager: ConfigManager, tokenManager: TokenManager) {
     this.apiCache = apiCache;
     this.configManager = configManager;
@@ -75,8 +82,12 @@ export class GitHubAuthManager {
    * @returns The OAuth Client ID to use for authentication
    */
   private async getClientId(): Promise<string | null> {
-    // Check environment variable first (for backward compatibility)
-    const envClientId = process.env.DOLLHOUSE_GITHUB_CLIENT_ID;
+    // Cycle 24 / cycle-23 security MEDIUM-1: route through env.X
+    // (Zod-validated) instead of raw process.env. Same sibling-fix-miss
+    // class as cycle 21's cookieSecret/inviteTokens sweep — a typo in
+    // the env name would previously fall through to the default client
+    // ID with no operator signal.
+    const envClientId = env.DOLLHOUSE_GITHUB_CLIENT_ID;
     if (envClientId) {
       logger.debug('Using OAuth Client ID from environment variable');
       return envClientId;
@@ -268,120 +279,142 @@ export class GitHubAuthManager {
     logger.debug('OAUTH_STEP_2: Initiating device flow', { url: this.DEVICE_CODE_URL });
     
     try {
-      const response = await this.fetchWithRetry(this.DEVICE_CODE_URL, {
-        method: 'POST',
-        headers: {
-          'Accept': 'application/json',
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          client_id: clientId,
-          scope: 'public_repo read:user'
-        })
-      });
-      
-      logger.debug('OAUTH_STEP_3: GitHub response', { 
-        status: response.status, 
-        statusText: response.statusText,
-        headers: {
-          'x-github-request-id': response.headers.get('x-github-request-id'),
-          'x-ratelimit-remaining': response.headers.get('x-ratelimit-remaining')
-        }
-      });
-      
+      const response = await this.requestDeviceCode(clientId);
+      this.logDeviceFlowResponse(response);
       if (!response.ok) {
-        const responseText = await response.text();
-        logger.error('GitHub OAuth endpoint error', { 
-          status: response.status,
-          statusText: response.statusText,
-          responseBody: responseText,
-          clientId: clientId?.substring(0, 8) + '...'
-        });
-        
-        // Parse GitHub's error response for specific error codes
-        try {
-          const errorData = JSON.parse(responseText);
-          
-          if (errorData.error === 'unauthorized_client') {
-            throw new Error(`OAUTH_CLIENT_UNAUTHORIZED: OAuth app '${clientId?.substring(0, 8)}...' is not authorized for device flow. The app may need reconfiguration.`);
-          }
-          
-          if (errorData.error === 'invalid_client') {
-            throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId?.substring(0, 8)}...'. The app may not exist or be disabled.`);
-          }
-          
-          if (errorData.error_description) {
-            throw new Error(`OAUTH_API_ERROR: ${errorData.error_description}`);
-          }
-        } catch {
-          // If we can't parse the error, provide HTTP status specific error
-          if (response.status === 401) {
-            throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId?.substring(0, 8)}...'. The app may not exist or be disabled.`);
-          }
-          
-          if (response.status === 403) {
-            throw new Error(`OAUTH_DEVICE_FLOW_DISABLED: This OAuth app doesn't have device flow enabled. Contact administrator.`);
-          }
-          
-          if (response.status === 429) {
-            throw new Error(`OAUTH_RATE_LIMITED: Too many authentication attempts. Please wait before trying again.`);
-          }
-          
-          throw new Error(`OAUTH_HTTP_${response.status}: GitHub OAuth failed - ${response.statusText}`);
-        }
+        await this.handleDeviceFlowHttpError(response, clientId);
       }
       
       const data = await response.json();
-      
-      // Validate response
-      if (!data.device_code || !data.user_code || !data.verification_uri) {
-        logger.error('Invalid device flow response structure', { 
-          hasDeviceCode: !!data.device_code,
-          hasUserCode: !!data.user_code,
-          hasVerificationUri: !!data.verification_uri
-        });
-        throw new Error('OAUTH_INVALID_RESPONSE: Invalid device flow response from GitHub - missing required fields');
-      }
-      
-      // Log security event for audit trail
-      SecurityMonitor.logSecurityEvent({
-        type: 'TOKEN_VALIDATION_SUCCESS',
-        severity: 'LOW',
-        source: 'GitHubAuthManager.initiateDeviceFlow',
-        details: 'GitHub OAuth device flow initiated successfully',
-        metadata: {
-          userCode: data.user_code,
-          expiresIn: data.expires_in,
-          interval: data.interval
-        }
-      });
-      
+      this.validateDeviceFlowResponse(data);
+      this.logDeviceFlowSuccess(data as DeviceCodeResponse);
       return data as DeviceCodeResponse;
     } catch (error) {
-      ErrorHandler.logError('GitHubAuthManager.initiateDeviceFlow', error);
-      
-      // Check if it's a network error
-      if (error instanceof Error) {
-        // Re-throw if it's already a properly formatted error with code
-        if (error.message.startsWith('OAUTH_')) {
-          throw error;
-        }
-        
-        // Format network errors
-        if (error.message.includes('ECONNREFUSED') || 
-            error.message.includes('ETIMEDOUT') || 
-            error.message.includes('ENOTFOUND')) {
-          throw new Error(`OAUTH_NETWORK_ERROR: Unable to reach GitHub servers (https://github.com/login/device/code). Check your internet connection.`);
-        }
-        
-        if (error.message.includes('network')) {
-          throw new Error(`OAUTH_NETWORK_ERROR: Network error while connecting to GitHub. Please check your internet connection.`);
-        }
-      }
-      
-      // Generic fallback (should rarely happen)
-      throw new Error(`OAUTH_UNKNOWN_ERROR: Failed to start GitHub authentication - ${error instanceof Error ? error.message : 'Unknown error'}`);
+      this.handleDeviceFlowError(error);
     }
+  }
+
+  private async requestDeviceCode(clientId: string): Promise<Response> {
+    return this.fetchWithRetry(this.DEVICE_CODE_URL, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        client_id: clientId,
+        scope: 'public_repo read:user'
+      })
+    });
+  }
+
+  private logDeviceFlowResponse(response: Response): void {
+    logger.debug('OAUTH_STEP_3: GitHub response', {
+      status: response.status,
+      statusText: response.statusText,
+      headers: {
+        'x-github-request-id': response.headers.get('x-github-request-id'),
+        'x-ratelimit-remaining': response.headers.get('x-ratelimit-remaining')
+      }
+    });
+  }
+
+  private async handleDeviceFlowHttpError(response: Response, clientId: string): Promise<void> {
+    const responseText = await response.text();
+    logger.error('GitHub OAuth endpoint error', {
+      status: response.status,
+      statusText: response.statusText,
+      responseBody: responseText,
+      clientId: clientId?.substring(0, 8) + '...'
+    });
+
+    try {
+      const errorData = JSON.parse(responseText);
+      this.throwDeviceFlowApiError(errorData, clientId);
+    } catch {
+      this.throwDeviceFlowStatusError(response, clientId);
+    }
+  }
+
+  private throwDeviceFlowApiError(errorData: { error?: string; error_description?: string }, clientId: string): void {
+    if (errorData.error === 'unauthorized_client') {
+      throw new Error(`OAUTH_CLIENT_UNAUTHORIZED: OAuth app '${clientId?.substring(0, 8)}...' is not authorized for device flow. The app may need reconfiguration.`);
+    }
+
+    if (errorData.error === 'invalid_client') {
+      throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId?.substring(0, 8)}...'. The app may not exist or be disabled.`);
+    }
+
+    if (errorData.error_description) {
+      throw new Error(`OAUTH_API_ERROR: ${errorData.error_description}`);
+    }
+  }
+
+  private throwDeviceFlowStatusError(response: Response, clientId: string): never {
+    if (response.status === 401) {
+      throw new Error(`OAUTH_CLIENT_INVALID: GitHub rejected OAuth client ID '${clientId?.substring(0, 8)}...'. The app may not exist or be disabled.`);
+    }
+
+    if (response.status === 403) {
+      throw new Error(`OAUTH_DEVICE_FLOW_DISABLED: This OAuth app doesn't have device flow enabled. Contact administrator.`);
+    }
+
+    if (response.status === 429) {
+      throw new Error(`OAUTH_RATE_LIMITED: Too many authentication attempts. Please wait before trying again.`);
+    }
+
+    throw new Error(`OAUTH_HTTP_${response.status}: GitHub OAuth failed - ${response.statusText}`);
+  }
+
+  private validateDeviceFlowResponse(data: any): void {
+    if (!data.device_code || !data.user_code || !data.verification_uri) {
+      logger.error('Invalid device flow response structure', {
+        hasDeviceCode: !!data.device_code,
+        hasUserCode: !!data.user_code,
+        hasVerificationUri: !!data.verification_uri
+      });
+      throw new Error('OAUTH_INVALID_RESPONSE: Invalid device flow response from GitHub - missing required fields');
+    }
+  }
+
+  private logDeviceFlowSuccess(data: DeviceCodeResponse): void {
+    SecurityMonitor.logSecurityEvent({
+      type: 'TOKEN_VALIDATION_SUCCESS',
+      severity: 'LOW',
+      source: 'GitHubAuthManager.initiateDeviceFlow',
+      details: 'GitHub OAuth device flow initiated successfully',
+      metadata: {
+        userCode: data.user_code,
+        expiresIn: data.expires_in,
+        interval: data.interval
+      }
+    });
+  }
+
+  private handleDeviceFlowError(error: unknown): never {
+    ErrorHandler.logError('GitHubAuthManager.initiateDeviceFlow', error);
+
+    if (error instanceof Error) {
+      if (error.message.startsWith('OAUTH_')) {
+        throw error;
+      }
+
+      if (this.isConnectionError(error.message)) {
+        throw new Error(`OAUTH_NETWORK_ERROR: Unable to reach GitHub servers (https://github.com/login/device/code). Check your internet connection.`);
+      }
+
+      if (error.message.includes('network')) {
+        throw new Error(`OAUTH_NETWORK_ERROR: Network error while connecting to GitHub. Please check your internet connection.`);
+      }
+    }
+
+    throw new Error(`OAUTH_UNKNOWN_ERROR: Failed to start GitHub authentication - ${error instanceof Error ? error.message : 'Unknown error'}`);
+  }
+
+  private isConnectionError(message: string): boolean {
+    return message.includes('ECONNREFUSED') ||
+      message.includes('ETIMEDOUT') ||
+      message.includes('ENOTFOUND');
   }
   
   /**
@@ -634,7 +667,8 @@ export class GitHubAuthManager {
    */
   private async fetchUserInfo(token: string): Promise<any> {
     // Check cache first
-    const cached = this.apiCache.get(this.USER_URL);
+    const cacheKey = this.userInfoCacheKey(token);
+    const cached = this.apiCache.get(cacheKey);
     if (cached) {
       return cached;
     }
@@ -704,7 +738,7 @@ export class GitHubAuthManager {
     });
     
     // Cache the result
-    this.apiCache.set(this.USER_URL, data);
+    this.apiCache.set(cacheKey, data);
     
     return data;
   }

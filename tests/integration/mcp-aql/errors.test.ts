@@ -22,6 +22,10 @@ import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import { Gatekeeper } from '../../../src/handlers/mcp-aql/Gatekeeper.js';
 
+const UNKNOWN_OPERATION_ERROR = 'Unknown operation';
+const INVALID_INPUT_ERROR = 'Invalid input';
+const INVALID_CHARACTERS_ERROR = 'invalid characters';
+
 describe('MCP-AQL Error Handling Integration', () => {
   let env: PortfolioTestEnvironment;
   let container: DollhouseContainer;
@@ -62,7 +66,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Unknown operation');
+        expect(result.error).toContain(UNKNOWN_OPERATION_ERROR);
         expect(result.error).toContain('unknown_create_operation');
       }
     });
@@ -75,7 +79,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Unknown operation');
+        expect(result.error).toContain(UNKNOWN_OPERATION_ERROR);
         expect(result.error).toContain('unknown_read_operation');
       }
     });
@@ -88,7 +92,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Unknown operation');
+        expect(result.error).toContain(UNKNOWN_OPERATION_ERROR);
         expect(result.error).toContain('unknown_update_operation');
       }
     });
@@ -101,7 +105,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Unknown operation');
+        expect(result.error).toContain(UNKNOWN_OPERATION_ERROR);
         expect(result.error).toContain('unknown_delete_operation');
       }
     });
@@ -245,7 +249,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
         expect(result.error).toContain('operation');
       }
     });
@@ -255,7 +259,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
       }
     });
 
@@ -264,7 +268,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
       }
     });
 
@@ -273,7 +277,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
       }
     });
 
@@ -282,7 +286,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
       }
     });
 
@@ -294,7 +298,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
       }
     });
 
@@ -306,7 +310,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
       }
     });
 
@@ -318,7 +322,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Invalid input');
+        expect(result.error).toContain(INVALID_INPUT_ERROR);
       }
     });
 
@@ -330,7 +334,7 @@ describe('MCP-AQL Error Handling Integration', () => {
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('Unknown operation');
+        expect(result.error).toContain(UNKNOWN_OPERATION_ERROR);
       }
     });
   });
@@ -488,18 +492,18 @@ describe('MCP-AQL Error Handling Integration', () => {
   });
 
   describe('Query elements errors', () => {
-    it('should fail when query_elements is missing elementType', async () => {
+    it('should fail when query_elements is missing element_type', async () => {
       const result = await mcpAqlHandler.handleRead({
         operation: 'query_elements',
         params: {
-          // Missing elementType
+          // Missing element_type
           filters: {},
         },
       });
 
       expect(result.success).toBe(false);
       if (!result.success) {
-        expect(result.error).toContain('elementType');
+        expect(result.error).toContain('element_type');
       }
     });
   });
@@ -559,7 +563,7 @@ describe('MCP-AQL Error Handling Integration', () => {
       const result = service.validateCategory('test category!');
 
       expect(result.isValid).toBe(false);
-      expect(result.errors?.[0]).toContain('invalid characters');
+      expect(result.errors?.[0]).toContain(INVALID_CHARACTERS_ERROR);
       expect(result.errors?.[0]).toContain('Allowed:');
       expect(result.errors?.[0]).toContain('must start with a letter');
     });
@@ -571,7 +575,7 @@ describe('MCP-AQL Error Handling Integration', () => {
       const result = service.validateUsername('user@name');
 
       expect(result.isValid).toBe(false);
-      expect(result.errors?.[0]).toContain('invalid characters');
+      expect(result.errors?.[0]).toContain(INVALID_CHARACTERS_ERROR);
       expect(result.errors?.[0]).toContain("'@'");
       expect(result.errors?.[0]).toContain('Allowed:');
       expect(result.errors?.[0]).toContain('must start and end with alphanumeric');
@@ -585,7 +589,7 @@ describe('MCP-AQL Error Handling Integration', () => {
       const result = service.validateUsername('a');
 
       expect(result.isValid).toBe(false);
-      expect(result.errors?.[0]).toContain('invalid characters');
+      expect(result.errors?.[0]).toContain(INVALID_CHARACTERS_ERROR);
       // No specific invalid chars to list, but structural constraint should explain
       expect(result.errors?.[0]).toContain('Allowed:');
       expect(result.errors?.[0]).toContain('must start and end with alphanumeric');

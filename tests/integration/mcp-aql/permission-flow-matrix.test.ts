@@ -298,7 +298,7 @@ describe('Permission Flow Full Matrix (Issue #1669)', () => {
             // Each should have a clear rationale about why
             expect(policy.rationale).toBeDefined();
             expect(policy.rationale).toMatch(
-              /auto-approved|frictionless|avoid.*confirmation|avoid.*loop/i
+              /auto-approved|frictionless|avoid.*confirmation|avoid.*loop|deadlock|out-of-band/i
             );
           }
         }

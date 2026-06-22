@@ -254,7 +254,7 @@ describe('CollectionHandler', () => {
     it('should enable collection submission when autoSubmit is true', async () => {
       const result = await handler.configureCollectionSubmission(true);
 
-      expect(process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION).toBe('true');
+      expect(handler.isAutoSubmitEnabled()).toBe(true);
       expect(result.content[0].text).toContain('>>');
       expect(result.content[0].text).toContain('Collection submission enabled');
       expect(result.content[0].text).toContain('automatically be submitted');
@@ -262,11 +262,11 @@ describe('CollectionHandler', () => {
 
     it('should disable collection submission when autoSubmit is false', async () => {
       // First enable it
-      process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
+      handler.setAutoSubmitEnabled(true);
 
       const result = await handler.configureCollectionSubmission(false);
 
-      expect(process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION).toBeUndefined();
+      expect(handler.isAutoSubmitEnabled()).toBe(false);
       expect(result.content[0].text).toContain('>>');
       expect(result.content[0].text).toContain('Collection submission disabled');
       expect(result.content[0].text).toContain('only be uploaded to your personal portfolio');
@@ -293,7 +293,7 @@ describe('CollectionHandler', () => {
     });
 
     it('should return enabled status when auto-submit is enabled', async () => {
-      process.env.DOLLHOUSE_AUTO_SUBMIT_TO_COLLECTION = 'true';
+      handler.setAutoSubmitEnabled(true);
 
       const result = await handler.getCollectionSubmissionConfig();
 

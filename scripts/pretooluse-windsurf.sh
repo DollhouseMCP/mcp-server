@@ -5,7 +5,7 @@
 # This wrapper translates Windsurf hook events into Dollhouse permission
 # evaluations and then maps the response back to Windsurf exit codes.
 
-RUN_DIR="$HOME/.dollhouse/run"
+RUN_DIR="${DOLLHOUSE_RUN_DIR:-$HOME/.dollhouse/run}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091 # Resolved at runtime via SCRIPT_DIR.
 source "$SCRIPT_DIR/permission-hook-config.sh"

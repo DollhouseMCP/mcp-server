@@ -27,6 +27,9 @@ import { ValidationRegistry } from '../../../src/services/validation/ValidationR
 import { TriggerValidationService } from '../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../src/services/validation/ValidationService.js';
 import { ElementType } from '../../../src/portfolio/types.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { SerializationService } from '../../../src/services/SerializationService.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 describe('PersonaFinding - Multi-Strategy Search', () => {
   let personaManager: PersonaManager;
@@ -106,6 +109,10 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
     } as Persona
   ];
 
+  const seedPersona = (persona: Persona): void => {
+    (personaManager as any).cacheElement(persona, persona.filename);
+  };
+
   beforeEach(() => {
     jest.clearAllMocks();
 
@@ -142,18 +149,21 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
       metadataService
     );
 
-    personaManager = new PersonaManager(
-      mockPortfolioManager as unknown as PortfolioManager,
-      DEFAULT_INDICATOR_CONFIG,
-      mockFileLockManager,
-      mockFileOperationsService,
+    personaManager = new PersonaManager({
+      portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
+      indicatorConfig: DEFAULT_INDICATOR_CONFIG,
+      fileLockManager: mockFileLockManager,
+      fileOperationsService: mockFileOperationsService,
       validationRegistry,
-      metadataService
-    );
+      serializationService: new SerializationService(),
+      metadataService,
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+    });
 
     // Populate cache with test personas
     for (const persona of testPersonas) {
-      (personaManager as any).elements.set(persona.filename, persona);
+      seedPersona(persona);
     }
   });
 
@@ -251,7 +261,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
         unique_id: 'test-priority-001'
       } as Persona;
 
-      (personaManager as any).elements.set(ambiguousPersona.filename, ambiguousPersona);
+      seedPersona(ambiguousPersona);
 
       // Search by filename - should find by filename strategy first
       const found = personaManager.findPersona('Test-Priority.md');
@@ -342,7 +352,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
           filename: `persona-${i}.md`,
           unique_id: `persona-${i}`
         } as Persona;
-        (personaManager as any).elements.set(persona.filename, persona);
+        seedPersona(persona);
       }
 
       const start = performance.now();
@@ -374,7 +384,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
           filename: `persona-${i}.md`,
           unique_id: `persona-${i}`
         } as Persona;
-        (personaManager as any).elements.set(persona.filename, persona);
+        seedPersona(persona);
       }
 
       const start = performance.now();
@@ -406,7 +416,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
           filename: `persona-${i}.md`,
           unique_id: `persona-${i}`
         } as Persona;
-        (personaManager as any).elements.set(persona.filename, persona);
+        seedPersona(persona);
       }
 
       const start = performance.now();
@@ -444,7 +454,7 @@ describe('PersonaFinding - Multi-Strategy Search', () => {
         unique_id: 'creative-writer-xyz999'
       } as Persona;
 
-      (personaManager as any).elements.set(similarPersona.filename, similarPersona);
+      seedPersona(similarPersona);
 
       // Search by name - should return first match found
       const found = personaManager.findPersona('Creative Writer');

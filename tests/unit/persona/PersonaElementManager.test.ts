@@ -26,6 +26,9 @@ import { ValidationRegistry } from '../../../src/services/validation/ValidationR
 import { TriggerValidationService } from '../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../src/services/validation/ValidationService.js';
 import { ElementType } from '../../../src/portfolio/types.js';
+import { ElementEventDispatcher } from '../../../src/events/ElementEventDispatcher.js';
+import { SerializationService } from '../../../src/services/SerializationService.js';
+import { createTestStorageFactory } from '../../helpers/createTestStorageFactory.js';
 
 describe('PersonaElementManager Integration', () => {
   let personaManager: PersonaManager;
@@ -86,16 +89,19 @@ describe('PersonaElementManager Integration', () => {
     );
 
     // Create PersonaManager instance
-    personaManager = new PersonaManager(
-      mockPortfolioManager as unknown as PortfolioManager,
-      DEFAULT_INDICATOR_CONFIG,
-      mockFileLockManager,
-      mockFileOperationsService,
+    personaManager = new PersonaManager({
+      portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
+      indicatorConfig: DEFAULT_INDICATOR_CONFIG,
+      fileLockManager: mockFileLockManager,
+      fileOperationsService: mockFileOperationsService,
       validationRegistry,
+      serializationService: new SerializationService(),
       metadataService,
-      mockPersonaImporter,
-      mockNotifier
-    );
+      eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: createTestStorageFactory(),
+      personaImporter: mockPersonaImporter,
+      notifier: mockNotifier,
+    });
   });
 
   afterEach(() => {
@@ -267,7 +273,9 @@ describe('PersonaElementManager Integration', () => {
       expect(cacheStats.pathMappings).toBe(1);
 
       // Verify we can retrieve from cache
-      const cached = (personaManager as any).elements.get(persona.id);
+      const cached = (personaManager as any).getCachedByAbsolutePath(
+        path.join(mockPersonasDir, 'cached-persona.md')
+      );
       expect(cached).toBeDefined();
       expect(cached.metadata.name).toBe('Cached Persona');
     });
@@ -319,7 +327,9 @@ describe('PersonaElementManager Integration', () => {
       expect(cacheStats.pathMappings).toBe(25);
 
       // Access first persona to update LRU order
-      const firstPersona = (personaManager as any).elements.get(personas[0].id);
+      const firstPersona = (personaManager as any).getCachedByAbsolutePath(
+        path.join(mockPersonasDir, 'persona-0.md')
+      );
       expect(firstPersona).toBeDefined();
     });
   });

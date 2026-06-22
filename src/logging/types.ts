@@ -45,6 +45,10 @@ export interface UnifiedLogEntry {
     stack?: string;
   };
   correlationId?: string;
+  /** Session user identity, auto-populated from SessionContext when available. */
+  userId?: string;
+  /** Session identifier, auto-populated from SessionContext when available. */
+  sessionId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -86,6 +90,8 @@ export interface LogQueryOptions {
   limit?: number;
   offset?: number;
   correlationId?: string;
+  userId?: string;
+  sessionId?: string;
 }
 
 export interface LogQueryResult {
