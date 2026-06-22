@@ -41,7 +41,11 @@ function createMockServer() {
     setRequestHandler: jest.fn((schema: any, handler: any) => {
       registeredHandlers.push({ schema, handler });
     }),
+    sendToolListChanged: jest.fn(() => Promise.resolve()),
     _registeredHandlers: registeredHandlers,
+    getListToolsHandler(): (request: any) => Promise<any> {
+      return registeredHandlers[0].handler;
+    },
     getCallToolHandler(): (request: any) => Promise<any> {
       // CallToolRequest is the second handler registered (after ListTools)
       return registeredHandlers[1].handler;
@@ -50,9 +54,17 @@ function createMockServer() {
 }
 
 function createMockToolRegistry(tools: Record<string, (args: any) => Promise<any>> = {}) {
+  const listeners = new Set<(event: any) => void>();
   return {
     getAllTools: jest.fn(() => []),
     getHandler: jest.fn((name: string) => tools[name] ?? null),
+    onChange: jest.fn((listener: (event: any) => void) => {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    }),
+    emitChange(event: any) {
+      for (const listener of listeners) listener(event);
+    },
   };
 }
 
@@ -65,11 +77,43 @@ describe('ServerSetup', () => {
     serverSetup = new ServerSetup(contextTracker);
   });
 
+  describe('tool list change notifications', () => {
+    it('invalidates cached tools and sends a tools/list_changed notification on registry changes', async () => {
+      const server = createMockServer();
+      const registry = createMockToolRegistry();
+      const firstTools = [{
+        name: 'first_tool',
+        description: 'First',
+        inputSchema: { type: 'object', properties: {} },
+      }];
+      const secondTools = [{
+        name: 'second_tool',
+        description: 'Second',
+        inputSchema: { type: 'object', properties: {} },
+      }];
+      registry.getAllTools
+        .mockReturnValueOnce(firstTools)
+        .mockReturnValueOnce(secondTools);
+
+      serverSetup.setupServer(server as any, registry as any);
+      const listHandler = server.getListToolsHandler();
+
+      await expect(listHandler({})).resolves.toEqual({ tools: firstTools });
+      await expect(listHandler({})).resolves.toEqual({ tools: firstTools });
+      registry.emitChange({ reason: 'registered', toolNames: ['second_tool'] });
+      await Promise.resolve();
+      await expect(listHandler({})).resolves.toEqual({ tools: secondTools });
+
+      expect(server.sendToolListChanged).toHaveBeenCalledTimes(1);
+      expect(registry.getAllTools).toHaveBeenCalledTimes(2);
+    });
+  });
+
   describe('setupCallToolHandler', () => {
     it('should wrap tool execution in ContextTracker runAsync', async () => {
       const capturedCorrelationIds: (string | undefined)[] = [];
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           capturedCorrelationIds.push(contextTracker.getCorrelationId());
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
@@ -91,7 +135,7 @@ describe('ServerSetup', () => {
     it('should create context with llm-request type and toolName metadata', async () => {
       let capturedContext: any;
       const mockTools = {
-        my_tool: jest.fn(async () => {
+        my_tool: jest.fn(() => {
           capturedContext = contextTracker.getContext();
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
@@ -113,8 +157,8 @@ describe('ServerSetup', () => {
     it('should generate different correlationIds for different calls', async () => {
       const ids: string[] = [];
       const mockTools = {
-        test_tool: jest.fn(async () => {
-          ids.push(contextTracker.getCorrelationId()!);
+        test_tool: jest.fn(() => {
+          ids.push(contextTracker.getCorrelationId() ?? '');
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
       };
@@ -147,7 +191,7 @@ describe('ServerSetup', () => {
 
     it('should clear context after handler completes', async () => {
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
       };
@@ -172,7 +216,7 @@ describe('ServerSetup', () => {
 
       const callOrder: string[] = [];
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           callOrder.push('tool_executed');
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
@@ -200,7 +244,7 @@ describe('ServerSetup', () => {
       const hangingPromise = new Promise<void>(() => {});
 
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
       };
@@ -228,7 +272,7 @@ describe('ServerSetup', () => {
 
     it('should proceed immediately when no deferred promise is set', async () => {
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
       };
@@ -249,7 +293,7 @@ describe('ServerSetup', () => {
       deferredPromise.catch(() => {});
 
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
       };
@@ -273,11 +317,11 @@ describe('ServerSetup', () => {
 
       const callOrder: string[] = [];
       const mockTools = {
-        tool_a: jest.fn(async () => {
+        tool_a: jest.fn(() => {
           callOrder.push('a');
           return { content: [{ type: 'text', text: 'a' }] };
         }),
-        tool_b: jest.fn(async () => {
+        tool_b: jest.fn(() => {
           callOrder.push('b');
           return { content: [{ type: 'text', text: 'b' }] };
         }),
@@ -312,7 +356,7 @@ describe('ServerSetup', () => {
       resolveDeferred(); // Resolve immediately
 
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
       };
@@ -341,7 +385,7 @@ describe('ServerSetup', () => {
     it('should return undefined getSessionContext when no resolver is provided', async () => {
       let capturedSession: SessionContext | undefined;
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           capturedSession = contextTracker.getSessionContext();
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
@@ -363,7 +407,7 @@ describe('ServerSetup', () => {
 
       let capturedSession: SessionContext | undefined;
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           capturedSession = contextTracker.getSessionContext();
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
@@ -377,8 +421,8 @@ describe('ServerSetup', () => {
       await callHandler({ params: { name: 'test_tool', arguments: {} } });
 
       expect(capturedSession).toBeDefined();
-      expect(capturedSession!.transport).toBe('stdio');
-      expect(capturedSession!.tenantId).toBeNull();
+      expect(capturedSession?.transport).toBe('stdio');
+      expect(capturedSession?.tenantId).toBeNull();
       expect(Object.isFrozen(capturedSession)).toBe(true);
     });
 
@@ -387,7 +431,7 @@ describe('ServerSetup', () => {
       const setupWithSession = new ServerSetup(contextTracker, () => stdioSession);
 
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
       };
@@ -408,7 +452,7 @@ describe('ServerSetup', () => {
 
       let capturedContext: any;
       const mockTools = {
-        my_tool: jest.fn(async () => {
+        my_tool: jest.fn(() => {
           capturedContext = contextTracker.getContext();
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
@@ -432,7 +476,7 @@ describe('ServerSetup', () => {
 
       const sessions: (SessionContext | undefined)[] = [];
       const mockTools = {
-        test_tool: jest.fn(async () => {
+        test_tool: jest.fn(() => {
           sessions.push(contextTracker.getSessionContext());
           return { content: [{ type: 'text', text: 'ok' }] };
         }),
@@ -447,8 +491,8 @@ describe('ServerSetup', () => {
       await callHandler({ params: { name: 'test_tool', arguments: {} } });
 
       expect(sessions).toHaveLength(2);
-      expect(sessions[0]!.userId).toBe(sessions[1]!.userId);
-      expect(sessions[0]!.sessionId).toBe(sessions[1]!.sessionId);
+      expect(sessions[0]?.userId).toBe(sessions[1]?.userId);
+      expect(sessions[0]?.sessionId).toBe(sessions[1]?.sessionId);
     });
   });
 });

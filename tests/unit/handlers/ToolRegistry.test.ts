@@ -74,6 +74,38 @@ describe('ToolRegistry', () => {
     });
   });
 
+  it('emits batched change events for dynamic tool registration and removal', () => {
+    const listener = jest.fn();
+    registry.onChange(listener);
+
+    registry.registerMany([
+      {
+        tool: {
+          name: 'dynamic_a',
+          description: 'A',
+          inputSchema: { type: 'object' as const, properties: {} },
+        },
+      },
+      {
+        tool: {
+          name: 'dynamic_b',
+          description: 'B',
+          inputSchema: { type: 'object' as const, properties: {} },
+        },
+      },
+    ]);
+    registry.unregister('dynamic_a');
+
+    expect(listener).toHaveBeenNthCalledWith(1, {
+      reason: 'registered',
+      toolNames: ['dynamic_a', 'dynamic_b'],
+    });
+    expect(listener).toHaveBeenNthCalledWith(2, {
+      reason: 'unregistered',
+      toolNames: ['dynamic_a'],
+    });
+  });
+
   it('registerMany should register multiple tools', () => {
     const handlerA = jest.fn<() => Promise<any>>();
     const handlerB = jest.fn<() => Promise<any>>();

@@ -1,5 +1,4 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
 
 import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
@@ -8,6 +7,11 @@ import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '.
 import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
+import {
+  assertPublicResolvedHost,
+  PublicHostGuardError,
+  type DnsLookup,
+} from './IntegrationPublicHostGuard.js';
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
@@ -17,13 +21,6 @@ const DEFAULT_RATE_LIMIT_MAX = 60;
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const REDACTED = '[redacted]';
 const RATE_LIMIT_SCOPE = 'web-console:integrations:request-gateway:v1';
-
-type DnsLookup = (hostname: string, options: { readonly all: true }) => Promise<readonly DnsLookupAddress[]>;
-
-interface DnsLookupAddress {
-  readonly address: string;
-  readonly family: number;
-}
 
 interface RateLimitState {
   readonly windowStart: number;
@@ -273,7 +270,7 @@ export class IntegrationRequestGateway {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== null) headers.set('Content-Type', 'application/json');
     injectCredential(descriptor, url, headers, credential);
-    await assertPublicResolvedHost(url.hostname, this.dnsLookupImpl);
+    await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     try {
@@ -598,15 +595,17 @@ function injectCredential(
   throw new IntegrationRequestError('integration_auth_strategy_not_supported', 'Integration auth strategy is not supported.', 400);
 }
 
-async function assertPublicResolvedHost(hostname: string, lookup: DnsLookup): Promise<void> {
-  let addresses: readonly DnsLookupAddress[];
+async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup): Promise<void> {
   try {
-    addresses = await lookup(hostname, { all: true });
-  } catch {
-    throw new IntegrationRequestError('integration_host_resolution_failed', 'Integration request host could not be resolved.', 502);
-  }
-  if (addresses.length === 0 || addresses.some(entry => !isPublicIpAddress(entry.address))) {
-    throw new IntegrationRequestError('integration_host_not_allowed', 'Integration request host is not allowed.', 403);
+    await assertPublicResolvedHost(hostname, lookup);
+  } catch (error) {
+    if (error instanceof PublicHostGuardError) {
+      if (error.reason === 'resolution_failed') {
+        throw new IntegrationRequestError('integration_host_resolution_failed', 'Integration request host could not be resolved.', 502);
+      }
+      throw new IntegrationRequestError('integration_host_not_allowed', 'Integration request host is not allowed.', 403);
+    }
+    throw error;
   }
 }
 
@@ -682,41 +681,4 @@ function isCredentialKey(key: string): boolean {
 
 function isConnected(record: UserIntegrationRecord | null): record is UserIntegrationRecord {
   return record?.status === 'connected' && record.revokedAt === null;
-}
-
-function isPublicIpAddress(address: string): boolean {
-  const normalized = normalizeIpv4MappedAddress(address);
-  const version = isIP(normalized);
-  if (version === 4) return isPublicIpv4(normalized);
-  if (version === 6) return isPublicIpv6(normalized);
-  return false;
-}
-
-function normalizeIpv4MappedAddress(address: string): string {
-  const mapped = address.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
-  return mapped?.[1] ?? address;
-}
-
-function isPublicIpv4(address: string): boolean {
-  const parts = address.split('.').map(part => Number.parseInt(part, 10));
-  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127) return false;
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  if (a === 169 && b === 254) return false;
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  if (a === 192 && b === 168) return false;
-  if (a >= 224) return false;
-  return true;
-}
-
-function isPublicIpv6(address: string): boolean {
-  const normalized = address.toLowerCase();
-  if (normalized === '::' || normalized === '::1') return false;
-  const firstGroup = Number.parseInt(normalized.split(':')[0] || '0', 16);
-  if (Number.isNaN(firstGroup)) return false;
-  if ((firstGroup & 0xfe00) === 0xfc00) return false;
-  if ((firstGroup & 0xffc0) === 0xfe80) return false;
-  if ((firstGroup & 0xff00) === 0xff00) return false;
-  return true;
 }

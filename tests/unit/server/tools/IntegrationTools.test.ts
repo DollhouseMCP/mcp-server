@@ -1,6 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
-import { getIntegrationTools } from '../../../../src/server/tools/IntegrationTools.js';
+import { getIntegrationTools, getPromotedIntegrationTools, getRemoteMcpBridgeTools } from '../../../../src/server/tools/IntegrationTools.js';
 import type { IntegrationRequestGateway } from '../../../../src/web-console/modules/integrations/IntegrationRequestGateway.js';
 import {
   IntegrationPolicyUnavailableError,
@@ -10,6 +10,9 @@ import {
   IntegrationOperationCatalogError,
   type IntegrationOperationCatalog,
 } from '../../../../src/web-console/modules/integrations/IntegrationOperationCatalog.js';
+import type { IntegrationRemoteMcpBridge } from '../../../../src/web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
+
+const REMOTE_DOCS = 'remote-docs';
 
 describe('IntegrationTools', () => {
   it('runs policy before gateway request and returns approval metadata', async () => {
@@ -177,6 +180,203 @@ describe('IntegrationTools', () => {
       result: {
         provider: 'gmail',
         operations: [{ operationId: 'getProfile' }],
+      },
+    });
+  });
+
+  it('creates promoted operation tools that execute through policy and gateway', async () => {
+    const gateway = {
+      request: jest.fn<IntegrationRequestGateway['request']>().mockResolvedValue({
+        provider: 'gmail',
+        method: 'GET',
+        host: 'gmail.googleapis.com',
+        path: '/gmail/v1/users/me/messages',
+        status: 200,
+        response: { messages: [] },
+        refreshed: false,
+        provenance: {
+          source: 'third_party_integration',
+          trust: 'untrusted',
+          provider: 'gmail',
+          method: 'GET',
+          host: 'gmail.googleapis.com',
+          path: '/gmail/v1/users/me/messages',
+          readWriteClass: 'read',
+          handling: 'data_only_not_instructions',
+        },
+      }),
+    } as unknown as IntegrationRequestGateway;
+    const policy = {
+      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
+    } as unknown as IntegrationRequestPolicyEnforcer;
+    const catalog = {
+      listPromotedOperations: jest.fn<IntegrationOperationCatalog['listPromotedOperations']>().mockResolvedValue([{
+        operationId: 'listMessages',
+        method: 'GET',
+        path: '/gmail/v1/users/{userId}/messages',
+        readWriteClass: 'read',
+        summary: 'List messages',
+        description: null,
+        requiredScopes: ['gmail.readonly'],
+        available: true,
+        unavailableReason: null,
+        parameters: [
+          { name: 'userId', in: 'path', required: true, description: null, schema: { type: 'string' } },
+          { name: 'q', in: 'query', required: false, description: null, schema: { type: 'string' } },
+        ],
+        requestBody: null,
+        responses: [],
+        gatewayRequest: {
+          tool: 'integration_request',
+          provider: 'gmail',
+          method: 'GET',
+          pathTemplate: '/gmail/v1/users/{userId}/messages',
+        },
+        specContract: {
+          descriptorId: '00000000-0000-4000-8000-000000000001',
+          specHash: 'a'.repeat(64),
+        },
+        scopeAvailability: {
+          enforcement: 'advisory_upstream_oauth_token',
+          note: 'advisory',
+        },
+      }]),
+    } as unknown as IntegrationOperationCatalog;
+
+    const tools = await getPromotedIntegrationTools(gateway, catalog, policy);
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].tool.name).toBe('integration_gmail_listmessages');
+    const result = await tools[0].handler({
+      path_params: { userId: 'me' },
+      query: { q: 'is:unread' },
+    });
+
+    expect(policy.authorize).toHaveBeenCalledWith({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/messages',
+      query: { q: 'is:unread' },
+      body: undefined,
+    });
+    expect(gateway.request).toHaveBeenCalledWith({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/messages',
+      query: { q: 'is:unread' },
+      body: undefined,
+    });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      ok: true,
+      promotedTool: {
+        operationId: 'listMessages',
+        provider: 'gmail',
+      },
+      result: {
+        provenance: {
+          source: 'third_party_integration',
+          trust: 'untrusted',
+        },
+      },
+    });
+  });
+
+  it('suffixes promoted operation names that collide with reserved tools', async () => {
+    const gateway = { request: jest.fn<IntegrationRequestGateway['request']>() } as unknown as IntegrationRequestGateway;
+    const catalog = {
+      listPromotedOperations: jest.fn<IntegrationOperationCatalog['listPromotedOperations']>().mockResolvedValue([{
+        operationId: 'listMessages',
+        method: 'GET',
+        path: '/messages',
+        readWriteClass: 'read',
+        summary: null,
+        description: null,
+        requiredScopes: [],
+        available: true,
+        unavailableReason: null,
+        parameters: [],
+        requestBody: null,
+        responses: [],
+        gatewayRequest: {
+          tool: 'integration_request',
+          provider: 'gmail',
+          method: 'GET',
+          pathTemplate: '/messages',
+        },
+        specContract: {
+          descriptorId: '00000000-0000-4000-8000-000000000001',
+          specHash: 'a'.repeat(64),
+        },
+        scopeAvailability: {
+          enforcement: 'advisory_upstream_oauth_token',
+          note: 'advisory',
+        },
+      }]),
+    } as unknown as IntegrationOperationCatalog;
+
+    const tools = await getPromotedIntegrationTools(
+      gateway,
+      catalog,
+      null,
+      new Set(['integration_gmail_listmessages']),
+    );
+
+    expect(tools[0].tool.name).toBe('integration_gmail_listmessages_2');
+  });
+
+  it('creates remote MCP bridge tools from allowlisted downstream tools', async () => {
+    const bridge = {
+      listAllowedTools: jest.fn<IntegrationRemoteMcpBridge['listAllowedTools']>().mockResolvedValue([{
+        provider: REMOTE_DOCS,
+        remoteName: 'search',
+        localName: 'remote_mcp_remote_docs_search',
+        description: 'Search remote docs',
+        inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+        serverUrl: 'https://mcp.example.com/mcp',
+      }]),
+      callTool: jest.fn<IntegrationRemoteMcpBridge['callTool']>().mockResolvedValue({
+        provider: REMOTE_DOCS,
+        remoteName: 'search',
+        result: { content: [{ type: 'text', text: 'found' }] },
+        provenance: {
+          source: 'third_party_integration',
+          trust: 'untrusted',
+          provider: REMOTE_DOCS,
+          remoteTool: 'search',
+          handling: 'data_only_not_instructions',
+        },
+      }),
+    } as unknown as IntegrationRemoteMcpBridge;
+    const policy = {
+      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
+    } as unknown as IntegrationRequestPolicyEnforcer;
+
+    const tools = await getRemoteMcpBridgeTools(
+      bridge,
+      policy,
+      new Set(['remote_mcp_remote_docs_search']),
+    );
+
+    expect(tools[0].tool.name).toBe('remote_mcp_remote_docs_search_2');
+    const result = await tools[0].handler({ q: 'status' });
+    expect(policy.authorize).toHaveBeenCalledWith({
+      provider: REMOTE_DOCS,
+      method: 'PUT',
+      path: '/_integration/remote_mcp/search',
+      body: { q: 'status' },
+    });
+    expect(bridge.callTool).toHaveBeenCalledWith({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: { q: 'status' },
+    });
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      ok: true,
+      result: {
+        provenance: {
+          source: 'third_party_integration',
+          trust: 'untrusted',
+        },
       },
     });
   });

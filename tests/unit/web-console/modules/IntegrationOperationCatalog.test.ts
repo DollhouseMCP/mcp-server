@@ -73,6 +73,33 @@ describe('IntegrationOperationCatalog', () => {
     expect(result.operations.map(operation => operation.operationId)).toEqual(['listMessages', 'getProfile']);
   });
 
+  it('lists only allowlisted available promoted operations for the current session', async () => {
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({
+        operationPromotion: { operations: ['listMessages', 'sendMessage'] },
+      }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    const result = await runAsUser(contextTracker, () => catalog.listPromotedOperations());
+
+    expect(result.map(operation => operation.operationId)).toEqual(['listMessages']);
+    expect(result[0]).toMatchObject({
+      gatewayRequest: {
+        provider: 'gmail',
+        method: 'GET',
+        pathTemplate: '/gmail/v1/users/{userId}/messages',
+      },
+      specContract: {
+        descriptorId: DESCRIPTOR_ID,
+        specHash: SPEC_HASH,
+      },
+      scopeAvailability: {
+        enforcement: 'advisory_upstream_oauth_token',
+      },
+    });
+  });
+
   it('treats OpenAPI security requirements as alternatives', async () => {
     const { catalog, contextTracker } = createCatalog({ scopes: ['gmail.metadata'] });
 

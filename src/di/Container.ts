@@ -91,12 +91,15 @@ import { IntegrationProviderRegistry } from "../web-console/modules/integrations
 import {
   createGitHubIntegrationProvider,
   IntegrationOperationCatalog,
+  IntegrationRemoteMcpBridge,
   IntegrationRequestPolicyEnforcer,
   IntegrationRequestGateway,
   IntegrationTokenRefreshService,
   serializeGitHubIntegrationStatus,
   type IIntegrationProvider,
+  type RemoteMcpClientFactory,
 } from "../web-console/modules/integrations/index.js";
+import type { DnsLookup } from "../web-console/modules/integrations/IntegrationPublicHostGuard.js";
 import type { IGitHubIntegrationProvider } from "../web-console/modules/integrations/GitHubIntegrationProvider.js";
 import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
@@ -167,7 +170,22 @@ export interface HandlerBundle {
   integrationRequestGateway?: IntegrationRequestGateway;
   integrationRequestPolicyEnforcer?: IntegrationRequestPolicyEnforcer;
   integrationOperationCatalog?: IntegrationOperationCatalog;
+  integrationRemoteMcpBridge?: IntegrationRemoteMcpBridge;
 }
+
+/**
+ * Optional DI override points for the outbound integration transport. When a service
+ * is registered under one of these names the gateway/bridge use it instead of the
+ * production default (real `fetch` / DNS resolver / SDK MCP client). Defaults to
+ * production behavior when unregistered. Wired integration tests register these to
+ * route outbound calls through a local server while keeping the SSRF host guard fully
+ * enforced (the injected DNS resolver returns a controlled public address).
+ */
+export const INTEGRATION_OUTBOUND_OVERRIDES = {
+  fetch: 'IntegrationOutboundFetch',
+  dnsLookup: 'IntegrationOutboundDnsLookup',
+  remoteMcpClientFactory: 'IntegrationRemoteMcpClientFactory',
+} as const;
 
 /**
  * Type-safe service record for dependency injection container
@@ -1186,6 +1204,7 @@ export class DollhouseContainer {
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
     const integrationRequestGateway = this.resolveIntegrationRequestGateway();
     const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
+    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
     const integrationRequestPolicyEnforcer = integrationRequestGateway
       ? new IntegrationRequestPolicyEnforcer({
         gatekeeper: handlerDeps.gatekeeper,
@@ -1209,6 +1228,7 @@ export class DollhouseContainer {
       integrationRequestGateway: integrationRequestGateway ?? undefined,
       integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
       integrationOperationCatalog: integrationOperationCatalog ?? undefined,
+      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
     };
   }
 
@@ -1524,6 +1544,7 @@ export class DollhouseContainer {
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
     serverSetup.setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
+    await this.registerSessionIntegrationTools(toolRegistry, bundle, contextTracker, sessionContext);
     this.resolve<SessionContainerRegistry>('SessionContainerRegistry').register(sid, child);
 
     return {
@@ -1730,6 +1751,7 @@ export class DollhouseContainer {
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
     const integrationRequestGateway = this.resolveIntegrationRequestGateway();
     const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
+    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
     const integrationRequestPolicyEnforcer = integrationRequestGateway
       ? new IntegrationRequestPolicyEnforcer({
         gatekeeper: handlerDeps.gatekeeper,
@@ -1752,6 +1774,7 @@ export class DollhouseContainer {
       integrationRequestGateway: integrationRequestGateway ?? undefined,
       integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
       integrationOperationCatalog: integrationOperationCatalog ?? undefined,
+      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
     };
   }
 
@@ -1774,6 +1797,8 @@ export class DollhouseContainer {
       providers: providerRegistry,
       secretEncryption,
     });
+    const fetchOverride = this.resolveIntegrationOverride<typeof fetch>(INTEGRATION_OUTBOUND_OVERRIDES.fetch);
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     return new IntegrationRequestGateway({
       integrationStore,
       descriptorStore,
@@ -1781,7 +1806,13 @@ export class DollhouseContainer {
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
       tokenRefresh,
       rateLimitStore,
+      ...(fetchOverride ? { fetch: fetchOverride } : {}),
+      ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
     });
+  }
+
+  private resolveIntegrationOverride<T>(name: string): T | undefined {
+    return this.hasRegistration(name) ? this.resolve<T>(name) : undefined;
   }
 
   private resolveIntegrationOperationCatalog(): IntegrationOperationCatalog | null {
@@ -1798,6 +1829,78 @@ export class DollhouseContainer {
       specStore: this.resolve<IIntegrationOpenApiSpecStore>(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore),
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
       portfolioStore: this.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore),
+    });
+  }
+
+  private async registerSessionIntegrationTools(
+    toolRegistry: ToolRegistry,
+    bundle: HandlerBundle,
+    contextTracker: ContextTracker,
+    sessionContext: Readonly<SessionContext>,
+  ): Promise<void> {
+    const {
+      integrationRequestGateway,
+      integrationOperationCatalog,
+      integrationRemoteMcpBridge,
+      integrationRequestPolicyEnforcer,
+    } = bundle;
+    if (integrationRequestGateway && integrationOperationCatalog) {
+      const promotionContext = contextTracker.createSessionContext(
+        'llm-request',
+        sessionContext,
+        { toolName: 'promoted_integration_tools' },
+      );
+      await contextTracker.runAsync(promotionContext, async () => {
+        try {
+          await toolRegistry.registerPromotedIntegrationTools(
+            integrationRequestGateway,
+            integrationOperationCatalog,
+            integrationRequestPolicyEnforcer,
+          );
+        } catch (error) {
+          logger.warn('[HTTP Session] Promoted integration tool registration skipped', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
+    if (integrationRemoteMcpBridge) {
+      const remoteMcpContext = contextTracker.createSessionContext(
+        'llm-request',
+        sessionContext,
+        { toolName: 'remote_mcp_bridge_tools' },
+      );
+      await contextTracker.runAsync(remoteMcpContext, async () => {
+        try {
+          await toolRegistry.registerRemoteMcpBridgeTools(
+            integrationRemoteMcpBridge,
+            integrationRequestPolicyEnforcer,
+          );
+        } catch (error) {
+          logger.warn('[HTTP Session] Remote MCP bridge tool registration skipped', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
+  }
+
+  private resolveIntegrationRemoteMcpBridge(): IntegrationRemoteMcpBridge | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
+    const clientFactoryOverride = this.resolveIntegrationOverride<RemoteMcpClientFactory>(INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory);
+    return new IntegrationRemoteMcpBridge({
+      integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
+      descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
+      secretEncryption: this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption),
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+      ...(clientFactoryOverride ? { clientFactory: clientFactoryOverride } : {}),
     });
   }
 

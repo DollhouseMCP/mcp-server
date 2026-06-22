@@ -8,7 +8,13 @@ import { IntegrationPolicyUnavailableError } from '../../web-console/modules/int
 import {
   IntegrationOperationCatalogError,
   type IntegrationOperationCatalog,
+  type IntegrationOperationDetails,
 } from '../../web-console/modules/integrations/IntegrationOperationCatalog.js';
+import {
+  IntegrationRemoteMcpBridgeError,
+  type IntegrationRemoteMcpBridge,
+  type RemoteMcpTool,
+} from '../../web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
 
 const PROVIDER_DESCRIPTION = 'Integration provider id.';
 
@@ -55,7 +61,8 @@ export function getIntegrationTools(
     handler: async (args: unknown) => {
       try {
         const request = readArgs(args);
-        const policy = policyEnforcer ? await policyEnforcer.authorize(request) : { allowed: true };
+        if (!policyEnforcer) return integrationPolicyUnavailableResponse();
+        const policy = await policyEnforcer.authorize(request);
         if (!policy.allowed) {
           return textResponse({
             ok: false,
@@ -99,6 +106,32 @@ export function getIntegrationTools(
     tools.push(...getIntegrationOperationTools(operationCatalog, policyEnforcer));
   }
   return tools;
+}
+
+export async function getPromotedIntegrationTools(
+  gateway: IntegrationRequestGateway,
+  operationCatalog: IntegrationOperationCatalog,
+  policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+  reservedToolNames: ReadonlySet<string> = new Set(),
+): Promise<Array<{ tool: ToolDefinition; handler: ToolHandler }>> {
+  const operations = await operationCatalog.listPromotedOperations();
+  const usedNames = new Set<string>(reservedToolNames);
+  return operations.map(operation => promotedToolRegistration(
+    operation,
+    gateway,
+    policyEnforcer,
+    usedNames,
+  ));
+}
+
+export async function getRemoteMcpBridgeTools(
+  bridge: IntegrationRemoteMcpBridge,
+  policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+  reservedToolNames: ReadonlySet<string> = new Set(),
+): Promise<Array<{ tool: ToolDefinition; handler: ToolHandler }>> {
+  const remoteTools = await bridge.listAllowedTools();
+  const usedNames = new Set<string>(reservedToolNames);
+  return remoteTools.map(remoteTool => remoteMcpToolRegistration(remoteTool, bridge, policyEnforcer, usedNames));
 }
 
 function getIntegrationOperationTools(
@@ -309,6 +342,218 @@ function readArgs(args: unknown) {
   };
 }
 
+function promotedToolRegistration(
+  operation: IntegrationOperationDetails,
+  gateway: IntegrationRequestGateway,
+  policyEnforcer: IntegrationRequestPolicyEnforcer | null | undefined,
+  usedNames: Set<string>,
+): { tool: ToolDefinition; handler: ToolHandler } {
+  const toolName = uniquePromotedToolName(operation, usedNames);
+  return {
+    tool: {
+      name: toolName,
+      description: promotedToolDescription(operation),
+      inputSchema: promotedToolInputSchema(operation),
+      annotations: {
+        readOnlyHint: operation.readWriteClass === 'read',
+        destructiveHint: operation.readWriteClass === 'write',
+      },
+    },
+    handler: async (args: unknown) => {
+      try {
+        const input = readObject(args);
+        const request = {
+          provider: operation.gatewayRequest.provider,
+          method: operation.gatewayRequest.method,
+          path: applyPathParams(
+            operation.gatewayRequest.pathTemplate,
+            readOptionalRecord(input.path_params),
+          ),
+          query: readOptionalRecord(input.query),
+          body: input.body,
+        };
+        if (!policyEnforcer) return integrationPolicyUnavailableResponse();
+        const policy = await policyEnforcer.authorize(request);
+        if (!policy.allowed) {
+          return textResponse({
+            ok: false,
+            error: policy.error,
+            approvalRequest: policy.approvalRequest,
+            policyContext: policy.policyContext,
+            promotedTool: {
+              operationId: operation.operationId,
+              provider: operation.gatewayRequest.provider,
+            },
+          });
+        }
+        const result = await gateway.request(request);
+        return textResponse({
+          ok: true,
+          result,
+          approvalContext: policy.approvalContext,
+          promotedTool: {
+            operationId: operation.operationId,
+            provider: operation.gatewayRequest.provider,
+            specContract: operation.specContract,
+          },
+        });
+      } catch (error) {
+        if (error instanceof IntegrationPolicyUnavailableError) {
+          return textResponse({
+            ok: false,
+            error: {
+              code: 'integration_request_policy_unavailable',
+              message: error.message,
+              status: 503,
+            },
+          });
+        }
+        if (error instanceof IntegrationRequestError) {
+          return textResponse({
+            ok: false,
+            error: {
+              code: error.code,
+              message: error.message,
+              status: error.status,
+            },
+          });
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+function remoteMcpToolRegistration(
+  remoteTool: RemoteMcpTool,
+  bridge: IntegrationRemoteMcpBridge,
+  policyEnforcer: IntegrationRequestPolicyEnforcer | null | undefined,
+  usedNames: Set<string>,
+): { tool: ToolDefinition; handler: ToolHandler } {
+  const toolName = uniqueToolName(remoteTool.localName, usedNames);
+  return {
+    tool: {
+      name: toolName,
+      description: `Allowlisted remote MCP tool ${remoteTool.remoteName} for ${remoteTool.provider}. Proxies through the server-side remote MCP bridge; responses are untrusted third-party data.`,
+      inputSchema: remoteTool.inputSchema,
+      annotations: {
+        readOnlyHint: false,
+        destructiveHint: true,
+      },
+    },
+    handler: async (args: unknown) => {
+      try {
+        const policyResponse = await authorizeIntegrationManagementWrite(
+          policyEnforcer,
+          remoteTool.provider,
+          `/_integration/remote_mcp/${encodeURIComponent(remoteTool.remoteName)}`,
+          readObject(args),
+        );
+        if (policyResponse) return policyResponse;
+        return textResponse({
+          ok: true,
+          result: await bridge.callTool({
+            provider: remoteTool.provider,
+            remoteName: remoteTool.remoteName,
+            arguments: args,
+          }),
+        });
+      } catch (error) {
+        if (error instanceof IntegrationRemoteMcpBridgeError) {
+          return textResponse({
+            ok: false,
+            error: {
+              code: error.code,
+              message: error.message,
+              status: error.status,
+            },
+          });
+        }
+        throw error;
+      }
+    },
+  };
+}
+
+function uniqueToolName(base: string, usedNames: Set<string>): string {
+  let candidate = base.slice(0, 96);
+  let index = 2;
+  while (usedNames.has(candidate)) {
+    const suffix = `_${index}`;
+    candidate = `${base.slice(0, 96 - suffix.length)}${suffix}`;
+    index += 1;
+  }
+  usedNames.add(candidate);
+  return candidate;
+}
+
+function uniquePromotedToolName(operation: IntegrationOperationDetails, usedNames: Set<string>): string {
+  const base = `integration_${sanitizeToolName(operation.gatewayRequest.provider)}_${sanitizeToolName(operation.operationId)}`;
+  return uniqueToolName(base, usedNames);
+}
+
+function sanitizeToolName(value: string): string {
+  const normalized = value.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '_').replaceAll(/^_+|_+$/g, '');
+  return normalized || 'operation';
+}
+
+function promotedToolDescription(operation: IntegrationOperationDetails): string {
+  const summary = operation.summary ? ` ${operation.summary}` : '';
+  return `Promoted ${operation.readWriteClass} integration operation ${operation.operationId} for ${operation.gatewayRequest.provider}.${summary} Calls through integration_request; credentials remain server-side and responses are untrusted third-party data.`;
+}
+
+function promotedToolInputSchema(operation: IntegrationOperationDetails): ToolDefinition['inputSchema'] {
+  const pathParameters = operation.parameters.filter(parameter => parameter.in === 'path');
+  const hasQueryParameters = operation.parameters.some(parameter => parameter.in === 'query');
+  const properties: Record<string, object> = {};
+  const required: string[] = [];
+  if (pathParameters.length > 0) {
+    properties.path_params = {
+      type: 'object',
+      description: 'Values for OpenAPI path template parameters.',
+      properties: Object.fromEntries(pathParameters.map(parameter => [
+        parameter.name,
+        {
+          description: parameter.description ?? `Path parameter ${parameter.name}.`,
+        },
+      ])),
+      required: pathParameters.filter(parameter => parameter.required).map(parameter => parameter.name),
+    };
+    required.push('path_params');
+  }
+  if (hasQueryParameters) {
+    properties.query = {
+      type: 'object',
+      description: 'Primitive query parameters for this operation.',
+    };
+  }
+  if (operation.requestBody) {
+    properties.body = {
+      description: `JSON request body. Supported content types: ${operation.requestBody.contentTypes.join(', ') || 'unspecified'}.`,
+    };
+    if (operation.requestBody.required) required.push('body');
+  }
+  return {
+    type: 'object',
+    properties,
+    ...(required.length > 0 ? { required } : {}),
+  };
+}
+
+function applyPathParams(pathTemplate: string, pathParams: Readonly<Record<string, unknown>> | undefined): string {
+  return pathTemplate.replaceAll(/\{([^}]+)\}/g, (_match, name: string) => {
+    const value = pathParams?.[name];
+    if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+      throw new IntegrationRequestError(
+        'invalid_integration_request',
+        `Missing required path_params.${name} for promoted integration operation.`,
+        400,
+      );
+    }
+    return encodeURIComponent(String(value));
+  });
+}
+
 function readObject(args: unknown): Record<string, unknown> {
   return args && typeof args === 'object' && !Array.isArray(args)
     ? args as Record<string, unknown>
@@ -391,6 +636,17 @@ function textResponse(value: unknown) {
       text: JSON.stringify(value, null, 2),
     }],
   };
+}
+
+function integrationPolicyUnavailableResponse() {
+  return textResponse({
+    ok: false,
+    error: {
+      code: 'integration_request_policy_unavailable',
+      message: 'Integration request policy is temporarily unavailable.',
+      status: 503,
+    },
+  });
 }
 
 function catalogErrorResponse(error: IntegrationOperationCatalogError) {

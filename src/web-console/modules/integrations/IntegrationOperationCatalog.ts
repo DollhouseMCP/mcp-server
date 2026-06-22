@@ -40,6 +40,10 @@ export interface IntegrationGeneratedSkillInput {
   readonly provider: string;
 }
 
+export interface IntegrationPromotedOperationListInput {
+  readonly provider?: string;
+}
+
 export interface IntegrationOpenApiIngestInput {
   readonly provider: string;
   readonly spec: Readonly<Record<string, unknown>>;
@@ -228,6 +232,37 @@ export class IntegrationOperationCatalog {
     };
   }
 
+  async listPromotedOperations(input: IntegrationPromotedOperationListInput = {}): Promise<readonly IntegrationOperationDetails[]> {
+    const session = this.currentUserId();
+    const descriptors = input.provider
+      ? [await this.options.descriptorStore.findVisibleByProvider(session, input.provider)]
+      : await this.options.descriptorStore.listVisible(session);
+    const promoted: IntegrationOperationDetails[] = [];
+    for (const descriptor of descriptors) {
+      if (!descriptor) continue;
+      const promotedIds = readPromotedOperationIds(descriptor.operationPromotion);
+      if (promotedIds.size === 0) continue;
+      const spec = await this.options.specStore.findByDescriptorId(descriptor.id);
+      if (!spec) continue;
+      const grantedScopes = await this.resolveGrantedScopesForPromotion(session, descriptor.provider);
+      if (!grantedScopes) continue;
+      const operations = deriveOperationDetails(descriptor, spec.spec, grantedScopes);
+      for (const operation of operations) {
+        if (!operation.available || !promotedIds.has(operation.operationId)) continue;
+        promoted.push({
+          ...operation,
+          specContract: {
+            descriptorId: descriptor.id,
+            specHash: spec.specHash,
+          },
+          scopeAvailability: scopeAvailability(),
+        });
+      }
+    }
+    return promoted.sort((left, right) => left.gatewayRequest.provider.localeCompare(right.gatewayRequest.provider) ||
+      left.operationId.localeCompare(right.operationId));
+  }
+
   async regenerateSkill(input: IntegrationGeneratedSkillInput): Promise<GeneratedIntegrationSkillWriteResult> {
     const context = await this.resolveConnectedContext(input.provider);
     const operations = deriveOperations(context.descriptor, context.spec.spec, context.grantedScopes)
@@ -294,6 +329,11 @@ export class IntegrationOperationCatalog {
     return grantedScopes(integration);
   }
 
+  private async resolveGrantedScopesForPromotion(userId: string, provider: string): Promise<ReadonlySet<string> | null> {
+    const integration = await this.options.integrationStore.findByProvider(userId, provider);
+    return integration?.status === 'connected' ? grantedScopes(integration) : null;
+  }
+
   private async writeGeneratedSkill(
     userId: string,
     descriptor: IntegrationDescriptorRecord,
@@ -319,7 +359,7 @@ export class IntegrationOperationCatalog {
         userId,
         type: 'skills',
         name: portfolioName,
-        displayName: `Using ${descriptor.displayName}`,
+        displayName: null,
         metadata,
         content: skill.content,
         tags,
@@ -339,7 +379,7 @@ export class IntegrationOperationCatalog {
       canonicalName,
       expectedVersion: existing.version,
       expectedContentHash: existing.contentHash,
-      displayName: `Using ${descriptor.displayName}`,
+      displayName: null,
       metadata,
       content: skill.content,
       tags,
@@ -364,7 +404,7 @@ export class IntegrationOperationCatalog {
         userId,
         type: 'skills',
         name: revisionName,
-        displayName: `Using ${descriptor.displayName}`,
+        displayName: null,
         metadata,
         content: skill.content,
         tags,
@@ -726,6 +766,12 @@ function generatedSkillMetadata(
   return {
     name: skill.name,
     description: `Generated helper for ${descriptor.displayName} integration`,
+    // Skills are v2 dual-field: the behavioral guidance lives in the `instructions`
+    // frontmatter field (which element managers preserve across save/reload), not the
+    // markdown body (which is rendered from name+description). Carry the generated
+    // operation guidance here so it survives persistence and reaches the agent on
+    // activation.
+    instructions: skill.content,
     source: 'integration_openapi_spec',
     integration: {
       provider: descriptor.provider,
@@ -756,6 +802,13 @@ function isCurrentGeneratedSkill(
 function grantedScopes(integration: UserIntegrationRecord): ReadonlySet<string> {
   const scopes = integration.authorizedPermissions.scopes;
   return new Set(Array.isArray(scopes) ? scopes.filter((scope): scope is string => typeof scope === 'string') : []);
+}
+
+function readPromotedOperationIds(operationPromotion: Readonly<Record<string, unknown>>): ReadonlySet<string> {
+  const operations = operationPromotion.operations;
+  if (!Array.isArray(operations)) return new Set();
+  return new Set(operations.filter((operation): operation is string =>
+    typeof operation === 'string' && operation.trim() !== ''));
 }
 
 function fallbackOperationId(method: string, path: string): string {
