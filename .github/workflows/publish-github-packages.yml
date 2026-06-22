@@ -17,6 +17,12 @@ on:
     tags:
       - 'v*'  # Triggers on version tags like v1.2.3
   workflow_dispatch:  # Allow manual trigger
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (test without publishing)'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -124,13 +130,25 @@ jobs:
           echo "GitHub Packages dist-tag: ${dist_tag}"
 
       - name: Publish to GitHub Packages
-        if: steps.check_version.outputs.already_published == 'false'
+        if: ${{ steps.check_version.outputs.already_published == 'false' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
           # Publish to GitHub Packages
           # Registry is configured via setup-node step's registry-url parameter
           # NODE_AUTH_TOKEN provides authentication to GitHub Packages
           npm publish --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dry run (skip GitHub Packages publish)
+        if: ${{ steps.check_version.outputs.already_published == 'false' && github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        shell: bash
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "DRY RUN MODE - Skipping GitHub Packages publication"
+          echo "Package would be published: @DollhouseMCP/mcp-server@${PACKAGE_VERSION}"
+          echo "GitHub Packages dist-tag: ${{ steps.package_dist_tag.outputs.dist_tag }}"
+          npm publish --dry-run --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -149,7 +167,7 @@ jobs:
           git checkout -- package.json
 
       - name: Notify success
-        if: success()
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
           echo "✅ Successfully published to GitHub Packages!"

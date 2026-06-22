@@ -129,6 +129,15 @@ jobs:
           echo "DOLLHOUSE_REMOTE_SSH_IDENTITY_FILE=${key_file}" >> "$GITHUB_ENV"
           echo "DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=${known_hosts_file}" >> "$GITHUB_ENV"
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Run hosted remote deploy
         shell: bash
         env:
@@ -161,7 +170,7 @@ jobs:
             npm run hosted:remote -- "${args[@]}"
 
       - name: Verify public alpha endpoint
-        if: inputs.dry_run != true
+        if: ${{ inputs.dry_run != true }}
         shell: bash
         run: |
           DOLLHOUSE_PUBLIC_BASE_URL="${DOLLHOUSE_PUBLIC_BASE_URL}" npm run hosted:deploy -- verify

@@ -138,7 +138,7 @@ jobs:
           } > beta-release-notes.md
 
       - name: Dry-run summary
-        if: inputs.dry_run == true
+        if: ${{ inputs.dry_run == true }}
         shell: bash
         run: |
           {
@@ -154,7 +154,7 @@ jobs:
           cat beta-release-notes.md
 
       - name: Create beta tag and GitHub prerelease
-        if: inputs.dry_run != true
+        if: ${{ inputs.dry_run != true }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}

@@ -22,6 +22,11 @@ on:
         required: false
         type: boolean
         default: false
+      debug_oidc:
+        description: 'Print OIDC/npm environment diagnostics without secret values'
+        required: false
+        type: boolean
+        default: false
 
 concurrency:
   group: release-publish-${{ github.workflow }}
@@ -122,6 +127,7 @@ jobs:
           echo "npm dist-tag: ${dist_tag}"
 
       - name: Debug OIDC Environment
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_oidc == true }}
         shell: bash
         run: |
           echo "=== OIDC Environment Check ==="
@@ -143,7 +149,7 @@ jobs:
           echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-NOT SET}"
 
       - name: Publish to npm (with provenance)
-        if: github.event.inputs.dry_run != 'true'
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
         shell: bash
         env:
           # Ensure provenance is enabled for OIDC detection
@@ -156,7 +162,7 @@ jobs:
           npm publish --provenance --access public --tag "${DIST_TAG}" --loglevel verbose
 
       - name: Dry run (skip publish)
-        if: github.event.inputs.dry_run == 'true'
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
         shell: bash
         env:
           DIST_TAG: ${{ steps.npm_dist_tag.outputs.dist_tag }}
@@ -166,7 +172,7 @@ jobs:
           npm publish --dry-run --tag "${DIST_TAG}"
 
       - name: Notify success
-        if: success() && github.event.inputs.dry_run != 'true'
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
           echo "✅ Successfully published @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }} to npm!"

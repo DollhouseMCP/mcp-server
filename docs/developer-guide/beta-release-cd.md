@@ -64,6 +64,11 @@ evaluated from the default branch. Before publishing the first beta prerelease,
 the default branch must already have prerelease-aware publish workflows so a beta
 package cannot become the npm `latest` dist-tag.
 
+That default-branch check is a bootstrap guard. Once the prerelease-safe publish
+workflows have permanently reached the default branch, replace the string-grep
+assertions with a simpler versioned invariant or remove the guard as part of the
+normal release workflow cleanup.
+
 A non-dry-run publish creates:
 
 - annotated tag `v<version>`
@@ -74,6 +79,10 @@ The existing release/tag workflows then publish the artifacts:
 - npm package with the `beta` dist-tag
 - GitHub Packages package with the `beta` dist-tag
 - `.mcpb` Desktop Extension bundle and checksum attached to the prerelease
+
+Manual npm publish runs support `dry_run` and an explicit `debug_oidc` input for
+OIDC diagnostics. Manual GitHub Packages runs default to `dry_run: true`; tag
+pushes still publish normally after duplicate-version checks pass.
 
 The MCP Registry workflow skips GitHub prereleases.
 
