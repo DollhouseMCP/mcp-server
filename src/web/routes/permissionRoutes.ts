@@ -80,29 +80,6 @@ interface PermissionDecisionInput extends Record<string, unknown> {
   request_id?: string;
 }
 
-/**
- * Optional host metadata forwarded by permission hooks for audit correlation.
- *
- * Codex supplies these fields with hook events so the dashboard can connect a
- * permission decision back to the originating session, turn, tool use,
- * transcript, workspace, and model. They are display-only metadata and are not
- * used to decide whether a tool call is allowed.
- */
-interface PermissionDecisionRequestMetadata {
-  /** Codex session identifier for grouping decisions by conversation. */
-  session_id?: string;
-  /** Codex turn identifier for locating the user/model exchange. */
-  turn_id?: string;
-  /** Codex tool-use identifier for the exact hook invocation. */
-  tool_use_id?: string;
-  /** Local transcript path emitted by Codex for human troubleshooting. */
-  transcript_path?: string;
-  /** Working directory where the host attempted the tool call. */
-  cwd?: string;
-  /** Model name reported by the host for audit context. */
-  model?: string;
-}
-
 interface PermissionDecisionTargetDescriptor {
   key: PermissionDecisionTargetKey;
   label: string;
@@ -115,13 +92,22 @@ interface KnownPolicySession {
   source: 'policy';
 }
 
+interface PermissionDecisionContext {
+  session_id?: string;
+  turn_id?: string;
+  tool_use_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  model?: string;
+}
+
 const PERMISSION_ROUTE_RATE_LIMIT_REQUESTS = 120;
 const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
 
 interface PermissionDecisionTracker {
   trackDecision(
-    metadata: PermissionDecisionRequestMetadata,
+    context: PermissionDecisionContext,
     toolName: string,
     input: PermissionDecisionInput,
     result: Record<string, unknown>,
@@ -133,6 +119,18 @@ interface PermissionDecisionTracker {
 const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
 const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
 type NormalizablePermissionDecision = 'allow' | 'deny' | 'ask';
+const CONTEXT_DETAIL_FIELDS: Array<{
+  key: keyof PermissionDecisionContext;
+  label: string;
+  monospace?: boolean;
+}> = [
+  { key: 'session_id', label: 'Session', monospace: true },
+  { key: 'turn_id', label: 'Turn', monospace: true },
+  { key: 'tool_use_id', label: 'Tool Use', monospace: true },
+  { key: 'transcript_path', label: 'Transcript', monospace: true },
+  { key: 'cwd', label: 'Workspace', monospace: true },
+  { key: 'model', label: 'Model', monospace: true },
+];
 
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
@@ -160,6 +158,13 @@ function extractDecision(result: Record<string, unknown>, platform?: string): st
   if (typeof result.allowed === 'boolean') return result.allowed ? 'allow' : 'deny';
   if (platform === 'codex' && isEmptyObject(result)) return 'allow';
   return 'unknown';
+}
+
+function normalizeOptionalRequestString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+
+  const normalized = value.normalize('NFC');
+  return normalized === '' ? undefined : normalized;
 }
 
 function extractReason(result: Record<string, unknown>): string {
@@ -206,19 +211,12 @@ function normalizePermissionResponseForPlatform(
   return formatPermissionResponse('allow', platform, input);
 }
 
-/**
- * Builds the expanded audit details shown in the dashboard.
- *
- * Host metadata stays separate from permission inputs so the UI can explain
- * where a decision came from without accidentally treating correlation fields
- * as policy targets.
- */
 function buildDecisionDetails(
   toolName: string,
   input: PermissionDecisionInput,
   result: Record<string, unknown>,
   platform: string,
-  metadata: PermissionDecisionRequestMetadata,
+  context: PermissionDecisionContext,
 ): { target?: string; targetLabel?: string; details: PermissionDecisionDetail[] } {
   const details: PermissionDecisionDetail[] = [];
 
@@ -226,32 +224,15 @@ function buildDecisionDetails(
     details.push({ label: 'Platform', value: platform, monospace: true });
   }
 
-  if (metadata.session_id) {
-    details.push({ label: 'Session', value: metadata.session_id, monospace: true });
-  }
-
-  if (metadata.turn_id) {
-    details.push({ label: 'Turn', value: metadata.turn_id, monospace: true });
-  }
-
-  if (metadata.tool_use_id) {
-    details.push({ label: 'Tool Use', value: metadata.tool_use_id, monospace: true });
-  }
-
-  if (metadata.transcript_path) {
-    details.push({ label: 'Transcript', value: metadata.transcript_path, monospace: true });
-  }
-
-  if (metadata.cwd) {
-    details.push({ label: 'Working Dir', value: metadata.cwd, monospace: true });
-  }
-
-  if (metadata.model) {
-    details.push({ label: 'Model', value: metadata.model, monospace: true });
-  }
-
   if (toolName === 'Bash' && typeof input.command === 'string' && input.command !== '') {
     details.push({ label: 'Command', value: input.command, monospace: true });
+  }
+
+  for (const descriptor of CONTEXT_DETAIL_FIELDS) {
+    const value = context[descriptor.key];
+    if (typeof value === 'string') {
+      details.push({ label: descriptor.label, value, monospace: descriptor.monospace });
+    }
   }
 
   const targetDescriptors: PermissionDecisionTargetDescriptor[] = [
@@ -298,22 +279,22 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
 
   return {
     trackDecision(
-      metadata: PermissionDecisionRequestMetadata,
+      context: PermissionDecisionContext,
       toolName: string,
       input: PermissionDecisionInput,
       result: Record<string, unknown>,
       platform: string,
     ): void {
-      const detailState = buildDecisionDetails(toolName, input, result, platform, metadata);
+      const detailState = buildDecisionDetails(toolName, input, result, platform, context);
       const entry: PermissionDecision = {
         id: `d-${++decisionCounter}`,
         timestamp: new Date().toISOString(),
-        ...(metadata.session_id ? { session_id: metadata.session_id } : {}),
-        ...(metadata.turn_id ? { turn_id: metadata.turn_id } : {}),
-        ...(metadata.tool_use_id ? { tool_use_id: metadata.tool_use_id } : {}),
-        ...(metadata.transcript_path ? { transcript_path: metadata.transcript_path } : {}),
-        ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
-        ...(metadata.model ? { model: metadata.model } : {}),
+        ...(context.session_id ? { session_id: context.session_id } : {}),
+        ...(context.turn_id ? { turn_id: context.turn_id } : {}),
+        ...(context.tool_use_id ? { tool_use_id: context.tool_use_id } : {}),
+        ...(context.transcript_path ? { transcript_path: context.transcript_path } : {}),
+        ...(context.cwd ? { cwd: context.cwd } : {}),
+        ...(context.model ? { model: context.model } : {}),
         tool_name: toolName,
         command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
         decision: extractDecision(result, platform),
@@ -482,13 +463,13 @@ export function registerPermissionRoutes(
 
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
     const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
-    const requestMetadata: PermissionDecisionRequestMetadata = {
-      session_id: normalizeOptionalString(body.session_id),
-      turn_id: normalizeOptionalString(body.turn_id),
-      tool_use_id: normalizeOptionalString(body.tool_use_id),
-      transcript_path: normalizeOptionalString(body.transcript_path),
-      cwd: normalizeOptionalString(body.cwd),
-      model: normalizeOptionalString(body.model),
+    const context: PermissionDecisionContext = {
+      session_id: normalizeOptionalRequestString(body.session_id),
+      turn_id: normalizeOptionalRequestString(body.turn_id),
+      tool_use_id: normalizeOptionalRequestString(body.tool_use_id),
+      transcript_path: normalizeOptionalRequestString(body.transcript_path),
+      cwd: normalizeOptionalRequestString(body.cwd),
+      model: normalizeOptionalRequestString(body.model),
     };
     const input = body.input;
 
@@ -505,7 +486,7 @@ export function registerPermissionRoutes(
           tool_name,
           input: input || {},
           platform,
-          ...(requestMetadata.session_id ? { session_id: requestMetadata.session_id } : {}),
+          ...(context.session_id ? { session_id: context.session_id } : {}),
         },
       }));
       const elapsedMs = Date.now() - startMs;
@@ -527,7 +508,7 @@ export function registerPermissionRoutes(
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(requestMetadata, tool_name, input || {}, trackedResult, platform);
+      decisionTracker.trackDecision(context, tool_name, input || {}, trackedResult, platform);
 
       res.json(responseData);
     } catch (err) {
@@ -730,12 +711,6 @@ function normalizeAuthorityMode(value: unknown): PermissionAuthorityMode | null 
   return typeof value === 'string' && PERMISSION_AUTHORITY_MODES.includes(value as PermissionAuthorityMode)
     ? value as PermissionAuthorityMode
     : null;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return typeof value === 'string' && value !== ''
-    ? value.normalize('NFC')
-    : undefined;
 }
 
 function asStringArray(value: unknown): string[] {

@@ -27,7 +27,6 @@ import {
   formatUnknownPropertyWarnings,
   formatElementResolutionWarnings,
   collectGatekeeperAuthoringErrors,
-  findOversizedDescriptionFields,
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
@@ -77,7 +76,7 @@ function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
     case 'name':
       return SECURITY_LIMITS.MAX_NAME_LENGTH;
     case 'description':
-      return SECURITY_LIMITS.MAX_YAML_LENGTH;
+      return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
     case 'content':
       return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
     case 'filename':
@@ -228,7 +227,6 @@ function validateFieldValue(
     return null; // No validation rules for this field
   }
 
-  // Determine max length based on field type, using system constants
   const maxLength = getMaxLengthForFieldType(fieldType);
 
   const result = validationService.validateAndSanitizeInput(value, {
@@ -242,6 +240,75 @@ function validateFieldValue(
   }
 
   return null; // Valid
+}
+
+interface OversizedDescriptionField {
+  path: string;
+  length: number;
+  maxLength: number;
+}
+
+type TraversalEntry = readonly [string, unknown];
+
+function getTraversalEntries(value: object, path: string): TraversalEntry[] {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => [`${path}[${index}]`, item] as const);
+  }
+
+  return Object.entries(value as Record<string, unknown>).map(([key, item]) => [`${path}.${key}`, item] as const);
+}
+
+function getDescriptionMaxLengthForPath(fieldPath: string): number {
+  if (fieldPath === 'input.description' || fieldPath === 'input.metadata.description') {
+    return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
+  }
+
+  return SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH;
+}
+
+function isOversizedDescriptionField(fieldPath: string, value: unknown): value is string {
+  const maxLength = getDescriptionMaxLengthForPath(fieldPath);
+  return (
+    fieldPath.endsWith('.description') &&
+    typeof value === 'string' &&
+    value.length > maxLength
+  );
+}
+
+function formatOversizedDescriptionField(field: OversizedDescriptionField): string {
+  return (
+    `  • ${field.path} exceeds maximum length of ` +
+    `${field.maxLength} characters (${field.length})`
+  );
+}
+
+function findOversizedDescriptionFields(
+  value: unknown,
+  path = 'input',
+  seen = new WeakSet<object>(),
+): OversizedDescriptionField[] {
+  if (value === null || typeof value !== 'object') {
+    return [];
+  }
+
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+
+  const oversized: OversizedDescriptionField[] = [];
+  for (const [fieldPath, item] of getTraversalEntries(value, path)) {
+    if (isOversizedDescriptionField(fieldPath, item)) {
+      oversized.push({
+        path: fieldPath,
+        length: item.length,
+        maxLength: getDescriptionMaxLengthForPath(fieldPath),
+      });
+    }
+    oversized.push(...findOversizedDescriptionFields(item, fieldPath, seen));
+  }
+
+  return oversized;
 }
 
 /**
@@ -623,10 +690,13 @@ export async function editElement(
     return error(formatGatekeeperValidationMessage(gatekeeperErrors));
   }
 
-  const descriptionLengthErrors = findOversizedDescriptionFields(input);
-  if (descriptionLengthErrors.length > 0) {
-    const formattedErrors = descriptionLengthErrors.map(descriptionError => `  • ${descriptionError}`).join('\n');
-    return error(`Description length validation failed:\n${formattedErrors}`);
+  const oversizedDescriptionFields = findOversizedDescriptionFields(input);
+  if (oversizedDescriptionFields.length > 0) {
+    return error(
+      `Description length validation failed:\n${oversizedDescriptionFields.map(field =>
+        formatOversizedDescriptionField(field)
+      ).join('\n')}`
+    );
   }
 
   // Validate string field values using injected validator

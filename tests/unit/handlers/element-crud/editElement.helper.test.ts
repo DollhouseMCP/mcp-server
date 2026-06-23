@@ -339,66 +339,6 @@ describe('editElement helper', () => {
       expect(saved.metadata.author).toBe('New Author');
       expect(saved.metadata.tags).toEqual(['tag1', 'tag2']);
     });
-
-    it('should preserve long top-level descriptions instead of rejecting or truncating them', async () => {
-      const element = createMockElement('test-skill');
-      const longDescription = 'Long-form skill description. '.repeat(80);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
-
-      const result = await editElement(mockContext, {
-        name: 'test-skill',
-        type: ElementType.SKILL,
-        input: {
-          description: longDescription
-        },
-      });
-
-      expect(result.content[0].text).toContain('✅');
-      const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.description).toBe(longDescription);
-      expect(saved.metadata.description.length).toBeGreaterThan(500);
-    });
-
-    it('should preserve long nested metadata descriptions instead of rejecting or truncating them', async () => {
-      const element = createMockElement('test-skill');
-      const longDescription = 'Nested long-form skill description. '.repeat(80);
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
-
-      const result = await editElement(mockContext, {
-        name: 'test-skill',
-        type: ElementType.SKILL,
-        input: {
-          metadata: {
-            description: longDescription
-          }
-        },
-      });
-
-      expect(result.content[0].text).toContain('✅');
-      const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
-      expect(saved.metadata.description).toBe(longDescription);
-      expect(saved.metadata.description.length).toBeGreaterThan(500);
-    });
-
-    it('should reject description edits that exceed the YAML frontmatter safety limit', async () => {
-      const element = createMockElement('test-skill');
-      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
-
-      const result = await editElement(mockContext, {
-        name: 'test-skill',
-        type: ElementType.SKILL,
-        input: {
-          metadata: {
-            description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1)
-          }
-        },
-      });
-
-      expect(result.content[0].text).toContain('❌');
-      expect(result.content[0].text).toContain('Description length validation failed');
-      expect(result.content[0].text).toContain('input.metadata.description');
-      expect(mockContext.skillManager.save).not.toHaveBeenCalled();
-    });
   });
 
   describe('persona editing', () => {
@@ -1148,6 +1088,62 @@ describe('editElement helper', () => {
       expect(result.content[0].text).toContain('❌');
       expect(result.content[0].text).toContain('externalRestrictions.description is required');
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should reject oversized top-level metadata descriptions before merging', async () => {
+      const element = createMockElement('test-skill');
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            description: oversizedDescription,
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('Description length validation failed');
+      expect(result.content[0].text).toContain('input.metadata.description');
+      expect(mockContext.skillManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should allow nested documentation descriptions longer than 500 characters during edit', async () => {
+      const element = createMockElement('test-template', {
+        variables: [
+          {
+            name: 'topic',
+            type: 'string',
+            description: 'Short description',
+          },
+        ],
+      });
+      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      const longDescription = 'Detailed variable documentation '.repeat(25).trim();
+
+      const result = await editElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        input: {
+          metadata: {
+            variables: [
+              {
+                name: 'topic',
+                type: 'string',
+                description: longDescription,
+              },
+            ],
+          },
+        },
+      });
+
+      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(result.content[0].text).toContain('✅');
+      const saved = (mockContext.templateManager.save as jest.Mock).mock.calls[0][0];
+      expect(saved.metadata.variables[0].description).toBe(longDescription);
     });
 
     it('should reject number where string is expected (description)', async () => {

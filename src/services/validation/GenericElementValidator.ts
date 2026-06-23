@@ -10,7 +10,7 @@
  */
 
 import { ElementType } from '../../portfolio/types.js';
-import { ValidationService } from './ValidationService.js';
+import { ValidationService, type ValidationResult as InputValidationResult } from './ValidationService.js';
 import { TriggerValidationService } from './TriggerValidationService.js';
 import { MetadataService } from '../MetadataService.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
@@ -427,17 +427,13 @@ export class GenericElementValidator implements ElementValidator {
       return ValidatorHelpers.fail(["Description must be a string"]);
     }
 
-    if (description.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+    if (description.length > SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH) {
       return ValidatorHelpers.fail([
-        `Description exceeds maximum YAML/frontmatter length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
+        `Description exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters`
       ]);
     }
 
-    const result = this.validationService.validateAndSanitizeInput(description, {
-      maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
-      allowSpaces: true,
-      fieldType: 'description'
-    });
+    const result = this.sanitizeDescriptionInput(description);
 
     if (!result.isValid) {
       return ValidatorHelpers.fail(result.errors || ['Invalid description']);
@@ -452,6 +448,14 @@ export class GenericElementValidator implements ElementValidator {
       errors: [],
       warnings
     };
+  }
+
+  private sanitizeDescriptionInput(description: string): InputValidationResult {
+    return this.validationService.validateAndSanitizeInput(description, {
+      maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+      allowSpaces: true,
+      fieldType: 'description'
+    });
   }
 
   /**
