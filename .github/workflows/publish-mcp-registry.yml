@@ -74,7 +74,10 @@ jobs:
       - name: Install cosign
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac
         with:
-          cosign-release: 'v3.0.6'
+          # The pinned installer verifies cosign with detached .sig assets.
+          # Cosign v3 releases publish sigstore bundles instead, so keep the
+          # installer on the latest detached-signature release it supports.
+          cosign-release: 'v2.5.2'
 
       - name: Download mcp-publisher CLI
         shell: bash
