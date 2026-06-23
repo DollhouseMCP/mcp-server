@@ -149,6 +149,19 @@ describe('createElement helper', () => {
       expect(call.description).not.toContain('<script>');
     });
 
+    it('should reject persona descriptions above the description length limit', async () => {
+      const oversizedDescription = 'a'.repeat(501);
+
+      const result = await createElement(mockContext, {
+        name: 'test-persona',
+        type: ElementType.PERSONA,
+        description: oversizedDescription,
+      });
+
+      expect(result.content[0].text).toContain('❌ Description too large');
+      expect(mockContext.personaManager.create).not.toHaveBeenCalled();
+    });
+
     it('should sanitize metadata to remove dangerous properties', async () => {
       const metadata = {
         description: 'safe',
