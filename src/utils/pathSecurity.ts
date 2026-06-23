@@ -22,8 +22,11 @@ export function resolvePathWithinBase(baseDir: string, ...segments: string[]): s
   const resolvedBase = path.resolve(baseDir);
   const resolvedTarget = path.resolve(resolvedBase, ...segments);
   const relativePath = path.relative(resolvedBase, resolvedTarget);
+  const isTraversal = relativePath === '..'
+    || relativePath.startsWith('..' + path.sep)
+    || path.isAbsolute(relativePath);
 
-  if (relativePath === '' || (!relativePath.startsWith('..') && !path.isAbsolute(relativePath))) {
+  if (!isTraversal) {
     return resolvedTarget;
   }
 

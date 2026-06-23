@@ -16,6 +16,12 @@ describe('resolvePathWithinBase', () => {
     expect(resolvePathWithinBase(baseDir)).toBe(path.resolve(baseDir));
   });
 
+  it('allows in-base filenames that start with two dots', () => {
+    expect(resolvePathWithinBase(baseDir, '..backup.md')).toBe(
+      path.resolve(baseDir, '..backup.md')
+    );
+  });
+
   it('rejects traversal outside the base directory', () => {
     expect(() => resolvePathWithinBase(baseDir, '..', 'outside.md')).toThrow(
       'Resolved path escapes the base directory'
