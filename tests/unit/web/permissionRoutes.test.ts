@@ -731,6 +731,47 @@ describe('permissionRoutes', () => {
       ]);
     });
 
+    it('should track empty Codex allow responses as allow', async () => {
+      const handler = {
+        handleRead: jest
+          .fn()
+          .mockResolvedValueOnce([{ success: true, data: {} }])
+          .mockResolvedValueOnce([{
+            success: true,
+            data: {
+              activeElementCount: 0,
+              hasAllowlist: false,
+              combinedDenyPatterns: [],
+              combinedAllowPatterns: [],
+              combinedConfirmPatterns: [],
+              elements: [],
+              permissionPromptActive: false,
+            },
+          }]),
+      } as any;
+      const app = createApp(handler);
+
+      const response = await request(app)
+        .post('/api/evaluate_permission')
+        .send({
+          tool_name: 'Bash',
+          input: { command: 'pwd' },
+          platform: 'codex',
+          session_id: 'session-codex',
+        });
+
+      expect(response.body).toEqual({});
+
+      const status = await request(app).get('/api/permissions/status');
+      expect(status.body.recentDecisions[0]).toEqual(expect.objectContaining({
+        session_id: 'session-codex',
+        tool_name: 'Bash',
+        command: 'pwd',
+        decision: 'allow',
+        platform: 'codex',
+      }));
+    });
+
     it('should include useful audit detail fields for tracked decisions', async () => {
       const handler = {
         handleRead: jest

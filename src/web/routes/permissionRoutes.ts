@@ -115,7 +115,11 @@ function extractString(obj: Record<string, unknown>, keys: string[], fallback: s
   return fallback;
 }
 
-function extractDecision(result: Record<string, unknown>): string {
+function isEmptyObject(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length === 0;
+}
+
+function extractDecision(result: Record<string, unknown>, platform?: string): string {
   const nested = result.hookSpecificOutput;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
@@ -126,6 +130,7 @@ function extractDecision(result: Record<string, unknown>): string {
   if (typeof result.decision === 'string') return result.decision;
   if (typeof result.behavior === 'string') return result.behavior;
   if (typeof result.allowed === 'boolean') return result.allowed ? 'allow' : 'deny';
+  if (platform === 'codex' && isEmptyObject(result)) return 'allow';
   return 'unknown';
 }
 
@@ -246,7 +251,7 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
         ...(sessionId ? { session_id: sessionId } : {}),
         tool_name: toolName,
         command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
-        decision: extractDecision(result),
+        decision: extractDecision(result, platform),
         reason: extractReason(result),
         platform,
         target: detailState.target,
@@ -441,7 +446,7 @@ export function registerPermissionRoutes(
         rawResult,
       );
       const trackedResult = { ...rawResult, ...responseData };
-      const decision = extractDecision(responseData);
+      const decision = extractDecision(trackedResult, platform);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
