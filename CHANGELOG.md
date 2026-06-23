@@ -2,7 +2,7 @@
 
 ## [2.0.33] - 2026-06-23
 
-Patch release with dependency security hardening, permission audit visibility improvements, description validation fixes, and UUID dependency removal.
+Patch release with runtime dependency security hardening, permission audit visibility improvements, description validation fixes, and UUID dependency removal.
 
 ## [2.0.32] - 2026-04-23
 
