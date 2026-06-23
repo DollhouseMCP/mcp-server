@@ -242,6 +242,61 @@ function validateFieldValue(
   return null; // Valid
 }
 
+interface OversizedDescriptionField {
+  path: string;
+  length: number;
+}
+
+type TraversalEntry = readonly [string, unknown];
+
+function getTraversalEntries(value: object, path: string): TraversalEntry[] {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => [`${path}[${index}]`, item] as const);
+  }
+
+  return Object.entries(value as Record<string, unknown>).map(([key, item]) => [`${path}.${key}`, item] as const);
+}
+
+function isOversizedDescriptionField(fieldPath: string, value: unknown): value is string {
+  return (
+    fieldPath.endsWith('.description') &&
+    typeof value === 'string' &&
+    value.length > SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
+  );
+}
+
+function formatOversizedDescriptionField(field: OversizedDescriptionField): string {
+  return (
+    `  • ${field.path} exceeds maximum length of ` +
+    `${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters (${field.length})`
+  );
+}
+
+function findOversizedDescriptionFields(
+  value: unknown,
+  path = 'input',
+  seen = new WeakSet<object>(),
+): OversizedDescriptionField[] {
+  if (value === null || typeof value !== 'object') {
+    return [];
+  }
+
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+
+  const oversized: OversizedDescriptionField[] = [];
+  for (const [fieldPath, item] of getTraversalEntries(value, path)) {
+    if (isOversizedDescriptionField(fieldPath, item)) {
+      oversized.push({ path: fieldPath, length: item.length });
+    }
+    oversized.push(...findOversizedDescriptionFields(item, fieldPath, seen));
+  }
+
+  return oversized;
+}
+
 /**
  * Validate and normalize ensemble elements input.
  *
@@ -619,6 +674,15 @@ export async function editElement(
   const gatekeeperErrors = collectGatekeeperAuthoringErrors(input, input.metadata);
   if (gatekeeperErrors.length > 0) {
     return error(formatGatekeeperValidationMessage(gatekeeperErrors));
+  }
+
+  const oversizedDescriptionFields = findOversizedDescriptionFields(input);
+  if (oversizedDescriptionFields.length > 0) {
+    return error(
+      `Description length validation failed:\n${oversizedDescriptionFields.map(field =>
+        formatOversizedDescriptionField(field)
+      ).join('\n')}`
+    );
   }
 
   // Validate string field values using injected validator
