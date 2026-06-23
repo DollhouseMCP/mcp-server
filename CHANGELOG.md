@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.35] - 2026-06-23
+
+- Harden converter and CLI output path handling to keep generated files inside their intended output directories.
+- Restore SonarCloud main quality gate health with path traversal coverage, accessibility, and reliability fixes.
+- Update MCP registry publisher workflow verification for the current publisher release and OIDC audience.
+
 ## [2.0.32] - 2026-04-23
 
 - Restore the management console's stronger responsive header behavior, including cleaner tab overflow handling and keyboard-accessible menu navigation.
