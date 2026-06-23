@@ -322,6 +322,29 @@ describe('SecurityAuditor', () => {
 
       expect(result.findings.some(f => f.ruleId === 'OWASP-A01-001')).toBe(false);
     });
+
+    test('should suppress findings with config glob patterns against absolute scanner paths', async () => {
+      const configWithSuppression: SecurityAuditConfig = {
+        ...await SecurityAuditor.getDefaultConfig(mockFileOperations),
+        suppressions: [{
+          rule: 'DMCP-SEC-004',
+          file: '**/src/feature/suppressed.ts',
+          reason: 'Test glob suppression for scanner absolute paths'
+        }]
+      };
+
+      const auditorWithSuppression = new SecurityAuditor(configWithSuppression, mockFileOperations);
+      const sourceDir = path.join(tempDir, 'src', 'feature');
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, 'suppressed.ts'),
+        'export function handler(req: { body: string }) { return req.body; }',
+      );
+
+      const result = await auditorWithSuppression.audit(tempDir);
+
+      expect(result.findings.some(f => f.ruleId === 'DMCP-SEC-004')).toBe(false);
+    });
   });
 
   describe('Build Failure Logic', () => {

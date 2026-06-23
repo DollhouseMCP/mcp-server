@@ -3,7 +3,6 @@
  * Implements automated security auditing for DollhouseMCP (Issue #53)
  */
 
-// import { SecurityMonitor } from '../securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { 
   SecurityAuditConfig, 
@@ -180,7 +179,7 @@ export class SecurityAuditor {
 
           if (finding.file) {
             const fileSuppressions = this.suppressions.get(finding.file);
-            if (fileSuppressions?.has(finding.ruleId)) {
+            if (fileSuppressions?.has(finding.ruleId) || this.matchesConfiguredSuppression(finding)) {
               if (this.config.reporting?.verbose) {
                 suppressedFindings.push({
                   rule: finding.ruleId,
@@ -213,6 +212,23 @@ export class SecurityAuditor {
     }
     
     return filtered;
+  }
+
+  private matchesConfiguredSuppression(finding: SecurityFinding): boolean {
+    if (!finding.file || !this.config.suppressions?.length) return false;
+
+    for (const suppression of this.config.suppressions) {
+      if (suppression.rule !== '*' && suppression.rule !== finding.ruleId) {
+        continue;
+      }
+      if (!suppression.file) {
+        return true;
+      }
+      if (configuredSuppressionFileMatches(suppression.file, finding.file)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -383,4 +399,39 @@ export class SecurityAuditor {
       ]
     };
   }
+}
+
+function configuredSuppressionFileMatches(pattern: string, filePath: string): boolean {
+  const normalizedPattern = normalizeAuditPath(pattern);
+  const normalizedFile = normalizeAuditPath(filePath);
+  const relativeFile = toProjectRelativeAuditPath(normalizedFile);
+  const candidates = new Set([normalizedFile, relativeFile]);
+
+  for (const candidate of candidates) {
+    if (candidate === normalizedPattern) return true;
+    if (normalizedPattern.includes('*') && globPatternToRegex(normalizedPattern).test(candidate)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function normalizeAuditPath(value: string): string {
+  return value.replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/\/$/, '');
+}
+
+function toProjectRelativeAuditPath(filePath: string): string {
+  if (!path.isAbsolute(filePath)) return filePath;
+  const relative = normalizeAuditPath(path.relative(process.cwd(), filePath));
+  return relative.startsWith('..') ? filePath : relative;
+}
+
+function globPatternToRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .replaceAll(/[\\^$.()+?{}[\]|]/g, String.raw`\$&`)
+    .replaceAll('**', '\0')
+    .replaceAll('*', '[^/]*')
+    .replaceAll('\0/', '(?:.*/)?')
+    .replaceAll('\0', '.*');
+  return new RegExp(`^${escaped}$`);
 }

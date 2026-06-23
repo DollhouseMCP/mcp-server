@@ -16,6 +16,73 @@
 
 const API_PREFIX = '/api/v1';
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
+const RESERVED_NORMALIZED_KEYS = new Set([
+  '__proto__',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+]);
+
+function assertCanWriteNormalizedKey(seen, key) {
+  if (RESERVED_NORMALIZED_KEYS.has(key)) {
+    throw new Error('Request contains a reserved Unicode-normalized field');
+  }
+  if (seen.has(key)) {
+    throw new Error('Request contains duplicate Unicode-equivalent fields');
+  }
+  seen.add(key);
+}
+
+/**
+ * Normalize API request targets. Paths and query fragments are identifiers, so
+ * string values are NFC-normalized along with object keys before fetch.
+ */
+function normalizeUnicode(value) {
+  if (typeof value === 'string') return value.normalize('NFC');
+  if (Array.isArray(value)) return value.map(item => normalizeUnicode(item));
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const normalized = Object.create(null);
+    const seen = new Set();
+    for (const [key, item] of Object.entries(value)) {
+      const normalizedKey = key.normalize('NFC');
+      assertCanWriteNormalizedKey(seen, normalizedKey);
+      Object.defineProperty(normalized, normalizedKey, {
+        value: normalizeUnicode(item),
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
+    }
+    return normalized;
+  }
+  return value;
+}
+
+/**
+ * Normalize JSON body keys without rewriting string values. Element content and
+ * metadata can contain free-form user text that must round-trip exactly.
+ */
+function normalizeBodyKeys(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(item => normalizeBodyKeys(item));
+  if (value && typeof value === 'object' && Object.getPrototypeOf(value) === Object.prototype) {
+    const normalized = Object.create(null);
+    const seen = new Set();
+    for (const [key, item] of Object.entries(value)) {
+      const normalizedKey = key.normalize('NFC');
+      assertCanWriteNormalizedKey(seen, normalizedKey);
+      Object.defineProperty(normalized, normalizedKey, {
+        value: normalizeBodyKeys(item),
+        configurable: true,
+        enumerable: true,
+        writable: true,
+      });
+    }
+    return normalized;
+  }
+  return value;
+}
 
 /** Read a non-HttpOnly cookie (used for the dh_csrf double-submit token). */
 function readCookie(name) {
@@ -52,12 +119,13 @@ function parseProblemCode(body) {
  * required capability + step_up_url) before returning so the shell can react.
  */
 export async function request(method, path, options = {}) {
-  const res = await fetch(API_PREFIX + path, {
+  const normalizedBody = options.body === undefined ? undefined : normalizeBodyKeys(options.body);
+  const res = await fetch(API_PREFIX + normalizeUnicode(path), {
     method,
     credentials: 'same-origin',
     redirect: 'manual',
     headers: buildHeaders(method, options),
-    body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    body: normalizedBody === undefined ? undefined : JSON.stringify(normalizedBody),
     signal: options.signal,
   });
 

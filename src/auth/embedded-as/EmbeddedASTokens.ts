@@ -20,6 +20,7 @@ import type {
   ISigningKeyStore,
   SigningKey,
 } from '../../storage/signingKeys/ISigningKeyStore.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 export const ALGORITHM = 'ES256';
 export const DEFAULT_ACCESS_TOKEN_TTL_SECONDS = 3600;
@@ -56,9 +57,15 @@ export class EmbeddedASTokens {
         typ: 'at+jwt',
         crit: {},
       });
-      return buildEmbeddedAsAuthResult(payload, protectedHeader, keyset.kid);
+      return logEmbeddedTokenValidationResult(
+        buildEmbeddedAsAuthResult(payload, protectedHeader, keyset.kid),
+        'EmbeddedASTokens.validate',
+      );
     } catch (error) {
-      return { ok: false, reason: mapEmbeddedAsVerifyError(error) };
+      return logEmbeddedTokenValidationResult(
+        { ok: false, reason: mapEmbeddedAsVerifyError(error) },
+        'EmbeddedASTokens.validate',
+      );
     }
   }
 
@@ -87,10 +94,18 @@ export class EmbeddedASTokens {
     await this.ensureInitialized();
     try {
       const protectedHeader = decodeProtectedHeader(token);
-      if (!protectedHeader.kid) return { ok: false, reason: 'token missing kid header' };
+      if (!protectedHeader.kid) {
+        return logEmbeddedTokenValidationResult(
+          { ok: false, reason: 'token missing kid header' },
+          'EmbeddedASTokens.validateWithStore',
+        );
+      }
       const key = await requiredSigningKeyStore(this.signingKeyStore).getByKid(protectedHeader.kid);
       if (!(key?.kind === 'jwks' && key.retiredAt === undefined)) {
-        return { ok: false, reason: 'unknown key id' };
+        return logEmbeddedTokenValidationResult(
+          { ok: false, reason: 'unknown key id' },
+          'EmbeddedASTokens.validateWithStore',
+        );
       }
       const keyset = signingKeyToKeyset(key);
       const { publicSigningKey } = await importSigningKeys(keyset);
@@ -101,9 +116,15 @@ export class EmbeddedASTokens {
         typ: 'at+jwt',
         crit: {},
       });
-      return buildEmbeddedAsAuthResult(payload, protectedHeader, keyset.kid);
+      return logEmbeddedTokenValidationResult(
+        buildEmbeddedAsAuthResult(payload, protectedHeader, keyset.kid),
+        'EmbeddedASTokens.validateWithStore',
+      );
     } catch (error) {
-      return { ok: false, reason: mapEmbeddedAsVerifyError(error) };
+      return logEmbeddedTokenValidationResult(
+        { ok: false, reason: mapEmbeddedAsVerifyError(error) },
+        'EmbeddedASTokens.validateWithStore',
+      );
     }
   }
 
@@ -239,4 +260,17 @@ function signingKeyToKeyset(key: SigningKey): SigningKeyset {
 function requiredSigningKeyStore(store: ISigningKeyStore | undefined): ISigningKeyStore {
   if (!store) throw new Error('Signing key store is required');
   return store;
+}
+
+function logEmbeddedTokenValidationResult(result: AuthResult, source: string): AuthResult {
+  if (!result.ok) {
+    SecurityMonitor.logSecurityEvent({
+      type: 'TOKEN_VALIDATION_FAILURE',
+      severity: 'MEDIUM',
+      source,
+      details: 'Embedded authorization server token validation failed',
+      additionalData: { reason: result.reason },
+    });
+  }
+  return result;
 }
