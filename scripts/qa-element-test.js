@@ -262,6 +262,8 @@ class ElementTestRunner {
     const maxDuration = total > 0 ? 
       Math.max(...this.results.map(r => r.duration)) : 0;
     
+    const firstResult = this.results[0];
+
     const report = {
       timestamp: endTime.toISOString(),
       agent: 'SONNET-1',
@@ -283,10 +285,10 @@ class ElementTestRunner {
           (r.params.type === 'invalid_type' || r.params.name === 'NonExistentElement')).length
       },
       performance_analysis: {
-        fastest_operation: this.results.length > 0 ? 
-          this.results.reduce((min, r) => r.duration < min.duration ? r : min).tool : null,
-        slowest_operation: this.results.length > 0 ? 
-          this.results.reduce((max, r) => r.duration > max.duration ? r : max).tool : null,
+        fastest_operation: firstResult ?
+          this.results.reduce((min, r) => r.duration < min.duration ? r : min, firstResult).tool : null,
+        slowest_operation: firstResult ?
+          this.results.reduce((max, r) => r.duration > max.duration ? r : max, firstResult).tool : null,
         timeout_rate: `${((this.results.filter(r => r.error && r.error.includes('Timeout')).length / total) * 100).toFixed(1)}%`
       },
       detailed_results: this.results.map(r => ({
