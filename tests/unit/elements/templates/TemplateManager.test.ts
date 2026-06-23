@@ -305,17 +305,19 @@ Hello {{name}}!`;
     });
 
     it('preserves explicitly provided variable metadata', async () => {
+      const variableDescription = 'Detailed variable documentation '.repeat(10).trim();
       const template = await manager.create({
         name: 'auto-derive-preserve',
         description: 'Test preservation',
         content: 'Hello {{name}}!',
         metadata: {
-          variables: [{ name: 'name', type: 'string', required: true, description: 'Full name' }]
+          variables: [{ name: 'name', type: 'string', required: true, description: variableDescription }]
         },
       });
       const nameVar = template.metadata.variables?.find(v => v.name === 'name');
       expect(nameVar!.required).toBe(true);
-      expect(nameVar!.description).toBe('Full name');
+      expect(variableDescription.length).toBeGreaterThan(200);
+      expect(nameVar!.description).toBe(variableDescription);
     });
 
     it('adds missing placeholders without removing declared ones', async () => {

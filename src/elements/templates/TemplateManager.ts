@@ -428,7 +428,7 @@ export class TemplateManager extends BaseElementManager<Template> {
       metadata.variables = data.variables.map((v: any) => ({
         name: sanitizeInput(v.name || '', 50),
         type: sanitizeInput(v.type || 'string', 20),
-        description: v.description ? sanitizeInput(v.description, 200) : undefined,
+        description: v.description ? sanitizeInput(v.description, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
         required: Boolean(v.required),
         default: v.default,
         validation: v.validation ? sanitizeInput(v.validation, 200) : undefined,
