@@ -16,6 +16,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { MetadataService } from '../../../../src/services/MetadataService.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Mock the services
 jest.mock('../../../../src/services/validation/ValidationService.js');
@@ -211,6 +212,21 @@ describe('GenericElementValidator', () => {
 
         expect(result.isValid).toBe(false);
         expect(result.errors).toContain('Description is required');
+      });
+
+      it('should reject oversized descriptions before sanitizer truncation', async () => {
+        const data = {
+          name: 'Test Skill',
+          description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1),
+          content: 'Test content'
+        };
+
+        const result = await validator.validateCreate(data);
+
+        expect(result.isValid).toBe(false);
+        expect(result.errors).toContain(
+          `Description exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters`
+        );
       });
 
       it('should reject invalid content - too short', async () => {
