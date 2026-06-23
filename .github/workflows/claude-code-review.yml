@@ -39,8 +39,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
-          # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
-          # model: "claude-opus-4-20250514"
+          # Pin to a current Claude API alias instead of relying on the action default.
+          model: "claude-sonnet-4-6"
           
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
@@ -79,4 +79,3 @@ jobs:
           # if: |
           #   !contains(github.event.pull_request.title, '[skip-review]') &&
           #   !contains(github.event.pull_request.title, '[WIP]')
-

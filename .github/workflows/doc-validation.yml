@@ -39,6 +39,7 @@ jobs:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}  # Use workflow token directly, skip OIDC (no id-token:write needed)
           use_sticky_comment: true
+          model: "claude-sonnet-4-6"
 
           direct_prompt: |
             You are a documentation validation agent. Your job is to check whether code changes in this PR would invalidate any claims made in the user-facing documentation.
