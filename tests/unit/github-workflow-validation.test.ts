@@ -190,7 +190,8 @@ describe('GitHub Workflow Validation', () => {
       const downloadStep = publishJob.steps.find(step => step.name === 'Download mcp-publisher CLI');
 
       expect(cosignStep?.uses).toMatch(/^sigstore\/cosign-installer@[a-f0-9]{40}$/);
-      expect(cosignStep?.with?.['cosign-release']).toBe('v3.0.6');
+      expect(cosignStep?.with?.['cosign-release']).toBe('v2.5.2');
+      expect(workflowContent).toContain('Cosign v3 releases publish sigstore bundles instead');
       expect(downloadStep?.run).toContain('set -euo pipefail');
       expect(downloadStep?.run).toContain('VERSION="v1.7.9"');
       expect(downloadStep?.run).toContain('EXPECTED_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"');
