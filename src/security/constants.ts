@@ -20,7 +20,6 @@ export const SECURITY_LIMITS = {
   // Field-level validation limits — used across element managers and validators.
   // Centralized here so a single change applies everywhere and grep finds all usages.
   MAX_NAME_LENGTH: 100,                     // Element name field
-  MAX_DESCRIPTION_LENGTH: 500,              // Element description field
   MAX_ENUM_FIELD_LENGTH: 20,                // Short enum-like fields (strategy, role, activation)
   MAX_TAG_LENGTH: 50,                       // Individual tag / category values
   MAX_COMMAND_ARG_LENGTH: 1000,             // CLI command argument validation

@@ -384,7 +384,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     }
 
     if (data.description) {
-      metadata.description = sanitizeInput(UnicodeValidator.normalize(data.description).normalizedContent, 500);
+      metadata.description = sanitizeInput(UnicodeValidator.normalize(data.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH);
     }
 
     if (data.category) {
@@ -428,7 +428,7 @@ export class TemplateManager extends BaseElementManager<Template> {
       metadata.variables = data.variables.map((v: any) => ({
         name: sanitizeInput(v.name || '', 50),
         type: sanitizeInput(v.type || 'string', 20),
-        description: v.description ? sanitizeInput(v.description, 200) : undefined,
+        description: v.description ? sanitizeInput(v.description, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
         required: Boolean(v.required),
         default: v.default,
         validation: v.validation ? sanitizeInput(v.validation, 200) : undefined,
@@ -440,7 +440,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     if (Array.isArray(data.examples)) {
       metadata.examples = data.examples.map((ex: any) => ({
         title: sanitizeInput(ex.title || '', 100),
-        description: ex.description ? sanitizeInput(ex.description, 500) : undefined,
+        description: ex.description ? sanitizeInput(ex.description, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
         variables: ex.variables || {},
         output: ex.output ? sanitizeInput(ex.output, 5000) : undefined
       }));

@@ -81,13 +81,40 @@ describe('Input Length Validation', () => {
     test('rejects metadata fields exceeding limit', () => {
       const metadata = {
         name: 'Test',
-        description: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1)
+        customField: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1)
       };
       
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
       expect(result.detectedPatterns).toEqual(
-        expect.arrayContaining(['description: Field exceeds maximum length of 1024 characters'])
+        expect.arrayContaining(['customField: Field exceeds maximum length of 1024 characters'])
+      );
+    });
+
+    test('allows descriptions beyond short metadata field limit', () => {
+      const metadata = {
+        name: 'Test',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1)
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+
+      expect(result.isValid).toBe(true);
+    });
+
+    test('rejects descriptions exceeding YAML frontmatter limit', () => {
+      const metadata = {
+        name: 'Test',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1)
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+
+      expect(result.isValid).toBe(false);
+      expect(result.detectedPatterns).toEqual(
+        expect.arrayContaining([
+          `description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
+        ])
       );
     });
   });
@@ -156,11 +183,12 @@ This is the content of the persona.`;
       expect(contentResult.isValid).toBe(true);
     });
 
-    test('large persona file is rejected early', () => {
-      // Should fail on metadata field length
+    test('large non-description metadata field is rejected early', () => {
+      // Description is allowed to be substantive; other metadata fields still use
+      // the short field-size guard.
       const result = ContentValidator.validateMetadata({
         name: 'Test',
-        description: 'a'.repeat(2000)
+        customField: 'a'.repeat(2000)
       });
       expect(result.isValid).toBe(false);
     });

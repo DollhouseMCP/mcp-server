@@ -177,6 +177,8 @@ Hello {{name}}!`;
 
   describe('validation methods', () => {
     it('should handle complex metadata during import', async () => {
+      const longVariableDescription = 'Template variable description: '.padEnd(1024, 'v');
+      const longExampleDescription = 'Template example description: '.padEnd(1024, 'e');
       const complexData = JSON.stringify({
         metadata: {
           name: 'Complex Template',
@@ -188,7 +190,7 @@ Hello {{name}}!`;
             {
               name: 'username',
               type: 'string',
-              description: 'User name',
+              description: longVariableDescription,
               required: true,
               validation: '^[a-zA-Z0-9_]+$'
             },
@@ -204,7 +206,7 @@ Hello {{name}}!`;
           examples: [
             {
               title: 'Basic Example',
-              description: 'Shows basic usage',
+              description: longExampleDescription,
               variables: { username: 'john_doe', count: 5 },
               output: 'Hello john_doe, you have 5 items!'
             }
@@ -217,10 +219,14 @@ Hello {{name}}!`;
       
       expect(template.metadata.variables).toHaveLength(2);
       expect(template.metadata.variables![0].name).toBe('username');
+      expect(template.metadata.variables![0].description).toBe(longVariableDescription);
+      expect(template.metadata.variables![0].description!.length).toBeGreaterThan(500);
       // The sanitization removes backslashes, so they won't be in the validation pattern
       expect(template.metadata.variables![0].validation).toBe('^[a-zA-Z0-9_]+');
       expect(template.metadata.variables![1].default).toBe(10);
       expect(template.metadata.examples).toHaveLength(1);
+      expect(template.metadata.examples![0].description).toBe(longExampleDescription);
+      expect(template.metadata.examples![0].description!.length).toBeGreaterThan(500);
       expect(template.metadata.tags).toEqual(['complex', 'advanced', 'features']);
     });
 

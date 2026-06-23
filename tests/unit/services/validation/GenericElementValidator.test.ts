@@ -16,6 +16,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { MetadataService } from '../../../../src/services/MetadataService.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Mock the services
 jest.mock('../../../../src/services/validation/ValidationService.js');
@@ -299,6 +300,28 @@ describe('GenericElementValidator', () => {
         const result = await validator.validateCreate(data);
 
         expect(result.warnings.some(w => w.includes('Description is very long'))).toBe(true);
+      });
+
+      it('should reject descriptions beyond the YAML frontmatter safety limit', async () => {
+        const description = 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
+        const data = {
+          name: 'Test',
+          description,
+          content: 'Content'
+        };
+
+        const result = await validator.validateCreate(data);
+
+        expect(result.isValid).toBe(false);
+        expect(result.errors).toEqual(
+          expect.arrayContaining([
+            `Description exceeds maximum YAML/frontmatter length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
+          ])
+        );
+        expect(mockValidationService.validateAndSanitizeInput).not.toHaveBeenCalledWith(
+          description,
+          expect.objectContaining({ fieldType: 'description' })
+        );
       });
 
       it('should warn about very long content', async () => {

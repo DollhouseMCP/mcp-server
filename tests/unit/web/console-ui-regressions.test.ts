@@ -1132,11 +1132,15 @@ describe('Web console cleanup regressions', () => {
                 tool_name: 'Edit',
                 decision: 'ask',
                 reason: 'Needs confirmation before editing a protected file.',
-                platform: 'cursor',
+                platform: 'codex',
+                session_id: 'session-audit-1',
+                turn_id: 'turn-audit-1',
                 target: '/opt/dollhouse/important.txt',
                 targetLabel: 'File',
                 details: [
-                  { label: 'Platform', value: 'cursor', monospace: true },
+                  { label: 'Platform', value: 'codex', monospace: true },
+                  { label: 'Session', value: 'session-audit-1', monospace: true },
+                  { label: 'Turn', value: 'turn-audit-1', monospace: true },
                   { label: 'File', value: '/opt/dollhouse/important.txt', monospace: true },
                   { label: 'Matched Pattern', value: 'Edit:*', monospace: true },
                 ],
@@ -1170,13 +1174,22 @@ describe('Web console cleanup regressions', () => {
 
     const modal = win.document.getElementById('perm-audit-modal');
     const modalFeed = win.document.getElementById('perm-audit-modal-feed');
+    const compactFeed = win.document.getElementById('perm-feed');
     expect(modal?.hasAttribute('open')).toBe(true);
     expect(win.document.getElementById('perm-audit-modal-title')?.textContent).toContain('All Sessions Audit View');
+    expect(compactFeed?.textContent).toContain('Codex');
+    expect(compactFeed?.textContent).toContain('session session-audit-1');
     expect(modalFeed?.textContent).toContain('Needs confirmation before editing a protected file.');
     expect(modalFeed?.textContent).toContain('/opt/dollhouse/important.txt');
+    expect(modalFeed?.textContent).toContain('session-audit-1');
+    expect(modalFeed?.textContent).toContain('turn-audit-1');
     expect(modalFeed?.textContent).toContain('Matched Pattern');
     expect(modalFeed?.textContent).toContain('Exact Time');
     expect(modalFeed?.querySelector('.perm-audit-entry')).not.toBeNull();
+    const auditDetailRows = Array.from(modalFeed?.querySelectorAll('.perm-audit-detail-row') ?? []);
+    expect(auditDetailRows.some(row => row.getAttribute('aria-label') === 'Platform: codex')).toBe(true);
+    expect(auditDetailRows.some(row => row.getAttribute('aria-label') === 'Session: session-audit-1')).toBe(true);
+    expect(auditDetailRows.some(row => row.getAttribute('role') === 'group')).toBe(true);
 
     const details = modalFeed?.querySelector('details') as HTMLDetailsElement | null;
     expect(details).not.toBeNull();
@@ -1197,6 +1210,37 @@ describe('Web console cleanup regressions', () => {
     closeButton?.click();
     await wait(DEFAULT_WAIT_MS);
     expect(modal?.hasAttribute('open')).toBe(false);
+
+    cleanup();
+  });
+
+  it('surfaces malformed permissions JSON through the dashboard error boundary', async () => {
+    const { window: win, cleanup } = createDom(`
+      <div id="console-tabs"><button class="console-tab" data-tab="permissions">Permissions</button></div>
+      <div id="permissions-dashboard-root"></div>
+    `);
+    const warnSpy = jest.spyOn(win.console, 'warn').mockImplementation(() => undefined);
+
+    win.DollhouseAuth.apiFetch = jest.fn((url: string) => {
+      if (url === '/api/permissions/status') {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.reject(new SyntaxError('bad permissions json')),
+        });
+      }
+
+      return Promise.reject(new Error(`unexpected url ${url}`));
+    });
+
+    win.eval(permissionsSource);
+    win.document.dispatchEvent(new win.Event('DOMContentLoaded'));
+    win.DollhouseConsole.permissions.init();
+    await wait(DEFAULT_WAIT_MS);
+
+    const serverDot = win.document.getElementById('perm-dot-server') as HTMLElement | null;
+    expect(serverDot?.dataset.status).toBe('error');
+    expect(serverDot?.parentElement?.querySelector('.perm-status-label')?.textContent).toBe('Server unreachable');
+    expect(warnSpy.mock.calls.some(call => String(call[0]).includes('Invalid permission status JSON'))).toBe(true);
 
     cleanup();
   });

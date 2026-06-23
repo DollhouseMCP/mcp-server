@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { v4 as uuidv4 } from 'uuid';
+import { randomUUID } from 'node:crypto';
 import { SkillManager } from '../../../src/elements/skills/SkillManager.js';
 import { Skill } from '../../../src/elements/skills/Skill.js';
 import { TemplateManager } from '../../../src/elements/templates/TemplateManager.js';
@@ -33,7 +33,7 @@ describe('Version Persistence', () => {
 
   beforeEach(async () => {
     // Create unique test directory
-    testDir = path.join(os.tmpdir(), `test-version-${uuidv4()}`);
+    testDir = path.join(os.tmpdir(), `test-version-${randomUUID()}`);
     await fs.mkdir(testDir, { recursive: true });
     
     // Create subdirectories

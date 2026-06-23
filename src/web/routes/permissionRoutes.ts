@@ -39,6 +39,11 @@ interface PermissionDecision {
   id: string;
   timestamp: string;
   session_id?: string;
+  turn_id?: string;
+  tool_use_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  model?: string;
   tool_name: string;
   command?: string;
   decision: string;
@@ -75,6 +80,29 @@ interface PermissionDecisionInput extends Record<string, unknown> {
   request_id?: string;
 }
 
+/**
+ * Optional host metadata forwarded by permission hooks for audit correlation.
+ *
+ * Codex supplies these fields with hook events so the dashboard can connect a
+ * permission decision back to the originating session, turn, tool use,
+ * transcript, workspace, and model. They are display-only metadata and are not
+ * used to decide whether a tool call is allowed.
+ */
+interface PermissionDecisionRequestMetadata {
+  /** Codex session identifier for grouping decisions by conversation. */
+  session_id?: string;
+  /** Codex turn identifier for locating the user/model exchange. */
+  turn_id?: string;
+  /** Codex tool-use identifier for the exact hook invocation. */
+  tool_use_id?: string;
+  /** Local transcript path emitted by Codex for human troubleshooting. */
+  transcript_path?: string;
+  /** Working directory where the host attempted the tool call. */
+  cwd?: string;
+  /** Model name reported by the host for audit context. */
+  model?: string;
+}
+
 interface PermissionDecisionTargetDescriptor {
   key: PermissionDecisionTargetKey;
   label: string;
@@ -93,7 +121,7 @@ const DECISION_BUFFER_SIZE = 200;
 
 interface PermissionDecisionTracker {
   trackDecision(
-    sessionId: string | undefined,
+    metadata: PermissionDecisionRequestMetadata,
     toolName: string,
     input: PermissionDecisionInput,
     result: Record<string, unknown>,
@@ -115,7 +143,11 @@ function extractString(obj: Record<string, unknown>, keys: string[], fallback: s
   return fallback;
 }
 
-function extractDecision(result: Record<string, unknown>): string {
+function isEmptyObject(value: Record<string, unknown>): boolean {
+  return Object.keys(value).length === 0;
+}
+
+function extractDecision(result: Record<string, unknown>, platform?: string): string {
   const nested = result.hookSpecificOutput;
   if (nested && typeof nested === 'object' && !Array.isArray(nested)) {
     const nestedDecision = (nested as Record<string, unknown>).permissionDecision;
@@ -126,6 +158,7 @@ function extractDecision(result: Record<string, unknown>): string {
   if (typeof result.decision === 'string') return result.decision;
   if (typeof result.behavior === 'string') return result.behavior;
   if (typeof result.allowed === 'boolean') return result.allowed ? 'allow' : 'deny';
+  if (platform === 'codex' && isEmptyObject(result)) return 'allow';
   return 'unknown';
 }
 
@@ -173,16 +206,48 @@ function normalizePermissionResponseForPlatform(
   return formatPermissionResponse('allow', platform, input);
 }
 
+/**
+ * Builds the expanded audit details shown in the dashboard.
+ *
+ * Host metadata stays separate from permission inputs so the UI can explain
+ * where a decision came from without accidentally treating correlation fields
+ * as policy targets.
+ */
 function buildDecisionDetails(
   toolName: string,
   input: PermissionDecisionInput,
   result: Record<string, unknown>,
   platform: string,
+  metadata: PermissionDecisionRequestMetadata,
 ): { target?: string; targetLabel?: string; details: PermissionDecisionDetail[] } {
   const details: PermissionDecisionDetail[] = [];
 
   if (platform) {
     details.push({ label: 'Platform', value: platform, monospace: true });
+  }
+
+  if (metadata.session_id) {
+    details.push({ label: 'Session', value: metadata.session_id, monospace: true });
+  }
+
+  if (metadata.turn_id) {
+    details.push({ label: 'Turn', value: metadata.turn_id, monospace: true });
+  }
+
+  if (metadata.tool_use_id) {
+    details.push({ label: 'Tool Use', value: metadata.tool_use_id, monospace: true });
+  }
+
+  if (metadata.transcript_path) {
+    details.push({ label: 'Transcript', value: metadata.transcript_path, monospace: true });
+  }
+
+  if (metadata.cwd) {
+    details.push({ label: 'Working Dir', value: metadata.cwd, monospace: true });
+  }
+
+  if (metadata.model) {
+    details.push({ label: 'Model', value: metadata.model, monospace: true });
   }
 
   if (toolName === 'Bash' && typeof input.command === 'string' && input.command !== '') {
@@ -233,20 +298,25 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
 
   return {
     trackDecision(
-      sessionId: string | undefined,
+      metadata: PermissionDecisionRequestMetadata,
       toolName: string,
       input: PermissionDecisionInput,
       result: Record<string, unknown>,
       platform: string,
     ): void {
-      const detailState = buildDecisionDetails(toolName, input, result, platform);
+      const detailState = buildDecisionDetails(toolName, input, result, platform, metadata);
       const entry: PermissionDecision = {
         id: `d-${++decisionCounter}`,
         timestamp: new Date().toISOString(),
-        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(metadata.session_id ? { session_id: metadata.session_id } : {}),
+        ...(metadata.turn_id ? { turn_id: metadata.turn_id } : {}),
+        ...(metadata.tool_use_id ? { tool_use_id: metadata.tool_use_id } : {}),
+        ...(metadata.transcript_path ? { transcript_path: metadata.transcript_path } : {}),
+        ...(metadata.cwd ? { cwd: metadata.cwd } : {}),
+        ...(metadata.model ? { model: metadata.model } : {}),
         tool_name: toolName,
         command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
-        decision: extractDecision(result),
+        decision: extractDecision(result, platform),
         reason: extractReason(result),
         platform,
         target: detailState.target,
@@ -397,6 +467,11 @@ export function registerPermissionRoutes(
       input?: PermissionDecisionInput;
       platform?: string;
       session_id?: string;
+      turn_id?: string;
+      tool_use_id?: string;
+      transcript_path?: string;
+      cwd?: string;
+      model?: string;
     };
     const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : 'claude_code';
 
@@ -407,7 +482,14 @@ export function registerPermissionRoutes(
 
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
     const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
-    const session_id = typeof body.session_id === 'string' ? body.session_id.normalize('NFC') : undefined;
+    const requestMetadata: PermissionDecisionRequestMetadata = {
+      session_id: normalizeOptionalString(body.session_id),
+      turn_id: normalizeOptionalString(body.turn_id),
+      tool_use_id: normalizeOptionalString(body.tool_use_id),
+      transcript_path: normalizeOptionalString(body.transcript_path),
+      cwd: normalizeOptionalString(body.cwd),
+      model: normalizeOptionalString(body.model),
+    };
     const input = body.input;
 
     if (!tool_name) {
@@ -423,7 +505,7 @@ export function registerPermissionRoutes(
           tool_name,
           input: input || {},
           platform,
-          ...(session_id ? { session_id } : {}),
+          ...(requestMetadata.session_id ? { session_id: requestMetadata.session_id } : {}),
         },
       }));
       const elapsedMs = Date.now() - startMs;
@@ -441,11 +523,11 @@ export function registerPermissionRoutes(
         rawResult,
       );
       const trackedResult = { ...rawResult, ...responseData };
-      const decision = extractDecision(responseData);
+      const decision = extractDecision(trackedResult, platform);
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(session_id, tool_name, input || {}, trackedResult, platform);
+      decisionTracker.trackDecision(requestMetadata, tool_name, input || {}, trackedResult, platform);
 
       res.json(responseData);
     } catch (err) {
@@ -648,6 +730,12 @@ function normalizeAuthorityMode(value: unknown): PermissionAuthorityMode | null 
   return typeof value === 'string' && PERMISSION_AUTHORITY_MODES.includes(value as PermissionAuthorityMode)
     ? value as PermissionAuthorityMode
     : null;
+}
+
+function normalizeOptionalString(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== ''
+    ? value.normalize('NFC')
+    : undefined;
 }
 
 function asStringArray(value: unknown): string[] {

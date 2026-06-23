@@ -739,6 +739,21 @@
   white-space: nowrap;
 }
 
+.perm-feed-tool-group {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.perm-feed-meta {
+  color: var(--ink-500, #64748b);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .perm-feed-reason {
   color: var(--ink-400, #64748b);
   font-size: 0.75rem;
@@ -1126,6 +1141,7 @@
 [data-theme="dark"] .perm-status-updated,
 [data-theme="dark"] .perm-selected-subtitle,
 [data-theme="dark"] .perm-feed-time,
+[data-theme="dark"] .perm-feed-meta,
 [data-theme="dark"] .perm-feed-reason,
 [data-theme="dark"] .perm-pattern-empty,
 [data-theme="dark"] .perm-feed-empty,
