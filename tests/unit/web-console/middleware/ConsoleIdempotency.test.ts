@@ -21,6 +21,7 @@ const PORTFOLIO_MUTATION_ROUTE = {
   privacyClass: 'self_private',
   idempotency: 'required',
   pathParamValueNormalization: { name: 'nfc' },
+  queryParamValueNormalization: { tag: 'nfc' },
   handler: () => ({ status: 200 }),
 } satisfies ConsoleRouteDefinition;
 
@@ -40,13 +41,13 @@ describe('console idempotency canonicalization', () => {
   });
 
   it('uses normalized params and query values for canonical idempotency targets', () => {
-    const request = requestForTarget('/api/v1/me/portfolio/elements/personas/%CE%B1-cafe%CC%81?tag=cafe%CC%81', {
+    const request = requestForTarget('/api/v1/me/portfolio/elements/personas/%CE%B1-cafe%CC%81?tag=%CE%B1-cafe%CC%81&q=%CE%B1-cafe%CC%81', {
       params: { type: 'personas', name: 'α-café' },
-      query: { tag: 'café' },
+      query: { tag: 'α-café', q: 'a-café' },
     });
 
     expect(canonicalRequestTarget(request, PORTFOLIO_MUTATION_ROUTE))
-      .toBe('/api/v1/me/portfolio/elements/personas/%CE%B1-caf%C3%A9?tag=caf%C3%A9');
+      .toBe('/api/v1/me/portfolio/elements/personas/%CE%B1-caf%C3%A9?q=a-caf%C3%A9&tag=%CE%B1-caf%C3%A9');
   });
 
   it('fingerprints object key order canonically', () => {

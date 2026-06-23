@@ -1,7 +1,10 @@
 import type { RequestHandler } from 'express';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { ConsoleStoreValidationError } from '../stores/ConsoleStoreValidation.js';
-import type { ConsolePathParamValueNormalization } from './ConsolePlatformTypes.js';
+import type {
+  ConsolePathParamValueNormalization,
+  ConsoleQueryParamValueNormalization,
+} from './ConsolePlatformTypes.js';
 
 type MutableRecord = Record<string, unknown>;
 type StringNormalizationMode = ConsolePathParamValueNormalization | 'preserve';
@@ -31,6 +34,7 @@ interface ConsoleUnicodeNormalizationOptions {
   readonly params?: boolean;
   readonly pathParamValueNormalization?: Readonly<Record<string, ConsolePathParamValueNormalization>>;
   readonly query?: boolean;
+  readonly queryParamValueNormalization?: Readonly<Record<string, ConsoleQueryParamValueNormalization>>;
   readonly body?: 'keys' | 'off';
 }
 
@@ -51,6 +55,7 @@ export function createConsoleUnicodeNormalizationMiddleware(
   const normalizeQuery = options.query ?? true;
   const bodyMode = options.body ?? 'keys';
   const pathParamValueNormalization = options.pathParamValueNormalization;
+  const queryParamValueNormalization = options.queryParamValueNormalization;
 
   return (request, _response, next): void => {
     try {
@@ -67,7 +72,10 @@ export function createConsoleUnicodeNormalizationMiddleware(
       }
       if (normalizeQuery) {
         Object.defineProperty(request, 'query', {
-          value: normalizeValue(request.query, { strings: 'security' }),
+          value: normalizeValue(request.query, {
+            strings: 'security',
+            stringModesByKey: queryParamValueNormalization,
+          }),
           configurable: true,
           enumerable: true,
           writable: true,
@@ -141,7 +149,11 @@ function normalizePlainObject(value: MutableRecord, options: NormalizeValueOptio
   for (const [key, item] of Object.entries(value)) {
     const normalizedKey = UnicodeValidator.normalize(key).normalizedContent;
     assertNoNormalizedKeyCollision(seen, normalizedKey, JSON_OBJECT_RESERVED_KEYS);
-    defineDataProperty(normalized, normalizedKey, normalizeValue(item, options, depth + 1));
+    defineDataProperty(
+      normalized,
+      normalizedKey,
+      normalizeValue(item, optionsForKey(options, key, normalizedKey), depth + 1),
+    );
   }
   return normalized;
 }

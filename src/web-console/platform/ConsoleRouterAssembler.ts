@@ -10,6 +10,7 @@ import { problemForConsoleError, sendProblemResponse } from './ProblemResponses.
 function registerRoute(router: Router, route: ConsoleRouteDefinition): void {
   const normalizeUnicode = createConsoleUnicodeNormalizationMiddleware({
     pathParamValueNormalization: route.pathParamValueNormalization,
+    queryParamValueNormalization: route.queryParamValueNormalization,
   });
   const handler: RequestHandler = (request, response, next): void => {
     const consoleRequest = request as ConsoleRequest;

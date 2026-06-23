@@ -124,6 +124,7 @@ function middlewareForRoute(input: {
   const normalizeRequestTarget = createConsoleUnicodeNormalizationMiddleware({
     body: 'off',
     pathParamValueNormalization: input.route.pathParamValueNormalization,
+    queryParamValueNormalization: input.route.queryParamValueNormalization,
   });
   if (input.route.audience === 'public') {
     return [normalizeRequestTarget, input.normalizeBody, createSecuredHandler(input.route, input.options)];

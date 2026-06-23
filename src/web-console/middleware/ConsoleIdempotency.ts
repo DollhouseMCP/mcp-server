@@ -6,6 +6,7 @@ import type { ConsoleAdminAuditResult } from '../audit/IAdminAuditWriter.js';
 import type {
   ConsoleHandlerResult,
   ConsolePathParamValueNormalization,
+  ConsoleQueryParamValueNormalization,
   ConsoleRequest,
   ConsoleRouteDefinition,
 } from '../platform/ConsolePlatformTypes.js';
@@ -116,7 +117,7 @@ export async function executeWithConsoleIdempotency(
 
 export function canonicalRequestTarget(req: ConsoleRequest, route?: ConsoleRouteDefinition): string {
   const parsed = new URL(req.originalUrl, 'https://console.invalid');
-  const sortedQuery = canonicalQueryEntries(parsed)
+  const sortedQuery = canonicalQueryEntries(parsed, route)
     .sort(([leftName, leftValue], [rightName, rightValue]) =>
       compareCodeUnits(leftName, rightName) || compareCodeUnits(leftValue, rightValue));
   const search = new URLSearchParams(sortedQuery).toString();
@@ -200,12 +201,31 @@ function normalizePathParamValue(value: string, mode: ConsolePathParamValueNorma
     : UnicodeValidator.normalize(value).normalizedContent;
 }
 
-function canonicalQueryEntries(parsed: URL): [string, string][] {
+function canonicalQueryEntries(parsed: URL, route?: ConsoleRouteDefinition): [string, string][] {
   return [...parsed.searchParams.entries()]
-    .map(([key, value]) => [
-      UnicodeValidator.normalize(key).normalizedContent,
-      UnicodeValidator.normalize(value).normalizedContent,
-    ]);
+    .map(([key, value]) => {
+      const normalizedKey = UnicodeValidator.normalize(key).normalizedContent;
+      return [
+        normalizedKey,
+        normalizeQueryParamValue(value, queryParamMode(route, key, normalizedKey)),
+      ];
+    });
+}
+
+function queryParamMode(
+  route: ConsoleRouteDefinition | undefined,
+  key: string,
+  normalizedKey: string,
+): ConsoleQueryParamValueNormalization {
+  return route?.queryParamValueNormalization?.[key] ??
+    route?.queryParamValueNormalization?.[normalizedKey] ??
+    'security';
+}
+
+function normalizeQueryParamValue(value: string, mode: ConsoleQueryParamValueNormalization): string {
+  return mode === 'nfc'
+    ? value.normalize('NFC')
+    : UnicodeValidator.normalize(value).normalizedContent;
 }
 
 function compareCodeUnits(left: string, right: string): number {

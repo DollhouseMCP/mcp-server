@@ -284,6 +284,45 @@ describe('console platform HTTP foundations', () => {
     expect(response.body).toEqual({ name: 'α-café' });
   });
 
+  it('preserves free-form query value confusables while applying canonical NFC', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'freeform-query',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'GET',
+        path: '/api/v1/me/freeform-query',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        queryParamValueNormalization: { tag: 'nfc' },
+        handler: req => ({
+          status: 200,
+          body: {
+            tag: req.query.tag,
+            q: req.query.q,
+          },
+        }),
+      }],
+    });
+    const app = express();
+    app.use(assembleConsoleRouter(registry));
+
+    const freeformTag = 'α-cafe\u0301';
+    const response = await request(app)
+      .get(`/api/v1/me/freeform-query?tag=${encodeURIComponent(freeformTag)}&q=${encodeURIComponent(freeformTag)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      tag: 'α-café',
+      q: 'a-café',
+    });
+  });
+
   it.each(['__proto__', 'constructor'])(
     'rejects reserved route param key %s before it can shadow object internals',
     async paramName => {

@@ -65,6 +65,7 @@ export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleM
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
       privacyProjector: projectPortfolioElementList,
+      queryParamValueNormalization: { tag: 'nfc' },
       handler: req => service.listElements(req),
     },
     {
