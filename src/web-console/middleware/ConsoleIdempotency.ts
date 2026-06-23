@@ -5,9 +5,8 @@ import { UnicodeValidator } from '../../security/validators/unicodeValidator.js'
 import type { ConsoleAdminAuditResult } from '../audit/IAdminAuditWriter.js';
 import type {
   ConsoleHandlerResult,
-  ConsolePathParamValueNormalization,
-  ConsoleQueryParamValueNormalization,
   ConsoleRequest,
+  ConsoleRequestTargetValueNormalization,
   ConsoleRouteDefinition,
 } from '../platform/ConsolePlatformTypes.js';
 import type { ConsoleProblemInput } from '../platform/ProblemResponses.js';
@@ -179,7 +178,7 @@ function canonicalPathname(req: ConsoleRequest, route: ConsoleRouteDefinition, f
       ? req.params[paramName]
       : decodePathSegment(fallbackSegments[index]);
     const mode = route.pathParamValueNormalization?.[paramName] ?? 'security';
-    return encodeURIComponent(normalizePathParamValue(value, mode));
+    return encodeURIComponent(normalizeRequestTargetValue(value, mode));
   }).join('/');
 }
 
@@ -195,7 +194,7 @@ function decodePathSegment(segment: string): string {
   }
 }
 
-function normalizePathParamValue(value: string, mode: ConsolePathParamValueNormalization): string {
+function normalizeRequestTargetValue(value: string, mode: ConsoleRequestTargetValueNormalization): string {
   return mode === 'nfc'
     ? value.normalize('NFC')
     : UnicodeValidator.normalize(value).normalizedContent;
@@ -207,7 +206,7 @@ function canonicalQueryEntries(parsed: URL, route?: ConsoleRouteDefinition): [st
       const normalizedKey = UnicodeValidator.normalize(key).normalizedContent;
       return [
         normalizedKey,
-        normalizeQueryParamValue(value, queryParamMode(route, key, normalizedKey)),
+        normalizeRequestTargetValue(value, queryParamMode(route, key, normalizedKey)),
       ];
     });
 }
@@ -216,16 +215,10 @@ function queryParamMode(
   route: ConsoleRouteDefinition | undefined,
   key: string,
   normalizedKey: string,
-): ConsoleQueryParamValueNormalization {
+): ConsoleRequestTargetValueNormalization {
   return route?.queryParamValueNormalization?.[key] ??
     route?.queryParamValueNormalization?.[normalizedKey] ??
     'security';
-}
-
-function normalizeQueryParamValue(value: string, mode: ConsoleQueryParamValueNormalization): string {
-  return mode === 'nfc'
-    ? value.normalize('NFC')
-    : UnicodeValidator.normalize(value).normalizedContent;
 }
 
 function compareCodeUnits(left: string, right: string): number {

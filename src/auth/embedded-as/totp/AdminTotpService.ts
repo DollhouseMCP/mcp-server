@@ -258,9 +258,13 @@ function logTotpEvent(
     type,
     severity,
     source: 'AdminTotpService',
-    details,
+    details: `${details} [principal:${auditPrincipalFingerprint(userId)}]`,
     additionalData: { userId },
   });
+}
+
+function auditPrincipalFingerprint(userId: string): string {
+  return createHash('sha256').update(userId, 'utf8').digest('hex').slice(0, 16);
 }
 
 function secretOwnerId(userId: string, factorId: string): string {

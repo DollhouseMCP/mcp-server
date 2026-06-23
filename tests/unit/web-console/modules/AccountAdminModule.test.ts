@@ -1077,6 +1077,27 @@ describe('AccountAdminModule', () => {
     ]);
   });
 
+  it('normalizes security-sensitive allowlist body values before storage', async () => {
+    const { module } = mutationFixture();
+    const add = findRoute(module.routes, ACCOUNT_ALLOWLIST_PATH, 'POST');
+
+    await expect(add.handler(consoleRequest({
+      body: { kind: 'github_username', value: 'ｍick' },
+    }))).resolves.toMatchObject({
+      status: 201,
+      body: {
+        kind: 'github_username',
+        value: 'mick',
+      },
+    });
+    await expect(add.handler(consoleRequest({
+      body: { kind: 'github_username', value: 'mick' },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'conflict' },
+    });
+  });
+
   it('rejects malformed list query parameters before hitting the store', async () => {
     const { module } = mutationFixture();
     const route = findRoute(module.routes, '/api/v1/admin/accounts/users');

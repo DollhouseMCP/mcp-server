@@ -199,6 +199,30 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     }
   });
 
+  it('includes reason and provider in validation failure details for audit deduplication', async () => {
+    const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    try {
+      const missingScopeToken = await mintToken({ scope: 'openid profile' });
+      await provider.validate(missingScopeToken);
+
+      const wrongProvider = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: wrongJwks,
+      });
+      await wrongProvider.validate(await mintToken());
+
+      const details = logSpy.mock.calls.map(([event]) => event.details);
+      expect(details).toEqual([
+        'OIDC access token validation failed: token missing mcp scope [provider:oidc:tenant.example.com]',
+        'OIDC access token validation failed: invalid signature [provider:oidc:tenant.example.com]',
+      ]);
+      expect(new Set(details).size).toBe(details.length);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   // Cycle-12 fix (M12-1): algorithms allowlist parity with EmbeddedAS
   // and LocalDev. The default allowlist excludes `none` and HS-family
   // algorithms; jose rejects them at verify-time even if a token were

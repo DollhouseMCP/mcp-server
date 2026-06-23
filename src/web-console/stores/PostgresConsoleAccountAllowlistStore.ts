@@ -17,6 +17,7 @@ import type {
   IConsoleAccountAllowlistStore,
 } from './IConsoleAccountAllowlistStore.js';
 import {
+  normalizeAllowlistDisplayValue,
   normalizeAllowlistValue,
   validateAllowlistAddInput,
   validateAllowlistRemoveInput,
@@ -124,7 +125,7 @@ export async function addAccountAllowlistEntryWithTx(
     const rows = await tx.insert(accountAllowlistEntries).values({
       kind: input.kind,
       normalizedValue: normalizeAllowlistValue(input.kind, input.value),
-      displayValue: input.value.trim(),
+      displayValue: normalizeAllowlistDisplayValue(input.value),
       note: input.note ?? null,
       createdByUserId: input.createdByUserId,
       createdAt: input.createdAt,

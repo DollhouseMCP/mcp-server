@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { Secret, TOTP } from 'otpauth';
 
 import {
@@ -6,6 +6,7 @@ import {
   AdminTotpError,
   AdminTotpService,
 } from '../../../../../src/auth/embedded-as/totp/AdminTotpService.js';
+import { SecurityMonitor } from '../../../../../src/security/securityMonitor.js';
 import { InMemoryAuthStorageLayer } from '../../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { AeadSecretEncryptionService } from '../../../../../src/web-console/security/SecretEncryption.js';
 import { InMemoryConsoleFactorStore } from '../../../../../src/web-console/stores/InMemoryConsoleFactorStore.js';
@@ -16,6 +17,10 @@ const TOTP_LABEL = 'Admin Console';
 const NOW = new Date('2026-05-27T12:00:00.000Z');
 const FIVE_MINUTES = new Date('2026-05-27T12:05:00.000Z');
 const ELEVEN_MINUTES = new Date('2026-05-27T12:11:00.000Z');
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 function createService(now: () => Date = () => NOW): {
   service: AdminTotpService;
@@ -163,5 +168,29 @@ describe('AdminTotpService', () => {
 
     await expect(service.prove(USER_ID, '000000')).resolves.toEqual({ ok: false });
     await expect(service.disable(USER_ID, '000000')).resolves.toBe(false);
+  });
+
+  it('adds a principal fingerprint to TOTP audit details for deduplication', async () => {
+    const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    const { service } = createService();
+    const { service: otherService } = createService();
+    const begin = await service.beginEnrollment(USER_ID, TOTP_LABEL);
+    const otherBegin = await otherService.beginEnrollment(OTHER_USER_ID, TOTP_LABEL);
+
+    await expect(service.confirmEnrollment(USER_ID, begin.pendingId, '000000'))
+      .rejects.toBeInstanceOf(AdminTotpError);
+    await expect(otherService.confirmEnrollment(OTHER_USER_ID, otherBegin.pendingId, '000000'))
+      .rejects.toBeInstanceOf(AdminTotpError);
+
+    const failureDetails = logSpy.mock.calls
+      .map(call => call[0])
+      .filter(event => event.type === 'TOTP_VERIFICATION_FAILED')
+      .map(event => event.details);
+    expect(failureDetails).toHaveLength(2);
+    expect(failureDetails[0]).toMatch(/Admin TOTP enrollment confirmation failed \[principal:[0-9a-f]{16}\]/);
+    expect(failureDetails[1]).toMatch(/Admin TOTP enrollment confirmation failed \[principal:[0-9a-f]{16}\]/);
+    expect(failureDetails[0]).not.toBe(failureDetails[1]);
+    expect(failureDetails.join('\n')).not.toContain(USER_ID);
+    expect(failureDetails.join('\n')).not.toContain(OTHER_USER_ID);
   });
 });

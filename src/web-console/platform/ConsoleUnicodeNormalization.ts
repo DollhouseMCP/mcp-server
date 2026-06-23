@@ -2,12 +2,11 @@ import type { RequestHandler } from 'express';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { ConsoleStoreValidationError } from '../stores/ConsoleStoreValidation.js';
 import type {
-  ConsolePathParamValueNormalization,
-  ConsoleQueryParamValueNormalization,
+  ConsoleRequestTargetValueNormalization,
 } from './ConsolePlatformTypes.js';
 
 type MutableRecord = Record<string, unknown>;
-type StringNormalizationMode = ConsolePathParamValueNormalization | 'preserve';
+type StringNormalizationMode = ConsoleRequestTargetValueNormalization | 'preserve';
 
 const MAX_BODY_NORMALIZATION_DEPTH = 64;
 const MAX_BODY_NORMALIZATION_NODES = 10_000;
@@ -32,9 +31,9 @@ const ROUTE_PARAM_RESERVED_KEYS = new Set([
 
 interface ConsoleUnicodeNormalizationOptions {
   readonly params?: boolean;
-  readonly pathParamValueNormalization?: Readonly<Record<string, ConsolePathParamValueNormalization>>;
+  readonly pathParamValueNormalization?: Readonly<Record<string, ConsoleRequestTargetValueNormalization>>;
   readonly query?: boolean;
-  readonly queryParamValueNormalization?: Readonly<Record<string, ConsoleQueryParamValueNormalization>>;
+  readonly queryParamValueNormalization?: Readonly<Record<string, ConsoleRequestTargetValueNormalization>>;
   readonly body?: 'keys' | 'off';
 }
 

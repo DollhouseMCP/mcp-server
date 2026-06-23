@@ -488,6 +488,19 @@ describe('secured console router authentication', () => {
     expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
   });
 
+  it('does not recursively normalize JSON bodies for public readiness routes', async () => {
+    const { app, sessionStore } = await buildApp(null);
+    const lookup = jest.spyOn(sessionStore, 'findActiveByIdHash');
+
+    const response = await request(app).get(HEALTH_PATH)
+      .set('Content-Type', 'application/json')
+      .send(nestedJson(80));
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBeUndefined();
+    expect(lookup).not.toHaveBeenCalled();
+  });
+
   it('resolves an opaque session to canonical user context and sets security headers', async () => {
     const { app, sessionStore, adminAuditWriter } = await buildApp();
     const touch = jest.spyOn(sessionStore, 'touch');

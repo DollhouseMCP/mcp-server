@@ -807,6 +807,27 @@ describe('InMemoryConsoleAccountAllowlistStore', () => {
       revokedAt: FIVE_MINUTES,
     })).rejects.toThrow('revokedByUserId must be a UUID');
   });
+
+  it('security-normalizes account allowlist values before storage and matching', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+
+    const entry = await store.add({
+      kind: 'github_username',
+      value: 'ｍick',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    });
+
+    expect(entry.displayValue).toBe('mick');
+    expect(entry.normalizedValue).toBe('mick');
+    await expect(store.matchesIdentity({ githubUsername: 'mick' })).resolves.toBe(true);
+    await expect(store.add({
+      kind: 'github_username',
+      value: 'mick',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('active allowlist entry already exists');
+  });
 });
 
 describe('InMemoryConsoleSecurityInvalidationStore', () => {

@@ -127,7 +127,10 @@ function middlewareForRoute(input: {
     queryParamValueNormalization: input.route.queryParamValueNormalization,
   });
   if (input.route.audience === 'public') {
-    return [normalizeRequestTarget, input.normalizeBody, createSecuredHandler(input.route, input.options)];
+    // Current public console routes are GET-only health/auth redirects and do
+    // not consume JSON bodies. Avoid recursive body walking before any auth
+    // boundary; future public body routes must validate their own payloads.
+    return [normalizeRequestTarget, createSecuredHandler(input.route, input.options)];
   }
   return [
     normalizeRequestTarget,

@@ -146,7 +146,7 @@ export class OidcAuthProvider implements IAuthProvider {
       type: 'TOKEN_VALIDATION_FAILURE',
       severity: 'MEDIUM',
       source: 'OidcAuthProvider.validate',
-      details: 'OIDC access token validation failed',
+      details: `OIDC access token validation failed: ${reason} [provider:${this.name}]`,
       additionalData: { provider: this.name, issuer: this.issuer, reason },
     });
   }

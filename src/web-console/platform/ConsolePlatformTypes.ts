@@ -53,8 +53,6 @@ export type ConsoleIdempotencyPolicy = 'not_applicable' | 'required';
 export type ConsoleAuditExecutionPolicy = 'kernel' | 'handler_transaction';
 export type ConsoleResponseKind = 'json' | 'sse';
 export type ConsoleRequestTargetValueNormalization = 'security' | 'nfc';
-export type ConsolePathParamValueNormalization = ConsoleRequestTargetValueNormalization;
-export type ConsoleQueryParamValueNormalization = ConsoleRequestTargetValueNormalization;
 
 export interface ConsoleRequestContext {
   readonly correlationId: string;
@@ -168,12 +166,12 @@ export interface ConsoleRouteDefinition {
    * they are free-form resource names whose confusable characters are part of
    * the stored identifier, such as portfolio element names.
    */
-  readonly pathParamValueNormalization?: Readonly<Record<string, ConsolePathParamValueNormalization>>;
+  readonly pathParamValueNormalization?: Readonly<Record<string, ConsoleRequestTargetValueNormalization>>;
   /**
    * Query values are security-normalized by default. Mark query parameters as
    * `nfc` when they are free-form filters compared against stored user text.
    */
-  readonly queryParamValueNormalization?: Readonly<Record<string, ConsoleQueryParamValueNormalization>>;
+  readonly queryParamValueNormalization?: Readonly<Record<string, ConsoleRequestTargetValueNormalization>>;
   readonly handler: ConsoleHandler;
 }
 
