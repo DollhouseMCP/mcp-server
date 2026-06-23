@@ -13,10 +13,18 @@ name: Publish to GitHub Packages
 # 4. Authentication issues → should proceed to publish (fails safely if duplicate)
 
 on:
+  release:
+    types: [published]
   push:
     tags:
       - 'v*'  # Triggers on version tags like v1.2.3
   workflow_dispatch:  # Allow manual trigger
+    inputs:
+      dry_run:
+        description: 'Run in dry-run mode (test without publishing)'
+        required: false
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -95,14 +103,71 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Resolve GitHub Packages dist-tag
+        id: package_dist_tag
+        shell: bash
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+
+          case "${PACKAGE_VERSION}" in
+            *-alpha.*)
+              dist_tag="alpha"
+              ;;
+            *-beta.*)
+              dist_tag="beta"
+              ;;
+            *-rc.*)
+              dist_tag="next"
+              ;;
+            *-*)
+              echo "::error::Unsupported prerelease channel in ${PACKAGE_VERSION}; expected -alpha., -beta., or -rc."
+              exit 1
+              ;;
+            *)
+              dist_tag="latest"
+              ;;
+          esac
+
+          echo "dist_tag=${dist_tag}" >> "$GITHUB_OUTPUT"
+          echo "GitHub Packages dist-tag: ${dist_tag}"
+
+      - name: Guard GitHub Packages release channel
+        if: ${{ github.event_name == 'release' }}
+        shell: bash
+        env:
+          DIST_TAG: ${{ steps.package_dist_tag.outputs.dist_tag }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+        run: |
+          if [[ "${RELEASE_PRERELEASE}" == "true" && "${DIST_TAG}" == "latest" ]]; then
+            echo "::error::Refusing to publish a GitHub prerelease to GitHub Packages latest"
+            exit 1
+          fi
+
+          if [[ "${RELEASE_PRERELEASE}" != "true" && "${DIST_TAG}" != "latest" ]]; then
+            echo "::error::Prerelease version must be published from a GitHub prerelease"
+            exit 1
+          fi
+
       - name: Publish to GitHub Packages
-        if: steps.check_version.outputs.already_published == 'false'
+        if: ${{ steps.check_version.outputs.already_published == 'false' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
           # Publish to GitHub Packages
           # Registry is configured via setup-node step's registry-url parameter
           # NODE_AUTH_TOKEN provides authentication to GitHub Packages
-          npm publish
+          npm publish --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dry run (skip GitHub Packages publish)
+        if: ${{ steps.check_version.outputs.already_published == 'false' && github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        shell: bash
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          echo "DRY RUN MODE - Skipping GitHub Packages publication"
+          echo "Package would be published: @DollhouseMCP/mcp-server@${PACKAGE_VERSION}"
+          echo "GitHub Packages dist-tag: ${{ steps.package_dist_tag.outputs.dist_tag }}"
+          npm publish --dry-run --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -121,8 +186,9 @@ jobs:
           git checkout -- package.json
 
       - name: Notify success
-        if: success()
+        if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
           echo "✅ Successfully published to GitHub Packages!"
+          echo "🏷️ Dist-tag: ${{ steps.package_dist_tag.outputs.dist_tag }}"
           echo "📦 Package will appear in the repository's Packages section"

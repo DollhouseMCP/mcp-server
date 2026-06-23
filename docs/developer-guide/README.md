@@ -9,6 +9,7 @@ This directory contains documentation for developers contributing to the Dollhou
 *   [Development Workflow](workflow.md) - Overview of the development process.
 *   [PR Guidelines](pr-guidelines.md) - Best practices for Pull Requests.
 *   [Beta Branch Provenance](beta-branch-provenance.md) - Attribution and merge guidance for the hosted Streamable HTTP beta branch.
+*   [Beta Release and Deployment CD](beta-release-cd.md) - Manual beta publish and alpha VPS deployment workflows.
 *   [Element Development](element-development.md) - Deep dive on element architecture and integration.
 *   [Adding New Element Types](adding-elements.md) - Step-by-step playbook for new element types.
 *   [Manual Element Construction](manual-element-construction.md) - When and how to hand-craft elements.
