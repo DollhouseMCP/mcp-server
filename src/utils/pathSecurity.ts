@@ -7,12 +7,12 @@ import * as path from 'node:path';
  */
 export function resolvePathWithinBase(baseDir: string, ...segments: string[]): string {
   if (!baseDir || typeof baseDir !== 'string') {
-    throw new Error('Base directory must be a non-empty string');
+    throw new TypeError('Base directory must be a non-empty string');
   }
 
   for (const segment of segments) {
     if (typeof segment !== 'string') {
-      throw new Error('Path segments must be strings');
+      throw new TypeError('Path segments must be strings');
     }
     if (segment.includes('\0')) {
       throw new Error('Path segment contains a null byte');
