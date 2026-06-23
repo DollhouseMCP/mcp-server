@@ -391,6 +391,26 @@ tags:
       });
     });
 
+    it('should preserve parameter descriptions longer than 200 characters when importing', async () => {
+      const longDescription = 'Detailed parameter guidance '.repeat(10).trim();
+      const yamlData = {
+        name: 'Long Parameter Description',
+        description: 'Imported skill with detailed parameter docs',
+        parameters: [
+          {
+            name: 'topic',
+            type: 'string',
+            description: longDescription
+          }
+        ]
+      };
+
+      const skill = await skillManager.importElement(JSON.stringify(yamlData), 'json');
+
+      expect(longDescription.length).toBeGreaterThan(200);
+      expect(skill.metadata.parameters?.[0].description).toBe(longDescription);
+    });
+
     it('should import from JSON format', async () => {
       const jsonData = JSON.stringify({
         name: 'JSON Skill',
