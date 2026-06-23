@@ -523,7 +523,10 @@ export abstract class BaseElement implements IElement {
     const lower = feedback.toLowerCase();
     
     // Look for explicit ratings
-    const ratingMatch = lower.match(/(\d+)\s*(stars?|\/5|out of 5)/);
+    const ratingMatch =
+      lower.match(/\b([1-5])[ \t]*stars?\b/) ||
+      lower.match(/\b([1-5])[ \t]*\/5\b/) ||
+      lower.match(/\b([1-5])[ \t]*out of 5\b/);
     if (ratingMatch) {
       const rating = Number.parseInt(ratingMatch[1]);
       if (rating >= 1 && rating <= 5) return rating;

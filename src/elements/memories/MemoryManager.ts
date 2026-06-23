@@ -1553,7 +1553,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
     // Check for duplicate (moved from createElement handler)
     const existingMemories = await this.list();
-    const duplicate = existingMemories.find(m =>
+    const duplicate = existingMemories.some(m =>
       m.metadata.name?.toLowerCase() === metadata.name?.toLowerCase()
     );
     if (duplicate) {
@@ -1980,9 +1980,9 @@ export class MemoryManager extends BaseElementManager<Memory> {
   private parseRetentionDays(retention: string | number): number {
     if (typeof retention === 'number') return retention;
     if (retention === 'permanent' || retention === 'perpetual') return 999999;
-    const regex = /(\d+)\s*days?/i;
-    const match = regex.exec(retention);
-    return match ? Number.parseInt(match[1]) : MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
+    const lower = retention.toLowerCase();
+    const match = lower.includes('day') ? /\d+/.exec(retention) : null;
+    return match ? Number.parseInt(match[0]) : MEMORY_CONSTANTS.DEFAULT_RETENTION_DAYS;
   }
 
   /**

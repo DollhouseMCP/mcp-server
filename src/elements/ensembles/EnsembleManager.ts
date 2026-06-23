@@ -815,7 +815,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
     // Issue #613: Check metadata name uniqueness (not just filename)
     const existingEnsembles = await this.list();
-    const duplicate = existingEnsembles.find(e =>
+    const duplicate = existingEnsembles.some(e =>
       e.metadata.name.toLowerCase() === fullMetadata.name.toLowerCase()
     );
     if (duplicate) {

@@ -335,7 +335,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Issue #613: Check metadata name uniqueness (not just filename)
       const existingAgents = await this.list();
-      const duplicate = existingAgents.find(a =>
+      const duplicate = existingAgents.some(a =>
         a.metadata.name.toLowerCase() === sanitizedName.toLowerCase()
       );
       if (duplicate) {

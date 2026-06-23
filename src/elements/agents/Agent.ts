@@ -241,8 +241,8 @@ export class Agent extends BaseElement implements IElement {
     riskAssessment?: RiskAssessmentResult;
     outcome?: DecisionOutcome;
   }): AgentDecision {
-    const goal = this.state.goals.find(g => g.id === decision.goalId);
-    if (!goal) {
+    const goalExists = this.state.goals.some(g => g.id === decision.goalId);
+    if (!goalExists) {
       throw ErrorHandler.createError(
         `Goal ${decision.goalId} not found`,
         ErrorCategory.VALIDATION_ERROR,

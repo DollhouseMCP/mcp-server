@@ -101,10 +101,10 @@ export class ContentValidator {
   // tests/integration/security-audit-batch-a.integration.test.ts) and new attack vectors.
   private static readonly INJECTION_PATTERNS: Array<{ pattern: RegExp; severity: 'high' | 'critical'; description: string }> = [
     // System prompt override attempts
-    { pattern: /\[SYSTEM:\s*.*?\]/gi, severity: 'critical', description: 'System prompt override' },
-    { pattern: /\[ADMIN:\s*.*?\]/gi, severity: 'critical', description: 'Admin prompt override' },
-    { pattern: /\[ASSISTANT:\s*.*?\]/gi, severity: 'critical', description: 'Assistant prompt override' },
-    { pattern: /\[USER:\s*.*?\]/gi, severity: 'high', description: 'User prompt override' },
+    { pattern: /\[SYSTEM:[^\]\r\n]{0,1000}\]/gi, severity: 'critical', description: 'System prompt override' },
+    { pattern: /\[ADMIN:[^\]\r\n]{0,1000}\]/gi, severity: 'critical', description: 'Admin prompt override' },
+    { pattern: /\[ASSISTANT:[^\]\r\n]{0,1000}\]/gi, severity: 'critical', description: 'Assistant prompt override' },
+    { pattern: /\[USER:[^\]\r\n]{0,1000}\]/gi, severity: 'high', description: 'User prompt override' },
     
     // Instruction manipulation
     { pattern: /ignore\s+(all\s+)?previous\s+instructions/gi, severity: 'critical', description: 'Instruction override' },
@@ -181,16 +181,102 @@ export class ContentValidator {
     // Example: &a [*a] or &bomb ["test", *bomb]
     /&(\w+)\s*\[[^\]]*\*\1[^\]]*\]/,      // Direct recursion in array
     /&(\w+)\s*\{[^}]*\*\1[^}]*\}/,        // Direct recursion in object
-    /^\s*\w+:\s*&(\w+)\s*\n\s*\w+:\s*\*\1/m,  // Multi-line value recursion (data: &ref / value: *ref)
-    
-    // Simplified pattern to detect deeply nested anchors (less ReDoS risk)
-    // Looks for 3+ anchor definitions in close proximity
-    /&\w+[^&]*&\w+[^&]*&\w+/,            // 3+ anchors (simplified, less backtracking)
-    
+
     // Detects excessive aliases in close proximity (potential amplification)
     // Example: [*a, *b, *c, *d, *e, *f, *g, *h, *i, *j]
     /\*\w+(?:[,\s]+\*\w+){9,}/,          // 10+ aliases in sequence (non-capturing group)
   ];
+
+  private static isYamlIdentifierChar(char: string): boolean {
+    const code = char.charCodeAt(0);
+    return (
+      (code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      char === '_' ||
+      char === '-'
+    );
+  }
+
+  private static readYamlIdentifierAfter(content: string, startIndex: number): string | undefined {
+    let endIndex = startIndex;
+    while (endIndex < content.length && this.isYamlIdentifierChar(content[endIndex])) {
+      endIndex += 1;
+    }
+    return endIndex > startIndex ? content.slice(startIndex, endIndex) : undefined;
+  }
+
+  private static extractYamlAnchors(content: string): string[] {
+    const anchors: string[] = [];
+    let index = content.indexOf('&');
+
+    while (index !== -1) {
+      const anchor = this.readYamlIdentifierAfter(content, index + 1);
+      if (anchor) {
+        anchors.push(anchor);
+        index += anchor.length + 1;
+      } else {
+        index += 1;
+      }
+      index = content.indexOf('&', index);
+    }
+
+    return anchors;
+  }
+
+  private static hasYamlAlias(content: string, anchor: string): boolean {
+    let index = content.indexOf(`*${anchor}`);
+    while (index !== -1) {
+      const afterAlias = content[index + anchor.length + 1];
+      if (!afterAlias || !this.isYamlIdentifierChar(afterAlias)) {
+        return true;
+      }
+      index = content.indexOf(`*${anchor}`, index + 1);
+    }
+    return false;
+  }
+
+  private static hasMultilineValueRecursion(yamlContent: string): boolean {
+    let previousAnchor: string | undefined;
+
+    for (const line of yamlContent.split('\n')) {
+      if (previousAnchor && this.hasYamlAlias(line, previousAnchor)) {
+        return true;
+      }
+
+      const anchorIndex = line.indexOf('&');
+      previousAnchor = anchorIndex === -1
+        ? undefined
+        : this.readYamlIdentifierAfter(line, anchorIndex + 1);
+    }
+
+    return false;
+  }
+
+  private static hasNestedYamlAnchors(yamlContent: string): boolean {
+    return this.extractYamlAnchors(yamlContent).length >= 3;
+  }
+
+  private static logYamlBombDetection(details: string, contentLength: number): void {
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_INJECTION_ATTEMPT',
+      severity: 'CRITICAL',
+      source: 'yaml_bomb_detection',
+      details,
+      metadata: {
+        patternType: 'YAML_BOMB',
+        contentLength
+      }
+    });
+
+    ContentValidator.getTelemetry()?.recordBlockedAttack(
+      'YAML_BOMB',
+      details,
+      'CRITICAL',
+      'yaml_validation',
+      { patternType: 'YAML_BOMB', contentLength }
+    );
+  }
 
   private static readonly MALICIOUS_YAML_PATTERNS = [
     // Language-specific deserialization attacks
@@ -245,12 +331,12 @@ export class ContentValidator {
     /\.(?:get|post|put|delete)\s*\(\s*["']https?:\/\//,    // Method chaining with HTTP requests
     
     // File system operations - require suspicious context
-    /(?:fs\.|file\.|)\s*open\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,     // File open with suspicious paths
+    /(?:fs\.|file\.)?[ \t]*open[ \t]*\([ \t]*["'](?:\/etc\/|\/bin\/|\.\.\/)/, // File open with suspicious paths
     /file_get_contents\s*\(/,                                             // PHP file reading function
     /file_put_contents\s*\(/,                                             // PHP file writing function
-    /fopen\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,                       // File open with dangerous system paths
-    /(?:fs\.)?\s*readFile\s*\(\s*["'](?:\/etc\/|\/bin\/|\.\.\/)/,        // Node.js file read with path traversal
-    /(?:fs\.)?\s*writeFile\s*\(\s*["'](?:\/(?:bin|etc|tmp)\/|\.\.\/)/,   // Node.js file write to system dirs
+    /fopen[ \t]*\([ \t]*["'](?:\/etc\/|\/bin\/|\.\.\/)/,                 // File open with dangerous system paths
+    /(?:fs\.)?[ \t]*readFile[ \t]*\([ \t]*["'](?:\/etc\/|\/bin\/|\.\.\/)/, // Node.js file read with path traversal
+    /(?:fs\.)?[ \t]*writeFile[ \t]*\([ \t]*["'](?:\/(?:bin|etc|tmp)\/|\.\.\/)/, // Node.js file write to system dirs
     
     // Protocol handlers
     /file:\/\//,
@@ -576,6 +662,16 @@ export class ContentValidator {
 
     // SECURITY FIX #364: Check for YAML bombs before other validation
     // SECURITY FIX (PR #552 review): Use RegexValidator for ReDoS protection
+    if (this.hasMultilineValueRecursion(yamlContent)) {
+      this.logYamlBombDetection('YAML bomb pattern detected: multi-line value recursion', yamlContent.length);
+      return false;
+    }
+
+    if (this.hasNestedYamlAnchors(yamlContent)) {
+      this.logYamlBombDetection('YAML bomb pattern detected: 3+ anchors in close proximity', yamlContent.length);
+      return false;
+    }
+
     for (const pattern of this.YAML_BOMB_PATTERNS) {
       // Use RegexValidator to safely check patterns with timeout protection
       // This prevents ReDoS attacks from maliciously crafted YAML

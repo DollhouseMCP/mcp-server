@@ -137,7 +137,7 @@ export class TemplateManager extends BaseElementManager<Template> {
 
     // FIX: Issue #20 - Check for duplicate before creating
     const existingTemplates = await this.list();
-    const duplicate = existingTemplates.find(t =>
+    const duplicate = existingTemplates.some(t =>
       t.metadata.name.toLowerCase() === sanitizedName.toLowerCase()
     );
 
