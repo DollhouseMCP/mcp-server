@@ -245,6 +245,7 @@ function validateFieldValue(
 interface OversizedDescriptionField {
   path: string;
   length: number;
+  maxLength: number;
 }
 
 type TraversalEntry = readonly [string, unknown];
@@ -257,18 +258,27 @@ function getTraversalEntries(value: object, path: string): TraversalEntry[] {
   return Object.entries(value as Record<string, unknown>).map(([key, item]) => [`${path}.${key}`, item] as const);
 }
 
+function getDescriptionMaxLengthForPath(fieldPath: string): number {
+  if (fieldPath === 'input.description' || fieldPath === 'input.metadata.description') {
+    return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
+  }
+
+  return SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH;
+}
+
 function isOversizedDescriptionField(fieldPath: string, value: unknown): value is string {
+  const maxLength = getDescriptionMaxLengthForPath(fieldPath);
   return (
     fieldPath.endsWith('.description') &&
     typeof value === 'string' &&
-    value.length > SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
+    value.length > maxLength
   );
 }
 
 function formatOversizedDescriptionField(field: OversizedDescriptionField): string {
   return (
     `  • ${field.path} exceeds maximum length of ` +
-    `${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters (${field.length})`
+    `${field.maxLength} characters (${field.length})`
   );
 }
 
@@ -289,7 +299,11 @@ function findOversizedDescriptionFields(
   const oversized: OversizedDescriptionField[] = [];
   for (const [fieldPath, item] of getTraversalEntries(value, path)) {
     if (isOversizedDescriptionField(fieldPath, item)) {
-      oversized.push({ path: fieldPath, length: item.length });
+      oversized.push({
+        path: fieldPath,
+        length: item.length,
+        maxLength: getDescriptionMaxLengthForPath(fieldPath),
+      });
     }
     oversized.push(...findOversizedDescriptionFields(item, fieldPath, seen));
   }
