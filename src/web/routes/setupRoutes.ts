@@ -32,8 +32,9 @@ const GITHUB_REPO = 'DollhouseMCP/mcp-server';
 const MCPB_ASSET_PATTERN = /^dollhousemcp-.*\.mcpb$/;
 import { SlidingWindowRateLimiter } from '../../utils/SlidingWindowRateLimiter.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
-import { randomInt, randomUUID } from 'node:crypto';
+import { randomInt } from 'node:crypto';
 import { PostHog } from 'posthog-node';
+import { v4 as uuidv4 } from 'uuid';
 
 function isMissingPathError(error: unknown): boolean {
   return Boolean(
@@ -453,7 +454,7 @@ async function capturePostHogLicenseEvent(licenseData: Record<string, unknown>):
     const idPath = join(homedir(), '.dollhouse', '.telemetry-id');
     installId = (await readFile(idPath, 'utf-8')).trim();
   } catch {
-    installId = randomUUID();
+    installId = uuidv4();
   }
   const eventType = (licenseData.eventType as string) ?? 'activation';
   posthog.capture({
