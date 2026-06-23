@@ -16,7 +16,6 @@
  */
 
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { SECURITY_LIMITS } from '../../security/constants.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
@@ -26,6 +25,7 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
  */
 export const VALIDATION_CONSTANTS = {
   MAX_NAME_LENGTH: 100,
+  MAX_DESCRIPTION_LENGTH: 500,
   MAX_CATEGORY_LENGTH: 50,
   MAX_TAG_LENGTH: 50,
   MAX_AUTHOR_LENGTH: 100,
@@ -76,12 +76,12 @@ export class ElementValidation {
    * Validate and sanitize a description field
    *
    * @param description - Raw description value
-   * @param maxLength - Maximum length (default: YAML/frontmatter limit)
+   * @param maxLength - Maximum length (default: 500)
    * @returns Sanitized description or undefined
    */
   static validateDescription(
     description: any,
-    maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH
+    maxLength: number = VALIDATION_CONSTANTS.MAX_DESCRIPTION_LENGTH
   ): string | undefined {
     if (!description) {
       return undefined;
