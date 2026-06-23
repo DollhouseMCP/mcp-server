@@ -2421,7 +2421,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
         const validated: AgentGoalParameter = { name, type, required };
         if (typeof p.description === 'string' && p.description.length > 0) {
-          validated.description = sanitizeInput(p.description, 500);
+          validated.description = sanitizeInput(p.description, SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH);
         }
         if (p.default !== undefined) {
           // Sanitize string defaults to prevent injection when used in goal rendering

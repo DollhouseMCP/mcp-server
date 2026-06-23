@@ -145,9 +145,20 @@ export class Template extends BaseElement implements IElement {
         ...variable,
         name: sanitizeInput(UnicodeValidator.normalize(variable.name).normalizedContent, 50),
         description: variable.description
-          ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH)
+          ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH)
           : undefined,
         validation: variable.validation ? sanitizeInput(variable.validation, 200) : undefined
+      }));
+    }
+
+    if (this.metadata.examples) {
+      this.metadata.examples = this.metadata.examples.map(example => ({
+        ...example,
+        title: sanitizeInput(UnicodeValidator.normalize(example.title).normalizedContent, 100),
+        description: example.description
+          ? sanitizeInput(UnicodeValidator.normalize(example.description).normalizedContent, SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH)
+          : undefined,
+        output: example.output ? sanitizeInput(example.output, 5000) : undefined
       }));
     }
 

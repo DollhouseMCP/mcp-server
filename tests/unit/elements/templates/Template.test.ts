@@ -66,6 +66,25 @@ describe('Template', () => {
       expect(template.metadata.variables?.[0].description).toBe(longDescription);
     });
 
+    it('should preserve example descriptions longer than 500 characters', () => {
+      const longDescription = 'Detailed example documentation '.repeat(25).trim();
+
+      const template = new Template({
+        name: 'Long Example Description',
+        examples: [
+          {
+            title: 'Detailed Example',
+            description: longDescription,
+            variables: { topic: 'documentation' },
+            output: 'Generated output'
+          }
+        ]
+      }, 'Write about {{topic}}.', metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(template.metadata.examples?.[0].description).toBe(longDescription);
+    });
+
     it('should validate include paths', () => {
       expect(() => {
         new Template({

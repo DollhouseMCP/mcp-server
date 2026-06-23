@@ -114,7 +114,7 @@ export class Skill extends BaseElement implements IElement {
           name: sanitizeInput(UnicodeValidator.normalize(param.name).normalizedContent, 50),
           description: sanitizeInput(
             UnicodeValidator.normalize(param.description).normalizedContent,
-            SECURITY_LIMITS.MAX_YAML_LENGTH
+            SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH
           )
         };
         // Only include options if they exist (avoid undefined)

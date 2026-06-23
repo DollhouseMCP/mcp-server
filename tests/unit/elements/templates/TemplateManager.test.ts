@@ -224,6 +224,30 @@ Hello {{name}}!`;
       expect(template.metadata.tags).toEqual(['complex', 'advanced', 'features']);
     });
 
+    it('should preserve example descriptions longer than 500 characters when importing', async () => {
+      const longDescription = 'Detailed example documentation '.repeat(25).trim();
+      const importData = JSON.stringify({
+        metadata: {
+          name: 'Long Example Description',
+          description: 'Template with detailed example docs',
+          examples: [
+            {
+              title: 'Detailed Example',
+              description: longDescription,
+              variables: { topic: 'documentation' },
+              output: 'Generated output'
+            }
+          ]
+        },
+        content: 'Write about {{topic}}.'
+      });
+
+      const template = await manager.importElement(importData, 'json');
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(template.metadata.examples?.[0].description).toBe(longDescription);
+    });
+
     it('should sanitize metadata fields', async () => {
       const unsafeData = JSON.stringify({
         metadata: {
