@@ -25,6 +25,7 @@ import type { ConsoleHttpMethod, ConsoleRouteDefinition , ConsoleRequest } from 
 import { isElevationValidForRoute } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
 import { createConsoleRequestContextMiddleware, requireConsoleRequestContext } from './ConsoleRequestContext.js';
+import { createConsoleUnicodeNormalizationMiddleware } from './ConsoleUnicodeNormalization.js';
 import { executeConsoleRoute, sendConsoleHandlerResult } from './ConsoleRouteExecution.js';
 import {
   createConsoleUserContextMiddleware,
@@ -58,6 +59,7 @@ export function assembleSecuredConsoleRouter(
   router.use(createConsoleSecurityHeadersMiddleware());
   const authenticate = createConsoleAuthenticationMiddleware(options);
   const csrf = createConsoleCsrfProtectionMiddleware(options);
+  const normalizeBody = createConsoleUnicodeNormalizationMiddleware({ params: false, query: false, body: 'keys' });
   const userContext = options.userContext
     ? createConsoleUserContextMiddleware(options.userContext)
     : null;
@@ -67,6 +69,7 @@ export function assembleSecuredConsoleRouter(
       registerSecuredRoute(router, route, middlewareForRoute({
         route,
         options,
+        normalizeBody,
         authenticate,
         userContext,
         csrf,
@@ -113,16 +116,27 @@ export function assembleSecuredConsoleRouter(
 function middlewareForRoute(input: {
   readonly route: ConsoleRouteDefinition;
   readonly options: SecuredConsoleRouterOptions;
+  readonly normalizeBody: RequestHandler;
   readonly authenticate: RequestHandler;
   readonly userContext: RequestHandler | null;
   readonly csrf: RequestHandler;
 }): readonly RequestHandler[] {
+  const normalizeRequestTarget = createConsoleUnicodeNormalizationMiddleware({
+    body: 'off',
+    pathParamValueNormalization: input.route.pathParamValueNormalization,
+    queryParamValueNormalization: input.route.queryParamValueNormalization,
+  });
   if (input.route.audience === 'public') {
-    return [createSecuredHandler(input.route, input.options)];
+    // Current public console routes are GET-only health/auth redirects and do
+    // not consume JSON bodies. Avoid recursive body walking before any auth
+    // boundary; future public body routes must validate their own payloads.
+    return [normalizeRequestTarget, createSecuredHandler(input.route, input.options)];
   }
   return [
+    normalizeRequestTarget,
     ...(input.route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(input.route, input.options)] : []),
     input.authenticate,
+    input.normalizeBody,
     ...(input.userContext ? [input.userContext] : []),
     input.csrf,
     createConsoleAuthorizationMiddleware(input.route, input.options),

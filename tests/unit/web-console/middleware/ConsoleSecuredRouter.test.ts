@@ -35,6 +35,7 @@ const SELF_CAPABILITY = 'console:self' as const;
 const AUDIT_CAPABILITY = 'console:admin:audit' as const;
 const CONTEXT_PATH = '/api/v1/me/context';
 const CHANGE_PATH = '/api/v1/me/change';
+const UNICODE_CHANGE_PREFIX = '/api/v1/me/unicode-change';
 const HEALTH_PATH = '/api/v1/health/ready';
 const OWNED_SESSION_ID = 'mcp-session-owned';
 const OTHER_SESSION_ID = 'mcp-session-other';
@@ -137,6 +138,20 @@ function fixtureModules(
       handler: () => {
         onChange?.();
         return { status: 200, body: { changed: true } };
+      },
+    }, {
+      method: 'POST',
+      path: `${UNICODE_CHANGE_PREFIX}/:name`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      pathParamValueNormalization: { name: 'nfc' },
+      handler: req => {
+        onChange?.();
+        return { status: 200, body: { changed: true, name: req.params.name, query: req.query.q } };
       },
     }],
   }, {
@@ -452,6 +467,10 @@ function adminTransactionMutationRequest(app: express.Express, key: string = IDE
     .set(IDEMPOTENCY_HEADER, key);
 }
 
+function nestedJson(depth: number): string {
+  return '{"child":'.repeat(depth) + 'null' + '}'.repeat(depth);
+}
+
 describe('secured console router authentication', () => {
   it('serves public readiness without browser authentication', async () => {
     const { app, sessionStore } = await buildApp(null);
@@ -467,6 +486,19 @@ describe('secured console router authentication', () => {
     });
     expect(lookup).not.toHaveBeenCalled();
     expect(response.headers['content-security-policy']).toContain("frame-ancestors 'none'");
+  });
+
+  it('does not recursively normalize JSON bodies for public readiness routes', async () => {
+    const { app, sessionStore } = await buildApp(null);
+    const lookup = jest.spyOn(sessionStore, 'findActiveByIdHash');
+
+    const response = await request(app).get(HEALTH_PATH)
+      .set('Content-Type', 'application/json')
+      .send(nestedJson(80));
+
+    expect(response.status).toBe(503);
+    expect(response.body.code).toBeUndefined();
+    expect(lookup).not.toHaveBeenCalled();
   });
 
   it('resolves an opaque session to canonical user context and sets security headers', async () => {
@@ -552,6 +584,17 @@ describe('secured console router authentication', () => {
     expect(response.headers['x-content-type-options']).toBe('nosniff');
     expect(response.headers['referrer-policy']).toBe('strict-origin-when-cross-origin');
     expect(response.headers['permissions-policy']).toBe('geolocation=(), microphone=(), camera=()');
+  });
+
+  it('authenticates protected routes before walking JSON request bodies', async () => {
+    const { app } = await buildApp();
+
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Content-Type', 'application/json')
+      .send(nestedJson(80));
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
   });
 
   it('fails closed when the login subject maps to a disabled principal', async () => {
@@ -839,6 +882,30 @@ describe('secured console router browser protections', () => {
     expect(first.status).toBe(200);
     expect(replay.status).toBe(200);
     expect(replay.body).toEqual({ changed: true });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it('replays Unicode-equivalent normalized targets without reporting idempotency mismatch', async () => {
+    const { app, onChange } = await buildApp();
+    const headers = {
+      Cookie: csrfCookies(),
+      [CSRF_HEADER]: CSRF_VALUE,
+      Origin: ORIGIN,
+      [CONSOLE_REQUEST_HEADER]: '1',
+      [IDEMPOTENCY_HEADER]: IDEMPOTENCY_KEY,
+    };
+    const decomposedName = 'α-cafe\u0301';
+    const composedName = 'α-café';
+    const target = (name: string) =>
+      `${UNICODE_CHANGE_PREFIX}/${encodeURIComponent(name)}?q=${encodeURIComponent(name)}`;
+
+    const first = await request(app).post(target(decomposedName)).set(headers).send({ value: 1 });
+    const replay = await request(app).post(target(composedName)).set(headers).send({ value: 1 });
+
+    expect(first.status).toBe(200);
+    expect(first.body).toEqual({ changed: true, name: composedName, query: 'a-café' });
+    expect(replay.status).toBe(200);
+    expect(replay.body).toEqual(first.body);
     expect(onChange).toHaveBeenCalledTimes(1);
   });
 
@@ -1332,6 +1399,23 @@ describe('secured console router rate limiting', () => {
     expect(response.body.code).toBe('unauthenticated');
     expect(consume).not.toHaveBeenCalled();
     expect(onProtectedCorrelation).not.toHaveBeenCalled();
+  });
+
+  it('authenticates protected routes before walking deeply nested JSON bodies', async () => {
+    const { app, onChange } = await buildApp(record());
+    const deepBody = `${'{"nested":'.repeat(80)}null${'}'.repeat(80)}`;
+
+    const response = await request(app)
+      .post(CHANGE_PATH)
+      .set('Content-Type', 'application/json')
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY)
+      .send(deepBody);
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it('fails closed on protected rate-limit dependency errors', async () => {

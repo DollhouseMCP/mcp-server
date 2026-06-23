@@ -52,6 +52,7 @@ export type ConsoleOwnershipPolicy = 'none' | 'flow_transaction' | 'authenticate
 export type ConsoleIdempotencyPolicy = 'not_applicable' | 'required';
 export type ConsoleAuditExecutionPolicy = 'kernel' | 'handler_transaction';
 export type ConsoleResponseKind = 'json' | 'sse';
+export type ConsoleRequestTargetValueNormalization = 'security' | 'nfc';
 
 export interface ConsoleRequestContext {
   readonly correlationId: string;
@@ -160,6 +161,17 @@ export interface ConsoleRouteDefinition {
   readonly streamPolicy?: ConsoleStreamPolicy;
   readonly streamEventProjectors?: ConsoleStreamEventProjectors;
   readonly privacyProjector?: ConsolePrivacyProjector;
+  /**
+   * Path params are security-normalized by default. Mark params as `nfc` when
+   * they are free-form resource names whose confusable characters are part of
+   * the stored identifier, such as portfolio element names.
+   */
+  readonly pathParamValueNormalization?: Readonly<Record<string, ConsoleRequestTargetValueNormalization>>;
+  /**
+   * Query values are security-normalized by default. Mark query parameters as
+   * `nfc` when they are free-form filters compared against stored user text.
+   */
+  readonly queryParamValueNormalization?: Readonly<Record<string, ConsoleRequestTargetValueNormalization>>;
   readonly handler: ConsoleHandler;
 }
 

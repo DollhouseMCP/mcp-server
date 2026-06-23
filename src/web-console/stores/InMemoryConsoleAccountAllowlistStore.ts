@@ -11,6 +11,7 @@ import type {
 } from './IConsoleAccountAllowlistStore.js';
 import {
   cloneAllowlistEntry,
+  normalizeAllowlistDisplayValue,
   normalizeAllowlistValue,
   validateAllowlistAddInput,
   validateAllowlistRemoveInput,
@@ -71,7 +72,7 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
       id: randomUUID(),
       kind: input.kind,
       normalizedValue,
-      displayValue: input.value.trim(),
+      displayValue: normalizeAllowlistDisplayValue(input.value),
       note: input.note ?? null,
       createdByUserId: input.createdByUserId,
       createdAt: new Date(input.createdAt),

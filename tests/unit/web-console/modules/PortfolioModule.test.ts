@@ -190,6 +190,7 @@ describe('PortfolioModule', () => {
         path: ELEMENTS_PATH,
         ownership: 'authenticated_user',
         privacyClass: 'self_private',
+        queryParamValueNormalization: { tag: 'nfc' },
       }),
       expect.objectContaining({
         method: 'GET',

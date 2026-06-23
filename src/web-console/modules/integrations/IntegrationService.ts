@@ -1,5 +1,6 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import {
   CONSOLE_INTEGRATION_STATE_COOKIE,
   readCookie,
@@ -93,6 +94,10 @@ export class IntegrationService {
       expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
       consumedAt: null,
     });
+    logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration link flow started', {
+      userId: auth.userId,
+      contentsPermission,
+    });
     return {
       // Return the authorization URL in the body (not a 302): the console is an
       // SPA driven by fetch, which can't follow a cross-origin redirect, and CSRF
@@ -173,6 +178,9 @@ export class IntegrationService {
         errorReason: 'token_exchange_failed',
         occurredAt: this.now(),
       });
+      logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration token exchange failed', {
+        userId: auth.userId,
+      });
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
 
@@ -197,6 +205,11 @@ export class IntegrationService {
         )
         : null,
       connectedAt,
+    });
+    logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration connected', {
+      userId: auth.userId,
+      repositorySelection: exchanged.repositorySelection,
+      contentsPermission: exchanged.contentsPermission,
     });
 
     return {
@@ -230,6 +243,9 @@ export class IntegrationService {
         provider: 'github',
         revokedAt: this.now(),
       });
+      logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration disconnected', {
+        userId: auth.userId,
+      });
     }
     return {
       status: 200,
@@ -243,10 +259,10 @@ export class IntegrationService {
     active: NonNullable<Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>>,
   ): Promise<boolean> {
     const accessToken = active.accessTokenCiphertext
-      ? decryptNullable(deps.secretEncryption, active.accessTokenCiphertext, integrationSecretContext('access_token', auth.userId, 'github'))
+      ? decryptNullable(deps.secretEncryption, active.accessTokenCiphertext, integrationSecretContext('access_token', auth.userId, 'github'), auth.userId, 'github')
       : null;
     const refreshToken = active.refreshTokenCiphertext
-      ? decryptNullable(deps.secretEncryption, active.refreshTokenCiphertext, integrationSecretContext('refresh_token', auth.userId, 'github'))
+      ? decryptNullable(deps.secretEncryption, active.refreshTokenCiphertext, integrationSecretContext('refresh_token', auth.userId, 'github'), auth.userId, 'github')
       : null;
     try {
       await deps.githubProvider.revokeCredentials({
@@ -299,6 +315,10 @@ export class IntegrationService {
     userId: string | null,
     reason: IntegrationCallbackRejectedReason,
   ): Promise<void> {
+    logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration callback rejected', {
+      userId,
+      reason,
+    });
     try {
       await this.options.securityEventSink?.recordIntegrationCallbackRejected({
         type: 'console.auth.integration_callback_rejected.v1',
@@ -339,10 +359,17 @@ function decryptNullable(
   secretEncryption: ISecretEncryptionService,
   ciphertext: Buffer,
   context: IntegrationSecretContext,
+  userId: string,
+  provider: 'github',
 ): string | null {
   try {
     return secretEncryption.decrypt(ciphertext, context).toString('utf8');
   } catch {
+    logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration credential decrypt failed', {
+      userId,
+      provider,
+      secretClass: context.secretClass,
+    });
     return null;
   }
 }
@@ -391,6 +418,21 @@ function serviceUnavailable(detail: string): ConsoleHandlerResult {
   };
 }
 
+function logIntegrationSecurityEvent(
+  type: 'OPERATION_COMPLETED' | 'OPERATION_FAILED',
+  severity: 'LOW' | 'MEDIUM',
+  details: string,
+  additionalData?: Record<string, unknown>,
+): void {
+  SecurityMonitor.logSecurityEvent({
+    type,
+    severity,
+    source: 'IntegrationService',
+    details,
+    additionalData,
+  });
+}
+
 function buffersEqual(left: Buffer, right: Buffer): boolean {
-  return left.length === right.length && left.equals(right);
+  return left.length === right.length && timingSafeEqual(left, right);
 }

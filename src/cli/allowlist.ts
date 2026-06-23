@@ -35,6 +35,7 @@
 import { Command } from 'commander';
 import { openCliAuthStorage, type CliAuthStorageHandle } from './cliAuthStorage.js';
 import type { AuthAllowlistEntry, AuthAllowlistKind } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 const VALID_KINDS: readonly AuthAllowlistKind[] = ['email', 'github_username', 'github_id'];
 
@@ -68,6 +69,10 @@ function assertValidKind(kind: string): asserts kind is AuthAllowlistKind {
   }
 }
 
+function normalizeCliInput(value: string): string {
+  return UnicodeValidator.normalize(value).normalizedContent;
+}
+
 function formatEntry(e: AuthAllowlistEntry): string {
   const note = e.note ? ` — ${e.note}` : '';
   const by = e.createdBy ? ` (added by ${e.createdBy})` : '';
@@ -76,23 +81,26 @@ function formatEntry(e: AuthAllowlistEntry): string {
 }
 
 async function runAdd(handle: CliAuthStorageHandle, opts: AddOptions): Promise<void> {
-  assertValidKind(opts.kind);
-  if (!opts.value || opts.value.trim().length === 0) {
+  const kind = normalizeCliInput(opts.kind).trim();
+  const value = normalizeCliInput(opts.value).trim();
+  const note = opts.note === undefined ? undefined : normalizeCliInput(opts.note);
+  assertValidKind(kind);
+  if (!value) {
     process.stderr.write('--value is required.\n');
     process.exit(1);
   }
   try {
     const entry = await handle.storage.allowlistAdd({
-      kind: opts.kind,
-      value: opts.value,
-      note: opts.note ?? null,
+      kind,
+      value,
+      note: note ?? null,
       createdBy: 'cli',
     });
     process.stdout.write(`Added: ${formatEntry(entry)}\n`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     if (msg.includes('already exists')) {
-      process.stderr.write(`Entry already exists for kind=${opts.kind} value=${opts.value.toLowerCase()}\n`);
+      process.stderr.write(`Entry already exists for kind=${kind} value=${value.toLowerCase()}\n`);
       process.exit(1);
     }
     throw err;
@@ -100,15 +108,16 @@ async function runAdd(handle: CliAuthStorageHandle, opts: AddOptions): Promise<v
 }
 
 async function runList(handle: CliAuthStorageHandle, opts: ListOptions): Promise<void> {
-  if (opts.kind !== undefined) {
-    assertValidKind(opts.kind);
+  const kind = opts.kind === undefined ? undefined : normalizeCliInput(opts.kind).trim();
+  if (kind !== undefined) {
+    assertValidKind(kind);
   }
   const all = await handle.storage.allowlistList();
-  const filtered = opts.kind ? all.filter(e => e.kind === opts.kind) : all;
+  const filtered = kind ? all.filter(e => e.kind === kind) : all;
   if (filtered.length === 0) {
     process.stdout.write(
-      opts.kind
-        ? `No allowlist entries of kind '${opts.kind}'.\n`
+      kind
+        ? `No allowlist entries of kind '${kind}'.\n`
         : 'Allowlist is empty.\n',
     );
     return;
@@ -139,18 +148,19 @@ async function runRemove(handle: CliAuthStorageHandle, opts: RemoveOptions): Pro
 
   let targetId: string;
   if (byId) {
-    targetId = opts.id!;
+    targetId = normalizeCliInput(opts.id!).trim();
   } else {
     if (opts.kind === undefined || opts.value === undefined) {
       process.stderr.write('--kind and --value are both required when removing by value.\n');
       process.exit(1);
     }
-    assertValidKind(opts.kind);
-    const value = opts.value.toLowerCase();
+    const kind = normalizeCliInput(opts.kind).trim();
+    assertValidKind(kind);
+    const value = normalizeCliInput(opts.value).trim().toLowerCase();
     const all = await handle.storage.allowlistList();
-    const found = all.find(e => e.kind === opts.kind && e.value === value);
+    const found = all.find(e => e.kind === kind && e.value === value);
     if (!found) {
-      process.stderr.write(`No allowlist entry found for kind=${opts.kind} value=${value}\n`);
+      process.stderr.write(`No allowlist entry found for kind=${kind} value=${value}\n`);
       process.exit(1);
     }
     targetId = found.id;
@@ -165,7 +175,8 @@ async function runRemove(handle: CliAuthStorageHandle, opts: RemoveOptions): Pro
 }
 
 async function runUpdate(handle: CliAuthStorageHandle, opts: UpdateOptions): Promise<void> {
-  if (!opts.id || opts.id.trim().length === 0) {
+  const id = normalizeCliInput(opts.id).trim();
+  if (!id) {
     process.stderr.write('--id is required.\n');
     process.exit(1);
   }
@@ -173,11 +184,12 @@ async function runUpdate(handle: CliAuthStorageHandle, opts: UpdateOptions): Pro
     process.stderr.write('Nothing to update. Pass --note <text> (or empty string to clear).\n');
     process.exit(1);
   }
-  const updated = await handle.storage.allowlistUpdate(opts.id, {
-    note: opts.note === '' ? null : opts.note,
+  const note = normalizeCliInput(opts.note);
+  const updated = await handle.storage.allowlistUpdate(id, {
+    note: note === '' ? null : note,
   });
   if (!updated) {
-    process.stderr.write(`No allowlist entry found with id '${opts.id}'.\n`);
+    process.stderr.write(`No allowlist entry found with id '${id}'.\n`);
     process.exit(1);
   }
   process.stdout.write(`Updated: ${formatEntry(updated)}\n`);

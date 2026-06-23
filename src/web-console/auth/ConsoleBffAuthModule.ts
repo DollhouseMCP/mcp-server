@@ -1,6 +1,7 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 import { logger } from '../../utils/logger.js';
+import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 import type { IConsoleIdentityResolver } from '../identity/IConsoleIdentityResolver.js';
 import {
@@ -178,6 +179,7 @@ class ConsoleBffAuthService {
     const code = singleQueryValue(req.query.code);
     const state = singleQueryValue(req.query.state);
     if (!transactionId || !code || !state) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console login callback rejected: missing parameters');
       return failedCallback();
     }
 
@@ -187,6 +189,7 @@ class ConsoleBffAuthService {
       this.now(),
     );
     if (transaction?.flowKind !== 'login') {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console login callback rejected: invalid transaction');
       return failedCallback();
     }
 
@@ -202,6 +205,7 @@ class ConsoleBffAuthService {
         redirectUri: this.redirectUri,
       });
     } catch {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console login callback rejected: code exchange failed');
       return failedCallback();
     }
     // Link this identity to its users row before resolving (idempotent). Lets a
@@ -210,6 +214,7 @@ class ConsoleBffAuthService {
     await this.options.identityResolver.linkAccount(claims.sub, claims.displayName);
     const principal = await this.options.identityResolver.resolveEnabledPrincipal(claims.sub);
     if (!principal) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console login callback rejected: principal unavailable');
       return failedCallback();
     }
 
@@ -231,6 +236,7 @@ class ConsoleBffAuthService {
       lastIp: typeof req.ip === 'string' ? req.ip : null,
       userAgent: typeof req.headers['user-agent'] === 'string' ? req.headers['user-agent'] : null,
     });
+    logConsoleAuthEvent('OPERATION_COMPLETED', 'LOW', 'Console login completed', { userId: principal.userId });
 
     return {
       status: 302,
@@ -247,6 +253,9 @@ class ConsoleBffAuthService {
     const authentication = requireAuthentication(req);
     const capability = readRequestedAdminCapability(req);
     if (!capability) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: invalid capability', {
+        userId: authentication.userId,
+      });
       return invalidCapability();
     }
     const now = this.now();
@@ -292,6 +301,9 @@ class ConsoleBffAuthService {
     const code = singleQueryValue(req.query.code);
     const state = singleQueryValue(req.query.state);
     if (!transactionId || !code || !state) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: missing parameters', {
+        userId: authentication.userId,
+      });
       logger.warn('[ConsoleBffAuthModule] step-up rejected: missing params', {
         hasTransactionId: !!transactionId, hasCode: !!code, hasState: !!state,
       });
@@ -319,6 +331,10 @@ class ConsoleBffAuthService {
         sessionMatch: !!transaction?.consoleSessionIdHash &&
           buffersEqual(transaction.consoleSessionIdHash, authentication.sessionIdHash),
       });
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: invalid transaction', {
+        userId: authentication.userId,
+        flowKind: transaction?.flowKind ?? null,
+      });
       return failedCallback();
     }
 
@@ -334,6 +350,9 @@ class ConsoleBffAuthService {
         redirectUri: this.stepUpRedirectUri,
       });
     } catch (error) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: code exchange failed', {
+        userId: authentication.userId,
+      });
       logger.warn('[ConsoleBffAuthModule] step-up rejected: code exchange failed', {
         error: error instanceof Error ? error.message : String(error),
       });
@@ -356,6 +375,10 @@ class ConsoleBffAuthService {
         `inFuture=${claims.authTime ? claims.authTime > now : 'n/a'} ` +
         `stale=${claims.authTime ? claims.authTime.getTime() + AUTH_TIME_FRESHNESS_MAX_MS <= now.getTime() : 'n/a'}`,
       );
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: claims check failed', {
+        userId: authentication.userId,
+        acr: claims.acr ?? null,
+      });
       return failedCallback();
     }
     // One step-up elevates the session to the principal's FULL role-entitled
@@ -375,8 +398,15 @@ class ConsoleBffAuthService {
       authTime: claims.authTime,
     }, now);
     if (!attached) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: session elevation update failed', {
+        userId: authentication.userId,
+      });
       return failedCallback();
     }
+    logConsoleAuthEvent('OPERATION_COMPLETED', 'LOW', 'Console step-up completed', {
+      userId: authentication.userId,
+      requestedCapability: transaction.requestedCapability,
+    });
     return {
       status: 302,
       redirectTo: transaction.returnTo ?? '/',
@@ -387,12 +417,18 @@ class ConsoleBffAuthService {
   async stepDown(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const authentication = requireAuthentication(req);
     await this.options.sessionStore.clearElevation(authentication.sessionIdHash, this.now());
+    logConsoleAuthEvent('OPERATION_COMPLETED', 'LOW', 'Console step-down completed', {
+      userId: authentication.userId,
+    });
     return { status: 204 };
   }
 
   async logout(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const authentication = requireAuthentication(req);
     await this.options.sessionStore.revoke(authentication.sessionIdHash, this.now());
+    logConsoleAuthEvent('OPERATION_COMPLETED', 'LOW', 'Console logout completed', {
+      userId: authentication.userId,
+    });
     return {
       status: 204,
       cookies: [
@@ -498,6 +534,21 @@ function invalidCapability(): ConsoleHandlerResult {
   };
 }
 
+function logConsoleAuthEvent(
+  type: 'OPERATION_COMPLETED' | 'OPERATION_FAILED',
+  severity: 'LOW' | 'MEDIUM',
+  details: string,
+  additionalData?: Record<string, unknown>,
+): void {
+  SecurityMonitor.logSecurityEvent({
+    type,
+    severity,
+    source: 'ConsoleBffAuthModule',
+    details,
+    additionalData,
+  });
+}
+
 function requireAuthentication(req: ConsoleRequest): ConsoleAuthenticatedContext {
   if (!req.consoleAuthentication) {
     throw new Error('Console authentication context is required');
@@ -506,5 +557,5 @@ function requireAuthentication(req: ConsoleRequest): ConsoleAuthenticatedContext
 }
 
 function buffersEqual(left: Buffer, right: Buffer): boolean {
-  return left.length === right.length && left.equals(right);
+  return left.length === right.length && timingSafeEqual(left, right);
 }
