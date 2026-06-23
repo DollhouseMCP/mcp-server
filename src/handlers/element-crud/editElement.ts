@@ -71,6 +71,19 @@ const READ_ONLY_FIELDS = new Set([
   '_isDirty'
 ]);
 
+function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
+  switch (fieldType) {
+    case 'name':
+      return SECURITY_LIMITS.MAX_NAME_LENGTH;
+    case 'description':
+      return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
+    case 'content':
+      return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+    case 'filename':
+      return SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH;
+  }
+}
+
 /**
  * Issue #662: Systematic field type validation at the editElement boundary.
  *
@@ -214,10 +227,7 @@ function validateFieldValue(
     return null; // No validation rules for this field
   }
 
-  // Determine max length based on field type, using system constants
-  const maxLength = fieldType === 'name' ? SECURITY_LIMITS.MAX_NAME_LENGTH :
-                    fieldType === 'description' ? SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH :
-                    fieldType === 'content' ? SECURITY_LIMITS.MAX_CONTENT_LENGTH : SECURITY_LIMITS.MAX_COMMAND_ARG_LENGTH;
+  const maxLength = getMaxLengthForFieldType(fieldType);
 
   const result = validationService.validateAndSanitizeInput(value, {
     maxLength,
