@@ -16,7 +16,13 @@
 
 const API_PREFIX = '/api/v1';
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
-const RESERVED_NORMALIZED_KEYS = new Set(['__proto__', '__defineGetter__', '__defineSetter__']);
+const RESERVED_NORMALIZED_KEYS = new Set([
+  '__proto__',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+]);
 
 function assertCanWriteNormalizedKey(seen, key) {
   if (RESERVED_NORMALIZED_KEYS.has(key)) {
@@ -28,6 +34,10 @@ function assertCanWriteNormalizedKey(seen, key) {
   seen.add(key);
 }
 
+/**
+ * Normalize API request targets. Paths and query fragments are identifiers, so
+ * string values are NFC-normalized along with object keys before fetch.
+ */
 function normalizeUnicode(value) {
   if (typeof value === 'string') return value.normalize('NFC');
   if (Array.isArray(value)) return value.map(item => normalizeUnicode(item));
@@ -49,6 +59,10 @@ function normalizeUnicode(value) {
   return value;
 }
 
+/**
+ * Normalize JSON body keys without rewriting string values. Element content and
+ * metadata can contain free-form user text that must round-trip exactly.
+ */
 function normalizeBodyKeys(value) {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value.map(item => normalizeBodyKeys(item));

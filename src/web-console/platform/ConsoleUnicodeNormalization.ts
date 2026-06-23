@@ -8,7 +8,24 @@ type StringNormalizationMode = ConsolePathParamValueNormalization | 'preserve';
 
 const MAX_BODY_NORMALIZATION_DEPTH = 64;
 const MAX_BODY_NORMALIZATION_NODES = 10_000;
-const PROTOTYPE_POLLUTING_KEYS = new Set(['__proto__', '__defineGetter__', '__defineSetter__']);
+const JSON_OBJECT_RESERVED_KEYS = new Set([
+  '__proto__',
+  '__defineGetter__',
+  '__defineSetter__',
+  '__lookupGetter__',
+  '__lookupSetter__',
+]);
+const ROUTE_PARAM_RESERVED_KEYS = new Set([
+  ...JSON_OBJECT_RESERVED_KEYS,
+  'constructor',
+  'hasOwnProperty',
+  'isPrototypeOf',
+  'propertyIsEnumerable',
+  'prototype',
+  'toLocaleString',
+  'toString',
+  'valueOf',
+]);
 
 interface ConsoleUnicodeNormalizationOptions {
   readonly params?: boolean;
@@ -38,9 +55,14 @@ export function createConsoleUnicodeNormalizationMiddleware(
   return (request, _response, next): void => {
     try {
       if (normalizeParams) {
-        normalizeRecordInPlace(request.params as MutableRecord, {
-          strings: 'security',
-          stringModesByKey: pathParamValueNormalization,
+        Object.defineProperty(request, 'params', {
+          value: normalizeRecord(request.params as MutableRecord, {
+            strings: 'security',
+            stringModesByKey: pathParamValueNormalization,
+          }),
+          configurable: true,
+          enumerable: true,
+          writable: true,
         });
       }
       if (normalizeQuery) {
@@ -66,18 +88,17 @@ export function createConsoleUnicodeNormalizationMiddleware(
   };
 }
 
-function normalizeRecordInPlace(value: MutableRecord, options: NormalizeValueOptions): void {
+function normalizeRecord(value: MutableRecord, options: NormalizeValueOptions): MutableRecord {
+  const normalized = Object.create(null) as MutableRecord;
   const entries = Object.entries(value);
   const seen = new Set<string>();
-  for (const key of Object.keys(value)) {
-    delete value[key];
-  }
   for (const [key, item] of entries) {
     const normalizedKey = UnicodeValidator.normalize(key).normalizedContent;
-    assertNoNormalizedKeyCollision(seen, normalizedKey);
+    assertNoNormalizedKeyCollision(seen, normalizedKey, ROUTE_PARAM_RESERVED_KEYS);
     const normalizedValue = normalizeValue(item, optionsForKey(options, key, normalizedKey), 1);
-    defineDataProperty(value, normalizedKey, normalizedValue);
+    defineDataProperty(normalized, normalizedKey, normalizedValue);
   }
+  return normalized;
 }
 
 function normalizeValue(value: unknown, options: NormalizeValueOptions, depth = 0): unknown {
@@ -119,7 +140,7 @@ function normalizePlainObject(value: MutableRecord, options: NormalizeValueOptio
   const seen = new Set<string>();
   for (const [key, item] of Object.entries(value)) {
     const normalizedKey = UnicodeValidator.normalize(key).normalizedContent;
-    assertNoNormalizedKeyCollision(seen, normalizedKey);
+    assertNoNormalizedKeyCollision(seen, normalizedKey, JSON_OBJECT_RESERVED_KEYS);
     defineDataProperty(normalized, normalizedKey, normalizeValue(item, options, depth + 1));
   }
   return normalized;
@@ -136,8 +157,8 @@ function checkBodyTraversal(options: NormalizeValueOptions, depth: number): void
   }
 }
 
-function assertNoNormalizedKeyCollision(seen: Set<string>, key: string): void {
-  if (PROTOTYPE_POLLUTING_KEYS.has(key)) {
+function assertNoNormalizedKeyCollision(seen: Set<string>, key: string, reservedKeys: ReadonlySet<string>): void {
+  if (reservedKeys.has(key)) {
     throw new ConsoleStoreValidationError('Request contains a reserved Unicode-normalized field');
   }
   if (seen.has(key)) {

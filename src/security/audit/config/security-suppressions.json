@@ -112,13 +112,73 @@
     },
     {
       "rule": "DMCP-SEC-004",
-      "file": "src/web-console/**/*.ts",
-      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: ConsoleUnicodeNormalization middleware normalizes route params, query values, and JSON body strings for both secured and fixture console routers before handlers, modules, stores, or services run. Cookie/header credentials intentionally remain exact-match opaque values."
+      "file": "src/web-console/WebConsoleRegistrar.ts",
+      "reason": "WEB-CONSOLE COMPOSITION: Registrar wires stores, modules, and the secured router. Runtime request input is normalized by ConsoleUnicodeNormalization before route handlers; deployment/configuration secrets and OAuth identifiers remain exact-match opaque values."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/auth/ConsoleBffAuthModule.ts",
+      "reason": "OPAQUE OAUTH FLOW VALUES: Login state, PKCE verifier, authorization code, session cookies, and JWT values are credentials/protocol values that must be exact-match validated. Return paths are normalized through ConsoleReturnPaths and route payloads pass through ConsoleUnicodeNormalization."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/auth/EmbeddedAsConsoleOAuthClient.ts",
+      "reason": "OPAQUE OAUTH CLIENT VALUES: Authorization codes, code verifiers, redirect URIs, and JWTs are protocol credentials and must not be Unicode-folded. JWT claims are validated after jose verification and are not free-form request payloads."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/identity/provisionConsoleAdmin.ts",
+      "reason": "OPERATOR BOOTSTRAP IDENTITY: Admin provisioning keys users by exact OAuth subject identifiers. Normalizing subject strings would break identity binding; display names are free-form and not used for authorization decisions."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleAdminAudit.ts",
+      "reason": "AUDIT CONTEXT ONLY: Admin audit events record authenticated session context, route metadata, normalized path/query/body-derived handler summaries, and opaque request headers for traceability. It does not authorize from raw user text."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleAuthentication.ts",
+      "reason": "OPAQUE SESSION VALUES: Session cookies and stored hashes are exact-match credentials and must not be Unicode-normalized. Request path/query/body values are normalized after authentication by the secured router."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleCsrfProtection.ts",
+      "reason": "OPAQUE CSRF VALUES: CSRF cookie/header values, Origin, Sec-Fetch-Site, and X-Console-Request are browser protocol values checked by exact comparison. They are not free-form user payloads."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleOwnership.ts",
+      "reason": "NORMALIZED ROUTE PARAM CONSUMER: Ownership checks run after ConsoleUnicodeNormalization and authentication. Runtime session ids are read from normalized route params and compared as exact stored identifiers."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleRateLimit.ts",
+      "reason": "NORMALIZED ROUTE PARAM CONSUMER: Protected-correlation rate limits run after ConsoleUnicodeNormalization and authentication. Account correlation ids are normalized route params before limiter consumption."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Route-served console modules receive request params, query values, and JSON body keys through ConsoleUnicodeNormalization before handlers run. New non-route-served module files require manual DMCP-SEC-004 review."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/platform/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Platform routing owns ConsoleUnicodeNormalization and request canonicalization. New non-route middleware must be reviewed before relying on this suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/services/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Web-console services are invoked from normalized console routes or trusted lifecycle jobs. New externally reachable service entry points require manual DMCP-SEC-004 review."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/stores/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Web-console stores are reached from normalized console route handlers or trusted server composition. New direct external-input store entry points require manual DMCP-SEC-004 review."
     },
     {
       "rule": "DMCP-SEC-004",
       "file": "src/web-console/ui/*.js",
-      "reason": "Browser console modules send requests through ui/api.js, which applies native NFC normalization to API paths and JSON payload strings before fetch. Server-side ConsoleUnicodeNormalization remains the authoritative boundary for all console route params, query values, and bodies."
+      "reason": "Browser console modules send requests through ui/api.js, which applies native NFC normalization to API paths and JSON payload keys before fetch. Server-side ConsoleUnicodeNormalization remains the authoritative boundary for all console route params, query values, and bodies."
     },
     {
       "rule": "DMCP-SEC-004",

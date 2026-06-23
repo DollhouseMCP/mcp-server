@@ -216,6 +216,7 @@ describe('console platform HTTP foundations', () => {
           status: 200,
           body: {
             param: req.params.name,
+            paramPrototype: Object.getPrototypeOf(req.params) === null,
             query: req.query.q,
             keyed: (req.body as Record<string, unknown>)['café'],
             nested: (req.body as { nested: { label: string } }).nested.label,
@@ -241,6 +242,7 @@ describe('console platform HTTP foundations', () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       param: 'café',
+      paramPrototype: true,
       query: 'café',
       keyed: 'body-key-normalized',
       nested: decomposedCafe,
@@ -282,37 +284,40 @@ describe('console platform HTTP foundations', () => {
     expect(response.body).toEqual({ name: 'α-café' });
   });
 
-  it('rejects reserved route params before they can invoke prototype setters', async () => {
-    const registry = new ConsoleModuleRegistry();
-    const handler = jest.fn(() => ({ status: 200, body: {} }));
-    registry.register({
-      id: 'prototype-param',
-      apiVersion: 'v1',
-      capabilities: [SELF_CAPABILITY],
-      routes: [{
-        method: 'GET',
-        path: '/api/v1/me/prototype-param/:__proto__',
-        audience: 'self',
-        requiredCapability: SELF_CAPABILITY,
-        ownership: 'authenticated_user',
-        elevation: 'none',
-        privacyClass: 'self_private',
-        idempotency: 'not_applicable',
-        handler,
-      }],
-    });
-    const app = express();
-    app.use(assembleConsoleRouter(registry));
+  it.each(['__proto__', 'constructor'])(
+    'rejects reserved route param key %s before it can shadow object internals',
+    async paramName => {
+      const registry = new ConsoleModuleRegistry();
+      const handler = jest.fn(() => ({ status: 200, body: {} }));
+      registry.register({
+        id: 'prototype-param',
+        apiVersion: 'v1',
+        capabilities: [SELF_CAPABILITY],
+        routes: [{
+          method: 'GET',
+          path: `/api/v1/me/prototype-param/:${paramName}`,
+          audience: 'self',
+          requiredCapability: SELF_CAPABILITY,
+          ownership: 'authenticated_user',
+          elevation: 'none',
+          privacyClass: 'self_private',
+          idempotency: 'not_applicable',
+          handler,
+        }],
+      });
+      const app = express();
+      app.use(assembleConsoleRouter(registry));
 
-    const response = await request(app).get('/api/v1/me/prototype-param/not-admin');
+      const response = await request(app).get('/api/v1/me/prototype-param/not-admin');
 
-    expect(response.status).toBe(400);
-    expect(response.body).toMatchObject({
-      code: 'invalid_request',
-      detail: 'Request contains a reserved Unicode-normalized field',
-    });
-    expect(handler).not.toHaveBeenCalled();
-  });
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'invalid_request',
+        detail: 'Request contains a reserved Unicode-normalized field',
+      });
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
 
   it('rejects reserved JSON body keys before they can invoke prototype setters', async () => {
     const registry = new ConsoleModuleRegistry();
