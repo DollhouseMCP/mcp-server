@@ -39,6 +39,11 @@ interface PermissionDecision {
   id: string;
   timestamp: string;
   session_id?: string;
+  turn_id?: string;
+  tool_use_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  model?: string;
   tool_name: string;
   command?: string;
   decision: string;
@@ -87,13 +92,22 @@ interface KnownPolicySession {
   source: 'policy';
 }
 
+interface PermissionDecisionContext {
+  session_id?: string;
+  turn_id?: string;
+  tool_use_id?: string;
+  transcript_path?: string;
+  cwd?: string;
+  model?: string;
+}
+
 const PERMISSION_ROUTE_RATE_LIMIT_REQUESTS = 120;
 const PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS = 60_000;
 const DECISION_BUFFER_SIZE = 200;
 
 interface PermissionDecisionTracker {
   trackDecision(
-    sessionId: string | undefined,
+    context: PermissionDecisionContext,
     toolName: string,
     input: PermissionDecisionInput,
     result: Record<string, unknown>,
@@ -105,6 +119,18 @@ interface PermissionDecisionTracker {
 const CLAUDE_COMPATIBLE_HOOK_PLATFORMS = new Set(['claude_code', 'vscode']);
 const NORMALIZABLE_PERMISSION_DECISIONS = new Set(['allow', 'deny', 'ask']);
 type NormalizablePermissionDecision = 'allow' | 'deny' | 'ask';
+const CONTEXT_DETAIL_FIELDS: Array<{
+  key: keyof PermissionDecisionContext;
+  label: string;
+  monospace?: boolean;
+}> = [
+  { key: 'session_id', label: 'Session', monospace: true },
+  { key: 'turn_id', label: 'Turn', monospace: true },
+  { key: 'tool_use_id', label: 'Tool Use', monospace: true },
+  { key: 'transcript_path', label: 'Transcript', monospace: true },
+  { key: 'cwd', label: 'Workspace', monospace: true },
+  { key: 'model', label: 'Model', monospace: true },
+];
 
 /** Extract a string field from a record, trying multiple keys in order */
 function extractString(obj: Record<string, unknown>, keys: string[], fallback: string): string {
@@ -132,6 +158,13 @@ function extractDecision(result: Record<string, unknown>, platform?: string): st
   if (typeof result.allowed === 'boolean') return result.allowed ? 'allow' : 'deny';
   if (platform === 'codex' && isEmptyObject(result)) return 'allow';
   return 'unknown';
+}
+
+function normalizeOptionalRequestString(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+
+  const normalized = value.normalize('NFC');
+  return normalized === '' ? undefined : normalized;
 }
 
 function extractReason(result: Record<string, unknown>): string {
@@ -183,6 +216,7 @@ function buildDecisionDetails(
   input: PermissionDecisionInput,
   result: Record<string, unknown>,
   platform: string,
+  context: PermissionDecisionContext,
 ): { target?: string; targetLabel?: string; details: PermissionDecisionDetail[] } {
   const details: PermissionDecisionDetail[] = [];
 
@@ -192,6 +226,13 @@ function buildDecisionDetails(
 
   if (toolName === 'Bash' && typeof input.command === 'string' && input.command !== '') {
     details.push({ label: 'Command', value: input.command, monospace: true });
+  }
+
+  for (const descriptor of CONTEXT_DETAIL_FIELDS) {
+    const value = context[descriptor.key];
+    if (typeof value === 'string') {
+      details.push({ label: descriptor.label, value, monospace: descriptor.monospace });
+    }
   }
 
   const targetDescriptors: PermissionDecisionTargetDescriptor[] = [
@@ -238,17 +279,22 @@ function createPermissionDecisionTracker(bufferSize = DECISION_BUFFER_SIZE): Per
 
   return {
     trackDecision(
-      sessionId: string | undefined,
+      context: PermissionDecisionContext,
       toolName: string,
       input: PermissionDecisionInput,
       result: Record<string, unknown>,
       platform: string,
     ): void {
-      const detailState = buildDecisionDetails(toolName, input, result, platform);
+      const detailState = buildDecisionDetails(toolName, input, result, platform, context);
       const entry: PermissionDecision = {
         id: `d-${++decisionCounter}`,
         timestamp: new Date().toISOString(),
-        ...(sessionId ? { session_id: sessionId } : {}),
+        ...(context.session_id ? { session_id: context.session_id } : {}),
+        ...(context.turn_id ? { turn_id: context.turn_id } : {}),
+        ...(context.tool_use_id ? { tool_use_id: context.tool_use_id } : {}),
+        ...(context.transcript_path ? { transcript_path: context.transcript_path } : {}),
+        ...(context.cwd ? { cwd: context.cwd } : {}),
+        ...(context.model ? { model: context.model } : {}),
         tool_name: toolName,
         command: toolName === 'Bash' && typeof input?.command === 'string' ? input.command : undefined,
         decision: extractDecision(result, platform),
@@ -402,6 +448,11 @@ export function registerPermissionRoutes(
       input?: PermissionDecisionInput;
       platform?: string;
       session_id?: string;
+      turn_id?: string;
+      tool_use_id?: string;
+      transcript_path?: string;
+      cwd?: string;
+      model?: string;
     };
     const platform = typeof body.platform === 'string' ? body.platform.normalize('NFC') : 'claude_code';
 
@@ -412,7 +463,14 @@ export function registerPermissionRoutes(
 
     // Unicode normalization (NFC) on string inputs to prevent homograph attacks
     const tool_name = typeof body.tool_name === 'string' ? body.tool_name.normalize('NFC') : undefined;
-    const session_id = typeof body.session_id === 'string' ? body.session_id.normalize('NFC') : undefined;
+    const context: PermissionDecisionContext = {
+      session_id: normalizeOptionalRequestString(body.session_id),
+      turn_id: normalizeOptionalRequestString(body.turn_id),
+      tool_use_id: normalizeOptionalRequestString(body.tool_use_id),
+      transcript_path: normalizeOptionalRequestString(body.transcript_path),
+      cwd: normalizeOptionalRequestString(body.cwd),
+      model: normalizeOptionalRequestString(body.model),
+    };
     const input = body.input;
 
     if (!tool_name) {
@@ -428,7 +486,7 @@ export function registerPermissionRoutes(
           tool_name,
           input: input || {},
           platform,
-          ...(session_id ? { session_id } : {}),
+          ...(context.session_id ? { session_id: context.session_id } : {}),
         },
       }));
       const elapsedMs = Date.now() - startMs;
@@ -450,7 +508,7 @@ export function registerPermissionRoutes(
       logger.debug(`[WebUI/Gateway] evaluate_permission: ${tool_name} → ${decision} (${elapsedMs}ms)`);
 
       // Track decision for live dashboard feed
-      decisionTracker.trackDecision(session_id, tool_name, input || {}, trackedResult, platform);
+      decisionTracker.trackDecision(context, tool_name, input || {}, trackedResult, platform);
 
       res.json(responseData);
     } catch (err) {

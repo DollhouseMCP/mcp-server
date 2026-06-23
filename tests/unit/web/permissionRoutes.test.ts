@@ -758,6 +758,11 @@ describe('permissionRoutes', () => {
           input: { command: 'pwd' },
           platform: 'codex',
           session_id: 'session-codex',
+          turn_id: 'turn-42',
+          tool_use_id: 'tool-use-99',
+          transcript_path: '/Users/codex/.codex/transcripts/session.jsonl',
+          cwd: '/workspace/project',
+          model: 'gpt-5.4',
         });
 
       expect(response.body).toEqual({});
@@ -765,11 +770,24 @@ describe('permissionRoutes', () => {
       const status = await request(app).get('/api/permissions/status');
       expect(status.body.recentDecisions[0]).toEqual(expect.objectContaining({
         session_id: 'session-codex',
+        turn_id: 'turn-42',
+        tool_use_id: 'tool-use-99',
+        transcript_path: '/Users/codex/.codex/transcripts/session.jsonl',
+        cwd: '/workspace/project',
+        model: 'gpt-5.4',
         tool_name: 'Bash',
         command: 'pwd',
         decision: 'allow',
         platform: 'codex',
       }));
+      expect(status.body.recentDecisions[0].details).toEqual(expect.arrayContaining([
+        { label: 'Session', value: 'session-codex', monospace: true },
+        { label: 'Turn', value: 'turn-42', monospace: true },
+        { label: 'Tool Use', value: 'tool-use-99', monospace: true },
+        { label: 'Transcript', value: '/Users/codex/.codex/transcripts/session.jsonl', monospace: true },
+        { label: 'Workspace', value: '/workspace/project', monospace: true },
+        { label: 'Model', value: 'gpt-5.4', monospace: true },
+      ]));
     });
 
     it('should include useful audit detail fields for tracked decisions', async () => {
