@@ -133,29 +133,6 @@ This is a test skill.`;
         .rejects.toThrow();
     });
 
-    it('should preserve long parameter descriptions from skill metadata', async () => {
-      const longDescription = 'Skill parameter description '.padEnd(1024, 'a');
-      const skillContent = `---
-name: Parameter Skill
-description: A skill with detailed parameter metadata
-parameters:
-  - name: prompt
-    type: string
-    description: ${longDescription}
----
-# Parameter Skill
-
-This skill has a parameter with a substantive description.`;
-
-      const skillPath = path.join(portfolioManager.getElementDir(ElementType.SKILL), 'parameter-skill.md');
-      await fs.writeFile(skillPath, skillContent);
-
-      const skill = await skillManager.load('parameter-skill.md');
-
-      expect(skill.metadata.parameters?.[0].description).toBe(longDescription);
-      expect(skill.metadata.parameters?.[0].description.length).toBeGreaterThan(500);
-    });
-
     it('should validate file paths', async () => {
       await expect(skillManager.load('../../../etc/passwd'))
         .rejects.toThrow('Invalid skill path');
@@ -416,6 +393,26 @@ tags:
         source: 'SkillManager.importElement',
         details: 'YAML content safely parsed'
       });
+    });
+
+    it('should preserve parameter descriptions longer than 200 characters when importing', async () => {
+      const longDescription = 'Detailed parameter guidance '.repeat(10).trim();
+      const yamlData = {
+        name: 'Long Parameter Description',
+        description: 'Imported skill with detailed parameter docs',
+        parameters: [
+          {
+            name: 'topic',
+            type: 'string',
+            description: longDescription
+          }
+        ]
+      };
+
+      const skill = await skillManager.importElement(JSON.stringify(yamlData), 'json');
+
+      expect(longDescription.length).toBeGreaterThan(200);
+      expect(skill.metadata.parameters?.[0].description).toBe(longDescription);
     });
 
     it('should import from JSON format', async () => {

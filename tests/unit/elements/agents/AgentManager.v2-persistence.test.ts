@@ -817,6 +817,28 @@ describe('AgentManager v2 Metadata Persistence', () => {
       expect(result.parameters[0].description).not.toContain('<script>');
       expect(result.parameters[0].description).not.toContain('</script>');
     });
+
+    it('should preserve parameter descriptions longer than 500 characters', () => {
+      const normalizeGoal = (agentManager as any).normalizeGoalInput.bind(agentManager);
+      const longDescription = 'Detailed parameter guidance '.repeat(25).trim();
+
+      const goalWithLongDescription = {
+        template: 'Run {cmd}',
+        parameters: [
+          {
+            name: 'cmd',
+            type: 'string',
+            required: true,
+            description: longDescription
+          }
+        ]
+      };
+
+      const result = normalizeGoal(goalWithLongDescription);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(result.parameters[0].description).toBe(longDescription);
+    });
   });
 
   describe('element quality — markdown body (#696)', () => {
