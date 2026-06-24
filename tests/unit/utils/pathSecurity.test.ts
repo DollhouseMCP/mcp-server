@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { tmpdir } from 'node:os';
 import { resolvePathWithinBase } from '../../../src/utils/pathSecurity.js';
@@ -45,5 +46,63 @@ describe('resolvePathWithinBase', () => {
     expect(() => resolvePathWithinBase(baseDir, 'bad\0file.md')).toThrow(
       'Path segment contains a null byte'
     );
+  });
+
+  it('rejects paths through symlinked directories inside the base directory', () => {
+    const sandbox = fs.mkdtempSync(path.join(tmpdir(), 'dollhouse-path-security-'));
+    const base = path.join(sandbox, 'base');
+    const outside = path.join(sandbox, 'outside-target');
+    const link = path.join(base, 'scripts');
+
+    try {
+      fs.mkdirSync(base, { recursive: true });
+      fs.mkdirSync(outside, { recursive: true });
+
+      try {
+        fs.symlinkSync(outside, link, 'dir');
+      } catch (error) {
+        const code = typeof error === 'object' && error !== null && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (code === 'EPERM' || code === 'EACCES') {
+          return;
+        }
+        throw error;
+      }
+
+      expect(() => resolvePathWithinBase(base, 'scripts', 'file.md')).toThrow(
+        'Path segment resolves through a symbolic link'
+      );
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a symlinked base directory before resolving child paths', () => {
+    const sandbox = fs.mkdtempSync(path.join(tmpdir(), 'dollhouse-path-security-'));
+    const base = path.join(sandbox, 'base-link');
+    const outside = path.join(sandbox, 'outside-target');
+
+    try {
+      fs.mkdirSync(outside, { recursive: true });
+
+      try {
+        fs.symlinkSync(outside, base, 'dir');
+      } catch (error) {
+        const code = typeof error === 'object' && error !== null && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (code === 'EPERM' || code === 'EACCES') {
+          return;
+        }
+        throw error;
+      }
+
+      expect(() => resolvePathWithinBase(base, 'file.md')).toThrow(
+        'Base directory resolves through a symbolic link'
+      );
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
   });
 });

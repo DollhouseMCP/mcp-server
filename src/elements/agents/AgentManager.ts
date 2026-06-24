@@ -2038,7 +2038,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     if (metadata.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadata.description, {
-        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });

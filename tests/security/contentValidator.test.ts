@@ -6,6 +6,7 @@
 
 import { createHash } from 'node:crypto';
 import { ContentValidator } from '../../src/security/contentValidator.js';
+import { SECURITY_LIMITS } from '../../src/security/constants.js';
 
 describe('ContentValidator', () => {
   describe('validateAndSanitize', () => {
@@ -241,6 +242,47 @@ data:
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
       expect(result.detectedPatterns?.length).toBeGreaterThan(0);
+    });
+
+    it('should allow metadata descriptions beyond the legacy element description limit', () => {
+      const metadata = {
+        name: 'Substantive Description',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1),
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+
+      expect(result.isValid).toBe(true);
+      expect(result.detectedPatterns).toEqual([]);
+    });
+
+    it('should reject metadata descriptions exceeding the YAML frontmatter limit', () => {
+      const metadata = {
+        name: 'Oversized Description',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1),
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+
+      expect(result.isValid).toBe(false);
+      expect(result.detectedPatterns).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining(`description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`),
+        ])
+      );
+    });
+
+    it('should allow non-description metadata fields up to the metadata field limit', () => {
+      const metadata = {
+        name: 'Large Notes',
+        description: 'Short description',
+        notes: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH),
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+
+      expect(result.isValid).toBe(true);
+      expect(result.detectedPatterns).toEqual([]);
     });
   });
 

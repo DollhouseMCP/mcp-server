@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 const { createElement } = await import('../../../../src/handlers/element-crud/createElement.js');
 const { ElementType } = await import('../../../../src/portfolio/PortfolioManager.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 describe('createElement helper', () => {
   let mockContext: ElementCrudContext;
@@ -149,8 +150,22 @@ describe('createElement helper', () => {
       expect(call.description).not.toContain('<script>');
     });
 
-    it('should reject persona descriptions above the description length limit', async () => {
-      const oversizedDescription = 'a'.repeat(501);
+    it('should allow persona descriptions beyond the legacy 500-character limit', async () => {
+      const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
+
+      await createElement(mockContext, {
+        name: 'test-persona',
+        type: ElementType.PERSONA,
+        description: substantiveDescription,
+      });
+
+      expect(mockContext.personaManager.create).toHaveBeenCalledWith(
+        expect.objectContaining({ description: substantiveDescription })
+      );
+    });
+
+    it('should reject persona descriptions above the YAML frontmatter limit', async () => {
+      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
 
       const result = await createElement(mockContext, {
         name: 'test-persona',
@@ -159,6 +174,7 @@ describe('createElement helper', () => {
       });
 
       expect(result.content[0].text).toContain('❌ Description too large');
+      expect(result.content[0].text).toContain('input.description');
       expect(mockContext.personaManager.create).not.toHaveBeenCalled();
     });
 

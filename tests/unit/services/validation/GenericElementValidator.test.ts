@@ -214,7 +214,7 @@ describe('GenericElementValidator', () => {
         expect(result.errors).toContain('Description is required');
       });
 
-      it('should reject oversized descriptions before sanitizer truncation', async () => {
+      it('should allow descriptions beyond the legacy 500-character limit', async () => {
         const data = {
           name: 'Test Skill',
           description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1),
@@ -223,9 +223,22 @@ describe('GenericElementValidator', () => {
 
         const result = await validator.validateCreate(data);
 
+        expect(result.isValid).toBe(true);
+        expect(result.errors).toEqual([]);
+      });
+
+      it('should reject descriptions exceeding the YAML frontmatter limit before sanitizer truncation', async () => {
+        const data = {
+          name: 'Test Skill',
+          description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1),
+          content: 'Test content'
+        };
+
+        const result = await validator.validateCreate(data);
+
         expect(result.isValid).toBe(false);
         expect(result.errors).toContain(
-          `Description exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters`
+          `Description exceeds maximum YAML/frontmatter length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
         );
       });
 

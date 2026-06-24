@@ -16,6 +16,7 @@ import {
   formatUnknownPropertyWarnings,
   formatElementResolutionWarnings,
   collectGatekeeperAuthoringErrors,
+  findOversizedDescriptionFields,
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
@@ -166,18 +167,19 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
       };
     }
 
-    const validatedName = sanitizeInput(name, SECURITY_LIMITS.MAX_FILENAME_LENGTH);
-
-    if (description.length > SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH) {
+    const descriptionLengthErrors = findOversizedDescriptionFields({ description, metadata });
+    if (descriptionLengthErrors.length > 0) {
+      const formattedErrors = descriptionLengthErrors.map(error => `  • ${error}`).join('\n');
       return {
         content: [{
           type: "text",
-          text: `❌ Description too large: Maximum allowed size is ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters.`
+          text: `❌ Description too large:\n${formattedErrors}`
         }]
       };
     }
 
-    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+    const validatedName = sanitizeInput(name, SECURITY_LIMITS.MAX_FILENAME_LENGTH);
+    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_YAML_LENGTH);
 
     if (content) {
       try {
