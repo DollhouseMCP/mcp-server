@@ -250,12 +250,16 @@ interface OversizedDescriptionField {
 
 type TraversalEntry = readonly [string, unknown];
 
+function appendTraversalKey(path: string, key: string): string {
+  return key.length > 0 ? `${path}.${key}` : `${path}[""]`;
+}
+
 function getTraversalEntries(value: object, path: string): TraversalEntry[] {
   if (Array.isArray(value)) {
     return value.map((item, index) => [`${path}[${index}]`, item] as const);
   }
 
-  return Object.entries(value as Record<string, unknown>).map(([key, item]) => [`${path}.${key}`, item] as const);
+  return Object.entries(value as Record<string, unknown>).map(([key, item]) => [appendTraversalKey(path, key), item] as const);
 }
 
 function getDescriptionMaxLengthForPath(fieldPath: string): number {
@@ -637,6 +641,11 @@ export async function editElement(
     const label = getElementTypeLabel(normalizedType);
     throw new ElementNotFoundError(label, name);
   }
+  const editableElement = element as typeof element & {
+    instructions: string;
+    content: string;
+    extensions?: Record<string, unknown>;
+  };
 
   // Check for unknown properties and generate warnings
   const unknownPropertyWarnings = detectUnknownMetadataProperties(
@@ -791,13 +800,13 @@ export async function editElement(
       });
       const sanitizedInstructions = contentValidation.sanitizedContent || '';
       // Set instructions on the element directly (all types now have this property)
-      (element as any).instructions = sanitizedInstructions;
+      editableElement.instructions = sanitizedInstructions;
       // For agents, also update extensions.instructions for backward compat
       if (normalizedType === ElementType.AGENT) {
-        if (!element.extensions) {
-          (element as any).extensions = {};
+        if (!editableElement.extensions) {
+          editableElement.extensions = {};
         }
-        (element as any).extensions.instructions = sanitizedInstructions;
+        editableElement.extensions.instructions = sanitizedInstructions;
       }
     } else if (key === 'content' && typeof value === 'string') {
       // Issue #585/#602: Handle content updates (reference material)
@@ -807,7 +816,7 @@ export async function editElement(
       });
       const sanitizedContent = contentValidation.sanitizedContent || '';
       // Set content on the element directly (all types now have this property)
-      (element as any).content = sanitizedContent;
+      editableElement.content = sanitizedContent;
     } else if (specialRouteFields.has(key)) {
       // Special route field — handled elsewhere, skip
       fieldApplied = false;

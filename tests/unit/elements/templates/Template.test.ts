@@ -589,6 +589,26 @@ describe('Template', () => {
         expect(first).toBe(second); // same reference = cached
       });
 
+      it('clears section and compiled caches when content is assigned directly', async () => {
+        const t = new Template(
+          { name: 'direct-content-update', variables: [{ name: 'name', type: 'string' }] },
+          SECTION_CONTENT,
+          metadataService
+        );
+
+        const firstSections = t.getSections();
+        const firstOutput = await t.render({ name: 'Alice' });
+        expect(firstOutput.trim()).toBe('Hello Alice!');
+
+        t.content = '<template>Goodbye {{name}}!</template>';
+
+        const secondSections = t.getSections();
+        const secondOutput = await t.render({ name: 'Alice' });
+        expect(secondSections).not.toBe(firstSections);
+        expect(secondSections.templateSection.trim()).toBe('Goodbye {{name}}!');
+        expect(secondOutput.trim()).toBe('Goodbye Alice!');
+      });
+
       it('clears the cache on deactivation', async () => {
         const t = new Template({ name: 'deactivate-test' }, SECTION_CONTENT, metadataService);
         const first = t.getSections();

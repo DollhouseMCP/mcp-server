@@ -83,7 +83,7 @@ describe('Input Length Validation', () => {
         name: 'Test',
         description: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1)
       };
-      
+
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
       expect(result.detectedPatterns).toEqual(

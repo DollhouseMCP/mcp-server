@@ -1111,6 +1111,29 @@ describe('editElement helper', () => {
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
 
+    it('should format empty metadata keys without doubled path separators', async () => {
+      const element = createMockElement('test-skill');
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH + 1);
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            '': {
+              description: oversizedDescription,
+            },
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('input.metadata[""].description');
+      expect(result.content[0].text).not.toContain('input.metadata..description');
+      expect(mockContext.skillManager.save).not.toHaveBeenCalled();
+    });
+
     it('should allow nested documentation descriptions longer than 500 characters during edit', async () => {
       const element = createMockElement('test-template', {
         variables: [
