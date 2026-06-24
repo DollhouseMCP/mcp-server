@@ -71,6 +71,12 @@ const READ_ONLY_FIELDS = new Set([
   '_isDirty'
 ]);
 
+function hasOwnRecordProperty(value: unknown, key: string): boolean {
+  return typeof value === 'object' &&
+    value !== null &&
+    Object.prototype.hasOwnProperty.call(value, key);
+}
+
 function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
   switch (fieldType) {
     case 'name':
@@ -498,6 +504,11 @@ function applyEnsembleElementsUpdate(
   return null;
 }
 
+function hasEnsembleElementsUpdate(input: Record<string, unknown>): boolean {
+  return hasOwnRecordProperty(input, 'elements') ||
+    hasOwnRecordProperty(input.metadata, 'elements');
+}
+
 /**
  * Sync ensemble elements from metadata after an update.
  *
@@ -516,11 +527,11 @@ async function syncEnsembleElementsIfNeeded(
   input: Record<string, unknown>,
   context?: ElementCrudContext
 ): Promise<ResolveElementTypesResult | undefined> {
-  const hasElementsUpdate = input.elements || (input.metadata as Record<string, unknown>)?.elements;
+  const hasElementsUpdate = hasEnsembleElementsUpdate(input);
 
   if (hasElementsUpdate && element instanceof Ensemble) {
     // Issue #466: Resolve missing element_type via portfolio lookup before sync
-    if (context && element.metadata.elements) {
+    if (context && Array.isArray(element.metadata.elements)) {
       const result = await resolveElementTypes(
         element.metadata.elements,
         {
@@ -771,7 +782,7 @@ export async function editElement(
 
       // If metadata.elements is provided for an ensemble, extract and route through
       // the ensemble elements handler for proper validation/normalization/merge.
-      if (normalizedType === ElementType.ENSEMBLE && metaValue.elements) {
+      if (normalizedType === ElementType.ENSEMBLE && hasOwnRecordProperty(metaValue, 'elements')) {
         const elemError = applyEnsembleElementsUpdate(metaValue.elements, element, updateObj, collectionWarnings);
         if (elemError) return error(elemError);
 

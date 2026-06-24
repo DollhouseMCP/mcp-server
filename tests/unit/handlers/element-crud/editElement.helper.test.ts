@@ -4,6 +4,8 @@ const { editElement } = await import('../../../../src/handlers/element-crud/edit
 const { ElementType } = await import('../../../../src/portfolio/PortfolioManager.js');
 const { ElementNotFoundError } = await import('../../../../src/utils/ErrorHandler.js');
 const { SECURITY_LIMITS } = await import('../../../../src/security/constants.js');
+const { Ensemble } = await import('../../../../src/elements/ensembles/Ensemble.js');
+const { createTestMetadataService } = await import('../../../helpers/di-mocks.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
 
 describe('editElement helper', () => {
@@ -298,6 +300,88 @@ describe('editElement helper', () => {
       expect(result.content[0].text).toContain('✅');
       expect(result.content[0].text).toContain('Updated');
       expect(mockContext.ensembleManager.save).toHaveBeenCalled();
+    });
+
+    it('should treat an empty ensemble.elements patch as an explicit sync request', async () => {
+      const ensembleElements = [{
+        element_name: 'old-skill',
+        element_type: 'skill',
+        role: 'support',
+        priority: 50,
+        activation: 'always',
+      }] as any[];
+      const ensemble = new Ensemble(
+        { name: 'test-ensemble', description: 'Test ensemble', version: '1.0.0' },
+        ensembleElements,
+        createTestMetadataService()
+      );
+      const syncSpy = jest.spyOn(ensemble, 'syncElementsFromMetadata');
+      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.save = jest.fn().mockResolvedValue(ensemble);
+
+      const result = await editElement(mockContext, {
+        name: 'test-ensemble',
+        type: ElementType.ENSEMBLE,
+        input: { elements: [] },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      expect(syncSpy).toHaveBeenCalled();
+      expect(ensemble.metadata.elements.map((el: any) => el.element_name)).toEqual(['old-skill']);
+      expect(ensemble.getElements().map((el: any) => el.element_name)).toEqual(['old-skill']);
+    });
+
+    it('should sync ensemble runtime elements after metadata.elements removes an item', async () => {
+      const ensembleElements = [{
+        element_name: 'old-skill',
+        element_type: 'skill',
+        role: 'support',
+        priority: 50,
+        activation: 'always',
+      }] as any[];
+      const ensemble = new Ensemble(
+        { name: 'test-ensemble', description: 'Test ensemble', version: '1.0.0' },
+        ensembleElements,
+        createTestMetadataService()
+      );
+      const syncSpy = jest.spyOn(ensemble, 'syncElementsFromMetadata');
+      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.save = jest.fn().mockResolvedValue(ensemble);
+
+      const result = await editElement(mockContext, {
+        name: 'test-ensemble',
+        type: ElementType.ENSEMBLE,
+        input: {
+          metadata: {
+            elements: [{ element_name: 'old-skill', _remove: true }],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      expect(syncSpy).toHaveBeenCalled();
+      expect(ensemble.metadata.elements).toEqual([]);
+      expect(ensemble.getElements()).toEqual([]);
+    });
+
+    it('should reject invalid metadata.elements even when the value is falsy', async () => {
+      const ensemble = new Ensemble(
+        { name: 'test-ensemble', description: 'Test ensemble', version: '1.0.0' },
+        [],
+        createTestMetadataService()
+      );
+      mockContext.ensembleManager.list = jest.fn().mockResolvedValue([ensemble]);
+      mockContext.ensembleManager.save = jest.fn().mockResolvedValue(ensemble);
+
+      const result = await editElement(mockContext, {
+        name: 'test-ensemble',
+        type: ElementType.ENSEMBLE,
+        input: { metadata: { elements: null } },
+      });
+
+      expect(result.content[0].text).toContain('❌ Invalid');
+      expect(result.content[0].text).toContain("'elements'");
+      expect(mockContext.ensembleManager.save).not.toHaveBeenCalled();
     });
 
     it('should replace arrays entirely (not merge element-by-element)', async () => {
