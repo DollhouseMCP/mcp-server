@@ -74,7 +74,7 @@ const READ_ONLY_FIELDS = new Set([
 function hasOwnRecordProperty(value: unknown, key: string): boolean {
   return typeof value === 'object' &&
     value !== null &&
-    Object.prototype.hasOwnProperty.call(value, key);
+    Object.hasOwn(value, key);
 }
 
 function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
