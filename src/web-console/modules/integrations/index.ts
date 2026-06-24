@@ -9,6 +9,8 @@ export * from './IntegrationSecurityEvents.js';
 export * from './IntegrationModule.js';
 export * from './IntegrationPrivacyProjectors.js';
 export * from './IntegrationSecretContext.js';
+export * from './IntegrationDescriptorSeedLoader.js';
+export * from './CuratedIntegrationProviders.js';
 export * from './IntegrationService.js';
 export * from './IntegrationTokenRefreshService.js';
 export * from './IntegrationRequestGateway.js';

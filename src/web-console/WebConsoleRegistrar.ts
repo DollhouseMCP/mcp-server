@@ -132,6 +132,7 @@ import {
 } from './modules/integrations/GitHubAppIntegrationProvider.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
+import { loadCuratedIntegrationProviders } from './modules/integrations/CuratedIntegrationProviders.js';
 import {
   InMemoryConsoleTelemetryQuery,
   PostgresConsoleTelemetryQuery,
@@ -271,6 +272,8 @@ export interface WebConsoleRegistrarOptions {
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly githubIntegrationProviderConfig?: GitHubAppIntegrationProviderConfig | null;
+  /** Directory of curated integration descriptor seed files, loaded at bootstrap. */
+  readonly integrationDescriptorSeedDir?: string;
   readonly portfolioStore?: IPortfolioElementStore | null;
   readonly enableManagerBackedPortfolioStore?: boolean;
   readonly enablePortfolioWriteRoutes?: boolean;
@@ -553,12 +556,25 @@ export class WebConsoleRegistrar {
     registerRouteModule(registry, this.options, 'me-logs', () => createMeLogsModule({
       logSource: resolveConsoleLogSource(container),
     }));
+    // Curated, data-driven providers: load descriptor seed files into the store and
+    // build their connect/callback providers so the generic /:provider routes activate.
+    // Requires secret encryption (to decrypt deployment OAuth client secrets); without
+    // it the console is not fully configured, so no curated providers are loaded.
+    const configuredIntegrationProviders = secretEncryption
+      ? await loadCuratedIntegrationProviders({
+          seedDir: this.options.integrationDescriptorSeedDir,
+          descriptorStore: stores.integrationDescriptorStore,
+          secretEncryption,
+          ...(this.options.now ? { now: this.options.now } : {}),
+        })
+      : [];
     registerRouteModule(registry, this.options, 'integrations', () => createIntegrationModule({
       integrationStore: stores.integrationStore,
       loginTransactions: stores.loginTransactionStore,
       opaqueValues,
       secretEncryption,
       githubProvider: githubIntegrationProvider,
+      configuredProviders: configuredIntegrationProviders,
       publicBaseUrl: integrationPublicBaseUrl,
       now: this.options.now,
     }));
