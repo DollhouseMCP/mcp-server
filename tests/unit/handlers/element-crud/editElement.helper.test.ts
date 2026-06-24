@@ -1289,15 +1289,17 @@ describe('editElement helper', () => {
       expect(result.content[0].text).toContain('Unrecognized Field');
     });
 
-    it('should accept version as both string and number', async () => {
+    it.each([
+      ['string', '2.0.0'],
+      ['number', 2],
+    ])('should accept version as %s', async (_label, version) => {
       const element = createMockElement('test-skill');
       mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
 
-      // version accepts string or number per the rule
       const result = await editElement(mockContext, {
         name: 'test-skill',
         type: ElementType.SKILL,
-        input: { version: '2.0.0' },
+        input: { version },
       });
       expect(result.content[0].text).toContain('✅');
     });

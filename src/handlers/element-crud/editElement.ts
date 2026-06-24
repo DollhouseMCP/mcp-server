@@ -133,7 +133,7 @@ const FIELD_TYPE_RULES: Record<string, {
   name: { expected: 'string', check: (v) => typeof v === 'string' },
   description: { expected: 'string', check: (v) => typeof v === 'string' },
   author: { expected: 'string', check: (v) => typeof v === 'string' },
-  version: { expected: 'string', check: (v) => typeof v === 'string' || typeof v === 'number' },
+  version: { expected: 'string or number', check: (v) => typeof v === 'string' || typeof v === 'number' },
   category: { expected: 'string', check: (v) => typeof v === 'string' },
   domain: { expected: 'string', check: (v) => typeof v === 'string' },
   tone: { expected: 'string', check: (v) => typeof v === 'string' },
