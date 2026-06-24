@@ -725,9 +725,13 @@ export class ContentValidator {
     // Check all string fields in metadata
     const checkField = (fieldName: string, value: any) => {
       if (typeof value === 'string') {
+        const maxLength = fieldName === 'description'
+          ? SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
+          : SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH;
+
         // Check field length first
-        if (value.length > SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH) {
-          detectedPatterns.push(`${fieldName}: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH} characters`);
+        if (value.length > maxLength) {
+          detectedPatterns.push(`${fieldName}: Field exceeds maximum length of ${maxLength} characters`);
           return;
         }
         

@@ -78,16 +78,29 @@ describe('Input Length Validation', () => {
       expect(result).toBe(false);
     });
 
-    test('rejects metadata fields exceeding limit', () => {
+    test('rejects metadata fields exceeding metadata field limit', () => {
       const metadata = {
         name: 'Test',
-        description: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1)
+        notes: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1)
       };
 
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
       expect(result.detectedPatterns).toEqual(
-        expect.arrayContaining(['description: Field exceeds maximum length of 1024 characters'])
+        expect.arrayContaining([`notes: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH} characters`])
+      );
+    });
+
+    test('rejects description fields exceeding element description limit', () => {
+      const metadata = {
+        name: 'Test',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1)
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+      expect(result.isValid).toBe(false);
+      expect(result.detectedPatterns).toEqual(
+        expect.arrayContaining([`description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters`])
       );
     });
   });

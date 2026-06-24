@@ -77,4 +77,32 @@ describe('resolvePathWithinBase', () => {
       fs.rmSync(sandbox, { recursive: true, force: true });
     }
   });
+
+  it('rejects a symlinked base directory before resolving child paths', () => {
+    const sandbox = fs.mkdtempSync(path.join(tmpdir(), 'dollhouse-path-security-'));
+    const base = path.join(sandbox, 'base-link');
+    const outside = path.join(sandbox, 'outside-target');
+
+    try {
+      fs.mkdirSync(outside, { recursive: true });
+
+      try {
+        fs.symlinkSync(outside, base, 'dir');
+      } catch (error) {
+        const code = typeof error === 'object' && error !== null && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (code === 'EPERM' || code === 'EACCES') {
+          return;
+        }
+        throw error;
+      }
+
+      expect(() => resolvePathWithinBase(base, 'file.md')).toThrow(
+        'Base directory resolves through a symbolic link'
+      );
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
 });
