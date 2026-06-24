@@ -27,7 +27,6 @@ import {
   formatUnknownPropertyWarnings,
   formatElementResolutionWarnings,
   collectGatekeeperAuthoringErrors,
-  findOversizedDescriptionFields,
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
@@ -72,12 +71,18 @@ const READ_ONLY_FIELDS = new Set([
   '_isDirty'
 ]);
 
+function hasOwnRecordProperty(value: unknown, key: string): boolean {
+  return typeof value === 'object' &&
+    value !== null &&
+    Object.hasOwn(value, key);
+}
+
 function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
   switch (fieldType) {
     case 'name':
       return SECURITY_LIMITS.MAX_NAME_LENGTH;
     case 'description':
-      return SECURITY_LIMITS.MAX_YAML_LENGTH;
+      return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
     case 'content':
       return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
     case 'filename':
@@ -134,7 +139,7 @@ const FIELD_TYPE_RULES: Record<string, {
   name: { expected: 'string', check: (v) => typeof v === 'string' },
   description: { expected: 'string', check: (v) => typeof v === 'string' },
   author: { expected: 'string', check: (v) => typeof v === 'string' },
-  version: { expected: 'string', check: (v) => typeof v === 'string' || typeof v === 'number' },
+  version: { expected: 'string or number', check: (v) => typeof v === 'string' || typeof v === 'number' },
   category: { expected: 'string', check: (v) => typeof v === 'string' },
   domain: { expected: 'string', check: (v) => typeof v === 'string' },
   tone: { expected: 'string', check: (v) => typeof v === 'string' },
@@ -228,7 +233,6 @@ function validateFieldValue(
     return null; // No validation rules for this field
   }
 
-  // Determine max length based on field type, using system constants
   const maxLength = getMaxLengthForFieldType(fieldType);
 
   const result = validationService.validateAndSanitizeInput(value, {
@@ -242,6 +246,79 @@ function validateFieldValue(
   }
 
   return null; // Valid
+}
+
+interface OversizedDescriptionField {
+  path: string;
+  length: number;
+  maxLength: number;
+}
+
+type TraversalEntry = readonly [string, unknown];
+
+function appendTraversalKey(path: string, key: string): string {
+  return key.length > 0 ? `${path}.${key}` : `${path}[""]`;
+}
+
+function getTraversalEntries(value: object, path: string): TraversalEntry[] {
+  if (Array.isArray(value)) {
+    return value.map((item, index) => [`${path}[${index}]`, item] as const);
+  }
+
+  return Object.entries(value as Record<string, unknown>).map(([key, item]) => [appendTraversalKey(path, key), item] as const);
+}
+
+function getDescriptionMaxLengthForPath(fieldPath: string): number {
+  if (fieldPath === 'input.description' || fieldPath === 'input.metadata.description') {
+    return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
+  }
+
+  return SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH;
+}
+
+function isOversizedDescriptionField(fieldPath: string, value: unknown): value is string {
+  const maxLength = getDescriptionMaxLengthForPath(fieldPath);
+  return (
+    fieldPath.endsWith('.description') &&
+    typeof value === 'string' &&
+    value.length > maxLength
+  );
+}
+
+function formatOversizedDescriptionField(field: OversizedDescriptionField): string {
+  return (
+    `  • ${field.path} exceeds maximum length of ` +
+    `${field.maxLength} characters (${field.length})`
+  );
+}
+
+function findOversizedDescriptionFields(
+  value: unknown,
+  path = 'input',
+  seen = new WeakSet<object>(),
+): OversizedDescriptionField[] {
+  if (value === null || typeof value !== 'object') {
+    return [];
+  }
+
+  if (seen.has(value)) {
+    return [];
+  }
+  seen.add(value);
+
+  const oversized: OversizedDescriptionField[] = [];
+  for (const [fieldPath, item] of getTraversalEntries(value, path)) {
+    if (isOversizedDescriptionField(fieldPath, item)) {
+      oversized.push({
+        path: fieldPath,
+        length: item.length,
+        maxLength: getDescriptionMaxLengthForPath(fieldPath),
+      });
+    }
+    oversized.push(...findOversizedDescriptionFields(item, fieldPath, seen));
+  }
+
+  return oversized;
 }
 
 /**
@@ -427,6 +504,11 @@ function applyEnsembleElementsUpdate(
   return null;
 }
 
+function hasEnsembleElementsUpdate(input: Record<string, unknown>): boolean {
+  return hasOwnRecordProperty(input, 'elements') ||
+    hasOwnRecordProperty(input.metadata, 'elements');
+}
+
 /**
  * Sync ensemble elements from metadata after an update.
  *
@@ -445,11 +527,11 @@ async function syncEnsembleElementsIfNeeded(
   input: Record<string, unknown>,
   context?: ElementCrudContext
 ): Promise<ResolveElementTypesResult | undefined> {
-  const hasElementsUpdate = input.elements || (input.metadata as Record<string, unknown>)?.elements;
+  const hasElementsUpdate = hasEnsembleElementsUpdate(input);
 
   if (hasElementsUpdate && element instanceof Ensemble) {
     // Issue #466: Resolve missing element_type via portfolio lookup before sync
-    if (context && element.metadata.elements) {
+    if (context && Array.isArray(element.metadata.elements)) {
       const result = await resolveElementTypes(
         element.metadata.elements,
         {
@@ -570,6 +652,11 @@ export async function editElement(
     const label = getElementTypeLabel(normalizedType);
     throw new ElementNotFoundError(label, name);
   }
+  const editableElement = element as typeof element & {
+    instructions: string;
+    content: string;
+    extensions?: Record<string, unknown>;
+  };
 
   // Check for unknown properties and generate warnings
   const unknownPropertyWarnings = detectUnknownMetadataProperties(
@@ -623,10 +710,13 @@ export async function editElement(
     return error(formatGatekeeperValidationMessage(gatekeeperErrors));
   }
 
-  const descriptionLengthErrors = findOversizedDescriptionFields(input);
-  if (descriptionLengthErrors.length > 0) {
-    const formattedErrors = descriptionLengthErrors.map(descriptionError => `  • ${descriptionError}`).join('\n');
-    return error(`Description length validation failed:\n${formattedErrors}`);
+  const oversizedDescriptionFields = findOversizedDescriptionFields(input);
+  if (oversizedDescriptionFields.length > 0) {
+    return error(
+      `Description length validation failed:\n${oversizedDescriptionFields.map(field =>
+        formatOversizedDescriptionField(field)
+      ).join('\n')}`
+    );
   }
 
   // Validate string field values using injected validator
@@ -692,7 +782,7 @@ export async function editElement(
 
       // If metadata.elements is provided for an ensemble, extract and route through
       // the ensemble elements handler for proper validation/normalization/merge.
-      if (normalizedType === ElementType.ENSEMBLE && metaValue.elements) {
+      if (normalizedType === ElementType.ENSEMBLE && hasOwnRecordProperty(metaValue, 'elements')) {
         const elemError = applyEnsembleElementsUpdate(metaValue.elements, element, updateObj, collectionWarnings);
         if (elemError) return error(elemError);
 
@@ -721,13 +811,13 @@ export async function editElement(
       });
       const sanitizedInstructions = contentValidation.sanitizedContent || '';
       // Set instructions on the element directly (all types now have this property)
-      (element as any).instructions = sanitizedInstructions;
+      editableElement.instructions = sanitizedInstructions;
       // For agents, also update extensions.instructions for backward compat
       if (normalizedType === ElementType.AGENT) {
-        if (!element.extensions) {
-          (element as any).extensions = {};
+        if (!editableElement.extensions) {
+          editableElement.extensions = {};
         }
-        (element as any).extensions.instructions = sanitizedInstructions;
+        editableElement.extensions.instructions = sanitizedInstructions;
       }
     } else if (key === 'content' && typeof value === 'string') {
       // Issue #585/#602: Handle content updates (reference material)
@@ -737,7 +827,7 @@ export async function editElement(
       });
       const sanitizedContent = contentValidation.sanitizedContent || '';
       // Set content on the element directly (all types now have this property)
-      (element as any).content = sanitizedContent;
+      editableElement.content = sanitizedContent;
     } else if (specialRouteFields.has(key)) {
       // Special route field — handled elsewhere, skip
       fieldApplied = false;

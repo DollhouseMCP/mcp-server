@@ -34,11 +34,12 @@ jobs:
           fetch-depth: 0
 
       - name: Run Documentation Validation
-        uses: anthropics/claude-code-action@de8e0b9c42c6cb58e904c857f164aa072244c1ac # beta
+        uses: anthropics/claude-code-action@28f83620103c48a57093dcc2837eec89e036bb9f # v0.0.63
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}  # Use workflow token directly, skip OIDC (no id-token:write needed)
           use_sticky_comment: true
+          model: "claude-sonnet-4-6"
 
           direct_prompt: |
             You are a documentation validation agent. Your job is to check whether code changes in this PR would invalidate any claims made in the user-facing documentation.
