@@ -345,5 +345,82 @@ describe('GitHubAuthHandler (DI)', () => {
         expect(response.content[0].text).toContain('ERROR polling failed');
       });
     });
+
+    it('reports helper completion from terminal result without crash language', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 7777,
+            deviceCode: 'device',
+            userCode: 'DONE-1234',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'success',
+            attempts: 1,
+            completedAt: new Date().toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => {
+          throw new Error('dead process');
+        });
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+        const response = await handler.checkGitHubAuth();
+
+        expect(response.content[0].text).toContain('Authentication Completed');
+        expect(response.content[0].text).toContain('token is not available');
+        expect(response.content[0].text).not.toContain('Authentication In Progress');
+        expect(response.content[0].text).not.toContain('crashed');
+
+        killSpy.mockRestore();
+      });
+    });
+
+    it('reports terminal helper failure without missing-log troubleshooting', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 8888,
+            deviceCode: 'device',
+            userCode: 'FAIL-1234',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'failed',
+            error: 'OAUTH_TOKEN_STORAGE_FAILED: disk full',
+            attempts: 1,
+            completedAt: new Date().toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+        const response = await handler.getOAuthHelperStatus();
+
+        expect(response.content[0].text).toContain('FAILED');
+        expect(response.content[0].text).toContain('OAUTH_TOKEN_STORAGE_FAILED: disk full');
+        expect(response.content[0].text).not.toContain('may have crashed');
+        expect(response.content[0].text).not.toContain('Check the log file for errors');
+      });
+    });
   });
 });

@@ -27,6 +27,11 @@ const __dirname = dirname(__filename);
 const DEFAULT_POLL_INTERVAL = 5;
 const DEFAULT_EXPIRES_IN = 900; // 15 minutes
 const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
+const DOLLHOUSE_HOME_DIR = process.env.DOLLHOUSE_HOME_DIR || homedir();
+const AUTH_DIR = join(DOLLHOUSE_HOME_DIR, '.dollhouse', '.auth');
+const PID_FILE = join(AUTH_DIR, 'oauth-helper.pid');
+const STATE_FILE = join(AUTH_DIR, 'oauth-helper-state.json');
+const RESULT_FILE = join(AUTH_DIR, 'oauth-helper-result.json');
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -51,7 +56,7 @@ if (!clientId || clientId === 'undefined') {
 }
 
 // Log file for debugging (optional, can be disabled in production)
-const LOG_FILE = join(homedir(), '.dollhouse', 'oauth-helper.log');
+const LOG_FILE = join(DOLLHOUSE_HOME_DIR, '.dollhouse', 'oauth-helper.log');
 const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
 
 async function log(message) {
@@ -127,47 +132,46 @@ async function storeToken(token) {
     const { TokenManager } = await import('./dist/security/tokenManager.js');
     
     // Store the token using the secure storage mechanism
-    await TokenManager.storeGitHubToken(token);
+    const tokenManager = new TokenManager(createHelperFileOperations());
+    await tokenManager.storeGitHubToken(token);
     await log('Token stored successfully using TokenManager');
     return true;
-  } catch {
-    await log('Failed to store token using TokenManager');
-    
-    // Fallback: Write to a temporary file for the MCP server to pick up
-    try {
-      const tempTokenFile = join(homedir(), '.dollhouse', '.auth', 'pending_token.txt');
-      const tempDir = dirname(tempTokenFile);
-      
-      // Create directory with secure permissions
-      await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
-      
-      // Verify directory permissions
-      const dirStats = await fs.stat(tempDir);
-      const dirMode = dirStats.mode & parseInt('777', 8);
-      if (dirMode !== parseInt('700', 8)) {
-        await fs.chmod(tempDir, 0o700);
-      }
-      
-      // Write token with secure permissions
-      await fs.writeFile(tempTokenFile, token, { mode: 0o600 });
-      
-      // Verify file permissions
-      await fs.chmod(tempTokenFile, 0o600);
-      
-      await log('Token written to fallback file with secure permissions');
-      return true;
-    } catch (fallbackError) {
-      await log('Fallback storage also failed');
-      throw fallbackError;
-    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown error';
+    await log(`Failed to store token using TokenManager: ${message}`);
+    console.error(`OAUTH_TOKEN_STORAGE_FAILED: ${message}`);
+    throw error;
   }
+}
+
+function createHelperFileOperations() {
+  return {
+    async createDirectory(directoryPath) {
+      await fs.mkdir(directoryPath, { recursive: true });
+    },
+    async writeFile(filePath, content) {
+      await fs.writeFile(filePath, content, { encoding: 'utf8' });
+    },
+    async chmod(filePath, mode) {
+      await fs.chmod(filePath, mode);
+    }
+  };
 }
 
 function cleanupPidFileSync() {
   try {
-    const pidFile = join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
-    if (fsSync.existsSync(pidFile)) {
-      fsSync.unlinkSync(pidFile);
+    if (fsSync.existsSync(PID_FILE)) {
+      fsSync.unlinkSync(PID_FILE);
+    }
+  } catch (error) {
+    // Ignore cleanup errors
+  }
+}
+
+function cleanupStateFileSync() {
+  try {
+    if (fsSync.existsSync(STATE_FILE)) {
+      fsSync.unlinkSync(STATE_FILE);
     }
   } catch (error) {
     // Ignore cleanup errors
@@ -176,22 +180,48 @@ function cleanupPidFileSync() {
 
 async function cleanupPidFile() {
   try {
-    const pidFile = join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
-    await fs.unlink(pidFile).catch(() => {});
+    await fs.unlink(PID_FILE).catch(() => {});
     await log('PID file cleaned up');
   } catch (error) {
     // Ignore cleanup errors
   }
 }
 
+async function cleanupStateFile() {
+  try {
+    await fs.unlink(STATE_FILE).catch(() => {});
+    await log('OAuth helper state file cleaned up');
+  } catch (error) {
+    // Ignore cleanup errors
+  }
+}
+
+async function writeTerminalResult(status, attempts, error) {
+  try {
+    await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
+    const result = {
+      status,
+      attempts,
+      completedAt: new Date().toISOString()
+    };
+
+    if (error) {
+      result.error = error;
+    }
+
+    await fs.writeFile(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
+    await fs.chmod(RESULT_FILE, 0o600).catch(() => {});
+    await log(`Terminal result written: ${status}`);
+  } catch (resultError) {
+    await log('Failed to write terminal result');
+  }
+}
+
 async function writePidFile() {
   try {
-    const pidFile = join(homedir(), '.dollhouse', '.auth', 'oauth-helper.pid');
-    const pidDir = dirname(pidFile);
-    
-    await fs.mkdir(pidDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(pidFile, process.pid.toString(), { mode: 0o600 });
-    await log(`PID file written: ${pidFile}`);
+    await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
+    await fs.writeFile(PID_FILE, process.pid.toString(), { mode: 0o600 });
+    await log(`PID file written: ${PID_FILE}`);
   } catch {
     await log('Failed to write PID file');
   }
@@ -233,14 +263,24 @@ async function main() {
   });
   
   process.on('SIGINT', () => {
+    cleanupStateFileSync();
     cleanupPidFileSync();
     process.exit(0);
   });
   
   process.on('SIGTERM', () => {
+    cleanupStateFileSync();
     cleanupPidFileSync();
     process.exit(0);
   });
+
+  async function finish(status, error, exitCode) {
+    clearInterval(heartbeatInterval);
+    await writeTerminalResult(status, attempts, error);
+    await cleanupStateFile();
+    await cleanupPidFile();
+    process.exit(exitCode);
+  }
   
   while (Date.now() < timeout) {
     attempts++;
@@ -266,16 +306,12 @@ async function main() {
           case 'expired_token':
             await log('OAUTH_HELPER_264: Device code expired - authentication window closed');
             console.error('OAUTH_EXPIRED: Device code expired at line 264 - authentication window closed');
-            clearInterval(heartbeatInterval);
-            await cleanupPidFile();
-            process.exit(1);
+            await finish('expired', 'Device code expired - authentication window closed', 1);
             
           case 'access_denied':
             await log('OAUTH_HELPER_270: User denied authorization request');
             console.error('OAUTH_ACCESS_DENIED: User denied authorization at line 270');
-            clearInterval(heartbeatInterval);
-            await cleanupPidFile();
-            process.exit(1);
+            await finish('denied', 'User denied authorization', 1);
             
           default:
             await log('OAUTH_HELPER_276: Unknown error from GitHub during device flow polling');
@@ -294,15 +330,11 @@ async function main() {
           await log('[SUCCESS] ✅ OAuth authentication completed successfully');
           await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
           console.log('✅ GitHub authentication successful! Token has been stored.');
-          clearInterval(heartbeatInterval);
-          await cleanupPidFile();
-          process.exit(0);
+          await finish('success', '', 0);
         } else {
           await log('[ERROR] ❌ Failed to store token');
           console.error('❌ Failed to store authentication token');
-          clearInterval(heartbeatInterval);
-          await cleanupPidFile();
-          process.exit(1);
+          await finish('failed', 'Failed to store authentication token', 1);
         }
       } else {
         // Reset error counter on successful communication
@@ -327,17 +359,14 @@ async function main() {
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
           await log('OAUTH_HELPER_323: Too many consecutive network errors, exiting');
           console.error(`OAUTH_NETWORK_FAILURE: Too many network errors (${MAX_CONSECUTIVE_ERRORS}) at line 323 - check internet connection`);
-          clearInterval(heartbeatInterval);
-          await cleanupPidFile();
-          process.exit(1);
+          await finish('failed', `Too many network errors (${MAX_CONSECUTIVE_ERRORS}) - check internet connection`, 1);
         }
       } else {
         // Non-network error, likely fatal
         await log('OAUTH_HELPER_330: Non-recoverable error');
         console.error('OAUTH_FATAL_ERROR: Non-recoverable error at line 330');
-        clearInterval(heartbeatInterval);
-        await cleanupPidFile();
-        process.exit(1);
+        const message = error instanceof Error ? error.message : 'Unknown error';
+        await finish('failed', `Non-recoverable error: ${message}`, 1);
       }
     }
     
@@ -349,15 +378,15 @@ async function main() {
   await log('OAUTH_HELPER_342: OAuth authorization timed out');
   await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
   console.error(`OAUTH_TIMEOUT: Authorization timed out at line 342 after ${Math.round((Date.now() - startTime) / 1000)}s - user did not authorize in time`);
-  clearInterval(heartbeatInterval);
-  await cleanupPidFile();
-  process.exit(1);
+  await finish('timeout', 'Authorization timed out - user did not authorize in time', 1);
 }
 
 // Run the main function
 main().catch(async () => {
   await log('Fatal error');
   console.error('Fatal error in OAuth helper');
+  await writeTerminalResult('failed', 0, 'Fatal error in OAuth helper');
+  await cleanupStateFile();
   await cleanupPidFile();
   process.exit(1);
 });
