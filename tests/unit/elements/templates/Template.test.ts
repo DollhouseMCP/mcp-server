@@ -120,6 +120,15 @@ describe('Template', () => {
 
       expect(template.metadata.includes).toEqual(['shared/header.md']);
     });
+
+    it('should store Windows-style include paths with portable separators', () => {
+      const template = new Template({
+        name: 'Windows Include',
+        includes: ['shared\\header.md']
+      }, 'Content', metadataService);
+
+      expect(template.metadata.includes).toEqual(['shared/header.md']);
+    });
   });
 
   describe('render', () => {

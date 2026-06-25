@@ -175,9 +175,9 @@ export class Template extends BaseElement implements IElement {
     // SECURITY FIX #2: Validate include paths
     if (this.metadata.includes) {
       this.metadata.includes = this.metadata.includes.map(includePath => {
-        const sanitizedPath = sanitizeInput(includePath, 200);
-        const normalizedPath = this.normalizeIncludePath(sanitizedPath);
+        const normalizedPath = this.normalizeIncludePath(includePath);
         if (normalizedPath === null) {
+          const sanitizedPath = sanitizeInput(includePath, 200);
           SecurityMonitor.logSecurityEvent({
             type: 'PATH_TRAVERSAL_ATTEMPT',
             severity: 'CRITICAL',
@@ -196,23 +196,32 @@ export class Template extends BaseElement implements IElement {
    * SECURITY FIX #2: Prevents accessing files outside template directory
    */
   private normalizeIncludePath(includePath: string): string | null {
-    const normalized = path.normalize(includePath);
+    const trimmedPath = includePath.trim();
+    if (trimmedPath.length === 0 || trimmedPath.length > 200) {
+      return null;
+    }
+
+    const portablePath = trimmedPath.replace(/\\/g, '/');
+    const normalized = path.posix.normalize(portablePath);
 
     // Reject traversal-shaped input before and after normalization so callers
     // do not store paths that only pass because they collapse to a safe target.
     if (
-      includePath.includes('..') ||
-      includePath.includes('~') ||
+      trimmedPath.includes('..') ||
+      portablePath.includes('~') ||
       normalized.includes('..') ||
       normalized.includes('~') ||
-      path.isAbsolute(normalized)
+      path.posix.isAbsolute(portablePath) ||
+      path.win32.isAbsolute(trimmedPath) ||
+      path.posix.isAbsolute(normalized) ||
+      path.win32.isAbsolute(normalized)
     ) {
       return null;
     }
 
-    // Only allow alphanumeric, dash, underscore, forward slash, backslash (for Windows), and .md extension
+    // Store include paths with POSIX separators so metadata is stable across OSes.
     // FIX: Remove unnecessary escape for / (SonarCloud S6535)
-    const validPathPattern = /^[a-zA-Z0-9\-_/\\]+\.md$/;
+    const validPathPattern = /^[a-zA-Z0-9\-_/]+\.md$/;
     return validPathPattern.test(normalized) ? normalized : null;
   }
 
