@@ -276,6 +276,39 @@ describe('editElement helper', () => {
       expect(saved.metadata.settings.verbose).toBe(false);  // Preserved
     });
 
+    it('should preserve nested metadata sibling objects during partial updates', async () => {
+      const element = createMockElement('test-skill', {
+        settings: {
+          display: { theme: 'light', density: 'comfortable' },
+          rules: { enabled: true, mode: 'strict' },
+        },
+      });
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            settings: {
+              display: { theme: 'dark' },
+            },
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
+      expect(saved.metadata.settings.display).toEqual({
+        theme: 'dark',
+        density: 'comfortable',
+      });
+      expect(saved.metadata.settings.rules).toEqual({
+        enabled: true,
+        mode: 'strict',
+      });
+    });
+
     it('should allow direct editing of ensemble.elements field (Issue #14)', async () => {
       const mockEnsemble = {
         metadata: {

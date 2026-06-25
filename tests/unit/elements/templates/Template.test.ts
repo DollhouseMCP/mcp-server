@@ -94,6 +94,15 @@ describe('Template', () => {
       }).toThrow('Invalid include path');
     });
 
+    it('should reject include paths with traversal segments before normalization', () => {
+      expect(() => {
+        new Template({
+          name: 'Traversal Include',
+          includes: ['shared/../secret.md']
+        }, 'Content', metadataService);
+      }).toThrow('Invalid include path');
+    });
+
     it('should allow valid include paths', () => {
       const template = new Template({
         name: 'Good Include',
@@ -101,6 +110,15 @@ describe('Template', () => {
       }, 'Content', metadataService);
       
       expect(template.metadata.includes).toEqual(['shared/header.md', 'components/footer.md']);
+    });
+
+    it('should store normalized valid include paths', () => {
+      const template = new Template({
+        name: 'Normalized Include',
+        includes: ['shared/./header.md']
+      }, 'Content', metadataService);
+
+      expect(template.metadata.includes).toEqual(['shared/header.md']);
     });
   });
 

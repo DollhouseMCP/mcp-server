@@ -176,8 +176,8 @@ export class Template extends BaseElement implements IElement {
     if (this.metadata.includes) {
       this.metadata.includes = this.metadata.includes.map(includePath => {
         const sanitizedPath = sanitizeInput(includePath, 200);
-        // Prevent path traversal attacks
-        if (!this.isValidIncludePath(sanitizedPath)) {
+        const normalizedPath = this.normalizeIncludePath(sanitizedPath);
+        if (normalizedPath === null) {
           SecurityMonitor.logSecurityEvent({
             type: 'PATH_TRAVERSAL_ATTEMPT',
             severity: 'CRITICAL',
@@ -186,7 +186,7 @@ export class Template extends BaseElement implements IElement {
           });
           throw ErrorHandler.createError(`Invalid include path: ${sanitizedPath}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_INCLUDE_PATH);
         }
-        return sanitizedPath;
+        return normalizedPath;
       });
     }
   }
@@ -195,20 +195,25 @@ export class Template extends BaseElement implements IElement {
    * Validate include paths to prevent directory traversal
    * SECURITY FIX #2: Prevents accessing files outside template directory
    */
-  private isValidIncludePath(includePath: string): boolean {
-    // Normalize the path
+  private normalizeIncludePath(includePath: string): string | null {
     const normalized = path.normalize(includePath);
-    
-    // Check for path traversal patterns
-    if (normalized.includes('..') || normalized.includes('~') || path.isAbsolute(normalized)) {
-      return false;
+
+    // Reject traversal-shaped input before and after normalization so callers
+    // do not store paths that only pass because they collapse to a safe target.
+    if (
+      includePath.includes('..') ||
+      includePath.includes('~') ||
+      normalized.includes('..') ||
+      normalized.includes('~') ||
+      path.isAbsolute(normalized)
+    ) {
+      return null;
     }
-    
+
     // Only allow alphanumeric, dash, underscore, forward slash, backslash (for Windows), and .md extension
-    // Note: We test against the original path to preserve cross-platform compatibility
     // FIX: Remove unnecessary escape for / (SonarCloud S6535)
     const validPathPattern = /^[a-zA-Z0-9\-_/\\]+\.md$/;
-    return validPathPattern.test(includePath);
+    return validPathPattern.test(normalized) ? normalized : null;
   }
 
   /**

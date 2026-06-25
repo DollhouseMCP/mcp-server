@@ -115,9 +115,14 @@ export function findOversizedDescriptionFields(
     : Object.entries(value);
 
   for (const [key, child] of entries) {
-    const childPath = Array.isArray(value)
-      ? `${path}[${key}]`
-      : key.length > 0 ? `${path}.${key}` : `${path}[""]`;
+    let childPath: string;
+    if (Array.isArray(value)) {
+      childPath = `${path}[${key}]`;
+    } else if (key.length > 0) {
+      childPath = `${path}.${key}`;
+    } else {
+      childPath = `${path}[""]`;
+    }
 
     if (key === 'description' && typeof child === 'string' && child.length > maxLength) {
       errors.push(`${childPath} exceeds maximum YAML/frontmatter length of ${maxLength} characters`);
@@ -553,7 +558,7 @@ export function formatElementResolutionWarnings(result: { ambiguous: Array<{ ele
   return lines.join('\n');
 }
 
-export async function resolveElementByName<T>(
+export async function resolveElementByName<T extends { metadata?: { name?: string } }>(
   manager: ElementManagerOperations<T> | null | undefined,
   type: ElementType,
   name: string
@@ -565,9 +570,9 @@ export async function resolveElementByName<T>(
   if (typeof manager.list === 'function') {
     const elements = await manager.list();
     if (Array.isArray(elements) && elements.length > 0) {
-      const found = findElementFlexibly(name, elements as any[]);
+      const found = findElementFlexibly(name, elements);
       if (found) {
-        return found as T;
+        return found;
       }
     }
   }
@@ -575,7 +580,7 @@ export async function resolveElementByName<T>(
   if (typeof manager.find === 'function') {
     const lowered = name.toLowerCase();
     const slug = slugify(name);
-    const found = await manager.find((candidate: any) => {
+    const found = await manager.find((candidate: T) => {
       const candidateName = candidate?.metadata?.name;
       if (typeof candidateName !== 'string') {
         return false;

@@ -37,6 +37,22 @@ type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
   delete?(filePath: string): Promise<void>;
 };
 
+type EditableElementRecord = Record<string, unknown> & {
+  metadata: Record<string, unknown> & {
+    name?: string;
+    description?: string;
+    tags?: unknown[];
+    modified?: string;
+  };
+  instructions?: string;
+  content?: string;
+  entries?: unknown;
+  extensions?: Record<string, unknown>;
+  getFilePath?: () => string;
+  filePath?: string;
+  filename?: string;
+};
+
 /**
  * GraphQL-aligned input for editing elements.
  * Uses nested objects (like create_element) instead of MongoDB-style dot notation.
@@ -580,11 +596,6 @@ export async function editElement(
     const label = getElementTypeLabel(normalizedType);
     throw new ElementNotFoundError(label, name);
   }
-  const editableElement = element as typeof element & {
-    instructions: string;
-    content: string;
-    extensions?: Record<string, unknown>;
-  };
 
   // Step 4.6: Fork-on-edit — if the element is from the shared pool,
   // materialize a private copy in the user's portfolio before editing.
@@ -602,6 +613,8 @@ export async function editElement(
       }
     }
   }
+
+  const editableElement = element as typeof element & EditableElementRecord;
 
   // Check for unknown properties and generate warnings
   const unknownPropertyWarnings = detectUnknownMetadataProperties(
@@ -795,19 +808,22 @@ export async function editElement(
   }
 
   // Deep merge the update into the element with security options
-  const elementData = element as unknown as Record<string, unknown>;
-  const mergedData = deepMerge(elementData, updateObj, MERGE_OPTIONS);
+  const mergedData = deepMerge(editableElement, updateObj, MERGE_OPTIONS);
 
   // Apply merged data back to element
   for (const [key, value] of Object.entries(mergedData)) {
     if (key !== 'metadata') {
-      (element as any)[key] = value;
+      editableElement[key] = value;
     }
   }
 
-  // Handle metadata separately to preserve element structure
+  // Handle metadata separately to preserve nested siblings after partial edits.
   if (mergedData.metadata && element.metadata) {
-    Object.assign(element.metadata, mergedData.metadata);
+    editableElement.metadata = deepMerge(
+      editableElement.metadata,
+      mergedData.metadata as Record<string, unknown>,
+      MERGE_OPTIONS
+    );
   }
 
   // Handle memory entries specially (extracted for clarity)
@@ -816,7 +832,7 @@ export async function editElement(
     if (!memoryResult.success) {
       return error(`Memory entry validation errors:\n${memoryResult.message}\n\nValid entries were saved.`);
     }
-    (element as any).entries = memoryResult.entriesMap;
+    editableElement.entries = memoryResult.entriesMap;
   }
 
   // Sync ensemble elements from metadata (extracted for clarity)
@@ -850,9 +866,9 @@ export async function editElement(
   }
 
   // Determine file path for saving
-  const filePathCandidate = typeof (element as any).getFilePath === 'function'
-    ? (element as any).getFilePath()
-    : ((element as any).filePath || (element as any).filename);
+  const filePathCandidate = typeof editableElement.getFilePath === 'function'
+    ? editableElement.getFilePath()
+    : (editableElement.filePath || editableElement.filename);
   const filename = typeof filePathCandidate === 'string' && filePathCandidate.length > 0
     ? filePathCandidate
     : getElementFilename(normalizedType, element.metadata?.name || name);
