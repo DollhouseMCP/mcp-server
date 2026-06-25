@@ -201,7 +201,7 @@ export class Template extends BaseElement implements IElement {
       return null;
     }
 
-    const portablePath = trimmedPath.replace(/\\/g, '/');
+    const portablePath = trimmedPath.replaceAll('\\', '/');
     const normalized = path.posix.normalize(portablePath);
 
     // Reject traversal-shaped input before and after normalization so callers
