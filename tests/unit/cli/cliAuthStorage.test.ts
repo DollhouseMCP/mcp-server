@@ -41,12 +41,15 @@ import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storag
 
 describe('openCliAuthStorage', () => {
   const savedBackend = process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
+  const savedAdminDbUrl = process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
   const savedDbUrl = process.env.DOLLHOUSE_DATABASE_URL;
   const tmpDirs: string[] = [];
 
   afterEach(async () => {
     if (savedBackend === undefined) delete process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
     else process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND = savedBackend;
+    if (savedAdminDbUrl === undefined) delete process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
+    else process.env.DOLLHOUSE_DATABASE_ADMIN_URL = savedAdminDbUrl;
     if (savedDbUrl === undefined) delete process.env.DOLLHOUSE_DATABASE_URL;
     else process.env.DOLLHOUSE_DATABASE_URL = savedDbUrl;
     for (const dir of tmpDirs) {
@@ -91,6 +94,13 @@ describe('openCliAuthStorage', () => {
 
   it('postgres URL resolution: falls back to app URL for simple installs', () => {
     expect(resolveCliAuthStoragePostgresUrl({
+      DOLLHOUSE_DATABASE_URL: 'postgres://app@example/db',
+    })).toBe('postgres://app@example/db');
+  });
+
+  it('postgres URL resolution: treats a blank admin URL as unavailable', () => {
+    expect(resolveCliAuthStoragePostgresUrl({
+      DOLLHOUSE_DATABASE_ADMIN_URL: '   ',
       DOLLHOUSE_DATABASE_URL: 'postgres://app@example/db',
     })).toBe('postgres://app@example/db');
   });

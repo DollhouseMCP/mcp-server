@@ -50,6 +50,11 @@ export interface CliAuthStorageHandle {
   close: () => Promise<void>;
 }
 
+function normalizePostgresUrlCandidate(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
 function detectBackend(): AuthStorageBackend {
   // Mirror the resolution order in `createAuthStorage.pickBackend` —
   // explicit env wins, otherwise filesystem default. We do this
@@ -63,7 +68,8 @@ function detectBackend(): AuthStorageBackend {
 }
 
 export function resolveCliAuthStoragePostgresUrl(sourceEnv: CliAuthStoragePostgresUrlEnv = env): string {
-  const url = sourceEnv.DOLLHOUSE_DATABASE_ADMIN_URL ?? sourceEnv.DOLLHOUSE_DATABASE_URL;
+  const url = normalizePostgresUrlCandidate(sourceEnv.DOLLHOUSE_DATABASE_ADMIN_URL) ??
+    normalizePostgresUrlCandidate(sourceEnv.DOLLHOUSE_DATABASE_URL);
   if (!url) {
     throw new Error(
       'DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres requires DOLLHOUSE_DATABASE_ADMIN_URL or ' +
