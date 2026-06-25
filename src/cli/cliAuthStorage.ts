@@ -52,7 +52,8 @@ export interface CliAuthStorageHandle {
 
 function normalizePostgresUrlCandidate(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
+  if (!trimmed) return undefined;
+  return trimmed;
 }
 
 function detectBackend(): AuthStorageBackend {
