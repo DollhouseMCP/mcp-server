@@ -14,11 +14,11 @@
  * the documented `dollhouse-admin-bootstrap` CLI (Round 5 review
  * fixup, post-triage HIGH-1).
  *
- * This helper opens a short-lived Drizzle connection from
- * `DOLLHOUSE_DATABASE_URL` when the auth storage backend is postgres,
- * passes it through to `createAuthStorage`, and exposes a `close()`
- * to drain the pool when the CLI exits. Filesystem and memory
- * backends skip the database wiring entirely.
+ * This helper opens a short-lived Drizzle connection from the admin
+ * database URL when available (falling back to `DOLLHOUSE_DATABASE_URL`
+ * for simple installs), passes it through to `createAuthStorage`, and
+ * exposes a `close()` to drain the pool when the CLI exits. Filesystem
+ * and memory backends skip the database wiring entirely.
  *
  * @module cli/cliAuthStorage
  */
@@ -33,6 +33,11 @@ import {
 import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { DatabaseInstance } from '../database/connection.js';
 
+export interface CliAuthStoragePostgresUrlEnv {
+  readonly DOLLHOUSE_DATABASE_ADMIN_URL?: string;
+  readonly DOLLHOUSE_DATABASE_URL?: string;
+}
+
 export interface CliAuthStorageHandle {
   storage: IAuthStorageLayer;
   /**
@@ -45,6 +50,12 @@ export interface CliAuthStorageHandle {
   close: () => Promise<void>;
 }
 
+function normalizePostgresUrlCandidate(value: string | undefined): string | undefined {
+  const trimmed = value?.trim();
+  if (!trimmed) return undefined;
+  return trimmed;
+}
+
 function detectBackend(): AuthStorageBackend {
   // Mirror the resolution order in `createAuthStorage.pickBackend` —
   // explicit env wins, otherwise filesystem default. We do this
@@ -55,6 +66,19 @@ function detectBackend(): AuthStorageBackend {
   // Leave NODE_ENV=test → memory to createAuthStorage's own logic;
   // CLI processes typically don't run with NODE_ENV=test.
   return 'filesystem';
+}
+
+export function resolveCliAuthStoragePostgresUrl(sourceEnv: CliAuthStoragePostgresUrlEnv = env): string {
+  const url = normalizePostgresUrlCandidate(sourceEnv.DOLLHOUSE_DATABASE_ADMIN_URL) ??
+    normalizePostgresUrlCandidate(sourceEnv.DOLLHOUSE_DATABASE_URL);
+  if (!url) {
+    throw new Error(
+      'DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres requires DOLLHOUSE_DATABASE_ADMIN_URL or ' +
+      'DOLLHOUSE_DATABASE_URL to be set so the bootstrap CLI can open a connection. ' +
+      'Either set one URL or use DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem for non-DB deployments.',
+    );
+  }
+  return url;
 }
 
 /**
@@ -74,18 +98,10 @@ export async function openCliAuthStorage(
     return { storage, close: async () => {} };
   }
 
-  // Postgres backend — open a connection from the same env the AS
-  // uses. The CLI shares the storage backend with the running AS;
-  // a separate connection pool is fine because (a) auth ops are
-  // low-volume, (b) the CLI is short-lived.
-  const url = env.DOLLHOUSE_DATABASE_URL;
-  if (!url) {
-    throw new Error(
-      'DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres requires DOLLHOUSE_DATABASE_URL ' +
-      'to be set so the bootstrap CLI can open a connection. Either set the URL ' +
-      'or use DOLLHOUSE_AUTH_STORAGE_BACKEND=filesystem for non-DB deployments.',
-    );
-  }
+  // Postgres backend — open a short-lived operator connection. Hosted
+  // deployments expose DOLLHOUSE_DATABASE_URL as the RLS app role, while
+  // auth-admin CLIs need the admin role for withSystemContext operations.
+  const url = resolveCliAuthStoragePostgresUrl();
 
   // Lazy import: only callers on the postgres branch pull in the
   // database / drizzle dependencies.
