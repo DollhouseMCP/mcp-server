@@ -16,10 +16,10 @@
  */
 
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { SECURITY_LIMITS } from '../../security/constants.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 /**
  * Validation constants shared across element types

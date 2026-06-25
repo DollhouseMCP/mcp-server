@@ -24,7 +24,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: write
-      issues: write
+      issues: read
       id-token: write
     
     steps:
@@ -35,15 +35,12 @@ jobs:
 
       - name: Run Claude Code Review
         id: claude-review
-        uses: anthropics/claude-code-action@beta
+        uses: anthropics/claude-code-action@28f83620103c48a57093dcc2837eec89e036bb9f # v0.0.63
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          # Provide the workflow token so PRs that update this workflow do not rely on
-          # the Claude GitHub App OIDC exchange, which requires default-branch parity.
-          github_token: ${{ github.token }}
+          github_token: ${{ github.token }}  # Use workflow token directly when this workflow changes in a PR
 
-          # The beta action currently installs an older Claude Code runtime whose
-          # sonnet alias resolves to a retired model, so pin a current Sonnet ID.
+          # Pin to a current Claude API alias instead of relying on the action default.
           model: "claude-sonnet-4-6"
           
           # Direct prompt for automated review (no @claude mention needed)

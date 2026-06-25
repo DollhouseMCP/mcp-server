@@ -10,13 +10,13 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { sanitizeInput, validateContentSize, validateCategory } from '../../security/InputValidator.js';
 import {
   sanitizeMetadata,
-  findOversizedDescriptionFields,
   normalizeElementTypeInput,
   formatValidElementTypesList,
   detectUnknownMetadataProperties,
   formatUnknownPropertyWarnings,
   formatElementResolutionWarnings,
   collectGatekeeperAuthoringErrors,
+  findOversizedDescriptionFields,
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import { resolveElementTypes } from '../../utils/elementTypeResolver.js';

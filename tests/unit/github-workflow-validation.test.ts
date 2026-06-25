@@ -184,16 +184,44 @@ describe('GitHub Workflow Validation', () => {
       expect(checkoutStep?.with?.ref).toBe('${{ steps.source-ref.outputs.ref }}');
     });
 
-    it('should verify publisher downloads with explicit certificate and signature checks', () => {
+    it('should verify publisher downloads with pinned Sigstore bundle checks', () => {
       const publishJob = workflow.jobs.publish;
+      const cosignStep = publishJob.steps.find(step => step.name === 'Install cosign');
       const downloadStep = publishJob.steps.find(step => step.name === 'Download mcp-publisher CLI');
 
+      expect(cosignStep?.uses).toMatch(/^sigstore\/cosign-installer@[a-f0-9]{40}$/);
+      expect(cosignStep?.with?.['cosign-release']).toBe('v3.0.6');
+      expect(workflowContent).toContain('Pinned to cosign-installer v4.1.2');
+      expect(workflowContent).toContain('https://github.com/sigstore/cosign-installer/issues/202');
       expect(downloadStep?.run).toContain('set -euo pipefail');
+      expect(downloadStep?.run).toContain('VERSION="v1.7.9"');
+      expect(downloadStep?.run).toContain('EXPECTED_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"');
+      expect(downloadStep?.run).toContain('.sigstore.json');
       expect(downloadStep?.run).toContain('SHA256 verification failed');
-      expect(downloadStep?.run).toContain('openssl x509 -in "$CERT_PEM" -noout >/dev/null');
+      expect(downloadStep?.run).toContain('cosign verify-blob');
+      expect(downloadStep?.run).toContain('--bundle "$BUNDLE_FILE"');
+      expect(downloadStep?.run).toContain('--certificate-identity "$EXPECTED_IDENTITY"');
+      expect(downloadStep?.run).toContain('--certificate-oidc-issuer "$EXPECTED_ISSUER"');
       expect(downloadStep?.run).toContain('EXPECTED_ISSUER');
-      expect(downloadStep?.run).toContain('subjectAltName');
-      expect(downloadStep?.run).toContain('Signature verification failed');
+      expect(downloadStep?.run).toContain('https://token.actions.githubusercontent.com');
+    });
+  });
+
+  describe('Beta prerelease workflow channels', () => {
+    it('should route exact beta and numbered beta versions to the beta npm dist-tag', () => {
+      const npmWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-npm.yml'), 'utf8');
+      const packagesWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-github-packages.yml'), 'utf8');
+
+      expect(npmWorkflow).toContain('*-beta|*-beta.*)');
+      expect(packagesWorkflow).toContain('*-beta|*-beta.*)');
+    });
+
+    it('should allow exact beta and numbered beta versions in beta CD workflows', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+      const betaDeployWorkflow = fs.readFileSync(path.join(workflowDir, 'deploy-beta-alpha-vps.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+      expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
     });
   });
 });

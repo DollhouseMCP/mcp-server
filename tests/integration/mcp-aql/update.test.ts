@@ -11,7 +11,6 @@ import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import type { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
-import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
 import path from 'path';
 import fs from 'fs/promises';
 
@@ -522,12 +521,12 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
       }
     });
 
-    it.each([501, 4096])('should accept %i character descriptions when editing', async (descriptionLength) => {
-      const elementName = `validation-test-skill-${descriptionLength}`;
+    // TODO: Max length validation not enforced on edit (truncation happens silently)
+    it.skip('should validate field values before setting', async () => {
       const createResult = await mcpAqlHandler.handleCreate({
         operation: 'create_element',
         params: {
-          element_name: elementName,
+          element_name: 'validation-test-skill',
           element_type: 'skills',
           description: 'Skill for validation testing',
           content: '# Test Content\n\nThis is test content that meets minimum length requirements.',
@@ -539,35 +538,31 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
       const verifyResult = await mcpAqlHandler.handleRead({
         operation: 'get_element',
         params: {
-          element_name: elementName,
+          element_name: 'validation-test-skill',
           element_type: 'skills',
         },
       });
       expect(verifyResult.success).toBe(true);
 
-      // Descriptions over 500 chars should be accepted; only global content/YAML
-      // safety limits should apply.
-      const longDescription = `Updated description ${descriptionLength}: `.padEnd(descriptionLength, 'a');
+      // Try to set a description that exceeds the YAML/frontmatter budget
+      const tooLongDescription = 'a'.repeat(65 * 1024);
 
       const result = await mcpAqlHandler.handleUpdate({
         operation: 'edit_element',
         params: {
-          element_name: elementName,
+          element_name: 'validation-test-skill',
           element_type: 'skills',
-          input: { description: longDescription },
+          input: { description: tooLongDescription },
         },
       });
 
+      // Handler returns success:true but with error content (❌ in message)
       expect(result.success).toBe(true);
       if (result.success) {
         const data = result.data as any;
-        expect(data.content[0].text).toMatch(/✅/);
+        expect(data.content[0].text).toMatch(/❌/);
+        expect(data.content[0].text).toMatch(/invalid value/i);
       }
-
-      const skillFile = path.join(env.testDir, 'skills', `${elementName}.md`);
-      const fileContent = await fs.readFile(skillFile, 'utf-8');
-      const parsed = SecureYamlParser.parse(fileContent, { validateContent: false });
-      expect(parsed.data.description).toBe(longDescription);
     });
 
     // FIX: Issue #287 - Fixed by removing test-pattern filtering

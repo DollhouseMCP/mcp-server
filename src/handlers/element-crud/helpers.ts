@@ -90,9 +90,9 @@ export function sanitizeMetadata(metadata: Record<string, any> | undefined): Rec
  * Find description fields that would exceed the YAML/frontmatter parser limit.
  *
  * Element descriptions are metadata and are serialized into YAML frontmatter, so
- * the real upper bound is the YAML safety limit rather than the content body
- * limit. This walks nested metadata too because templates, agents, and skills
- * all have description-like nested fields.
+ * the real upper bound is the YAML safety limit rather than the legacy short
+ * description display limit. This walks nested metadata too because templates,
+ * agents, and skills all have description-like nested fields.
  */
 export function findOversizedDescriptionFields(
   value: unknown,
@@ -115,7 +115,15 @@ export function findOversizedDescriptionFields(
     : Object.entries(value);
 
   for (const [key, child] of entries) {
-    const childPath = Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`;
+    let childPath: string;
+    if (Array.isArray(value)) {
+      childPath = `${path}[${key}]`;
+    } else if (key.length > 0) {
+      childPath = `${path}.${key}`;
+    } else {
+      childPath = `${path}[""]`;
+    }
+
     if (key === 'description' && typeof child === 'string' && child.length > maxLength) {
       errors.push(`${childPath} exceeds maximum YAML/frontmatter length of ${maxLength} characters`);
       continue;
@@ -208,6 +216,8 @@ export interface ElementManagerOperations<T> {
   find?: (predicate: (candidate: T) => boolean) => Promise<T | undefined>;
   load?: (filePath: string) => Promise<T>;
 }
+
+type ElementWithOptionalName = { metadata?: { name?: string } };
 
 /**
  * Known metadata properties for each element type.
@@ -550,7 +560,68 @@ export function formatElementResolutionWarnings(result: { ambiguous: Array<{ ele
   return lines.join('\n');
 }
 
-export async function resolveElementByName<T>(
+async function findElementFromList<T extends ElementWithOptionalName>(
+  manager: ElementManagerOperations<T>,
+  name: string
+): Promise<T | undefined> {
+  if (typeof manager.list !== 'function') {
+    return undefined;
+  }
+
+  const elements = await manager.list();
+  return Array.isArray(elements) && elements.length > 0
+    ? findElementFlexibly(name, elements)
+    : undefined;
+}
+
+function elementMatchesName<T extends ElementWithOptionalName>(
+  candidate: T,
+  loweredName: string,
+  nameSlug: string
+): boolean {
+  const candidateName = candidate?.metadata?.name;
+  if (typeof candidateName !== 'string') {
+    return false;
+  }
+
+  const candidateSlug = slugify(candidateName);
+  return candidateName.toLowerCase() === loweredName || candidateSlug === nameSlug;
+}
+
+async function findElementWithPredicate<T extends ElementWithOptionalName>(
+  manager: ElementManagerOperations<T>,
+  name: string
+): Promise<T | undefined> {
+  if (typeof manager.find !== 'function') {
+    return undefined;
+  }
+
+  const loweredName = name.toLowerCase();
+  const nameSlug = slugify(name);
+  return manager.find(candidate => elementMatchesName(candidate, loweredName, nameSlug));
+}
+
+async function loadElementByFilename<T extends ElementWithOptionalName>(
+  manager: ElementManagerOperations<T>,
+  type: ElementType,
+  name: string
+): Promise<T | undefined> {
+  if (typeof manager.load !== 'function') {
+    return undefined;
+  }
+
+  const candidateFilename = getElementFilename(type, name);
+  try {
+    return await manager.load(candidateFilename);
+  } catch (error) {
+    logger.debug(`[ElementCRUD] Direct load failed for ${type}:${name}`, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return undefined;
+  }
+}
+
+export async function resolveElementByName<T extends ElementWithOptionalName>(
   manager: ElementManagerOperations<T> | null | undefined,
   type: ElementType,
   name: string
@@ -559,41 +630,19 @@ export async function resolveElementByName<T>(
     return undefined;
   }
 
-  if (typeof manager.list === 'function') {
-    const elements = await manager.list();
-    if (Array.isArray(elements) && elements.length > 0) {
-      const found = findElementFlexibly(name, elements as any[]);
-      if (found) {
-        return found as T;
-      }
-    }
+  const listedElement = await findElementFromList(manager, name);
+  if (listedElement) {
+    return listedElement;
   }
 
-  if (typeof manager.find === 'function') {
-    const lowered = name.toLowerCase();
-    const slug = slugify(name);
-    const found = await manager.find((candidate: any) => {
-      const candidateName = candidate?.metadata?.name;
-      if (typeof candidateName !== 'string') {
-        return false;
-      }
-      const candidateSlug = slugify(candidateName);
-      return candidateName.toLowerCase() === lowered || candidateSlug === slug;
-    });
-    if (found) {
-      return found;
-    }
+  const foundElement = await findElementWithPredicate(manager, name);
+  if (foundElement) {
+    return foundElement;
   }
 
-  if (typeof manager.load === 'function') {
-    const candidateFilename = getElementFilename(type, name);
-    try {
-      return await manager.load(candidateFilename);
-    } catch (error) {
-      logger.debug(`[ElementCRUD] Direct load failed for ${type}:${name}`, {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
+  const loadedElement = await loadElementByFilename(manager, type, name);
+  if (loadedElement) {
+    return loadedElement;
   }
 
   logger.debug(`[ElementCRUD] Unable to locate ${type}:${name} via available manager operations.`);

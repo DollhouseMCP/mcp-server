@@ -98,14 +98,14 @@ jobs:
             *-alpha.*)
               dist_tag="alpha"
               ;;
-            *-beta.*)
+            *-beta|*-beta.*)
               dist_tag="beta"
               ;;
             *-rc.*)
               dist_tag="next"
               ;;
             *-*)
-              echo "::error::Unsupported prerelease channel in ${PACKAGE_VERSION}; expected -alpha., -beta., or -rc."
+              echo "::error::Unsupported prerelease channel in ${PACKAGE_VERSION}; expected -alpha., -beta, -beta., or -rc."
               exit 1
               ;;
             *)

@@ -81,6 +81,16 @@ export class Template extends BaseElement implements IElement {
   private compiledTemplate?: CompiledTemplate;
   // Issue #705: Cache parsed sections to avoid re-running regex on every render/validate
   private parsedSections?: TemplateSections;
+
+  public override get content(): string {
+    return this._content;
+  }
+
+  public override set content(value: string) {
+    this._content = value;
+    this.compiledTemplate = undefined;
+    this.parsedSections = undefined;
+  }
   
   // SECURITY FIX #4: Memory management constants
   // Prevents unbounded template size and variable count that could exhaust memory
@@ -96,7 +106,7 @@ export class Template extends BaseElement implements IElement {
     const sanitizedMetadata = {
       ...metadata,
       name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
-      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
+      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH) : undefined,
       category: metadata.category ? sanitizeInput(UnicodeValidator.normalize(metadata.category).normalizedContent, 50) : undefined,
       output_format: metadata.output_format ? sanitizeInput(metadata.output_format, 20) : undefined
     };
@@ -144,17 +154,30 @@ export class Template extends BaseElement implements IElement {
       this.metadata.variables = this.metadata.variables.map(variable => ({
         ...variable,
         name: sanitizeInput(UnicodeValidator.normalize(variable.name).normalizedContent, 50),
-        description: variable.description ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH) : undefined,
+        description: variable.description
+          ? sanitizeInput(UnicodeValidator.normalize(variable.description).normalizedContent, SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH)
+          : undefined,
         validation: variable.validation ? sanitizeInput(variable.validation, 200) : undefined
+      }));
+    }
+
+    if (this.metadata.examples) {
+      this.metadata.examples = this.metadata.examples.map(example => ({
+        ...example,
+        title: sanitizeInput(UnicodeValidator.normalize(example.title).normalizedContent, 100),
+        description: example.description
+          ? sanitizeInput(UnicodeValidator.normalize(example.description).normalizedContent, SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH)
+          : undefined,
+        output: example.output ? sanitizeInput(example.output, 5000) : undefined
       }));
     }
 
     // SECURITY FIX #2: Validate include paths
     if (this.metadata.includes) {
       this.metadata.includes = this.metadata.includes.map(includePath => {
-        const sanitizedPath = sanitizeInput(includePath, 200);
-        // Prevent path traversal attacks
-        if (!this.isValidIncludePath(sanitizedPath)) {
+        const normalizedPath = this.normalizeIncludePath(includePath);
+        if (normalizedPath === null) {
+          const sanitizedPath = sanitizeInput(includePath, 200);
           SecurityMonitor.logSecurityEvent({
             type: 'PATH_TRAVERSAL_ATTEMPT',
             severity: 'CRITICAL',
@@ -163,7 +186,7 @@ export class Template extends BaseElement implements IElement {
           });
           throw ErrorHandler.createError(`Invalid include path: ${sanitizedPath}`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_INCLUDE_PATH);
         }
-        return sanitizedPath;
+        return normalizedPath;
       });
     }
   }
@@ -172,20 +195,34 @@ export class Template extends BaseElement implements IElement {
    * Validate include paths to prevent directory traversal
    * SECURITY FIX #2: Prevents accessing files outside template directory
    */
-  private isValidIncludePath(includePath: string): boolean {
-    // Normalize the path
-    const normalized = path.normalize(includePath);
-    
-    // Check for path traversal patterns
-    if (normalized.includes('..') || normalized.includes('~') || path.isAbsolute(normalized)) {
-      return false;
+  private normalizeIncludePath(includePath: string): string | null {
+    const trimmedPath = includePath.trim();
+    if (trimmedPath.length === 0 || trimmedPath.length > 200) {
+      return null;
     }
-    
-    // Only allow alphanumeric, dash, underscore, forward slash, backslash (for Windows), and .md extension
-    // Note: We test against the original path to preserve cross-platform compatibility
+
+    const portablePath = trimmedPath.replaceAll('\\', '/');
+    const normalized = path.posix.normalize(portablePath);
+
+    // Reject traversal-shaped input before and after normalization so callers
+    // do not store paths that only pass because they collapse to a safe target.
+    if (
+      trimmedPath.includes('..') ||
+      portablePath.includes('~') ||
+      normalized.includes('..') ||
+      normalized.includes('~') ||
+      path.posix.isAbsolute(portablePath) ||
+      path.win32.isAbsolute(trimmedPath) ||
+      path.posix.isAbsolute(normalized) ||
+      path.win32.isAbsolute(normalized)
+    ) {
+      return null;
+    }
+
+    // Store include paths with POSIX separators so metadata is stable across OSes.
     // FIX: Remove unnecessary escape for / (SonarCloud S6535)
-    const validPathPattern = /^[a-zA-Z0-9\-_/\\]+\.md$/;
-    return validPathPattern.test(includePath);
+    const validPathPattern = /^[a-zA-Z0-9\-_/]+\.md$/;
+    return validPathPattern.test(normalized) ? normalized : null;
   }
 
   /**

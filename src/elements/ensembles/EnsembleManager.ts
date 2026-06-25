@@ -448,7 +448,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       let purpose: string | undefined;
       if (elem.purpose) {
         const purposeResult = this.validationService.validateAndSanitizeInput(String(elem.purpose), {
-          maxLength: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+          maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
           allowSpaces: true,
           fieldType: 'description'  // Allow full description punctuation (commas, em-dashes, etc.)
         });

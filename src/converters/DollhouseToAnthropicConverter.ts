@@ -16,10 +16,10 @@
  */
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 import * as yaml from 'js-yaml';
 import { SchemaMapper, type DollhouseMCPSkillMetadata, type AnthropicSkillMetadata } from './SchemaMapper.js';
 import { ContentExtractor, type ExtractedSection } from './ContentExtractor.js';
+import { resolvePathWithinBase } from '../utils/pathSecurity.js';
 
 export interface AnthropicSkillStructure {
     'SKILL.md': string;
@@ -150,7 +150,7 @@ export class DollhouseToAnthropicConverter {
         this.ensureDirectoryExists(outputDir);
 
         // Write SKILL.md
-        fs.writeFileSync(path.join(outputDir, 'SKILL.md'), structure['SKILL.md']);
+        fs.writeFileSync(resolvePathWithinBase(outputDir, 'SKILL.md'), structure['SKILL.md']);
 
         // Write all component directories
         this.writeScriptsDirectory(structure, outputDir);
@@ -161,7 +161,7 @@ export class DollhouseToAnthropicConverter {
 
         // Write license file
         if (structure['LICENSE.txt']) {
-            fs.writeFileSync(path.join(outputDir, 'LICENSE.txt'), structure['LICENSE.txt']);
+            fs.writeFileSync(resolvePathWithinBase(outputDir, 'LICENSE.txt'), structure['LICENSE.txt']);
         }
     }
 
@@ -182,11 +182,11 @@ export class DollhouseToAnthropicConverter {
     private writeScriptsDirectory(structure: AnthropicSkillStructure, outputDir: string): void {
         if (!structure['scripts/']) return;
 
-        const scriptsDir = path.join(outputDir, 'scripts');
+        const scriptsDir = resolvePathWithinBase(outputDir, 'scripts');
         fs.mkdirSync(scriptsDir, { recursive: true });
 
         for (const [filename, content] of Object.entries(structure['scripts/'])) {
-            fs.writeFileSync(path.join(scriptsDir, filename), content);
+            fs.writeFileSync(resolvePathWithinBase(scriptsDir, filename), content);
             // SECURITY (SonarCloud S2612): Do NOT auto-chmod scripts executable
             // - Scripts from DollhouseMCP are markdown code blocks, not executable files
             // - Format transformer shouldn't make security decisions (chmod = security decision)
@@ -206,11 +206,11 @@ export class DollhouseToAnthropicConverter {
     ): void {
         if (!files) return;
 
-        const targetDir = path.join(outputDir, dirName);
+        const targetDir = resolvePathWithinBase(outputDir, dirName);
         fs.mkdirSync(targetDir, { recursive: true });
 
         for (const [filename, content] of Object.entries(files)) {
-            fs.writeFileSync(path.join(targetDir, filename), content);
+            fs.writeFileSync(resolvePathWithinBase(targetDir, filename), content);
         }
     }
 

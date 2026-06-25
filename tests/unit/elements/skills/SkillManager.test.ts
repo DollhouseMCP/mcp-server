@@ -21,6 +21,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -101,6 +102,21 @@ describe('SkillManager', () => {
     delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
   });
 
+  describe('Skill element', () => {
+    it('should preserve substantive descriptions up to the 2.1 YAML/frontmatter limit', () => {
+      const longDescription = 'Detailed skill capability guidance '.repeat(25).trim();
+
+      const skill = new Skill({
+        name: 'Long Description Skill',
+        description: longDescription
+      }, '', metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeLessThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(skill.metadata.description).toBe(longDescription);
+    });
+  });
+
   describe('load', () => {
     it('should load a skill from file', async () => {
       // Create a test skill file
@@ -131,29 +147,6 @@ This is a test skill.`;
     it('should handle missing file gracefully', async () => {
       await expect(skillManager.load('non-existent.md'))
         .rejects.toThrow();
-    });
-
-    it('should preserve long parameter descriptions from skill metadata', async () => {
-      const longDescription = 'Skill parameter description '.padEnd(1024, 'a');
-      const skillContent = `---
-name: Parameter Skill
-description: A skill with detailed parameter metadata
-parameters:
-  - name: prompt
-    type: string
-    description: ${longDescription}
----
-# Parameter Skill
-
-This skill has a parameter with a substantive description.`;
-
-      const skillPath = path.join(portfolioManager.getElementDir(ElementType.SKILL), 'parameter-skill.md');
-      await fs.writeFile(skillPath, skillContent);
-
-      const skill = await skillManager.load('parameter-skill.md');
-
-      expect(skill.metadata.parameters?.[0].description).toBe(longDescription);
-      expect(skill.metadata.parameters?.[0].description.length).toBeGreaterThan(500);
     });
 
     it('should validate file paths', async () => {
@@ -416,6 +409,26 @@ tags:
         source: 'SkillManager.importElement',
         details: 'YAML content safely parsed'
       });
+    });
+
+    it('should preserve parameter descriptions longer than 200 characters when importing', async () => {
+      const longDescription = 'Detailed parameter guidance '.repeat(10).trim();
+      const yamlData = {
+        name: 'Long Parameter Description',
+        description: 'Imported skill with detailed parameter docs',
+        parameters: [
+          {
+            name: 'topic',
+            type: 'string',
+            description: longDescription
+          }
+        ]
+      };
+
+      const skill = await skillManager.importElement(JSON.stringify(yamlData), 'json');
+
+      expect(longDescription.length).toBeGreaterThan(200);
+      expect(skill.metadata.parameters?.[0].description).toBe(longDescription);
     });
 
     it('should import from JSON format', async () => {

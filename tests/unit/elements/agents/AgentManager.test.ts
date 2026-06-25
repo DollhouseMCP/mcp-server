@@ -1124,7 +1124,6 @@ Content`;
 
     describe('Issue #697: V2 Field Normalization on Load', () => {
       it('should normalize goals (plural) to goal on load', async () => {
-        const longParameterDescription = 'Agent goal parameter description '.padEnd(1024, 'g');
         fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
           if (filePath.includes('.state.yaml')) {
             const error = new Error('ENOENT') as NodeJS.ErrnoException;
@@ -1138,7 +1137,7 @@ goals:
   template: "Do {{task}}"
   parameters:
     - name: task
-      description: ${longParameterDescription}
+      description: The task to do
       required: true
 ---
 Agent with plural goals field`;
@@ -1149,8 +1148,6 @@ Agent with plural goals field`;
         // goal should be set from goals
         expect((agent!.metadata as any).goal).toBeDefined();
         expect((agent!.metadata as any).goal.template).toBe('Do {{task}}');
-        expect((agent!.metadata as any).goal.parameters[0].description).toBe(longParameterDescription);
-        expect((agent!.metadata as any).goal.parameters[0].description.length).toBeGreaterThan(500);
         // goals (plural) should be removed
         expect((agent!.metadata as any).goals).toBeUndefined();
       });

@@ -64,8 +64,8 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "${package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta\.[0-9A-Za-z.-]+$ ]]; then
-            echo "::error::Beta publish requires a SemVer prerelease like 2.1.0-beta.1; got ${package_version}"
+          if [[ ! "${package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Beta publish requires a SemVer prerelease like 2.1.0-beta or 2.1.0-beta.1; got ${package_version}"
             exit 1
           fi
 

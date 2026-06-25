@@ -37,6 +37,22 @@ type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
   delete?(filePath: string): Promise<void>;
 };
 
+type EditableElementRecord = Record<string, unknown> & {
+  metadata: Record<string, unknown> & {
+    name?: string;
+    description?: string;
+    tags?: unknown[];
+    modified?: string;
+  };
+  instructions?: string;
+  content?: string;
+  entries?: unknown;
+  extensions?: Record<string, unknown>;
+  getFilePath?: () => string;
+  filePath?: string;
+  filename?: string;
+};
+
 /**
  * GraphQL-aligned input for editing elements.
  * Uses nested objects (like create_element) instead of MongoDB-style dot notation.
@@ -71,6 +87,12 @@ const READ_ONLY_FIELDS = new Set([
   '_status',
   '_isDirty'
 ]);
+
+function hasOwnRecordProperty(value: unknown, key: string): boolean {
+  return typeof value === 'object' &&
+    value !== null &&
+    Object.hasOwn(value, key);
+}
 
 function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
   switch (fieldType) {
@@ -134,7 +156,7 @@ const FIELD_TYPE_RULES: Record<string, {
   name: { expected: 'string', check: (v) => typeof v === 'string' },
   description: { expected: 'string', check: (v) => typeof v === 'string' },
   author: { expected: 'string', check: (v) => typeof v === 'string' },
-  version: { expected: 'string', check: (v) => typeof v === 'string' || typeof v === 'number' },
+  version: { expected: 'string or number', check: (v) => typeof v === 'string' || typeof v === 'number' },
   category: { expected: 'string', check: (v) => typeof v === 'string' },
   domain: { expected: 'string', check: (v) => typeof v === 'string' },
   tone: { expected: 'string', check: (v) => typeof v === 'string' },
@@ -228,7 +250,6 @@ function validateFieldValue(
     return null; // No validation rules for this field
   }
 
-  // Determine max length based on field type, using system constants
   const maxLength = getMaxLengthForFieldType(fieldType);
 
   const result = validationService.validateAndSanitizeInput(value, {
@@ -427,6 +448,11 @@ function applyEnsembleElementsUpdate(
   return null;
 }
 
+function hasEnsembleElementsUpdate(input: Record<string, unknown>): boolean {
+  return hasOwnRecordProperty(input, 'elements') ||
+    hasOwnRecordProperty(input.metadata, 'elements');
+}
+
 /**
  * Sync ensemble elements from metadata after an update.
  *
@@ -445,11 +471,11 @@ async function syncEnsembleElementsIfNeeded(
   input: Record<string, unknown>,
   context?: ElementCrudContext
 ): Promise<ResolveElementTypesResult | undefined> {
-  const hasElementsUpdate = input.elements || (input.metadata as Record<string, unknown>)?.elements;
+  const hasElementsUpdate = hasEnsembleElementsUpdate(input);
 
   if (hasElementsUpdate && element instanceof Ensemble) {
     // Issue #466: Resolve missing element_type via portfolio lookup before sync
-    if (context && element.metadata.elements) {
+    if (context && Array.isArray(element.metadata.elements)) {
       const result = await resolveElementTypes(
         element.metadata.elements,
         {
@@ -588,6 +614,8 @@ export async function editElement(
     }
   }
 
+  const editableElement = element as typeof element & EditableElementRecord;
+
   // Check for unknown properties and generate warnings
   const unknownPropertyWarnings = detectUnknownMetadataProperties(
     normalizedType,
@@ -640,10 +668,12 @@ export async function editElement(
     return error(formatGatekeeperValidationMessage(gatekeeperErrors));
   }
 
-  const descriptionLengthErrors = findOversizedDescriptionFields(input);
-  if (descriptionLengthErrors.length > 0) {
-    const formattedErrors = descriptionLengthErrors.map(descriptionError => `  • ${descriptionError}`).join('\n');
-    return error(`Description length validation failed:\n${formattedErrors}`);
+  const oversizedDescriptionFields = findOversizedDescriptionFields(input);
+  if (oversizedDescriptionFields.length > 0) {
+    const formattedErrors = oversizedDescriptionFields.map(descriptionError => `  • ${descriptionError}`).join('\n');
+    return error(
+      `Description length validation failed:\n${formattedErrors}`
+    );
   }
 
   // Validate string field values using injected validator
@@ -709,7 +739,7 @@ export async function editElement(
 
       // If metadata.elements is provided for an ensemble, extract and route through
       // the ensemble elements handler for proper validation/normalization/merge.
-      if (normalizedType === ElementType.ENSEMBLE && metaValue.elements) {
+      if (normalizedType === ElementType.ENSEMBLE && hasOwnRecordProperty(metaValue, 'elements')) {
         const elemError = applyEnsembleElementsUpdate(metaValue.elements, element, updateObj, collectionWarnings);
         if (elemError) return error(elemError);
 
@@ -738,13 +768,13 @@ export async function editElement(
       });
       const sanitizedInstructions = contentValidation.sanitizedContent || '';
       // Set instructions on the element directly (all types now have this property)
-      (element as any).instructions = sanitizedInstructions;
+      editableElement.instructions = sanitizedInstructions;
       // For agents, also update extensions.instructions for backward compat
       if (normalizedType === ElementType.AGENT) {
-        if (!element.extensions) {
-          (element as any).extensions = {};
+        if (!editableElement.extensions) {
+          editableElement.extensions = {};
         }
-        (element as any).extensions.instructions = sanitizedInstructions;
+        editableElement.extensions.instructions = sanitizedInstructions;
       }
     } else if (key === 'content' && typeof value === 'string') {
       // Issue #585/#602: Handle content updates (reference material)
@@ -754,7 +784,7 @@ export async function editElement(
       });
       const sanitizedContent = contentValidation.sanitizedContent || '';
       // Set content on the element directly (all types now have this property)
-      (element as any).content = sanitizedContent;
+      editableElement.content = sanitizedContent;
     } else if (specialRouteFields.has(key)) {
       // Special route field — handled elsewhere, skip
       fieldApplied = false;
@@ -778,19 +808,22 @@ export async function editElement(
   }
 
   // Deep merge the update into the element with security options
-  const elementData = element as unknown as Record<string, unknown>;
-  const mergedData = deepMerge(elementData, updateObj, MERGE_OPTIONS);
+  const mergedData = deepMerge(editableElement, updateObj, MERGE_OPTIONS);
 
   // Apply merged data back to element
   for (const [key, value] of Object.entries(mergedData)) {
     if (key !== 'metadata') {
-      (element as any)[key] = value;
+      editableElement[key] = value;
     }
   }
 
-  // Handle metadata separately to preserve element structure
+  // Handle metadata separately to preserve nested siblings after partial edits.
   if (mergedData.metadata && element.metadata) {
-    Object.assign(element.metadata, mergedData.metadata);
+    editableElement.metadata = deepMerge(
+      editableElement.metadata,
+      mergedData.metadata as Record<string, unknown>,
+      MERGE_OPTIONS
+    );
   }
 
   // Handle memory entries specially (extracted for clarity)
@@ -799,7 +832,7 @@ export async function editElement(
     if (!memoryResult.success) {
       return error(`Memory entry validation errors:\n${memoryResult.message}\n\nValid entries were saved.`);
     }
-    (element as any).entries = memoryResult.entriesMap;
+    editableElement.entries = memoryResult.entriesMap;
   }
 
   // Sync ensemble elements from metadata (extracted for clarity)
@@ -833,9 +866,9 @@ export async function editElement(
   }
 
   // Determine file path for saving
-  const filePathCandidate = typeof (element as any).getFilePath === 'function'
-    ? (element as any).getFilePath()
-    : ((element as any).filePath || (element as any).filename);
+  const filePathCandidate = typeof editableElement.getFilePath === 'function'
+    ? editableElement.getFilePath()
+    : (editableElement.filePath || editableElement.filename);
   const filename = typeof filePathCandidate === 'string' && filePathCandidate.length > 0
     ? filePathCandidate
     : getElementFilename(normalizedType, element.metadata?.name || name);

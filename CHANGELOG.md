@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.1.0-beta] - 2026-06-25
+
+Start beta line for 2.1 hosted HTTP and expanded description limits.
+
+## [2.0.35] - 2026-06-23
+
+- Harden converter and CLI output path handling to keep generated files inside their intended output directories.
+- Restore SonarCloud main quality gate health with path traversal coverage, accessibility, and reliability fixes.
+- Update MCP registry publisher workflow verification for the current publisher release and OIDC audience.
+
+## [2.0.34] - 2026-06-23
+
+- Preserve dependency and security hardening while rolling back the accidental 2.0.33 main merge state.
+- Fix nested documentation description handling so agent goal parameters, template variables, and template examples can keep substantive descriptions beyond the top-level element summary limit.
+- Restore permission audit metadata and Codex permission allow-response handling from the develop hardening work.
+- Keep release metadata aligned across package, lockfile, manifest, MCP server metadata, and generated version surfaces.
+
 ## [2.0.32] - 2026-04-23
 
 - Restore the management console's stronger responsive header behavior, including cleaner tab overflow handling and keyboard-accessible menu navigation.
