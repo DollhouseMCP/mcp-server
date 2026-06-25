@@ -8,8 +8,9 @@
  */
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
-import express from 'express';
+import express, { type Express } from 'express';
 import request from 'supertest';
+import type { Response } from 'supertest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -32,6 +33,18 @@ const ASSET_VERSION_PLACEHOLDER = '{{DOLLHOUSE_ASSET_VERSION}}';
 /** A valid 64-hex-char token. */
 const TEST_TOKEN = 'a'.repeat(64);
 const ROTATED_TOKEN = 'b'.repeat(64);
+
+async function getWithTransientSocketRetry(app: Express, url: string): Promise<Response> {
+  try {
+    return await request(app).get(url);
+  } catch (err) {
+    const error = err as NodeJS.ErrnoException;
+    if (error.code !== 'ECONNRESET') {
+      throw err;
+    }
+    return request(app).get(url);
+  }
+}
 
 /**
  * Build a minimal Express app that replicates the server's static file
@@ -98,7 +111,7 @@ describe('token injection into index.html (#1804)', () => {
       getAssetVersion: () => '2.0.18',
     });
 
-    const res = await request(app).get('/');
+    const res = await getWithTransientSocketRetry(app, '/');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.text).toContain(`content="${TEST_TOKEN}"`);
@@ -117,7 +130,7 @@ describe('token injection into index.html (#1804)', () => {
       getAssetVersion: () => '2.0.18',
     });
 
-    const res = await request(app).get('/');
+    const res = await getWithTransientSocketRetry(app, '/');
     expect(res.status).toBe(200);
     expect(res.text).toContain('content=""');
     expect(res.text).not.toContain('{{CONSOLE_TOKEN}}');
@@ -130,7 +143,7 @@ describe('token injection into index.html (#1804)', () => {
       getAssetVersion: () => '2.0.18',
     });
 
-    const res = await request(app).get('/styles.css');
+    const res = await getWithTransientSocketRetry(app, '/styles.css');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/css');
     expect(res.text).toContain('body { color: red; }');
@@ -143,7 +156,7 @@ describe('token injection into index.html (#1804)', () => {
       getAssetVersion: () => '2.0.18',
     });
 
-    const res = await request(app).get('/app.js');
+    const res = await getWithTransientSocketRetry(app, '/app.js');
     expect(res.status).toBe(200);
     expect(res.text).toContain('console.log("ok")');
   });
@@ -157,14 +170,14 @@ describe('token injection into index.html (#1804)', () => {
     });
 
     // First request caches with TEST_TOKEN
-    const res1 = await request(app).get('/');
+    const res1 = await getWithTransientSocketRetry(app, '/');
     expect(res1.text).toContain(`content="${TEST_TOKEN}"`);
 
     // Simulate rotation
     currentToken = ROTATED_TOKEN;
 
     // Second request should detect the token change and re-render
-    const res2 = await request(app).get('/');
+    const res2 = await getWithTransientSocketRetry(app, '/');
     expect(res2.text).toContain(`content="${ROTATED_TOKEN}"`);
     expect(res2.text).not.toContain(TEST_TOKEN);
   });
@@ -176,7 +189,7 @@ describe('token injection into index.html (#1804)', () => {
       getAssetVersion: () => '2.0.18',
     });
 
-    const res = await request(app).get('/');
+    const res = await getWithTransientSocketRetry(app, '/');
     expect(res.text).toContain('content="a&quot;b&lt;c&amp;d"');
     expect(res.text).not.toContain('content="a"b<c&d"');
   });
@@ -188,7 +201,7 @@ describe('token injection into index.html (#1804)', () => {
       getAssetVersion: () => '2.0.18',
     });
 
-    const res = await request(app).get('/some/deep/path');
+    const res = await getWithTransientSocketRetry(app, '/some/deep/path');
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toContain('text/html');
     expect(res.text).toContain(`content="${TEST_TOKEN}"`);
