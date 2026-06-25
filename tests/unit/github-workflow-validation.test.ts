@@ -206,6 +206,24 @@ describe('GitHub Workflow Validation', () => {
       expect(downloadStep?.run).toContain('https://token.actions.githubusercontent.com');
     });
   });
+
+  describe('Beta prerelease workflow channels', () => {
+    it('should route exact beta and numbered beta versions to the beta npm dist-tag', () => {
+      const npmWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-npm.yml'), 'utf8');
+      const packagesWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-github-packages.yml'), 'utf8');
+
+      expect(npmWorkflow).toContain('*-beta|*-beta.*)');
+      expect(packagesWorkflow).toContain('*-beta|*-beta.*)');
+    });
+
+    it('should allow exact beta and numbered beta versions in beta CD workflows', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+      const betaDeployWorkflow = fs.readFileSync(path.join(workflowDir, 'deploy-beta-alpha-vps.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+      expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+    });
+  });
 });
 
 // Helper functions

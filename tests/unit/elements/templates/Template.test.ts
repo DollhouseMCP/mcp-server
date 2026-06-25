@@ -5,6 +5,7 @@
 import { Template, TemplateVariable } from '../../../../src/elements/templates/Template.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService = createTestMetadataService();
@@ -66,8 +67,21 @@ describe('Template', () => {
       expect(template.metadata.variables?.[0].description).toBe(longDescription);
     });
 
-    it('should preserve example descriptions longer than 500 characters', () => {
-      const longDescription = 'Detailed example documentation '.repeat(25).trim();
+    it('should preserve top-level descriptions up to the 2.1 YAML/frontmatter limit', () => {
+      const longDescription = 'Detailed template purpose and usage guidance '.repeat(25).trim();
+
+      const template = new Template({
+        name: 'Long Description Template',
+        description: longDescription
+      }, 'Write about {{topic}}.', metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeLessThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(template.metadata.description).toBe(longDescription);
+    });
+
+    it('should preserve example descriptions beyond the generic metadata field limit', () => {
+      const longDescription = 'Detailed example documentation '.repeat(40).trim();
 
       const template = new Template({
         name: 'Long Example Description',
@@ -81,7 +95,7 @@ describe('Template', () => {
         ]
       }, 'Write about {{topic}}.', metadataService);
 
-      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
       expect(template.metadata.examples?.[0].description).toBe(longDescription);
     });
 

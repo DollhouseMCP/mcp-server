@@ -150,8 +150,8 @@ describe('createElement helper', () => {
       expect(call.description).not.toContain('<script>');
     });
 
-    it('should allow persona descriptions beyond the legacy 500-character limit', async () => {
-      const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
+    it('should allow persona descriptions beyond the generic metadata field limit', async () => {
+      const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1);
 
       await createElement(mockContext, {
         name: 'test-persona',

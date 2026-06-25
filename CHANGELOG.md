@@ -1,5 +1,9 @@
 # Changelog
 
+## [2.1.0-beta] - 2026-06-25
+
+Start beta line for 2.1 hosted HTTP and expanded description limits.
+
 ## [2.0.35] - 2026-06-23
 
 - Harden converter and CLI output path handling to keep generated files inside their intended output directories.

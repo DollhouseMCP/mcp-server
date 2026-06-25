@@ -387,7 +387,7 @@ export class TemplateManager extends BaseElementManager<Template> {
     }
 
     if (data.description) {
-      metadata.description = sanitizeInput(UnicodeValidator.normalize(data.description).normalizedContent, 500);
+      metadata.description = sanitizeInput(UnicodeValidator.normalize(data.description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
     }
 
     if (data.category) {

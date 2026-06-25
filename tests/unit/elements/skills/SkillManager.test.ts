@@ -21,6 +21,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -99,6 +100,21 @@ describe('SkillManager', () => {
     // Clean up test directory
     await fs.rm(testDir, { recursive: true, force: true });
     delete process.env.DOLLHOUSE_PORTFOLIO_DIR;
+  });
+
+  describe('Skill element', () => {
+    it('should preserve substantive descriptions up to the 2.1 YAML/frontmatter limit', () => {
+      const longDescription = 'Detailed skill capability guidance '.repeat(25).trim();
+
+      const skill = new Skill({
+        name: 'Long Description Skill',
+        description: longDescription
+      }, '', metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeLessThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(skill.metadata.description).toBe(longDescription);
+    });
   });
 
   describe('load', () => {

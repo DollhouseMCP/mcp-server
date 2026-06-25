@@ -279,7 +279,8 @@ export class PathValidator {
       }
       return realPath;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') {
         return PathValidator.resolveParentSymlink(resolvedPath, userPath);
       }
       throw err;

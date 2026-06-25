@@ -244,10 +244,10 @@ data:
       expect(result.detectedPatterns?.length).toBeGreaterThan(0);
     });
 
-    it('should allow metadata descriptions beyond the legacy element description limit', () => {
+    it('should allow metadata descriptions beyond the generic metadata field limit', () => {
       const metadata = {
         name: 'Substantive Description',
-        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1),
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1),
       };
 
       const result = ContentValidator.validateMetadata(metadata);

@@ -1207,11 +1207,11 @@ describe('editElement helper', () => {
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
 
-    it('should allow top-level metadata descriptions beyond the legacy 500-character limit', async () => {
+    it('should allow top-level metadata descriptions beyond the generic metadata field limit', async () => {
       const element = createMockElement('test-skill');
       mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
 
-      const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
+      const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1);
       const result = await editElement(mockContext, {
         name: 'test-skill',
         type: ElementType.SKILL,
@@ -1271,7 +1271,7 @@ describe('editElement helper', () => {
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
 
-    it('should allow nested documentation descriptions longer than 500 characters during edit', async () => {
+    it('should allow nested documentation descriptions beyond the generic metadata field limit during edit', async () => {
       const element = createMockElement('test-template', {
         variables: [
           {
@@ -1282,7 +1282,7 @@ describe('editElement helper', () => {
         ],
       });
       mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
-      const longDescription = 'Detailed variable documentation '.repeat(25).trim();
+      const longDescription = 'Detailed variable documentation '.repeat(40).trim();
 
       const result = await editElement(mockContext, {
         name: 'test-template',
@@ -1300,7 +1300,7 @@ describe('editElement helper', () => {
         },
       });
 
-      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.templateManager.save as jest.Mock).mock.calls[0][0];
       expect(saved.metadata.variables[0].description).toBe(longDescription);

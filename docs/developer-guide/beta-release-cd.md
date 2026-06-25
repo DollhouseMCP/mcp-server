@@ -22,7 +22,7 @@ Allowed deployment refs are:
 
 - `beta`
 - `refs/heads/beta`
-- SemVer beta tags, such as `v2.1.0-beta.1`
+- SemVer beta tags, such as `v2.1.0-beta` or `v2.1.0-beta.1`
 
 The workflow requires the `alpha` GitHub environment to provide these secrets:
 
@@ -48,7 +48,7 @@ hosted deployment path has proved boring.
 Workflow: `.github/workflows/publish-beta-release.yml`
 
 Use this after a PR has already updated `package.json` and `manifest.json` to an
-exact beta version such as `2.1.0-beta.1`.
+exact beta version such as `2.1.0-beta` or `2.1.0-beta.1`.
 
 The workflow validates that:
 
@@ -93,7 +93,7 @@ Release publishing derives package channels from SemVer:
 | Version pattern | npm/GitHub Packages dist-tag |
 | --- | --- |
 | `*-alpha.*` | `alpha` |
-| `*-beta.*` | `beta` |
+| `*-beta`, `*-beta.*` | `beta` |
 | `*-rc.*` | `next` |
 | stable version | `latest` |
 

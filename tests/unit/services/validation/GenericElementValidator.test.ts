@@ -214,10 +214,10 @@ describe('GenericElementValidator', () => {
         expect(result.errors).toContain('Description is required');
       });
 
-      it('should allow descriptions beyond the legacy 500-character limit', async () => {
+      it('should allow descriptions beyond the generic metadata field limit', async () => {
         const data = {
           name: 'Test Skill',
-          description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1),
+          description: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1),
           content: 'Test content'
         };
 
