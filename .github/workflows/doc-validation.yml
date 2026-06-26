@@ -38,6 +38,8 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ github.token }}  # Use workflow token directly, skip OIDC (no id-token:write needed)
+          # Pin a current Sonnet model: the action's default `sonnet` alias resolves to a now-retired model (404).
+          model: "claude-sonnet-4-6"
           use_sticky_comment: true
 
           direct_prompt: |

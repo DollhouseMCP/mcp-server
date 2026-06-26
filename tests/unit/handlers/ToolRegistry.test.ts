@@ -74,6 +74,38 @@ describe('ToolRegistry', () => {
     });
   });
 
+  it('emits batched change events for dynamic tool registration and removal', () => {
+    const listener = jest.fn();
+    registry.onChange(listener);
+
+    registry.registerMany([
+      {
+        tool: {
+          name: 'dynamic_a',
+          description: 'A',
+          inputSchema: { type: 'object' as const, properties: {} },
+        },
+      },
+      {
+        tool: {
+          name: 'dynamic_b',
+          description: 'B',
+          inputSchema: { type: 'object' as const, properties: {} },
+        },
+      },
+    ]);
+    registry.unregister('dynamic_a');
+
+    expect(listener).toHaveBeenNthCalledWith(1, {
+      reason: 'registered',
+      toolNames: ['dynamic_a', 'dynamic_b'],
+    });
+    expect(listener).toHaveBeenNthCalledWith(2, {
+      reason: 'unregistered',
+      toolNames: ['dynamic_a'],
+    });
+  });
+
   it('registerMany should register multiple tools', () => {
     const handlerA = jest.fn<() => Promise<any>>();
     const handlerB = jest.fn<() => Promise<any>>();
@@ -234,7 +266,7 @@ describe('ToolRegistry', () => {
 
   it('executes config handler with options only', async () => {
     const configHandler = {
-      handleConfigOperation: jest.fn().mockResolvedValue(undefined),
+      handleConfigOperation: jest.fn(() => Promise.resolve()),
       handleSyncOperation: jest.fn(),
     } as any;
 
@@ -299,5 +331,18 @@ describe('ToolRegistry', () => {
     expect(buildInfoToolsFactory).toHaveBeenCalled();
     expect(registry.has('get_build_info')).toBe(true);
     expect(registry.getHandler('get_build_info')).toBeUndefined();
+  });
+
+  it('registerIntegrationTools should wire request and operation discovery tools', () => {
+    registry.registerIntegrationTools({} as any, null, {
+      listOperations: jest.fn(),
+      describeOperation: jest.fn(),
+    } as any);
+
+    expect(registry.has('integration_request')).toBe(true);
+    expect(registry.has('ingest_openapi_spec')).toBe(true);
+    expect(registry.has('regenerate_integration_skill')).toBe(true);
+    expect(registry.has('list_operations')).toBe(true);
+    expect(registry.has('describe_operation')).toBe(true);
   });
 });

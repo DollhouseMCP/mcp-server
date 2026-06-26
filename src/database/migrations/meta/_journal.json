@@ -281,6 +281,27 @@
       "when": 1779070000000,
       "tag": "0039_add_users_deleted_at",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1779075000000,
+      "tag": "0040_web_console_integration_provider_generalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1779080000000,
+      "tag": "0041_web_console_integration_descriptors",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1779085000000,
+      "tag": "0042_web_console_integration_token_refresh",
+      "breakpoints": true
     }
   ]
 }

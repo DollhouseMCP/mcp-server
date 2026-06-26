@@ -78,6 +78,29 @@ import type { PatternEncryptor } from "../security/encryption/PatternEncryptor.j
 import type { ContextTracker } from "../security/encryption/ContextTracker.js";
 import type { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver , SessionContext } from "../context/SessionContext.js";
+import type { IRateLimitStore } from "../auth/embedded-as/storage/IRateLimitStore.js";
+import { WEB_CONSOLE_SERVICE_NAMES } from "../web-console/WebConsoleRegistrar.js";
+import type {
+  IIntegrationDescriptorStore,
+  IIntegrationOpenApiSpecStore,
+  IPortfolioElementStore,
+  IUserIntegrationStore,
+} from "../web-console/stores/index.js";
+import type { ISecretEncryptionService } from "../web-console/security/SecretEncryption.js";
+import { IntegrationProviderRegistry } from "../web-console/modules/integrations/IntegrationProviderRegistry.js";
+import {
+  createGitHubIntegrationProvider,
+  IntegrationOperationCatalog,
+  IntegrationRemoteMcpBridge,
+  IntegrationRequestPolicyEnforcer,
+  IntegrationRequestGateway,
+  IntegrationTokenRefreshService,
+  serializeGitHubIntegrationStatus,
+  type IIntegrationProvider,
+  type RemoteMcpClientFactory,
+} from "../web-console/modules/integrations/index.js";
+import type { DnsLookup } from "../web-console/modules/integrations/IntegrationPublicHostGuard.js";
+import type { IGitHubIntegrationProvider } from "../web-console/modules/integrations/GitHubIntegrationProvider.js";
 import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
 import type { ITokenStore } from "../security/tokenStores/ITokenStore.js";
@@ -144,7 +167,25 @@ export interface HandlerBundle {
   toolRegistry: ToolRegistry;
   enhancedIndexHandler: EnhancedIndexHandler;
   mcpAqlHandler: MCPAQLHandler;
+  integrationRequestGateway?: IntegrationRequestGateway;
+  integrationRequestPolicyEnforcer?: IntegrationRequestPolicyEnforcer;
+  integrationOperationCatalog?: IntegrationOperationCatalog;
+  integrationRemoteMcpBridge?: IntegrationRemoteMcpBridge;
 }
+
+/**
+ * Optional DI override points for the outbound integration transport. When a service
+ * is registered under one of these names the gateway/bridge use it instead of the
+ * production default (real `fetch` / DNS resolver / SDK MCP client). Defaults to
+ * production behavior when unregistered. Wired integration tests register these to
+ * route outbound calls through a local server while keeping the SSRF host guard fully
+ * enforced (the injected DNS resolver returns a controlled public address).
+ */
+export const INTEGRATION_OUTBOUND_OVERRIDES = {
+  fetch: 'IntegrationOutboundFetch',
+  dnsLookup: 'IntegrationOutboundDnsLookup',
+  remoteMcpClientFactory: 'IntegrationRemoteMcpClientFactory',
+} as const;
 
 /**
  * Type-safe service record for dependency injection container
@@ -1161,6 +1202,15 @@ export class DollhouseContainer {
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
+    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
+    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
+    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
+    const integrationRequestPolicyEnforcer = integrationRequestGateway
+      ? new IntegrationRequestPolicyEnforcer({
+        gatekeeper: handlerDeps.gatekeeper,
+        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+      })
+      : null;
 
     return {
       personaHandler,
@@ -1175,6 +1225,10 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry, // No tool registry in bootstrap-only mode
       enhancedIndexHandler,
       mcpAqlHandler,
+      integrationRequestGateway: integrationRequestGateway ?? undefined,
+      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
+      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
+      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
     };
   }
 
@@ -1185,7 +1239,7 @@ export class DollhouseContainer {
   public async createHandlers(server: LowLevelMcpServer): Promise<HandlerBundle> {
     const bundle = await this.bootstrapHandlers();
 
-    const toolRegistry = new ToolRegistry(server as never);
+    const toolRegistry = new ToolRegistry(server);
     const interfaceMode = env.MCP_INTERFACE_MODE;
     logger.info(`MCP Interface Mode: ${interfaceMode}`);
 
@@ -1203,7 +1257,7 @@ export class DollhouseContainer {
       enhancedIndexHandler: bundle.enhancedIndexHandler,
     });
 
-    this.resolve<ServerSetup>('ServerSetup').setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
+    this.resolve<ServerSetup>('ServerSetup').setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
 
     return {
       ...bundle,
@@ -1480,7 +1534,7 @@ export class DollhouseContainer {
     child.register('SessionResolver', () => (() => sessionContext));
     child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
     child.register('ToolRegistry', () => {
-        const registry = new ToolRegistry(child.resolve<LowLevelMcpServer>('Server') as never);
+        const registry = new ToolRegistry(child.resolve<LowLevelMcpServer>('Server'));
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
       return registry;
     });
@@ -1489,7 +1543,8 @@ export class DollhouseContainer {
     const server = child.resolve<LowLevelMcpServer>('Server');
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
-    serverSetup.setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
+    serverSetup.setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
+    await this.registerSessionIntegrationTools(toolRegistry, bundle, contextTracker, sessionContext);
     this.resolve<SessionContainerRegistry>('SessionContainerRegistry').register(sid, child);
 
     return {
@@ -1693,6 +1748,16 @@ export class DollhouseContainer {
       enumerable: true,
     });
 
+    const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
+    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
+    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
+    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
+    const integrationRequestPolicyEnforcer = integrationRequestGateway
+      ? new IntegrationRequestPolicyEnforcer({
+        gatekeeper: handlerDeps.gatekeeper,
+        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+      })
+      : null;
     return {
       personaHandler,
       elementCrudHandler,
@@ -1705,8 +1770,149 @@ export class DollhouseContainer {
       syncHandler,
       toolRegistry: undefined as unknown as ToolRegistry,
       enhancedIndexHandler,
-      mcpAqlHandler: new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker')),
+      mcpAqlHandler,
+      integrationRequestGateway: integrationRequestGateway ?? undefined,
+      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
+      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
+      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
     };
+  }
+
+  private resolveIntegrationRequestGateway(): IntegrationRequestGateway | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    const integrationStore = this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore);
+    const descriptorStore = this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore);
+    const secretEncryption = this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption);
+    const rateLimitStore = this.hasRegistration('RateLimitStore')
+      ? this.resolve<IRateLimitStore>('RateLimitStore')
+      : null;
+    const providerRegistry = this.resolveIntegrationProviderRegistry();
+    const tokenRefresh = new IntegrationTokenRefreshService({
+      store: integrationStore,
+      providers: providerRegistry,
+      secretEncryption,
+    });
+    const fetchOverride = this.resolveIntegrationOverride<typeof fetch>(INTEGRATION_OUTBOUND_OVERRIDES.fetch);
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
+    return new IntegrationRequestGateway({
+      integrationStore,
+      descriptorStore,
+      secretEncryption,
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      tokenRefresh,
+      rateLimitStore,
+      ...(fetchOverride ? { fetch: fetchOverride } : {}),
+      ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+    });
+  }
+
+  private resolveIntegrationOverride<T>(name: string): T | undefined {
+    return this.hasRegistration(name) ? this.resolve<T>(name) : undefined;
+  }
+
+  private resolveIntegrationOperationCatalog(): IntegrationOperationCatalog | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioStore) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    return new IntegrationOperationCatalog({
+      integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
+      descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
+      specStore: this.resolve<IIntegrationOpenApiSpecStore>(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore),
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      portfolioStore: this.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore),
+    });
+  }
+
+  private async registerSessionIntegrationTools(
+    toolRegistry: ToolRegistry,
+    bundle: HandlerBundle,
+    contextTracker: ContextTracker,
+    sessionContext: Readonly<SessionContext>,
+  ): Promise<void> {
+    const {
+      integrationRequestGateway,
+      integrationOperationCatalog,
+      integrationRemoteMcpBridge,
+      integrationRequestPolicyEnforcer,
+    } = bundle;
+    if (integrationRequestGateway && integrationOperationCatalog) {
+      const promotionContext = contextTracker.createSessionContext(
+        'llm-request',
+        sessionContext,
+        { toolName: 'promoted_integration_tools' },
+      );
+      await contextTracker.runAsync(promotionContext, async () => {
+        try {
+          await toolRegistry.registerPromotedIntegrationTools(
+            integrationRequestGateway,
+            integrationOperationCatalog,
+            integrationRequestPolicyEnforcer,
+          );
+        } catch (error) {
+          logger.warn('[HTTP Session] Promoted integration tool registration skipped', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
+    if (integrationRemoteMcpBridge) {
+      const remoteMcpContext = contextTracker.createSessionContext(
+        'llm-request',
+        sessionContext,
+        { toolName: 'remote_mcp_bridge_tools' },
+      );
+      await contextTracker.runAsync(remoteMcpContext, async () => {
+        try {
+          await toolRegistry.registerRemoteMcpBridgeTools(
+            integrationRemoteMcpBridge,
+            integrationRequestPolicyEnforcer,
+          );
+        } catch (error) {
+          logger.warn('[HTTP Session] Remote MCP bridge tool registration skipped', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
+  }
+
+  private resolveIntegrationRemoteMcpBridge(): IntegrationRemoteMcpBridge | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
+    const clientFactoryOverride = this.resolveIntegrationOverride<RemoteMcpClientFactory>(INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory);
+    return new IntegrationRemoteMcpBridge({
+      integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
+      descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
+      secretEncryption: this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption),
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+      ...(clientFactoryOverride ? { clientFactory: clientFactoryOverride } : {}),
+    });
+  }
+
+  private resolveIntegrationProviderRegistry(): IntegrationProviderRegistry {
+    const providers: IIntegrationProvider[] = [];
+    if (this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider)) {
+      providers.push(createGitHubIntegrationProvider(
+        this.resolve<IGitHubIntegrationProvider>(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider),
+        serializeGitHubIntegrationStatus,
+      ));
+    }
+    return new IntegrationProviderRegistry(providers);
   }
 
   /**
@@ -1738,6 +1944,13 @@ export class DollhouseContainer {
       toolRegistry.registerBuildInfoTools(this.resolve('BuildInfoService'));
     } else {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
+    }
+    if (bundle.integrationRequestGateway) {
+      toolRegistry.registerIntegrationTools(
+        bundle.integrationRequestGateway,
+        bundle.integrationRequestPolicyEnforcer,
+        bundle.integrationOperationCatalog,
+      );
     }
   }
 
@@ -1776,13 +1989,13 @@ export class DollhouseContainer {
 
     if (interfaceMode === 'discrete') {
       // Current is discrete, calculate what mcpaql would be
-        const tempRegistry = new ToolRegistry({} as never);
+        const tempRegistry = new ToolRegistry({});
       tempRegistry.registerMCPAQLTools(mcpAqlHandler);
       alternativeTokens = tempRegistry.getToolTokenEstimate();
       alternativeToolCount = tempRegistry.getToolCount();
     } else {
       // Current is mcpaql, calculate what discrete would be
-        const tempRegistry = new ToolRegistry({} as never);
+        const tempRegistry = new ToolRegistry({});
       tempRegistry.registerPersonaTools(discreteHandlers.personaHandler);
       tempRegistry.registerElementTools(discreteHandlers.elementCrudHandler);
       tempRegistry.registerCollectionTools(discreteHandlers.collectionHandler);

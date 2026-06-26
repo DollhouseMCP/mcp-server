@@ -1,6 +1,8 @@
 import {
+  type ConfiguredIntegrationStatusDto,
   type GitHubIntegrationStatusDto,
   type IntegrationListDto,
+  type IntegrationStatusDto,
   type IntegrationStatusDtoStatus,
   type PortfolioSyncDirection,
 } from './IntegrationDtos.js';
@@ -8,7 +10,7 @@ import {
 export function projectIntegrationList(value: unknown): IntegrationListDto {
   const input = asRecord(value);
   const integrations = Array.isArray(input.integrations)
-    ? input.integrations.map(projectGitHubIntegrationStatus)
+    ? input.integrations.map(projectIntegrationStatus)
     : [];
   return { integrations };
 }
@@ -35,12 +37,42 @@ export function projectGitHubIntegrationStatus(value: unknown): GitHubIntegratio
   };
 }
 
+export function projectConfiguredIntegrationStatus(value: unknown): ConfiguredIntegrationStatusDto {
+  const input = asRecord(value);
+  return {
+    provider: stringField(input, 'provider'),
+    display_name: stringField(input, 'display_name'),
+    category: stringField(input, 'category'),
+    status: integrationStatus(input.status),
+    account_label: nullableStringField(input, 'account_label'),
+    scopes: stringArray(input.scopes),
+    error_reason: errorReason(input.error_reason),
+    connected_at: nullableStringField(input, 'connected_at'),
+    last_sync_at: nullableStringField(input, 'last_sync_at'),
+  };
+}
+
+function projectIntegrationStatus(value: unknown): IntegrationStatusDto {
+  const input = asRecord(value);
+  return input.provider === 'github'
+    ? projectGitHubIntegrationStatus(input)
+    : projectConfiguredIntegrationStatus(input);
+}
+
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function nullableStringField(record: Readonly<Record<string, unknown>>, key: string): string | null {
   return typeof record[key] === 'string' ? record[key] : null;
+}
+
+function stringField(record: Readonly<Record<string, unknown>>, key: string): string {
+  return typeof record[key] === 'string' ? record[key] : '';
+}
+
+function stringArray(value: unknown): readonly string[] {
+  return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : [];
 }
 
 function integrationStatus(value: unknown): IntegrationStatusDtoStatus {

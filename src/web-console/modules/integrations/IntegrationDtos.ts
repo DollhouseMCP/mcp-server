@@ -1,8 +1,10 @@
 import type {
   UserIntegrationErrorReason,
+  UserIntegrationProvider,
   UserIntegrationRecord,
   UserIntegrationStatus,
 } from '../../stores/IUserIntegrationStore.js';
+import type { IntegrationProviderCatalogDescriptor } from './IntegrationProvider.js';
 
 export type GitHubRepositorySelection = 'selected' | 'all' | 'unknown';
 export type GitHubContentsPermission = 'none' | 'read' | 'write';
@@ -23,14 +25,48 @@ export interface GitHubIntegrationStatusDto {
   readonly last_sync_at: string | null;
 }
 
-export interface IntegrationListDto {
-  readonly integrations: readonly GitHubIntegrationStatusDto[];
+export interface ConfiguredIntegrationStatusDto {
+  readonly provider: UserIntegrationProvider;
+  readonly display_name: string;
+  readonly category: string;
+  readonly status: IntegrationStatusDtoStatus;
+  readonly account_label: string | null;
+  readonly scopes: readonly string[];
+  readonly error_reason: UserIntegrationErrorReason | null;
+  readonly connected_at: string | null;
+  readonly last_sync_at: string | null;
 }
 
-export function serializeIntegrationList(records: readonly UserIntegrationRecord[]): IntegrationListDto {
+export type IntegrationStatusDto = GitHubIntegrationStatusDto | ConfiguredIntegrationStatusDto;
+
+export interface IntegrationListDto {
+  readonly integrations: readonly IntegrationStatusDto[];
+}
+
+export function serializeIntegrationList(
+  records: readonly UserIntegrationRecord[],
+  providers: readonly IntegrationProviderCatalogDescriptor[] = [{ id: 'github', displayName: 'GitHub', category: 'Source control' }],
+): IntegrationListDto {
   return {
-    integrations: [serializeGitHubIntegrationStatus(records[0] ?? null)],
+    integrations: providers.map(provider => serializeProviderStatus(
+      provider.id,
+      records.find(record => record.provider === provider.id) ?? null,
+    )),
   };
+}
+
+function serializeProviderStatus(
+  provider: UserIntegrationProvider,
+  record: UserIntegrationRecord | null,
+): IntegrationStatusDto {
+  if (provider === 'github') {
+    return serializeGitHubIntegrationStatus(record);
+  }
+  return serializeConfiguredIntegrationStatus({
+    id: provider,
+    displayName: provider,
+    category: 'Integration',
+  }, record);
 }
 
 export function serializeGitHubIntegrationStatus(record: UserIntegrationRecord | null): GitHubIntegrationStatusDto {
@@ -69,6 +105,24 @@ function disconnectedGitHubStatus(): GitHubIntegrationStatusDto {
   };
 }
 
+export function serializeConfiguredIntegrationStatus(
+  descriptor: IntegrationProviderCatalogDescriptor,
+  record: UserIntegrationRecord | null,
+): ConfiguredIntegrationStatusDto {
+  const scopes = normalizeScopes(record?.authorizedPermissions);
+  return {
+    provider: descriptor.id,
+    display_name: descriptor.displayName,
+    category: descriptor.category,
+    status: record?.status ?? 'disconnected',
+    account_label: record?.externalAccountLabel ?? null,
+    scopes,
+    error_reason: record?.errorReason ?? null,
+    connected_at: record?.connectedAt?.toISOString() ?? null,
+    last_sync_at: record?.lastSyncAt?.toISOString() ?? null,
+  };
+}
+
 function normalizeGitHubPermissions(
   value: Readonly<Record<string, unknown>>,
 ): { readonly repositorySelection: GitHubRepositorySelection; readonly contents: GitHubContentsPermission } {
@@ -97,4 +151,10 @@ function syncDirectionsForContents(contents: GitHubContentsPermission): readonly
   if (contents === 'write') return ['pull', 'push', 'bidirectional'];
   if (contents === 'read') return ['pull'];
   return [];
+}
+
+function normalizeScopes(value: Readonly<Record<string, unknown>> | undefined): readonly string[] {
+  const scopes = value?.scopes;
+  if (!Array.isArray(scopes)) return [];
+  return scopes.filter((scope): scope is string => typeof scope === 'string');
 }

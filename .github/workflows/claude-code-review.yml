@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: read
+      pull-requests: write  # Needed to post the review via the workflow token (github_token below)
       issues: read
       id-token: write
     
@@ -38,10 +38,10 @@ jobs:
         uses: anthropics/claude-code-action@beta
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          github_token: ${{ github.token }}  # Use workflow token directly so the App-token OIDC "workflow must match default branch" check is skipped
+          # Pin a current Sonnet model: the action's default `sonnet` alias resolves to a now-retired model (404).
+          model: "claude-sonnet-4-6"
 
-          # Optional: Specify model (defaults to Claude Sonnet 4, uncomment for Claude Opus 4)
-          # model: "claude-opus-4-20250514"
-          
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
             Please review this pull request and provide feedback on:

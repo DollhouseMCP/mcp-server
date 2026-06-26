@@ -141,13 +141,16 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
 ]);
 
-export type UserIntegrationProvider = 'github';
+export type UserIntegrationProvider = string;
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'
+  | 'token_refresh_failed'
   | 'revocation_failed'
   | 'scope_denied'
   | 'provider_unavailable';
+export type IntegrationDescriptorOwnership = 'curated' | 'byo';
+export type IntegrationAuthStrategy = 'oauth2_authorization_code' | 'static_api_key' | 'coded';
 
 export const userIntegrations = pgTable('user_integrations', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -168,7 +171,7 @@ export const userIntegrations = pgTable('user_integrations', {
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 }, (table) => [
-  check('user_integrations_provider_check', sql`${table.provider} IN ('github')`),
+  check('user_integrations_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
   check('user_integrations_status_check', sql`${table.status} IN ('connected', 'revoked', 'error')`),
   check('user_integrations_shape_check', sql`
     (${table.externalAccountLabel} IS NULL OR (
@@ -185,8 +188,6 @@ export const userIntegrations = pgTable('user_integrations', {
     ))
     AND jsonb_typeof(${table.authorizedPermissions}) = 'object'
     AND char_length(${table.authorizedPermissions}::text) <= 4096
-    AND (${table.authorizedPermissions} ?& array['repository_selection', 'permissions'])
-    AND (${table.authorizedPermissions} - 'repository_selection' - 'permissions') = '{}'::jsonb
     AND NOT (${table.authorizedPermissions} ?| array[
       'access_token',
       'accessToken',
@@ -199,17 +200,31 @@ export const userIntegrations = pgTable('user_integrations', {
       'credential_key_version',
       'credentialKeyVersion'
     ])
-    AND (${table.authorizedPermissions}->>'repository_selection') IN ('selected', 'all', 'unknown')
-    AND jsonb_typeof(${table.authorizedPermissions}->'permissions') = 'object'
-    AND ((${table.authorizedPermissions}->'permissions') - 'contents') = '{}'::jsonb
-    AND (${table.authorizedPermissions}->'permissions'->>'contents') IN ('none', 'read', 'write')
-    AND NOT (${table.authorizedPermissions}->'permissions' ?| array[
-      'administration',
-      'actions',
-      'workflows',
-      'secrets',
-      'metadata'
-    ])
+    AND (
+      (
+        ${table.provider} = 'github'
+        AND (${table.authorizedPermissions} ?& array['repository_selection', 'permissions'])
+        AND (${table.authorizedPermissions} - 'repository_selection' - 'permissions') = '{}'::jsonb
+        AND (${table.authorizedPermissions}->>'repository_selection') IN ('selected', 'all', 'unknown')
+        AND jsonb_typeof(${table.authorizedPermissions}->'permissions') = 'object'
+        AND ((${table.authorizedPermissions}->'permissions') - 'contents') = '{}'::jsonb
+        AND (${table.authorizedPermissions}->'permissions'->>'contents') IN ('none', 'read', 'write')
+        AND NOT (${table.authorizedPermissions}->'permissions' ?| array[
+          'administration',
+          'actions',
+          'workflows',
+          'secrets',
+          'metadata'
+        ])
+      )
+      OR (
+        ${table.provider} <> 'github'
+        AND (${table.authorizedPermissions} ?& array['scopes'])
+        AND (${table.authorizedPermissions} - 'scopes') = '{}'::jsonb
+        AND jsonb_typeof(${table.authorizedPermissions}->'scopes') = 'array'
+        AND jsonb_array_length(${table.authorizedPermissions}->'scopes') <= 100
+      )
+    )
     AND (
       (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)
       OR (${table.status} <> 'revoked')
@@ -218,6 +233,7 @@ export const userIntegrations = pgTable('user_integrations', {
       (${table.status} = 'error'
         AND ${table.errorReason} IN (
           'token_exchange_failed',
+          'token_refresh_failed',
           'revocation_failed',
           'scope_denied',
           'provider_unavailable'
@@ -229,6 +245,94 @@ export const userIntegrations = pgTable('user_integrations', {
     .on(table.userId, table.provider)
     .where(sql`${table.revokedAt} IS NULL`),
   index('idx_user_integrations_user').on(table.userId, table.revokedAt),
+]);
+
+export const integrationProviderDescriptors = pgTable('integration_provider_descriptors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider: text('provider').notNull(),
+  ownership: text('ownership').$type<IntegrationDescriptorOwnership>().notNull(),
+  ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'cascade' }),
+  displayName: text('display_name').notNull(),
+  category: text('category').notNull(),
+  authStrategy: text('auth_strategy').$type<IntegrationAuthStrategy>().notNull(),
+  apiHosts: jsonb('api_hosts').$type<readonly string[]>().notNull().default([]),
+  oauth: jsonb('oauth').$type<Record<string, unknown> | null>(),
+  staticApiKey: jsonb('static_api_key').$type<Record<string, unknown> | null>(),
+  clientSecretCiphertext: bytea('client_secret_ciphertext'),
+  credentialKeyVersion: text('credential_key_version'),
+  operationPromotion: jsonb('operation_promotion').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+}, (table) => [
+  check('integration_provider_descriptors_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
+  check('integration_provider_descriptors_ownership_check', sql`${table.ownership} IN ('curated', 'byo')`),
+  check('integration_provider_descriptors_auth_strategy_check', sql`${table.authStrategy} IN ('oauth2_authorization_code', 'static_api_key', 'coded')`),
+  check('integration_provider_descriptors_shape_check', sql`
+    btrim(${table.displayName}) <> ''
+    AND char_length(${table.displayName}) <= 120
+    AND btrim(${table.category}) <> ''
+    AND char_length(${table.category}) <= 80
+    AND jsonb_typeof(${table.apiHosts}) = 'array'
+    AND jsonb_array_length(${table.apiHosts}) BETWEEN 1 AND 25
+    AND jsonb_typeof(${table.operationPromotion}) = 'object'
+    AND char_length(${table.operationPromotion}::text) <= 8192
+    AND (${table.credentialKeyVersion} IS NULL OR (
+      btrim(${table.credentialKeyVersion}) <> ''
+      AND char_length(${table.credentialKeyVersion}) <= 128
+    ))
+    AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.credentialKeyVersion} IS NULL)
+    AND (
+      (${table.ownership} = 'curated' AND ${table.ownerUserId} IS NULL)
+      OR (${table.ownership} = 'byo' AND ${table.ownerUserId} IS NOT NULL)
+    )
+    AND (
+      (${table.authStrategy} = 'oauth2_authorization_code'
+        AND ${table.oauth} IS NOT NULL
+        AND jsonb_typeof(${table.oauth}) = 'object'
+        AND ${table.staticApiKey} IS NULL)
+      OR (${table.authStrategy} = 'static_api_key'
+        AND ${table.staticApiKey} IS NOT NULL
+        AND jsonb_typeof(${table.staticApiKey}) = 'object'
+        AND ${table.oauth} IS NULL)
+      OR (${table.authStrategy} = 'coded'
+        AND ${table.oauth} IS NULL
+        AND ${table.staticApiKey} IS NULL
+        AND ${table.clientSecretCiphertext} IS NULL)
+    )
+    AND ${table.updatedAt} >= ${table.createdAt}
+  `),
+  uniqueIndex('idx_integration_provider_descriptors_curated_unique')
+    .on(table.provider)
+    .where(sql`${table.ownership} = 'curated'`),
+  uniqueIndex('idx_integration_provider_descriptors_byo_unique')
+    .on(table.ownerUserId, table.provider)
+    .where(sql`${table.ownership} = 'byo'`),
+  index('idx_integration_provider_descriptors_owner').on(table.ownerUserId),
+]);
+
+export const integrationOpenApiSpecs = pgTable('integration_openapi_specs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  descriptorId: uuid('descriptor_id').notNull().references(() => integrationProviderDescriptors.id, { onDelete: 'cascade' }),
+  spec: jsonb('spec').notNull(),
+  sourceUrl: text('source_url'),
+  specHash: text('spec_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+}, (table) => [
+  check('integration_openapi_specs_shape_check', sql`
+    jsonb_typeof(${table.spec}) = 'object'
+    AND char_length(${table.spec}::text) <= 1048576
+    AND ${table.spec}->>'openapi' LIKE '3.%'
+    AND jsonb_typeof(${table.spec}->'paths') = 'object'
+    AND (${table.sourceUrl} IS NULL OR (
+      ${table.sourceUrl} LIKE 'https://%'
+      AND char_length(${table.sourceUrl}) <= 2048
+      AND ${table.sourceUrl} NOT LIKE '%#%'
+    ))
+    AND ${table.specHash} ~ '^[a-f0-9]{64}$'
+    AND ${table.updatedAt} >= ${table.createdAt}
+  `),
+  uniqueIndex('idx_integration_openapi_specs_descriptor_unique').on(table.descriptorId),
 ]);
 
 export type PortfolioSyncDirection = 'pull' | 'push' | 'bidirectional';
