@@ -592,7 +592,7 @@ function resolveJsonPointer(root: unknown, ref: string): unknown {
       return Number.isInteger(index) ? current[index] : undefined;
     }
     const record = asRecord(current);
-    return Object.prototype.hasOwnProperty.call(record, segment) ? record[segment] : undefined;
+    return Object.hasOwn(record, segment) ? record[segment] : undefined;
   }, root);
 }
 

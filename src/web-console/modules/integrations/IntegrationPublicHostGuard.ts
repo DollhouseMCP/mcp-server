@@ -39,7 +39,7 @@ export function isPublicIpAddress(address: string): boolean {
 }
 
 function normalizeIpv4MappedAddress(address: string): string {
-  const mapped = address.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
   return mapped?.[1] ?? address;
 }
 

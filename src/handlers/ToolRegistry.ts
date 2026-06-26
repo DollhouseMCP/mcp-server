@@ -41,7 +41,7 @@ export type ToolRegistryChangeListener = (event: {
 
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
-  private changeListeners = new Set<ToolRegistryChangeListener>();
+  private readonly changeListeners = new Set<ToolRegistryChangeListener>();
   constructor(_server: unknown) {}
 
   /**
