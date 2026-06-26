@@ -283,7 +283,7 @@ function remoteMcpLocalToolName(provider: string, remoteName: string): string {
 }
 
 function sanitizeToolName(value: string): string {
-  return value.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '_').replaceAll(/^_+|_+$/g, '') || 'tool';
+  return value.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '_').replaceAll(/^_{1,256}|_{1,256}$/g, '') || 'tool';
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

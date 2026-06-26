@@ -493,7 +493,7 @@ function uniquePromotedToolName(operation: IntegrationOperationDetails, usedName
 }
 
 function sanitizeToolName(value: string): string {
-  const normalized = value.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '_').replaceAll(/^_+|_+$/g, '');
+  const normalized = value.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '_').replaceAll(/^_{1,256}|_{1,256}$/g, '');
   return normalized || 'operation';
 }
 
@@ -541,7 +541,7 @@ function promotedToolInputSchema(operation: IntegrationOperationDetails): ToolDe
 }
 
 function applyPathParams(pathTemplate: string, pathParams: Readonly<Record<string, unknown>> | undefined): string {
-  return pathTemplate.replaceAll(/\{([^}]+)\}/g, (_match, name: string) => {
+  return pathTemplate.replaceAll(/\{([^}]{1,256})\}/g, (_match, name: string) => {
     const value = pathParams?.[name];
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
       throw new IntegrationRequestError(

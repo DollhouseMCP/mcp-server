@@ -130,7 +130,7 @@ export class IntegrationDescriptorSeedLoader {
     return entries
       .filter(entry => path.extname(entry).toLowerCase() === SEED_FILE_EXTENSION)
       .map(entry => path.join(this.seedDir, entry))
-      .sort();
+      .sort((a, b) => a.localeCompare(b));
   }
 
   private async processSeedFile(file: string): Promise<IntegrationDescriptorRecord | null> {

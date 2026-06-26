@@ -506,7 +506,7 @@ function resolveScopeDecision(
     .map(requirement => Object.values(asRecord(requirement)).flatMap(value =>
       Array.isArray(value) ? value.filter((scope): scope is string => typeof scope === 'string') : [],
     ))
-    .map(scopes => [...new Set(scopes)].sort())
+    .map(scopes => [...new Set(scopes)].sort((a, b) => a.localeCompare(b)))
     .sort((a, b) => a.length - b.length);
   const satisfied = alternatives.find(scopes => scopes.every(scope => granted.has(scope)));
   return {
@@ -541,7 +541,7 @@ function readRequestBody(
 ): IntegrationOperationRequestBody | null {
   const body = asRecord(resolveInternalRef(value, spec));
   const content = asRecord(body.content);
-  const contentTypes = Object.keys(content).sort();
+  const contentTypes = Object.keys(content).sort((a, b) => a.localeCompare(b));
   if (contentTypes.length === 0) return null;
   return {
     required: body.required === true,
@@ -559,7 +559,7 @@ function readResponses(
     return {
       status,
       description: readString(response.description),
-      contentTypes: Object.keys(asRecord(response.content)).sort(),
+      contentTypes: Object.keys(asRecord(response.content)).sort((a, b) => a.localeCompare(b)),
     };
   }).sort((a, b) => a.status.localeCompare(b.status));
 }
@@ -642,7 +642,7 @@ function generateSkill(
     regeneration: {
       source: 'openapi_spec',
       specHash,
-      scopeFingerprint: [...granted].sort().join(' '),
+      scopeFingerprint: [...granted].sort((a, b) => a.localeCompare(b)).join(' '),
       policy: 'regenerate_on_spec_hash_or_granted_scope_change_preserve_user_edits_by_creating_new_revision',
     },
   };
@@ -812,7 +812,7 @@ function readPromotedOperationIds(operationPromotion: Readonly<Record<string, un
 }
 
 function fallbackOperationId(method: string, path: string): string {
-  const suffix = path.replaceAll(/[^a-zA-Z0-9]+/g, '_').replaceAll(/^_+|_+$/g, '').toLowerCase();
+  const suffix = path.replaceAll(/[^a-zA-Z0-9]+/g, '_').replaceAll(/^_{1,256}|_{1,256}$/g, '').toLowerCase();
   return `${method}_${suffix || 'root'}`;
 }
 
