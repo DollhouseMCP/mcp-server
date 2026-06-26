@@ -163,6 +163,16 @@ adopt_deployment_config_from_env_file() {
     [[ -z "${value}" ]] || CADDY_TRUSTED_PROXIES="${value}"
   fi
 
+  if [[ "${DOCKER_LOG_MAX_SIZE_SET}" != "true" && -z "${DOCKER_LOG_MAX_SIZE}" ]]; then
+    value="$(deployment_env_file_value DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE)"
+    [[ -z "${value}" ]] || DOCKER_LOG_MAX_SIZE="${value}"
+  fi
+
+  if [[ "${DOCKER_LOG_MAX_FILE_SET}" != "true" && -z "${DOCKER_LOG_MAX_FILE}" ]]; then
+    value="$(deployment_env_file_value DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE)"
+    [[ -z "${value}" ]] || DOCKER_LOG_MAX_FILE="${value}"
+  fi
+
   if [[ "${adopt_mode_dependent}" == "true" && "${ALLOWED_HOSTS_SET}" != "true" && \
     "${HOSTNAME_SET}" != "true" && "${PUBLIC_BASE_URL_SET}" != "true" && \
     -z "${ALLOWED_HOSTS}" ]]; then
@@ -353,6 +363,18 @@ mode_default_caddy_access_log() {
   return 0
 }
 
+mode_default_docker_log_max_size() {
+  printf '25m\n'
+
+  return 0
+}
+
+mode_default_docker_log_max_file() {
+  printf '5\n'
+
+  return 0
+}
+
 mode_default_scheme() {
   case "${PROXY_MODE}" in
     caddy-tls)
@@ -451,6 +473,14 @@ resolve_mode_defaults() {
 
   if [[ -z "${CADDY_ACCESS_LOG}" ]]; then
     CADDY_ACCESS_LOG="$(mode_default_caddy_access_log)"
+  fi
+
+  if [[ -z "${DOCKER_LOG_MAX_SIZE}" ]]; then
+    DOCKER_LOG_MAX_SIZE="$(mode_default_docker_log_max_size)"
+  fi
+
+  if [[ -z "${DOCKER_LOG_MAX_FILE}" ]]; then
+    DOCKER_LOG_MAX_FILE="$(mode_default_docker_log_max_file)"
   fi
 
   return 0

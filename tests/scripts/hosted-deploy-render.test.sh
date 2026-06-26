@@ -52,6 +52,74 @@ assert_occurrences() {
   [[ "${actual}" == "${count}" ]] || fail "expected ${file} to contain '${expected}' ${count} time(s), got ${actual}"
 }
 
+assert_service_contains() {
+  local file="$1"
+  local service="$2"
+  local expected="$3"
+
+  awk -v service_line="  ${service}:" -v expected="${expected}" '
+    $0 == service_line {
+      in_service = 1
+      next
+    }
+    in_service && $0 ~ /^  [A-Za-z0-9_-]+:$/ {
+      in_service = 0
+    }
+    in_service && index($0, expected) > 0 {
+      found = 1
+    }
+    END {
+      exit found ? 0 : 1
+    }
+  ' "${file}" || fail "expected ${file} service ${service} to contain: ${expected}"
+}
+
+assert_compose_config_logging() {
+  local deploy_dir="$1"
+  local max_size="$2"
+  local max_file="$3"
+  local output service
+
+  if ! command -v docker >/dev/null 2>&1 || ! docker compose version >/dev/null 2>&1; then
+    log "skipping Docker Compose config parse; docker compose is unavailable"
+    return 0
+  fi
+
+  output="${TMP_ROOT}/compose-config-$(basename "${deploy_dir}").out"
+  (
+    cd "${deploy_dir}"
+    docker compose --profile maintenance --env-file .env.production -f compose.yml config > "${output}"
+  ) || fail "docker compose config failed for ${deploy_dir}/compose.yml"
+
+  for service in postgres dollhousemcp dollhousemcp-migrate caddy; do
+    assert_service_contains "${output}" "${service}" '    logging:'
+    assert_service_contains "${output}" "${service}" '      driver: json-file'
+    assert_service_contains "${output}" "${service}" "        max-file: \"${max_file}\""
+    assert_service_contains "${output}" "${service}" "        max-size: ${max_size}"
+  done
+}
+
+expect_log_rotation_render_failure() {
+  local output_name="$1"
+  local expected="$2"
+  shift 2
+
+  local output="${TMP_ROOT}/${output_name}"
+  local deploy_dir="${TMP_ROOT}/${output_name%.out}-deploy"
+  local -a env_overrides=("$@")
+
+  if env \
+    "DOLLHOUSE_HOSTED_DEPLOY_DIR=${deploy_dir}" \
+    DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+    DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+    DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+    "${env_overrides[@]}" \
+      bash "${HOSTED_DEPLOY}" --dry-run render > "${output}" 2>&1; then
+    fail "render with invalid Docker log rotation setting unexpectedly succeeded: ${output_name}"
+  fi
+  assert_contains "${output}" "${expected}"
+}
+
 file_mode() {
   local file="$1"
 
@@ -112,6 +180,7 @@ INIT_DB_FILE="${DEPLOY_DIR}/init-db.sh"
 POST_MIGRATION_GRANTS_FILE="${DEPLOY_DIR}/post-migration-grants.sql"
 POST_MIGRATION_GRANTS_SCRIPT_FILE="${DEPLOY_DIR}/apply-post-migration-grants.sh"
 BOOTSTRAP_ADMIN_SCRIPT_FILE="${DEPLOY_DIR}/bootstrap-admin.sh"
+LOGGING_ANCHOR_LINE='    logging: *dollhouse-logging'
 
 log "rendering default alpha configuration"
 render_with_dcr "${DEPLOY_DIR}" ""
@@ -131,6 +200,16 @@ assert_line "${COMPOSE_FILE}" '    container_name: deploy-caddy'
 assert_contains "${COMPOSE_FILE}" 'image: deploy-hosted:alpha'
 assert_contains "${COMPOSE_FILE}" 'image: deploy-hosted:alpha-migrate'
 assert_contains "${COMPOSE_FILE}" 'image: caddy:2.8'
+assert_contains "${COMPOSE_FILE}" 'x-dollhouse-logging: &dollhouse-logging'
+assert_contains "${COMPOSE_FILE}" '  driver: json-file'
+assert_contains "${COMPOSE_FILE}" '    max-size: "25m"'
+assert_contains "${COMPOSE_FILE}" '    max-file: "5"'
+assert_occurrences "${COMPOSE_FILE}" "${LOGGING_ANCHOR_LINE}" "4"
+assert_service_contains "${COMPOSE_FILE}" postgres "${LOGGING_ANCHOR_LINE}"
+assert_service_contains "${COMPOSE_FILE}" dollhousemcp "${LOGGING_ANCHOR_LINE}"
+assert_service_contains "${COMPOSE_FILE}" dollhousemcp-migrate "${LOGGING_ANCHOR_LINE}"
+assert_service_contains "${COMPOSE_FILE}" caddy "${LOGGING_ANCHOR_LINE}"
+assert_compose_config_logging "${DEPLOY_DIR}" "25m" "5"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "true"'
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_APP_DB_PASSWORD: \${POSTGRES_PASSWORD}"
 assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_DATABASE_URL: postgres://dollhouse_app:\${POSTGRES_PASSWORD}@postgres:5432/dollhousemcp"
@@ -189,6 +268,8 @@ assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_PUBLIC_BASE_URL=https://mcp.example.com'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES='
+assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=25m'
+assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=5'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret'
 
@@ -236,6 +317,68 @@ assert_contains "${CLOUDFLARE_CADDY_FILE}" 'trusted_proxies_strict'
 assert_contains "${CLOUDFLARE_CADDY_FILE}" 'log {'
 assert_contains "${CLOUDFLARE_ENV_FILE}" 'DOLLHOUSE_HOSTED_CADDY_ACCESS_LOG=true'
 assert_contains "${CLOUDFLARE_ENV_FILE}" "DOLLHOUSE_HOSTED_CADDY_TRUSTED_PROXIES=${CLOUDFLARE_SAMPLE_CIDRS}"
+
+log "checking Docker log rotation overrides"
+LOG_ROTATION_DEPLOY_DIR="${TMP_ROOT}/log-rotation-deploy"
+LOG_ROTATION_ENV_FILE="${LOG_ROTATION_DEPLOY_DIR}/.env.production"
+LOG_ROTATION_COMPOSE_FILE="${LOG_ROTATION_DEPLOY_DIR}/compose.yml"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${LOG_ROTATION_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=10m \
+DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=3 \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${LOG_ROTATION_COMPOSE_FILE}" '    max-size: "10m"'
+assert_contains "${LOG_ROTATION_COMPOSE_FILE}" '    max-file: "3"'
+assert_occurrences "${LOG_ROTATION_COMPOSE_FILE}" "${LOGGING_ANCHOR_LINE}" "4"
+assert_contains "${LOG_ROTATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=10m'
+assert_contains "${LOG_ROTATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=3'
+assert_compose_config_logging "${LOG_ROTATION_DEPLOY_DIR}" "10m" "3"
+
+log "checking Docker log rotation overrides persist on re-render"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${LOG_ROTATION_DEPLOY_DIR}" \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${LOG_ROTATION_COMPOSE_FILE}" '    max-size: "10m"'
+assert_contains "${LOG_ROTATION_COMPOSE_FILE}" '    max-file: "3"'
+assert_contains "${LOG_ROTATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=10m'
+assert_contains "${LOG_ROTATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=3'
+
+log "checking Docker log size validation"
+expect_log_rotation_render_failure \
+  log-bad-size.out \
+  "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE must be a positive Docker log size" \
+  DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=25mb
+
+log "checking Docker log size missing suffix validation"
+expect_log_rotation_render_failure \
+  log-missing-suffix.out \
+  "with suffix k, m, or g" \
+  DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=25
+
+log "checking Docker log size uppercase suffix validation"
+expect_log_rotation_render_failure \
+  log-upper-suffix.out \
+  "with suffix k, m, or g" \
+  DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=25M
+
+log "checking Docker log size leading zero validation"
+expect_log_rotation_render_failure \
+  log-leading-zero.out \
+  "no leading zero" \
+  DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=025m
+
+log "checking Docker log file count validation"
+expect_log_rotation_render_failure \
+  log-bad-file.out \
+  "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE must be a positive integer" \
+  DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=0
+
+log "checking Docker log file count integer validation"
+expect_log_rotation_render_failure \
+  log-bad-file-decimal.out \
+  "DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE must be a positive integer" \
+  DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=2.5
 
 log "checking restated proxy mode preserves persisted Cloudflare edge CIDRs"
 DOLLHOUSE_HOSTED_DEPLOY_DIR="${CLOUDFLARE_DEPLOY_DIR}" \
@@ -755,6 +898,7 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 [[ ! -e "${DRY_RUN_DEPLOY_DIR}" ]] || fail "dry-run render should not create ${DRY_RUN_DEPLOY_DIR}"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would render deployment files"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: deployment mode=cloud"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: Docker json-file log rotation max-size=25m max-file=5"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: auth provider=embedded methods=github open_dcr=true allowlist_required=true"
 
 log "checking quiet logging mode"
