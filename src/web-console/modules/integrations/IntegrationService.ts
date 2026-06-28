@@ -53,7 +53,7 @@ export class IntegrationService {
   }
 
   async getGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    return this.getProvider(req, 'github');
+    return this.getProvider(req, 'github' as UserIntegrationProvider);
   }
 
   async getProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
@@ -68,7 +68,7 @@ export class IntegrationService {
   }
 
   async connectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    return this.connectProvider(req, 'github');
+    return this.connectProvider(req, 'github' as UserIntegrationProvider);
   }
 
   async connectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
@@ -125,7 +125,7 @@ export class IntegrationService {
   }
 
   async completeGitHubCallback(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    return this.completeProviderCallback(req, 'github');
+    return this.completeProviderCallback(req, 'github' as UserIntegrationProvider);
   }
 
   async completeProviderCallback(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
@@ -221,7 +221,7 @@ export class IntegrationService {
   }
 
   async disconnectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
-    return this.disconnectProvider(req, 'github');
+    return this.disconnectProvider(req, 'github' as UserIntegrationProvider);
   }
 
   async disconnectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {

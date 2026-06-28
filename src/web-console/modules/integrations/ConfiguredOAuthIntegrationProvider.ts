@@ -13,6 +13,7 @@ import type {
   IntegrationTokenRefreshResult,
 } from './IntegrationProvider.js';
 import { serializeConfiguredIntegrationStatus } from './IntegrationDtos.js';
+import { logger } from '../../../utils/logger.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
 
@@ -80,8 +81,17 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         tokenExchange: oauth.tokenExchange,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
+      // Fail closed on redirects: client_secret/PKCE are sent to the token URL,
+      // so a 3xx must never replay them to a redirect target.
+      redirect: 'error',
     });
-    if (!response.ok) throw new Error('configured_oauth_token_exchange_failed');
+    if (!response.ok) {
+      logger.warn('Configured OAuth token exchange failed', {
+        provider: this.descriptor.id,
+        status: response.status,
+      });
+      throw new Error('configured_oauth_token_exchange_failed');
+    }
     const body = await readJson(response);
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_exchange_failed');
@@ -105,8 +115,17 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         tokenExchange: oauth.tokenExchange,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
+      // Fail closed on redirects: client_secret/refresh_token are sent to the
+      // token URL, so a 3xx must never replay them to a redirect target.
+      redirect: 'error',
     });
-    if (!response.ok) throw new Error('configured_oauth_token_refresh_failed');
+    if (!response.ok) {
+      logger.warn('Configured OAuth token refresh failed', {
+        provider: this.descriptor.id,
+        status: response.status,
+      });
+      throw new Error('configured_oauth_token_refresh_failed');
+    }
     const body = await readJson(response);
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_refresh_failed');
@@ -117,7 +136,12 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
   }
 
   async revokeCredentials(request: IntegrationRevocationRequest): Promise<void> {
-    if (!request.accessToken) return;
+    if (!request.accessToken) {
+      logger.warn('Configured OAuth revocation skipped: no access token to present', {
+        provider: this.descriptor.id,
+      });
+      return;
+    }
     const oauth = this.oauthDescriptor();
     const revocationUrl = readString(oauth.tokenExchange, 'revocationUrl');
     if (!revocationUrl) return;
@@ -133,6 +157,9 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         token: request.accessToken,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
+      // Fail closed on redirects: client_secret + token are sent to the
+      // revocation URL, so a 3xx must never replay them to a redirect target.
+      redirect: 'error',
     });
     if (!response.ok && response.status !== 404) {
       throw new Error('configured_oauth_revocation_failed');

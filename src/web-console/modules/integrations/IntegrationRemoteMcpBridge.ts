@@ -8,7 +8,7 @@ import type { ContextTracker } from '../../../security/encryption/ContextTracker
 import { logger } from '../../../utils/logger.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
-import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import {
   assertPublicResolvedHost,
@@ -115,7 +115,7 @@ export class IntegrationRemoteMcpBridge {
     const config = readRemoteMcpConfig(descriptor);
     if (!config) return [];
     const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
-    if (!isConnected(integration)) return [];
+    if (!isIntegrationConnected(integration)) return [];
     await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
     const bearerToken = this.decryptAccessToken(integration, userId);
     const client = await this.connectClient(config.serverUrl, bearerToken);
@@ -144,7 +144,7 @@ export class IntegrationRemoteMcpBridge {
 
   async callTool(input: RemoteMcpCallInput): Promise<RemoteMcpCallResult> {
     const session = this.options.contextTracker.requireSessionContext('IntegrationRemoteMcpBridge');
-    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, input.provider);
+    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, input.provider as UserIntegrationProvider);
     if (!descriptor) {
       throw new IntegrationRemoteMcpBridgeError('remote_mcp_descriptor_not_found', 'Remote MCP descriptor was not found.', 404);
     }
@@ -153,7 +153,7 @@ export class IntegrationRemoteMcpBridge {
       throw new IntegrationRemoteMcpBridgeError('remote_mcp_tool_not_allowed', 'Remote MCP tool is not allowlisted for this integration.', 403);
     }
     const integration = await this.options.integrationStore.findByProvider(session.userId, descriptor.provider);
-    if (!isConnected(integration)) {
+    if (!isIntegrationConnected(integration)) {
       throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
     }
     await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
@@ -294,10 +294,6 @@ function readArguments(value: unknown): Readonly<Record<string, unknown>> | unde
   if (value === undefined || value === null) return undefined;
   if (typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
   throw new IntegrationRemoteMcpBridgeError('remote_mcp_invalid_arguments', 'Remote MCP tool arguments must be an object.', 400);
-}
-
-function isConnected(record: UserIntegrationRecord | null): record is UserIntegrationRecord {
-  return record?.status === 'connected';
 }
 
 function withTimeout<T>(

@@ -148,7 +148,17 @@ describe('IntegrationTools', () => {
           enforcement: 'advisory_upstream_oauth_token',
           note: 'advisory',
         },
-        operations: [{ operationId: 'getProfile', method: 'GET', path: '/profile', available: true }],
+        operations: [{
+          operationId: 'getProfile',
+          method: 'GET',
+          path: '/profile',
+          readWriteClass: 'read',
+          summary: null,
+          description: null,
+          requiredScopes: [],
+          available: true,
+          unavailableReason: null,
+        }],
       }),
       describeOperation: jest.fn<IntegrationOperationCatalog['describeOperation']>(),
     } as unknown as IntegrationOperationCatalog;
@@ -362,7 +372,7 @@ describe('IntegrationTools', () => {
     expect(policy.authorize).toHaveBeenCalledWith({
       provider: REMOTE_DOCS,
       method: 'PUT',
-      path: '/_integration/remote_mcp/search',
+      path: '_internal:/integration/remote_mcp/search',
       body: { q: 'status' },
     });
     expect(bridge.callTool).toHaveBeenCalledWith({
@@ -422,7 +432,7 @@ describe('IntegrationTools', () => {
     expect(policy.authorize).toHaveBeenCalledWith({
       provider: 'gmail',
       method: 'PUT',
-      path: '/_integration/openapi_spec',
+      path: '_internal:/integration/openapi_spec',
       body: { openapi: '3.1.0', paths: { '/profile': { get: { responses: { 200: { description: 'ok' } } } } } },
     });
     expect(catalog.ingestOpenApiSpec).not.toHaveBeenCalled();

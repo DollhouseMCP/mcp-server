@@ -6,6 +6,7 @@ import {
   InMemoryIntegrationDescriptorStore,
   InMemoryUserIntegrationStore,
   type IntegrationDescriptorRecord,
+  type IUserIntegrationStore,
   type UserIntegrationRecord,
 } from '../../../../src/web-console/stores/index.js';
 import {
@@ -171,6 +172,31 @@ describe('IntegrationRemoteMcpBridge', () => {
       status: 403,
     } satisfies Partial<IntegrationRemoteMcpBridgeError>);
   });
+
+  it('denies remote MCP calls when the store returns a connected-but-revoked record (revocation race)', async () => {
+    // A racing/future store implementation could hand back a record whose status
+    // still reads 'connected' after revocation. The bridge must gate on the
+    // shared isIntegrationConnected predicate (which checks revokedAt), not trust
+    // the store's own read-time filtering.
+    const revoked: UserIntegrationRecord = {
+      ...integration(encryption()),
+      status: 'connected',
+      revokedAt: TIMESTAMP,
+    };
+    const integrationStore = {
+      findByProvider: () => Promise.resolve(revoked),
+    } as unknown as IUserIntegrationStore;
+    const { bridge, contextTracker } = fixture({ integrationStore });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: { q: 'status' },
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_not_connected',
+      status: 409,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+  });
 });
 
 function fixture(options: {
@@ -178,6 +204,7 @@ function fixture(options: {
   readonly descriptors?: readonly IntegrationDescriptorRecord[];
   readonly integration?: UserIntegrationRecord;
   readonly integrations?: readonly UserIntegrationRecord[];
+  readonly integrationStore?: IUserIntegrationStore;
   readonly clientFactory?: RemoteMcpClientFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
@@ -190,7 +217,7 @@ function fixture(options: {
     contextTracker,
     bridge: new IntegrationRemoteMcpBridge({
       descriptorStore: new InMemoryIntegrationDescriptorStore(descriptorRecords),
-      integrationStore: new InMemoryUserIntegrationStore(integrationRecords),
+      integrationStore: options.integrationStore ?? new InMemoryUserIntegrationStore(integrationRecords),
       secretEncryption,
       contextTracker,
       dnsLookup: options.dnsLookup ?? publicDnsLookup,

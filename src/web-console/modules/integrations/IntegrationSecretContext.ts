@@ -1,5 +1,4 @@
 export type IntegrationSecretKind = 'access_token' | 'refresh_token';
-export type IntegrationSecretProvider = string;
 
 export interface IntegrationSecretContext {
   readonly secretClass: string;
@@ -9,7 +8,7 @@ export interface IntegrationSecretContext {
 export function integrationSecretContext(
   secret: IntegrationSecretKind,
   userId: string,
-  provider: IntegrationSecretProvider,
+  provider: string,
 ): IntegrationSecretContext {
   return { secretClass: `integration_${secret}`, ownerId: `${provider}:${userId}` };
 }

@@ -7,16 +7,21 @@ import {
   cloneBuffer,
   cloneDate,
 } from './ConsoleStoreValidation.js';
+import type {
+  UserIntegrationProvider,
+  UserIntegrationStatus,
+  UserIntegrationErrorReason,
+} from '../../database/schema/webConsole.js';
 
-export type UserIntegrationProvider = string;
+// The schema layer is the single source of truth for these persisted integration
+// domain types (the user_integrations column is annotated with them). Re-exported
+// here so store-layer consumers keep a stable import site.
+export type {
+  UserIntegrationProvider,
+  UserIntegrationStatus,
+  UserIntegrationErrorReason,
+};
 export const GITHUB_USER_INTEGRATION_PROVIDER = 'github' as const;
-export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
-export type UserIntegrationErrorReason =
-  | 'token_exchange_failed'
-  | 'token_refresh_failed'
-  | 'revocation_failed'
-  | 'scope_denied'
-  | 'provider_unavailable';
 
 export interface UserIntegrationRecord {
   readonly id: string;
@@ -33,6 +38,18 @@ export interface UserIntegrationRecord {
   readonly connectedAt: Date | null;
   readonly lastSyncAt: Date | null;
   readonly revokedAt: Date | null;
+}
+
+/**
+ * A record is usable only if it is connected AND not revoked. Shared so the
+ * gateway, remote-MCP bridge, and operation catalog apply the same predicate —
+ * a revoked-but-stale record (status still 'connected' during a revocation race)
+ * must never be treated as connected.
+ */
+export function isIntegrationConnected(
+  record: UserIntegrationRecord | null,
+): record is UserIntegrationRecord {
+  return record?.status === 'connected' && record.revokedAt === null;
 }
 
 export interface IUserIntegrationStore {

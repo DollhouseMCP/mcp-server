@@ -45,10 +45,9 @@ const { ToolRegistry } = await import('../../../src/handlers/ToolRegistry.js');
 
 describe('ToolRegistry', () => {
   let registry: InstanceType<typeof ToolRegistry>;
-  const mockServer = {} as any;
 
   beforeEach(() => {
-    registry = new ToolRegistry(mockServer);
+    registry = new ToolRegistry();
     jest.clearAllMocks();
   });
 

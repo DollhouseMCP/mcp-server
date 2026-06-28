@@ -177,7 +177,7 @@ function getIntegrationOperationTools(
           const policyResponse = await authorizeIntegrationManagementWrite(
             policyEnforcer,
             provider,
-            '/_integration/openapi_spec',
+            '_internal:/integration/openapi_spec',
             readRequiredRecord(input.spec, 'spec'),
           );
           if (policyResponse) return policyResponse;
@@ -224,7 +224,7 @@ function getIntegrationOperationTools(
           const policyResponse = await authorizeIntegrationManagementWrite(
             policyEnforcer,
             provider,
-            '/_integration/generated_skill',
+            '_internal:/integration/generated_skill',
           );
           if (policyResponse) return policyResponse;
           return textResponse({
@@ -446,7 +446,7 @@ function remoteMcpToolRegistration(
         const policyResponse = await authorizeIntegrationManagementWrite(
           policyEnforcer,
           remoteTool.provider,
-          `/_integration/remote_mcp/${encodeURIComponent(remoteTool.remoteName)}`,
+          `_internal:/integration/remote_mcp/${encodeURIComponent(remoteTool.remoteName)}`,
           readObject(args),
         );
         if (policyResponse) return policyResponse;
@@ -601,6 +601,8 @@ async function authorizeIntegrationManagementWrite(
     });
   }
   try {
+    // `path` is a gateway-rejectable `_internal:/...` sentinel (not a real absolute path),
+    // so a management-write approval can never be replayed as a real integration_request call.
     const policy = await policyEnforcer.authorize({
       provider,
       method: 'PUT',

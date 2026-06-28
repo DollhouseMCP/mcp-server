@@ -6,6 +6,7 @@ import {
   type IntegrationStatusDtoStatus,
   type PortfolioSyncDirection,
 } from './IntegrationDtos.js';
+import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 
 export function projectIntegrationList(value: unknown): IntegrationListDto {
   const input = asRecord(value);
@@ -40,7 +41,7 @@ export function projectGitHubIntegrationStatus(value: unknown): GitHubIntegratio
 export function projectConfiguredIntegrationStatus(value: unknown): ConfiguredIntegrationStatusDto {
   const input = asRecord(value);
   return {
-    provider: stringField(input, 'provider'),
+    provider: stringField(input, 'provider') as UserIntegrationProvider,
     display_name: stringField(input, 'display_name'),
     category: stringField(input, 'category'),
     status: integrationStatus(input.status),

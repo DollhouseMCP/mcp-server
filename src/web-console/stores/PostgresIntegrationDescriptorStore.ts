@@ -103,7 +103,7 @@ function toDescriptorValues(input: IntegrationDescriptorCreateInput, createdAt: 
 function fromDescriptorRow(row: typeof integrationProviderDescriptors.$inferSelect): IntegrationDescriptorRecord {
   const record: IntegrationDescriptorRecord = {
     id: row.id,
-    provider: row.provider,
+    provider: row.provider as UserIntegrationProvider,
     ownership: row.ownership,
     ownerUserId: row.ownerUserId,
     displayName: row.displayName,

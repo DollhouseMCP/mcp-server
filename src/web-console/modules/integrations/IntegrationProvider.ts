@@ -88,7 +88,7 @@ export function createGitHubIntegrationProvider(
 ): IIntegrationProvider {
   return {
     descriptor: {
-      id: 'github',
+      id: 'github' as UserIntegrationProvider,
       displayName: 'GitHub',
       category: 'Source control',
     },
@@ -139,7 +139,7 @@ export function createUnavailableGitHubIntegrationProvider(
 ): IIntegrationProvider {
   return {
     descriptor: {
-      id: 'github',
+      id: 'github' as UserIntegrationProvider,
       displayName: 'GitHub',
       category: 'Source control',
     },

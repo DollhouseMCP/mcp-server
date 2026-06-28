@@ -4,7 +4,7 @@ import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
-import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
 import {
@@ -134,7 +134,7 @@ export class IntegrationRequestGateway {
       throw new IntegrationRequestError('integration_request_rate_limited', 'Integration request rate limit exceeded.', 429);
     }
     const record = await this.options.integrationStore.findByProvider(session.userId, provider);
-    if (!isConnected(record)) {
+    if (!isIntegrationConnected(record)) {
       await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'credential_not_connected');
       throw new IntegrationRequestError('integration_not_connected', 'Integration is not connected.', 409);
     }
@@ -214,7 +214,7 @@ export class IntegrationRequestGateway {
     tokenRefresh: IntegrationTokenRefreshService,
     userId: string,
     sessionId: string | null,
-    provider: string,
+    provider: UserIntegrationProvider,
     method: string,
     url: URL,
     staleAccessTokenCiphertext: Buffer,
@@ -279,6 +279,9 @@ export class IntegrationRequestGateway {
         headers,
         body,
         signal: controller.signal,
+        // Fail closed on redirects: the host allowlist + SSRF guard only validated the
+        // initial URL, so a 3xx to an internal or non-allowlisted host must not be followed.
+        redirect: 'error',
       });
       return await readBoundedResponse(response, controller);
     } catch (error) {
@@ -490,11 +493,11 @@ function stepRateLimit(
   };
 }
 
-function normalizeProvider(provider: string): string {
+function normalizeProvider(provider: string): UserIntegrationProvider {
   if (!/^[a-z][a-z0-9_-]{1,63}$/.test(provider)) {
     throw new IntegrationRequestError('invalid_integration_provider', 'Invalid integration provider.', 400);
   }
-  return provider;
+  return provider as UserIntegrationProvider;
 }
 
 function normalizeMethod(method: string): string {
@@ -624,6 +627,8 @@ async function readBoundedResponseText(response: Response, controller: AbortCont
     throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
   }
   if (!response.body) {
+    // No readable stream to bound incrementally; the Content-Length pre-check above
+    // is the primary guard, and this buffered read is re-checked against the cap below.
     const text = await response.text();
     if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BODY_BYTES) {
       controller.abort();
@@ -675,10 +680,17 @@ function redactCredentialFields(value: unknown): unknown {
   return output;
 }
 
-function isCredentialKey(key: string): boolean {
-  return /(^|_)(access|refresh)?_?token($|_)|authorization|api[_-]?key|secret|ciphertext/i.test(key);
-}
+// Credential-shaped field-name fragments matched anywhere in the key (case-insensitive).
+// Each `key`/`secret` separator variant is listed explicitly so the check stays a plain
+// substring scan rather than a high-complexity regex.
+const CREDENTIAL_KEY_SUBSTRINGS = [
+  'authorization', 'bearer', 'jwt', 'secret', 'credential', 'password', 'passwd', 'ciphertext',
+  'apikey', 'api_key', 'api-key', 'privatekey', 'private_key', 'private-key',
+];
 
-function isConnected(record: UserIntegrationRecord | null): record is UserIntegrationRecord {
-  return record?.status === 'connected' && record.revokedAt === null;
+function isCredentialKey(key: string): boolean {
+  const lower = key.toLowerCase();
+  if (CREDENTIAL_KEY_SUBSTRINGS.some(fragment => lower.includes(fragment))) return true;
+  // token / access_token / refresh_token / id_token, bounded so e.g. 'tokenizer' is not redacted.
+  return /(^|_)(access|refresh|id)?_?token($|_)/i.test(key);
 }

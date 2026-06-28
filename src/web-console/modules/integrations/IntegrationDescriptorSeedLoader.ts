@@ -32,6 +32,7 @@ import {
   type IntegrationRefreshMode,
   validateIntegrationDescriptorInput,
 } from '../../stores/IIntegrationDescriptorStore.js';
+import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import { integrationDescriptorClientSecretContext } from './IntegrationSecretContext.js';
 
 const SEED_FILE_EXTENSION = '.json';
@@ -172,7 +173,7 @@ export class IntegrationDescriptorSeedLoader {
     const timestamp = this.now();
     const authStrategy = readString(seed, 'authStrategy') ?? '';
     const base = {
-      provider,
+      provider: provider as UserIntegrationProvider,
       // Curated seeds are deployment-owned; ownership is forced, never read from the file.
       ownership: 'curated' as const,
       ownerUserId: null,

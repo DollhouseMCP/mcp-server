@@ -45,7 +45,7 @@ export interface IntegrationListDto {
 
 export function serializeIntegrationList(
   records: readonly UserIntegrationRecord[],
-  providers: readonly IntegrationProviderCatalogDescriptor[] = [{ id: 'github', displayName: 'GitHub', category: 'Source control' }],
+  providers: readonly IntegrationProviderCatalogDescriptor[] = [{ id: 'github' as UserIntegrationProvider, displayName: 'GitHub', category: 'Source control' }],
 ): IntegrationListDto {
   return {
     integrations: providers.map(provider => serializeProviderStatus(

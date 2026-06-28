@@ -11,6 +11,7 @@ import {
   type IIntegrationRequestAuditSink,
   type IntegrationDescriptorRecord,
   type IntegrationRequestAuditEvent,
+  type UserIntegrationProvider,
   type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
@@ -94,12 +95,30 @@ describe('IntegrationRequestGateway', () => {
     ]);
   });
 
+  it('issues the upstream request with redirect: error so redirects cannot bypass the host allowlist', async () => {
+    const inits: Array<RequestInit | undefined> = [];
+    const gateway = gatewayFixture({
+      fetch: (url, init) => {
+        inits.push(init);
+        return Promise.resolve(jsonResponse(200, { ok: true }));
+      },
+    });
+
+    await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/messages',
+    }));
+
+    expect(inits[0]?.redirect).toBe('error');
+  });
+
   it('injects static API keys into query parameters without returning the key', async () => {
     const fetches: string[] = [];
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({ staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } } })],
       records: [integrationRecord({
-        provider: 'airtable',
+        provider: 'airtable' as UserIntegrationProvider,
         authorizedPermissions: { scopes: [] },
         accessTokenCiphertext: encrypt('airtable-key', 'airtable'),
         refreshTokenCiphertext: null,
@@ -369,7 +388,7 @@ function gatewayFixture(options: {
   const secretEncryption = encryption();
   const integrationStore = new InMemoryUserIntegrationStore(options.records ?? [
     integrationRecord({
-      provider: 'gmail',
+      provider: 'gmail' as UserIntegrationProvider,
       authorizedPermissions: { scopes: ['gmail.readonly'] },
       accessTokenCiphertext: encrypt('gmail-access-token', 'gmail'),
       refreshTokenCiphertext: encrypt('gmail-refresh-token', 'gmail', 'refresh_token'),
@@ -412,7 +431,7 @@ function integrationRecord(overrides: Partial<UserIntegrationRecord>): UserInteg
   return {
     id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
     userId: USER_ID,
-    provider: 'gmail',
+    provider: 'gmail' as UserIntegrationProvider,
     externalAccountLabel: 'alice@example.com',
     externalInstallationId: null,
     authorizedPermissions: { scopes: ['gmail.readonly'] },
@@ -431,7 +450,7 @@ function integrationRecord(overrides: Partial<UserIntegrationRecord>): UserInteg
 function oauthDescriptor(): IntegrationDescriptorRecord {
   return {
     id: '00000000-0000-4000-8000-000000000101',
-    provider: 'gmail',
+    provider: 'gmail' as UserIntegrationProvider,
     ownership: 'curated',
     ownerUserId: null,
     displayName: 'Gmail',
@@ -460,7 +479,7 @@ function oauthDescriptor(): IntegrationDescriptorRecord {
 function staticDescriptor(overrides: Partial<IntegrationDescriptorRecord> = {}): IntegrationDescriptorRecord {
   return {
     id: '00000000-0000-4000-8000-000000000102',
-    provider: 'airtable',
+    provider: 'airtable' as UserIntegrationProvider,
     ownership: 'curated',
     ownerUserId: null,
     displayName: 'Airtable',

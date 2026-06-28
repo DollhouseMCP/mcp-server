@@ -321,6 +321,7 @@ New configuration options in v2.0:
 | `DOLLHOUSE_WEB_AUTH_ENABLED` | `false` | Enforce Bearer token auth on web console port 41715 (#1780). Phase 1 default-off — will flip to `true` in a follow-up release. |
 | `DOLLHOUSE_CONSOLE_TOKEN_FILE` | `~/.dollhouse/run/console-token.auth.json` | Optional override for the console token file path. |
 | `DOLLHOUSE_CONSOLE_ROTATION_REQUIRE_CONFIRMATION` | `true` | Require out-of-band confirmation (Phase 2: OS dialog or TOTP) for token rotation. Set `false` for headless CI. |
+| `DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR` | *(unset)* | Directory of curated integration descriptor seed files (data, not code) loaded into the descriptor store at web-console bootstrap. Per-provider deployment OAuth credentials are read separately from `DOLLHOUSE_INTEGRATION_<ID>_CLIENT_ID` / `_CLIENT_SECRET`. |
 
 ---
 
