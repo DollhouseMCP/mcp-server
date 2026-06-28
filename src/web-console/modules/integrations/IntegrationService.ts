@@ -9,6 +9,7 @@ import type {
   ConsoleHandlerResult,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
+import { logger } from '../../../utils/logger.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import { normalizeConsoleReturnPath } from '../../platform/ConsoleReturnPaths.js';
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
@@ -41,7 +42,24 @@ export class IntegrationService {
     readonly publicBaseUrl?: string | null;
     readonly securityEventSink?: IIntegrationSecurityEventSink | null;
     readonly now?: () => Date;
-  }) {}
+  }) {
+    // Warn once at construction (not per request) if the configured public base URL has a
+    // path component: OAuth callback URIs are built from the absolute INTEGRATION_PATH, so any
+    // path on the base URL (e.g. https://host/console) is silently dropped from the callback.
+    const baseUrl = this.options.publicBaseUrl;
+    if (baseUrl) {
+      try {
+        const { origin, pathname } = new URL(baseUrl);
+        if (pathname !== '/' && pathname !== '') {
+          logger.warn('Integration public base URL has a path component that is ignored when building OAuth callback URIs', {
+            publicBaseUrl: `${origin}${pathname}`,
+          });
+        }
+      } catch {
+        // An invalid base URL is surfaced later when providerCallbackUri constructs the URL.
+      }
+    }
+  }
 
   async list(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);

@@ -92,20 +92,30 @@ export class IntegrationRemoteMcpBridge {
   async listAllowedTools(): Promise<readonly RemoteMcpTool[]> {
     const session = this.options.contextTracker.requireSessionContext('IntegrationRemoteMcpBridge');
     const descriptors = await this.options.descriptorStore.listVisible(session.userId);
-    const tools: RemoteMcpTool[] = [];
-    for (const descriptor of descriptors) {
-      try {
-        const discovered = await this.listDescriptorTools(descriptor, session.userId);
-        tools.push(...discovered);
-      } catch (error) {
-        logger.warn('Remote MCP tool discovery skipped for integration descriptor', {
-          provider: descriptor.provider,
-          descriptorId: descriptor.id,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
+    // Discover descriptors with bounded concurrency: enough to avoid N sequential timeouts,
+    // capped so a user with many descriptors cannot fan out unbounded simultaneous outbound
+    // remote-MCP connections. Each descriptor's failure is isolated and never fails the list.
+    const DISCOVERY_CONCURRENCY = 5;
+    const discovered: (readonly RemoteMcpTool[])[] = [];
+    for (let offset = 0; offset < descriptors.length; offset += DISCOVERY_CONCURRENCY) {
+      const batch = descriptors.slice(offset, offset + DISCOVERY_CONCURRENCY);
+      const batchResults = await Promise.all(batch.map(async descriptor => {
+        try {
+          return await this.listDescriptorTools(descriptor, session.userId);
+        } catch (error) {
+          logger.warn('Remote MCP tool discovery skipped for integration descriptor', {
+            provider: descriptor.provider,
+            descriptorId: descriptor.id,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          return [] as readonly RemoteMcpTool[];
+        }
+      }));
+      discovered.push(...batchResults);
     }
-    return tools.sort((left, right) => left.localName.localeCompare(right.localName));
+    return discovered
+      .flat()
+      .sort((left, right) => left.localName.localeCompare(right.localName));
   }
 
   private async listDescriptorTools(

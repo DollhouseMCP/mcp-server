@@ -459,12 +459,18 @@ interface GatewayRequestContext {
   readonly url: URL;
 }
 
+// Single-replica/dev fallback used only when no IRateLimitStore is injected (production
+// passes the auto-expiring store). Bounded by a time-amortized sweep that drops expired
+// buckets at most once per window — so the Map size tracks active keys in the current
+// window, not lifetime traffic, without an O(n) scan on the request hot path.
 class InMemoryIntegrationRateLimiter {
   private readonly buckets = new Map<string, { windowStart: number; count: number }>();
+  private lastSweepAt = 0;
 
   constructor(private readonly windowMs: number, private readonly maxRequests: number) {}
 
   check(key: string, now: number): boolean {
+    this.maybeSweep(now);
     const current = this.buckets.get(key);
     if (!current || now - current.windowStart >= this.windowMs) {
       this.buckets.set(key, { windowStart: now, count: 1 });
@@ -473,6 +479,14 @@ class InMemoryIntegrationRateLimiter {
     if (current.count >= this.maxRequests) return false;
     current.count += 1;
     return true;
+  }
+
+  private maybeSweep(now: number): void {
+    if (now - this.lastSweepAt < this.windowMs) return;
+    this.lastSweepAt = now;
+    for (const [bucketKey, bucket] of this.buckets) {
+      if (now - bucket.windowStart >= this.windowMs) this.buckets.delete(bucketKey);
+    }
   }
 }
 
@@ -495,7 +509,7 @@ function stepRateLimit(
 
 function normalizeProvider(provider: string): UserIntegrationProvider {
   if (!/^[a-z][a-z0-9_-]{1,63}$/.test(provider)) {
-    throw new IntegrationRequestError('invalid_integration_provider', 'Invalid integration provider.', 400);
+    throw new IntegrationRequestError('invalid_integration_provider', 'Integration provider must be a lowercase id of 2-64 chars (a-z, 0-9, _, -).', 400);
   }
   return provider as UserIntegrationProvider;
 }
