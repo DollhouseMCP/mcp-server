@@ -27,6 +27,7 @@ export const TOOL_REDACTION: Partial<Record<string, ToolRedactionSpec>> = {
   mcp_aql_execute: { keepFields: ['operation'], digestFields: ['params'] },
   mcp_aql_read: { keepFields: ['operation', 'element_type', 'element_name'], digestFields: ['params'] },
   mcp_aql_delete: { keepFields: ['operation', 'element_type', 'element_name'] },
+  integration_request: { keepFields: ['provider', 'method', 'path', 'read_write_class'], digestFields: ['query', 'body'] },
   install_collection_content: { keepFields: ['element_type'], digestFields: ['url', 'params'] },
 };
 

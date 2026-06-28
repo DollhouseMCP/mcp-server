@@ -15,7 +15,7 @@ import {
   type ConsolePortfolioElementType,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
-import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import {
   isPortfolioSyncJobConflictPolicy,
   isPortfolioSyncJobDirection,
@@ -312,8 +312,8 @@ export class PortfolioService {
     const auth = requireConsoleAuthentication(req);
     const parsed = parseSyncBody(req.body);
     if (parsed.kind === 'problem') return parsed.result;
-    const integration = await this.integrationStore.findByProvider(auth.userId, parsed.value.provider);
-    if (integration?.status !== 'connected') {
+    const integration = await this.integrationStore.findByProvider(auth.userId, parsed.value.provider as UserIntegrationProvider);
+    if (!isIntegrationConnected(integration)) {
       return problem(409, 'integration_required', 'Conflict', 'A connected GitHub integration is required for portfolio sync.');
     }
     if (!syncDirectionAllowed(integration, parsed.value.direction)) {

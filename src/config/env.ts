@@ -173,6 +173,14 @@ const envSchema = z.object({
   DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
   /**
+   * Directory of curated integration descriptor seed files (data, not code),
+   * loaded into the descriptor store at web-console bootstrap. Per-provider
+   * deployment OAuth credentials are read separately from
+   * `DOLLHOUSE_INTEGRATION_<ID>_CLIENT_ID` / `_CLIENT_SECRET`.
+   */
+  DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
    * Legacy GitHub OAuth client secret. Predates the env-var split
    * above. Kept as a fallback so existing operators don't break;
    * prefer `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` for new deployments.

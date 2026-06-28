@@ -39,6 +39,7 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   | 'DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE'
   | 'DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID'
   | 'DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET'
+  | 'DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR'
 >;
 
 export async function bootstrapWebConsoleHttpApiV1(
@@ -105,6 +106,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
       'DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY',
     ),
     githubIntegrationProviderConfig,
+    integrationDescriptorSeedDir: sourceEnv.DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR,
     portfolioSyncRepositoryName: sourceEnv.GITHUB_REPOSITORY,
     reportCleanupError: ({ store, error }) => {
       logger.error('[WebConsole] Scheduled store cleanup failed', {

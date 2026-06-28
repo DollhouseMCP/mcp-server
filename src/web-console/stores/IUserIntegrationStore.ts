@@ -1,19 +1,27 @@
 import {
   ConsoleStoreValidationError,
+  assertDisplayString,
   assertNullableDisplayString,
   assertNonEmptyBuffer,
   assertUuid,
   cloneBuffer,
   cloneDate,
 } from './ConsoleStoreValidation.js';
+import type {
+  UserIntegrationProvider,
+  UserIntegrationStatus,
+  UserIntegrationErrorReason,
+} from '../../database/schema/webConsole.js';
 
-export type UserIntegrationProvider = 'github';
-export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
-export type UserIntegrationErrorReason =
-  | 'token_exchange_failed'
-  | 'revocation_failed'
-  | 'scope_denied'
-  | 'provider_unavailable';
+// The schema layer is the single source of truth for these persisted integration
+// domain types (the user_integrations column is annotated with them). Re-exported
+// here so store-layer consumers keep a stable import site.
+export type {
+  UserIntegrationProvider,
+  UserIntegrationStatus,
+  UserIntegrationErrorReason,
+};
+export const GITHUB_USER_INTEGRATION_PROVIDER = 'github' as const;
 
 export interface UserIntegrationRecord {
   readonly id: string;
@@ -32,10 +40,23 @@ export interface UserIntegrationRecord {
   readonly revokedAt: Date | null;
 }
 
+/**
+ * A record is usable only if it is connected AND not revoked. Shared so the
+ * gateway, remote-MCP bridge, and operation catalog apply the same predicate —
+ * a revoked-but-stale record (status still 'connected' during a revocation race)
+ * must never be treated as connected.
+ */
+export function isIntegrationConnected(
+  record: UserIntegrationRecord | null,
+): record is UserIntegrationRecord {
+  return record?.status === 'connected' && record.revokedAt === null;
+}
+
 export interface IUserIntegrationStore {
   listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
+  refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
 }
@@ -48,8 +69,35 @@ export interface UserIntegrationConnectInput {
   readonly authorizedPermissions: Readonly<Record<string, unknown>>;
   readonly accessTokenCiphertext: Buffer;
   readonly refreshTokenCiphertext: Buffer | null;
+  readonly credentialKeyVersion?: string | null;
   readonly connectedAt: Date;
 }
+
+export interface UserIntegrationRefreshInput {
+  readonly userId: string;
+  readonly provider: UserIntegrationProvider;
+  readonly staleAccessTokenCiphertext: Buffer;
+  readonly refreshedAt: Date;
+  readonly refresh: (record: UserIntegrationRecord) => Promise<UserIntegrationRefreshDecision>;
+}
+
+export type UserIntegrationRefreshDecision =
+  | {
+      readonly kind: 'refreshed';
+      readonly accessTokenCiphertext: Buffer;
+      readonly refreshTokenCiphertext: Buffer | null;
+      readonly credentialKeyVersion?: string | null;
+    }
+  | {
+      readonly kind: 'failed';
+      readonly errorReason: Extract<UserIntegrationErrorReason, 'token_refresh_failed' | 'provider_unavailable'>;
+    };
+
+export type UserIntegrationRefreshResult =
+  | { readonly kind: 'missing'; readonly record: null }
+  | { readonly kind: 'reused'; readonly record: UserIntegrationRecord }
+  | { readonly kind: 'refreshed'; readonly record: UserIntegrationRecord }
+  | { readonly kind: 'failed'; readonly record: UserIntegrationRecord };
 
 export interface UserIntegrationDisconnectInput {
   readonly userId: string;
@@ -67,6 +115,7 @@ export interface UserIntegrationErrorInput {
 export function validateUserIntegrationRecord(record: UserIntegrationRecord): void {
   assertUuid(record.id, 'id');
   assertUuid(record.userId, 'userId');
+  assertUserIntegrationProvider(record.provider);
   if (!['connected', 'revoked', 'error'].includes(record.status)) {
     throw new ConsoleStoreValidationError(`unsupported integration status '${record.status}'`);
   }
@@ -103,7 +152,7 @@ export function cloneUserIntegrationRecord(record: UserIntegrationRecord): UserI
 }
 
 function assertAuthorizedPermissions(
-  _provider: UserIntegrationProvider,
+  provider: UserIntegrationProvider,
   value: Readonly<Record<string, unknown>>,
 ): void {
   const serialized = JSON.stringify(value);
@@ -111,6 +160,21 @@ function assertAuthorizedPermissions(
     throw new ConsoleStoreValidationError('authorizedPermissions must be at most 4096 bytes');
   }
   assertNoUnsafePermissionKeys(value);
+  if (provider === GITHUB_USER_INTEGRATION_PROVIDER) {
+    assertGitHubAuthorizedPermissions(value);
+    return;
+  }
+  assertGenericAuthorizedPermissions(value);
+}
+
+export function assertUserIntegrationProvider(provider: string): asserts provider is UserIntegrationProvider {
+  assertDisplayString(provider, 'provider', 64);
+  if (!/^[a-z][a-z0-9_-]{1,63}$/.test(provider)) {
+    throw new ConsoleStoreValidationError('provider must be a lowercase provider id (2-64 chars: a-z, 0-9, _, -)');
+  }
+}
+
+function assertGitHubAuthorizedPermissions(value: Readonly<Record<string, unknown>>): void {
   const topLevelKeys = Object.keys(value);
   if (topLevelKeys.length !== 2
       || !topLevelKeys.includes('repository_selection')
@@ -134,6 +198,26 @@ function assertAuthorizedPermissions(
   const contents = permissionRecord.contents;
   if (contents !== 'none' && contents !== 'read' && contents !== 'write') {
     throw new ConsoleStoreValidationError('authorizedPermissions.permissions.contents must be none, read, or write');
+  }
+}
+
+function assertGenericAuthorizedPermissions(value: Readonly<Record<string, unknown>>): void {
+  const topLevelKeys = Object.keys(value);
+  if (topLevelKeys.length !== 1 || topLevelKeys[0] !== 'scopes') {
+    throw new ConsoleStoreValidationError('authorizedPermissions for configured providers may contain only scopes');
+  }
+  const scopes = value.scopes;
+  if (!Array.isArray(scopes)) {
+    throw new ConsoleStoreValidationError('authorizedPermissions.scopes must be an array');
+  }
+  if (scopes.length > 100) {
+    throw new ConsoleStoreValidationError('authorizedPermissions.scopes must contain at most 100 entries');
+  }
+  for (const scope of scopes) {
+    if (typeof scope !== 'string') {
+      throw new ConsoleStoreValidationError('authorizedPermissions.scopes entries must be strings');
+    }
+    assertDisplayString(scope, 'authorizedPermissions.scopes entry', 200);
   }
 }
 
@@ -164,6 +248,7 @@ function assertNoUnsafePermissionKeys(value: Readonly<Record<string, unknown>>):
 
 function isIntegrationErrorReason(value: string): value is UserIntegrationErrorReason {
   return value === 'token_exchange_failed' ||
+    value === 'token_refresh_failed' ||
     value === 'revocation_failed' ||
     value === 'scope_denied' ||
     value === 'provider_unavailable';

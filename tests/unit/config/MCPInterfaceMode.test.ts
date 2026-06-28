@@ -231,7 +231,7 @@ describe('Token Estimation', () => {
     } as any;
 
     // Create a registry and register MCP-AQL tools
-    const registry = new ToolRegistry({} as any);
+    const registry = new ToolRegistry();
     const tools = getMCPAQLTools(mockHandler);
     registry.registerMany(tools);
 
@@ -256,7 +256,7 @@ describe('Token Estimation', () => {
       handleExecute: jest.fn(),
     } as any;
 
-    const registry = new ToolRegistry({} as any);
+    const registry = new ToolRegistry();
     const tools = getMCPAQLTools(mockHandler);
     registry.registerMany(tools);
 
@@ -295,7 +295,7 @@ describe('Token Estimation', () => {
     } as any;
 
     // Get MCP-AQL CRUD tools token count
-    const mcpAqlRegistry = new ToolRegistry({} as any);
+    const mcpAqlRegistry = new ToolRegistry();
     const mcpAqlTools = getMCPAQLTools(mockHandler);
     mcpAqlRegistry.registerMany(mcpAqlTools);
     const mcpAqlTokens = mcpAqlRegistry.getToolTokenEstimate();
