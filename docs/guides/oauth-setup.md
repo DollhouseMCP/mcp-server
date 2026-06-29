@@ -180,7 +180,8 @@ If you're setting up your own instance, follow the administrator instructions ab
 **Problem**: The helper process might not be running
 **Solution**:
 - Check if the helper is running: `ps aux | grep oauth-helper`
-- Look at logs: `cat ~/.dollhouse/oauth-helper.log`
+- Check helper state: `oauth_helper_status verbose=true`
+- If you started the flow with `DOLLHOUSE_OAUTH_DEBUG=true`, look at logs: `cat ~/.dollhouse/oauth-helper.log`
 - Try restarting the authentication process
  - Ensure your client ID is valid (re-run `dollhouse_config action="get" setting="github.auth.client_id"`)
 
