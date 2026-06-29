@@ -53,7 +53,6 @@ export class TokenManager {
   };
 
   // Secure storage configuration
-  private static readonly TOKEN_DIR = path.join(homedir(), '.dollhouse', '.auth');
   private static readonly TOKEN_FILE = 'github_token.enc';
   private static readonly ALGORITHM = 'aes-256-gcm';
   private static readonly KEY_LENGTH = 32;
@@ -70,6 +69,10 @@ export class TokenManager {
 
   constructor(fileOperations: IFileOperationsService) {
     this.fileOperations = fileOperations;
+  }
+
+  static getTokenDir(): string {
+    return path.join(process.env.DOLLHOUSE_HOME_DIR || homedir(), '.dollhouse', '.auth');
   }
 
   /**
@@ -513,8 +516,9 @@ export class TokenManager {
       }
 
       // Ensure directory exists
-      await this.fileOperations.createDirectory(TokenManager.TOKEN_DIR);
-      await this.fileOperations.chmod(TokenManager.TOKEN_DIR, 0o700, {
+      const tokenDir = TokenManager.getTokenDir();
+      await this.fileOperations.createDirectory(tokenDir);
+      await this.fileOperations.chmod(tokenDir, 0o700, {
         source: 'TokenManager.storeGitHubToken'
       });
 
@@ -536,7 +540,7 @@ export class TokenManager {
       const stored = Buffer.concat([salt, iv, tag, encrypted]);
 
       // Write to file with restricted permissions
-      const tokenPath = path.join(TokenManager.TOKEN_DIR, TokenManager.TOKEN_FILE);
+      const tokenPath = path.join(tokenDir, TokenManager.TOKEN_FILE);
       // Write the binary content to the file (need to convert Buffer to string for FileOperationsService)
       // Since we're writing binary data, we'll write as base64 for safe storage
       await this.fileOperations.writeFile(tokenPath, stored.toString('base64'), {
@@ -576,7 +580,7 @@ export class TokenManager {
    */
   async retrieveGitHubToken(): Promise<string | null> {
     try {
-      const tokenPath = path.join(TokenManager.TOKEN_DIR, TokenManager.TOKEN_FILE);
+      const tokenPath = path.join(TokenManager.getTokenDir(), TokenManager.TOKEN_FILE);
 
       // Check if file exists
       const exists = await this.fileOperations.exists(tokenPath);
@@ -642,7 +646,7 @@ export class TokenManager {
    */
   async removeStoredToken(): Promise<void> {
     try {
-      const tokenPath = path.join(TokenManager.TOKEN_DIR, TokenManager.TOKEN_FILE);
+      const tokenPath = path.join(TokenManager.getTokenDir(), TokenManager.TOKEN_FILE);
 
       // Check if file exists before attempting deletion
       const exists = await this.fileOperations.exists(tokenPath);

@@ -221,6 +221,9 @@ describe('GitHubAuthHandler (DI)', () => {
       const helperPath = path.join(tempHome, 'oauth-helper.mjs');
       await fs.writeFile(helperPath, 'console.log(\"helper\");', 'utf-8');
       process.env.DOLLHOUSE_OAUTH_HELPER = helperPath;
+      const staleResultFile = path.join(tempHome, '.dollhouse', '.auth', 'oauth-helper-result.json');
+      await fs.mkdir(path.dirname(staleResultFile), { recursive: true });
+      await fs.writeFile(staleResultFile, JSON.stringify({ status: 'failed' }), 'utf-8');
 
       const unref = jest.fn();
       const spawnSpy = jest.spyOn(handler as any, 'spawnHelperProcess').mockReturnValue({
@@ -249,6 +252,7 @@ describe('GitHubAuthHandler (DI)', () => {
       const state = JSON.parse(await fs.readFile(stateFile, 'utf-8'));
       expect(state.deviceCode).toBe('device-code');
       expect(state.userCode).toBe('CODE-1234');
+      await expect(fs.access(staleResultFile)).rejects.toMatchObject({ code: 'ENOENT' });
 
       await fs.rm(tempHome, { recursive: true, force: true });
       delete process.env.DOLLHOUSE_OAUTH_HELPER;
@@ -343,6 +347,71 @@ describe('GitHubAuthHandler (DI)', () => {
         expect(response.content[0].text).toContain('Authentication Expired');
         expect(response.content[0].text).toContain('EXPIRED-1234');
         expect(response.content[0].text).toContain('ERROR polling failed');
+      });
+    });
+
+    it('reports terminal helper failure from result file without calling it active or crashed', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 7777,
+            deviceCode: 'device',
+            userCode: 'FAILED-7777',
+            startTime: new Date(Date.now() - 10_000).toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'failed',
+            attempts: 2,
+            completedAt: new Date().toISOString(),
+            errorCode: 'token_storage_failed',
+            message: 'OAuth token could not be stored securely.'
+          }, null, 2),
+          'utf-8'
+        );
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('GitHub Authentication Failed');
+        expect(text).toContain('OAuth token could not be stored securely.');
+        expect(text).not.toContain('Authentication In Progress');
+        expect(text).not.toContain('may have crashed');
+
+        const diagnostics = await handler.getOAuthHelperStatus();
+        const diagnosticsText = diagnostics.content[0].text;
+
+        expect(diagnosticsText).toContain('FAILED');
+        expect(diagnosticsText).toContain('Attempts:** 2');
+        expect(diagnosticsText).not.toContain('ACTIVE - Authentication in progress');
+        expect(diagnosticsText).not.toContain('may have crashed');
+      });
+    });
+
+    it('removes stale plaintext pending-token fallback files before reporting disconnected status', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        const pendingToken = path.join(stateDir, 'pending_token.txt');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(pendingToken, 'gho_stale_plaintext_token_from_old_flow', { mode: 0o600 });
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Not Connected to GitHub');
+        expect(text).toContain('stale plaintext OAuth fallback file from an earlier failed flow was removed');
+        await expect(fs.access(pendingToken)).rejects.toMatchObject({ code: 'ENOENT' });
       });
     });
   });
