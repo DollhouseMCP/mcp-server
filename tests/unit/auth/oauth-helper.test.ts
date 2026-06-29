@@ -319,6 +319,10 @@ describe('oauth-helper.mjs', () => {
   }, 15_000);
 
   it('writes a terminal result when interrupted by SIGTERM', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
     const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-interrupt-'));
 
