@@ -12,6 +12,7 @@ import { logger } from '../utils/logger.js';
 import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
 import * as path from 'path';
 import { homedir } from 'os';
+import { randomUUID } from 'node:crypto';
 import * as child_process from 'child_process';
 import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
@@ -29,10 +30,13 @@ interface OAuthHelperTerminalResult {
     completedAt?: string;
     errorCode?: string;
     message?: string;
+    flowId?: string;
+    pid?: number;
 }
 
 interface OAuthHelperState {
     pid: number;
+    flowId?: string;
     userCode: string;
     startTime: string;
     expiresAt: string;
@@ -176,10 +180,11 @@ export class GitHubAuthHandler {
         try {
           helperPath = await this.findOAuthHelperPath();
           this.logSpawningOAuthHelper(helperPath, clientId, deviceResponse);
-          const helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId);
+          const flowId = randomUUID();
+          const helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId, flowId);
           helper.unref();
           this.logOAuthHelperSpawned(helper.pid, deviceResponse);
-          await this.writeOAuthHelperState(helper.pid, deviceResponse);
+          await this.writeOAuthHelperState(helper.pid, deviceResponse, flowId);
           return null;
         } catch (spawnError) {
           return this.oauthHelperLaunchFailedResponse(spawnError, helperPath, clientId);
@@ -230,7 +235,7 @@ export class GitHubAuthHandler {
         });
     }
 
-    private async writeOAuthHelperState(pid: number | undefined, deviceResponse: DeviceCodeResponse): Promise<void> {
+    private async writeOAuthHelperState(pid: number | undefined, deviceResponse: DeviceCodeResponse, flowId: string): Promise<void> {
         const stateFile = this.getOAuthHelperStateFile();
         const resultFile = this.getOAuthHelperResultFile();
         const stateDir = path.dirname(stateFile);
@@ -239,6 +244,7 @@ export class GitHubAuthHandler {
 
         const state = {
           pid,
+          flowId,
           userCode: deviceResponse.user_code,
           startTime: new Date().toISOString(),
           expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
@@ -647,11 +653,17 @@ export class GitHubAuthHandler {
         const logFile = this.getOAuthHelperLogFile();
         const health = this.emptyOAuthHelperHealth();
 
-        await this.populateOAuthHelperResult(health);
-
         const state = await this.readOAuthHelperState();
         if (state) {
           this.populateOAuthHelperHealth(health, state);
+        }
+
+        const result = await this.readOAuthHelperResult();
+        if (result && (!state || this.oauthHelperResultMatchesState(result, state))) {
+          this.populateOAuthHelperResult(health, result);
+        }
+
+        if (state) {
           this.updateOAuthHelperActivity(health);
         }
 
@@ -682,10 +694,10 @@ export class GitHubAuthHandler {
         };
     }
 
-    private async populateOAuthHelperResult(health: ReturnType<GitHubAuthHandler['emptyOAuthHelperHealth']>): Promise<void> {
-        const result = await this.readOAuthHelperResult();
-        if (!result) return;
-
+    private populateOAuthHelperResult(
+        health: ReturnType<GitHubAuthHandler['emptyOAuthHelperHealth']>,
+        result: OAuthHelperTerminalResult,
+    ): void {
         health.exists = true;
         health.hasResult = true;
         health.resultStatus = result.status;
@@ -837,13 +849,16 @@ export class GitHubAuthHandler {
           errorCode: typeof value.errorCode === 'string' ? value.errorCode : undefined,
           message: typeof value.message === 'string'
             ? this.sanitizeOAuthHelperResultMessage(value.message)
-            : undefined
+            : undefined,
+          flowId: typeof value.flowId === 'string' ? value.flowId : undefined,
+          pid: this.isValidOAuthHelperPid(value.pid) ? value.pid : undefined
         };
     }
 
     private isOAuthHelperState(value: unknown): value is OAuthHelperState {
         if (!this.isRecord(value)) return false;
         return this.isValidOAuthHelperPid(value.pid) &&
+          (value.flowId === undefined || typeof value.flowId === 'string') &&
           typeof value.userCode === 'string' &&
           typeof value.startTime === 'string' &&
           typeof value.expiresAt === 'string' &&
@@ -875,6 +890,12 @@ export class GitHubAuthHandler {
         return typeof value === 'number' &&
           Number.isSafeInteger(value) &&
           value > 0;
+    }
+
+    private oauthHelperResultMatchesState(result: OAuthHelperTerminalResult, state: OAuthHelperState): boolean {
+        if (!state.flowId) return true;
+        if (result.flowId !== state.flowId) return false;
+        return typeof result.pid !== 'number' || result.pid === state.pid;
     }
 
     private isFileNotFoundError(error: unknown): boolean {
@@ -1066,7 +1087,7 @@ export class GitHubAuthHandler {
         };
     }
 
-    private spawnHelperProcess(helperPath: string, deviceResponse: DeviceCodeResponse, clientId: string) {
+    private spawnHelperProcess(helperPath: string, deviceResponse: DeviceCodeResponse, clientId: string, flowId: string) {
         return child_process.spawn('node', [
             helperPath,
             deviceResponse.device_code,
@@ -1080,7 +1101,8 @@ export class GitHubAuthHandler {
             env: {
                 ...process.env,
                 DOLLHOUSE_OAUTH_HELPER_AUTH_DIR: this.getOAuthHelperAuthDir(),
-                DOLLHOUSE_OAUTH_HELPER_LOG_FILE: this.getOAuthHelperLogFile()
+                DOLLHOUSE_OAUTH_HELPER_LOG_FILE: this.getOAuthHelperLogFile(),
+                DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId
             }
         });
     }
