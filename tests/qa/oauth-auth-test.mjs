@@ -11,6 +11,45 @@ import fs from 'fs/promises';
 import path from 'path';
 import { homedir } from 'os';
 
+function createFileOperations() {
+  return {
+    async createDirectory(directoryPath) {
+      await fs.mkdir(directoryPath, { recursive: true });
+    },
+    async readFile(filePath) {
+      return fs.readFile(filePath, 'utf-8');
+    },
+    async writeFile(filePath, content) {
+      await fs.writeFile(filePath, content, 'utf-8');
+    },
+    async deleteFile(filePath) {
+      await fs.unlink(filePath);
+    },
+    async chmod(filePath, mode) {
+      await fs.chmod(filePath, mode);
+    },
+    async exists(filePath) {
+      try {
+        await fs.access(filePath);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    async createFileExclusive(filePath, content) {
+      try {
+        await fs.writeFile(filePath, content, { flag: 'wx' });
+        return true;
+      } catch (error) {
+        if (error?.code === 'EEXIST') return false;
+        throw error;
+      }
+    }
+  };
+}
+
+const tokenManager = new TokenManager(createFileOperations());
+
 async function testTokenValidation() {
   console.log('🔍 Testing Token Validation Patterns...\n');
   
@@ -31,8 +70,8 @@ async function testTokenValidation() {
   let failed = 0;
   
   for (const testCase of testCases) {
-    const isValid = TokenManager.validateTokenFormat(testCase.token);
-    const tokenType = TokenManager.getTokenType(testCase.token);
+    const isValid = tokenManager.validateTokenFormat(testCase.token);
+    const tokenType = tokenManager.getTokenType(testCase.token);
     
     if (isValid === testCase.expected) {
       console.log(`✅ ${testCase.name}: ${isValid ? 'Valid' : 'Invalid'} (Type: ${tokenType})`);
@@ -182,18 +221,18 @@ async function testTokenRetrieval() {
   
   try {
     // Test synchronous retrieval (env var)
-    const syncToken = TokenManager.getGitHubToken();
+    const syncToken = tokenManager.getGitHubToken();
     if (syncToken) {
-      const tokenType = TokenManager.getTokenType(syncToken);
+      const tokenType = tokenManager.getTokenType(syncToken);
       console.log(`✅ Sync retrieval: Found ${tokenType} from environment`);
     } else {
       console.log('⚠️  Sync retrieval: No token in environment');
     }
     
     // Test async retrieval (all sources)
-    const asyncToken = await TokenManager.getGitHubTokenAsync();
+    const asyncToken = await tokenManager.getGitHubTokenAsync();
     if (asyncToken) {
-      const tokenType = TokenManager.getTokenType(asyncToken);
+      const tokenType = tokenManager.getTokenType(asyncToken);
       console.log(`✅ Async retrieval: Found ${tokenType}`);
     } else {
       console.log('⚠️  Async retrieval: No token found in any source');

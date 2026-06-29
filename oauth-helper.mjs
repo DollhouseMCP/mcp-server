@@ -13,15 +13,10 @@
  * between tool calls, breaking background OAuth polling.
  */
 
-import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import { homedir } from 'os';
-
-// Get the directory of this script
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
 
 // Constants
 const DEFAULT_POLL_INTERVAL = 5;
@@ -48,6 +43,7 @@ const RESULT_MESSAGES = {
   token_storage_failed: 'OAuth token could not be stored securely.',
   network_failure: 'Too many network errors while contacting the OAuth token endpoint.',
   fatal_error: 'OAuth helper stopped after an unrecoverable error.',
+  interrupted: 'OAuth helper was interrupted before authentication completed.',
   unknown_response: 'OAuth token endpoint returned an unrecognized response.',
 };
 
@@ -61,7 +57,7 @@ if (args.length < 4) {
 }
 
 const [deviceCode, intervalStr, expiresInStr, clientId] = args;
-const pollInterval = parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
+const pollIntervalSeconds = parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
 const expiresIn = parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 
 // Validate client ID is provided (no hardcoded fallback)
@@ -109,8 +105,8 @@ async function log(message) {
 
 function sanitizeDiagnostic(value) {
   return String(value ?? '')
-    .replace(/\bgithub_pat_[A-Za-z0-9_]+\b/g, '[REDACTED_GITHUB_TOKEN]')
-    .replace(/\bgh[a-z]_[A-Za-z0-9_]+\b/gi, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/\bgithub_pat_\w+\b/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/\bgh[a-z]_\w+\b/gi, '[REDACTED_GITHUB_TOKEN]')
     .replaceAll(deviceCode, '[REDACTED_DEVICE_CODE]');
 }
 
@@ -150,9 +146,9 @@ async function storeToken(token) {
   
   try {
     // Import the compiled TokenManager
-    const { TokenManager } = await import('./dist/security/tokenManager.js');
+    const { TokenManager } = await import(new URL('./dist/security/tokenManager.js', import.meta.url).href);
     
-    // Store the token using the secure storage mechanism
+    // Passing file operations selects TokenManager's file-backed secure storage overload.
     const tokenManager = new TokenManager(createHelperFileOperations(), AUTH_DIR);
     await tokenManager.storeGitHubToken(token);
     await log('Token stored successfully using TokenManager');
@@ -245,10 +241,31 @@ async function writeTerminalResult(status, attempts, errorCode = '') {
     }
 
     await fs.writeFile(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
-    await fs.chmod(RESULT_FILE, 0o600).catch(() => {});
-    await log(`Terminal result written: ${status}${status === 'success' ? '' : `/${safeErrorCode}`}`);
+    const resultSuffix = status === 'success' ? '' : `/${safeErrorCode}`;
+    await log(`Terminal result written: ${status}${resultSuffix}`);
   } catch {
     await log('Failed to write terminal result');
+  }
+}
+
+function writeTerminalResultSync(status, attempts, errorCode = '') {
+  try {
+    fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
+    const safeErrorCode = ALLOWED_RESULT_ERROR_CODES.has(errorCode) ? errorCode : 'fatal_error';
+    const result = {
+      status,
+      attempts,
+      completedAt: new Date().toISOString()
+    };
+
+    if (status !== 'success') {
+      result.errorCode = safeErrorCode;
+      result.message = RESULT_MESSAGES[safeErrorCode];
+    }
+
+    fsSync.writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
+  } catch {
+    // Ignore cleanup/status errors during process termination
   }
 }
 
@@ -265,7 +282,7 @@ async function writePidFile() {
 async function main() {
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
-  await log(`[CONFIG] Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
+  await log(`[CONFIG] Poll interval: ${pollIntervalSeconds}s, Expires in: ${expiresIn}s`);
   await log(`[CONFIG] Node version: ${process.version}`);
   await log(`[CONFIG] Platform: ${process.platform}`);
   // Never log client ID
@@ -284,6 +301,7 @@ async function main() {
   const timeout = startTime + (expiresIn * 1000);
   let attempts = 0;
   let consecutiveErrors = 0;
+  let currentPollIntervalMs = pollIntervalSeconds * 1000;
   const MAX_CONSECUTIVE_ERRORS = 5;
   
   // Set up cleanup on exit - use synchronous cleanup for exit event
@@ -298,15 +316,17 @@ async function main() {
   });
   
   process.on('SIGINT', () => {
+    writeTerminalResultSync('failed', attempts, 'interrupted');
     cleanupStateFileSync();
     cleanupPidFileSync();
-    process.exit(0);
+    process.exit(1);
   });
   
   process.on('SIGTERM', () => {
+    writeTerminalResultSync('failed', attempts, 'interrupted');
     cleanupStateFileSync();
     cleanupPidFileSync();
-    process.exit(0);
+    process.exit(1);
   });
 
   async function finish(status, errorCode, exitCode) {
@@ -334,8 +354,9 @@ async function main() {
             
           case 'slow_down':
             // GitHub is asking us to slow down
-            await log(`[RATE_LIMIT] GitHub requested slower polling - increasing interval to ${pollInterval * 1.5}s`);
-            await sleep(pollInterval * 1500);
+            currentPollIntervalMs += 5000;
+            await log(`[RATE_LIMIT] GitHub requested slower polling - increasing interval to ${currentPollIntervalMs / 1000}s`);
+            await sleep(currentPollIntervalMs);
             continue;
             
           case 'expired_token':
@@ -411,7 +432,7 @@ async function main() {
     }
     
     // Wait before next poll
-    await sleep(pollInterval * 1000);
+    await sleep(currentPollIntervalMs);
   }
   
   // Timeout reached
@@ -422,8 +443,8 @@ async function main() {
 }
 
 // Run the main function
-main().catch(async () => {
-  await log('Fatal error');
+main().catch(async (error) => {
+  await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
   await writeTerminalResult('failed', 0, 'fatal_error');
   await cleanupStateFile();
