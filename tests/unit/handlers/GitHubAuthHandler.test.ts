@@ -493,6 +493,64 @@ describe('GitHubAuthHandler (DI)', () => {
       });
     });
 
+    it('ignores malformed helper state JSON without checking an invalid process id', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: -1,
+            userCode: 'BAD-PID',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => undefined as any);
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Not Connected to GitHub');
+        expect(text).not.toContain('BAD-PID');
+        expect(killSpy).not.toHaveBeenCalled();
+
+        killSpy.mockRestore();
+      });
+    });
+
+    it('treats EPERM during helper process checks as alive', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 9999,
+            userCode: 'EPERM-9999',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => {
+          throw Object.assign(new Error('permission denied'), { code: 'EPERM' });
+        });
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false } as any);
+        const response = await handler.checkGitHubAuth();
+
+        expect(response.content[0].text).toContain('Authentication In Progress');
+        expect(response.content[0].text).toContain('Process Status:** ✅ Running');
+
+        killSpy.mockRestore();
+      });
+    });
+
     it('sanitizes helper result messages before rendering them', async () => {
       await withTempHome(async (homeDir) => {
         const stateDir = path.join(homeDir, '.dollhouse', '.auth');

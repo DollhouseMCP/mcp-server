@@ -57,8 +57,8 @@ if (args.length < 4) {
 }
 
 const [deviceCode, intervalStr, expiresInStr, clientId] = args;
-const pollIntervalSeconds = parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
-const expiresIn = parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
+const pollIntervalSeconds = Number.parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
+const expiresIn = Number.parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 
 // Validate client ID is provided (no hardcoded fallback)
 if (!clientId || clientId === 'undefined') {
@@ -160,6 +160,8 @@ async function storeToken(token) {
 }
 
 function createHelperFileOperations() {
+  // Paths are fixed by AUTH_DIR constants/env, so this standalone helper only
+  // needs the small FileOperations surface TokenManager uses for secure storage.
   return {
     async createDirectory(directoryPath) {
       await fs.mkdir(directoryPath, { recursive: true });
@@ -353,7 +355,8 @@ async function main() {
             break;
             
           case 'slow_down':
-            // GitHub is asking us to slow down
+            // GitHub asks clients to add 5s to the polling interval, then wait
+            // the updated interval before the next request.
             currentPollIntervalMs += 5000;
             await log(`[RATE_LIMIT] GitHub requested slower polling - increasing interval to ${currentPollIntervalMs / 1000}s`);
             await sleep(currentPollIntervalMs);

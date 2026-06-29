@@ -317,8 +317,10 @@ export class GitHubAuthHandler {
           return {
             content: [{
               type: "text",
-              text: this.prefix(`❌ **Unable to Check Authentication**\n\n`) +
-                    `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
+              text: this.prefix(
+                `❌ **Unable to Check Authentication**\n\n` +
+                `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
+              )
             }]
           };
         }
@@ -449,12 +451,14 @@ export class GitHubAuthHandler {
         return {
           content: [{
             type: "text",
-            text: this.prefix(`⚠️ **GitHub Token Invalid**\n\n`) +
-                  `A GitHub token was found but it appears to be invalid or expired.\n\n` +
-                  `**To fix this:**\n` +
-                  `1. Say "set up GitHub" to authenticate again\n` +
-                  `2. Or check your GITHUB_TOKEN environment variable\n\n` +
-                  `Note: Browse and install still work without authentication!`
+            text: this.prefix(
+              `⚠️ **GitHub Token Invalid**\n\n` +
+              `A GitHub token was found but it appears to be invalid or expired.\n\n` +
+              `**To fix this:**\n` +
+              `1. Say "set up GitHub" to authenticate again\n` +
+              `2. Or check your GITHUB_TOKEN environment variable\n\n` +
+              `Note: Browse and install still work without authentication!`
+            )
           }]
         };
     }
@@ -467,13 +471,15 @@ export class GitHubAuthHandler {
         return {
           content: [{
             type: "text",
-            text: this.prefix(`🔒 **Not Connected to GitHub**\n\n`) +
-                  `You're not currently authenticated with GitHub.\n\n` +
-                  `**What works without auth:**\n` +
-                  `✅ Browse the public collection\n` +
-                  `✅ Install community content\n` +
-                  `❌ Submit your own content (requires auth)\n\n` +
-                  `To connect, just say "set up GitHub" or "connect to GitHub"${legacyNotice}`
+            text: this.prefix(
+              `🔒 **Not Connected to GitHub**\n\n` +
+              `You're not currently authenticated with GitHub.\n\n` +
+              `**What works without auth:**\n` +
+              `✅ Browse the public collection\n` +
+              `✅ Install community content\n` +
+              `❌ Submit your own content (requires auth)\n\n` +
+              `To connect, just say "set up GitHub" or "connect to GitHub"${legacyNotice}`
+            )
           }]
         };
     }
@@ -505,8 +511,10 @@ export class GitHubAuthHandler {
           return {
             content: [{
               type: "text",
-              text: this.prefix(`❌ **Failed to Get OAuth Helper Status**\n\n`) +
-                    `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
+              text: this.prefix(
+                `❌ **Failed to Get OAuth Helper Status**\n\n` +
+                `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
+              )
             }]
           };
         }
@@ -750,9 +758,15 @@ export class GitHubAuthHandler {
         try {
           process.kill(pid, 0);
           return true;
-        } catch {
-          return false;
+        } catch (error) {
+          return this.isProcessPermissionError(error);
         }
+    }
+
+    private isProcessPermissionError(error: unknown): boolean {
+        return error instanceof Error &&
+          'code' in error &&
+          (error as NodeJS.ErrnoException).code === 'EPERM';
     }
 
     private async readOAuthHelperErrorLogIfNeeded(
@@ -829,7 +843,7 @@ export class GitHubAuthHandler {
 
     private isOAuthHelperState(value: unknown): value is OAuthHelperState {
         if (!this.isRecord(value)) return false;
-        return typeof value.pid === 'number' &&
+        return this.isValidOAuthHelperPid(value.pid) &&
           typeof value.userCode === 'string' &&
           typeof value.startTime === 'string' &&
           typeof value.expiresAt === 'string' &&
@@ -839,8 +853,12 @@ export class GitHubAuthHandler {
 
     private sanitizeOAuthHelperResultMessage(message: string): string {
         const withoutControlCharacters = Array.from(message, character => {
-          const codePoint = character.charCodeAt(0);
-          return codePoint <= 31 || codePoint === 127 ? ' ' : character;
+          const codePoint = character.codePointAt(0) ?? 0;
+          return codePoint <= 31 ||
+            codePoint === 127 ||
+            (codePoint >= 0xD800 && codePoint <= 0xDFFF)
+            ? ' '
+            : character;
         }).join('');
 
         return withoutControlCharacters
@@ -851,6 +869,12 @@ export class GitHubAuthHandler {
 
     private isRecord(value: unknown): value is Record<string, unknown> {
         return typeof value === 'object' && value !== null && !Array.isArray(value);
+    }
+
+    private isValidOAuthHelperPid(value: unknown): value is number {
+        return typeof value === 'number' &&
+          Number.isSafeInteger(value) &&
+          value > 0;
     }
 
     private isFileNotFoundError(error: unknown): boolean {
@@ -1080,6 +1104,8 @@ export class GitHubAuthHandler {
         if (this.pathService) {
             return path.join(this.getOAuthHelperAuthDir(), 'oauth-helper.log');
         }
+        // Preserve the legacy standalone helper log path; PathService deployments
+        // pass a per-session log path to the helper through its environment.
         return path.join(this.getDollhouseHomeDir(), '.dollhouse', 'oauth-helper.log');
     }
 
