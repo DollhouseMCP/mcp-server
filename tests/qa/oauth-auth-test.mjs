@@ -102,17 +102,17 @@ async function testTokenStorage() {
       path: '~/.dollhouse/.auth/github_token.enc'
     },
     {
-      name: 'Pending OAuth Token',
+      name: 'OAuth Helper Result',
       check: async () => {
-        const pendingPath = path.join(homedir(), '.dollhouse', '.auth', 'pending_token.txt');
+        const resultPath = path.join(homedir(), '.dollhouse', '.auth', 'oauth-helper-result.json');
         try {
-          await fs.access(pendingPath);
+          await fs.access(resultPath);
           return true;
         } catch {
           return false;
         }
       },
-      path: '~/.dollhouse/.auth/pending_token.txt'
+      path: '~/.dollhouse/.auth/oauth-helper-result.json'
     }
   ];
   

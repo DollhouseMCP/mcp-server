@@ -17,7 +17,7 @@ Use this checklist before merging PRs or cutting a release. It complements the d
 - [ ] Manually test `setup_github_auth` / `check_github_auth` to confirm the OAuth device flow still works.
 - [ ] Test a portfolio upload/download roundtrip (`portfolio_element_manager`) and a collection submission (`submit_collection_content`).
 - [ ] Rebuild the enhanced index (e.g., call `get_relationship_stats`) and watch for warnings or performance regressions.
-- [ ] Review `~/.dollhouse/oauth-helper.log` for errors if authentication was exercised.
+- [ ] Review `oauth_helper_status verbose=true` after exercising authentication; inspect `~/.dollhouse/oauth-helper.log` only when `DOLLHOUSE_OAUTH_DEBUG=true`.
 - [ ] Update release notes with notable security changes or mitigations.
 
 ## 3. Ongoing Practices
