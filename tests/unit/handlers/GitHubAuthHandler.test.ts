@@ -349,6 +349,46 @@ describe('GitHubAuthHandler (DI)', () => {
         expect(response.content[0].text).toContain('Authentication Expired');
         expect(response.content[0].text).toContain('EXPIRED-1234');
         expect(response.content[0].text).toContain('ERROR polling failed');
+
+        const diagnostics = await handler.getOAuthHelperStatus();
+        const diagnosticsText = diagnostics.content[0].text;
+
+        expect(diagnosticsText).toContain('Run `setup_github_auth` to try again.');
+        expect(diagnosticsText).not.toContain('Run \nsetup_github_auth\n');
+      });
+    });
+
+    it('formats crashed-helper diagnostics with inline setup command text', async () => {
+      if (process.platform === 'win32') {
+        return;
+      }
+
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 9999,
+            userCode: 'CRASHED-9999',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => {
+          throw Object.assign(new Error('process not found'), { code: 'ESRCH' });
+        });
+
+        const diagnostics = await handler.getOAuthHelperStatus();
+        const diagnosticsText = diagnostics.content[0].text;
+
+        expect(diagnosticsText).toContain('Process appears to have stopped');
+        expect(diagnosticsText).toContain('You may need to run `setup_github_auth` again.');
+        expect(diagnosticsText).not.toContain('run \nsetup_github_auth\n');
+
+        killSpy.mockRestore();
       });
     });
 

@@ -495,9 +495,7 @@ export class GitHubAuthHandler {
             if (!health.processAlive) {
               statusText += `⚠️ **WARNING:** Process appears to have stopped!\n`
               statusText += `The helper process (PID ${health.pid}) is not responding.\n`
-              statusText += `You may need to run 
-setup_github_auth
- again.\n\n`
+              statusText += `You may need to run \`setup_github_auth\` again.\n\n`
             }
           } else if (health.expired) {
             statusText += `**Status:** 🔴 EXPIRED\n`
@@ -505,9 +503,7 @@ setup_github_auth
             statusText += `**Process ID:** ${health.pid}\n`
             statusText += `**Started:** ${health.startTime?.toLocaleString()}\n`
             statusText += `**Expired:** ${health.expiresAt?.toLocaleString()}\n\n`
-            statusText += `The authentication request has expired. Run 
-setup_github_auth
- to try again.\n\n`
+            statusText += `The authentication request has expired. Run \`setup_github_auth\` to try again.\n\n`
           }
           
           statusText += `**📁 File Locations:**\n`
