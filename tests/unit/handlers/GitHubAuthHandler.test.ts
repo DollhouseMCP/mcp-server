@@ -254,6 +254,7 @@ describe('GitHubAuthHandler (DI)', () => {
       const stateFile = path.join(tempHome, '.dollhouse', '.auth', 'oauth-helper-state.json');
       const state = JSON.parse(await fs.readFile(stateFile, 'utf-8'));
       expect(state.deviceCode).toBeUndefined();
+      expect(typeof state.flowId).toBe('string');
       expect(state.userCode).toBe('CODE-1234');
       await expect(fs.access(staleResultFile)).rejects.toMatchObject({ code: 'ENOENT' });
 
@@ -394,6 +395,50 @@ describe('GitHubAuthHandler (DI)', () => {
         expect(diagnosticsText).toContain('Attempts:** 2');
         expect(diagnosticsText).not.toContain('ACTIVE - Authentication in progress');
         expect(diagnosticsText).not.toContain('may have crashed');
+      });
+    });
+
+    it('ignores a stale helper result from an older OAuth flow while a newer flow is active', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 7777,
+            flowId: 'new-flow',
+            userCode: 'ACTIVE-7777',
+            startTime: new Date(Date.now() - 10_000).toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'failed',
+            flowId: 'old-flow',
+            pid: 1111,
+            attempts: 3,
+            completedAt: new Date().toISOString(),
+            errorCode: 'expired_token',
+            message: 'The previous GitHub authentication request expired.'
+          }, null, 2),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => undefined as any);
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Authentication In Progress');
+        expect(text).toContain('ACTIVE-7777');
+        expect(text).not.toContain('GitHub Authentication Failed');
+        expect(text).not.toContain('previous GitHub authentication request expired');
+
+        killSpy.mockRestore();
       });
     });
 

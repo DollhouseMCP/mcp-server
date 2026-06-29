@@ -12,6 +12,7 @@ import { logger } from '../utils/logger.js';
 import { fileURLToPath } from 'url';
 import * as path from 'path';
 import { homedir } from 'os';
+import { randomUUID } from 'node:crypto';
 import * as child_process from 'child_process';
 import { InitializationService } from '../services/InitializationService.js';
 import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
@@ -26,13 +27,35 @@ interface OAuthHelperTerminalResult {
     completedAt?: string;
     errorCode?: string;
     message?: string;
+    flowId?: string;
+    pid?: number;
 }
 
 interface OAuthHelperState {
     pid: number;
+    flowId?: string;
     userCode: string;
     startTime: string;
     expiresAt: string;
+}
+
+interface OAuthHelperHealth {
+    exists: boolean;
+    isActive: boolean;
+    expired: boolean;
+    processAlive: boolean;
+    hasResult: boolean;
+    hasLog: boolean;
+    userCode: string;
+    timeRemaining: number;
+    pid: number;
+    startTime: Date | null;
+    expiresAt: Date | null;
+    completedAt: Date | null;
+    resultStatus: OAuthHelperTerminalStatus | null;
+    resultMessage: string;
+    resultAttempts?: number;
+    errorLog: string;
 }
 
 export class GitHubAuthHandler {
@@ -161,7 +184,8 @@ export class GitHubAuthHandler {
               deviceCode: deviceResponse.device_code.substring(0, 8) + '...' 
             });
             
-            const helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId);
+            const flowId = randomUUID();
+            const helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId, flowId);
             
             helper.unref();
             
@@ -181,6 +205,7 @@ export class GitHubAuthHandler {
             
             const state = {
               pid: helper.pid,
+              flowId,
               userCode: deviceResponse.user_code,
               startTime: new Date().toISOString(),
               expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
@@ -563,7 +588,7 @@ setup_github_auth
         const logFile = path.join(homeDir, '.dollhouse', 'oauth-helper.log');
         const resultFile = path.join(homeDir, '.dollhouse', '.auth', 'oauth-helper-result.json');
         
-        const health = {
+        const health: OAuthHelperHealth = {
           exists: false,
           isActive: false,
           expired: false,
@@ -582,19 +607,14 @@ setup_github_auth
           errorLog: ''
         };
 
+        let result: OAuthHelperTerminalResult | null = null;
+        let state: OAuthHelperState | null = null;
+
         try {
           const resultData = await this.fileOperations.readFile(resultFile, {
             source: 'GitHubAuthHandler.checkOAuthHelperHealth'
           });
-          const result = this.normalizeOAuthHelperResult(JSON.parse(resultData));
-          if (result) {
-            health.exists = true;
-            health.hasResult = true;
-            health.resultStatus = result.status;
-            health.resultMessage = result.message ?? '';
-            health.resultAttempts = result.attempts;
-            health.completedAt = result.completedAt ? new Date(result.completedAt) : null;
-          }
+          result = this.normalizeOAuthHelperResult(JSON.parse(resultData));
         } catch (error) {
           if (!this.isFileNotFoundError(error)) {
             logger.debug('Error reading OAuth helper result', { error });
@@ -605,16 +625,21 @@ setup_github_auth
           const stateData = await this.fileOperations.readFile(stateFile, {
             source: 'GitHubAuthHandler.checkOAuthHelperHealth'
           });
-          const state = JSON.parse(stateData);
-          if (!this.isOAuthHelperState(state)) {
+          const parsedState = JSON.parse(stateData);
+          if (!this.isOAuthHelperState(parsedState)) {
             logger.debug('OAuth helper state file had invalid shape');
             throw new Error('Invalid OAuth helper state shape');
           }
+          state = parsedState;
           health.exists = true;
           health.pid = state.pid;
           health.userCode = state.userCode;
           health.startTime = new Date(state.startTime);
           health.expiresAt = new Date(state.expiresAt);
+
+          if (result && this.oauthHelperResultMatchesState(result, state)) {
+            this.populateOAuthHelperResult(health, result);
+          }
 
           const now = new Date();
           if (health.resultStatus) {
@@ -645,6 +670,10 @@ setup_github_auth
           if (!this.isFileNotFoundError(error)) {
             logger.debug('Error reading OAuth helper state', { error });
           }
+        }
+
+        if (result && !state) {
+          this.populateOAuthHelperResult(health, result);
         }
 
         health.hasLog = await this.fileOperations.exists(logFile);
@@ -715,13 +744,16 @@ setup_github_auth
           errorCode: typeof value.errorCode === 'string' ? value.errorCode : undefined,
           message: typeof value.message === 'string'
             ? this.sanitizeOAuthHelperResultMessage(value.message)
-            : undefined
+            : undefined,
+          flowId: typeof value.flowId === 'string' ? value.flowId : undefined,
+          pid: this.isValidOAuthHelperPid(value.pid) ? value.pid : undefined
         };
     }
 
     private isOAuthHelperState(value: unknown): value is OAuthHelperState {
         if (!this.isRecord(value)) return false;
         return this.isValidOAuthHelperPid(value.pid) &&
+          (value.flowId === undefined || typeof value.flowId === 'string') &&
           typeof value.userCode === 'string' &&
           typeof value.startTime === 'string' &&
           typeof value.expiresAt === 'string' &&
@@ -759,6 +791,24 @@ setup_github_auth
         return error instanceof Error &&
           'code' in error &&
           (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+
+    private populateOAuthHelperResult(
+        health: OAuthHelperHealth,
+        result: OAuthHelperTerminalResult,
+    ): void {
+        health.exists = true;
+        health.hasResult = true;
+        health.resultStatus = result.status;
+        health.resultMessage = result.message ?? '';
+        health.resultAttempts = result.attempts;
+        health.completedAt = result.completedAt ? new Date(result.completedAt) : null;
+    }
+
+    private oauthHelperResultMatchesState(result: OAuthHelperTerminalResult, state: OAuthHelperState): boolean {
+        if (!state.flowId) return true;
+        if (result.flowId !== state.flowId) return false;
+        return typeof result.pid !== 'number' || result.pid === state.pid;
     }
 
     private isFileNotFoundError(error: unknown): boolean {
@@ -937,7 +987,7 @@ setup_github_auth
         }
     }
 
-    private spawnHelperProcess(helperPath: string, deviceResponse: DeviceCodeResponse, clientId: string) {
+    private spawnHelperProcess(helperPath: string, deviceResponse: DeviceCodeResponse, clientId: string, flowId: string) {
         return child_process.spawn('node', [
             helperPath,
             deviceResponse.device_code,
@@ -947,7 +997,11 @@ setup_github_auth
         ], {
             detached: true,
             stdio: 'ignore',
-            windowsHide: true
+            windowsHide: true,
+            env: {
+                ...process.env,
+                DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId
+            }
         });
     }
 

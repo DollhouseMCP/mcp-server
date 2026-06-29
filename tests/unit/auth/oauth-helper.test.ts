@@ -104,12 +104,12 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
   });
 }
 
-function runHelper(helperPath: string, tokenUrl: string, homeDir: string) {
-  const child = spawnHelper(helperPath, tokenUrl, homeDir);
+function runHelper(helperPath: string, tokenUrl: string, homeDir: string, extraEnv: NodeJS.ProcessEnv = {}) {
+  const child = spawnHelper(helperPath, tokenUrl, homeDir, extraEnv);
   return waitForClose(child);
 }
 
-function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string) {
+function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string, extraEnv: NodeJS.ProcessEnv = {}) {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const child = spawn(process.execPath, [
@@ -127,7 +127,8 @@ function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string) {
       DOLLHOUSE_TOKEN_SECRET: 'oauth-helper-test-secret',
       GITHUB_TOKEN: '',
       TEST_GITHUB_TOKEN: '',
-      GITHUB_TEST_TOKEN: ''
+      GITHUB_TEST_TOKEN: '',
+      ...extraEnv
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -359,6 +360,66 @@ describe('oauth-helper.mjs', () => {
 
       await expect(fs.access(path.join(authDir, 'oauth-helper-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await closeServer(server);
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('does not remove state or pid files owned by a newer helper flow', async () => {
+    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-flow-race-'));
+    let releaseOldFlow = false;
+
+    const server = createServer((_req, res) => {
+      json(res, 200, releaseOldFlow ? { error: 'expired_token' } : { error: 'authorization_pending' });
+    });
+
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('OAuth helper test server did not bind to a TCP port');
+    }
+
+    const authDir = path.join(tempHome, '.dollhouse', '.auth');
+    const pidFile = path.join(authDir, 'oauth-helper.pid');
+    const stateFile = path.join(authDir, 'oauth-helper-state.json');
+    const resultFile = path.join(authDir, 'oauth-helper-result.json');
+
+    try {
+      const child = spawnHelper(
+        helperPath,
+        `http://127.0.0.1:${address.port}/token`,
+        tempHome,
+        { DOLLHOUSE_OAUTH_HELPER_FLOW_ID: 'old-flow' }
+      );
+      await waitForFile(pidFile);
+
+      await fs.writeFile(pidFile, '999999', 'utf-8');
+      await fs.writeFile(
+        stateFile,
+        JSON.stringify({
+          pid: 999999,
+          flowId: 'new-flow',
+          userCode: 'NEW-FLOW',
+          startTime: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 120_000).toISOString()
+        }, null, 2),
+        'utf-8'
+      );
+
+      releaseOldFlow = true;
+      const result = await waitForClose(child);
+
+      expect(result.code).toBe(1);
+      await expect(fs.readFile(pidFile, 'utf-8')).resolves.toBe('999999');
+      const state = JSON.parse(await fs.readFile(stateFile, 'utf-8')) as Record<string, unknown>;
+      expect(state.flowId).toBe('new-flow');
+      expect(state.pid).toBe(999999);
+
+      const terminalResult = JSON.parse(await fs.readFile(resultFile, 'utf-8')) as Record<string, unknown>;
+      expect(terminalResult.status).toBe('expired');
+      expect(terminalResult.flowId).toBe('old-flow');
     } finally {
       await closeServer(server);
       await fs.rm(tempHome, { recursive: true, force: true });

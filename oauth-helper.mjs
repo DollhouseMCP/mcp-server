@@ -28,6 +28,7 @@ const PID_FILE = join(AUTH_DIR, 'oauth-helper.pid');
 const STATE_FILE = join(AUTH_DIR, 'oauth-helper-state.json');
 const RESULT_FILE = join(AUTH_DIR, 'oauth-helper-result.json');
 const LOG_FILE = join(DOLLHOUSE_HOME_DIR, '.dollhouse', 'oauth-helper.log');
+const FLOW_ID = process.env.DOLLHOUSE_OAUTH_HELPER_FLOW_ID || '';
 const TOKEN_URL = process.env.DOLLHOUSE_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token';
 const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
 
@@ -187,7 +188,7 @@ function createHelperFileOperations() {
 
 function cleanupPidFileSync() {
   try {
-    if (fsSync.existsSync(PID_FILE)) {
+    if (pidFileBelongsToThisHelperSync()) {
       fsSync.unlinkSync(PID_FILE);
     }
   } catch {
@@ -197,7 +198,7 @@ function cleanupPidFileSync() {
 
 function cleanupStateFileSync() {
   try {
-    if (fsSync.existsSync(STATE_FILE)) {
+    if (stateFileBelongsToThisHelperSync()) {
       fsSync.unlinkSync(STATE_FILE);
     }
   } catch {
@@ -207,8 +208,12 @@ function cleanupStateFileSync() {
 
 async function cleanupPidFile() {
   try {
-    await fs.unlink(PID_FILE).catch(() => {});
-    await log('PID file cleaned up');
+    if (await pidFileBelongsToThisHelper()) {
+      await fs.unlink(PID_FILE).catch(() => {});
+      await log('PID file cleaned up');
+    } else {
+      await log('PID file belongs to another helper flow; leaving it in place');
+    }
   } catch {
     // Ignore cleanup errors
   }
@@ -216,27 +221,42 @@ async function cleanupPidFile() {
 
 async function cleanupStateFile() {
   try {
-    await fs.unlink(STATE_FILE).catch(() => {});
-    await log('OAuth helper state file cleaned up');
+    if (await stateFileBelongsToThisHelper()) {
+      await fs.unlink(STATE_FILE).catch(() => {});
+      await log('OAuth helper state file cleaned up');
+    } else {
+      await log('OAuth helper state belongs to another flow; leaving it in place');
+    }
   } catch {
     // Ignore cleanup errors
   }
 }
 
+function buildTerminalResult(status, attempts, errorCode = '') {
+  const safeErrorCode = ALLOWED_RESULT_ERROR_CODES.has(errorCode) ? errorCode : 'fatal_error';
+  const result = {
+    status,
+    attempts,
+    completedAt: new Date().toISOString(),
+    pid: process.pid
+  };
+
+  if (FLOW_ID) {
+    result.flowId = FLOW_ID;
+  }
+
+  if (status !== 'success') {
+    result.errorCode = safeErrorCode;
+    result.message = RESULT_MESSAGES[safeErrorCode];
+  }
+
+  return { result, safeErrorCode };
+}
+
 async function writeTerminalResult(status, attempts, errorCode = '') {
   try {
     await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
-    const safeErrorCode = ALLOWED_RESULT_ERROR_CODES.has(errorCode) ? errorCode : 'fatal_error';
-    const result = {
-      status,
-      attempts,
-      completedAt: new Date().toISOString()
-    };
-
-    if (status !== 'success') {
-      result.errorCode = safeErrorCode;
-      result.message = RESULT_MESSAGES[safeErrorCode];
-    }
+    const { result, safeErrorCode } = buildTerminalResult(status, attempts, errorCode);
 
     await fs.writeFile(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
     const resultSuffix = status === 'success' ? '' : `/${safeErrorCode}`;
@@ -249,21 +269,53 @@ async function writeTerminalResult(status, attempts, errorCode = '') {
 function writeTerminalResultSync(status, attempts, errorCode = '') {
   try {
     fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
-    const safeErrorCode = ALLOWED_RESULT_ERROR_CODES.has(errorCode) ? errorCode : 'fatal_error';
-    const result = {
-      status,
-      attempts,
-      completedAt: new Date().toISOString()
-    };
-
-    if (status !== 'success') {
-      result.errorCode = safeErrorCode;
-      result.message = RESULT_MESSAGES[safeErrorCode];
-    }
+    const { result } = buildTerminalResult(status, attempts, errorCode);
 
     fsSync.writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
   } catch {
     // Ignore cleanup/status errors during process termination
+  }
+}
+
+async function pidFileBelongsToThisHelper() {
+  if (!FLOW_ID) return true;
+  try {
+    const pid = (await fs.readFile(PID_FILE, 'utf8')).trim();
+    return pid === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+function pidFileBelongsToThisHelperSync() {
+  if (!FLOW_ID) return fsSync.existsSync(PID_FILE);
+  try {
+    const pid = fsSync.readFileSync(PID_FILE, 'utf8').trim();
+    return pid === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+async function stateFileBelongsToThisHelper() {
+  if (!FLOW_ID) return true;
+  try {
+    const state = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+    return state?.flowId === FLOW_ID &&
+      (typeof state.pid !== 'number' || state.pid === process.pid);
+  } catch {
+    return false;
+  }
+}
+
+function stateFileBelongsToThisHelperSync() {
+  if (!FLOW_ID) return fsSync.existsSync(STATE_FILE);
+  try {
+    const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+    return state?.flowId === FLOW_ID &&
+      (typeof state.pid !== 'number' || state.pid === process.pid);
+  } catch {
+    return false;
   }
 }
 
