@@ -7,6 +7,8 @@ import * as os from 'node:os';
 import { pathToFileURL } from 'node:url';
 import type { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
 
+const TEST_CLIENT_ID = 'Ov23liABCDEFGHIJKLMNOP';
+
 function realFileOperations(): IFileOperationsService {
   return {
     async createDirectory(directoryPath: string) {
@@ -103,6 +105,11 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
 }
 
 function runHelper(helperPath: string, tokenUrl: string, homeDir: string) {
+  const child = spawnHelper(helperPath, tokenUrl, homeDir);
+  return waitForClose(child);
+}
+
+function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string) {
   const stdout: string[] = [];
   const stderr: string[] = [];
   const child = spawn(process.execPath, [
@@ -110,7 +117,7 @@ function runHelper(helperPath: string, tokenUrl: string, homeDir: string) {
     'device-code-for-test',
     '1',
     '20',
-    'Ov23liTestClientId'
+    TEST_CLIENT_ID
   ], {
     env: {
       ...process.env,
@@ -128,16 +135,40 @@ function runHelper(helperPath: string, tokenUrl: string, homeDir: string) {
   child.stdout?.on('data', chunk => stdout.push(String(chunk)));
   child.stderr?.on('data', chunk => stderr.push(String(chunk)));
 
-  return new Promise<{ code: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+  return Object.assign(child, {
+    readOutput: () => ({
+      stdout: stdout.join(''),
+      stderr: stderr.join('')
+    })
+  });
+}
+
+function waitForClose(child: ReturnType<typeof spawnHelper>) {
+  return new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string }>((resolve, reject) => {
     child.on('error', reject);
-    child.on('close', code => {
+    child.on('close', (code, signal) => {
+      const output = child.readOutput();
       resolve({
         code,
-        stdout: stdout.join(''),
-        stderr: stderr.join('')
+        signal,
+        stdout: output.stdout,
+        stderr: output.stderr
       });
     });
   });
+}
+
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    try {
+      await fs.access(filePath);
+      return;
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 50));
+    }
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
 }
 
 describe('oauth-helper.mjs', () => {
@@ -176,7 +207,7 @@ describe('oauth-helper.mjs', () => {
         polls += 1;
 
         expect(req.method).toBe('POST');
-        expect(body.client_id).toBe('Ov23liTestClientId');
+        expect(body.client_id).toBe(TEST_CLIENT_ID);
         expect(body.device_code).toBe('device-code-for-test');
         expect(body.grant_type).toBe('urn:ietf:params:oauth:grant-type:device_code');
 
@@ -243,6 +274,90 @@ describe('oauth-helper.mjs', () => {
       else process.env.TEST_GITHUB_TOKEN = originalTestGithubToken;
       if (originalGithubTestToken === undefined) delete process.env.GITHUB_TEST_TOKEN;
       else process.env.GITHUB_TEST_TOKEN = originalGithubTestToken;
+    }
+  }, 15_000);
+
+  it('persists GitHub slow_down backoff across polling attempts', async () => {
+    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-slow-down-'));
+    const expectedToken = 'gho_test_slow_down_token_1234567890';
+    let polls = 0;
+
+    const server = createServer(async (_req, res) => {
+      polls += 1;
+      if (polls === 1) {
+        json(res, 200, { error: 'slow_down' });
+        return;
+      }
+      json(res, 200, {
+        access_token: expectedToken,
+        token_type: 'bearer',
+        scope: 'read:user'
+      });
+    });
+
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('OAuth helper test server did not bind to a TCP port');
+    }
+
+    try {
+      const result = await runHelper(helperPath, `http://127.0.0.1:${address.port}/token`, tempHome);
+
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain('GitHub authentication successful');
+      expect(result.stderr).toBe('');
+      expect(polls).toBe(2);
+
+      const logPath = path.join(tempHome, '.dollhouse', 'oauth-helper.log');
+      await expect(fs.readFile(logPath, 'utf-8')).resolves.toContain('increasing interval to 6s');
+    } finally {
+      await closeServer(server);
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('writes a terminal result when interrupted by SIGTERM', async () => {
+    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-interrupt-'));
+
+    const server = createServer((_req, res) => {
+      json(res, 200, { error: 'authorization_pending' });
+    });
+
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('OAuth helper test server did not bind to a TCP port');
+    }
+
+    const authDir = path.join(tempHome, '.dollhouse', '.auth');
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(path.join(authDir, 'oauth-helper-state.json'), JSON.stringify({ stale: true }), 'utf-8');
+
+    try {
+      const child = spawnHelper(helperPath, `http://127.0.0.1:${address.port}/token`, tempHome);
+      await waitForFile(path.join(authDir, 'oauth-helper.pid'));
+
+      child.kill('SIGTERM');
+      const result = await waitForClose(child);
+
+      expect(result.code).toBe(1);
+      expect(result.signal).toBeNull();
+
+      const terminalResult = JSON.parse(
+        await fs.readFile(path.join(authDir, 'oauth-helper-result.json'), 'utf-8')
+      ) as Record<string, unknown>;
+      expect(terminalResult.status).toBe('failed');
+      expect(terminalResult.errorCode).toBe('interrupted');
+      expect(terminalResult.message).toBe('OAuth helper was interrupted before authentication completed.');
+
+      await expect(fs.access(path.join(authDir, 'oauth-helper-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await closeServer(server);
+      await fs.rm(tempHome, { recursive: true, force: true });
     }
   }, 15_000);
 });

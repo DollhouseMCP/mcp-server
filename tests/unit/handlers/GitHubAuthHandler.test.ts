@@ -37,8 +37,11 @@ function createFileOperationsMock(): jest.Mocked<FileOperationsService> {
     deleteFile: jest.fn().mockImplementation(async (filePath: string) => {
       try {
         await fs.unlink(filePath);
-      } catch (error: any) {
-        if (error.code !== 'ENOENT') throw error;
+      } catch (error: unknown) {
+        const code = error instanceof Error && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (code !== 'ENOENT') throw error;
       }
     }),
     // Add other methods that might be needed (returning defaults)
@@ -210,7 +213,7 @@ describe('GitHubAuthHandler (DI)', () => {
   });
 
   describe('setupGitHubAuth helper orchestration', () => {
-    it('spawns helper and writes state file with device code details', async () => {
+    it('spawns helper and writes state file without persisting the device code', async () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-home-'));
       const originalHome = process.env.HOME;
       const originalUserProfile = process.env.USERPROFILE;
@@ -250,7 +253,7 @@ describe('GitHubAuthHandler (DI)', () => {
 
       const stateFile = path.join(tempHome, '.dollhouse', '.auth', 'oauth-helper-state.json');
       const state = JSON.parse(await fs.readFile(stateFile, 'utf-8'));
-      expect(state.deviceCode).toBe('device-code');
+      expect(state.deviceCode).toBeUndefined();
       expect(state.userCode).toBe('CODE-1234');
       await expect(fs.access(staleResultFile)).rejects.toMatchObject({ code: 'ENOENT' });
 
@@ -299,7 +302,6 @@ describe('GitHubAuthHandler (DI)', () => {
           path.join(stateDir, 'oauth-helper-state.json'),
           JSON.stringify({
             pid: 9999,
-            deviceCode: 'device',
             userCode: 'STATE-9999',
             startTime: new Date().toISOString(),
             expiresAt
@@ -330,7 +332,6 @@ describe('GitHubAuthHandler (DI)', () => {
           path.join(stateDir, 'oauth-helper-state.json'),
           JSON.stringify({
             pid: 5555,
-            deviceCode: 'device',
             userCode: 'EXPIRED-1234',
             startTime: new Date(Date.now() - 3600_000).toISOString(),
             expiresAt: new Date(Date.now() - 60_000).toISOString()
@@ -358,7 +359,6 @@ describe('GitHubAuthHandler (DI)', () => {
           path.join(stateDir, 'oauth-helper-state.json'),
           JSON.stringify({
             pid: 7777,
-            deviceCode: 'device',
             userCode: 'FAILED-7777',
             startTime: new Date(Date.now() - 10_000).toISOString(),
             expiresAt: new Date(Date.now() + 120_000).toISOString()
@@ -394,6 +394,59 @@ describe('GitHubAuthHandler (DI)', () => {
         expect(diagnosticsText).toContain('Attempts:** 2');
         expect(diagnosticsText).not.toContain('ACTIVE - Authentication in progress');
         expect(diagnosticsText).not.toContain('may have crashed');
+      });
+    });
+
+    it('ignores malformed helper result JSON without throwing or leaking raw content', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(path.join(stateDir, 'oauth-helper-result.json'), '{not-json', 'utf-8');
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Not Connected to GitHub');
+        expect(text).not.toContain('{not-json');
+      });
+    });
+
+    it('sanitizes helper result messages before rendering them', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 8888,
+            userCode: 'FAILED-8888',
+            startTime: new Date(Date.now() - 10_000).toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'failed',
+            attempts: 1,
+            completedAt: new Date().toISOString(),
+            errorCode: 'fatal_error',
+            message: `Bad\u0000message ${'x'.repeat(700)}`
+          }, null, 2),
+          'utf-8'
+        );
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Bad message');
+        expect(text).not.toContain('\u0000');
+        expect(text).not.toContain('x'.repeat(600));
       });
     });
 

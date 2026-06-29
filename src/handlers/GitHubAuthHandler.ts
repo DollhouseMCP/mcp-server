@@ -28,6 +28,13 @@ interface OAuthHelperTerminalResult {
     message?: string;
 }
 
+interface OAuthHelperState {
+    pid: number;
+    userCode: string;
+    startTime: string;
+    expiresAt: string;
+}
+
 export class GitHubAuthHandler {
     constructor(
         private readonly githubAuthManager: GitHubAuthManager,
@@ -174,7 +181,6 @@ export class GitHubAuthHandler {
             
             const state = {
               pid: helper.pid,
-              deviceCode: deviceResponse.device_code,
               userCode: deviceResponse.user_code,
               startTime: new Date().toISOString(),
               expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
@@ -185,12 +191,13 @@ export class GitHubAuthHandler {
             });
             
           } catch (spawnError) {
+            const spawnErr = spawnError as NodeJS.ErrnoException;
             logger.error('OAUTH_INDEX_2774: Failed to spawn OAuth helper process', { 
               error: spawnError,
               helperPath,
               clientId: clientId?.substring(0, 8) + '...',
-              errorCode: (spawnError as any)?.code,
-              syscall: (spawnError as any)?.syscall
+              errorCode: spawnErr.code,
+              syscall: spawnErr.syscall
             });
             
             let errorDetail = '';
@@ -306,7 +313,7 @@ export class GitHubAuthHandler {
             const lines = [
               `${statusLabel.icon} **GitHub Authentication ${statusLabel.title}**`,
               '',
-              helperHealth.resultMessage || statusLabel.defaultMessage,
+              this.sanitizeOAuthHelperResultMessage(helperHealth.resultMessage) || statusLabel.defaultMessage,
               '',
               '**To try again:**',
               'Run: `setup_github_auth` to get a new code',
@@ -440,8 +447,9 @@ export class GitHubAuthHandler {
             if (health.resultAttempts !== undefined) {
               statusText += `**Attempts:** ${health.resultAttempts}\n`
             }
-            if (health.resultMessage) {
-              statusText += `**Result:** ${health.resultMessage}\n`
+            const resultMessage = this.sanitizeOAuthHelperResultMessage(health.resultMessage);
+            if (resultMessage) {
+              statusText += `**Result:** ${resultMessage}\n`
             }
             statusText += '\n';
           } else if (health.isActive) {
@@ -514,12 +522,12 @@ setup_github_auth
           
           if (health.exists && (health.expired || !health.processAlive)) {
             statusText += `\n**🧹 Manual Cleanup (if needed):**\n`
-            statusText += '```bash'
+            statusText += '```bash\n'
             statusText += `rm "${stateFile}"\n`
             statusText += `rm "${resultFile}"\n`
             statusText += `rm "${logFile}"\n`
             statusText += `rm "${pidFile}"\n`
-            statusText += '```';
+            statusText += '```\n';
           }
           
           return {
@@ -570,17 +578,17 @@ setup_github_auth
           const resultData = await this.fileOperations.readFile(resultFile, {
             source: 'GitHubAuthHandler.checkOAuthHelperHealth'
           });
-          const result = JSON.parse(resultData) as Partial<OAuthHelperTerminalResult>;
-          if (this.isOAuthHelperTerminalStatus(result.status)) {
+          const result = this.normalizeOAuthHelperResult(JSON.parse(resultData));
+          if (result) {
             health.exists = true;
             health.hasResult = true;
             health.resultStatus = result.status;
-            health.resultMessage = typeof result.message === 'string' ? result.message : '';
-            health.resultAttempts = typeof result.attempts === 'number' ? result.attempts : undefined;
-            health.completedAt = typeof result.completedAt === 'string' ? new Date(result.completedAt) : null;
+            health.resultMessage = result.message ?? '';
+            health.resultAttempts = result.attempts;
+            health.completedAt = result.completedAt ? new Date(result.completedAt) : null;
           }
         } catch (error) {
-          if (!(error instanceof Error && error.message.includes('ENOENT'))) {
+          if (!this.isFileNotFoundError(error)) {
             logger.debug('Error reading OAuth helper result', { error });
           }
         }
@@ -590,6 +598,10 @@ setup_github_auth
             source: 'GitHubAuthHandler.checkOAuthHelperHealth'
           });
           const state = JSON.parse(stateData);
+          if (!this.isOAuthHelperState(state)) {
+            logger.debug('OAuth helper state file had invalid shape');
+            throw new Error('Invalid OAuth helper state shape');
+          }
           health.exists = true;
           health.pid = state.pid;
           health.userCode = state.userCode;
@@ -622,10 +634,7 @@ setup_github_auth
           }
 
         } catch (error) {
-          // If state file is not found (ENOENT), it's expected, so don't log as debug
-          if (error instanceof Error && error.message.includes('ENOENT')) {
-            // Intentionally empty - ENOENT is expected when state file doesn't exist yet
-          } else {
+          if (!this.isFileNotFoundError(error)) {
             logger.debug('Error reading OAuth helper state', { error });
           }
         }
@@ -687,6 +696,49 @@ setup_github_auth
                status === 'expired' ||
                status === 'denied' ||
                status === 'timeout';
+    }
+
+    private normalizeOAuthHelperResult(value: unknown): OAuthHelperTerminalResult | null {
+        if (!this.isRecord(value) || !this.isOAuthHelperTerminalStatus(value.status)) return null;
+        return {
+          status: value.status,
+          attempts: typeof value.attempts === 'number' ? value.attempts : undefined,
+          completedAt: typeof value.completedAt === 'string' ? value.completedAt : undefined,
+          errorCode: typeof value.errorCode === 'string' ? value.errorCode : undefined,
+          message: typeof value.message === 'string'
+            ? this.sanitizeOAuthHelperResultMessage(value.message)
+            : undefined
+        };
+    }
+
+    private isOAuthHelperState(value: unknown): value is OAuthHelperState {
+        if (!this.isRecord(value)) return false;
+        return typeof value.pid === 'number' &&
+          typeof value.userCode === 'string' &&
+          typeof value.startTime === 'string' &&
+          typeof value.expiresAt === 'string' &&
+          !Number.isNaN(new Date(value.startTime).getTime()) &&
+          !Number.isNaN(new Date(value.expiresAt).getTime());
+    }
+
+    private sanitizeOAuthHelperResultMessage(message: string): string {
+        const withoutControlCharacters = Array.from(message, character => {
+          const codePoint = character.charCodeAt(0);
+          return codePoint <= 31 || codePoint === 127 ? ' ' : character;
+        }).join('');
+
+        return withoutControlCharacters
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 500);
+    }
+
+    private isRecord(value: unknown): value is Record<string, unknown> {
+        return typeof value === 'object' && value !== null && !Array.isArray(value);
+    }
+
+    private isFileNotFoundError(error: unknown): boolean {
+        return this.isRecord(error) && error.code === 'ENOENT';
     }
 
     private formatOAuthHelperTerminalStatus(status: OAuthHelperTerminalStatus) {
