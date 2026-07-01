@@ -12,7 +12,7 @@
 import { describe, test, beforeAll, afterAll, beforeEach, expect, jest } from '@jest/globals';
 import path from 'path';
 import fs from 'fs/promises';
-import { randomUUID } from 'node:crypto';
+import { v4 as uuidv4 } from 'uuid';
 import { TestServer } from '../helpers/test-server.js';
 import { hasTestCredentials, getTestSkipMessage } from '../../src/config/test-env.js';
 
@@ -33,7 +33,7 @@ describe('Roundtrip Workflow E2E Tests', () => {
     ctx = {
       server: new TestServer(),
       portfolioDir: path.join(process.cwd(), 'test-portfolio'),
-      testRepoName: `test-portfolio-${randomUUID()}`,
+      testRepoName: `test-portfolio-${uuidv4()}`,
       testSkillName: 'roundtrip-test-skill',
       originalConfig: null
     };

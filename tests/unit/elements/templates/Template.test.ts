@@ -54,6 +54,37 @@ describe('Template', () => {
       }).toThrow('Variable count 101 exceeds maximum 100');
     });
 
+    it('should preserve variable descriptions longer than 200 characters', () => {
+      const longDescription = 'Detailed variable documentation '.repeat(10).trim();
+
+      const template = new Template({
+        name: 'Long Variable Description',
+        variables: [{ name: 'topic', type: 'string', description: longDescription }]
+      }, 'Write about {{topic}}.', metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(200);
+      expect(template.metadata.variables?.[0].description).toBe(longDescription);
+    });
+
+    it('should preserve example descriptions longer than 500 characters', () => {
+      const longDescription = 'Detailed example documentation '.repeat(25).trim();
+
+      const template = new Template({
+        name: 'Long Example Description',
+        examples: [
+          {
+            title: 'Detailed Example',
+            description: longDescription,
+            variables: { topic: 'documentation' },
+            output: 'Generated output'
+          }
+        ]
+      }, 'Write about {{topic}}.', metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(template.metadata.examples?.[0].description).toBe(longDescription);
+    });
+
     it('should validate include paths', () => {
       expect(() => {
         new Template({
@@ -556,6 +587,26 @@ describe('Template', () => {
         const first = t.getSections();
         const second = t.getSections();
         expect(first).toBe(second); // same reference = cached
+      });
+
+      it('clears section and compiled caches when content is assigned directly', async () => {
+        const t = new Template(
+          { name: 'direct-content-update', variables: [{ name: 'name', type: 'string' }] },
+          SECTION_CONTENT,
+          metadataService
+        );
+
+        const firstSections = t.getSections();
+        const firstOutput = await t.render({ name: 'Alice' });
+        expect(firstOutput.trim()).toBe('Hello Alice!');
+
+        t.content = '<template>Goodbye {{name}}!</template>';
+
+        const secondSections = t.getSections();
+        const secondOutput = await t.render({ name: 'Alice' });
+        expect(secondSections).not.toBe(firstSections);
+        expect(secondSections.templateSection.trim()).toBe('Goodbye {{name}}!');
+        expect(secondOutput.trim()).toBe('Goodbye Alice!');
       });
 
       it('clears the cache on deactivation', async () => {

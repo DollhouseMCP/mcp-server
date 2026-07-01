@@ -43,6 +43,7 @@ import {
 } from '../converters/index.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { resolvePathWithinBase } from '../utils/pathSecurity.js';
 
 const program = new Command();
 
@@ -344,7 +345,7 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
         logConversionSteps(structure, operationsLog, options.verbose);
 
         // Determine output directory
-        const outputDir = path.join(options.output || './anthropic-skills', skillName);
+        const outputDir = resolvePathWithinBase(options.output || './anthropic-skills', skillName);
 
         if (options.dryRun) {
             console.log(chalk.yellow('\n[DRY RUN] Would create:'));
@@ -374,7 +375,7 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
                 success: true
             });
 
-            const reportPath = path.join(outputDir, '.conversion-report.md');
+            const reportPath = resolvePathWithinBase(outputDir, '.conversion-report.md');
             fs.writeFileSync(reportPath, report);
 
             if (options.verbose) {
@@ -459,8 +460,8 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
         logReverseConversionSteps(actualInput, operationsLog, options.verbose);
 
         // Determine output file
-        const outputDir = options.output || getDefaultSkillsDirectory();
-        const outputFile = path.join(outputDir, `${skillName}.md`);
+        const outputDir = path.resolve(options.output || getDefaultSkillsDirectory());
+        const outputFile = resolvePathWithinBase(outputDir, `${skillName}.md`);
 
         if (options.dryRun) {
             console.log(chalk.yellow('\n[DRY RUN] Would create:'));
@@ -492,7 +493,7 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
                 success: true
             });
 
-            const reportPath = path.join(outputDir, `${skillName}-conversion-report.md`);
+            const reportPath = resolvePathWithinBase(outputDir, `${skillName}-conversion-report.md`);
             fs.writeFileSync(reportPath, report);
 
             if (options.verbose) {
@@ -741,8 +742,8 @@ function getCreatedFiles(structure: AnthropicSkillStructure, outputDir: string):
     const files: string[] = [];
     iterateStructureFiles(structure, (dirName, filename) => {
         const filePath = dirName
-            ? path.join(outputDir, dirName, filename)
-            : path.join(outputDir, filename);
+            ? resolvePathWithinBase(outputDir, dirName, filename)
+            : resolvePathWithinBase(outputDir, filename);
         files.push(filePath);
     });
     return files;

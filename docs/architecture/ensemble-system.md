@@ -700,7 +700,7 @@ elements:
 All ensemble metadata is validated and sanitized:
 
 - **Name**: Alphanumeric, hyphens, max 100 chars
-- **Description**: Bounded by YAML/frontmatter safety limits, HTML stripped
+- **Description**: Max 500 chars, HTML stripped
 - **Element Names**: Sanitized, Unicode normalized
 - **Conditions**: Max 500 chars, injection-safe
 - **Dependencies**: Max 10 per element

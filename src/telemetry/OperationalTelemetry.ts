@@ -36,7 +36,7 @@
 
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { randomUUID } from 'node:crypto';
+import { v4 as uuidv4 } from 'uuid';
 import { PostHog } from 'posthog-node';
 import { logger } from '../utils/logger.js';
 import { PACKAGE_VERSION as VERSION } from '../generated/version.js';
@@ -220,7 +220,7 @@ export class OperationalTelemetry {
       }
 
       // Generate new UUID v4
-      this.installId = randomUUID();
+      this.installId = uuidv4();
 
       // Ensure directory exists
       await this.fileOperations.createDirectory(path.dirname(config.installIdPath));
