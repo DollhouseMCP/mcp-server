@@ -29,6 +29,7 @@ import {
 } from '../../elements/agents/constants.js';
 import { findPatternConflicts } from '../../utils/patternMatcher.js';
 import { parseElementPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 /**
  * Valid parameter types for goal templates
@@ -406,7 +407,7 @@ export class AgentElementValidator extends GenericElementValidator {
           warnings.push(`Parameter '${paramName}' description must be a string`);
         } else {
           const descResult = this.validationService.validateContent(paramObj.description, {
-            maxLength: AGENT_LIMITS.MAX_GOAL_LENGTH
+            maxLength: SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH
           });
           if (!descResult.isValid) {
             warnings.push(`Parameter '${paramName}' description failed validation: ${descResult.detectedPatterns?.join(', ') || 'invalid content'}`);

@@ -733,9 +733,10 @@ export class ContentValidator {
     // locally can also be installed from the collection.
     instructions: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
     content: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
-    // Descriptions can be substantive LLM-authored text — bound them by
-    // the YAML/frontmatter limit rather than the short 1KB metadata cap.
-    description: SECURITY_LIMITS.MAX_YAML_LENGTH,
+    // Element description is a short summary field with its own dedicated cap
+    // (tighter than the generic metadata-field cap); substantive long-form text
+    // belongs in instructions/content or nested documentation fields.
+    description: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
     // Default for everything else (name, category, author, version,
     // tags-as-string, custom fields) — strict 1KB cap.
   };

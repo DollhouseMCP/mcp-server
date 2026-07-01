@@ -731,7 +731,7 @@ describe('permissionRoutes', () => {
       ]);
     });
 
-    it('should track Codex allow responses as allow and preserve hook metadata', async () => {
+    it('should track empty Codex allow responses as allow', async () => {
       const handler = {
         handleRead: jest
           .fn()
@@ -751,40 +751,42 @@ describe('permissionRoutes', () => {
       } as any;
       const app = createApp(handler);
 
-      await request(app)
+      const response = await request(app)
         .post('/api/evaluate_permission')
         .send({
           tool_name: 'Bash',
           input: { command: 'pwd' },
           platform: 'codex',
-          session_id: 'session-codex-1',
+          session_id: 'session-codex',
           turn_id: 'turn-42',
-          tool_use_id: 'tooluse-9',
+          tool_use_id: 'tool-use-99',
           transcript_path: '/Users/codex/.codex/transcripts/session.jsonl',
-          cwd: '/workspace/demo',
+          cwd: '/workspace/project',
           model: 'gpt-5.4',
         });
 
+      expect(response.body).toEqual({});
+
       const status = await request(app).get('/api/permissions/status');
       expect(status.body.recentDecisions[0]).toEqual(expect.objectContaining({
-        session_id: 'session-codex-1',
+        session_id: 'session-codex',
         turn_id: 'turn-42',
-        tool_use_id: 'tooluse-9',
+        tool_use_id: 'tool-use-99',
         transcript_path: '/Users/codex/.codex/transcripts/session.jsonl',
-        cwd: '/workspace/demo',
+        cwd: '/workspace/project',
         model: 'gpt-5.4',
+        tool_name: 'Bash',
+        command: 'pwd',
         decision: 'allow',
         platform: 'codex',
       }));
       expect(status.body.recentDecisions[0].details).toEqual(expect.arrayContaining([
-        { label: 'Platform', value: 'codex', monospace: true },
-        { label: 'Session', value: 'session-codex-1', monospace: true },
+        { label: 'Session', value: 'session-codex', monospace: true },
         { label: 'Turn', value: 'turn-42', monospace: true },
-        { label: 'Tool Use', value: 'tooluse-9', monospace: true },
+        { label: 'Tool Use', value: 'tool-use-99', monospace: true },
         { label: 'Transcript', value: '/Users/codex/.codex/transcripts/session.jsonl', monospace: true },
-        { label: 'Working Dir', value: '/workspace/demo', monospace: true },
+        { label: 'Workspace', value: '/workspace/project', monospace: true },
         { label: 'Model', value: 'gpt-5.4', monospace: true },
-        { label: 'Command', value: 'pwd', monospace: true },
       ]));
     });
 

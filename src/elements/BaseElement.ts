@@ -16,7 +16,7 @@ import {
   UserFeedback
 } from '../types/elements/index.js';
 import { ElementType } from '../portfolio/types.js';
-import { randomUUID } from 'node:crypto';
+import { v4 as uuidv4 } from 'uuid';
 import * as yaml from 'js-yaml';
 import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -106,7 +106,7 @@ export abstract class BaseElement implements IElement {
     });
 
     this.type = type;
-    this.id = metadata.name ? this.generateId(normalized.name) : randomUUID();
+    this.id = metadata.name ? this.generateId(normalized.name) : uuidv4();
     this.version = normalized.version || '1.0.0';  // Guaranteed by normalizeMetadata, but add fallback for type safety
 
     // Spread normalized common metadata
