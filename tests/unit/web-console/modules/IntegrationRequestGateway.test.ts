@@ -17,6 +17,7 @@ import {
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import type { IRateLimitStore } from '../../../../src/auth/embedded-as/storage/IRateLimitStore.js';
+import type { OutboundPin, PinnedFetch } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SESSION_ID = 'mcp-session-1';
@@ -57,6 +58,8 @@ describe('IntegrationRequestGateway', () => {
       path: '/gmail/v1/users/me/messages',
       query: { q: 'is:unread' },
     }));
+
+    expect(gateway.pins).toEqual([{ hostname: GMAIL_HOST, address: PUBLIC_TEST_ADDRESS, family: 4 }]);
 
     expect(fetches[0]?.url).toBe('https://gmail.googleapis.com/gmail/v1/users/me/messages?q=is%3Aunread');
     expect(new Headers(fetches[0]?.init?.headers).get('Authorization')).toBe('Bearer gmail-access-token');
@@ -379,7 +382,7 @@ function gatewayFixture(options: {
   readonly descriptors?: readonly IntegrationDescriptorRecord[];
   readonly records?: readonly UserIntegrationRecord[];
   readonly providers?: IntegrationProviderRegistry;
-  readonly fetch?: typeof fetch;
+  readonly fetch?: PinnedFetch;
   readonly dnsLookup?: (hostname: string, options: { readonly all: true }) => Promise<readonly { readonly address: string; readonly family: number }[]>;
   readonly rateLimitStore?: IRateLimitStore;
   readonly rateLimit?: { readonly windowMs: number; readonly maxRequests: number };
@@ -397,6 +400,16 @@ function gatewayFixture(options: {
   const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? [oauthDescriptor()]);
   const providers = options.providers ?? IntegrationProviderRegistry.empty();
   const audit = new FixtureAuditSink();
+  // Adapt the plain fetch stub into the pinned-outbound seam, recording each pin
+  // so tests can assert the guard-vetted address reaches the transport.
+  const pins: OutboundPin[] = [];
+  const fetchStub = options.fetch;
+  const pinnedOutbound = fetchStub
+    ? (pin: OutboundPin) => {
+        pins.push(pin);
+        return { fetch: fetchStub, close: () => Promise.resolve() };
+      }
+    : undefined;
   const gateway = new IntegrationRequestGateway({
     integrationStore,
     descriptorStore,
@@ -408,13 +421,13 @@ function gatewayFixture(options: {
       secretEncryption,
       now: () => NOW,
     }),
-    fetch: options.fetch,
+    pinnedOutbound,
     dnsLookup: options.dnsLookup ?? (() => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }])),
     auditSink: audit,
     rateLimitStore: options.rateLimitStore,
     rateLimit: options.rateLimit,
   });
-  return { gateway, contextTracker, audit };
+  return { gateway, contextTracker, audit, pins };
 }
 
 function runAsUser<T>(contextTracker: ContextTracker, fn: () => Promise<T>): Promise<T> {

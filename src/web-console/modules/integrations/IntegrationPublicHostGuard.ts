@@ -20,7 +20,12 @@ export class PublicHostGuardError extends Error {
   }
 }
 
-export async function assertPublicResolvedHost(hostname: string, lookup: DnsLookup): Promise<void> {
+/**
+ * Resolve the hostname and require every resolved address to be public.
+ * Returns the first vetted address so callers can pin the connection to it
+ * instead of re-resolving at connect time (DNS-rebinding TOCTOU defense).
+ */
+export async function assertPublicResolvedHost(hostname: string, lookup: DnsLookup): Promise<DnsLookupAddress> {
   let addresses: readonly DnsLookupAddress[];
   try {
     addresses = await lookup(hostname, { all: true });
@@ -30,4 +35,5 @@ export async function assertPublicResolvedHost(hostname: string, lookup: DnsLook
   if (addresses.length === 0 || addresses.some(entry => !isPublicIpAddress(entry.address))) {
     throw new PublicHostGuardError('not_allowed');
   }
+  return addresses[0];
 }

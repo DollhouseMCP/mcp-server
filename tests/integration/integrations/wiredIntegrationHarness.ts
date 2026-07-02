@@ -31,6 +31,7 @@ import type { IIntegrationOpenApiSpecStore } from '../../../src/web-console/stor
 import type { IUserIntegrationStore } from '../../../src/web-console/stores/IUserIntegrationStore.js';
 import type { IPortfolioElementStore } from '../../../src/web-console/stores/IPortfolioElementStore.js';
 import type { RemoteMcpClientFactory } from '../../../src/web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
+import type { PinnedFetch, PinnedOutboundFactory } from '../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 import type { SessionContext } from '../../../src/context/SessionContext.js';
 
 export const PROVIDER = 'wired-rest';
@@ -180,15 +181,22 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
   await container.preparePortfolio();
 
   // Additive outbound-transport overrides — pass the SSRF guard with a public DNS answer
-  // while routing the actual bytes to the local upstream.
+  // while routing the actual bytes to the local upstream. The harness's pinned-outbound
+  // factory deliberately ignores the pin address and reroutes by URL: chain-level tests
+  // prove the guard/allowlist/policy path, while pinning correctness itself is proven by
+  // the focused unit test of the production factory.
   const dnsLookup = () => Promise.resolve([{ address: PUBLIC_DNS_ADDRESS, family: 4 }]);
-  const routedFetch: typeof fetch = (input, init) => {
+  const routedFetch: PinnedFetch = (input, init) => {
     const requested = new URL(requestHref(input));
     return fetch(new URL(`${requested.pathname}${requested.search}`, upstream.baseUrl), init);
   };
+  const pinnedOutboundFactory: PinnedOutboundFactory = () => ({
+    fetch: routedFetch,
+    close: () => Promise.resolve(),
+  });
   const remoteMcpBearer: { value: string | undefined } = { value: undefined };
   container.register(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup, () => dnsLookup);
-  container.register(INTEGRATION_OUTBOUND_OVERRIDES.fetch, () => routedFetch);
+  container.register(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory, () => pinnedOutboundFactory);
   container.register(
     INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory,
     () => options.remoteMcpClientFactory ?? defaultRemoteMcpClientFactory(token => { remoteMcpBearer.value = token; }),

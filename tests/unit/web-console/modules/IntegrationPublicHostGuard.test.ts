@@ -20,12 +20,15 @@ async function expectGuardRejection(lookup: DnsLookup, reason: 'resolution_faile
 }
 
 describe('assertPublicResolvedHost', () => {
-  it('resolves when every address is public', async () => {
+  it('returns the first vetted address when every address is public', async () => {
     const lookup = lookupReturning([
       { address: '93.184.216.34', family: 4 },
       { address: '2606:4700::6810:84e5', family: 6 },
     ]);
-    await expect(assertPublicResolvedHost(HOSTNAME, lookup)).resolves.toBeUndefined();
+    await expect(assertPublicResolvedHost(HOSTNAME, lookup)).resolves.toEqual({
+      address: '93.184.216.34',
+      family: 4,
+    });
   });
 
   it('rejects when any resolved address is non-public', async () => {

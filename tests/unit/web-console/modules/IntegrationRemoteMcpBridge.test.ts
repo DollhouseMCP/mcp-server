@@ -45,6 +45,7 @@ describe('IntegrationRemoteMcpBridge', () => {
     expect(clientFactory).toHaveBeenCalledWith({
       serverUrl: new URL('https://mcp.example.com/mcp'),
       bearerToken: 'remote-access-token',
+      pinnedFetch: expect.any(Function),
     });
     expect(tools).toEqual([{
       provider: REMOTE_DOCS,
