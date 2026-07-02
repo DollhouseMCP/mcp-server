@@ -131,6 +131,11 @@ describe('ipAddressClassifier', () => {
       ['fe80::1', 'link-local'],
       ['localhost', 'hostname, not an IP'],
       ['', 'empty string'],
+      // Intentional distinction: NAT64/6to4-wrapped loopback is NOT a localhost
+      // redirect for DCR loopback policy, while isPublicIpAddress still blocks
+      // both as non-public on the outbound path.
+      ['64:ff9b::7f00:1', 'NAT64-wrapped loopback'],
+      ['2002:7f00:1::', '6to4-wrapped loopback'],
     ] as const)('does not identify %s as loopback (%s)', address => {
       expect(isLoopbackIpAddress(address)).toBe(false);
     });

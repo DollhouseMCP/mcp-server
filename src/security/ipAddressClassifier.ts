@@ -9,6 +9,12 @@
  * This is the SSRF classification boundary for outbound integration calls; it is
  * deliberately dependency-free (`node:net.isIP` reports only the family and does
  * not canonicalize).
+ *
+ * Deliberately NOT blocked: Teredo (2001::/32) — its addresses appear in DNS as
+ * legitimate global unicast and don't directly expose internal hosts in this
+ * threat model (blocking would reject real deployments) — and the discard-only
+ * range (100::/64), which routes nowhere. Revisit if the guard ever classifies
+ * socket addresses rather than DNS answers.
  */
 
 const IPV6_BYTE_LENGTH = 16;
@@ -58,8 +64,12 @@ export function isLoopbackIpAddress(address: string): boolean {
   if (canonical === null) return false;
   if (canonical.family === 4) return canonical.bytes[0] === 127;
   if (hasZeroPrefix(canonical.bytes, 15) && canonical.bytes[15] === 1) return true;
-  const embedded = extractEmbeddedIpv4(canonical.bytes);
-  return embedded !== null && embedded[0] === 127;
+  // Only direct v4-mapped (::ffff:0:0/96) and v4-compatible (::/96) forms carry
+  // the host's own loopback. NAT64/6to4 embed a translator-side address, so they
+  // must not receive loopback treatment (isPublicIpAddress still rejects them).
+  const mapped = hasZeroPrefix(canonical.bytes, 10) && canonical.bytes[10] === 0xff && canonical.bytes[11] === 0xff;
+  const compatible = hasZeroPrefix(canonical.bytes, 12);
+  return (mapped || compatible) && canonical.bytes[12] === 127;
 }
 
 function parseIpv4(address: string): Uint8Array | null {
@@ -139,6 +149,8 @@ function isPublicIpv4Bytes(bytes: Uint8Array): boolean {
 }
 
 function isPublicIpv6Bytes(bytes: Uint8Array): boolean {
+  // The unspecified :: and loopback ::1 are rejected via extractEmbeddedIpv4's
+  // IPv4-compatible (::/96) case: they extract as 0.0.0.0 / 0.0.0.1, non-public.
   const embedded = extractEmbeddedIpv4(bytes);
   if (embedded !== null) return isPublicIpv4Bytes(embedded);
   const [first, second, third, fourth] = bytes;
