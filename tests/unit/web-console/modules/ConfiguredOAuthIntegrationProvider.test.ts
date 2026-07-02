@@ -54,10 +54,14 @@ function providerWith(input: {
   readonly fetchCalls: Array<{ readonly url: string; readonly body: string | null }>;
 } {
   const pins: OutboundPin[] = [];
-  const fetchCalls: Array<{ readonly url: string; readonly body: string | null }> = [];
+  const fetchCalls: Array<{ readonly url: string; readonly body: string | null; readonly redirect: RequestRedirect | undefined }> = [];
   const fetchImpl: PinnedFetch = input.fetch ?? ((url, init) => {
     const body = init?.body;
-    fetchCalls.push({ url: String(url), body: typeof body === 'string' || body instanceof URLSearchParams ? body.toString() : null });
+    fetchCalls.push({
+      url: String(url),
+      body: typeof body === 'string' || body instanceof URLSearchParams ? body.toString() : null,
+      redirect: init?.redirect,
+    });
     return Promise.resolve(new Response(JSON.stringify({
       access_token: 'fresh-access-token',
       refresh_token: 'fresh-refresh-token',
@@ -125,6 +129,7 @@ describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
     expect(pins).toEqual([{ hostname: TOKEN_HOST, address: PUBLIC_ADDRESS, family: 4 }]);
     expect(fetchCalls).toHaveLength(1);
     expect(fetchCalls[0].url).toBe(`https://${TOKEN_HOST}/oauth/token`);
+    expect(fetchCalls[0].redirect).toBe('error');
   });
 
   it('routes refresh and revocation through the pinned transport', async () => {
@@ -140,5 +145,7 @@ describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
       `https://${TOKEN_HOST}/oauth/token`,
       `https://${TOKEN_HOST}/oauth/revoke`,
     ]);
+    // Credential-bearing calls must never follow a redirect to another host.
+    expect(fetchCalls.map(call => call.redirect)).toEqual(['error', 'error']);
   });
 });

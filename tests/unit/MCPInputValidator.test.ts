@@ -105,6 +105,8 @@ describe('MCPInputValidator - Enhanced MCP Tool Input Validation', () => {
       expect(() => MCPInputValidator.validateImportUrl('http://169.254.169.254/latest/meta-data')).toThrow(PRIVATE_URL_ERROR);
       // Bracketed IPv6 forms: ULA, hex IPv4-mapped loopback, NAT64-wrapped metadata
       expect(() => MCPInputValidator.validateImportUrl('http://[fc00::1]/admin')).toThrow(PRIVATE_URL_ERROR);
+      // Percent-encoded brackets: the decode step must run before hostname classification
+      expect(() => MCPInputValidator.validateImportUrl('http://%5B::1%5D/admin')).toThrow(PRIVATE_URL_ERROR);
       expect(() => MCPInputValidator.validateImportUrl('http://[::ffff:7f00:1]/admin')).toThrow(PRIVATE_URL_ERROR);
       expect(() => MCPInputValidator.validateImportUrl('http://[64:ff9b::a9fe:a9fe]/admin')).toThrow(PRIVATE_URL_ERROR);
       // Decimal-encoded loopback variant beyond 127.0.0.1
