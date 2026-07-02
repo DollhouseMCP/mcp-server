@@ -48,6 +48,20 @@ export function isPublicIpAddress(address: string): boolean {
     : isPublicIpv6Bytes(canonical.bytes);
 }
 
+/**
+ * True when the address is loopback in any textual form: 127.0.0.0/8, IPv6
+ * `::1`, or any IPv6 transition form embedding a 127.0.0.0/8 address.
+ * Unparseable input is not loopback.
+ */
+export function isLoopbackIpAddress(address: string): boolean {
+  const canonical = parseIpAddress(address);
+  if (canonical === null) return false;
+  if (canonical.family === 4) return canonical.bytes[0] === 127;
+  if (hasZeroPrefix(canonical.bytes, 15) && canonical.bytes[15] === 1) return true;
+  const embedded = extractEmbeddedIpv4(canonical.bytes);
+  return embedded !== null && embedded[0] === 127;
+}
+
 function parseIpv4(address: string): Uint8Array | null {
   const parts = address.split('.');
   if (parts.length !== 4) return null;

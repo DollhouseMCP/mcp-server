@@ -1,6 +1,6 @@
 import { describe, expect, it } from '@jest/globals';
 
-import { isPublicIpAddress, parseIpAddress } from '../../../src/security/ipAddressClassifier.js';
+import { isLoopbackIpAddress, isPublicIpAddress, parseIpAddress } from '../../../src/security/ipAddressClassifier.js';
 
 const BLOCKED_TRANSITION_FORMS: ReadonlyArray<readonly [string, string]> = [
   ['::ffff:7f00:1', 'hex IPv4-mapped loopback 127.0.0.1'],
@@ -105,6 +105,34 @@ describe('ipAddressClassifier', () => {
 
     it.each(UNPARSEABLE_INPUTS)('fails closed on %s (%s)', address => {
       expect(isPublicIpAddress(address)).toBe(false);
+    });
+  });
+
+  describe('isLoopbackIpAddress', () => {
+    it.each([
+      ['127.0.0.1', 'canonical v4 loopback'],
+      ['127.0.0.2', 'non-first loopback address'],
+      ['127.255.255.255', 'loopback upper bound'],
+      ['::1', 'v6 loopback'],
+      ['0:0:0:0:0:0:0:1', 'v6 loopback long form'],
+      ['::ffff:127.0.0.1', 'dotted mapped loopback'],
+      ['::ffff:7f00:1', 'hex mapped loopback'],
+      ['::7f00:1', 'v4-compatible loopback'],
+    ] as const)('identifies %s as loopback (%s)', address => {
+      expect(isLoopbackIpAddress(address)).toBe(true);
+    });
+
+    it.each([
+      ['128.0.0.1', 'public v4'],
+      ['10.0.0.1', 'private but not loopback'],
+      ['::', 'unspecified'],
+      ['::2', 'v4-compatible non-loopback'],
+      ['::ffff:0.0.0.1', 'mapped non-loopback'],
+      ['fe80::1', 'link-local'],
+      ['localhost', 'hostname, not an IP'],
+      ['', 'empty string'],
+    ] as const)('does not identify %s as loopback (%s)', address => {
+      expect(isLoopbackIpAddress(address)).toBe(false);
     });
   });
 
