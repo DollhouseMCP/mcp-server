@@ -12,11 +12,20 @@ describe('createPinnedOutboundFactory', () => {
   let server: Server;
   let port: number;
   let seenHosts: string[];
+  let seenPaths: string[];
 
   beforeAll(async () => {
     seenHosts = [];
+    seenPaths = [];
     server = createServer((req, res) => {
       seenHosts.push(req.headers.host ?? '');
+      seenPaths.push(req.url ?? '');
+      if (req.url === '/redirect') {
+        res.statusCode = 302;
+        res.setHeader('Location', '/redirect-target');
+        res.end();
+        return;
+      }
       res.setHeader('Content-Type', 'application/json');
       res.end(JSON.stringify({ ok: true }));
     });
@@ -57,6 +66,25 @@ describe('createPinnedOutboundFactory', () => {
       expect(response.status).toBe(200);
       await response.arrayBuffer();
       expect(seenHosts.at(-1)).toBe(`${PINNED_HOSTNAME}:${port}`);
+    } finally {
+      await outbound.close();
+    }
+  });
+
+  it('rejects a real 302 under redirect: error without following it', async () => {
+    // Behavioral proof that the production transport honors redirect: 'error' —
+    // consumer suites stub the transport, so this is the one live-path check.
+    const outbound = createPinnedOutboundFactory()({
+      hostname: PINNED_HOSTNAME,
+      address: LOOPBACK,
+      family: 4,
+    });
+    try {
+      await expect(
+        outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/redirect`, { redirect: 'error' }),
+      ).rejects.toThrow();
+      expect(seenPaths).toContain('/redirect');
+      expect(seenPaths).not.toContain('/redirect-target');
     } finally {
       await outbound.close();
     }
