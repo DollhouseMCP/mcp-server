@@ -329,6 +329,13 @@ function insertChain(rows: unknown[] = []) {
   return chain;
 }
 
+function deletingChain(rows: unknown[] = []) {
+  const chain: Record<string, jest.Mock> = {};
+  chain.where = jest.fn(() => chain);
+  chain.returning = jest.fn(() => Promise.resolve(rows));
+  return chain;
+}
+
 function selectingChain(rows: unknown[]) {
   const chain: Record<string, jest.Mock> = {};
   chain.from = jest.fn(() => chain);
@@ -858,6 +865,31 @@ describe('PostgresIntegrationDescriptorStore', () => {
     }))).rejects.toThrow(ConsoleStoreValidationError);
     expect(transaction.insert).toBeUndefined();
   });
+
+  it('finds descriptors by id only for the BYO owner', async () => {
+    const chain = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.findById(DESCRIPTOR_ID, USER_ID)).resolves.toMatchObject({
+      id: DESCRIPTOR_ID,
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+    });
+    await expect(store.findById('not-a-uuid', USER_ID)).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.findById(DESCRIPTOR_ID, 'not-a-uuid')).rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it('deletes descriptors owner-scoped and reports whether a row was removed', async () => {
+    transaction.delete = jest.fn(() => deletingChain([{ id: DESCRIPTOR_ID }]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.delete(DESCRIPTOR_ID, USER_ID)).resolves.toBe(true);
+
+    transaction.delete = jest.fn(() => deletingChain([]));
+    await expect(store.delete(DESCRIPTOR_ID, USER_ID)).resolves.toBe(false);
+    await expect(store.delete('not-a-uuid', USER_ID)).rejects.toThrow(ConsoleStoreValidationError);
+  });
 });
 
 describe('PostgresIntegrationOpenApiSpecStore', () => {
@@ -895,6 +927,17 @@ describe('PostgresIntegrationOpenApiSpecStore', () => {
       spec: { openapi: '3.1.0' },
     }))).rejects.toThrow(ConsoleStoreValidationError);
     expect(transaction.insert).toBeUndefined();
+  });
+
+  it('deletes specs by descriptor id and reports whether one existed', async () => {
+    transaction.delete = jest.fn(() => deletingChain([{ id: SPEC_ID }]));
+    const store = new PostgresIntegrationOpenApiSpecStore({} as DatabaseInstance);
+
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(true);
+
+    transaction.delete = jest.fn(() => deletingChain([]));
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(false);
+    await expect(store.deleteByDescriptorId('not-a-uuid')).rejects.toThrow(ConsoleStoreValidationError);
   });
 });
 

@@ -629,6 +629,46 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.listVisiblePage(USER_ID, { cursor: 'svc-a:not-a-uuid' })).rejects.toThrow(ConsoleStoreValidationError);
   });
 
+  it('scopes findById to the BYO owner and fails closed everywhere else', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const byo = await store.upsert(oauthDescriptorInput());
+    const curated = await store.upsert(oauthDescriptorInput({
+      provider: 'shared-svc',
+      ownership: 'curated' as const,
+      ownerUserId: null,
+    }));
+
+    await expect(store.findById(byo.id, USER_ID)).resolves.toMatchObject({
+      id: byo.id,
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+    });
+    // Non-owner, curated-by-id, and unknown id are indistinguishable: null.
+    await expect(store.findById(byo.id, SECOND_USER_ID)).resolves.toBeNull();
+    await expect(store.findById(curated.id, USER_ID)).resolves.toBeNull();
+    await expect(store.findById(DESCRIPTOR_ID, USER_ID)).resolves.toBeNull();
+    await expect(store.findById('not-a-uuid', USER_ID)).rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it('deletes only owned BYO descriptors', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const byo = await store.upsert(oauthDescriptorInput());
+    const curated = await store.upsert(oauthDescriptorInput({
+      provider: 'shared-svc',
+      ownership: 'curated' as const,
+      ownerUserId: null,
+    }));
+
+    await expect(store.delete(byo.id, SECOND_USER_ID)).resolves.toBe(false);
+    await expect(store.delete(curated.id, USER_ID)).resolves.toBe(false);
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(2);
+
+    await expect(store.delete(byo.id, USER_ID)).resolves.toBe(true);
+    await expect(store.delete(byo.id, USER_ID)).resolves.toBe(false);
+    await expect(store.findVisibleByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(1);
+  });
+
   it('validates descriptor ownership, hosts, URLs, and auth strategy shape', async () => {
     const store = new InMemoryIntegrationDescriptorStore();
 
@@ -683,6 +723,16 @@ describe('InMemoryIntegrationOpenApiSpecStore', () => {
         paths: {},
       },
     });
+  });
+
+  it('deletes specs by descriptor id and reports whether one existed', async () => {
+    const store = new InMemoryIntegrationOpenApiSpecStore();
+    await store.upsert(openApiSpecInput());
+
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(true);
+    await expect(store.findByDescriptorId(DESCRIPTOR_ID)).resolves.toBeNull();
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(false);
+    await expect(store.deleteByDescriptorId('not-a-uuid')).rejects.toThrow(ConsoleStoreValidationError);
   });
 
   it('rejects invalid OpenAPI specs and non-HTTPS source URLs', async () => {

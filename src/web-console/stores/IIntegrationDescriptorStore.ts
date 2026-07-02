@@ -97,6 +97,23 @@ export interface IIntegrationDescriptorStore {
   listVisible(userId: string): Promise<readonly IntegrationDescriptorRecord[]>;
   listVisiblePage(userId: string, page?: IntegrationDescriptorPageRequest): Promise<IntegrationDescriptorPage>;
   findVisibleByProvider(userId: string, provider: UserIntegrationProvider): Promise<IntegrationDescriptorRecord | null>;
+  /**
+   * Owner-scoped id lookup for the BYO authoring plane: returns the
+   * descriptor only when it is BYO and owned by `userId`. Curated
+   * descriptors, other users' descriptors, and unknown ids all resolve to
+   * null — indistinguishable, so the caller can only 404.
+   */
+  findById(id: string, userId: string): Promise<IntegrationDescriptorRecord | null>;
+  /**
+   * Owner-scoped delete: removes the descriptor only when it is BYO and
+   * owned by `ownerUserId`; returns whether a record was deleted. Curated /
+   * non-owned / missing all return false (fail closed). The stored OpenAPI
+   * spec is NOT cascaded by this contract — callers delete it via
+   * `IIntegrationOpenApiSpecStore.deleteByDescriptorId` after a successful
+   * descriptor delete (PostgreSQL additionally enforces FK ON DELETE CASCADE
+   * as defense-in-depth).
+   */
+  delete(id: string, ownerUserId: string): Promise<boolean>;
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
 }
 

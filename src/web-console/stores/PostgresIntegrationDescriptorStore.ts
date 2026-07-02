@@ -84,6 +84,32 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     return rows[0] ? fromDescriptorRow(rows[0]) : null;
   }
 
+  async findById(id: string, userId: string): Promise<IntegrationDescriptorRecord | null> {
+    assertUuid(id, 'id');
+    assertUuid(userId, 'userId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(integrationProviderDescriptors).where(and(
+        eq(integrationProviderDescriptors.id, id),
+        eq(integrationProviderDescriptors.ownership, 'byo'),
+        eq(integrationProviderDescriptors.ownerUserId, userId),
+      )).limit(1),
+    );
+    return rows[0] ? fromDescriptorRow(rows[0]) : null;
+  }
+
+  async delete(id: string, ownerUserId: string): Promise<boolean> {
+    assertUuid(id, 'id');
+    assertUuid(ownerUserId, 'ownerUserId');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.delete(integrationProviderDescriptors).where(and(
+        eq(integrationProviderDescriptors.id, id),
+        eq(integrationProviderDescriptors.ownership, 'byo'),
+        eq(integrationProviderDescriptors.ownerUserId, ownerUserId),
+      )).returning({ id: integrationProviderDescriptors.id }),
+    );
+    return rows.length > 0;
+  }
+
   async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
     const rows = await withSystemContext(this.db, async tx => {

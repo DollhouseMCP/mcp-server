@@ -67,6 +67,28 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
     return visible ? cloneIntegrationDescriptorRecord(visible) : null;
   }
 
+  async findById(id: string, userId: string): Promise<IntegrationDescriptorRecord | null> {
+    await Promise.resolve();
+    assertUuid(id, 'id');
+    assertUuid(userId, 'userId');
+    const record = this.records.get(id);
+    return record?.ownership === 'byo' && record.ownerUserId === userId
+      ? cloneIntegrationDescriptorRecord(record)
+      : null;
+  }
+
+  async delete(id: string, ownerUserId: string): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(id, 'id');
+    assertUuid(ownerUserId, 'ownerUserId');
+    const record = this.records.get(id);
+    if (record?.ownership !== 'byo' || record.ownerUserId !== ownerUserId) {
+      return false;
+    }
+    this.records.delete(id);
+    return true;
+  }
+
   async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
     await Promise.resolve();
     validateIntegrationDescriptorInput(input);
