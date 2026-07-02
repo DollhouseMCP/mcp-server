@@ -133,6 +133,9 @@ import {
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
 import { loadCuratedIntegrationProviders } from './modules/integrations/CuratedIntegrationProviders.js';
+import { INTEGRATION_OUTBOUND_OVERRIDES } from './modules/integrations/IntegrationOutboundOverrides.js';
+import type { DnsLookup } from './modules/integrations/IntegrationPublicHostGuard.js';
+import type { PinnedOutboundFactory } from './modules/integrations/PinnedOutboundFactory.js';
 import {
   InMemoryConsoleTelemetryQuery,
   PostgresConsoleTelemetryQuery,
@@ -565,6 +568,17 @@ export class WebConsoleRegistrar {
           seedDir: this.options.integrationDescriptorSeedDir,
           descriptorStore: stores.integrationDescriptorStore,
           secretEncryption,
+          // Same outbound overrides the gateway/bridge honor, so curated OAuth
+          // token-endpoint calls share one guarded transport (and wired tests
+          // can route them to a local upstream).
+          outbound: {
+            ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory)
+              ? { pinnedOutbound: container.resolve<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory) }
+              : {}),
+            ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup)
+              ? { dnsLookup: container.resolve<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup) }
+              : {}),
+          },
           ...(this.options.now ? { now: this.options.now } : {}),
         })
       : [];

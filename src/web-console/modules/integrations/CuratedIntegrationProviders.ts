@@ -20,6 +20,8 @@ import type {
   IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import { ConfiguredOAuthIntegrationProvider } from './ConfiguredOAuthIntegrationProvider.js';
+import type { DnsLookup } from './IntegrationPublicHostGuard.js';
+import type { PinnedOutboundFactory } from './PinnedOutboundFactory.js';
 import {
   IntegrationDescriptorSeedLoader,
   type IntegrationDescriptorSeedCredentialResolver,
@@ -53,14 +55,25 @@ export function createEnvIntegrationDescriptorCredentialResolver(
  * descriptor that cannot produce a provider (no interpreter, or a build error)
  * is skipped without aborting the rest.
  */
+/**
+ * Outbound-transport seams threaded into each built provider so curated OAuth
+ * token-endpoint calls share the gateway's resolve-once-and-pin SSRF guard.
+ * Absent fields fall back to the production pinned transport / DNS resolver.
+ */
+export interface CuratedProviderOutboundOptions {
+  readonly pinnedOutbound?: PinnedOutboundFactory;
+  readonly dnsLookup?: DnsLookup;
+}
+
 export function buildConfiguredIntegrationProviders(
   descriptors: readonly IntegrationDescriptorRecord[],
   secretEncryption: ISecretEncryptionService,
+  outbound: CuratedProviderOutboundOptions = {},
 ): IIntegrationProvider[] {
   const providers: IIntegrationProvider[] = [];
   for (const descriptor of descriptors) {
     try {
-      const provider = buildProvider(descriptor, secretEncryption);
+      const provider = buildProvider(descriptor, secretEncryption, outbound);
       if (provider) providers.push(provider);
     } catch (err) {
       logger.error(
@@ -75,6 +88,7 @@ export function buildConfiguredIntegrationProviders(
 function buildProvider(
   descriptor: IntegrationDescriptorRecord,
   secretEncryption: ISecretEncryptionService,
+  outbound: CuratedProviderOutboundOptions,
 ): IIntegrationProvider | null {
   if (descriptor.authStrategy === 'static_api_key') {
     return new StaticApiKeyIntegrationProvider(descriptor);
@@ -90,7 +104,12 @@ function buildProvider(
         }),
       )
       .toString('utf8');
-    return new ConfiguredOAuthIntegrationProvider({ descriptor, clientSecret });
+    return new ConfiguredOAuthIntegrationProvider({
+      descriptor,
+      clientSecret,
+      ...(outbound.pinnedOutbound ? { pinnedOutbound: outbound.pinnedOutbound } : {}),
+      ...(outbound.dnsLookup ? { dnsLookup: outbound.dnsLookup } : {}),
+    });
   }
   // 'coded' descriptors have no configured-provider interpreter (e.g. GitHub stays bespoke).
   return null;
@@ -103,6 +122,8 @@ export interface LoadCuratedIntegrationProvidersParams {
   readonly now?: () => Date;
   /** Overridable for tests; defaults to reading deployment credentials from process.env. */
   readonly credentialResolver?: IntegrationDescriptorSeedCredentialResolver;
+  /** Outbound-transport seams for the built providers' token-endpoint calls. */
+  readonly outbound?: CuratedProviderOutboundOptions;
 }
 
 /**
@@ -122,5 +143,5 @@ export async function loadCuratedIntegrationProviders(
     params.now ? { now: params.now } : {},
   );
   const { descriptors } = await loader.loadSeeds();
-  return buildConfiguredIntegrationProviders(descriptors, params.secretEncryption);
+  return buildConfiguredIntegrationProviders(descriptors, params.secretEncryption, params.outbound ?? {});
 }

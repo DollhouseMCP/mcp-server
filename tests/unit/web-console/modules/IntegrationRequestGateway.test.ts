@@ -333,20 +333,22 @@ describe('IntegrationRequestGateway', () => {
 
   it('refreshes once on 401 and retries with the rotated credential', async () => {
     const fetches: Array<{ readonly url: string; readonly authorization: string | null; readonly body: string | null }> = [];
+    const providerFetch: PinnedFetch = (url, init) => {
+      fetches.push({
+        url: urlString(url),
+        authorization: new Headers(init?.headers).get('Authorization'),
+        body: requestBodyString(init),
+      });
+      return Promise.resolve(jsonResponse(200, {
+        access_token: 'gmail-fresh-access-token',
+        refresh_token: 'gmail-rotated-refresh-token',
+      }));
+    };
     const oauthProvider = new ConfiguredOAuthIntegrationProvider({
       descriptor: oauthDescriptor(),
       clientSecret: 'gmail-client-secret',
-      fetch: (url, init) => {
-        fetches.push({
-          url: urlString(url),
-          authorization: new Headers(init?.headers).get('Authorization'),
-          body: requestBodyString(init),
-        });
-        return Promise.resolve(jsonResponse(200, {
-          access_token: 'gmail-fresh-access-token',
-          refresh_token: 'gmail-rotated-refresh-token',
-        }));
-      },
+      pinnedOutbound: () => ({ fetch: providerFetch, close: () => Promise.resolve() }),
+      dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
     });
     const gateway = gatewayFixture({
       providers: new IntegrationProviderRegistry([oauthProvider]),

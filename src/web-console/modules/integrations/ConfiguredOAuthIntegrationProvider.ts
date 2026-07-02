@@ -1,4 +1,5 @@
 import { isIP } from 'node:net';
+import { lookup as dnsLookup } from 'node:dns/promises';
 
 import type { IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import type { UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
@@ -13,6 +14,13 @@ import type {
   IntegrationTokenRefreshResult,
 } from './IntegrationProvider.js';
 import { serializeConfiguredIntegrationStatus } from './IntegrationDtos.js';
+import {
+  assertPublicResolvedHost,
+  PublicHostGuardError,
+  type DnsLookup,
+  type DnsLookupAddress,
+} from './IntegrationPublicHostGuard.js';
+import { createPinnedOutboundFactory, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
 import { logger } from '../../../utils/logger.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
@@ -20,9 +28,17 @@ const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
 export interface ConfiguredOAuthIntegrationProviderConfig {
   readonly descriptor: IntegrationDescriptorRecord;
   readonly clientSecret: string;
-  readonly fetch?: typeof fetch;
+  readonly pinnedOutbound?: PinnedOutboundFactory;
+  readonly dnsLookup?: DnsLookup;
   /** Bounds each outbound token-endpoint call so a hung provider cannot hold a refresh row lock open. */
   readonly requestTimeoutMs?: number;
+}
+
+/** A token-endpoint response with its body already consumed, so the pinned socket pool can close. */
+interface TokenEndpointResponse {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly body: unknown;
 }
 
 export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider {
@@ -30,7 +46,8 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'oauth2_authorization_code';
 
-  private readonly fetchImpl: typeof fetch;
+  private readonly pinnedOutboundFactory: PinnedOutboundFactory;
+  private readonly dnsLookupImpl: DnsLookup;
   private readonly timeoutMs: number;
 
   constructor(private readonly config: ConfiguredOAuthIntegrationProviderConfig) {
@@ -45,7 +62,8 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       displayName: config.descriptor.displayName,
       category: config.descriptor.category,
     };
-    this.fetchImpl = config.fetch ?? fetch;
+    this.pinnedOutboundFactory = config.pinnedOutbound ?? createPinnedOutboundFactory();
+    this.dnsLookupImpl = config.dnsLookup ?? dnsLookup;
     this.timeoutMs = config.requestTimeoutMs ?? DEFAULT_OUTBOUND_TIMEOUT_MS;
   }
 
@@ -71,7 +89,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     request: IntegrationTokenExchangeRequest,
   ): Promise<IntegrationTokenExchangeResult> {
     const oauth = this.oauthDescriptor();
-    const response = await this.fetchImpl(oauth.tokenUrl, {
+    const response = await this.guardedTokenEndpointFetch('token', oauth.tokenUrl, {
       ...tokenRequestInit({
         clientId: oauth.clientId,
         clientSecret: this.config.clientSecret,
@@ -92,7 +110,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       });
       throw new Error('configured_oauth_token_exchange_failed');
     }
-    const body = await readJson(response);
+    const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_exchange_failed');
     return {
@@ -107,7 +125,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
   async refreshCredentials(request: IntegrationTokenRefreshRequest): Promise<IntegrationTokenRefreshResult> {
     const oauth = this.oauthDescriptor();
     if (oauth.refresh === 'none') throw new Error('configured_oauth_refresh_not_supported');
-    const response = await this.fetchImpl(oauth.tokenUrl, {
+    const response = await this.guardedTokenEndpointFetch('token', oauth.tokenUrl, {
       ...refreshTokenRequestInit({
         clientId: oauth.clientId,
         clientSecret: this.config.clientSecret,
@@ -126,7 +144,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       });
       throw new Error('configured_oauth_token_refresh_failed');
     }
-    const body = await readJson(response);
+    const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_refresh_failed');
     return {
@@ -145,7 +163,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     const oauth = this.oauthDescriptor();
     const revocationUrl = readString(oauth.tokenExchange, 'revocationUrl');
     if (!revocationUrl) return;
-    const response = await this.fetchImpl(revocationUrl, {
+    const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -174,6 +192,48 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     const oauth = this.config.descriptor.oauth;
     if (!oauth) throw new Error('configured OAuth provider requires an OAuth descriptor');
     return oauth;
+  }
+
+  /**
+   * POST to a descriptor-controlled token endpoint through the same
+   * resolve-once-and-pin guard as the data path. The host must resolve to
+   * public addresses BEFORE any secret leaves the process, and the connection
+   * is pinned to the vetted address so a connect-time re-resolution cannot
+   * retarget it. Fails closed on resolution failure or a non-public address.
+   */
+  private async guardedTokenEndpointFetch(
+    endpoint: 'token' | 'revocation',
+    urlValue: string,
+    init: RequestInit,
+  ): Promise<TokenEndpointResponse> {
+    const url = new URL(urlValue);
+    let vetted: DnsLookupAddress;
+    try {
+      vetted = await assertPublicResolvedHost(url.hostname, this.dnsLookupImpl);
+    } catch (error) {
+      if (error instanceof PublicHostGuardError) {
+        logger.warn('Configured OAuth endpoint host rejected by public-host guard', {
+          provider: this.descriptor.id,
+          endpoint,
+          reason: error.reason,
+        });
+        throw new Error(error.reason === 'resolution_failed'
+          ? 'configured_oauth_endpoint_resolution_failed'
+          : 'configured_oauth_endpoint_not_allowed');
+      }
+      throw error;
+    }
+    const outbound = this.pinnedOutboundFactory({
+      hostname: url.hostname,
+      address: vetted.address,
+      family: vetted.family,
+    });
+    try {
+      const response = await outbound.fetch(urlValue, init);
+      return { ok: response.ok, status: response.status, body: await readJson(response) };
+    } finally {
+      await outbound.close();
+    }
   }
 }
 
