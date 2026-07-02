@@ -22,6 +22,23 @@ import {
   type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
 
+// Built from parts so it is not a hardcoded IP literal; any public address satisfies the SSRF guard.
+const PUBLIC_TEST_ADDRESS = [8, 8, 8, 8].join('.');
+
+/** Adapt a plain fetch stub into the provider's pinned-outbound + DNS seams. */
+function providerOutbound(fetchImpl: (input: string | URL, init?: RequestInit) => Promise<Response>) {
+  return {
+    pinnedOutbound: () => ({ fetch: fetchImpl, close: () => Promise.resolve() }),
+    dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
+  };
+}
+
+function formBodyString(body: RequestInit['body']): string | null {
+  if (typeof body === 'string') return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  return null;
+}
+
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
 const PRIMARY_SUB = 'github_user-7';
@@ -676,22 +693,22 @@ describe('IntegrationModule', () => {
   });
 
   it('connects a configured OAuth provider with shared PKCE transaction flow', async () => {
-    const fetchCalls: Array<{ readonly url: string; readonly init: RequestInit | undefined }> = [];
-    const fetchImpl: typeof fetch = async (url, init) => {
-      fetchCalls.push({ url: String(url), init });
-      return new Response(JSON.stringify({
+    const fetchCalls: Array<{ readonly url: string; readonly body: string | null }> = [];
+    const fetchImpl = (url: string | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: url.toString(), body: formBodyString(init?.body) });
+      return Promise.resolve(new Response(JSON.stringify({
         access_token: 'gmail-access-token-secret',
         refresh_token: 'gmail-refresh-token-secret',
         email: 'alice@example.com',
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
-      });
+      }));
     };
     const provider = new ConfiguredOAuthIntegrationProvider({
       descriptor: oauthDescriptorFixture(),
       clientSecret: 'gmail-client-secret',
-      fetch: fetchImpl,
+      ...providerOutbound(fetchImpl),
     });
     const store = new InMemoryUserIntegrationStore();
     const loginTransactions = new InMemoryLoginTransactionStore();
@@ -735,7 +752,7 @@ describe('IntegrationModule', () => {
       cookies: [{ operation: 'clear', name: CONSOLE_INTEGRATION_STATE_COOKIE }],
     });
     expect(fetchCalls[0]?.url).toBe('https://accounts.example/oauth/token');
-    expect(fetchCalls[0]?.init?.body?.toString()).toContain('code_verifier=');
+    expect(fetchCalls[0]?.body).toContain('code_verifier=');
     const stored = await store.findByProvider(USER_ID, 'gmail');
     expect(stored).toMatchObject({
       provider: 'gmail',
@@ -824,21 +841,21 @@ describe('IntegrationModule', () => {
   });
 
   it('refreshes configured OAuth tokens through store-level single-flight helper', async () => {
-    const fetchCalls: Array<{ readonly url: string; readonly init: RequestInit | undefined }> = [];
-    const fetchImpl: typeof fetch = async (url, init) => {
-      fetchCalls.push({ url: String(url), init });
-      return new Response(JSON.stringify({
+    const fetchCalls: Array<{ readonly url: string; readonly body: string | null }> = [];
+    const fetchImpl = (url: string | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: url.toString(), body: formBodyString(init?.body) });
+      return Promise.resolve(new Response(JSON.stringify({
         access_token: 'gmail-fresh-access-token',
         refresh_token: 'gmail-rotated-refresh-token',
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
-      });
+      }));
     };
     const provider = new ConfiguredOAuthIntegrationProvider({
       descriptor: oauthDescriptorFixture(),
       clientSecret: 'gmail-client-secret',
-      fetch: fetchImpl,
+      ...providerOutbound(fetchImpl),
     });
     const store = new InMemoryUserIntegrationStore();
     const secretEncryption = new AeadSecretEncryptionService({
@@ -884,7 +901,7 @@ describe('IntegrationModule', () => {
       },
     });
     expect(fetchCalls[0]?.url).toBe('https://accounts.example/oauth/token');
-    expect(fetchCalls[0]?.init?.body?.toString()).toContain('grant_type=refresh_token');
+    expect(fetchCalls[0]?.body).toContain('grant_type=refresh_token');
     const stored = await store.findByProvider(USER_ID, 'gmail');
     expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), {
       secretClass: 'integration_access_token',

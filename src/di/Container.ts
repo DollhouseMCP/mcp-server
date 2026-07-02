@@ -100,6 +100,7 @@ import {
   type RemoteMcpClientFactory,
 } from "../web-console/modules/integrations/index.js";
 import type { DnsLookup } from "../web-console/modules/integrations/IntegrationPublicHostGuard.js";
+import type { PinnedOutboundFactory } from "../web-console/modules/integrations/PinnedOutboundFactory.js";
 import type { IGitHubIntegrationProvider } from "../web-console/modules/integrations/GitHubIntegrationProvider.js";
 import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
@@ -173,19 +174,9 @@ export interface HandlerBundle {
   integrationRemoteMcpBridge?: IntegrationRemoteMcpBridge;
 }
 
-/**
- * Optional DI override points for the outbound integration transport. When a service
- * is registered under one of these names the gateway/bridge use it instead of the
- * production default (real `fetch` / DNS resolver / SDK MCP client). Defaults to
- * production behavior when unregistered. Wired integration tests register these to
- * route outbound calls through a local server while keeping the SSRF host guard fully
- * enforced (the injected DNS resolver returns a controlled public address).
- */
-export const INTEGRATION_OUTBOUND_OVERRIDES = {
-  fetch: 'IntegrationOutboundFetch',
-  dnsLookup: 'IntegrationOutboundDnsLookup',
-  remoteMcpClientFactory: 'IntegrationRemoteMcpClientFactory',
-} as const;
+import { INTEGRATION_OUTBOUND_OVERRIDES } from "../web-console/modules/integrations/IntegrationOutboundOverrides.js";
+
+export { INTEGRATION_OUTBOUND_OVERRIDES };
 
 /**
  * Type-safe service record for dependency injection container
@@ -1797,7 +1788,7 @@ export class DollhouseContainer {
       providers: providerRegistry,
       secretEncryption,
     });
-    const fetchOverride = this.resolveIntegrationOverride<typeof fetch>(INTEGRATION_OUTBOUND_OVERRIDES.fetch);
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
     const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     return new IntegrationRequestGateway({
       integrationStore,
@@ -1806,7 +1797,7 @@ export class DollhouseContainer {
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
       tokenRefresh,
       rateLimitStore,
-      ...(fetchOverride ? { fetch: fetchOverride } : {}),
+      ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
       ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
     });
   }
@@ -1894,6 +1885,7 @@ export class DollhouseContainer {
     }
     const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     const clientFactoryOverride = this.resolveIntegrationOverride<RemoteMcpClientFactory>(INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory);
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
     return new IntegrationRemoteMcpBridge({
       integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
       descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
@@ -1901,6 +1893,7 @@ export class DollhouseContainer {
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
       ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
       ...(clientFactoryOverride ? { clientFactory: clientFactoryOverride } : {}),
+      ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
     });
   }
 

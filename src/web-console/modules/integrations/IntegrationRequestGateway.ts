@@ -11,7 +11,9 @@ import {
   assertPublicResolvedHost,
   PublicHostGuardError,
   type DnsLookup,
+  type DnsLookupAddress,
 } from './IntegrationPublicHostGuard.js';
+import { createPinnedOutboundFactory, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
@@ -37,7 +39,7 @@ export interface IntegrationRequestGatewayOptions {
   readonly secretEncryption: ISecretEncryptionService;
   readonly contextTracker: ContextTracker;
   readonly tokenRefresh?: IntegrationTokenRefreshService | null;
-  readonly fetch?: typeof fetch;
+  readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
   readonly auditSink?: IIntegrationRequestAuditSink | null;
   readonly rateLimitStore?: IRateLimitStore | null;
@@ -97,12 +99,12 @@ export interface IIntegrationRequestAuditSink {
 }
 
 export class IntegrationRequestGateway {
-  private readonly fetchImpl: typeof fetch;
+  private readonly pinnedOutboundFactory: PinnedOutboundFactory;
   private readonly dnsLookupImpl: DnsLookup;
   private readonly limiter: InMemoryIntegrationRateLimiter;
 
   constructor(private readonly options: IntegrationRequestGatewayOptions) {
-    this.fetchImpl = options.fetch ?? fetch;
+    this.pinnedOutboundFactory = options.pinnedOutbound ?? createPinnedOutboundFactory();
     this.dnsLookupImpl = options.dnsLookup ?? dnsLookup;
     this.limiter = new InMemoryIntegrationRateLimiter(
       options.rateLimit?.windowMs ?? DEFAULT_RATE_LIMIT_WINDOW_MS,
@@ -270,11 +272,18 @@ export class IntegrationRequestGateway {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== null) headers.set('Content-Type', 'application/json');
     injectCredential(descriptor, url, headers, credential);
-    await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
+    const vetted = await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
+    // Pin the connection to the vetted address so a second connect-time DNS
+    // resolution cannot retarget the request (DNS-rebinding TOCTOU).
+    const outbound = this.pinnedOutboundFactory({
+      hostname: url.hostname,
+      address: vetted.address,
+      family: vetted.family,
+    });
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
     try {
-      const response = await this.fetchImpl(url.toString(), {
+      const response = await outbound.fetch(url.toString(), {
         method,
         headers,
         body,
@@ -294,6 +303,7 @@ export class IntegrationRequestGateway {
       throw new IntegrationRequestError('integration_request_failed', 'Integration request failed.', 502);
     } finally {
       clearTimeout(timeout);
+      await outbound.close();
     }
   }
 
@@ -612,9 +622,9 @@ function injectCredential(
   throw new IntegrationRequestError('integration_auth_strategy_not_supported', 'Integration auth strategy is not supported.', 400);
 }
 
-async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup): Promise<void> {
+async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup): Promise<DnsLookupAddress> {
   try {
-    await assertPublicResolvedHost(hostname, lookup);
+    return await assertPublicResolvedHost(hostname, lookup);
   } catch (error) {
     if (error instanceof PublicHostGuardError) {
       if (error.reason === 'resolution_failed') {

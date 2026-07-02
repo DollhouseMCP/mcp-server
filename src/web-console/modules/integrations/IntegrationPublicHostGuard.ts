@@ -1,4 +1,6 @@
-import { isIP } from 'node:net';
+import { isPublicIpAddress } from '../../../security/ipAddressClassifier.js';
+
+export { isPublicIpAddress };
 
 export type DnsLookup = (hostname: string, options: { readonly all: true }) => Promise<readonly DnsLookupAddress[]>;
 
@@ -18,7 +20,12 @@ export class PublicHostGuardError extends Error {
   }
 }
 
-export async function assertPublicResolvedHost(hostname: string, lookup: DnsLookup): Promise<void> {
+/**
+ * Resolve the hostname and require every resolved address to be public.
+ * Returns the first vetted address so callers can pin the connection to it
+ * instead of re-resolving at connect time (DNS-rebinding TOCTOU defense).
+ */
+export async function assertPublicResolvedHost(hostname: string, lookup: DnsLookup): Promise<DnsLookupAddress> {
   let addresses: readonly DnsLookupAddress[];
   try {
     addresses = await lookup(hostname, { all: true });
@@ -28,41 +35,5 @@ export async function assertPublicResolvedHost(hostname: string, lookup: DnsLook
   if (addresses.length === 0 || addresses.some(entry => !isPublicIpAddress(entry.address))) {
     throw new PublicHostGuardError('not_allowed');
   }
-}
-
-export function isPublicIpAddress(address: string): boolean {
-  const normalized = normalizeIpv4MappedAddress(address);
-  const version = isIP(normalized);
-  if (version === 4) return isPublicIpv4(normalized);
-  if (version === 6) return isPublicIpv6(normalized);
-  return false;
-}
-
-function normalizeIpv4MappedAddress(address: string): string {
-  const mapped = /^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i.exec(address);
-  return mapped?.[1] ?? address;
-}
-
-function isPublicIpv4(address: string): boolean {
-  const parts = address.split('.').map(part => Number.parseInt(part, 10));
-  if (parts.length !== 4 || parts.some(part => !Number.isInteger(part) || part < 0 || part > 255)) return false;
-  const [a, b] = parts;
-  if (a === 0 || a === 10 || a === 127) return false;
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  if (a === 169 && b === 254) return false;
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  if (a === 192 && b === 168) return false;
-  if (a >= 224) return false;
-  return true;
-}
-
-function isPublicIpv6(address: string): boolean {
-  const normalized = address.toLowerCase();
-  if (normalized === '::' || normalized === '::1') return false;
-  const firstGroup = Number.parseInt(normalized.split(':')[0] || '0', 16);
-  if (Number.isNaN(firstGroup)) return false;
-  if ((firstGroup & 0xfe00) === 0xfc00) return false;
-  if ((firstGroup & 0xffc0) === 0xfe80) return false;
-  if ((firstGroup & 0xff00) === 0xff00) return false;
-  return true;
+  return addresses[0];
 }

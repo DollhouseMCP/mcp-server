@@ -14,7 +14,9 @@ import {
   assertPublicResolvedHost,
   PublicHostGuardError,
   type DnsLookup,
+  type DnsLookupAddress,
 } from './IntegrationPublicHostGuard.js';
+import { createPinnedOutboundFactory, type PinnedFetch, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
 
 const DEFAULT_REMOTE_MCP_TIMEOUT_MS = 5_000;
 
@@ -24,6 +26,7 @@ export interface IntegrationRemoteMcpBridgeOptions {
   readonly secretEncryption: ISecretEncryptionService;
   readonly contextTracker: ContextTracker;
   readonly clientFactory?: RemoteMcpClientFactory;
+  readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
 }
@@ -65,6 +68,12 @@ export interface RemoteMcpClient {
 export type RemoteMcpClientFactory = (input: {
   readonly serverUrl: URL;
   readonly bearerToken: string;
+  /**
+   * Fetch pinned to the guard-vetted address for `serverUrl`'s host. Every
+   * factory implementation must route the transport through it — connecting
+   * with a default fetch would re-resolve DNS and bypass the pin.
+   */
+  readonly pinnedFetch: PinnedFetch;
 }) => Promise<RemoteMcpClient>;
 
 export class IntegrationRemoteMcpBridgeError extends Error {
@@ -80,11 +89,13 @@ export class IntegrationRemoteMcpBridgeError extends Error {
 
 export class IntegrationRemoteMcpBridge {
   private readonly clientFactory: RemoteMcpClientFactory;
+  private readonly pinnedOutboundFactory: PinnedOutboundFactory;
   private readonly dnsLookupImpl: DnsLookup;
   private readonly timeoutMs: number;
 
   constructor(private readonly options: IntegrationRemoteMcpBridgeOptions) {
     this.clientFactory = options.clientFactory ?? createSdkRemoteMcpClient;
+    this.pinnedOutboundFactory = options.pinnedOutbound ?? createPinnedOutboundFactory();
     this.dnsLookupImpl = options.dnsLookup ?? dnsLookup;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REMOTE_MCP_TIMEOUT_MS;
   }
@@ -126,10 +137,9 @@ export class IntegrationRemoteMcpBridge {
     if (!config) return [];
     const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
     if (!isIntegrationConnected(integration)) return [];
-    await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
+    const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
     const bearerToken = this.decryptAccessToken(integration, userId);
-    const client = await this.connectClient(config.serverUrl, bearerToken);
-    try {
+    return await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
       const listed = await withTimeout(
         client.listTools(),
         this.timeoutMs,
@@ -147,9 +157,7 @@ export class IntegrationRemoteMcpBridge {
           serverUrl: config.serverUrl.toString(),
         }];
       });
-    } finally {
-      await client.close();
-    }
+    });
   }
 
   async callTool(input: RemoteMcpCallInput): Promise<RemoteMcpCallResult> {
@@ -166,9 +174,9 @@ export class IntegrationRemoteMcpBridge {
     if (!isIntegrationConnected(integration)) {
       throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
     }
-    await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-    const client = await this.connectClient(config.serverUrl, this.decryptAccessToken(integration, session.userId));
-    try {
+    const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
+    const bearerToken = this.decryptAccessToken(integration, session.userId);
+    return await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
       const result = await withTimeout(
         client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
         this.timeoutMs,
@@ -187,9 +195,7 @@ export class IntegrationRemoteMcpBridge {
           handling: 'data_only_not_instructions',
         },
       };
-    } finally {
-      await client.close();
-    }
+    });
   }
 
   private decryptAccessToken(record: UserIntegrationRecord, userId: string): string {
@@ -206,9 +212,9 @@ export class IntegrationRemoteMcpBridge {
     }
   }
 
-  private async assertRemoteMcpPublicHost(hostname: string): Promise<void> {
+  private async assertRemoteMcpPublicHost(hostname: string): Promise<DnsLookupAddress> {
     try {
-      await assertPublicResolvedHost(hostname, this.dnsLookupImpl);
+      return await assertPublicResolvedHost(hostname, this.dnsLookupImpl);
     } catch (error) {
       if (error instanceof PublicHostGuardError) {
         if (error.reason === 'resolution_failed') {
@@ -220,8 +226,36 @@ export class IntegrationRemoteMcpBridge {
     }
   }
 
-  private async connectClient(serverUrl: URL, bearerToken: string): Promise<RemoteMcpClient> {
-    const clientPromise = this.clientFactory({ serverUrl, bearerToken });
+  /**
+   * Run `work` against a client whose transport is pinned to the vetted
+   * address. The pinned socket pool outlives the client and is closed last,
+   * even when the client's own close throws.
+   */
+  private async withPinnedClient<T>(
+    serverUrl: URL,
+    bearerToken: string,
+    vetted: DnsLookupAddress,
+    work: (client: RemoteMcpClient) => Promise<T>,
+  ): Promise<T> {
+    const outbound = this.pinnedOutboundFactory({
+      hostname: serverUrl.hostname,
+      address: vetted.address,
+      family: vetted.family,
+    });
+    try {
+      const client = await this.connectClient(serverUrl, bearerToken, outbound.fetch);
+      try {
+        return await work(client);
+      } finally {
+        await client.close();
+      }
+    } finally {
+      await outbound.close();
+    }
+  }
+
+  private async connectClient(serverUrl: URL, bearerToken: string, pinnedFetch: PinnedFetch): Promise<RemoteMcpClient> {
+    const clientPromise = this.clientFactory({ serverUrl, bearerToken, pinnedFetch });
     try {
       return await withTimeout(
         clientPromise,
@@ -241,9 +275,11 @@ export class IntegrationRemoteMcpBridge {
 async function createSdkRemoteMcpClient(input: {
   readonly serverUrl: URL;
   readonly bearerToken: string;
+  readonly pinnedFetch: PinnedFetch;
 }): Promise<RemoteMcpClient> {
   const client = new Client({ name: 'dollhousemcp-remote-bridge', version: '1.0.0' }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(input.serverUrl, {
+    fetch: input.pinnedFetch,
     requestInit: {
       headers: {
         Authorization: `Bearer ${input.bearerToken}`,
