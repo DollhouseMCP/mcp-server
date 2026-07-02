@@ -6,7 +6,6 @@ import {
   InMemoryIntegrationDescriptorStore,
   InMemoryUserIntegrationStore,
   IntegrationProviderRegistry,
-  IntegrationRequestGateway,
   IntegrationTokenRefreshService,
   type IIntegrationRequestAuditSink,
   type IntegrationDescriptorRecord,
@@ -14,6 +13,9 @@ import {
   type UserIntegrationProvider,
   type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
+// The raw gateway is deliberately not exported from the module barrels (FO2);
+// its own unit tests import the class module directly.
+import { IntegrationRequestGateway } from '../../../../src/web-console/modules/integrations/IntegrationRequestGateway.js';
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import type { IRateLimitStore } from '../../../../src/auth/embedded-as/storage/IRateLimitStore.js';

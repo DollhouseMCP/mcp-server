@@ -73,10 +73,73 @@ export interface IntegrationDescriptorCreateInput {
   readonly updatedAt: Date;
 }
 
+export const INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT = 100;
+
+export interface IntegrationDescriptorPageRequest {
+  /** 1..INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT; defaults to the maximum. */
+  readonly limit?: number;
+  /** Opaque cursor from a previous page's `nextCursor`; null/absent starts at the beginning. */
+  readonly cursor?: string | null;
+}
+
+export interface IntegrationDescriptorPage {
+  readonly items: readonly IntegrationDescriptorRecord[];
+  readonly nextCursor: string | null;
+}
+
 export interface IIntegrationDescriptorStore {
+  /**
+   * ALL descriptors visible to the user (curated + own BYO), ordered by
+   * provider then id. Complete — implementations must iterate pages
+   * internally rather than silently truncating; bounded reads use
+   * `listVisiblePage`.
+   */
   listVisible(userId: string): Promise<readonly IntegrationDescriptorRecord[]>;
+  listVisiblePage(userId: string, page?: IntegrationDescriptorPageRequest): Promise<IntegrationDescriptorPage>;
   findVisibleByProvider(userId: string, provider: UserIntegrationProvider): Promise<IntegrationDescriptorRecord | null>;
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
+}
+
+export function resolveDescriptorPageLimit(limit: number | undefined): number {
+  if (limit === undefined) return INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT) {
+    throw new ConsoleStoreValidationError(
+      `limit must be an integer between 1 and ${INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT}`,
+    );
+  }
+  return limit;
+}
+
+export function encodeDescriptorPageCursor(record: IntegrationDescriptorRecord): string {
+  return `${record.provider}:${record.id}`;
+}
+
+export function decodeDescriptorPageCursor(cursor: string): {
+  readonly provider: UserIntegrationProvider;
+  readonly id: string;
+} {
+  const separator = cursor.indexOf(':');
+  if (separator < 1) {
+    throw new ConsoleStoreValidationError('cursor is invalid');
+  }
+  const provider = cursor.slice(0, separator);
+  const id = cursor.slice(separator + 1);
+  assertUserIntegrationProvider(provider);
+  assertUuid(id, 'cursor id');
+  return { provider, id };
+}
+
+/**
+ * (provider, id) keyset comparison matching the page ordering. UUID string
+ * comparison agrees with PostgreSQL's byte-wise uuid ordering because the
+ * canonical form is fixed-width lowercase hex.
+ */
+export function isAfterDescriptorPageCursor(
+  record: IntegrationDescriptorRecord,
+  cursor: { readonly provider: string; readonly id: string },
+): boolean {
+  return record.provider > cursor.provider
+    || (record.provider === cursor.provider && record.id > cursor.id);
 }
 
 export function validateIntegrationDescriptorRecord(record: IntegrationDescriptorRecord): void {

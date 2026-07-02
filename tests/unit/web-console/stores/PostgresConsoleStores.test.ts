@@ -10,7 +10,7 @@ import type {
   IdempotencyRecord,
   IdempotencyRequestIdentity,
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
-import type { ConsoleAdminAuditEvent } from '../../../../src/web-console/audit/IAdminAuditWriter.js';
+import type { ConsoleAdminActorRole, ConsoleAdminAuditEvent } from '../../../../src/web-console/audit/IAdminAuditWriter.js';
 
 let transaction: Record<string, jest.Mock>;
 const withSystemContextMock = jest.fn(async (
@@ -77,6 +77,8 @@ const { PortfolioSyncAlreadyPendingError } = await import(
 );
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const READ_ISSUES_SCOPE = 'read:issues';
+const FRESH_ACCESS_TOKEN = 'fresh-access';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
 const SPEC_ID = '1f518305-ae82-4fe2-a696-dfdd2d4d4025';
@@ -687,14 +689,14 @@ describe('PostgresUserIntegrationStore', () => {
   it('maps generic provider integrations with scopes-only permission details', async () => {
     const chain = selectingChain([userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
     })]);
     transaction.select = jest.fn(() => chain);
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
 
     await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
     });
   });
 
@@ -729,14 +731,14 @@ describe('PostgresUserIntegrationStore', () => {
   it('locks an active integration before updating refreshed credentials', async () => {
     const updated = userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
-      accessTokenCiphertext: Buffer.from('fresh-access'),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
       refreshTokenCiphertext: Buffer.from('fresh-refresh'),
       credentialKeyVersion: 'integration-key-v2',
     });
     transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
       accessTokenCiphertext: Buffer.from('stale-access'),
       refreshTokenCiphertext: Buffer.from('stale-refresh'),
     })]));
@@ -748,16 +750,16 @@ describe('PostgresUserIntegrationStore', () => {
       provider: 'linear',
       staleAccessTokenCiphertext: Buffer.from('stale-access'),
       refreshedAt: FIVE_MINUTES,
-      refresh: async () => ({
-        kind: 'refreshed',
-        accessTokenCiphertext: Buffer.from('fresh-access'),
+      refresh: () => Promise.resolve({
+        kind: 'refreshed' as const,
+        accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
         refreshTokenCiphertext: Buffer.from('fresh-refresh'),
         credentialKeyVersion: 'integration-key-v2',
       }),
     })).resolves.toMatchObject({
       kind: 'refreshed',
       record: {
-        accessTokenCiphertext: Buffer.from('fresh-access'),
+        accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
         credentialKeyVersion: 'integration-key-v2',
       },
     });
@@ -769,8 +771,8 @@ describe('PostgresUserIntegrationStore', () => {
   it('reuses a row refreshed by an earlier locked caller', async () => {
     transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
-      accessTokenCiphertext: Buffer.from('fresh-access'),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
       refreshTokenCiphertext: Buffer.from('fresh-refresh'),
     })]));
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
@@ -780,13 +782,11 @@ describe('PostgresUserIntegrationStore', () => {
       provider: 'linear',
       staleAccessTokenCiphertext: Buffer.from('stale-access'),
       refreshedAt: FIVE_MINUTES,
-      refresh: async () => {
-        throw new Error('refresh should not run');
-      },
+      refresh: () => Promise.reject(new Error('refresh should not run')),
     })).resolves.toMatchObject({
       kind: 'reused',
       record: {
-        accessTokenCiphertext: Buffer.from('fresh-access'),
+        accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
       },
     });
     expect(transaction.update).toBeUndefined();
@@ -810,6 +810,33 @@ describe('PostgresIntegrationDescriptorStore', () => {
       apiHosts: ['gmail.googleapis.com'],
     });
     expect(row.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
+  });
+
+  it('paginates visible descriptors and encodes the next (provider, id) cursor', async () => {
+    const rows = [
+      integrationDescriptorRow({ provider: 'svc-a', id: '00000000-0000-4000-8000-0000000000a1' }),
+      integrationDescriptorRow({ provider: 'svc-b', id: '00000000-0000-4000-8000-0000000000a2' }),
+      integrationDescriptorRow({ provider: 'svc-c', id: '00000000-0000-4000-8000-0000000000a3' }),
+    ];
+    const chain = selectingChain(rows);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    const page = await store.listVisiblePage(USER_ID, { limit: 2 });
+
+    // limit+1 row probing: 3 rows back for limit 2 → one more page exists.
+    expect(chain.limit).toHaveBeenCalledWith(3);
+    expect(page.items.map(item => item.provider)).toEqual(['svc-a', 'svc-b']);
+    expect(page.nextCursor).toBe('svc-b:00000000-0000-4000-8000-0000000000a2');
+  });
+
+  it('rejects invalid pagination limits and cursors before querying', async () => {
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.listVisiblePage(USER_ID, { limit: 0 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { limit: 101 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { cursor: 'garbage' })).rejects.toThrow(ConsoleStoreValidationError);
+    expect(transaction.select).toBeUndefined();
   });
 
   it('upserts descriptors by owner/provider identity', async () => {
@@ -1796,7 +1823,7 @@ describe('PostgresAdminAuditWriter', () => {
   it.each([
     ['actorConsoleSessionHash', { actorConsoleSessionHash: Buffer.alloc(31, 8) }, 'actor session hash'],
     ['actorSub', { actorSub: ' ' }, 'actorSub'],
-    ['actorCapabilityRole', { actorCapabilityRole: ' ' as never }, 'actorCapabilityRole'],
+    ['actorCapabilityRole', { actorCapabilityRole: ' ' as unknown as ConsoleAdminActorRole }, 'actorCapabilityRole'],
     ['endpoint', { endpoint: ' ' }, 'endpoint'],
     ['operation', { operation: ' ' }, 'operation'],
     ['correlationId', { correlationId: ' ' }, 'correlationId'],

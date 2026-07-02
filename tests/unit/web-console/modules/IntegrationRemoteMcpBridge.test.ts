@@ -57,6 +57,24 @@ describe('IntegrationRemoteMcpBridge', () => {
     }]);
   });
 
+  it('skips discovery for providers the discovery gate refuses, before any credential use', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const discoveryGate = jest.fn<(provider: string) => Promise<boolean>>().mockResolvedValue(false);
+    const integrationStore = {
+      findByProvider: jest.fn(),
+    } as unknown as IUserIntegrationStore;
+    const { bridge, contextTracker } = fixture({ clientFactory, discoveryGate, integrationStore });
+
+    const tools = await runAsUser(contextTracker, () => bridge.listAllowedTools());
+
+    expect(tools).toEqual([]);
+    expect(discoveryGate).toHaveBeenCalledWith(REMOTE_DOCS);
+    // Gate refusal must short-circuit BEFORE the credential lookup/decrypt and
+    // before any outbound connection is attempted.
+    expect(integrationStore.findByProvider).not.toHaveBeenCalled();
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it('proxies calls with decrypted credentials and untrusted provenance', async () => {
     const callTool = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] });
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
@@ -209,6 +227,7 @@ function fixture(options: {
   readonly clientFactory?: RemoteMcpClientFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
+  readonly discoveryGate?: (provider: string) => Promise<boolean>;
 } = {}) {
   const contextTracker = new ContextTracker();
   const secretEncryption = encryption();
@@ -221,6 +240,7 @@ function fixture(options: {
       integrationStore: options.integrationStore ?? new InMemoryUserIntegrationStore(integrationRecords),
       secretEncryption,
       contextTracker,
+      discoveryGate: options.discoveryGate ?? (() => Promise.resolve(true)),
       dnsLookup: options.dnsLookup ?? publicDnsLookup,
       timeoutMs: options.timeoutMs,
       clientFactory: options.clientFactory ?? (() => Promise.resolve({

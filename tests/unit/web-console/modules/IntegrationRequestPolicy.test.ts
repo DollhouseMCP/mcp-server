@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import type { ActiveElement } from '../../../../src/handlers/mcp-aql/policies/index.js';
@@ -6,6 +6,7 @@ import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKe
 import { IntegrationRequestPolicyEnforcer } from '../../../../src/web-console/modules/integrations/IntegrationRequestPolicy.js';
 
 const SEND_PATH = '/gmail/v1/users/me/messages/send';
+const REMOTE_DOCS = 'remote-docs';
 
 function approvalRequestId(decision: { readonly approvalRequest?: { readonly requestId: string } }): string {
   if (!decision.approvalRequest) throw new Error('expected an approval request');
@@ -152,6 +153,83 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       allowed: true,
       approvalContext: { scope: 'tool_session' },
     });
+  });
+
+  it('evaluateDiscovery allows unrestricted providers without creating approval requests', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-allow-test',
+      new StaticAuditHmacKeyResolver('99'.repeat(32)),
+    );
+    const createSpy = jest.spyOn(gatekeeper, 'createCliApprovalRequest');
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([]),
+    });
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('evaluateDiscovery fails closed on confirm policies without creating approval requests', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-confirm-test',
+      new StaticAuditHmacKeyResolver('aa'.repeat(32)),
+    );
+    const createSpy = jest.spyOn(gatekeeper, 'createCliApprovalRequest');
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      // integrationReadGuard confirms every integration read; discovery is a
+      // session-start read with nobody present to confirm, so it must skip.
+      getActiveElements: () => Promise.resolve([integrationReadGuard()]),
+    });
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
+    expect(createSpy).not.toHaveBeenCalled();
+  });
+
+  it('evaluateDiscovery honors standing tool_session read approvals', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-standing-test',
+      new StaticAuditHmacKeyResolver('bb'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([integrationReadGuard()]),
+    });
+
+    const first = await enforcer.authorize({
+      provider: REMOTE_DOCS,
+      method: 'GET',
+      path: '/anything',
+    });
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+  });
+
+  it('evaluateDiscovery fails closed when policy evaluation is unavailable', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-discovery-unavailable-test',
+      new StaticAuditHmacKeyResolver('cc'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.reject(new Error('element resolution failed')),
+    });
+
+    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
   });
 });
 

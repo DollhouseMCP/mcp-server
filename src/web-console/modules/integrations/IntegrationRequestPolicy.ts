@@ -8,6 +8,7 @@ import {
 } from '../../../handlers/mcp-aql/policies/ToolClassification.js';
 
 const INTEGRATION_TOOL_NAME = 'integration_request';
+const REMOTE_MCP_DISCOVERY_POLICY_PATH = '_internal:/integration/remote_mcp_discovery';
 
 export interface IntegrationRequestPolicyInput {
   readonly provider: string;
@@ -99,6 +100,37 @@ export class IntegrationRequestPolicyEnforcer {
     }
 
     return { allowed: true, policyContext: elementDecision.policyContext };
+  }
+
+  /**
+   * Side-effect-free policy check for remote-MCP tool discovery — the
+   * session-start credentialed egress that decrypts a descriptor's bearer
+   * token and connects outbound to list its tools. Unlike `authorize()`, this
+   * NEVER creates an approval request (discovery runs at session
+   * establishment where nobody is present to approve, and creating one per
+   * session would flood the approval queue). A standing approval counts;
+   * anything policy would deny or ask confirmation for — including policy
+   * evaluation being unavailable — fails closed to `false`, and the caller
+   * skips discovery for that provider.
+   */
+  async evaluateDiscovery(provider: string): Promise<boolean> {
+    try {
+      const toolInput = integrationToolInput({
+        provider,
+        method: 'GET',
+        path: REMOTE_MCP_DISCOVERY_POLICY_PATH,
+      });
+      const existingApproval = await this.checkExistingApproval(toolInput, 'read');
+      if (existingApproval) return true;
+      const activeElements = await this.options.getActiveElements();
+      const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
+      if (elementDecision.behavior === 'deny' || elementDecision.behavior === 'confirm') return false;
+      const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
+      const approvalPolicy = resolveCliApprovalPolicy(activeElements);
+      return !approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous');
+    } catch {
+      return false;
+    }
   }
 
   private async checkExistingApproval(toolInput: Record<string, unknown>, readWriteClass: 'read' | 'write') {

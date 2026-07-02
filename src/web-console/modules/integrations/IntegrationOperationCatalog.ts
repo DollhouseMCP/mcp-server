@@ -732,7 +732,16 @@ function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descrip
 }
 
 function assertNoExternalRefs(value: unknown, depth = 0): void {
-  if (depth > 40 || value === null || typeof value !== 'object') return;
+  if (depth > 40) {
+    // Fail closed: nodes past the recursion limit are never inspected, so a
+    // deeper external $ref would silently escape the check if we returned here.
+    throw new IntegrationOperationCatalogError(
+      'invalid_openapi_spec',
+      'OpenAPI spec exceeds the supported nesting depth of 40.',
+      400,
+    );
+  }
+  if (value === null || typeof value !== 'object') return;
   if (Array.isArray(value)) {
     for (const item of value) assertNoExternalRefs(item, depth + 1);
     return;

@@ -2,8 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import {
   cloneIntegrationDescriptorRecord,
+  decodeDescriptorPageCursor,
+  encodeDescriptorPageCursor,
+  isAfterDescriptorPageCursor,
+  resolveDescriptorPageLimit,
   type IIntegrationDescriptorStore,
   type IntegrationDescriptorCreateInput,
+  type IntegrationDescriptorPage,
+  type IntegrationDescriptorPageRequest,
   type IntegrationDescriptorRecord,
   validateIntegrationDescriptorInput,
   validateIntegrationDescriptorRecord,
@@ -23,10 +29,31 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
   async listVisible(userId: string): Promise<readonly IntegrationDescriptorRecord[]> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
+    return this.visibleSorted(userId).map(cloneIntegrationDescriptorRecord);
+  }
+
+  async listVisiblePage(
+    userId: string,
+    page: IntegrationDescriptorPageRequest = {},
+  ): Promise<IntegrationDescriptorPage> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    const limit = resolveDescriptorPageLimit(page.limit);
+    const cursor = page.cursor ? decodeDescriptorPageCursor(page.cursor) : null;
+    const visible = this.visibleSorted(userId)
+      .filter(record => !cursor || isAfterDescriptorPageCursor(record, cursor));
+    const items = visible.slice(0, limit).map(cloneIntegrationDescriptorRecord);
+    const lastItem = items.at(-1);
+    return {
+      items,
+      nextCursor: visible.length > limit && lastItem ? encodeDescriptorPageCursor(lastItem) : null,
+    };
+  }
+
+  private visibleSorted(userId: string): IntegrationDescriptorRecord[] {
     return [...this.records.values()]
       .filter(record => record.ownership === 'curated' || record.ownerUserId === userId)
-      .sort((left, right) => left.provider.localeCompare(right.provider))
-      .map(cloneIntegrationDescriptorRecord);
+      .sort((left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id));
   }
 
   async findVisibleByProvider(

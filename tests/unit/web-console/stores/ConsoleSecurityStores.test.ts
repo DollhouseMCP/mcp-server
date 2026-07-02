@@ -26,6 +26,8 @@ import type {
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const READ_ISSUES_SCOPE = 'read:issues';
+const STALE_ACCESS_TOKEN = 'stale-access';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
 const SPEC_HASH = 'a'.repeat(64);
@@ -427,7 +429,7 @@ describe('InMemoryUserIntegrationStore', () => {
     const generic = userIntegration({
       provider: 'linear',
       authorizedPermissions: {
-        scopes: ['read:issues', 'write:comments'],
+        scopes: [READ_ISSUES_SCOPE, 'write:comments'],
       },
     });
     const store = new InMemoryUserIntegrationStore([generic]);
@@ -435,7 +437,7 @@ describe('InMemoryUserIntegrationStore', () => {
     await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
       provider: 'linear',
       authorizedPermissions: {
-        scopes: ['read:issues', 'write:comments'],
+        scopes: [READ_ISSUES_SCOPE, 'write:comments'],
       },
     });
   });
@@ -443,8 +445,8 @@ describe('InMemoryUserIntegrationStore', () => {
   it('serializes concurrent refresh and lets the losing caller reuse the fresh token', async () => {
     const store = new InMemoryUserIntegrationStore([userIntegration({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
-      accessTokenCiphertext: Buffer.from('stale-access'),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshTokenCiphertext: Buffer.from('stale-refresh'),
     })]);
     let refreshCalls = 0;
@@ -466,14 +468,14 @@ describe('InMemoryUserIntegrationStore', () => {
     const first = store.refresh({
       userId: USER_ID,
       provider: 'linear',
-      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh,
     });
     const second = store.refresh({
       userId: USER_ID,
       provider: 'linear',
-      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh,
     });
@@ -496,23 +498,23 @@ describe('InMemoryUserIntegrationStore', () => {
   it('records refresh failure without deleting the previous encrypted credential', async () => {
     const store = new InMemoryUserIntegrationStore([userIntegration({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
-      accessTokenCiphertext: Buffer.from('stale-access'),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshTokenCiphertext: Buffer.from('stale-refresh'),
     })]);
 
     await expect(store.refresh({
       userId: USER_ID,
       provider: 'linear',
-      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
-      refresh: async () => ({ kind: 'failed', errorReason: 'token_refresh_failed' }),
+      refresh: () => Promise.resolve({ kind: 'failed' as const, errorReason: 'token_refresh_failed' }),
     })).resolves.toMatchObject({
       kind: 'failed',
       record: {
         status: 'error',
         errorReason: 'token_refresh_failed',
-        accessTokenCiphertext: Buffer.from('stale-access'),
+        accessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
         refreshTokenCiphertext: Buffer.from('stale-refresh'),
       },
     });
@@ -558,7 +560,7 @@ describe('InMemoryUserIntegrationStore', () => {
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
       provider: 'linear',
       authorizedPermissions: {
-        scopes: ['read:issues'],
+        scopes: [READ_ISSUES_SCOPE],
         token: 'plaintext-token',
       },
     })])).toThrow(ConsoleStoreValidationError);
@@ -594,6 +596,39 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.findVisibleByProvider(SECOND_USER_ID, 'gmail')).resolves.toBeNull();
   });
 
+  it('paginates visible descriptors with a stable (provider, id) cursor and keeps listVisible complete', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const providers = ['svc-a', 'svc-b', 'svc-c', 'svc-d', 'svc-e'];
+    for (const provider of providers) {
+      await store.upsert(oauthDescriptorInput({ provider }));
+    }
+
+    const first = await store.listVisiblePage(USER_ID, { limit: 2 });
+    expect(first.items.map(item => item.provider)).toEqual(['svc-a', 'svc-b']);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = await store.listVisiblePage(USER_ID, { limit: 2, cursor: first.nextCursor });
+    expect(second.items.map(item => item.provider)).toEqual(['svc-c', 'svc-d']);
+
+    const third = await store.listVisiblePage(USER_ID, { limit: 2, cursor: second.nextCursor });
+    expect(third.items.map(item => item.provider)).toEqual(['svc-e']);
+    expect(third.nextCursor).toBeNull();
+
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(5);
+    await expect(store.listVisiblePage(SECOND_USER_ID, { limit: 2 }))
+      .resolves.toMatchObject({ items: [], nextCursor: null });
+  });
+
+  it('rejects invalid pagination limits and cursors', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+
+    await expect(store.listVisiblePage(USER_ID, { limit: 0 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { limit: 101 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { limit: 1.5 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { cursor: 'garbage' })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { cursor: 'svc-a:not-a-uuid' })).rejects.toThrow(ConsoleStoreValidationError);
+  });
+
   it('validates descriptor ownership, hosts, URLs, and auth strategy shape', async () => {
     const store = new InMemoryIntegrationDescriptorStore();
 
@@ -603,9 +638,11 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.upsert(oauthDescriptorInput({
       apiHosts: ['localhost'],
     }))).rejects.toThrow(ConsoleStoreValidationError);
+    const baseOauth = oauthDescriptorInput().oauth;
+    if (!baseOauth) throw new Error('fixture oauth missing');
     await expect(store.upsert(oauthDescriptorInput({
       oauth: {
-        ...oauthDescriptorInput().oauth!,
+        ...baseOauth,
         tokenUrl: 'http://oauth2.googleapis.com/token',
       },
     }))).rejects.toThrow(ConsoleStoreValidationError);

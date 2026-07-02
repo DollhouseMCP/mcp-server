@@ -11,34 +11,61 @@ import {
   type IntegrationOperationCatalog,
 } from '../../../../src/web-console/modules/integrations/IntegrationOperationCatalog.js';
 import type { IntegrationRemoteMcpBridge } from '../../../../src/web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
+import {
+  AuthorizedIntegrationGateway,
+  AuthorizedIntegrationOperationCatalog,
+  AuthorizedIntegrationRemoteMcpBridge,
+} from '../../../../src/web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 
 const REMOTE_DOCS = 'remote-docs';
+
+function allowingPolicy(): IntegrationRequestPolicyEnforcer {
+  return {
+    authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
+  } as unknown as IntegrationRequestPolicyEnforcer;
+}
+
+function approvalRequiredPolicy(requestId: string): IntegrationRequestPolicyEnforcer {
+  return {
+    authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({
+      allowed: false,
+      error: {
+        code: 'integration_request_approval_required',
+        message: 'Approval required.',
+        status: 403,
+      },
+      approvalRequest: {
+        requestId,
+        toolName: 'integration_request',
+        riskLevel: 'dangerous',
+        riskScore: 80,
+        irreversible: false,
+        reason: 'Requires approval.',
+      },
+    }),
+  } as unknown as IntegrationRequestPolicyEnforcer;
+}
+
+function authorized(gateway: IntegrationRequestGateway, policyEnforcer: IntegrationRequestPolicyEnforcer) {
+  return new AuthorizedIntegrationGateway({ gateway, policyEnforcer });
+}
+
+function authorizedCatalog(catalog: IntegrationOperationCatalog, policyEnforcer: IntegrationRequestPolicyEnforcer) {
+  return new AuthorizedIntegrationOperationCatalog({ catalog, policyEnforcer });
+}
+
+function authorizedBridge(bridge: IntegrationRemoteMcpBridge, policyEnforcer: IntegrationRequestPolicyEnforcer) {
+  return new AuthorizedIntegrationRemoteMcpBridge({ bridge, policyEnforcer });
+}
 
 describe('IntegrationTools', () => {
   it('runs policy before gateway request and returns approval metadata', async () => {
     const gateway = {
       request: jest.fn<IntegrationRequestGateway['request']>(),
     } as unknown as IntegrationRequestGateway;
-    const policy = {
-      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({
-        allowed: false,
-        error: {
-          code: 'integration_request_approval_required',
-          message: 'Approval required.',
-          status: 403,
-        },
-        approvalRequest: {
-          requestId: 'cli-00000000-0000-4000-8000-000000000001',
-          toolName: 'integration_request',
-          riskLevel: 'dangerous',
-          riskScore: 80,
-          irreversible: false,
-          reason: 'Requires approval.',
-        },
-      }),
-    } as unknown as IntegrationRequestPolicyEnforcer;
+    const policy = approvalRequiredPolicy('cli-00000000-0000-4000-8000-000000000001');
 
-    const tool = getIntegrationTools(gateway, policy).find(candidate => candidate.tool.name === 'integration_request');
+    const tool = getIntegrationTools(authorized(gateway, policy)).find(candidate => candidate.tool.name === 'integration_request');
     if (!tool) throw new Error('integration_request tool missing');
     const result = await tool.handler({
       provider: 'gmail',
@@ -83,11 +110,9 @@ describe('IntegrationTools', () => {
         },
       }),
     } as unknown as IntegrationRequestGateway;
-    const policy = {
-      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
-    } as unknown as IntegrationRequestPolicyEnforcer;
+    const policy = allowingPolicy();
 
-    const tool = getIntegrationTools(gateway, policy).find(candidate => candidate.tool.name === 'integration_request');
+    const tool = getIntegrationTools(authorized(gateway, policy)).find(candidate => candidate.tool.name === 'integration_request');
     if (!tool) throw new Error('integration_request tool missing');
     const result = await tool.handler({
       provider: 'gmail',
@@ -117,7 +142,7 @@ describe('IntegrationTools', () => {
         .mockRejectedValue(new IntegrationPolicyUnavailableError()),
     } as unknown as IntegrationRequestPolicyEnforcer;
 
-    const tool = getIntegrationTools(gateway, policy).find(candidate => candidate.tool.name === 'integration_request');
+    const tool = getIntegrationTools(authorized(gateway, policy)).find(candidate => candidate.tool.name === 'integration_request');
     if (!tool) throw new Error('integration_request tool missing');
     const result = await tool.handler({
       provider: 'gmail',
@@ -163,7 +188,7 @@ describe('IntegrationTools', () => {
       describeOperation: jest.fn<IntegrationOperationCatalog['describeOperation']>(),
     } as unknown as IntegrationOperationCatalog;
 
-    const tools = getIntegrationTools(gateway, null, catalog);
+    const tools = getIntegrationTools(authorized(gateway, allowingPolicy()), authorizedCatalog(catalog, allowingPolicy()));
     expect(tools.map(entry => entry.tool.name)).toEqual([
       'integration_request',
       'ingest_openapi_spec',
@@ -216,9 +241,7 @@ describe('IntegrationTools', () => {
         },
       }),
     } as unknown as IntegrationRequestGateway;
-    const policy = {
-      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
-    } as unknown as IntegrationRequestPolicyEnforcer;
+    const policy = allowingPolicy();
     const catalog = {
       listPromotedOperations: jest.fn<IntegrationOperationCatalog['listPromotedOperations']>().mockResolvedValue([{
         operationId: 'listMessages',
@@ -253,7 +276,10 @@ describe('IntegrationTools', () => {
       }]),
     } as unknown as IntegrationOperationCatalog;
 
-    const tools = await getPromotedIntegrationTools(gateway, catalog, policy);
+    const tools = await getPromotedIntegrationTools(
+      authorized(gateway, policy),
+      authorizedCatalog(catalog, allowingPolicy()),
+    );
 
     expect(tools).toHaveLength(1);
     expect(tools[0].tool.name).toBe('integration_gmail_listmessages');
@@ -325,9 +351,8 @@ describe('IntegrationTools', () => {
     } as unknown as IntegrationOperationCatalog;
 
     const tools = await getPromotedIntegrationTools(
-      gateway,
-      catalog,
-      null,
+      authorized(gateway, allowingPolicy()),
+      authorizedCatalog(catalog, allowingPolicy()),
       new Set(['integration_gmail_listmessages']),
     );
 
@@ -357,13 +382,10 @@ describe('IntegrationTools', () => {
         },
       }),
     } as unknown as IntegrationRemoteMcpBridge;
-    const policy = {
-      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
-    } as unknown as IntegrationRequestPolicyEnforcer;
+    const policy = allowingPolicy();
 
     const tools = await getRemoteMcpBridgeTools(
-      bridge,
-      policy,
+      authorizedBridge(bridge, policy),
       new Set(['remote_mcp_remote_docs_search']),
     );
 
@@ -391,28 +413,36 @@ describe('IntegrationTools', () => {
     });
   });
 
+  it('denies remote MCP proxy calls before the bridge when policy refuses', async () => {
+    const bridge = {
+      listAllowedTools: jest.fn<IntegrationRemoteMcpBridge['listAllowedTools']>().mockResolvedValue([{
+        provider: REMOTE_DOCS,
+        remoteName: 'search',
+        localName: 'remote_mcp_remote_docs_search',
+        description: 'Search remote docs',
+        inputSchema: { type: 'object' },
+        serverUrl: 'https://mcp.example.com/mcp',
+      }]),
+      callTool: jest.fn<IntegrationRemoteMcpBridge['callTool']>(),
+    } as unknown as IntegrationRemoteMcpBridge;
+    const policy = approvalRequiredPolicy('cli-00000000-0000-4000-8000-000000000003');
+
+    const tools = await getRemoteMcpBridgeTools(authorizedBridge(bridge, policy));
+    const result = await tools[0].handler({ q: 'status' });
+
+    expect(bridge.callTool).not.toHaveBeenCalled();
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      ok: false,
+      error: { code: 'integration_request_approval_required' },
+      approvalRequest: { requestId: 'cli-00000000-0000-4000-8000-000000000003' },
+    });
+  });
+
   it('runs integration write policy before OpenAPI ingestion', async () => {
     const gateway = {
       request: jest.fn<IntegrationRequestGateway['request']>(),
     } as unknown as IntegrationRequestGateway;
-    const policy = {
-      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({
-        allowed: false,
-        error: {
-          code: 'integration_request_approval_required',
-          message: 'Approval required.',
-          status: 403,
-        },
-        approvalRequest: {
-          requestId: 'cli-00000000-0000-4000-8000-000000000002',
-          toolName: 'integration_request',
-          riskLevel: 'dangerous',
-          riskScore: 80,
-          irreversible: false,
-          reason: 'Requires approval.',
-        },
-      }),
-    } as unknown as IntegrationRequestPolicyEnforcer;
+    const policy = approvalRequiredPolicy('cli-00000000-0000-4000-8000-000000000002');
     const catalog = {
       ingestOpenApiSpec: jest.fn<IntegrationOperationCatalog['ingestOpenApiSpec']>(),
       regenerateSkill: jest.fn<IntegrationOperationCatalog['regenerateSkill']>(),
@@ -420,7 +450,7 @@ describe('IntegrationTools', () => {
       describeOperation: jest.fn<IntegrationOperationCatalog['describeOperation']>(),
     } as unknown as IntegrationOperationCatalog;
 
-    const ingestTool = getIntegrationTools(gateway, policy, catalog)
+    const ingestTool = getIntegrationTools(authorized(gateway, allowingPolicy()), authorizedCatalog(catalog, policy))
       .find(candidate => candidate.tool.name === 'ingest_openapi_spec');
     if (!ingestTool) throw new Error('ingest_openapi_spec tool missing');
 
@@ -458,10 +488,7 @@ describe('IntegrationTools', () => {
       describeOperation: jest.fn<IntegrationOperationCatalog['describeOperation']>(),
     } as unknown as IntegrationOperationCatalog;
 
-    const policy = {
-      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
-    } as unknown as IntegrationRequestPolicyEnforcer;
-    const ingestTool = getIntegrationTools(gateway, policy, catalog)
+    const ingestTool = getIntegrationTools(authorized(gateway, allowingPolicy()), authorizedCatalog(catalog, allowingPolicy()))
       .find(candidate => candidate.tool.name === 'ingest_openapi_spec');
     if (!ingestTool) throw new Error('ingest_openapi_spec tool missing');
 
@@ -487,10 +514,14 @@ describe('IntegrationTools', () => {
     });
   });
 
-  it('fails closed for integration management writes when policy enforcer is unavailable', async () => {
+  it('fails closed for integration management writes when policy evaluation is unavailable', async () => {
     const gateway = {
       request: jest.fn<IntegrationRequestGateway['request']>(),
     } as unknown as IntegrationRequestGateway;
+    const policy = {
+      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>()
+        .mockRejectedValue(new IntegrationPolicyUnavailableError()),
+    } as unknown as IntegrationRequestPolicyEnforcer;
     const catalog = {
       ingestOpenApiSpec: jest.fn<IntegrationOperationCatalog['ingestOpenApiSpec']>(),
       regenerateSkill: jest.fn<IntegrationOperationCatalog['regenerateSkill']>(),
@@ -498,7 +529,7 @@ describe('IntegrationTools', () => {
       describeOperation: jest.fn<IntegrationOperationCatalog['describeOperation']>(),
     } as unknown as IntegrationOperationCatalog;
 
-    const ingestTool = getIntegrationTools(gateway, null, catalog)
+    const ingestTool = getIntegrationTools(authorized(gateway, allowingPolicy()), authorizedCatalog(catalog, policy))
       .find(candidate => candidate.tool.name === 'ingest_openapi_spec');
     if (!ingestTool) throw new Error('ingest_openapi_spec tool missing');
 
@@ -511,7 +542,7 @@ describe('IntegrationTools', () => {
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       ok: false,
       error: {
-        code: 'integration_management_policy_unavailable',
+        code: 'integration_request_policy_unavailable',
         status: 503,
       },
     });
@@ -542,15 +573,18 @@ describe('IntegrationTools', () => {
       describeOperation: jest.fn<IntegrationOperationCatalog['describeOperation']>(),
     } as unknown as IntegrationOperationCatalog;
 
-    const policy = {
-      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: true }),
-    } as unknown as IntegrationRequestPolicyEnforcer;
-    const tool = getIntegrationTools(gateway, policy, catalog)
+    const policy = allowingPolicy();
+    const tool = getIntegrationTools(authorized(gateway, allowingPolicy()), authorizedCatalog(catalog, policy))
       .find(candidate => candidate.tool.name === 'regenerate_integration_skill');
     if (!tool) throw new Error('regenerate_integration_skill tool missing');
 
     const result = await tool.handler({ provider: 'gmail' });
 
+    expect(policy.authorize).toHaveBeenCalledWith({
+      provider: 'gmail',
+      method: 'PUT',
+      path: '_internal:/integration/generated_skill',
+    });
     expect(catalog.regenerateSkill).toHaveBeenCalledWith({ provider: 'gmail' });
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       ok: true,
@@ -575,7 +609,7 @@ describe('IntegrationTools', () => {
         )),
     } as unknown as IntegrationOperationCatalog;
 
-    const describeTool = getIntegrationTools(gateway, null, catalog)
+    const describeTool = getIntegrationTools(authorized(gateway, allowingPolicy()), authorizedCatalog(catalog, allowingPolicy()))
       .find(candidate => candidate.tool.name === 'describe_operation');
     if (!describeTool) throw new Error('describe_operation tool missing');
 
