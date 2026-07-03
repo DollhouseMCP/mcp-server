@@ -562,6 +562,28 @@ export class MCPAQLHandler {
   /** Issue #656: Debounce metrics — tracks saves coalesced vs actually written. */
   private readonly debounceMetrics = { coalesced: 0, written: 0 };
   /**
+   * Issue #2329: Memories whose most recent save attempt failed.
+   * Key: normalized memory name (memorySaveKey). Holds the failing Memory
+   * instance and its manager — the unpersisted entries exist only in that
+   * instance, so recovery must retry it (a freshly loaded instance would lack
+   * them), and holding the reference keeps it alive across cache eviction.
+   * The next addEntry retries the save synchronously and reports the error to
+   * the caller instead of silently accepting more entries; dispose() flushes
+   * these as a last resort.
+   */
+  private readonly failedMemorySaves = new Map<string, {
+    error: Error;
+    memory: import('../../elements/memories/Memory.js').Memory;
+    manager: MemoryManager;
+  }>();
+  /**
+   * Issue #2329: monotonically increasing save-attempt counter per memory key.
+   * Guards the failure ledger against reordering: an older in-flight save that
+   * resolves after a newer one started must not overwrite the newer attempt's
+   * outcome.
+   */
+  private readonly memorySaveAttempts = new Map<string, number>();
+  /**
    * Issue #657: Per-memory save frequency tracker.
    * Sliding window counter: tracks addEntry calls per memory within the monitor window.
    * Logs warnings at configurable thresholds to catch runaway loops early.
@@ -1056,6 +1078,7 @@ export class MCPAQLHandler {
         elementType,
         params: mergedParams,
       });
+      this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
 
       // Step 5: Apply field selection (Issue #202)
       // Transform name → element_name for LLM consistency
@@ -1591,6 +1614,90 @@ export class MCPAQLHandler {
    */
 
   /**
+   * Normalized key shared by pendingSaves, failedMemorySaves, memorySaveAttempts,
+   * and saveFrequencyCounters. All memory-save bookkeeping must use this — a
+   * mismatched key silently disconnects the failure ledger from recovery (#2329).
+   */
+  private memorySaveKey(memoryName: string): string {
+    return memoryName.toLowerCase();
+  }
+
+  /**
+   * Issue #2329 (Codex review): a successfully deleted memory must drop its
+   * save bookkeeping — a retained failure-ledger instance or pending debounce
+   * timer would otherwise re-save the in-RAM state and resurrect the deleted
+   * file. Called after dispatch in executeOperation so the schema-dispatch,
+   * legacy, and batch paths are all covered.
+   */
+  private cleanupDeletedMemoryBookkeeping(
+    operation: string,
+    elementType: string | undefined,
+    params: Record<string, unknown> | undefined,
+  ): void {
+    if (operation !== 'delete_element') return;
+    const p = params ?? {};
+    const type = (elementType ?? p.element_type ?? p.type) as string | undefined;
+    const name = (p.element_name ?? p.name) as string | undefined;
+    if (name && normalizeElementType(type) === ElementType.MEMORY) {
+      this.clearMemorySaveBookkeeping(name);
+    }
+  }
+
+  /**
+   * Issue #2329 (Codex review): drop all save bookkeeping for a deleted memory.
+   * Without this, the failure ledger keeps the deleted memory's in-RAM instance
+   * and the flush/retry paths re-save it, resurrecting the deleted file. A save
+   * already in flight when the delete lands can still race the file back — that
+   * narrow window is inherent to fire-and-forget writes and unchanged here.
+   */
+  private clearMemorySaveBookkeeping(memoryName: string): void {
+    const key = this.memorySaveKey(memoryName);
+    const pending = this.pendingSaves.get(key);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingSaves.delete(key);
+    }
+    this.failedMemorySaves.delete(key);
+    this.memorySaveAttempts.delete(key);
+    this.saveFrequencyCounters.delete(key);
+  }
+
+  /**
+   * Issue #2329: save a memory with failure-ledger bookkeeping. On failure the
+   * ledger records the error AND the failing instance (its unpersisted entries
+   * exist nowhere else); on success the record clears. The attempt counter makes
+   * the newest-started save win: an older in-flight save resolving late cannot
+   * erase a newer failure. Rethrows the save error.
+   */
+  private async saveMemoryTracked(
+    key: string,
+    memory: import('../../elements/memories/Memory.js').Memory,
+    manager: MemoryManager,
+  ): Promise<void> {
+    const attempt = (this.memorySaveAttempts.get(key) ?? 0) + 1;
+    this.memorySaveAttempts.set(key, attempt);
+    try {
+      await manager.save(memory);
+      if (this.memorySaveAttempts.get(key) === attempt) {
+        this.failedMemorySaves.delete(key);
+        // Prune the counter on latest-success so the map stays bounded by
+        // currently-failing memories. A stale in-flight save then sees
+        // undefined !== its attempt and correctly skips ledger updates.
+        this.memorySaveAttempts.delete(key);
+      }
+    } catch (err) {
+      if (this.memorySaveAttempts.get(key) === attempt) {
+        this.failedMemorySaves.set(key, {
+          error: err instanceof Error ? err : new Error(String(err)),
+          memory,
+          manager,
+        });
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Issue #656: Debounce memory saves to prevent file descriptor exhaustion.
    * Coalesces rapid addEntry calls — only writes the latest state after the window expires.
    */
@@ -1599,7 +1706,7 @@ export class MCPAQLHandler {
     memory: import('../../elements/memories/Memory.js').Memory,
     manager: MemoryManager,
   ): void {
-    const key = memoryName.toLowerCase();
+    const key = this.memorySaveKey(memoryName);
     const existing = this.pendingSaves.get(key);
     if (existing) {
       clearTimeout(existing.timer);
@@ -1611,7 +1718,7 @@ export class MCPAQLHandler {
       this.pendingSaves.delete(key);
       this.debounceMetrics.written++;
       logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
-      manager.save(memory).catch((err) => {
+      this.saveMemoryTracked(key, memory, manager).catch((err) => {
         logger.error(`[MCPAQLHandler] Debounced save failed for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written}): ${err}`);
       });
     }, debounceMs);
@@ -1632,7 +1739,7 @@ export class MCPAQLHandler {
    * @param memoryName - Name of the memory being written to
    */
   private trackSaveFrequency(memoryName: string): void {
-    const key = memoryName.toLowerCase();
+    const key = this.memorySaveKey(memoryName);
     const now = Date.now();
     const windowMs = STORAGE_LAYER_CONFIG.MEMORY_SAVE_MONITOR_WINDOW_MS;
     const warnThreshold = STORAGE_LAYER_CONFIG.MEMORY_SAVE_FREQUENCY_WARN_THRESHOLD;
@@ -1699,6 +1806,9 @@ export class MCPAQLHandler {
 
   /**
    * Issue #656: Flush all pending debounced saves immediately.
+   * Issue #2329: also retries memories whose earlier deferred save failed and
+   * that have no pending timer — their dirty state exists only in RAM and this
+   * is the last chance to persist it before shutdown.
    */
   async flushPendingSaves(): Promise<void> {
     const pending = [...this.pendingSaves.entries()];
@@ -1706,14 +1816,29 @@ export class MCPAQLHandler {
     if (pending.length > 0) {
       logger.info(`[MCPAQLHandler] Flushing ${pending.length} pending memory save(s) on shutdown (total coalesced: ${this.debounceMetrics.coalesced}, total written: ${this.debounceMetrics.written})`);
     }
+    const flushedKeys = new Set<string>();
     for (const [key, { timer, memory, manager }] of pending) {
       clearTimeout(timer);
+      flushedKeys.add(key);
       try {
-        await manager.save(memory);
+        await this.saveMemoryTracked(key, memory, manager);
         this.debounceMetrics.written++;
       } catch (err) {
         const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
         logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' (entries: ${entryCount}, pending remaining: ${pending.length}): ${err}`);
+      }
+    }
+    // Direct Map iteration is safe here: saveMemoryTracked only deletes the
+    // current key on success, which the iteration protocol tolerates.
+    for (const [key, { memory, manager }] of this.failedMemorySaves) {
+      if (flushedKeys.has(key)) continue; // just attempted above
+      try {
+        await this.saveMemoryTracked(key, memory, manager);
+        this.debounceMetrics.written++;
+        logger.info(`[MCPAQLHandler] Recovered previously failed save for memory '${key}' during flush`);
+      } catch (err) {
+        const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
+        logger.error(`[MCPAQLHandler] Final flush retry failed for memory '${key}' (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
       }
     }
   }
@@ -1739,46 +1864,122 @@ export class MCPAQLHandler {
     }
 
     switch (method) {
-      case 'addEntry': {
-        // Fix #387: Accept 'entry' as alias for 'content'
-        if (params.entry !== undefined && params.content === undefined) {
-          params.content = params.entry;
-        }
-        // Memory.addEntry(content, tags?, metadata?)
-        // Fix #387 Option D: Contextual error message guiding toward correct parameter
-        if (params.content === undefined || params.content === null || typeof params.content !== 'string' || (params.content as string).trim() === '') {
-          const hint = params.entry !== undefined
-            ? `You passed 'entry', but an entry is the full object (content + tags + metadata + timestamp). ` +
-              `Use 'content' to provide the text portion of the entry.`
-            : `The 'content' parameter is the text portion of the memory entry.`;
-          throw new Error(
-            `Missing required parameter 'content'. ${hint} ` +
-            `Example: { operation: "addEntry", params: { element_name: "${memoryName}", content: "your text here", tags: ["optional"] } }`
-          );
-        }
-        const content = params.content as string;
-        const tags = params.tags as string[] | undefined;
-        const metadata = params.metadata as Record<string, unknown> | undefined;
-        const entryResult = memory.addEntry(content, tags, metadata);
-        // Issue #657: Track save frequency and alert on anomalous patterns.
-        this.trackSaveFrequency(memoryName);
-        // Issue #656: Debounce saves to prevent FD exhaustion from rapid addEntry calls.
-        // The entry is already in memory — disk write is deferred and coalesced.
-        this.debouncedMemorySave(memoryName, memory, manager);
-        return entryResult;
-      }
+      case 'addEntry':
+        return this.handleMemoryAddEntry(memoryName, memory, manager, params);
 
       case 'clear': {
+        // Issue #2329: cancel any pending debounced save first — a stale timer
+        // firing after the clear would resurrect the pre-clear entries on disk.
+        const clearKey = this.memorySaveKey(memoryName);
+        const pendingClear = this.pendingSaves.get(clearKey);
+        if (pendingClear) {
+          clearTimeout(pendingClear.timer);
+          this.pendingSaves.delete(clearKey);
+        }
         // Memory.clearAll(confirm) - requires explicit confirmation
-        const clearResult = memory.clearAll(true);
-        // Fix #438: Persist to disk so cleared state survives restart
-        await manager.save(memory);
+        const clearResult = await memory.clearAll(true);
+        // Fix #438: Persist to disk so cleared state survives restart.
+        // Tracked so a success clears any stale failure record for this memory.
+        await this.saveMemoryTracked(clearKey, memory, manager);
         return clearResult;
       }
 
       default:
         throw new Error(`Unknown Memory method: ${method}`);
     }
+  }
+
+  /**
+   * Fix #387: resolve the addEntry 'content' parameter, accepting 'entry' as an
+   * alias and throwing a contextual error when the text portion is missing.
+   */
+  private extractAddEntryContent(memoryName: string, params: Record<string, unknown>): string {
+    if (params.entry !== undefined && params.content === undefined) {
+      params.content = params.entry;
+    }
+    // Fix #387 Option D: Contextual error message guiding toward correct parameter
+    if (params.content === undefined || params.content === null || typeof params.content !== 'string' || (params.content as string).trim() === '') {
+      const hint = params.entry !== undefined
+        ? `You passed 'entry', but an entry is the full object (content + tags + metadata + timestamp). ` +
+          `Use 'content' to provide the text portion of the entry.`
+        : `The 'content' parameter is the text portion of the memory entry.`;
+      throw new Error(
+        `Missing required parameter 'content'. ${hint} ` +
+        `Example: { operation: "addEntry", params: { element_name: "${memoryName}", content: "your text here", tags: ["optional"] } }`
+      );
+    }
+    return params.content as string;
+  }
+
+  /**
+   * addEntry with the #2329 persistence guarantees: recover from a prior failed
+   * save, mutate the authoritative instance, verify persistability before
+   * reporting success (rolling back on failure), then schedule the debounced save.
+   */
+  private async handleMemoryAddEntry(
+    memoryName: string,
+    memory: import('../../elements/memories/Memory.js').Memory,
+    manager: MemoryManager,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const content = this.extractAddEntryContent(memoryName, params);
+    const tags = params.tags as string[] | undefined;
+    const metadata = params.metadata as Record<string, unknown> | undefined;
+
+    // Issue #2329: operate on the authoritative instance. Unpersisted entries
+    // live only in the instance held by the failure ledger or a pending
+    // debounced save; after cache eviction find() reloads a fresh copy from
+    // disk that lacks them, and writing through that copy would clobber the
+    // recovered state.
+    const saveKey = this.memorySaveKey(memoryName);
+    const priorFailure = this.failedMemorySaves.get(saveKey);
+    const targetMemory = priorFailure?.memory ?? this.pendingSaves.get(saveKey)?.memory ?? memory;
+
+    // Issue #2329: if a previous save of this memory failed (e.g. disk error),
+    // recover before accepting more entries — otherwise they pile up in RAM
+    // behind the same failure and are lost on restart.
+    if (priorFailure) {
+      try {
+        await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
+      } catch (retryErr) {
+        throw new Error(
+          `Entry NOT saved: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
+          `(${priorFailure.error.message}) and the retry also failed: ` +
+          `${retryErr instanceof Error ? retryErr.message : retryErr}`
+        );
+      }
+    }
+
+    const entriesBefore = targetMemory.getEntries().size;
+    const entryResult = await targetMemory.addEntry(content, tags, metadata);
+
+    // Issue #2329: verify the memory can still be persisted BEFORE reporting
+    // success. The disk write below is deferred (debounced), so a validation
+    // failure there can never reach the caller — entries were acknowledged
+    // with an id and then silently lost when the memory outgrew save limits.
+    try {
+      await manager.assertPersistable(targetMemory);
+    } catch (validationErr) {
+      targetMemory.removeEntry(entryResult.id);
+      // addEntry may have evicted old entries (retention/capacity policy)
+      // before validation failed. The eviction stands — it would happen on
+      // any future successful add — but it must reach disk, or RAM and disk
+      // silently diverge with no save scheduled.
+      if (targetMemory.getEntries().size !== entriesBefore) {
+        this.debouncedMemorySave(memoryName, targetMemory, manager);
+      }
+      throw new Error(
+        `Entry NOT saved to memory '${memoryName}': ` +
+        `${validationErr instanceof Error ? validationErr.message : validationErr}`
+      );
+    }
+
+    // Issue #657: Track save frequency and alert on anomalous patterns.
+    this.trackSaveFrequency(memoryName);
+    // Issue #656: Debounce saves to prevent FD exhaustion from rapid addEntry calls.
+    // The entry is already in memory — disk write is deferred and coalesced.
+    this.debouncedMemorySave(memoryName, targetMemory, manager);
+    return entryResult;
   }
 
   /**
