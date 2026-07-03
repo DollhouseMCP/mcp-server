@@ -148,6 +148,7 @@ import {
   createCollectionModule,
   type CollectionDetailPort,
   type CollectionIndexPort,
+  type CollectionInstallPort,
   type CollectionSearchPort,
 } from './modules/collection/index.js';
 import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
@@ -617,12 +618,22 @@ export class WebConsoleRegistrar {
       now: this.options.now,
     }));
     // Whole-module gate (not per-route like portfolio writes): when the flag is
-    // off, the catalog surface is absent from the manifest entirely.
+    // off, the catalog surface is absent from the manifest entirely. The install
+    // route additionally requires the portfolio write flag — install is a
+    // portfolio mutation sourced from the catalog.
     if (this.options.enableCollectionRoutes === true) {
+      const enableInstall = this.options.enablePortfolioWriteRoutes === true;
       registerRouteModule(registry, this.options, 'collection', () => createCollectionModule({
         index: resolveCollectionEngineService<CollectionIndexPort>(container, 'CollectionIndexManager'),
         search: resolveCollectionEngineService<CollectionSearchPort>(container, 'CollectionSearch'),
         details: resolveCollectionEngineService<CollectionDetailPort>(container, 'PersonaDetails'),
+        install: enableInstall
+          ? {
+              installer: resolveCollectionEngineService<CollectionInstallPort>(container, 'ElementInstaller'),
+              portfolioStore: stores.portfolioStore,
+              now: this.options.now,
+            }
+          : undefined,
       }));
     }
     registerRouteModule(registry, this.options, 'selfService', () => createSelfServiceModule({

@@ -11,6 +11,7 @@ import {
   type ConsoleHandlerResult,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
+  type IPortfolioElementStore,
 } from '../../../../src/web-console/index.js';
 import type { CollectionIndexManager } from '../../../../src/collection/CollectionIndexManager.js';
 import type { CollectionSearch } from '../../../../src/collection/CollectionSearch.js';
@@ -150,6 +151,29 @@ describe('CollectionModule', () => {
         expect(definition.elevation).toBe('none');
         expect(definition.privacyProjector).toBeDefined();
       }
+    });
+
+    it('omits the install route unless install options are provided', () => {
+      const module = createCollectionModule(fakePorts());
+      expect(module.routes.some(r => r.method === 'POST')).toBe(false);
+    });
+
+    it('adds a self-private install route under the portfolio path when install is enabled', () => {
+      const module = createCollectionModule({
+        ...fakePorts(),
+        install: {
+          installer: { fetchAndValidate: () => Promise.reject(new Error('unused')) },
+          portfolioStore: {} as unknown as IPortfolioElementStore,
+        },
+      });
+      const install = module.routes.find(r => r.method === 'POST');
+      expect(install).toBeDefined();
+      expect(install?.path).toBe('/api/v1/me/portfolio/from-collection');
+      // Install writes per-user data: self_private, NOT the catalog class.
+      expect(install?.privacyClass).toBe('self_private');
+      expect(install?.idempotency).toBe('required');
+      expect(install?.rateLimit).toBe('collection_fetch');
+      expect(install?.ownership).toBe('authenticated_user');
     });
   });
 

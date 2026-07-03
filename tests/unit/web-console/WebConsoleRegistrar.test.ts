@@ -395,6 +395,7 @@ describe('WebConsoleRegistrar', () => {
 
     const collectionRoutes = composition.registry.createRouteManifest().routes
       .filter(route => route.moduleId === 'collection');
+    // Browse-only: portfolio write flag is off, so no install route.
     expect(collectionRoutes.map(route => route.path)).toEqual([
       '/api/v1/collection/elements',
       '/api/v1/collection/elements/:type/:name',
@@ -404,6 +405,29 @@ describe('WebConsoleRegistrar', () => {
       expect(route.privacyClass).toBe('public_catalog');
       expect(route.rateLimit).toBe('collection_fetch');
     }
+  });
+
+  it('adds the install route only when collection AND portfolio write flags are both enabled', async () => {
+    const container = new TestContainer();
+    container.seed('CollectionIndexManager', { getIndex: jest.fn() });
+    container.seed('CollectionSearch', { searchCollectionWithOptions: jest.fn() });
+    container.seed('PersonaDetails', { getCollectionContent: jest.fn() });
+    container.seed('ElementInstaller', { fetchAndValidate: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 24),
+      enableCollectionRoutes: true,
+      enablePortfolioWriteRoutes: true,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    const install = composition.registry.createRouteManifest().routes
+      .find(route => route.moduleId === 'collection' && route.method === 'POST');
+    expect(install?.path).toBe('/api/v1/me/portfolio/from-collection');
+    expect(install?.privacyClass).toBe('self_private');
+    expect(install?.idempotency).toBe('required');
+    expect(install?.rateLimit).toBe('collection_fetch');
   });
 
   it('fails fast when collection routes are enabled without the collection engine services', async () => {
