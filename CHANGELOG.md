@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.36] - 2026-07-03
+
+- Fix silent memory data loss: `addEntry` reported success while entries were never persisted when a memory's serialized YAML exceeded 64KB. Saves now persist correctly and surface errors instead of failing silently. (#2329, #2330, #2332)
+- Fix GitHub OAuth helper token handoff so the helper stores tokens through TokenManager instead of plaintext fallback files, with hardened result/state handling, slow_down backoff, and sanitized diagnostics. (#2325)
+
 ## [2.0.35] - 2026-06-23
 
 - Harden converter and CLI output path handling to keep generated files inside their intended output directories.
