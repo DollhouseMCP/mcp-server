@@ -28,7 +28,6 @@ import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { ContentValidator } from '../../security/contentValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
@@ -670,36 +669,24 @@ export class MemoryManager extends BaseElementManager<Memory> {
       });
       throw new Error(
         `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
-        `This memory is full — start a new memory for additional entries, or delete old entries from this one.`
+        `This memory is full — start a new memory for additional entries.`
       );
     }
 
-    // Fix #908/#918: YAML bomb detection on Memory's custom save path.
-    // Issue #2329: runs at every size with the memory cap — the previous
-    // `<= MAX_YAML_LENGTH` guard skipped bomb detection entirely for content
-    // over 64KB, and the validator's default cap would reject it outright.
+    // Bomb/injection detection + gatekeeper policy validation. Issue #2329 root
+    // cause: this parse previously capped at MAX_YAML_LENGTH (64KB — a frontmatter
+    // limit), so every save of a memory whose serialized YAML exceeded 64KB threw
+    // here, and the deferred save path swallowed the error while addEntry kept
+    // reporting success. The cap now matches the memory size limit enforced above
+    // and on load. parseRawYaml runs ContentValidator.validateYamlContent with the
+    // same cap internally (Fix #908/#918), so bomb detection covers every size —
+    // the previous `<= MAX_YAML_LENGTH` guard skipped it for content over 64KB.
     const validationStart = Date.now();
-    if (!ContentValidator.validateYamlContent(yamlContent, MEMORY_CONSTANTS.MAX_YAML_SIZE)) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_INJECTION_ATTEMPT',
-        severity: 'CRITICAL',
-        source: 'MemoryManager.save.yamlBombDetection',
-        details: 'Serialized memory contains malicious YAML patterns — write blocked',
-        metadata: { contentLength: yamlContent.length }
-      });
-      throw new Error('Serialized memory contains malicious YAML patterns — write blocked');
-    }
+    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, MEMORY_CONSTANTS.MAX_YAML_SIZE);
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
       logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
     }
-
-    // Gatekeeper policy validation. Issue #2329 root cause: this parse previously
-    // capped at MAX_YAML_LENGTH (64KB — a frontmatter limit), so every save of a
-    // memory whose serialized YAML exceeded 64KB threw here, and the deferred save
-    // path swallowed the error while addEntry kept reporting success. The cap now
-    // matches the memory size limit enforced above and on load.
-    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, MEMORY_CONSTANTS.MAX_YAML_SIZE);
     const gatekeeperErrors = [
       ...getGatekeeperAuthoringErrors(parsedYaml),
       ...getGatekeeperAuthoringErrors(

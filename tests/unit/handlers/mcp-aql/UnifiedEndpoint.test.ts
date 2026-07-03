@@ -40,6 +40,7 @@ describe('UnifiedEndpoint', () => {
           metadata: { name: 'test-memory' },
           addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
           removeEntry: jest.fn().mockReturnValue(true),
+          getEntries: jest.fn().mockReturnValue(new Map()),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
         }),
         save: jest.fn().mockResolvedValue(undefined),
