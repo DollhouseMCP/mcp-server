@@ -155,6 +155,30 @@ describe('Memory addEntry persistence (#2329)', () => {
     expect(raw).toContain('second entry after recovery');
   });
 
+  it('does not resurrect a deleted memory from the failure ledger (Codex P2)', async () => {
+    await createMemory('doomed-2329');
+    expect((await addEntry('doomed-2329', 'entry that will fail to save')).success).toBe(true);
+
+    // Deferred save fails once → failure ledger holds the in-RAM instance.
+    jest.spyOn(memoryManager, 'save')
+      .mockRejectedValueOnce(new Error('EIO: simulated disk failure'));
+    await mcpAqlHandler.flushPendingSaves();
+    jest.restoreAllMocks();
+
+    // Delete the memory — must also drop the ledger entry.
+    const deleteResult = await mcpAqlHandler.handleDelete({
+      operation: 'delete_element',
+      params: { element_name: 'doomed-2329', element_type: 'memories' },
+    });
+    expect(deleteResult.success).toBe(true);
+
+    // A later flush must NOT re-save the retained instance and resurrect the file.
+    await mcpAqlHandler.flushPendingSaves();
+    const memoriesDir = path.join(env.testDir, 'memories');
+    const files = await fs.readdir(memoriesDir, { recursive: true });
+    expect(files.filter(f => String(f).includes('doomed-2329'))).toHaveLength(0);
+  });
+
   it('reports an error when both the deferred save and the retry fail', async () => {
     await createMemory('dead-disk-2329');
 
