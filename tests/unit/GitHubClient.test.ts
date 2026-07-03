@@ -1,13 +1,13 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { GitHubClient } from '../../src/collection/GitHubClient.js';
-import { APICache } from '../../src/cache/APICache.js';
+import type { APICache } from '../../src/cache/APICache.js';
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
 import { SECURITY_LIMITS } from '../../src/security/constants.js';
 import { createMockTokenManager } from '../helpers/di-mocks.js';
 
 // Create a properly typed mock for fetch
 const mockFetch = jest.fn() as jest.MockedFunction<typeof fetch>;
-global.fetch = mockFetch;
+globalThis.fetch = mockFetch;
 
 // Mock SecurityMonitor to avoid security event logging in tests
 jest.mock('../../src/security/securityMonitor.js', () => ({
@@ -15,6 +15,9 @@ jest.mock('../../src/security/securityMonitor.js', () => ({
     logSecurityEvent: jest.fn()
   }
 }));
+
+const GITHUB_API_RATE_KEY = 'github_api';
+const GITHUB_TEST_URL = 'https://api.github.com/test';
 
 describe('GitHubClient', () => {
   let githubClient: GitHubClient;
@@ -68,13 +71,13 @@ describe('GitHubClient', () => {
       const result = await githubClient.fetchFromGitHub(testUrl);
 
       expect(result).toEqual(cachedData);
-      expect(global.fetch).not.toHaveBeenCalled();
+      expect(globalThis.fetch).not.toHaveBeenCalled();
     });
 
     it('should enforce rate limiting', async () => {
       // Fill up rate limit
       const requests = new Array(SECURITY_LIMITS.RATE_LIMIT_REQUESTS).fill(Date.now());
-      rateLimitTracker.set('github_api', requests);
+      rateLimitTracker.set(GITHUB_API_RATE_KEY, requests);
 
       await expect(githubClient.fetchFromGitHub(testUrl))
         .rejects.toThrow('Rate limit exceeded');
@@ -151,10 +154,10 @@ describe('GitHubClient', () => {
       await githubClient.fetchFromGitHub(testUrl);
 
       // Check that only the API call was made (no separate token validation call)
-      expect(global.fetch).toHaveBeenCalledTimes(1);
+      expect(globalThis.fetch).toHaveBeenCalledTimes(1);
 
       // Call should be to the actual URL with the validated token
-      expect(global.fetch).toHaveBeenCalledWith(
+      expect(globalThis.fetch).toHaveBeenCalledWith(
         testUrl,
         expect.objectContaining({
           headers: expect.objectContaining({
@@ -181,11 +184,55 @@ describe('GitHubClient', () => {
     });
   });
 
+  describe('SSRF guards', () => {
+    it('rejects a URL whose host is not on the allowlist', async () => {
+      await expect(
+        githubClient.fetchFromGitHub('https://evil.example.com/repos/x')
+      ).rejects.toThrow(/non-allowed URL/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a path-traversal URL that would normalize to a different endpoint', async () => {
+      // Would collapse to https://api.github.com/orgs/DollhouseMCP — a different
+      // endpoint that still passes a hostname-only allowlist. Must be blocked
+      // BEFORE the URL constructor normalizes the `..` segments.
+      await expect(
+        githubClient.fetchFromGitHub(
+          'https://api.github.com/repos/DollhouseMCP/collection/contents/library/../../../orgs/DollhouseMCP'
+        )
+      ).rejects.toThrow(/path-traversal/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a single-dot path segment', async () => {
+      await expect(
+        githubClient.fetchFromGitHub('https://api.github.com/repos/./collection')
+      ).rejects.toThrow(/path-traversal/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('allows a search URL whose query string contains dots', async () => {
+      // Dots in the ?q= query must NOT trip the path-traversal check — only
+      // path segments are inspected.
+      const mockResponse = {
+        ok: true,
+        json: (jest.fn() as any).mockResolvedValue({ items: [] })
+      } as unknown as Response;
+      mockFetch.mockResolvedValue(mockResponse);
+      mockApiCache.get.mockReturnValue(null);
+
+      await expect(
+        githubClient.fetchFromGitHub('https://api.github.com/search/code?q=a..b+repo:DollhouseMCP/collection')
+      ).resolves.toEqual({ items: [] });
+      expect(mockFetch).toHaveBeenCalled();
+    });
+  });
+
   describe('Rate Limiting', () => {
     it('should clean up old rate limit entries', async () => {
       // Add old entries (outside window)
       const oldTime = Date.now() - SECURITY_LIMITS.RATE_LIMIT_WINDOW_MS - 1000;
-      rateLimitTracker.set('github_api', [oldTime, oldTime, oldTime]);
+      rateLimitTracker.set(GITHUB_API_RATE_KEY, [oldTime, oldTime, oldTime]);
 
       const mockResponse = {
         ok: true,
@@ -195,10 +242,10 @@ describe('GitHubClient', () => {
       mockApiCache.get.mockReturnValue(null);
 
       // Should not throw rate limit error
-      await githubClient.fetchFromGitHub('https://api.github.com/test');
+      await githubClient.fetchFromGitHub(GITHUB_TEST_URL);
 
       // Old entries should be cleaned up
-      const requests = rateLimitTracker.get('github_api') || [];
+      const requests = rateLimitTracker.get(GITHUB_API_RATE_KEY) || [];
       expect(requests.every(time => time > oldTime)).toBe(true);
     });
 
@@ -214,7 +261,7 @@ describe('GitHubClient', () => {
       await githubClient.fetchFromGitHub('https://api.github.com/test1');
       await githubClient.fetchFromGitHub('https://api.github.com/test2');
 
-      const requests = rateLimitTracker.get('github_api') || [];
+      const requests = rateLimitTracker.get(GITHUB_API_RATE_KEY) || [];
       expect(requests).toHaveLength(2);
     });
   });
@@ -229,7 +276,7 @@ describe('GitHubClient', () => {
       mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
-      await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
+      await expect(githubClient.fetchFromGitHub(GITHUB_TEST_URL))
         .rejects.toThrow('Invalid JSON');
       
       // Verify cache was not updated with bad data
@@ -245,11 +292,11 @@ describe('GitHubClient', () => {
       mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
-      const result = await githubClient.fetchFromGitHub('https://api.github.com/test');
+      const result = await githubClient.fetchFromGitHub(GITHUB_TEST_URL);
       expect(result).toBe('not an object');
       
       // Even non-object JSON should be cached
-      expect(mockApiCache.set).toHaveBeenCalledWith('https://api.github.com/test', 'not an object');
+      expect(mockApiCache.set).toHaveBeenCalledWith(GITHUB_TEST_URL, 'not an object');
     });
 
     it('should handle 404 responses', async () => {
@@ -262,7 +309,7 @@ describe('GitHubClient', () => {
       mockFetch.mockResolvedValue(mockResponse);
       mockApiCache.get.mockReturnValue(null);
 
-      await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
+      await expect(githubClient.fetchFromGitHub(GITHUB_TEST_URL))
         .rejects.toThrow('Failed to fetch from GitHub: File not found in collection');
     });
 
@@ -278,7 +325,7 @@ describe('GitHubClient', () => {
       mockApiCache.get.mockReturnValue(null);
 
       try {
-        await githubClient.fetchFromGitHub('https://api.github.com/test');
+        await githubClient.fetchFromGitHub(GITHUB_TEST_URL);
         throw new Error('Should have thrown an error');
       } catch (error) {
         expect(error).toBeInstanceOf(McpError);
@@ -306,11 +353,11 @@ describe('GitHubClient', () => {
       mockApiCache.get.mockReturnValue(null);
 
       // First call should fail
-      await expect(githubClient.fetchFromGitHub('https://api.github.com/test'))
+      await expect(githubClient.fetchFromGitHub(GITHUB_TEST_URL))
         .rejects.toThrow('ECONNRESET');
       
       // Second call should succeed
-      const result = await githubClient.fetchFromGitHub('https://api.github.com/test');
+      const result = await githubClient.fetchFromGitHub(GITHUB_TEST_URL);
       expect(result).toEqual({ success: true });
       expect(callCount).toBe(2);
     });
@@ -346,7 +393,7 @@ describe('GitHubClient', () => {
       const testUrl = 'https://api.github.com/test-cache-corruption';
       
       // Simulate corrupted cache returning undefined
-      mockApiCache.get.mockReturnValue(undefined);
+      mockApiCache.get.mockReturnValue();
       
       const mockData = { fresh: 'data' };
       mockFetch.mockResolvedValue({
