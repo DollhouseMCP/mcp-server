@@ -46,6 +46,16 @@ export class InMemoryIntegrationOpenApiSpecStore implements IIntegrationOpenApiS
     return cloneIntegrationOpenApiSpecRecord(record);
   }
 
+  async deleteByDescriptorId(descriptorId: string): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(descriptorId, 'descriptorId');
+    const id = this.byDescriptorId.get(descriptorId);
+    if (!id) return false;
+    this.records.delete(id);
+    this.byDescriptorId.delete(descriptorId);
+    return true;
+  }
+
   set(record: IntegrationOpenApiSpecRecord): void {
     validateIntegrationOpenApiSpecRecord(record);
     const cloned = cloneIntegrationOpenApiSpecRecord(record);

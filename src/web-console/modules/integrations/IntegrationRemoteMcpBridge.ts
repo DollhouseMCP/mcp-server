@@ -25,6 +25,14 @@ export interface IntegrationRemoteMcpBridgeOptions {
   readonly integrationStore: IUserIntegrationStore;
   readonly secretEncryption: ISecretEncryptionService;
   readonly contextTracker: ContextTracker;
+  /**
+   * Policy gate consulted per descriptor before any credentialed discovery
+   * egress (bearer-token decrypt + outbound connect during `listAllowedTools`).
+   * Discovery for a provider is skipped unless this resolves `true`. Required
+   * — the bridge cannot be constructed without a discovery policy, so
+   * session-start discovery can never run un-gated.
+   */
+  readonly discoveryGate: (provider: string) => Promise<boolean>;
   readonly clientFactory?: RemoteMcpClientFactory;
   readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
@@ -135,6 +143,13 @@ export class IntegrationRemoteMcpBridge {
   ): Promise<readonly RemoteMcpTool[]> {
     const config = readRemoteMcpConfig(descriptor);
     if (!config) return [];
+    if (!(await this.options.discoveryGate(descriptor.provider))) {
+      logger.info('Remote MCP tool discovery skipped by policy', {
+        provider: descriptor.provider,
+        descriptorId: descriptor.id,
+      });
+      return [];
+    }
     const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
     if (!isIntegrationConnected(integration)) return [];
     const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);

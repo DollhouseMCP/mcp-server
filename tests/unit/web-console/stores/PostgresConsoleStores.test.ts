@@ -10,7 +10,7 @@ import type {
   IdempotencyRecord,
   IdempotencyRequestIdentity,
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
-import type { ConsoleAdminAuditEvent } from '../../../../src/web-console/audit/IAdminAuditWriter.js';
+import type { ConsoleAdminActorRole, ConsoleAdminAuditEvent } from '../../../../src/web-console/audit/IAdminAuditWriter.js';
 
 let transaction: Record<string, jest.Mock>;
 const withSystemContextMock = jest.fn(async (
@@ -77,6 +77,8 @@ const { PortfolioSyncAlreadyPendingError } = await import(
 );
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const READ_ISSUES_SCOPE = 'read:issues';
+const FRESH_ACCESS_TOKEN = 'fresh-access';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
 const SPEC_ID = '1f518305-ae82-4fe2-a696-dfdd2d4d4025';
@@ -323,6 +325,34 @@ function insertChain(rows: unknown[] = []) {
   chain.values = jest.fn(() => chain);
   chain.onConflictDoUpdate = jest.fn(() => chain);
   chain.onConflictDoNothing = jest.fn(() => chain);
+  chain.returning = jest.fn(() => Promise.resolve(rows));
+  return chain;
+}
+
+/** Every string value reachable from a value tree (for inspecting drizzle exprs). */
+function collectStrings(root: unknown): Set<string> {
+  const out = new Set<string>();
+  const seen = new WeakSet<object>();
+  const iterableOf = (value: object): unknown[] => {
+    if (value instanceof Map) return [...value.values()];
+    if (value instanceof Set) return [...value];
+    return Object.values(value as Record<string, unknown>);
+  };
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 30 || value == null) return;
+    if (typeof value === 'string') { out.add(value); return; }
+    if (typeof value !== 'object') return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    for (const nested of iterableOf(value)) visit(nested, depth + 1);
+  };
+  visit(root, 0);
+  return out;
+}
+
+function deletingChain(rows: unknown[] = []) {
+  const chain: Record<string, jest.Mock> = {};
+  chain.where = jest.fn(() => chain);
   chain.returning = jest.fn(() => Promise.resolve(rows));
   return chain;
 }
@@ -687,14 +717,14 @@ describe('PostgresUserIntegrationStore', () => {
   it('maps generic provider integrations with scopes-only permission details', async () => {
     const chain = selectingChain([userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
     })]);
     transaction.select = jest.fn(() => chain);
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
 
     await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
     });
   });
 
@@ -729,14 +759,14 @@ describe('PostgresUserIntegrationStore', () => {
   it('locks an active integration before updating refreshed credentials', async () => {
     const updated = userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
-      accessTokenCiphertext: Buffer.from('fresh-access'),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
       refreshTokenCiphertext: Buffer.from('fresh-refresh'),
       credentialKeyVersion: 'integration-key-v2',
     });
     transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
       accessTokenCiphertext: Buffer.from('stale-access'),
       refreshTokenCiphertext: Buffer.from('stale-refresh'),
     })]));
@@ -748,16 +778,16 @@ describe('PostgresUserIntegrationStore', () => {
       provider: 'linear',
       staleAccessTokenCiphertext: Buffer.from('stale-access'),
       refreshedAt: FIVE_MINUTES,
-      refresh: async () => ({
-        kind: 'refreshed',
-        accessTokenCiphertext: Buffer.from('fresh-access'),
+      refresh: () => Promise.resolve({
+        kind: 'refreshed' as const,
+        accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
         refreshTokenCiphertext: Buffer.from('fresh-refresh'),
         credentialKeyVersion: 'integration-key-v2',
       }),
     })).resolves.toMatchObject({
       kind: 'refreshed',
       record: {
-        accessTokenCiphertext: Buffer.from('fresh-access'),
+        accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
         credentialKeyVersion: 'integration-key-v2',
       },
     });
@@ -769,8 +799,8 @@ describe('PostgresUserIntegrationStore', () => {
   it('reuses a row refreshed by an earlier locked caller', async () => {
     transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
-      accessTokenCiphertext: Buffer.from('fresh-access'),
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
       refreshTokenCiphertext: Buffer.from('fresh-refresh'),
     })]));
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
@@ -780,13 +810,11 @@ describe('PostgresUserIntegrationStore', () => {
       provider: 'linear',
       staleAccessTokenCiphertext: Buffer.from('stale-access'),
       refreshedAt: FIVE_MINUTES,
-      refresh: async () => {
-        throw new Error('refresh should not run');
-      },
+      refresh: () => Promise.reject(new Error('refresh should not run')),
     })).resolves.toMatchObject({
       kind: 'reused',
       record: {
-        accessTokenCiphertext: Buffer.from('fresh-access'),
+        accessTokenCiphertext: Buffer.from(FRESH_ACCESS_TOKEN),
       },
     });
     expect(transaction.update).toBeUndefined();
@@ -812,6 +840,60 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(row.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
   });
 
+  it('paginates visible descriptors and encodes the next (provider, id) cursor', async () => {
+    const rows = [
+      integrationDescriptorRow({ provider: 'svc-a', id: '00000000-0000-4000-8000-0000000000a1' }),
+      integrationDescriptorRow({ provider: 'svc-b', id: '00000000-0000-4000-8000-0000000000a2' }),
+      integrationDescriptorRow({ provider: 'svc-c', id: '00000000-0000-4000-8000-0000000000a3' }),
+    ];
+    const chain = selectingChain(rows);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    const page = await store.listVisiblePage(USER_ID, { limit: 2 });
+
+    // limit+1 row probing: 3 rows back for limit 2 → one more page exists.
+    expect(chain.limit).toHaveBeenCalledWith(3);
+    expect(page.items.map(item => item.provider)).toEqual(['svc-a', 'svc-b']);
+    expect(page.nextCursor).toBe('svc-b:00000000-0000-4000-8000-0000000000a2');
+  });
+
+  it('applies a keyset WHERE predicate carrying the decoded cursor', async () => {
+    // Guards the keyset clause itself: without this, the gt/and/or predicate
+    // could be deleted from the query and only the chain-mock happy path (which
+    // ignores WHERE) would still pass — silently returning duplicate/missing
+    // rows on page 2+. Assert the decoded cursor's provider AND id reach the
+    // WHERE expression.
+    const chain = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+    const cursorId = '00000000-0000-4000-8000-0000000000a2';
+
+    await store.listVisiblePage(USER_ID, { limit: 2, cursor: `svc-b:${cursorId}` });
+
+    // Drizzle holds bound params inside the expression tree (not via
+    // JSON.stringify); collect every string value reachable from the WHERE arg.
+    const literals = collectStrings(chain.where.mock.calls[0]?.[0]);
+    expect(literals).toContain('svc-b');
+    expect(literals).toContain(cursorId);
+
+    // And the no-cursor case's WHERE must NOT carry a cursor value (proves the
+    // keyset branch is genuinely conditional, not always appended).
+    const plainChain = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => plainChain);
+    await store.listVisiblePage(USER_ID, { limit: 2 });
+    expect(collectStrings(plainChain.where.mock.calls[0]?.[0])).not.toContain('svc-b');
+  });
+
+  it('rejects invalid pagination limits and cursors before querying', async () => {
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.listVisiblePage(USER_ID, { limit: 0 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { limit: 101 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { cursor: 'garbage' })).rejects.toThrow(ConsoleStoreValidationError);
+    expect(transaction.select).toBeUndefined();
+  });
+
   it('upserts descriptors by owner/provider identity', async () => {
     transaction.select = jest.fn(() => selectingChain([]));
     transaction.insert = jest.fn(() => insertChain([integrationDescriptorRow()]));
@@ -830,6 +912,31 @@ describe('PostgresIntegrationDescriptorStore', () => {
       apiHosts: ['127.0.0.1'],
     }))).rejects.toThrow(ConsoleStoreValidationError);
     expect(transaction.insert).toBeUndefined();
+  });
+
+  it('finds descriptors by id only for the BYO owner', async () => {
+    const chain = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.findById(DESCRIPTOR_ID, USER_ID)).resolves.toMatchObject({
+      id: DESCRIPTOR_ID,
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+    });
+    await expect(store.findById('not-a-uuid', USER_ID)).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.findById(DESCRIPTOR_ID, 'not-a-uuid')).rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it('deletes descriptors owner-scoped and reports whether a row was removed', async () => {
+    transaction.delete = jest.fn(() => deletingChain([{ id: DESCRIPTOR_ID }]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.delete(DESCRIPTOR_ID, USER_ID)).resolves.toBe(true);
+
+    transaction.delete = jest.fn(() => deletingChain([]));
+    await expect(store.delete(DESCRIPTOR_ID, USER_ID)).resolves.toBe(false);
+    await expect(store.delete('not-a-uuid', USER_ID)).rejects.toThrow(ConsoleStoreValidationError);
   });
 });
 
@@ -868,6 +975,17 @@ describe('PostgresIntegrationOpenApiSpecStore', () => {
       spec: { openapi: '3.1.0' },
     }))).rejects.toThrow(ConsoleStoreValidationError);
     expect(transaction.insert).toBeUndefined();
+  });
+
+  it('deletes specs by descriptor id and reports whether one existed', async () => {
+    transaction.delete = jest.fn(() => deletingChain([{ id: SPEC_ID }]));
+    const store = new PostgresIntegrationOpenApiSpecStore({} as DatabaseInstance);
+
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(true);
+
+    transaction.delete = jest.fn(() => deletingChain([]));
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(false);
+    await expect(store.deleteByDescriptorId('not-a-uuid')).rejects.toThrow(ConsoleStoreValidationError);
   });
 });
 
@@ -1796,7 +1914,7 @@ describe('PostgresAdminAuditWriter', () => {
   it.each([
     ['actorConsoleSessionHash', { actorConsoleSessionHash: Buffer.alloc(31, 8) }, 'actor session hash'],
     ['actorSub', { actorSub: ' ' }, 'actorSub'],
-    ['actorCapabilityRole', { actorCapabilityRole: ' ' as never }, 'actorCapabilityRole'],
+    ['actorCapabilityRole', { actorCapabilityRole: ' ' as unknown as ConsoleAdminActorRole }, 'actorCapabilityRole'],
     ['endpoint', { endpoint: ' ' }, 'endpoint'],
     ['operation', { operation: ' ' }, 'operation'],
     ['correlationId', { correlationId: ' ' }, 'correlationId'],

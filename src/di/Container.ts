@@ -89,16 +89,24 @@ import type {
 import type { ISecretEncryptionService } from "../web-console/security/SecretEncryption.js";
 import { IntegrationProviderRegistry } from "../web-console/modules/integrations/IntegrationProviderRegistry.js";
 import {
+  AuthorizedIntegrationGateway,
+  AuthorizedIntegrationOperationCatalog,
+  AuthorizedIntegrationRemoteMcpBridge,
   createGitHubIntegrationProvider,
-  IntegrationOperationCatalog,
-  IntegrationRemoteMcpBridge,
+  createStoreIntegrationProviderResolver,
   IntegrationRequestPolicyEnforcer,
-  IntegrationRequestGateway,
   IntegrationTokenRefreshService,
   serializeGitHubIntegrationStatus,
   type IIntegrationProvider,
+  type IntegrationRequestPolicyEnforcerOptions,
   type RemoteMcpClientFactory,
 } from "../web-console/modules/integrations/index.js";
+// The raw execution authorities are deliberately NOT exported from the module
+// barrel (FO2): only this composition root may construct them, and everything
+// tool-facing receives the policy-authorized facades above.
+import { IntegrationRequestGateway } from "../web-console/modules/integrations/IntegrationRequestGateway.js";
+import { IntegrationOperationCatalog } from "../web-console/modules/integrations/IntegrationOperationCatalog.js";
+import { IntegrationRemoteMcpBridge } from "../web-console/modules/integrations/IntegrationRemoteMcpBridge.js";
 import type { DnsLookup } from "../web-console/modules/integrations/IntegrationPublicHostGuard.js";
 import type { PinnedOutboundFactory } from "../web-console/modules/integrations/PinnedOutboundFactory.js";
 import type { IGitHubIntegrationProvider } from "../web-console/modules/integrations/GitHubIntegrationProvider.js";
@@ -168,10 +176,9 @@ export interface HandlerBundle {
   toolRegistry: ToolRegistry;
   enhancedIndexHandler: EnhancedIndexHandler;
   mcpAqlHandler: MCPAQLHandler;
-  integrationRequestGateway?: IntegrationRequestGateway;
-  integrationRequestPolicyEnforcer?: IntegrationRequestPolicyEnforcer;
-  integrationOperationCatalog?: IntegrationOperationCatalog;
-  integrationRemoteMcpBridge?: IntegrationRemoteMcpBridge;
+  authorizedIntegrationGateway?: AuthorizedIntegrationGateway;
+  authorizedIntegrationOperationCatalog?: AuthorizedIntegrationOperationCatalog;
+  authorizedIntegrationRemoteMcpBridge?: AuthorizedIntegrationRemoteMcpBridge;
 }
 
 import { INTEGRATION_OUTBOUND_OVERRIDES } from "../web-console/modules/integrations/IntegrationOutboundOverrides.js";
@@ -1193,16 +1200,6 @@ export class DollhouseContainer {
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
-    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
-    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
-    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
-    const integrationRequestPolicyEnforcer = integrationRequestGateway
-      ? new IntegrationRequestPolicyEnforcer({
-        gatekeeper: handlerDeps.gatekeeper,
-        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
-      })
-      : null;
-
     return {
       personaHandler,
       elementCrudHandler,
@@ -1216,10 +1213,7 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry, // No tool registry in bootstrap-only mode
       enhancedIndexHandler,
       mcpAqlHandler,
-      integrationRequestGateway: integrationRequestGateway ?? undefined,
-      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
-      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
-      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
+      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
     };
   }
 
@@ -1740,15 +1734,6 @@ export class DollhouseContainer {
     });
 
     const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
-    const integrationRequestGateway = this.resolveIntegrationRequestGateway();
-    const integrationOperationCatalog = this.resolveIntegrationOperationCatalog();
-    const integrationRemoteMcpBridge = this.resolveIntegrationRemoteMcpBridge();
-    const integrationRequestPolicyEnforcer = integrationRequestGateway
-      ? new IntegrationRequestPolicyEnforcer({
-        gatekeeper: handlerDeps.gatekeeper,
-        getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
-      })
-      : null;
     return {
       personaHandler,
       elementCrudHandler,
@@ -1762,10 +1747,45 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry,
       enhancedIndexHandler,
       mcpAqlHandler,
-      integrationRequestGateway: integrationRequestGateway ?? undefined,
-      integrationRequestPolicyEnforcer: integrationRequestPolicyEnforcer ?? undefined,
-      integrationOperationCatalog: integrationOperationCatalog ?? undefined,
-      integrationRemoteMcpBridge: integrationRemoteMcpBridge ?? undefined,
+      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
+    };
+  }
+
+  /**
+   * Build the policy-authorized integration facades for a handler bundle.
+   *
+   * The enforcer is constructed unconditionally (it only needs the gatekeeper
+   * and the active-element closure), so a facade exists exactly when its raw
+   * authority does — there is no representable "authority present, policy
+   * absent" state (FO2). The raw gateway/bridge/catalog never leave this
+   * composition root.
+   */
+  private buildAuthorizedIntegrationServices(
+    gatekeeper: IntegrationRequestPolicyEnforcerOptions['gatekeeper'],
+    mcpAqlHandler: MCPAQLHandler,
+  ): Pick<
+    HandlerBundle,
+    'authorizedIntegrationGateway' | 'authorizedIntegrationOperationCatalog' | 'authorizedIntegrationRemoteMcpBridge'
+  > {
+    const policyEnforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+    });
+    const gateway = this.resolveIntegrationRequestGateway();
+    const catalog = this.resolveIntegrationOperationCatalog();
+    const bridge = this.resolveIntegrationRemoteMcpBridge(
+      provider => policyEnforcer.evaluateDiscovery(provider),
+    );
+    return {
+      authorizedIntegrationGateway: gateway
+        ? new AuthorizedIntegrationGateway({ gateway, policyEnforcer })
+        : undefined,
+      authorizedIntegrationOperationCatalog: catalog
+        ? new AuthorizedIntegrationOperationCatalog({ catalog, policyEnforcer })
+        : undefined,
+      authorizedIntegrationRemoteMcpBridge: bridge
+        ? new AuthorizedIntegrationRemoteMcpBridge({ bridge, policyEnforcer })
+        : undefined,
     };
   }
 
@@ -1783,13 +1803,24 @@ export class DollhouseContainer {
       ? this.resolve<IRateLimitStore>('RateLimitStore')
       : null;
     const providerRegistry = this.resolveIntegrationProviderRegistry();
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     const tokenRefresh = new IntegrationTokenRefreshService({
       store: integrationStore,
       providers: providerRegistry,
+      // The boot registry only carries the bespoke GitHub provider here;
+      // descriptor-backed providers (curated and runtime-authored BYO) refresh
+      // through per-request store resolution so no restart is ever needed.
+      resolveProvider: createStoreIntegrationProviderResolver({
+        descriptorStore,
+        secretEncryption,
+        outbound: {
+          ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
+          ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+        },
+      }),
       secretEncryption,
     });
-    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
-    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     return new IntegrationRequestGateway({
       integrationStore,
       descriptorStore,
@@ -1830,12 +1861,11 @@ export class DollhouseContainer {
     sessionContext: Readonly<SessionContext>,
   ): Promise<void> {
     const {
-      integrationRequestGateway,
-      integrationOperationCatalog,
-      integrationRemoteMcpBridge,
-      integrationRequestPolicyEnforcer,
+      authorizedIntegrationGateway,
+      authorizedIntegrationOperationCatalog,
+      authorizedIntegrationRemoteMcpBridge,
     } = bundle;
-    if (integrationRequestGateway && integrationOperationCatalog) {
+    if (authorizedIntegrationGateway && authorizedIntegrationOperationCatalog) {
       const promotionContext = contextTracker.createSessionContext(
         'llm-request',
         sessionContext,
@@ -1844,9 +1874,8 @@ export class DollhouseContainer {
       await contextTracker.runAsync(promotionContext, async () => {
         try {
           await toolRegistry.registerPromotedIntegrationTools(
-            integrationRequestGateway,
-            integrationOperationCatalog,
-            integrationRequestPolicyEnforcer,
+            authorizedIntegrationGateway,
+            authorizedIntegrationOperationCatalog,
           );
         } catch (error) {
           logger.warn('[HTTP Session] Promoted integration tool registration skipped', {
@@ -1855,7 +1884,7 @@ export class DollhouseContainer {
         }
       });
     }
-    if (integrationRemoteMcpBridge) {
+    if (authorizedIntegrationRemoteMcpBridge) {
       const remoteMcpContext = contextTracker.createSessionContext(
         'llm-request',
         sessionContext,
@@ -1864,8 +1893,7 @@ export class DollhouseContainer {
       await contextTracker.runAsync(remoteMcpContext, async () => {
         try {
           await toolRegistry.registerRemoteMcpBridgeTools(
-            integrationRemoteMcpBridge,
-            integrationRequestPolicyEnforcer,
+            authorizedIntegrationRemoteMcpBridge,
           );
         } catch (error) {
           logger.warn('[HTTP Session] Remote MCP bridge tool registration skipped', {
@@ -1876,7 +1904,9 @@ export class DollhouseContainer {
     }
   }
 
-  private resolveIntegrationRemoteMcpBridge(): IntegrationRemoteMcpBridge | null {
+  private resolveIntegrationRemoteMcpBridge(
+    discoveryGate: (provider: string) => Promise<boolean>,
+  ): IntegrationRemoteMcpBridge | null {
     if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
         !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
         !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
@@ -1891,6 +1921,7 @@ export class DollhouseContainer {
       descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
       secretEncryption: this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption),
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      discoveryGate,
       ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
       ...(clientFactoryOverride ? { clientFactory: clientFactoryOverride } : {}),
       ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
@@ -1938,11 +1969,10 @@ export class DollhouseContainer {
     } else {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
     }
-    if (bundle.integrationRequestGateway) {
+    if (bundle.authorizedIntegrationGateway) {
       toolRegistry.registerIntegrationTools(
-        bundle.integrationRequestGateway,
-        bundle.integrationRequestPolicyEnforcer,
-        bundle.integrationOperationCatalog,
+        bundle.authorizedIntegrationGateway,
+        bundle.authorizedIntegrationOperationCatalog,
       );
     }
   }

@@ -5,11 +5,18 @@ import type {
   UserIntegrationRefreshResult,
 } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import type { IntegrationProviderResolver } from './CuratedIntegrationProviders.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 
 export interface IntegrationTokenRefreshServiceOptions {
   readonly store: IUserIntegrationStore;
   readonly providers: IntegrationProviderRegistry;
+  /**
+   * Per-request fallback for providers absent from the boot-time registry
+   * (runtime-authored BYO and store-loaded curated descriptors), so their
+   * OAuth refresh works without a restart.
+   */
+  readonly resolveProvider?: IntegrationProviderResolver | null;
   readonly secretEncryption: ISecretEncryptionService;
   readonly now?: () => Date;
 }
@@ -23,8 +30,10 @@ export interface IntegrationTokenRefreshInput {
 export class IntegrationTokenRefreshService {
   constructor(private readonly options: IntegrationTokenRefreshServiceOptions) {}
 
-  refreshOnDemand(input: IntegrationTokenRefreshInput): Promise<UserIntegrationRefreshResult> {
-    const provider = this.options.providers.get(input.provider);
+  async refreshOnDemand(input: IntegrationTokenRefreshInput): Promise<UserIntegrationRefreshResult> {
+    const provider = this.options.providers.get(input.provider)
+      ?? await this.options.resolveProvider?.(input.userId, input.provider)
+      ?? null;
     const refreshCredentials = provider?.refreshCredentials?.bind(provider);
     if (!refreshCredentials) {
       return this.options.store.refresh({

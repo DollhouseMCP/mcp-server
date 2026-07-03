@@ -50,7 +50,12 @@ export interface IntegrationOAuthDescriptor {
 
 export interface IntegrationStaticApiKeyDescriptor {
   readonly injection: {
-    readonly location: 'header' | 'query';
+    /**
+     * `basic` sends `Authorization: Basic base64(credential)` where the
+     * stored credential is `username:password`; name is fixed to
+     * `Authorization` and no valuePrefix applies.
+     */
+    readonly location: 'header' | 'query' | 'basic';
     readonly name: string;
     readonly valuePrefix: string | null;
   };
@@ -73,10 +78,108 @@ export interface IntegrationDescriptorCreateInput {
   readonly updatedAt: Date;
 }
 
+export const INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT = 100;
+
+export interface IntegrationDescriptorPageRequest {
+  /** 1..INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT; defaults to the maximum. */
+  readonly limit?: number;
+  /** Opaque cursor from a previous page's `nextCursor`; null/absent starts at the beginning. */
+  readonly cursor?: string | null;
+}
+
+export interface IntegrationDescriptorPage {
+  readonly items: readonly IntegrationDescriptorRecord[];
+  readonly nextCursor: string | null;
+}
+
 export interface IIntegrationDescriptorStore {
+  /**
+   * ALL descriptors visible to the user (curated + own BYO), ordered by
+   * provider then id. Complete — implementations must iterate pages
+   * internally rather than silently truncating; bounded reads use
+   * `listVisiblePage`.
+   */
   listVisible(userId: string): Promise<readonly IntegrationDescriptorRecord[]>;
+  listVisiblePage(userId: string, page?: IntegrationDescriptorPageRequest): Promise<IntegrationDescriptorPage>;
   findVisibleByProvider(userId: string, provider: UserIntegrationProvider): Promise<IntegrationDescriptorRecord | null>;
+  /**
+   * Owner-scoped id lookup for the BYO authoring plane: returns the
+   * descriptor only when it is BYO and owned by `userId`. Curated
+   * descriptors, other users' descriptors, and unknown ids all resolve to
+   * null — indistinguishable, so the caller can only 404.
+   */
+  findById(id: string, userId: string): Promise<IntegrationDescriptorRecord | null>;
+  /**
+   * Owner-scoped delete: removes the descriptor only when it is BYO and
+   * owned by `ownerUserId`; returns whether a record was deleted. Curated /
+   * non-owned / missing all return false (fail closed). The stored OpenAPI
+   * spec is NOT cascaded by this contract — callers delete it via
+   * `IIntegrationOpenApiSpecStore.deleteByDescriptorId` after a successful
+   * descriptor delete (PostgreSQL additionally enforces FK ON DELETE CASCADE
+   * as defense-in-depth).
+   */
+  delete(id: string, ownerUserId: string): Promise<boolean>;
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
+}
+
+export function resolveDescriptorPageLimit(limit: number | undefined): number {
+  if (limit === undefined) return INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT;
+  if (!Number.isInteger(limit) || limit < 1 || limit > INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT) {
+    throw new ConsoleStoreValidationError(
+      `limit must be an integer between 1 and ${INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT}`,
+    );
+  }
+  return limit;
+}
+
+export function encodeDescriptorPageCursor(record: IntegrationDescriptorRecord): string {
+  return `${record.provider}:${record.id}`;
+}
+
+export function decodeDescriptorPageCursor(cursor: string): {
+  readonly provider: UserIntegrationProvider;
+  readonly id: string;
+} {
+  const separator = cursor.indexOf(':');
+  if (separator < 1) {
+    throw new ConsoleStoreValidationError('cursor is invalid');
+  }
+  const provider = cursor.slice(0, separator);
+  const id = cursor.slice(separator + 1);
+  assertUserIntegrationProvider(provider);
+  assertUuid(id, 'cursor id');
+  return { provider, id };
+}
+
+/**
+ * Total order over (provider, id) by code-point comparison. This MUST be the
+ * ordering the in-memory store sorts by, because the keyset cursor filter
+ * (`isAfterDescriptorPageCursor`) uses the same `<`/`>` comparison — a
+ * divergent sort (e.g. `localeCompare`, which orders `_`/`-` differently from
+ * code points for the `[a-z0-9_-]` charset) would silently drop rows from
+ * later pages. PostgreSQL is internally consistent (one collation drives both
+ * ORDER BY and the keyset predicate); this keeps the in-memory backend paired.
+ */
+export function compareDescriptorPageOrder(
+  left: Pick<IntegrationDescriptorRecord, 'provider' | 'id'>,
+  right: Pick<IntegrationDescriptorRecord, 'provider' | 'id'>,
+): number {
+  if (left.provider !== right.provider) return left.provider < right.provider ? -1 : 1;
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
+}
+
+/**
+ * (provider, id) keyset comparison matching the page ordering. UUID string
+ * comparison agrees with PostgreSQL's byte-wise uuid ordering because the
+ * canonical form is fixed-width lowercase hex.
+ */
+export function isAfterDescriptorPageCursor(
+  record: IntegrationDescriptorRecord,
+  cursor: { readonly provider: string; readonly id: string },
+): boolean {
+  return record.provider > cursor.provider
+    || (record.provider === cursor.provider && record.id > cursor.id);
 }
 
 export function validateIntegrationDescriptorRecord(record: IntegrationDescriptorRecord): void {
@@ -121,10 +224,25 @@ export function cloneIntegrationDescriptorRecord(
   };
 }
 
+/**
+ * Provider ids a descriptor must never claim:
+ * - `descriptors` collides with the fixed authoring route segment;
+ * - `github` is a bespoke registry-only provider whose credential is stored
+ *   under the same provider-keyed context the gateway injects, so a BYO
+ *   `github` descriptor could route the deployment-brokered GitHub token to a
+ *   descriptor-chosen host. Bespoke/registry-only provider ids are reserved
+ *   here as the store-boundary belt; the authoring service additionally
+ *   rejects every id present in the boot provider registry.
+ */
+const RESERVED_DESCRIPTOR_PROVIDER_IDS = new Set(['descriptors', 'github']);
+
 function validateIntegrationDescriptorShape(
   record: Omit<IntegrationDescriptorRecord, 'id'> & { readonly id?: string },
 ): void {
   assertUserIntegrationProvider(record.provider);
+  if (RESERVED_DESCRIPTOR_PROVIDER_IDS.has(record.provider)) {
+    throw new ConsoleStoreValidationError(`provider id '${record.provider}' is reserved`);
+  }
   const ownership: string = record.ownership;
   if (ownership !== 'curated' && ownership !== 'byo') {
     throw new ConsoleStoreValidationError('descriptor ownership must be curated or byo');
@@ -194,8 +312,18 @@ function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor): void {
 
 function validateStaticApiKeyDescriptor(staticApiKey: IntegrationStaticApiKeyDescriptor): void {
   const location: string = staticApiKey.injection.location;
-  if (location !== 'header' && location !== 'query') {
-    throw new ConsoleStoreValidationError('staticApiKey.injection.location must be header or query');
+  if (location !== 'header' && location !== 'query' && location !== 'basic') {
+    throw new ConsoleStoreValidationError('staticApiKey.injection.location must be header, query, or basic');
+  }
+  if (location === 'basic') {
+    // The Basic scheme owns the header and encoding; nothing is configurable.
+    if (staticApiKey.injection.name !== 'Authorization') {
+      throw new ConsoleStoreValidationError('basic injection name must be Authorization');
+    }
+    if (staticApiKey.injection.valuePrefix !== null) {
+      throw new ConsoleStoreValidationError('basic injection must not declare a valuePrefix');
+    }
+    return;
   }
   assertDisplayString(staticApiKey.injection.name, 'staticApiKey.injection.name', 120);
   assertNullableDisplayString(staticApiKey.injection.valuePrefix, 'staticApiKey.injection.valuePrefix', 40);

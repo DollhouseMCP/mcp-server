@@ -611,6 +611,12 @@ function injectCredential(
     return;
   }
   if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
+    if (descriptor.staticApiKey.injection.location === 'basic') {
+      // The stored credential is `username:password` (RFC 7617); encode at
+      // injection time so the vault never holds base64-obscured material.
+      headers.set('Authorization', `Basic ${Buffer.from(credential, 'utf8').toString('base64')}`);
+      return;
+    }
     const value = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
     if (descriptor.staticApiKey.injection.location === 'header') {
       headers.set(descriptor.staticApiKey.injection.name, value);

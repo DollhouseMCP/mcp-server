@@ -27,6 +27,12 @@ export interface IntegrationOpenApiSpecUpsertInput {
 export interface IIntegrationOpenApiSpecStore {
   findByDescriptorId(descriptorId: string): Promise<IntegrationOpenApiSpecRecord | null>;
   upsert(input: IntegrationOpenApiSpecUpsertInput): Promise<IntegrationOpenApiSpecRecord>;
+  /**
+   * Delete the stored spec for a descriptor; returns whether one existed.
+   * Ownership is NOT checked here — the caller authorizes against the
+   * descriptor (owner-scoped) before touching its spec.
+   */
+  deleteByDescriptorId(descriptorId: string): Promise<boolean>;
 }
 
 export function validateIntegrationOpenApiSpecRecord(record: IntegrationOpenApiSpecRecord): void {

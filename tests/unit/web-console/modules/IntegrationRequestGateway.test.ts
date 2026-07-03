@@ -6,7 +6,6 @@ import {
   InMemoryIntegrationDescriptorStore,
   InMemoryUserIntegrationStore,
   IntegrationProviderRegistry,
-  IntegrationRequestGateway,
   IntegrationTokenRefreshService,
   type IIntegrationRequestAuditSink,
   type IntegrationDescriptorRecord,
@@ -14,6 +13,9 @@ import {
   type UserIntegrationProvider,
   type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
+// The raw gateway is deliberately not exported from the module barrels (FO2);
+// its own unit tests import the class module directly.
+import { IntegrationRequestGateway } from '../../../../src/web-console/modules/integrations/IntegrationRequestGateway.js';
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import type { IRateLimitStore } from '../../../../src/auth/embedded-as/storage/IRateLimitStore.js';
@@ -140,6 +142,37 @@ describe('IntegrationRequestGateway', () => {
 
     expect(fetches[0]).toBe('https://api.airtable.com/v0/app/table?key=airtable-key');
     expect(JSON.stringify(result)).not.toContain('airtable-key');
+  });
+
+  it('emits Authorization: Basic for basic-injection static credentials without leaking them', async () => {
+    const fetches: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'basic', name: 'Authorization', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('twilio-sid:twilio-secret', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: (url, init) => {
+        fetches.push({ url: urlString(url), init });
+        return Promise.resolve(jsonResponse(200, { records: [] }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/v0/app/table',
+    }));
+
+    const authorization = new Headers(fetches[0]?.init?.headers).get('Authorization');
+    expect(authorization).toBe(`Basic ${Buffer.from('twilio-sid:twilio-secret', 'utf8').toString('base64')}`);
+    // Neither the raw credential nor the query string carries the secret.
+    expect(fetches[0]?.url).toBe('https://api.airtable.com/v0/app/table');
+    expect(JSON.stringify(result)).not.toContain('twilio-secret');
   });
 
   it('fails closed on disallowed method, host escape, oversized body, and rate limit', async () => {
@@ -378,6 +411,46 @@ describe('IntegrationRequestGateway', () => {
     ]);
     expect(fetches[1]?.body).toContain('grant_type=refresh_token');
   });
+
+  it('refreshes on 401 through a provider resolved from the store, absent from the boot registry', async () => {
+    const fetches: Array<{ readonly authorization: string | null }> = [];
+    const providerFetch: PinnedFetch = () => Promise.resolve(jsonResponse(200, {
+      access_token: 'gmail-fresh-access-token',
+      refresh_token: 'gmail-rotated-refresh-token',
+    }));
+    // The provider is built per-request from the descriptor — NOT registered in
+    // the boot registry (empty). This proves the gateway's 401-refresh path is
+    // wired to the store-resolution fallback for runtime-authored BYO providers.
+    const storeResolvedProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptor(),
+      clientSecret: 'gmail-client-secret',
+      pinnedOutbound: () => ({ fetch: providerFetch, close: () => Promise.resolve() }),
+      dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
+    });
+    const gateway = gatewayFixture({
+      providers: IntegrationProviderRegistry.empty(),
+      resolveProvider: (_userId, provider) =>
+        Promise.resolve(provider === 'gmail' ? storeResolvedProvider : null),
+      fetch: (url, init) => {
+        fetches.push({ authorization: new Headers(init?.headers).get('Authorization') });
+        return Promise.resolve(fetches.length === 1
+          ? jsonResponse(401, { error: 'expired' })
+          : jsonResponse(200, { ok: true }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+    }));
+
+    expect(result).toMatchObject({ status: 200, refreshed: true });
+    expect(fetches.map(call => call.authorization)).toEqual([
+      'Bearer gmail-access-token',
+      'Bearer gmail-fresh-access-token',
+    ]);
+  });
 });
 
 function gatewayFixture(options: {
@@ -388,6 +461,7 @@ function gatewayFixture(options: {
   readonly dnsLookup?: (hostname: string, options: { readonly all: true }) => Promise<readonly { readonly address: string; readonly family: number }[]>;
   readonly rateLimitStore?: IRateLimitStore;
   readonly rateLimit?: { readonly windowMs: number; readonly maxRequests: number };
+  readonly resolveProvider?: ConstructorParameters<typeof IntegrationTokenRefreshService>[0]['resolveProvider'];
 } = {}) {
   const contextTracker = new ContextTracker();
   const secretEncryption = encryption();
@@ -420,6 +494,7 @@ function gatewayFixture(options: {
     tokenRefresh: new IntegrationTokenRefreshService({
       store: integrationStore,
       providers,
+      ...(options.resolveProvider ? { resolveProvider: options.resolveProvider } : {}),
       secretEncryption,
       now: () => NOW,
     }),

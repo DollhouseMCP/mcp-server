@@ -2,8 +2,15 @@ import { randomUUID } from 'node:crypto';
 
 import {
   cloneIntegrationDescriptorRecord,
+  compareDescriptorPageOrder,
+  decodeDescriptorPageCursor,
+  encodeDescriptorPageCursor,
+  isAfterDescriptorPageCursor,
+  resolveDescriptorPageLimit,
   type IIntegrationDescriptorStore,
   type IntegrationDescriptorCreateInput,
+  type IntegrationDescriptorPage,
+  type IntegrationDescriptorPageRequest,
   type IntegrationDescriptorRecord,
   validateIntegrationDescriptorInput,
   validateIntegrationDescriptorRecord,
@@ -23,10 +30,31 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
   async listVisible(userId: string): Promise<readonly IntegrationDescriptorRecord[]> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
+    return this.visibleSorted(userId).map(cloneIntegrationDescriptorRecord);
+  }
+
+  async listVisiblePage(
+    userId: string,
+    page: IntegrationDescriptorPageRequest = {},
+  ): Promise<IntegrationDescriptorPage> {
+    await Promise.resolve();
+    assertUuid(userId, 'userId');
+    const limit = resolveDescriptorPageLimit(page.limit);
+    const cursor = page.cursor ? decodeDescriptorPageCursor(page.cursor) : null;
+    const visible = this.visibleSorted(userId)
+      .filter(record => !cursor || isAfterDescriptorPageCursor(record, cursor));
+    const items = visible.slice(0, limit).map(cloneIntegrationDescriptorRecord);
+    const lastItem = items.at(-1);
+    return {
+      items,
+      nextCursor: visible.length > limit && lastItem ? encodeDescriptorPageCursor(lastItem) : null,
+    };
+  }
+
+  private visibleSorted(userId: string): IntegrationDescriptorRecord[] {
     return [...this.records.values()]
       .filter(record => record.ownership === 'curated' || record.ownerUserId === userId)
-      .sort((left, right) => left.provider.localeCompare(right.provider))
-      .map(cloneIntegrationDescriptorRecord);
+      .sort(compareDescriptorPageOrder);
   }
 
   async findVisibleByProvider(
@@ -35,9 +63,35 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
   ): Promise<IntegrationDescriptorRecord | null> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
-    const visible = [...this.records.values()].find(record =>
+    const candidates = [...this.records.values()].filter(record =>
       record.provider === provider && (record.ownership === 'curated' || record.ownerUserId === userId));
+    // Curated strictly wins over a same-id BYO descriptor so a user cannot
+    // shadow a curated provider's credential/routing by authoring their own.
+    // `.at(0)` (not `[0]`) keeps the type honest that the array may be empty.
+    const visible = candidates.find(record => record.ownership === 'curated') ?? candidates.at(0);
     return visible ? cloneIntegrationDescriptorRecord(visible) : null;
+  }
+
+  async findById(id: string, userId: string): Promise<IntegrationDescriptorRecord | null> {
+    await Promise.resolve();
+    assertUuid(id, 'id');
+    assertUuid(userId, 'userId');
+    const record = this.records.get(id);
+    return record?.ownership === 'byo' && record.ownerUserId === userId
+      ? cloneIntegrationDescriptorRecord(record)
+      : null;
+  }
+
+  async delete(id: string, ownerUserId: string): Promise<boolean> {
+    await Promise.resolve();
+    assertUuid(id, 'id');
+    assertUuid(ownerUserId, 'ownerUserId');
+    const record = this.records.get(id);
+    if (record?.ownership !== 'byo' || record.ownerUserId !== ownerUserId) {
+      return false;
+    }
+    this.records.delete(id);
+    return true;
   }
 
   async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {

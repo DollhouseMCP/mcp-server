@@ -1,27 +1,25 @@
 import type { ToolDefinition, ToolHandler } from '../../handlers/types/ToolTypes.js';
-import {
-  IntegrationRequestError,
-  type IntegrationRequestGateway,
-} from '../../web-console/modules/integrations/IntegrationRequestGateway.js';
-import type { IntegrationRequestPolicyEnforcer } from '../../web-console/modules/integrations/IntegrationRequestPolicy.js';
-import { IntegrationPolicyUnavailableError } from '../../web-console/modules/integrations/IntegrationRequestPolicy.js';
+import { IntegrationRequestError } from '../../web-console/modules/integrations/IntegrationRequestGateway.js';
 import {
   IntegrationOperationCatalogError,
-  type IntegrationOperationCatalog,
   type IntegrationOperationDetails,
 } from '../../web-console/modules/integrations/IntegrationOperationCatalog.js';
 import {
   IntegrationRemoteMcpBridgeError,
-  type IntegrationRemoteMcpBridge,
   type RemoteMcpTool,
 } from '../../web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
+import type {
+  AuthorizedIntegrationGateway,
+  AuthorizedIntegrationOperationCatalog,
+  AuthorizedIntegrationRemoteMcpBridge,
+  IntegrationPolicyDenial,
+} from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 
 const PROVIDER_DESCRIPTION = 'Integration provider id.';
 
 export function getIntegrationTools(
-  gateway: IntegrationRequestGateway,
-  policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
-  operationCatalog?: IntegrationOperationCatalog | null,
+  gateway: AuthorizedIntegrationGateway,
+  operationCatalog?: AuthorizedIntegrationOperationCatalog | null,
 ): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
   const tools: Array<{ tool: ToolDefinition; handler: ToolHandler }> = [{
     tool: {
@@ -61,33 +59,14 @@ export function getIntegrationTools(
     handler: async (args: unknown) => {
       try {
         const request = readArgs(args);
-        if (!policyEnforcer) return integrationPolicyUnavailableResponse();
-        const policy = await policyEnforcer.authorize(request);
-        if (!policy.allowed) {
-          return textResponse({
-            ok: false,
-            error: policy.error,
-            approvalRequest: policy.approvalRequest,
-            policyContext: policy.policyContext,
-          });
-        }
-        const result = await gateway.request(request);
+        const outcome = await gateway.request(request);
+        if (!outcome.ok) return policyDenialResponse(outcome);
         return textResponse({
           ok: true,
-          result,
-          approvalContext: policy.approvalContext,
+          result: outcome.result,
+          approvalContext: outcome.approvalContext,
         });
       } catch (error) {
-        if (error instanceof IntegrationPolicyUnavailableError) {
-          return textResponse({
-            ok: false,
-            error: {
-              code: 'integration_request_policy_unavailable',
-              message: error.message,
-              status: 503,
-            },
-          });
-        }
         if (error instanceof IntegrationRequestError) {
           return textResponse({
             ok: false,
@@ -103,15 +82,14 @@ export function getIntegrationTools(
     },
   }];
   if (operationCatalog) {
-    tools.push(...getIntegrationOperationTools(operationCatalog, policyEnforcer));
+    tools.push(...getIntegrationOperationTools(operationCatalog));
   }
   return tools;
 }
 
 export async function getPromotedIntegrationTools(
-  gateway: IntegrationRequestGateway,
-  operationCatalog: IntegrationOperationCatalog,
-  policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+  gateway: AuthorizedIntegrationGateway,
+  operationCatalog: AuthorizedIntegrationOperationCatalog,
   reservedToolNames: ReadonlySet<string> = new Set(),
 ): Promise<Array<{ tool: ToolDefinition; handler: ToolHandler }>> {
   const operations = await operationCatalog.listPromotedOperations();
@@ -119,24 +97,21 @@ export async function getPromotedIntegrationTools(
   return operations.map(operation => promotedToolRegistration(
     operation,
     gateway,
-    policyEnforcer,
     usedNames,
   ));
 }
 
 export async function getRemoteMcpBridgeTools(
-  bridge: IntegrationRemoteMcpBridge,
-  policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+  bridge: AuthorizedIntegrationRemoteMcpBridge,
   reservedToolNames: ReadonlySet<string> = new Set(),
 ): Promise<Array<{ tool: ToolDefinition; handler: ToolHandler }>> {
   const remoteTools = await bridge.listAllowedTools();
   const usedNames = new Set<string>(reservedToolNames);
-  return remoteTools.map(remoteTool => remoteMcpToolRegistration(remoteTool, bridge, policyEnforcer, usedNames));
+  return remoteTools.map(remoteTool => remoteMcpToolRegistration(remoteTool, bridge, usedNames));
 }
 
 function getIntegrationOperationTools(
-  operationCatalog: IntegrationOperationCatalog,
-  policyEnforcer?: IntegrationRequestPolicyEnforcer | null,
+  operationCatalog: AuthorizedIntegrationOperationCatalog,
 ): Array<{ tool: ToolDefinition; handler: ToolHandler }> {
   return [
     {
@@ -173,22 +148,16 @@ function getIntegrationOperationTools(
       handler: async (args: unknown) => {
         try {
           const input = readObject(args);
-          const provider = readRequiredString(input.provider, 'provider');
-          const policyResponse = await authorizeIntegrationManagementWrite(
-            policyEnforcer,
-            provider,
-            '_internal:/integration/openapi_spec',
-            readRequiredRecord(input.spec, 'spec'),
-          );
-          if (policyResponse) return policyResponse;
+          const outcome = await operationCatalog.ingestOpenApiSpec({
+            provider: readRequiredString(input.provider, 'provider'),
+            spec: readRequiredRecord(input.spec, 'spec'),
+            sourceUrl: readOptionalString(input.source_url, 'source_url'),
+            regenerateSkill: input.regenerate_skill === true,
+          });
+          if (!outcome.ok) return policyDenialResponse(outcome);
           return textResponse({
             ok: true,
-            result: await operationCatalog.ingestOpenApiSpec({
-              provider,
-              spec: readRequiredRecord(input.spec, 'spec'),
-              sourceUrl: readOptionalString(input.source_url, 'source_url'),
-              regenerateSkill: input.regenerate_skill === true,
-            }),
+            result: outcome.result,
           });
         } catch (error) {
           if (error instanceof IntegrationOperationCatalogError) {
@@ -220,18 +189,13 @@ function getIntegrationOperationTools(
       handler: async (args: unknown) => {
         try {
           const input = readObject(args);
-          const provider = readRequiredString(input.provider, 'provider');
-          const policyResponse = await authorizeIntegrationManagementWrite(
-            policyEnforcer,
-            provider,
-            '_internal:/integration/generated_skill',
-          );
-          if (policyResponse) return policyResponse;
+          const outcome = await operationCatalog.regenerateSkill({
+            provider: readRequiredString(input.provider, 'provider'),
+          });
+          if (!outcome.ok) return policyDenialResponse(outcome);
           return textResponse({
             ok: true,
-            result: await operationCatalog.regenerateSkill({
-              provider,
-            }),
+            result: outcome.result,
           });
         } catch (error) {
           if (error instanceof IntegrationOperationCatalogError) {
@@ -344,8 +308,7 @@ function readArgs(args: unknown) {
 
 function promotedToolRegistration(
   operation: IntegrationOperationDetails,
-  gateway: IntegrationRequestGateway,
-  policyEnforcer: IntegrationRequestPolicyEnforcer | null | undefined,
+  gateway: AuthorizedIntegrationGateway,
   usedNames: Set<string>,
 ): { tool: ToolDefinition; handler: ToolHandler } {
   const toolName = uniquePromotedToolName(operation, usedNames);
@@ -372,25 +335,23 @@ function promotedToolRegistration(
           query: readOptionalRecord(input.query),
           body: input.body,
         };
-        if (!policyEnforcer) return integrationPolicyUnavailableResponse();
-        const policy = await policyEnforcer.authorize(request);
-        if (!policy.allowed) {
+        const outcome = await gateway.request(request);
+        if (!outcome.ok) {
           return textResponse({
             ok: false,
-            error: policy.error,
-            approvalRequest: policy.approvalRequest,
-            policyContext: policy.policyContext,
+            error: outcome.error,
+            approvalRequest: outcome.approvalRequest,
+            policyContext: outcome.policyContext,
             promotedTool: {
               operationId: operation.operationId,
               provider: operation.gatewayRequest.provider,
             },
           });
         }
-        const result = await gateway.request(request);
         return textResponse({
           ok: true,
-          result,
-          approvalContext: policy.approvalContext,
+          result: outcome.result,
+          approvalContext: outcome.approvalContext,
           promotedTool: {
             operationId: operation.operationId,
             provider: operation.gatewayRequest.provider,
@@ -398,16 +359,6 @@ function promotedToolRegistration(
           },
         });
       } catch (error) {
-        if (error instanceof IntegrationPolicyUnavailableError) {
-          return textResponse({
-            ok: false,
-            error: {
-              code: 'integration_request_policy_unavailable',
-              message: error.message,
-              status: 503,
-            },
-          });
-        }
         if (error instanceof IntegrationRequestError) {
           return textResponse({
             ok: false,
@@ -426,8 +377,7 @@ function promotedToolRegistration(
 
 function remoteMcpToolRegistration(
   remoteTool: RemoteMcpTool,
-  bridge: IntegrationRemoteMcpBridge,
-  policyEnforcer: IntegrationRequestPolicyEnforcer | null | undefined,
+  bridge: AuthorizedIntegrationRemoteMcpBridge,
   usedNames: Set<string>,
 ): { tool: ToolDefinition; handler: ToolHandler } {
   const toolName = uniqueToolName(remoteTool.localName, usedNames);
@@ -443,20 +393,15 @@ function remoteMcpToolRegistration(
     },
     handler: async (args: unknown) => {
       try {
-        const policyResponse = await authorizeIntegrationManagementWrite(
-          policyEnforcer,
-          remoteTool.provider,
-          `_internal:/integration/remote_mcp/${encodeURIComponent(remoteTool.remoteName)}`,
-          readObject(args),
-        );
-        if (policyResponse) return policyResponse;
+        const outcome = await bridge.callTool({
+          provider: remoteTool.provider,
+          remoteName: remoteTool.remoteName,
+          arguments: args,
+        });
+        if (!outcome.ok) return policyDenialResponse(outcome);
         return textResponse({
           ok: true,
-          result: await bridge.callTool({
-            provider: remoteTool.provider,
-            remoteName: remoteTool.remoteName,
-            arguments: args,
-          }),
+          result: outcome.result,
         });
       } catch (error) {
         if (error instanceof IntegrationRemoteMcpBridgeError) {
@@ -584,51 +529,13 @@ function readOptionalString(value: unknown, field: string): string | null {
   throw new IntegrationRequestError('invalid_integration_request', `${field} must be a non-empty string.`, 400);
 }
 
-async function authorizeIntegrationManagementWrite(
-  policyEnforcer: IntegrationRequestPolicyEnforcer | null | undefined,
-  provider: string,
-  path: string,
-  body?: unknown,
-): Promise<ReturnType<typeof textResponse> | null> {
-  if (!policyEnforcer) {
-    return textResponse({
-      ok: false,
-      error: {
-        code: 'integration_management_policy_unavailable',
-        message: 'Integration management write policy is temporarily unavailable.',
-        status: 503,
-      },
-    });
-  }
-  try {
-    // `path` is a gateway-rejectable `_internal:/...` sentinel (not a real absolute path),
-    // so a management-write approval can never be replayed as a real integration_request call.
-    const policy = await policyEnforcer.authorize({
-      provider,
-      method: 'PUT',
-      path,
-      ...(body === undefined ? {} : { body }),
-    });
-    if (policy.allowed) return null;
-    return textResponse({
-      ok: false,
-      error: policy.error,
-      approvalRequest: policy.approvalRequest,
-      policyContext: policy.policyContext,
-    });
-  } catch (error) {
-    if (error instanceof IntegrationPolicyUnavailableError) {
-      return textResponse({
-        ok: false,
-        error: {
-          code: 'integration_request_policy_unavailable',
-          message: error.message,
-          status: 503,
-        },
-      });
-    }
-    throw error;
-  }
+function policyDenialResponse(denial: IntegrationPolicyDenial) {
+  return textResponse({
+    ok: false,
+    error: denial.error,
+    approvalRequest: denial.approvalRequest,
+    policyContext: denial.policyContext,
+  });
 }
 
 function textResponse(value: unknown) {
@@ -638,17 +545,6 @@ function textResponse(value: unknown) {
       text: JSON.stringify(value, null, 2),
     }],
   };
-}
-
-function integrationPolicyUnavailableResponse() {
-  return textResponse({
-    ok: false,
-    error: {
-      code: 'integration_request_policy_unavailable',
-      message: 'Integration request policy is temporarily unavailable.',
-      status: 503,
-    },
-  });
 }
 
 function catalogErrorResponse(error: IntegrationOperationCatalogError) {
