@@ -334,7 +334,10 @@ export class SecureYamlParser {
 
     // Fix #908: YAML bomb detection — previously skipped, allowing bomb payloads
     // through MCP-AQL create dispatcher and web routes that use parseRawYaml().
-    if (!ContentValidator.validateYamlContent(yamlContent)) {
+    // Issue #2329: pass maxSize through — validateYamlContent's own default cap is
+    // 64KB (frontmatter-sized), which rejected larger pure-YAML documents even
+    // when the caller allowed them.
+    if (!ContentValidator.validateYamlContent(yamlContent, maxSize)) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'CRITICAL',
