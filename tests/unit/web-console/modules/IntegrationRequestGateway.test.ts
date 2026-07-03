@@ -411,6 +411,46 @@ describe('IntegrationRequestGateway', () => {
     ]);
     expect(fetches[1]?.body).toContain('grant_type=refresh_token');
   });
+
+  it('refreshes on 401 through a provider resolved from the store, absent from the boot registry', async () => {
+    const fetches: Array<{ readonly authorization: string | null }> = [];
+    const providerFetch: PinnedFetch = () => Promise.resolve(jsonResponse(200, {
+      access_token: 'gmail-fresh-access-token',
+      refresh_token: 'gmail-rotated-refresh-token',
+    }));
+    // The provider is built per-request from the descriptor — NOT registered in
+    // the boot registry (empty). This proves the gateway's 401-refresh path is
+    // wired to the store-resolution fallback for runtime-authored BYO providers.
+    const storeResolvedProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptor(),
+      clientSecret: 'gmail-client-secret',
+      pinnedOutbound: () => ({ fetch: providerFetch, close: () => Promise.resolve() }),
+      dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
+    });
+    const gateway = gatewayFixture({
+      providers: IntegrationProviderRegistry.empty(),
+      resolveProvider: (_userId, provider) =>
+        Promise.resolve(provider === 'gmail' ? storeResolvedProvider : null),
+      fetch: (url, init) => {
+        fetches.push({ authorization: new Headers(init?.headers).get('Authorization') });
+        return Promise.resolve(fetches.length === 1
+          ? jsonResponse(401, { error: 'expired' })
+          : jsonResponse(200, { ok: true }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+    }));
+
+    expect(result).toMatchObject({ status: 200, refreshed: true });
+    expect(fetches.map(call => call.authorization)).toEqual([
+      'Bearer gmail-access-token',
+      'Bearer gmail-fresh-access-token',
+    ]);
+  });
 });
 
 function gatewayFixture(options: {
@@ -421,6 +461,7 @@ function gatewayFixture(options: {
   readonly dnsLookup?: (hostname: string, options: { readonly all: true }) => Promise<readonly { readonly address: string; readonly family: number }[]>;
   readonly rateLimitStore?: IRateLimitStore;
   readonly rateLimit?: { readonly windowMs: number; readonly maxRequests: number };
+  readonly resolveProvider?: ConstructorParameters<typeof IntegrationTokenRefreshService>[0]['resolveProvider'];
 } = {}) {
   const contextTracker = new ContextTracker();
   const secretEncryption = encryption();
@@ -453,6 +494,7 @@ function gatewayFixture(options: {
     tokenRefresh: new IntegrationTokenRefreshService({
       store: integrationStore,
       providers,
+      ...(options.resolveProvider ? { resolveProvider: options.resolveProvider } : {}),
       secretEncryption,
       now: () => NOW,
     }),

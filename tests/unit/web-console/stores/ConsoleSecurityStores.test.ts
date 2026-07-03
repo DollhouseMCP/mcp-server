@@ -619,6 +619,45 @@ describe('InMemoryIntegrationDescriptorStore', () => {
       .resolves.toMatchObject({ items: [], nextCursor: null });
   });
 
+  it('paginates without dropping rows whose provider ids sort differently under localeCompare vs code point', async () => {
+    // `_`/`-` order differently under ICU localeCompare than by code point.
+    // The sort comparator and the keyset cursor MUST agree or a boundary row
+    // vanishes from every later page. These ids diverge between the two orders.
+    const store = new InMemoryIntegrationDescriptorStore();
+    const providers = ['a-n', 'a560', 'a7m', 'a_d3w', 'a_kdr', 'a_x'];
+    for (const provider of providers) {
+      await store.upsert(oauthDescriptorInput({ provider }));
+    }
+
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await store.listVisiblePage(USER_ID, { limit: 2, cursor });
+      collected.push(...page.items.map(item => item.provider));
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    // Every id appears exactly once across the paged walk — none skipped.
+    const byName = (left: string, right: string): number => left.localeCompare(right);
+    expect([...collected].sort(byName)).toEqual([...providers].sort(byName));
+    expect(new Set(collected).size).toBe(providers.length);
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(providers.length);
+  });
+
+  it('resolves curated strictly over a same-provider BYO descriptor', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    // BYO authored first, curated seeded second — order must not decide the winner.
+    await store.upsert(oauthDescriptorInput({ provider: 'shared', apiHosts: ['byo.example.com'] }));
+    await store.upsert({
+      ...oauthDescriptorInput({ provider: 'shared', apiHosts: ['curated.example.com'] }),
+      ownership: 'curated',
+      ownerUserId: null,
+    });
+
+    const resolved = await store.findVisibleByProvider(USER_ID, 'shared');
+    expect(resolved).toMatchObject({ ownership: 'curated', apiHosts: ['curated.example.com'] });
+  });
+
   it('rejects invalid pagination limits and cursors', async () => {
     const store = new InMemoryIntegrationDescriptorStore();
 

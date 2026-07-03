@@ -96,6 +96,7 @@ function staticKeyBody(overrides: Partial<Record<string, unknown>> = {}) {
 function fixture(options: {
   readonly descriptors?: readonly IntegrationDescriptorRecord[];
   readonly withEncryption?: boolean;
+  readonly reservedProviderIds?: ReadonlySet<string>;
 } = {}) {
   const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? []);
   const specStore = new InMemoryIntegrationOpenApiSpecStore();
@@ -104,9 +105,39 @@ function fixture(options: {
     descriptorStore,
     specStore,
     secretEncryption,
+    ...(options.reservedProviderIds ? { reservedProviderIds: options.reservedProviderIds } : {}),
     now: () => NOW,
   });
   return { service, descriptorStore, specStore, secretEncryption };
+}
+
+function curatedRecord(provider: string, id: string): IntegrationDescriptorRecord {
+  return {
+    id,
+    provider,
+    ownership: 'curated',
+    ownerUserId: null,
+    displayName: `Curated ${provider}`,
+    category: 'crm',
+    authStrategy: 'oauth2_authorization_code',
+    apiHosts: [`api.${provider}.example`],
+    oauth: {
+      clientId: 'curated-client',
+      authorizationUrl: `https://auth.${provider}.example/authorize`,
+      tokenUrl: `https://auth.${provider}.example/token`,
+      scopes: [],
+      pkce: 'required',
+      refresh: 'none',
+      tokenExchange: {},
+      accountLabel: {},
+    },
+    staticApiKey: null,
+    clientSecretCiphertext: null,
+    credentialKeyVersion: null,
+    operationPromotion: {},
+    createdAt: NOW,
+    updatedAt: NOW,
+  };
 }
 
 function bodyOf(result: { body?: unknown }): Record<string, unknown> {
@@ -214,6 +245,86 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(missingProvider.status).toBe(422);
   });
 
+  it('rejects provider ids reserved by a built-in or curated boot-registry provider', async () => {
+    // github is a bespoke registry provider with no descriptor; a BYO github
+    // would route the deployment-brokered GitHub token to a chosen host.
+    const { service } = fixture({ reservedProviderIds: new Set(['github', 'gmail']) });
+
+    const github = await service.create(consoleRequest({
+      body: staticKeyBody({ provider: 'github' }),
+    }));
+    expect(github.status).toBe(409);
+    expect(bodyOf(github)).toMatchObject({ code: 'integration_descriptor_conflict' });
+
+    const curated = await service.create(consoleRequest({ body: oauthBody({ provider: 'gmail' }) }));
+    expect(curated.status).toBe(409);
+
+    // The store also refuses github directly (belt), independent of the registry.
+    const storeReserved = await service.create(consoleRequest({ body: oauthBody({ provider: 'github' }) }));
+    expect([409, 422]).toContain(storeReserved.status);
+  });
+
+  it('stores a rotated client secret when the PATCH body omits provider', async () => {
+    const { service, descriptorStore, secretEncryption } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+
+    const oauthWithNewSecret = { ...(oauthBody().oauth as Record<string, unknown>), client_secret: 'rotated-secret-value' };
+    const updated = await service.update(consoleRequest({
+      params: { id: created.id as string },
+      body: { oauth: oauthWithNewSecret }, // no `provider` key — the natural rotation call
+    }));
+
+    expect(updated.status).toBe(200);
+    expect(bodyOf(updated)).toMatchObject({ has_client_secret: true });
+    expect(JSON.stringify(bodyOf(updated))).not.toContain('rotated-secret-value');
+
+    const stored = await descriptorStore.findById(created.id as string, USER_ID);
+    const ciphertext = stored?.clientSecretCiphertext;
+    if (!ciphertext) throw new Error('expected rotated ciphertext to persist');
+    expect(secretEncryption?.decrypt(
+      ciphertext,
+      integrationDescriptorClientSecretContext({ provider: MYCRM, ownerUserId: USER_ID }),
+    ).toString('utf8')).toBe('rotated-secret-value');
+  });
+
+  it('rejects PATCH and DELETE by non-owner and on curated descriptors', async () => {
+    const curated = curatedRecord('shared-crm', '00000000-0000-4000-8000-0000000000c1');
+    const { service } = fixture({ descriptors: [curated] });
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const ownedId = created.id as string;
+
+    // Non-owner cannot mutate or delete the owner's descriptor.
+    await expect(service.update(consoleRequest({
+      params: { id: ownedId },
+      body: { display_name: 'hijacked' },
+      consoleAuthentication: authenticatedContext(OTHER_USER_ID),
+    }))).resolves.toMatchObject({ status: 404 });
+    await expect(service.remove(consoleRequest({
+      params: { id: ownedId },
+      consoleAuthentication: authenticatedContext(OTHER_USER_ID),
+    }))).resolves.toMatchObject({ status: 404 });
+
+    // A curated descriptor (visible via list) is not mutable or deletable by id.
+    await expect(service.update(consoleRequest({
+      params: { id: curated.id },
+      body: { display_name: 'hijacked' },
+    }))).resolves.toMatchObject({ status: 404 });
+    await expect(service.remove(consoleRequest({ params: { id: curated.id } })))
+      .resolves.toMatchObject({ status: 404 });
+  });
+
+  it('never serializes the client secret on list responses', async () => {
+    const { service } = fixture();
+    await service.create(consoleRequest({ body: oauthBody() }));
+
+    const listed = await service.list(consoleRequest());
+    expect(JSON.stringify(bodyOf(listed))).not.toContain(CLIENT_SECRET);
+    const first = (bodyOf(listed).descriptors as Array<Record<string, unknown>>)[0];
+    expect(first.has_client_secret).toBe(true);
+    expect(first.client_secret).toBeUndefined();
+    expect(first.clientSecretCiphertext).toBeUndefined();
+  });
+
   it('fails closed when a client secret is supplied without encryption configured', async () => {
     const { service, descriptorStore } = fixture({ withEncryption: false });
 
@@ -278,6 +389,23 @@ describe('IntegrationDescriptorAuthoringService', () => {
       display_name: 'Renamed CRM',
       has_client_secret: true,
       created_at: created.created_at,
+    });
+    expect(JSON.stringify(bodyOf(updated))).not.toContain(CLIENT_SECRET);
+  });
+
+  it('switches an existing header-injection descriptor to basic, defaulting the header name', async () => {
+    const { service } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: staticKeyBody() })));
+
+    const switched = await service.update(consoleRequest({
+      params: { id: created.id as string },
+      body: { static_api_key: { injection: { location: 'basic' } } },
+    }));
+
+    expect(switched.status).toBe(200);
+    expect(bodyOf(switched)).toMatchObject({
+      auth_strategy: 'static_api_key',
+      static_api_key: { injection: { location: 'basic', name: 'Authorization', value_prefix: null } },
     });
   });
 
@@ -753,5 +881,24 @@ describe('IntegrationModule descriptor routes', () => {
       integrationStore: new InMemoryUserIntegrationStore(),
     });
     expect(withoutStores.routes.some(route => route.path.startsWith(DESCRIPTORS_PATH))).toBe(false);
+  });
+
+  it('registers every parameterized :provider route after all literal routes', () => {
+    const module = createIntegrationModule({
+      integrationStore: new InMemoryUserIntegrationStore(),
+      descriptorStore: new InMemoryIntegrationDescriptorStore(),
+      openApiSpecStore: new InMemoryIntegrationOpenApiSpecStore(),
+      secretEncryption: encryption(),
+    });
+    const paths = module.routes.map(route => route.path);
+    // A first-match router depends on literals (github, descriptors) preceding
+    // the :provider fallback — otherwise the fallback's reserved-id guard would
+    // shadow them (404) and silently break GitHub/descriptor routes.
+    const firstParamIndex = paths.findIndex(path => path.includes('/:provider'));
+    const lastLiteralIndex = Math.max(
+      ...paths.map((path, index) => (path.includes('/:provider') ? -1 : index)),
+    );
+    expect(firstParamIndex).toBeGreaterThan(-1);
+    expect(firstParamIndex).toBeGreaterThan(lastLiteralIndex);
   });
 });

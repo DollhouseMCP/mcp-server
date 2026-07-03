@@ -329,6 +329,27 @@ function insertChain(rows: unknown[] = []) {
   return chain;
 }
 
+/** Every string value reachable from a value tree (for inspecting drizzle exprs). */
+function collectStrings(root: unknown): Set<string> {
+  const out = new Set<string>();
+  const seen = new WeakSet<object>();
+  const iterableOf = (value: object): unknown[] => {
+    if (value instanceof Map) return [...value.values()];
+    if (value instanceof Set) return [...value];
+    return Object.values(value as Record<string, unknown>);
+  };
+  const visit = (value: unknown, depth: number): void => {
+    if (depth > 30 || value == null) return;
+    if (typeof value === 'string') { out.add(value); return; }
+    if (typeof value !== 'object') return;
+    if (seen.has(value)) return;
+    seen.add(value);
+    for (const nested of iterableOf(value)) visit(nested, depth + 1);
+  };
+  visit(root, 0);
+  return out;
+}
+
 function deletingChain(rows: unknown[] = []) {
   const chain: Record<string, jest.Mock> = {};
   chain.where = jest.fn(() => chain);
@@ -835,6 +856,33 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(chain.limit).toHaveBeenCalledWith(3);
     expect(page.items.map(item => item.provider)).toEqual(['svc-a', 'svc-b']);
     expect(page.nextCursor).toBe('svc-b:00000000-0000-4000-8000-0000000000a2');
+  });
+
+  it('applies a keyset WHERE predicate carrying the decoded cursor', async () => {
+    // Guards the keyset clause itself: without this, the gt/and/or predicate
+    // could be deleted from the query and only the chain-mock happy path (which
+    // ignores WHERE) would still pass — silently returning duplicate/missing
+    // rows on page 2+. Assert the decoded cursor's provider AND id reach the
+    // WHERE expression.
+    const chain = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+    const cursorId = '00000000-0000-4000-8000-0000000000a2';
+
+    await store.listVisiblePage(USER_ID, { limit: 2, cursor: `svc-b:${cursorId}` });
+
+    // Drizzle holds bound params inside the expression tree (not via
+    // JSON.stringify); collect every string value reachable from the WHERE arg.
+    const literals = collectStrings(chain.where.mock.calls[0]?.[0]);
+    expect(literals).toContain('svc-b');
+    expect(literals).toContain(cursorId);
+
+    // And the no-cursor case's WHERE must NOT carry a cursor value (proves the
+    // keyset branch is genuinely conditional, not always appended).
+    const plainChain = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => plainChain);
+    await store.listVisiblePage(USER_ID, { limit: 2 });
+    expect(collectStrings(plainChain.where.mock.calls[0]?.[0])).not.toContain('svc-b');
   });
 
   it('rejects invalid pagination limits and cursors before querying', async () => {

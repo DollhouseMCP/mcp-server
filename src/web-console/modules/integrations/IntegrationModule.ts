@@ -153,7 +153,7 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
         privacyProjector: projectGitHubIntegrationStatus,
         handler: req => service.disconnectGitHub(req),
       },
-      ...byoDescriptorRoutes(options),
+      ...byoDescriptorRoutes(options, new Set(providers.listDescriptors().map(entry => entry.id))),
       ...configuredProviderRoutes(options.configuredProviders ?? [], service),
       // Parameterized routes MUST register last: every literal route above
       // (github, descriptors, boot-time curated providers) wins the match
@@ -265,12 +265,16 @@ function perRequestProviderRoutes(
  * reserves that provider id, and configured-provider routes are generated
  * from validated descriptors only.
  */
-function byoDescriptorRoutes(options: IntegrationModuleOptions): ConsoleModuleDescriptor['routes'] {
+function byoDescriptorRoutes(
+  options: IntegrationModuleOptions,
+  reservedProviderIds: ReadonlySet<string>,
+): ConsoleModuleDescriptor['routes'] {
   if (!options.descriptorStore || !options.openApiSpecStore) return [];
   const authoring = new IntegrationDescriptorAuthoringService({
     descriptorStore: options.descriptorStore,
     specStore: options.openApiSpecStore,
     secretEncryption: options.secretEncryption,
+    reservedProviderIds,
     now: options.now,
   });
   const basePath = '/api/v1/me/integrations/descriptors';

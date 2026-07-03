@@ -54,6 +54,23 @@ function enforcerAllowing(approvalContext?: { requestId: string; scope: string }
   } as unknown as IntegrationRequestPolicyEnforcer;
 }
 
+describe('integrations module barrel (FO2 isolation)', () => {
+  it('does not re-export the raw execution authority constructors', async () => {
+    const barrel = await import('../../../../src/web-console/modules/integrations/index.js');
+    const exported = Object.keys(barrel);
+    // The raw authorities must stay constructible only from the DI root; the
+    // barrel exposes their error/DTO types and the Authorized* facades, never
+    // the un-gated classes themselves.
+    expect(exported).not.toContain('IntegrationRequestGateway');
+    expect(exported).not.toContain('IntegrationOperationCatalog');
+    expect(exported).not.toContain('IntegrationRemoteMcpBridge');
+    // Facades remain exported.
+    expect(exported).toContain('AuthorizedIntegrationGateway');
+    expect(exported).toContain('AuthorizedIntegrationOperationCatalog');
+    expect(exported).toContain('AuthorizedIntegrationRemoteMcpBridge');
+  });
+});
+
 describe('AuthorizedIntegrationGateway', () => {
   it('feeds the exact same input object to authorize() and the raw gateway', async () => {
     const gateway = {

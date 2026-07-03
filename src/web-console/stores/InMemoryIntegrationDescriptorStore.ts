@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   cloneIntegrationDescriptorRecord,
+  compareDescriptorPageOrder,
   decodeDescriptorPageCursor,
   encodeDescriptorPageCursor,
   isAfterDescriptorPageCursor,
@@ -53,7 +54,7 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
   private visibleSorted(userId: string): IntegrationDescriptorRecord[] {
     return [...this.records.values()]
       .filter(record => record.ownership === 'curated' || record.ownerUserId === userId)
-      .sort((left, right) => left.provider.localeCompare(right.provider) || left.id.localeCompare(right.id));
+      .sort(compareDescriptorPageOrder);
   }
 
   async findVisibleByProvider(
@@ -62,8 +63,12 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
   ): Promise<IntegrationDescriptorRecord | null> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
-    const visible = [...this.records.values()].find(record =>
+    const candidates = [...this.records.values()].filter(record =>
       record.provider === provider && (record.ownership === 'curated' || record.ownerUserId === userId));
+    // Curated strictly wins over a same-id BYO descriptor so a user cannot
+    // shadow a curated provider's credential/routing by authoring their own.
+    // `.at(0)` (not `[0]`) keeps the type honest that the array may be empty.
+    const visible = candidates.find(record => record.ownership === 'curated') ?? candidates.at(0);
     return visible ? cloneIntegrationDescriptorRecord(visible) : null;
   }
 

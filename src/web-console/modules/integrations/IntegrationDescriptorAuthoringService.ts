@@ -44,6 +44,15 @@ export class IntegrationDescriptorAuthoringService {
     readonly descriptorStore: IIntegrationDescriptorStore;
     readonly specStore: IIntegrationOpenApiSpecStore;
     readonly secretEncryption?: ISecretEncryptionService | null;
+    /**
+     * Provider ids owned by the boot-time registry (bespoke providers like
+     * `github` + curated seeds). A BYO descriptor must never claim one:
+     * `github`'s credential is stored under the same provider-keyed context
+     * the gateway injects, so a BYO `github` would route the deployment token
+     * to a user-chosen host; curated ids must not be shadowed. Checked in
+     * addition to the store's own reserved-id belt.
+     */
+    readonly reservedProviderIds?: ReadonlySet<string>;
     readonly now?: () => Date;
   }) {}
 
@@ -77,6 +86,13 @@ export class IntegrationDescriptorAuthoringService {
       throw error;
     }
     if (!parsed.provider) return unprocessable('provider is required');
+    // A boot-registry provider id (bespoke `github` or a curated seed) must
+    // not be claimed by a BYO descriptor — it would shadow that provider's
+    // routing while the gateway still injects the registry provider's stored
+    // credential (deployment-token exfiltration for `github`).
+    if (this.options.reservedProviderIds?.has(parsed.provider)) {
+      return conflict(`provider '${parsed.provider}' is reserved by a built-in or curated provider`);
+    }
     // A provider id shared with ANY visible descriptor (curated or own BYO)
     // would make provider-keyed resolution ambiguous for this user.
     const collision = await this.options.descriptorStore.findVisibleByProvider(
@@ -122,7 +138,11 @@ export class IntegrationDescriptorAuthoringService {
     }
 
     const merged = mergeDescriptor(existing, parsed);
-    const secret = this.encryptClientSecret(parsed, auth.userId, preservedSecret(existing, merged));
+    // Use `merged` (not `parsed`): it carries `mergedProvider = existing.provider`
+    // so encryptClientSecret's provider guard never misfires and the AAD binds
+    // to the real provider. Passing `parsed` here dropped a rotated secret when
+    // the PATCH body omitted `provider`.
+    const secret = this.encryptClientSecret(merged, auth.userId, preservedSecret(existing, merged));
     if (secret === ENCRYPTION_UNAVAILABLE) return encryptionUnavailable();
     try {
       const record = await this.options.descriptorStore.upsert(
@@ -470,80 +490,38 @@ function isUuidShaped(value: string | undefined): value is string {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 }
 
-function notFound(): ConsoleHandlerResult {
+function consoleProblem(
+  status: number,
+  title: string,
+  code: string,
+  detail: string,
+): ConsoleHandlerResult {
   return {
-    status: 404,
-    body: {
-      type: PROBLEM_TYPE_BLANK,
-      title: 'Not found',
-      status: 404,
-      code: 'integration_descriptor_not_found',
-      detail: 'Integration descriptor was not found.',
-    },
+    status,
+    body: { type: PROBLEM_TYPE_BLANK, title, status, code, detail },
   };
+}
+
+function notFound(): ConsoleHandlerResult {
+  return consoleProblem(404, 'Not found', 'integration_descriptor_not_found', 'Integration descriptor was not found.');
 }
 
 function specNotFound(): ConsoleHandlerResult {
-  return {
-    status: 404,
-    body: {
-      type: PROBLEM_TYPE_BLANK,
-      title: 'Not found',
-      status: 404,
-      code: 'integration_spec_not_found',
-      detail: 'No OpenAPI spec is stored for this descriptor.',
-    },
-  };
+  return consoleProblem(404, 'Not found', 'integration_spec_not_found', 'No OpenAPI spec is stored for this descriptor.');
 }
 
 function catalogError(error: IntegrationOperationCatalogError): ConsoleHandlerResult {
-  return {
-    status: error.status,
-    body: {
-      type: PROBLEM_TYPE_BLANK,
-      title: 'Invalid OpenAPI spec',
-      status: error.status,
-      code: error.code,
-      detail: error.message,
-    },
-  };
+  return consoleProblem(error.status, 'Invalid OpenAPI spec', error.code, error.message);
 }
 
 function conflict(detail: string): ConsoleHandlerResult {
-  return {
-    status: 409,
-    body: {
-      type: PROBLEM_TYPE_BLANK,
-      title: 'Conflict',
-      status: 409,
-      code: 'integration_descriptor_conflict',
-      detail,
-    },
-  };
+  return consoleProblem(409, 'Conflict', 'integration_descriptor_conflict', detail);
 }
 
 function unprocessable(detail: string): ConsoleHandlerResult {
-  return {
-    status: 422,
-    body: {
-      type: PROBLEM_TYPE_BLANK,
-      title: 'Unprocessable content',
-      status: 422,
-      code: 'invalid_integration_descriptor',
-      detail,
-    },
-  };
+  return consoleProblem(422, 'Unprocessable content', 'invalid_integration_descriptor', detail);
 }
 
 function encryptionUnavailable(): ConsoleHandlerResult {
-  return {
-    status: 503,
-    body: {
-      type: PROBLEM_TYPE_BLANK,
-      title: 'Service unavailable',
-      status: 503,
-      code: 'service_unavailable',
-      detail: 'Descriptor secret encryption is not configured.',
-    },
-  };
+  return consoleProblem(503, 'Service unavailable', 'service_unavailable', 'Descriptor secret encryption is not configured.');
 }

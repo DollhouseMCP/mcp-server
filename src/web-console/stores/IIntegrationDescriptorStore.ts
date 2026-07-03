@@ -152,6 +152,24 @@ export function decodeDescriptorPageCursor(cursor: string): {
 }
 
 /**
+ * Total order over (provider, id) by code-point comparison. This MUST be the
+ * ordering the in-memory store sorts by, because the keyset cursor filter
+ * (`isAfterDescriptorPageCursor`) uses the same `<`/`>` comparison — a
+ * divergent sort (e.g. `localeCompare`, which orders `_`/`-` differently from
+ * code points for the `[a-z0-9_-]` charset) would silently drop rows from
+ * later pages. PostgreSQL is internally consistent (one collation drives both
+ * ORDER BY and the keyset predicate); this keeps the in-memory backend paired.
+ */
+export function compareDescriptorPageOrder(
+  left: Pick<IntegrationDescriptorRecord, 'provider' | 'id'>,
+  right: Pick<IntegrationDescriptorRecord, 'provider' | 'id'>,
+): number {
+  if (left.provider !== right.provider) return left.provider < right.provider ? -1 : 1;
+  if (left.id === right.id) return 0;
+  return left.id < right.id ? -1 : 1;
+}
+
+/**
  * (provider, id) keyset comparison matching the page ordering. UUID string
  * comparison agrees with PostgreSQL's byte-wise uuid ordering because the
  * canonical form is fixed-width lowercase hex.
@@ -207,10 +225,16 @@ export function cloneIntegrationDescriptorRecord(
 }
 
 /**
- * Provider ids that would collide with fixed route segments under
- * /api/v1/me/integrations/ if a descriptor claimed them.
+ * Provider ids a descriptor must never claim:
+ * - `descriptors` collides with the fixed authoring route segment;
+ * - `github` is a bespoke registry-only provider whose credential is stored
+ *   under the same provider-keyed context the gateway injects, so a BYO
+ *   `github` descriptor could route the deployment-brokered GitHub token to a
+ *   descriptor-chosen host. Bespoke/registry-only provider ids are reserved
+ *   here as the store-boundary belt; the authoring service additionally
+ *   rejects every id present in the boot provider registry.
  */
-const RESERVED_DESCRIPTOR_PROVIDER_IDS = new Set(['descriptors']);
+const RESERVED_DESCRIPTOR_PROVIDER_IDS = new Set(['descriptors', 'github']);
 
 function validateIntegrationDescriptorShape(
   record: Omit<IntegrationDescriptorRecord, 'id'> & { readonly id?: string },

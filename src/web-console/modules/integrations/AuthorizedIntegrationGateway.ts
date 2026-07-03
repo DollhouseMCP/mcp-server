@@ -39,9 +39,15 @@ import {
  * facade requires its enforcer at construction — an un-gated authority is
  * unrepresentable rather than merely discouraged.
  *
- * The facade passes the SAME input object to `authorize()` and to the
- * downstream call, so the exact-input HMAC that approval verification binds
- * to always matches what is actually executed.
+ * For `request()` the facade passes the SAME input object to `authorize()`
+ * and to the downstream call, so the exact-input HMAC that approval
+ * verification binds to always matches what is actually executed. The
+ * management-write facades (ingestOpenApiSpec / regenerateSkill / remote-MCP
+ * callTool) authorize on a synthetic `_internal:/...` sentinel target
+ * carrying the material content (the spec body, the tool arguments); their
+ * provenance-only inputs (`sourceUrl`, `regenerateSkill`) are deliberately
+ * outside the bound scope, and the sentinel path is gateway-rejectable so a
+ * management approval can never be replayed as a real integration_request.
  */
 
 type PolicyErrorShape = NonNullable<IntegrationRequestPolicyDecision['error']>;

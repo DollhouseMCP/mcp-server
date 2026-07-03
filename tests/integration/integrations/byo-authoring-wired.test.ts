@@ -145,4 +145,43 @@ describe('BYO authoring wired end-to-end', () => {
     expect(envelope.ok).toBe(false);
     expect(envelope.error).toMatchObject({ code: 'integration_descriptor_not_found' });
   });
+
+  it('authors a basic-injection descriptor and drives it through the gateway with an Authorization: Basic header', async () => {
+    const basicProvider = 'byo-basic';
+    const username = 'account-sid';
+    const password = 'auth-token-secret';
+
+    const created = await harness.callConsoleRoute('POST', DESCRIPTORS_PATH, {
+      body: {
+        provider: basicProvider,
+        display_name: 'Basic REST',
+        category: 'testing',
+        auth_strategy: 'static_api_key',
+        api_hosts: [API_HOST],
+        static_api_key: { injection: { location: 'basic' } },
+      },
+    });
+    expect(created.status).toBe(201);
+    expect(body(created)).toMatchObject({
+      static_api_key: { injection: { location: 'basic', name: 'Authorization' } },
+    });
+
+    const connected = await harness.callConsoleRoute('POST', '/api/v1/me/integrations/:provider/connect', {
+      params: { provider: basicProvider },
+      body: { username, password },
+    });
+    expect(connected.status).toBe(200);
+    expect(JSON.stringify(connected.body)).not.toContain(password);
+
+    const envelope = await harness.callViaRegistry('integration_request', {
+      provider: basicProvider,
+      method: 'GET',
+      path: '/things/7',
+    });
+    expect(envelope.ok).toBe(true);
+    const upstream = harness.lastRequest();
+    const expectedBasic = Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
+    expect(upstream?.authorization).toBe(`Basic ${expectedBasic}`);
+    expect(JSON.stringify(envelope)).not.toContain(password);
+  });
 });

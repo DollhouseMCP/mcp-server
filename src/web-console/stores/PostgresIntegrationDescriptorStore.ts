@@ -1,4 +1,4 @@
-import { and, asc, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -79,7 +79,12 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
           eq(integrationProviderDescriptors.ownership, 'curated'),
           eq(integrationProviderDescriptors.ownerUserId, userId),
         ),
-      )).limit(1),
+      ))
+        // Curated strictly wins over a same-id BYO descriptor ('byo' < 'curated'
+        // lexically, so descending order puts curated first) — deterministic
+        // resolution prevents a BYO descriptor shadowing a curated provider.
+        .orderBy(desc(integrationProviderDescriptors.ownership))
+        .limit(1),
     );
     return rows[0] ? fromDescriptorRow(rows[0]) : null;
   }
