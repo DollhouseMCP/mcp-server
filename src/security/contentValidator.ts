@@ -683,14 +683,11 @@ export class ContentValidator {
   }
 
   /**
-   * SECURITY FIX #364: Detect circular reference chains.
-   * SECURITY FIX (PR #552 review): Optimized from O(n²) to O(n) using Set-based lookups.
+   * First pass of circular-reference detection: map each anchor to the alias
+   * names referenced within its next 5 lines.
    */
-  private static hasCircularAnchorReferences(yamlContent: string): boolean {
+  private static buildAnchorReferenceMap(lines: string[]): Map<string, Set<string>> {
     const anchorRefs = new Map<string, Set<string>>();
-    const lines = yamlContent.split('\n');
-
-    // First pass: Build reference map efficiently
     for (let i = 0; i < lines.length; i++) {
       const anchorMatch = lines[i].match(/&(\w+)/);
       if (anchorMatch) {
@@ -711,8 +708,17 @@ export class ContentValidator {
         anchorRefs.set(anchorName, references);
       }
     }
+    return anchorRefs;
+  }
 
-    // Second pass: Check for circular references (O(n) with Set lookups)
+  /**
+   * SECURITY FIX #364: Detect circular reference chains.
+   * SECURITY FIX (PR #552 review): Optimized from O(n²) to O(n) using Set-based lookups.
+   */
+  private static hasCircularAnchorReferences(yamlContent: string): boolean {
+    const anchorRefs = this.buildAnchorReferenceMap(yamlContent.split('\n'));
+
+    // Check for circular references (O(n) with Set lookups)
     for (const [anchor1, refs1] of anchorRefs) {
       for (const refAnchor of refs1) {
         const refs2 = anchorRefs.get(refAnchor);

@@ -1078,6 +1078,7 @@ export class MCPAQLHandler {
         elementType,
         params: mergedParams,
       });
+      this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
 
       // Step 5: Apply field selection (Issue #202)
       // Transform name → element_name for LLM consistency
@@ -1247,29 +1248,6 @@ export class MCPAQLHandler {
    * @throws Error if handler reference is unknown or method fails
    */
   private async dispatch(
-    handlerRef: string,
-    input: OperationInput
-  ): Promise<unknown> {
-    const result = await this.dispatchInner(handlerRef, input);
-
-    // Issue #2329 (Codex review): a successfully deleted memory must drop its
-    // save bookkeeping — a retained failure-ledger instance or pending debounce
-    // timer would otherwise re-save the in-RAM state and resurrect the deleted
-    // file. Hooked here so both the schema-dispatch and legacy paths (and batch
-    // operations) are covered.
-    if (input.operation === 'delete_element') {
-      const p = (input.params ?? {}) as Record<string, unknown>;
-      const type = (input.elementType ?? p.element_type ?? p.type) as string | undefined;
-      const name = (p.element_name ?? p.name) as string | undefined;
-      if (name && normalizeElementType(type) === ElementType.MEMORY) {
-        this.clearMemorySaveBookkeeping(name);
-      }
-    }
-
-    return result;
-  }
-
-  private async dispatchInner(
     handlerRef: string,
     input: OperationInput
   ): Promise<unknown> {
@@ -1645,6 +1623,27 @@ export class MCPAQLHandler {
   }
 
   /**
+   * Issue #2329 (Codex review): a successfully deleted memory must drop its
+   * save bookkeeping — a retained failure-ledger instance or pending debounce
+   * timer would otherwise re-save the in-RAM state and resurrect the deleted
+   * file. Called after dispatch in executeOperation so the schema-dispatch,
+   * legacy, and batch paths are all covered.
+   */
+  private cleanupDeletedMemoryBookkeeping(
+    operation: string,
+    elementType: string | undefined,
+    params: Record<string, unknown> | undefined,
+  ): void {
+    if (operation !== 'delete_element') return;
+    const p = params ?? {};
+    const type = (elementType ?? p.element_type ?? p.type) as string | undefined;
+    const name = (p.element_name ?? p.name) as string | undefined;
+    if (name && normalizeElementType(type) === ElementType.MEMORY) {
+      this.clearMemorySaveBookkeeping(name);
+    }
+  }
+
+  /**
    * Issue #2329 (Codex review): drop all save bookkeeping for a deleted memory.
    * Without this, the failure ledger keeps the deleted memory's in-RAM instance
    * and the flush/retry paths re-save it, resurrecting the deleted file. A save
@@ -1891,21 +1890,13 @@ export class MCPAQLHandler {
   }
 
   /**
-   * addEntry with the #2329 persistence guarantees: recover from a prior failed
-   * save, mutate the authoritative instance, verify persistability before
-   * reporting success (rolling back on failure), then schedule the debounced save.
+   * Fix #387: resolve the addEntry 'content' parameter, accepting 'entry' as an
+   * alias and throwing a contextual error when the text portion is missing.
    */
-  private async handleMemoryAddEntry(
-    memoryName: string,
-    memory: import('../../elements/memories/Memory.js').Memory,
-    manager: MemoryManager,
-    params: Record<string, unknown>,
-  ): Promise<unknown> {
-    // Fix #387: Accept 'entry' as alias for 'content'
+  private extractAddEntryContent(memoryName: string, params: Record<string, unknown>): string {
     if (params.entry !== undefined && params.content === undefined) {
       params.content = params.entry;
     }
-    // Memory.addEntry(content, tags?, metadata?)
     // Fix #387 Option D: Contextual error message guiding toward correct parameter
     if (params.content === undefined || params.content === null || typeof params.content !== 'string' || (params.content as string).trim() === '') {
       const hint = params.entry !== undefined
@@ -1917,7 +1908,21 @@ export class MCPAQLHandler {
         `Example: { operation: "addEntry", params: { element_name: "${memoryName}", content: "your text here", tags: ["optional"] } }`
       );
     }
-    const content = params.content as string;
+    return params.content as string;
+  }
+
+  /**
+   * addEntry with the #2329 persistence guarantees: recover from a prior failed
+   * save, mutate the authoritative instance, verify persistability before
+   * reporting success (rolling back on failure), then schedule the debounced save.
+   */
+  private async handleMemoryAddEntry(
+    memoryName: string,
+    memory: import('../../elements/memories/Memory.js').Memory,
+    manager: MemoryManager,
+    params: Record<string, unknown>,
+  ): Promise<unknown> {
+    const content = this.extractAddEntryContent(memoryName, params);
     const tags = params.tags as string[] | undefined;
     const metadata = params.metadata as Record<string, unknown> | undefined;
 
