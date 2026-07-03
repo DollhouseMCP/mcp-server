@@ -612,8 +612,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       this.cacheElement(element, relativePath);
 
       // Phase 2: Notify storage layer of save
-      const relPath = path.relative(this.memoriesDir, fullPath).split(path.sep).join('/');
-      await this.storageLayer.notifySaved(relPath, fullPath);
+      await this.storageLayer.notifySaved(relativePath, fullPath);
 
       // Update bounded content hash index
       this.contentHashIndex.set(contentHash, fullPath);
