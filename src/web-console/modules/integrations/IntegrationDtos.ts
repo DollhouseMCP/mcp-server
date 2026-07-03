@@ -4,6 +4,13 @@ import type {
   UserIntegrationRecord,
   UserIntegrationStatus,
 } from '../../stores/IUserIntegrationStore.js';
+import type {
+  IntegrationAuthStrategy,
+  IntegrationDescriptorOwnership,
+  IntegrationDescriptorRecord,
+  IntegrationPkceMode,
+  IntegrationRefreshMode,
+} from '../../stores/IIntegrationDescriptorStore.js';
 import type { IntegrationProviderCatalogDescriptor } from './IntegrationProvider.js';
 
 export type GitHubRepositorySelection = 'selected' | 'all' | 'unknown';
@@ -157,4 +164,96 @@ function normalizeScopes(value: Readonly<Record<string, unknown>> | undefined): 
   const scopes = value?.scopes;
   if (!Array.isArray(scopes)) return [];
   return scopes.filter((scope): scope is string => typeof scope === 'string');
+}
+
+/**
+ * Display-safe descriptor DTO (allowlist). Credential material —
+ * clientSecretCiphertext, credentialKeyVersion, or any plaintext secret —
+ * must never appear here; the browser only learns whether a secret is stored.
+ */
+export interface IntegrationDescriptorDto {
+  readonly id: string;
+  readonly provider: UserIntegrationProvider;
+  readonly ownership: IntegrationDescriptorOwnership;
+  readonly display_name: string;
+  readonly category: string;
+  readonly auth_strategy: IntegrationAuthStrategy;
+  readonly api_hosts: readonly string[];
+  readonly oauth: IntegrationDescriptorOAuthDto | null;
+  readonly static_api_key: IntegrationDescriptorStaticApiKeyDto | null;
+  readonly has_client_secret: boolean;
+  readonly operation_promotion: Readonly<Record<string, unknown>>;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export interface IntegrationDescriptorOAuthDto {
+  readonly client_id: string;
+  readonly authorization_url: string;
+  readonly token_url: string;
+  readonly scopes: readonly string[];
+  readonly pkce: IntegrationPkceMode;
+  readonly refresh: IntegrationRefreshMode;
+  readonly token_exchange: Readonly<Record<string, unknown>>;
+  readonly account_label: Readonly<Record<string, unknown>>;
+}
+
+export interface IntegrationDescriptorStaticApiKeyDto {
+  readonly injection: {
+    readonly location: 'header' | 'query';
+    readonly name: string;
+    readonly value_prefix: string | null;
+  };
+}
+
+export interface IntegrationDescriptorListDto {
+  readonly descriptors: readonly IntegrationDescriptorDto[];
+  readonly next_cursor: string | null;
+}
+
+export function serializeIntegrationDescriptor(record: IntegrationDescriptorRecord): IntegrationDescriptorDto {
+  return {
+    id: record.id,
+    provider: record.provider,
+    ownership: record.ownership,
+    display_name: record.displayName,
+    category: record.category,
+    auth_strategy: record.authStrategy,
+    api_hosts: [...record.apiHosts],
+    oauth: record.oauth
+      ? {
+        client_id: record.oauth.clientId,
+        authorization_url: record.oauth.authorizationUrl,
+        token_url: record.oauth.tokenUrl,
+        scopes: [...record.oauth.scopes],
+        pkce: record.oauth.pkce,
+        refresh: record.oauth.refresh,
+        token_exchange: record.oauth.tokenExchange,
+        account_label: record.oauth.accountLabel,
+      }
+      : null,
+    static_api_key: record.staticApiKey
+      ? {
+        injection: {
+          location: record.staticApiKey.injection.location,
+          name: record.staticApiKey.injection.name,
+          value_prefix: record.staticApiKey.injection.valuePrefix,
+        },
+      }
+      : null,
+    has_client_secret: record.clientSecretCiphertext !== null,
+    operation_promotion: record.operationPromotion,
+    created_at: record.createdAt.toISOString(),
+    updated_at: record.updatedAt.toISOString(),
+  };
+}
+
+export function serializeIntegrationDescriptorList(
+  records: readonly IntegrationDescriptorRecord[],
+  nextCursor: string | null,
+): IntegrationDescriptorListDto {
+  return {
+    descriptors: records.map(serializeIntegrationDescriptor),
+    next_cursor: nextCursor,
+  };
 }

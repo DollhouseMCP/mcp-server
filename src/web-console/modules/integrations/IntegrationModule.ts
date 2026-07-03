@@ -1,6 +1,8 @@
 import type { ConsoleModuleDescriptor, ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
+import type { IIntegrationDescriptorStore } from '../../stores/IIntegrationDescriptorStore.js';
+import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
 import type { IGitHubIntegrationProvider } from './GitHubIntegrationProvider.js';
@@ -11,12 +13,15 @@ import {
 } from './IntegrationProvider.js';
 import { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 import type { IIntegrationSecurityEventSink } from './IntegrationSecurityEvents.js';
+import { IntegrationDescriptorAuthoringService } from './IntegrationDescriptorAuthoringService.js';
 import { IntegrationService } from './IntegrationService.js';
 import { serializeGitHubIntegrationStatus } from './IntegrationDtos.js';
 import {
   projectGitHubIntegrationStatus,
   projectConfiguredIntegrationStatus,
   projectIntegrationConnect,
+  projectIntegrationDescriptor,
+  projectIntegrationDescriptorList,
   projectIntegrationList,
 } from './IntegrationPrivacyProjectors.js';
 
@@ -24,6 +29,8 @@ const SELF_CAPABILITY = 'console:self';
 
 export interface IntegrationModuleOptions {
   readonly integrationStore: IUserIntegrationStore;
+  readonly descriptorStore?: IIntegrationDescriptorStore | null;
+  readonly openApiSpecStore?: IIntegrationOpenApiSpecStore | null;
   readonly loginTransactions?: ILoginTransactionStore | null;
   readonly opaqueValues?: IConsoleOpaqueValueService | null;
   readonly secretEncryption?: ISecretEncryptionService | null;
@@ -128,9 +135,88 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
         privacyProjector: projectGitHubIntegrationStatus,
         handler: req => service.disconnectGitHub(req),
       },
+      ...byoDescriptorRoutes(options),
       ...configuredProviderRoutes(options.configuredProviders ?? [], service),
     ],
   };
+}
+
+/**
+ * Self-service BYO descriptor authoring (issue #2321). The literal
+ * `descriptors` segment cannot collide with a provider route: the store
+ * reserves that provider id, and configured-provider routes are generated
+ * from validated descriptors only.
+ */
+function byoDescriptorRoutes(options: IntegrationModuleOptions): ConsoleModuleDescriptor['routes'] {
+  if (!options.descriptorStore || !options.openApiSpecStore) return [];
+  const authoring = new IntegrationDescriptorAuthoringService({
+    descriptorStore: options.descriptorStore,
+    specStore: options.openApiSpecStore,
+    secretEncryption: options.secretEncryption,
+    now: options.now,
+  });
+  const basePath = '/api/v1/me/integrations/descriptors';
+  return [
+    {
+      method: 'GET',
+      path: basePath,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationDescriptorList,
+      handler: req => authoring.list(req),
+    },
+    {
+      method: 'POST',
+      path: basePath,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectIntegrationDescriptor,
+      handler: req => authoring.create(req),
+    },
+    {
+      method: 'GET',
+      path: `${basePath}/:id`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationDescriptor,
+      handler: req => authoring.get(req),
+    },
+    {
+      method: 'PATCH',
+      path: `${basePath}/:id`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectIntegrationDescriptor,
+      handler: req => authoring.update(req),
+    },
+    {
+      method: 'DELETE',
+      path: `${basePath}/:id`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      handler: req => authoring.remove(req),
+    },
+  ];
 }
 
 function configuredProviderRoutes(

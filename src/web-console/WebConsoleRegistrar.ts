@@ -584,6 +584,8 @@ export class WebConsoleRegistrar {
       : [];
     registerRouteModule(registry, this.options, 'integrations', () => createIntegrationModule({
       integrationStore: stores.integrationStore,
+      descriptorStore: stores.integrationDescriptorStore,
+      openApiSpecStore: stores.integrationOpenApiSpecStore,
       loginTransactions: stores.loginTransactionStore,
       opaqueValues,
       secretEncryption,

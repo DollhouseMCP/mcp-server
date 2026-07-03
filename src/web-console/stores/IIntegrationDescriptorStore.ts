@@ -201,10 +201,19 @@ export function cloneIntegrationDescriptorRecord(
   };
 }
 
+/**
+ * Provider ids that would collide with fixed route segments under
+ * /api/v1/me/integrations/ if a descriptor claimed them.
+ */
+const RESERVED_DESCRIPTOR_PROVIDER_IDS = new Set(['descriptors']);
+
 function validateIntegrationDescriptorShape(
   record: Omit<IntegrationDescriptorRecord, 'id'> & { readonly id?: string },
 ): void {
   assertUserIntegrationProvider(record.provider);
+  if (RESERVED_DESCRIPTOR_PROVIDER_IDS.has(record.provider)) {
+    throw new ConsoleStoreValidationError(`provider id '${record.provider}' is reserved`);
+  }
   const ownership: string = record.ownership;
   if (ownership !== 'curated' && ownership !== 'byo') {
     throw new ConsoleStoreValidationError('descriptor ownership must be curated or byo');

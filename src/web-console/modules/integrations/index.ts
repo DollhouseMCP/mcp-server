@@ -9,6 +9,7 @@ export * from './IntegrationSecurityEvents.js';
 export * from './IntegrationModule.js';
 export * from './IntegrationPrivacyProjectors.js';
 export * from './IntegrationSecretContext.js';
+export * from './IntegrationDescriptorAuthoringService.js';
 export * from './IntegrationDescriptorSeedLoader.js';
 export * from './CuratedIntegrationProviders.js';
 export * from './IntegrationService.js';
