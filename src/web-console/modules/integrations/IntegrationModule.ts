@@ -23,6 +23,7 @@ import {
   projectIntegrationDescriptor,
   projectIntegrationDescriptorList,
   projectIntegrationList,
+  projectIntegrationOpenApiSpecMetadata,
 } from './IntegrationPrivacyProjectors.js';
 
 const SELF_CAPABILITY = 'console:self';
@@ -215,6 +216,30 @@ function byoDescriptorRoutes(options: IntegrationModuleOptions): ConsoleModuleDe
       privacyClass: 'self_private',
       idempotency: 'required',
       handler: req => authoring.remove(req),
+    },
+    {
+      method: 'PUT',
+      path: `${basePath}/:id/spec`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'required',
+      privacyProjector: projectIntegrationOpenApiSpecMetadata,
+      handler: req => authoring.putSpec(req),
+    },
+    {
+      method: 'GET',
+      path: `${basePath}/:id/spec`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationOpenApiSpecMetadata,
+      handler: req => authoring.getSpec(req),
     },
   ];
 }

@@ -6,6 +6,7 @@ import {
   type IntegrationDescriptorOAuthDto,
   type IntegrationDescriptorStaticApiKeyDto,
   type IntegrationListDto,
+  type IntegrationOpenApiSpecMetadataDto,
   type IntegrationStatusDto,
   type IntegrationStatusDtoStatus,
   type PortfolioSyncDirection,
@@ -95,6 +96,24 @@ export function projectIntegrationDescriptorList(value: unknown): IntegrationDes
       : [],
     next_cursor: nullableStringField(input, 'next_cursor'),
   };
+}
+
+export function projectIntegrationOpenApiSpecMetadata(value: unknown): IntegrationOpenApiSpecMetadataDto {
+  const input = asRecord(value);
+  return {
+    descriptor_id: stringField(input, 'descriptor_id'),
+    provider: stringField(input, 'provider') as UserIntegrationProvider,
+    spec_hash: stringField(input, 'spec_hash'),
+    source_url: nullableStringField(input, 'source_url'),
+    operation_count: numberField(input, 'operation_count'),
+    spec_bytes: numberField(input, 'spec_bytes'),
+    created_at: stringField(input, 'created_at'),
+    updated_at: stringField(input, 'updated_at'),
+  };
+}
+
+function numberField(record: Readonly<Record<string, unknown>>, key: string): number {
+  return typeof record[key] === 'number' && Number.isFinite(record[key]) ? record[key] : 0;
 }
 
 function projectDescriptorOAuth(value: unknown): IntegrationDescriptorOAuthDto | null {

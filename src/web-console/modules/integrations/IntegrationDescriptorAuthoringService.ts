@@ -17,10 +17,17 @@ import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore
 import {
   serializeIntegrationDescriptor,
   serializeIntegrationDescriptorList,
+  serializeIntegrationOpenApiSpecMetadata,
 } from './IntegrationDtos.js';
+import {
+  countSpecOperations,
+  IntegrationOperationCatalogError,
+  prepareOpenApiSpecForDescriptor,
+} from './IntegrationOperationCatalog.js';
 import { integrationDescriptorClientSecretContext } from './IntegrationSecretContext.js';
 
 const MAX_CLIENT_SECRET_BYTES = 8192;
+const PROBLEM_TYPE_BLANK = 'about:blank';
 
 /**
  * Self-service BYO descriptor authoring (issue #2321, Group 10 Scope 2).
@@ -137,6 +144,75 @@ export class IntegrationDescriptorAuthoringService {
     // Postgres cascades via FK; this keeps in-memory backends equivalent.
     await this.options.specStore.deleteByDescriptorId(id);
     return { status: 204 };
+  }
+
+  async putSpec(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    const auth = requireConsoleAuthentication(req);
+    const descriptor = await this.findOwned(singleParamValue(req.params.id), auth.userId);
+    if (!descriptor) return notFound();
+    const input = asRecord(req.body);
+    if (!input.spec || typeof input.spec !== 'object' || Array.isArray(input.spec)) {
+      return unprocessable('spec must be a JSON object');
+    }
+    const sourceUrl = input.source_url;
+    if (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== 'string') {
+      return unprocessable('source_url must be a string or null');
+    }
+    let prepared;
+    try {
+      prepared = prepareOpenApiSpecForDescriptor(input.spec, descriptor);
+    } catch (error) {
+      if (error instanceof IntegrationOperationCatalogError) return catalogError(error);
+      throw error;
+    }
+    const now = this.now();
+    try {
+      const record = await this.options.specStore.upsert({
+        descriptorId: descriptor.id,
+        spec: prepared.normalizedSpec,
+        sourceUrl: sourceUrl ?? null,
+        specHash: prepared.specHash,
+        createdAt: now,
+        updatedAt: now,
+      });
+      return {
+        status: 200,
+        body: serializeIntegrationOpenApiSpecMetadata({
+          descriptorId: record.descriptorId,
+          provider: descriptor.provider,
+          specHash: record.specHash,
+          sourceUrl: record.sourceUrl,
+          operationCount: countSpecOperations(descriptor, record.spec),
+          spec: record.spec,
+          createdAt: record.createdAt,
+          updatedAt: record.updatedAt,
+        }),
+      };
+    } catch (error) {
+      if (error instanceof ConsoleStoreValidationError) return unprocessable(error.message);
+      throw error;
+    }
+  }
+
+  async getSpec(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    const auth = requireConsoleAuthentication(req);
+    const descriptor = await this.findOwned(singleParamValue(req.params.id), auth.userId);
+    if (!descriptor) return notFound();
+    const record = await this.options.specStore.findByDescriptorId(descriptor.id);
+    if (!record) return specNotFound();
+    return {
+      status: 200,
+      body: serializeIntegrationOpenApiSpecMetadata({
+        descriptorId: record.descriptorId,
+        provider: descriptor.provider,
+        specHash: record.specHash,
+        sourceUrl: record.sourceUrl,
+        operationCount: countSpecOperations(descriptor, record.spec),
+        spec: record.spec,
+        createdAt: record.createdAt,
+        updatedAt: record.updatedAt,
+      }),
+    };
   }
 
   private async findOwned(id: string | undefined, userId: string): Promise<IntegrationDescriptorRecord | null> {
@@ -394,7 +470,7 @@ function notFound(): ConsoleHandlerResult {
   return {
     status: 404,
     body: {
-      type: 'about:blank',
+      type: PROBLEM_TYPE_BLANK,
       title: 'Not found',
       status: 404,
       code: 'integration_descriptor_not_found',
@@ -403,11 +479,37 @@ function notFound(): ConsoleHandlerResult {
   };
 }
 
+function specNotFound(): ConsoleHandlerResult {
+  return {
+    status: 404,
+    body: {
+      type: PROBLEM_TYPE_BLANK,
+      title: 'Not found',
+      status: 404,
+      code: 'integration_spec_not_found',
+      detail: 'No OpenAPI spec is stored for this descriptor.',
+    },
+  };
+}
+
+function catalogError(error: IntegrationOperationCatalogError): ConsoleHandlerResult {
+  return {
+    status: error.status,
+    body: {
+      type: PROBLEM_TYPE_BLANK,
+      title: 'Invalid OpenAPI spec',
+      status: error.status,
+      code: error.code,
+      detail: error.message,
+    },
+  };
+}
+
 function conflict(detail: string): ConsoleHandlerResult {
   return {
     status: 409,
     body: {
-      type: 'about:blank',
+      type: PROBLEM_TYPE_BLANK,
       title: 'Conflict',
       status: 409,
       code: 'integration_descriptor_conflict',
@@ -420,7 +522,7 @@ function unprocessable(detail: string): ConsoleHandlerResult {
   return {
     status: 422,
     body: {
-      type: 'about:blank',
+      type: PROBLEM_TYPE_BLANK,
       title: 'Unprocessable content',
       status: 422,
       code: 'invalid_integration_descriptor',
@@ -433,7 +535,7 @@ function encryptionUnavailable(): ConsoleHandlerResult {
   return {
     status: 503,
     body: {
-      type: 'about:blank',
+      type: PROBLEM_TYPE_BLANK,
       title: 'Service unavailable',
       status: 503,
       code: 'service_unavailable',

@@ -257,3 +257,40 @@ export function serializeIntegrationDescriptorList(
     next_cursor: nextCursor,
   };
 }
+
+/**
+ * Spec metadata only — the stored spec body stays server-side data queried
+ * through the operation-discovery tools, not a browser payload.
+ */
+export interface IntegrationOpenApiSpecMetadataDto {
+  readonly descriptor_id: string;
+  readonly provider: UserIntegrationProvider;
+  readonly spec_hash: string;
+  readonly source_url: string | null;
+  readonly operation_count: number;
+  readonly spec_bytes: number;
+  readonly created_at: string;
+  readonly updated_at: string;
+}
+
+export function serializeIntegrationOpenApiSpecMetadata(input: {
+  readonly descriptorId: string;
+  readonly provider: UserIntegrationProvider;
+  readonly specHash: string;
+  readonly sourceUrl: string | null;
+  readonly operationCount: number;
+  readonly spec: Readonly<Record<string, unknown>>;
+  readonly createdAt: Date;
+  readonly updatedAt: Date;
+}): IntegrationOpenApiSpecMetadataDto {
+  return {
+    descriptor_id: input.descriptorId,
+    provider: input.provider,
+    spec_hash: input.specHash,
+    source_url: input.sourceUrl,
+    operation_count: input.operationCount,
+    spec_bytes: Buffer.byteLength(JSON.stringify(input.spec), 'utf8'),
+    created_at: input.createdAt.toISOString(),
+    updated_at: input.updatedAt.toISOString(),
+  };
+}

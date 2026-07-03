@@ -163,9 +163,7 @@ export class IntegrationOperationCatalog {
         403,
       );
     }
-    const normalizedSpec = normalizeOpenApiSpec(input.spec);
-    assertSpecHostsAllowed(normalizedSpec, context.descriptor);
-    const specHash = sha256Json(normalizedSpec);
+    const { normalizedSpec, specHash } = prepareOpenApiSpecForDescriptor(input.spec, context.descriptor);
     const now = this.now();
     const granted = await this.resolveGrantedScopes(context.userId, context.descriptor.provider);
     const operations = deriveOperations(context.descriptor, normalizedSpec, granted);
@@ -432,6 +430,33 @@ export class IntegrationOperationCatalog {
     }
     return session.userId;
   }
+}
+
+/**
+ * Shared ingestion core for storing an OpenAPI spec against a descriptor:
+ * validate/normalize the document, enforce the descriptor host allowlist,
+ * and compute the stable content hash. Used by the agent-facing catalog and
+ * the console spec-management endpoints so both surfaces accept exactly the
+ * same specs. Throws IntegrationOperationCatalogError on invalid specs.
+ */
+export function prepareOpenApiSpecForDescriptor(
+  spec: unknown,
+  descriptor: IntegrationDescriptorRecord,
+): {
+  readonly normalizedSpec: Readonly<Record<string, unknown>>;
+  readonly specHash: string;
+} {
+  const normalizedSpec = normalizeOpenApiSpec(spec);
+  assertSpecHostsAllowed(normalizedSpec, descriptor);
+  return { normalizedSpec, specHash: sha256Json(normalizedSpec) };
+}
+
+/** Scope-independent operation count for spec metadata surfaces. */
+export function countSpecOperations(
+  descriptor: IntegrationDescriptorRecord,
+  spec: Readonly<Record<string, unknown>>,
+): number {
+  return deriveOperations(descriptor, spec, new Set()).length;
 }
 
 function deriveOperations(

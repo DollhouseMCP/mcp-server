@@ -343,6 +343,123 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 });
 
+describe('IntegrationDescriptorAuthoringService spec management', () => {
+  function openApiSpec(overrides: Partial<Record<string, unknown>> = {}) {
+    return {
+      openapi: '3.1.0',
+      servers: [{ url: 'https://api.mycrm.example' }],
+      paths: {
+        '/contacts': {
+          get: {
+            operationId: 'listContacts',
+            responses: { 200: { description: 'ok' } },
+          },
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  it('ingests a spec for an owned descriptor and returns metadata only', async () => {
+    const { service, specStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+
+    const result = await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: { spec: openApiSpec(), source_url: 'https://api.mycrm.example/openapi.json' },
+    }));
+
+    expect(result.status).toBe(200);
+    const body = bodyOf(result);
+    expect(body).toMatchObject({
+      descriptor_id: descriptorId,
+      provider: MYCRM,
+      source_url: 'https://api.mycrm.example/openapi.json',
+      operation_count: 1,
+    });
+    expect(body.spec_hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(typeof body.spec_bytes).toBe('number');
+    // Metadata only — the stored document itself is never in the response.
+    expect(body.spec).toBeUndefined();
+    expect(body.paths).toBeUndefined();
+
+    await expect(specStore.findByDescriptorId(descriptorId)).resolves.toMatchObject({
+      descriptorId,
+      specHash: body.spec_hash,
+    });
+  });
+
+  it('rejects specs that fail the shared ingestion validation', async () => {
+    const { service } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+
+    const foreignHost = await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: { spec: openApiSpec({ servers: [{ url: 'https://evil.example.com' }] }) },
+    }));
+    expect(foreignHost.status).toBe(400);
+    expect(bodyOf(foreignHost)).toMatchObject({ code: 'invalid_openapi_spec' });
+
+    const externalRef = await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: {
+        spec: openApiSpec({
+          components: { schemas: { External: { $ref: 'https://evil.example.com/schema.json#/X' } } },
+        }),
+      },
+    }));
+    expect(externalRef.status).toBe(400);
+
+    const notAnObject = await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: { spec: 'not-an-object' },
+    }));
+    expect(notAnObject.status).toBe(422);
+  });
+
+  it('scopes spec reads and writes to the descriptor owner', async () => {
+    const { service } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+    await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: { spec: openApiSpec() },
+    }));
+
+    const foreignPut = await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: { spec: openApiSpec() },
+      consoleAuthentication: authenticatedContext(OTHER_USER_ID),
+    }));
+    expect(foreignPut.status).toBe(404);
+
+    const foreignGet = await service.getSpec(consoleRequest({
+      params: { id: descriptorId },
+      consoleAuthentication: authenticatedContext(OTHER_USER_ID),
+    }));
+    expect(foreignGet.status).toBe(404);
+
+    const owned = await service.getSpec(consoleRequest({ params: { id: descriptorId } }));
+    expect(owned.status).toBe(200);
+    expect(bodyOf(owned)).toMatchObject({ descriptor_id: descriptorId, operation_count: 1 });
+  });
+
+  it('distinguishes a missing spec from a missing descriptor', async () => {
+    const { service } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+
+    const noSpec = await service.getSpec(consoleRequest({ params: { id: created.id as string } }));
+    expect(noSpec.status).toBe(404);
+    expect(bodyOf(noSpec)).toMatchObject({ code: 'integration_spec_not_found' });
+
+    const noDescriptor = await service.getSpec(consoleRequest({ params: { id: UNKNOWN_ID } }));
+    expect(noDescriptor.status).toBe(404);
+    expect(bodyOf(noDescriptor)).toMatchObject({ code: 'integration_descriptor_not_found' });
+  });
+});
+
 describe('IntegrationModule descriptor routes', () => {
   it('registers the authoring routes only when both descriptor and spec stores are present', () => {
     const withStores = createIntegrationModule({
@@ -357,8 +474,10 @@ describe('IntegrationModule descriptor routes', () => {
       `DELETE ${DESCRIPTORS_PATH}/:id`,
       `GET ${DESCRIPTORS_PATH}`,
       `GET ${DESCRIPTORS_PATH}/:id`,
+      `GET ${DESCRIPTORS_PATH}/:id/spec`,
       `PATCH ${DESCRIPTORS_PATH}/:id`,
       `POST ${DESCRIPTORS_PATH}`,
+      `PUT ${DESCRIPTORS_PATH}/:id/spec`,
     ]);
 
     const withoutStores = createIntegrationModule({

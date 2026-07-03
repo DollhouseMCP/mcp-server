@@ -61,6 +61,8 @@ const CONTRACT_ROUTES = [
   'GET /api/v1/me/integrations/descriptors/:id',
   'PATCH /api/v1/me/integrations/descriptors/:id',
   'DELETE /api/v1/me/integrations/descriptors/:id',
+  'PUT /api/v1/me/integrations/descriptors/:id/spec',
+  'GET /api/v1/me/integrations/descriptors/:id/spec',
   'GET /api/v1/me/logs',
   'GET /api/v1/me/portfolio',
   'GET /api/v1/me/portfolio/elements',
