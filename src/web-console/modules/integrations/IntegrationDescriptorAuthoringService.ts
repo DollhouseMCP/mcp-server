@@ -4,7 +4,7 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
-import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
+import { ConsoleStoreValidationError, isUniqueViolation } from '../../stores/ConsoleStoreValidation.js';
 import type {
   IIntegrationDescriptorStore,
   IntegrationDescriptorCreateInput,
@@ -109,6 +109,12 @@ export class IntegrationDescriptorAuthoringService {
       return { status: 201, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
       if (error instanceof ConsoleStoreValidationError) return unprocessable(error.message);
+      // Two concurrent creates for the same (provider, owner) both pass the
+      // pre-check under READ COMMITTED; the loser trips the unique constraint.
+      // Surface it as the same 409 the pre-check returns, not a 500.
+      if (isUniqueViolation(error)) {
+        return conflict(`provider '${parsed.provider}' already has a visible descriptor`);
+      }
       throw error;
     }
   }
@@ -364,10 +370,17 @@ function parseStaticApiKeyBody(value: unknown): IntegrationStaticApiKeyDescripto
   if (valuePrefix !== undefined && valuePrefix !== null && typeof valuePrefix !== 'string') {
     throw new DescriptorBodyError('static_api_key.injection.value_prefix must be a string or null');
   }
-  // Basic owns its header; the name defaults so callers need only the location.
-  const name = location === 'basic' && injection.name === undefined
-    ? 'Authorization'
-    : requireString(injection.name, 'static_api_key.injection.name');
+  // Basic owns its header: the name defaults to Authorization and any other
+  // supplied value is rejected here (rather than deferring to a store 422).
+  let name: string;
+  if (location === 'basic') {
+    if (injection.name !== undefined && injection.name !== 'Authorization') {
+      throw new DescriptorBodyError('basic injection name must be Authorization');
+    }
+    name = 'Authorization';
+  } else {
+    name = requireString(injection.name, 'static_api_key.injection.name');
+  }
   return {
     injection: {
       location,

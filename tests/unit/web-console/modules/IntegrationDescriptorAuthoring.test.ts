@@ -393,6 +393,46 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(JSON.stringify(bodyOf(updated))).not.toContain(CLIENT_SECRET);
   });
 
+  it('rejects a supplied non-Authorization name for basic injection in the parser (422)', async () => {
+    const { service } = fixture();
+
+    const created = await service.create(consoleRequest({
+      body: staticKeyBody({
+        provider: 'twilio-basic',
+        static_api_key: { injection: { location: 'basic', name: 'X-Custom-Auth' } },
+      }),
+    }));
+    expect(created.status).toBe(422);
+    expect(bodyOf(created)).toMatchObject({ code: 'invalid_integration_descriptor' });
+    expect(String(bodyOf(created).detail)).toContain('Authorization');
+  });
+
+  it('maps a concurrent-create unique violation to 409 rather than surfacing a 500', async () => {
+    // Two simultaneous creates for the same provider both pass the pre-check
+    // under READ COMMITTED; the loser trips the Postgres unique constraint.
+    const uniqueViolation = Object.assign(new Error('duplicate key'), { code: '23505' });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const racingStore = {
+      ...store,
+      findVisibleByProvider: () => Promise.resolve(null),
+      findById: store.findById.bind(store),
+      listVisible: store.listVisible.bind(store),
+      listVisiblePage: store.listVisiblePage.bind(store),
+      delete: store.delete.bind(store),
+      upsert: () => Promise.reject(uniqueViolation),
+    } as unknown as InMemoryIntegrationDescriptorStore;
+    const service = new IntegrationDescriptorAuthoringService({
+      descriptorStore: racingStore,
+      specStore: new InMemoryIntegrationOpenApiSpecStore(),
+      secretEncryption: encryption(),
+      now: () => NOW,
+    });
+
+    const result = await service.create(consoleRequest({ body: oauthBody() }));
+    expect(result.status).toBe(409);
+    expect(bodyOf(result)).toMatchObject({ code: 'integration_descriptor_conflict' });
+  });
+
   it('switches an existing header-injection descriptor to basic, defaulting the header name', async () => {
     const { service } = fixture();
     const created = bodyOf(await service.create(consoleRequest({ body: staticKeyBody() })));

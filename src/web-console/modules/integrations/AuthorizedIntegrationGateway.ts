@@ -55,14 +55,14 @@ type PolicyErrorShape = NonNullable<IntegrationRequestPolicyDecision['error']>;
 export interface IntegrationPolicyDenial {
   readonly ok: false;
   readonly error: PolicyErrorShape;
-  readonly approvalRequest?: IntegrationRequestPolicyDecision['approvalRequest'];
+  readonly approvalRequest?: NonNullable<IntegrationRequestPolicyDecision['approvalRequest']>;
   readonly policyContext?: unknown;
 }
 
 export interface IntegrationAuthorizedSuccess<T> {
   readonly ok: true;
   readonly result: T;
-  readonly approvalContext?: IntegrationRequestPolicyDecision['approvalContext'];
+  readonly approvalContext?: NonNullable<IntegrationRequestPolicyDecision['approvalContext']>;
 }
 
 export type IntegrationAuthorizedOutcome<T> = IntegrationAuthorizedSuccess<T> | IntegrationPolicyDenial;
@@ -186,7 +186,7 @@ export class AuthorizedIntegrationRemoteMcpBridge {
 }
 
 type AuthorizeDecision =
-  | { readonly authorized: true; readonly approvalContext?: IntegrationRequestPolicyDecision['approvalContext'] }
+  | { readonly authorized: true; readonly approvalContext?: NonNullable<IntegrationRequestPolicyDecision['approvalContext']> }
   | { readonly authorized: false; readonly denial: IntegrationPolicyDenial };
 
 async function authorizeOrDeny(
