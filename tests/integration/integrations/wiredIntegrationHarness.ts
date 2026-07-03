@@ -19,6 +19,11 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 import { INTEGRATION_OUTBOUND_OVERRIDES, type DollhouseContainer } from '../../../src/di/Container.js';
 import { WebConsoleRegistrar, WEB_CONSOLE_SERVICE_NAMES } from '../../../src/web-console/WebConsoleRegistrar.js';
+import { executeConsoleRoute } from '../../../src/web-console/platform/ConsoleRouteExecution.js';
+import type {
+  ConsoleHandlerResult,
+  ConsoleRequest,
+} from '../../../src/web-console/platform/ConsolePlatformTypes.js';
 import { createHttpSession } from '../../../src/context/HttpSession.js';
 import { integrationSecretContext } from '../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
 import { createIntegrationContainer, type IntegrationContainer } from '../../helpers/integration-container.js';
@@ -71,6 +76,16 @@ export interface WiredHarness {
   readonly secretEncryption: ISecretEncryptionService;
   lastRequest(): CapturedRequest | undefined;
   hasTool(name: string): boolean;
+  /**
+   * Invoke a registered console `/api/v1` route through the real route
+   * execution path (privacy projectors applied), authenticated as the
+   * harness user. `request` supplies params/query/body/headers.
+   */
+  callConsoleRoute(
+    method: string,
+    path: string,
+    request?: Partial<Pick<ConsoleRequest, 'params' | 'query' | 'body' | 'headers'>>,
+  ): Promise<ConsoleHandlerResult>;
   encryptAccessToken(userId: string, provider: string, token: string): Buffer;
   /** Seeds a BYO descriptor owned by the session user + a connected credential. Returns the descriptor id. */
   seedConnectedByoDescriptor(provider: string, host: string): Promise<string>;
@@ -202,7 +217,7 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
     () => options.remoteMcpClientFactory ?? defaultRemoteMcpClientFactory(token => { remoteMcpBearer.value = token; }),
   );
 
-  await new WebConsoleRegistrar({
+  const composition = await new WebConsoleRegistrar({
     opaqueValueHmacKey: Buffer.alloc(32, 11),
     secretEncryptionKey: { keyId: 'wired-test-key', key: Buffer.alloc(32, 7) },
     registerCleanup: false,
@@ -295,6 +310,28 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
     encryptAccessToken,
     lastRequest: () => upstream.captured.value,
     hasTool: name => toolRegistry.has(name),
+    callConsoleRoute: (method, path, request = {}) => {
+      const route = composition.registry.getModules()
+        .flatMap(module => module.routes)
+        .find(candidate => candidate.method === method && candidate.path === path);
+      if (!route) throw new Error(`console route not registered: ${method} ${path}`);
+      const consoleRequest = {
+        params: {},
+        query: {},
+        body: {},
+        headers: {},
+        ...request,
+        consoleAuthentication: {
+          sessionIdHash: Buffer.alloc(32, 21),
+          userId,
+          authSub: 'wired-user',
+          authzVersion: 1,
+          grantedCapabilities: ['console:self'],
+          elevation: null,
+        },
+      } as unknown as ConsoleRequest;
+      return executeConsoleRoute(route, consoleRequest);
+    },
     seedConnectedByoDescriptor: async (provider, host) => {
       const byo = await descriptorStore.upsert({
         provider,
