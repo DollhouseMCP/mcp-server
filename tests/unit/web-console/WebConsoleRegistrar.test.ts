@@ -366,6 +366,57 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.portfolioStore).toBe(portfolioStore);
   });
 
+  it('omits the collection catalog module unless collection routes are enabled', async () => {
+    const container = new TestContainer();
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 21),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    expect(
+      composition.registry.createRouteManifest().routes.some(route => route.moduleId === 'collection'),
+    ).toBe(false);
+  });
+
+  it('registers the collection catalog module from the collection engine services when enabled', async () => {
+    const container = new TestContainer();
+    container.seed('CollectionIndexManager', { getIndex: jest.fn() });
+    container.seed('CollectionSearch', { searchCollectionWithOptions: jest.fn() });
+    container.seed('PersonaDetails', { getCollectionContent: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 22),
+      enableCollectionRoutes: true,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    const collectionRoutes = composition.registry.createRouteManifest().routes
+      .filter(route => route.moduleId === 'collection');
+    expect(collectionRoutes.map(route => route.path)).toEqual([
+      '/api/v1/collection/elements',
+      '/api/v1/collection/elements/:type/:name',
+    ]);
+    for (const route of collectionRoutes) {
+      expect(route.requiredCapability).toBe(CONSOLE_SELF_CAPABILITY);
+      expect(route.privacyClass).toBe('public_catalog');
+      expect(route.rateLimit).toBe('collection_fetch');
+    }
+  });
+
+  it('fails fast when collection routes are enabled without the collection engine services', async () => {
+    const container = new TestContainer();
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 23),
+      enableCollectionRoutes: true,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container)).rejects.toThrow(/CollectionIndexManager/);
+  });
+
   it('registers protected correlation rate limiting only with explicit shared dependencies', async () => {
     const container = new TestContainer();
     const { InMemoryRateLimitStore } = await import('../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js');
@@ -1129,6 +1180,7 @@ describe('WebConsoleRegistrar', () => {
       createAccountAdminModule,
       createActivationModule,
       createAuditModule,
+      createCollectionModule,
       createExecutionModule,
       createIntegrationModule,
       createOperationsModule,
@@ -1220,6 +1272,11 @@ describe('WebConsoleRegistrar', () => {
       integrationStore: productionAdapter(),
       syncJobStore: new InMemoryPortfolioSyncJobStore(),
     }));
+    registry.register(createCollectionModule({
+      index: productionAdapter(),
+      search: productionAdapter(),
+      details: productionAdapter(),
+    }));
     registry.register(createSessionTelemetryModule({
       runtimeStore,
       ownedActivityQuery: new InMemoryOwnedActivityQuery(),
@@ -1246,6 +1303,7 @@ describe('WebConsoleRegistrar', () => {
         oauthGrantRevocationService: productionAdapter(),
         protectedCorrelationRateLimiter: productionAdapter(),
         protectedCorrelationRateLimitStore: productionAdapter(),
+        collectionFetchRateLimiter: productionAdapter(),
         adminAuditQuery: productionAdapter(),
         approvalAuditQuery: productionAdapter(),
         authenticationAuditQuery: productionAdapter(),

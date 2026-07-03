@@ -5,6 +5,7 @@ export const WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS = [
   'activations',
   'approvals',
   'audit',
+  'collection',
   'executions',
   'integrations',
   'me-logs',

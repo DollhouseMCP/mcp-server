@@ -24,6 +24,7 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   Env,
   | 'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED'
   | 'DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED'
+  | 'DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED'
   | 'DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED'
   | 'DOLLHOUSE_HTTP_WEB_CONSOLE'
   | 'DOLLHOUSE_PUBLIC_BASE_URL'
@@ -86,6 +87,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
     },
     enableApiV1Mount: true,
     enablePortfolioWriteRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED,
+    enableCollectionRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED,
     enableAccountAllowlistRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED,
     requireExplicitProductionAdapterMetadata: true,
     productionDatabaseVerification: resolveWebConsoleProductionDatabaseVerificationFromEnv(sourceEnv),

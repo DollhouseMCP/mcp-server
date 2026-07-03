@@ -415,6 +415,13 @@ const envSchema = z.object({
    */
   DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: envBool(false),
   /**
+   * Enables the collection catalog browse routes (/api/v1/collection/*) on the
+   * replacement console. Defaults off: serving the catalog drives server-funded
+   * outbound GitHub traffic under a budget shared by every user, so operators
+   * opt in deliberately (and can kill the surface independently of the console).
+   */
+  DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED: envBool(false),
+  /**
    * Enables the sign-in allowlist admin routes (/api/v1/admin/accounts/allowlist*)
    * on the replacement console. Defaults on: the console is the operator surface
    * for managing the sign-in allowlist, and the routes are admin-capability +
