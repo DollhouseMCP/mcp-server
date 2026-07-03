@@ -66,6 +66,33 @@ describe('DatabaseMemoryStorageLayer', () => {
     expect(entries[0].content).toBeTruthy();
   });
 
+  it('should sync entries for memories whose YAML exceeds 64KB (#2329)', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+
+    // Issue #2329: memories up to MAX_YAML_SIZE (256KB) are valid; entry sync
+    // previously parsed with a 64KB frontmatter cap and silently skipped,
+    // leaving memory_entries stale while the element row persisted.
+    const bigText = 'research finding lorem ipsum dolor sit amet '.repeat(400);
+    const content = buildMemoryContent('large-memory-2329', Array.from({ length: 6 }, (_, i) => ({
+      id: `big-entry-${i}`,
+      content: `entry-${i} ${bigText}`,
+    })));
+    expect(content.length).toBeGreaterThan(64 * 1024);
+
+    const elementId = await layer.writeContent('memories', 'large-memory-2329', content, {
+      author: '', version: '', description: '', tags: [],
+    });
+
+    const entries = await layer.getEntries(elementId);
+    expect(entries).toHaveLength(6);
+
+    const summaries = await layer.listSummaries();
+    const summary = summaries.find(s => s.name === 'large-memory-2329');
+    expect(summary?.totalEntries).toBe(6);
+  });
+
   it('should replace entries on update (not duplicate)', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();
