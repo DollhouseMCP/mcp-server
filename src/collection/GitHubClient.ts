@@ -62,7 +62,10 @@ export class GitHubClient {
    *    its own: a caller that interpolates untrusted input (e.g.
    *    `.../contents/library/../../../orgs/X`) would parse to a *different*
    *    api.github.com endpoint that still passes the hostname check — and be
-   *    fetched with the server token attached. No legitimate GitHub URL has a
+   *    fetched with the server token attached. The check runs on a
+   *    percent-decoded, backslash-normalized copy of the path so encoded forms
+   *    (`%2e%2e`, `..%5c`) — which `fetch`/WHATWG still collapse to traversal —
+   *    cannot slip past a literal `..` scan. No legitimate GitHub URL has a
    *    `.`/`..` path segment (search queries live in the query string, which we
    *    exclude here), so this breaks nothing legitimate.
    * 2. Reject any host not on the allowlist (default api.github.com +
@@ -70,7 +73,16 @@ export class GitHubClient {
    */
   private assertUrlAllowed(url: string): void {
     const rawPath = url.split('#')[0].split('?')[0];
-    if (rawPath.split('/').some(segment => segment === '..' || segment === '.')) {
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(rawPath);
+    } catch {
+      throw new Error('GitHubClient: Refusing to fetch URL with malformed percent-encoding');
+    }
+    // Backslashes are treated as path separators by the URL parser, so fold
+    // them in before splitting.
+    const segments = decodedPath.replaceAll('\\', '/').split('/');
+    if (segments.some(segment => segment === '..' || segment === '.')) {
       throw new Error('GitHubClient: Refusing to fetch URL with path-traversal segments');
     }
 

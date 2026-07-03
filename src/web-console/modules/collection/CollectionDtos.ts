@@ -5,6 +5,28 @@ export const COLLECTION_LIST_DEFAULT_PAGE_SIZE = 50;
 export const COLLECTION_LIST_MAX_PAGE_SIZE = 100;
 export const COLLECTION_SEARCH_QUERY_MAX_LENGTH = 200;
 
+// Catalog file extension per element type. Memories are stored as YAML across
+// DollhouseMCP (matching each element manager's getFileExtension()); every
+// other type is Markdown. Used to reconstruct a catalog path from a bare
+// type+name and to strip the correct suffix off a catalog basename.
+const COLLECTION_TYPE_EXTENSIONS: Readonly<Record<ConsolePortfolioElementType, string>> = {
+  personas: '.md',
+  skills: '.md',
+  templates: '.md',
+  agents: '.md',
+  memories: '.yaml',
+  ensembles: '.md',
+};
+
+export function collectionFileExtension(type: ConsolePortfolioElementType): string {
+  return COLLECTION_TYPE_EXTENSIONS[type];
+}
+
+/** Catalog path for a bare type+canonical-name, honoring the per-type extension. */
+export function collectionElementPath(type: ConsolePortfolioElementType, name: string): string {
+  return `library/${type}/${name}${collectionFileExtension(type)}`;
+}
+
 /**
  * `ok` — the catalog index was served (from cache or a fresh fetch).
  * `degraded` — the index and its fallbacks were unreachable; the response is
@@ -44,13 +66,21 @@ export interface CollectionElementListDto {
 
 /**
  * Canonical element name from a catalog path: the file stem of the last
- * segment (`library/personas/code-review.md` → `code-review`). Falls back to
- * the entry name when the path has no usable basename.
+ * segment (`library/personas/code-review.md` → `code-review`,
+ * `library/memories/guide.yaml` → `guide`). Falls back to the entry name when
+ * the path has no usable basename.
  */
 export function collectionElementNameFromPath(path: string, fallback: string): string {
   const basename = path.split('/').pop() ?? '';
-  const stem = basename.endsWith('.md') ? basename.slice(0, -3) : basename;
+  const stem = stripCatalogExtension(basename);
   return stem === '' ? fallback : stem;
+}
+
+function stripCatalogExtension(basename: string): string {
+  for (const extension of ['.md', '.yaml', '.yml']) {
+    if (basename.endsWith(extension)) return basename.slice(0, -extension.length);
+  }
+  return basename;
 }
 
 export function serializeCollectionIndexEntry(
@@ -77,13 +107,20 @@ export function serializeCollectionElementList(input: {
   readonly pageSize: number;
   readonly sourceStatus: CollectionSourceStatus;
   readonly sourceDetail?: string;
+  /**
+   * Authoritative "another page exists" signal. Pass it when the caller
+   * paginates upstream and post-filters this page (the engine total may then
+   * exceed the visible count, so deriving has_more from total would overstate).
+   * Omit it when the caller holds the full result set and slices it locally.
+   */
+  readonly hasMore?: boolean;
 }): CollectionElementListDto {
   return {
     elements: input.elements,
     total: input.total,
     page: input.page,
     page_size: input.pageSize,
-    has_more: input.page * input.pageSize < input.total,
+    has_more: input.hasMore ?? input.page * input.pageSize < input.total,
     source_status: input.sourceStatus,
     source_detail: input.sourceDetail ?? null,
   };

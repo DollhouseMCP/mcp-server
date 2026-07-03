@@ -13,6 +13,7 @@ import {
   COLLECTION_LIST_DEFAULT_PAGE_SIZE,
   COLLECTION_LIST_MAX_PAGE_SIZE,
   COLLECTION_SEARCH_QUERY_MAX_LENGTH,
+  collectionElementPath,
   serializeCollectionElementList,
   serializeCollectionIndexEntry,
   type CollectionElementDetailDto,
@@ -80,7 +81,7 @@ export class CollectionService {
       return invalidRequest('name path parameter must be a canonical collection element name.');
     }
 
-    const path = `library/${type}/${name}.md`;
+    const path = collectionElementPath(type, name);
     let fetched: { metadata: unknown; content: string };
     try {
       fetched = await this.options.details.getCollectionContent(path);
@@ -165,6 +166,10 @@ export class CollectionService {
       total: results.total,
       page: results.page,
       pageSize: results.pageSize,
+      // The engine paginates before we drop non-console-type hits, so its own
+      // hasMore is the authoritative next-page signal — deriving it from the
+      // (unfiltered) total would advertise pages the filtered view can't fill.
+      hasMore: results.hasMore,
       sourceStatus: 'ok',
     });
   }

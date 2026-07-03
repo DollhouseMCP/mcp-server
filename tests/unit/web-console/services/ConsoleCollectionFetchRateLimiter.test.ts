@@ -14,6 +14,7 @@ jest.mock('../../../../src/security/securityMonitor.js', () => ({
 }));
 
 const SESSION_LIMIT = 30;
+const DEPLOYMENT_LIMIT = 300;
 const KEY = Buffer.alloc(32, 1);
 const TEST_IP = '198.51.100.7';
 // InMemoryRateLimitStore expires entries against the REAL clock, so the
@@ -58,6 +59,39 @@ describe('ConsoleCollectionFetchRateLimiter', () => {
     }
     const otherSession = await limiter.consume({ consoleSessionIdHash: sessionHash(2), ip: TEST_IP });
     expect(otherSession.allowed).toBe(true);
+  });
+
+  it('does not charge the shared deployment budget for session-rejected requests', async () => {
+    const limiter = createLimiter(() => START);
+    // A single session floods far past the deployment limit. Only its first 30
+    // are allowed; the rest are session-rejected and must NOT reach GitHub, so
+    // they must not consume the deployment budget.
+    for (let i = 0; i < DEPLOYMENT_LIMIT + 50; i++) {
+      const result = await limiter.consume({ consoleSessionIdHash: sessionHash(1), ip: TEST_IP });
+      if (i >= SESSION_LIMIT) {
+        expect(result.exceededScopes).toEqual(['session']);
+      }
+    }
+    // A different session must still be served — the deployment budget was only
+    // charged for this session's 30 allowed requests, nowhere near 300.
+    const otherSession = await limiter.consume({ consoleSessionIdHash: sessionHash(9), ip: TEST_IP });
+    expect(otherSession.allowed).toBe(true);
+    expect(otherSession.exceededScopes).toEqual([]);
+  });
+
+  it('trips the deployment scope when allowed requests across sessions exceed the budget', async () => {
+    const limiter = createLimiter(() => START);
+    // Spread allowed requests across many sessions so no single session budget
+    // trips; the shared deployment budget must still cap the aggregate.
+    let denied: Awaited<ReturnType<typeof limiter.consume>> | null = null;
+    for (let session = 0; session < DEPLOYMENT_LIMIT + 5 && !denied; session++) {
+      const result = await limiter.consume({ consoleSessionIdHash: sessionHash(session % 200), ip: TEST_IP });
+      if (!result.allowed) denied = result;
+    }
+    // With distinct sessions each spending 1, the deployment budget (300) trips
+    // before any per-session budget (30) does.
+    expect(denied).not.toBeNull();
+    expect(denied?.exceededScopes).toEqual(['deployment']);
   });
 
   it('resets the budget after the window elapses', async () => {

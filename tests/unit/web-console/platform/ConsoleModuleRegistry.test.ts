@@ -414,6 +414,30 @@ describe('ConsoleModuleRegistry', () => {
     }))).toThrow(/duplicates schema/);
   });
 
+  it('accepts a public_catalog route under /api/v1/collection', () => {
+    const registry = new ConsoleModuleRegistry();
+    expect(() => registry.register(selfModule({
+      id: 'collection',
+      routes: [selfRoute({ path: '/api/v1/collection/elements', privacyClass: 'public_catalog' })],
+    }))).not.toThrow();
+  });
+
+  it('rejects a personal route that claims the public_catalog privacy class', () => {
+    const registry = new ConsoleModuleRegistry();
+    // Laundering per-user data through the non-personal catalog class must fail.
+    expect(() => registry.register(selfModule({
+      routes: [selfRoute({ path: '/api/v1/me/example', privacyClass: 'public_catalog' })],
+    }))).toThrow(/public_catalog/);
+  });
+
+  it('rejects a /api/v1/collection route that claims a personal privacy class', () => {
+    const registry = new ConsoleModuleRegistry();
+    expect(() => registry.register(selfModule({
+      id: 'collection',
+      routes: [selfRoute({ path: '/api/v1/collection/elements', privacyClass: 'self_private' })],
+    }))).toThrow(/public_catalog/);
+  });
+
   it('rejects event and schema identifier collisions across modules', () => {
     const registry = new ConsoleModuleRegistry();
     registry.register(selfModule({

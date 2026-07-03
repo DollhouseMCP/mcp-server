@@ -178,6 +178,23 @@ describe('CollectionModule', () => {
       expect(body.elements[0].type).toBe('skills');
     });
 
+    it('strips the .yaml extension from memory element names', async () => {
+      const definition = routeWith(LIST_PATH, fakePorts({
+        index: {
+          getIndex: () => Promise.resolve(collectionIndex({
+            memories: [indexEntry({
+              path: 'library/memories/welcome-to-dollhouse-guide.yaml',
+              type: 'memories',
+              name: 'Welcome Guide',
+            })],
+          })),
+        },
+      }));
+      const body = (await invoke(definition, consoleRequest({ query: { type: 'memories' } } as Partial<ConsoleRequest>))).body as CollectionElementListDto;
+      expect(body.elements[0].name).toBe('welcome-to-dollhouse-guide');
+      expect(body.elements[0].path).toBe('library/memories/welcome-to-dollhouse-guide.yaml');
+    });
+
     it('rejects an unsupported type with a clean 400', async () => {
       const result = await invoke(route(LIST_PATH), consoleRequest({ query: { type: '../../../orgs/x' } } as Partial<ConsoleRequest>));
       expect(result.status).toBe(400);
@@ -229,6 +246,31 @@ describe('CollectionModule', () => {
       expect(result.status).toBe(400);
     });
 
+    it('derives has_more from the engine, not the (unfiltered) total', async () => {
+      // Engine reports a large total but says this is the last page. Non-console
+      // hits get filtered out; has_more must follow the engine's hasMore=false,
+      // not page*page_size<total (which would wrongly advertise another page).
+      const definition = routeWith(LIST_PATH, fakePorts({
+        search: {
+          searchCollectionWithOptions: (query, options) => Promise.resolve({
+            items: [
+              indexEntry(),
+              indexEntry({ path: 'library/tools/foo.md', type: 'tools', name: 'Foo' }),
+            ],
+            total: 100,
+            page: options.page ?? 1,
+            pageSize: options.pageSize ?? 50,
+            hasMore: false,
+            query,
+            searchTime: 1,
+          } satisfies SearchResults),
+        },
+      }));
+      const body = (await invoke(definition, consoleRequest({ query: { q: 'review' } } as Partial<ConsoleRequest>))).body as CollectionElementListDto;
+      expect(body.elements).toHaveLength(1); // non-console 'tools' hit filtered out
+      expect(body.has_more).toBe(false);
+    });
+
     it('degrades cleanly when search fails', async () => {
       const definition = routeWith(LIST_PATH, fakePorts({
         search: { searchCollectionWithOptions: () => Promise.reject(new Error('search backend down')) },
@@ -270,6 +312,25 @@ describe('CollectionModule', () => {
         params: { type: 'skills', name: 'my-skill_v2.1' },
       } as Partial<ConsoleRequest>));
       expect(paths).toEqual(['library/skills/my-skill_v2.1.md']);
+    });
+
+    it('fetches memories with a .yaml extension, not .md', async () => {
+      // Memories are stored as YAML in the collection; a hardcoded .md would
+      // 404 every memory detail. The path must carry the per-type extension.
+      const paths: string[] = [];
+      const definition = routeWith(DETAIL_PATH, fakePorts({
+        details: {
+          getCollectionContent: path => {
+            paths.push(path);
+            return Promise.resolve({ metadata: { name: 'Guide' }, content: 'body' });
+          },
+        },
+      }));
+      const result = await invoke(definition, consoleRequest({
+        params: { type: 'memories', name: 'welcome-to-dollhouse-guide' },
+      } as Partial<ConsoleRequest>));
+      expect(paths).toEqual(['library/memories/welcome-to-dollhouse-guide.yaml']);
+      expect(result.status).toBe(200);
     });
 
     it('rejects traversal-shaped names without fetching', async () => {

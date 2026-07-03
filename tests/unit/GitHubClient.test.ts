@@ -211,6 +211,34 @@ describe('GitHubClient', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
+    it('rejects percent-encoded traversal that the URL parser would collapse', async () => {
+      // new URL(...) decodes %2e%2e and collapses it to /repos/DollhouseMCP/orgs/evil,
+      // reaching a token-authenticated endpoint. The decoded raw-path check must
+      // catch it despite there being no literal ".." segment.
+      await expect(
+        githubClient.fetchFromGitHub(
+          'https://api.github.com/repos/DollhouseMCP/collection/contents/library/%2e%2e/%2e%2e/%2e%2e/orgs/evil'
+        )
+      ).rejects.toThrow(/path-traversal/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects backslash-encoded traversal segments', async () => {
+      await expect(
+        githubClient.fetchFromGitHub(
+          String.raw`https://api.github.com/repos/DollhouseMCP/collection/contents/library/..\..\..\orgs/evil`
+        )
+      ).rejects.toThrow(/path-traversal/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('rejects a URL with malformed percent-encoding', async () => {
+      await expect(
+        githubClient.fetchFromGitHub('https://api.github.com/repos/DollhouseMCP/collection/contents/%zz')
+      ).rejects.toThrow(/malformed percent-encoding/);
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
     it('allows a search URL whose query string contains dots', async () => {
       // Dots in the ?q= query must NOT trip the path-traversal check — only
       // path segments are inspected.

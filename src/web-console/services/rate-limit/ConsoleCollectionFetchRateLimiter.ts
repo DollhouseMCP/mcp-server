@@ -75,12 +75,17 @@ export class ConsoleCollectionFetchRateLimiter {
     const sessionSelector = this.selector('session', input.consoleSessionIdHash.toString('hex'));
     const deploymentSelector = this.selector('deployment', 'global');
 
+    // Consume the session budget FIRST and only charge the shared deployment
+    // budget when the session is allowed. A session-rejected request never
+    // reaches the upstream GitHub fetch, so it must not spend the deployment
+    // budget — otherwise one abusive session could exhaust the shared budget
+    // and deny every other session (the invariant this policy exists to hold).
     let budgets: readonly ConsumedBudget[];
     try {
-      budgets = await Promise.all([
-        this.consumeBudget('session', sessionSelector, SESSION_LIMIT, now),
-        this.consumeBudget('deployment', deploymentSelector, DEPLOYMENT_LIMIT, now),
-      ]);
+      const session = await this.consumeBudget('session', sessionSelector, SESSION_LIMIT, now);
+      budgets = session.allowed
+        ? [session, await this.consumeBudget('deployment', deploymentSelector, DEPLOYMENT_LIMIT, now)]
+        : [session];
     } catch (error) {
       throw new ConsoleCollectionFetchRateLimitDependencyError(
         'collection fetch rate-limit store unavailable',
