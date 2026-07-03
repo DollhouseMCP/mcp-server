@@ -54,8 +54,9 @@ export class TokenManager {
     GENERIC_GITHUB_TOKEN: /^gh[a-z]_.+$/i   // Catch-all for any gh*_ pattern
   };
 
-  // Secure storage configuration
-  private static readonly DEFAULT_TOKEN_DIR = path.join(homedir(), '.dollhouse', '.auth');
+  private static getDefaultTokenDir(): string {
+    return path.join(process.env.DOLLHOUSE_HOME_DIR || homedir(), '.dollhouse', '.auth');
+  }
 
   // Rate limiter for token validation operations - prevents brute force attacks
   private tokenValidationLimiter: RateLimiter | null = null;
@@ -92,7 +93,7 @@ export class TokenManager {
 
     const authDir = typeof userIdResolverOrAuthDir === 'string'
       ? userIdResolverOrAuthDir
-      : TokenManager.DEFAULT_TOKEN_DIR;
+      : TokenManager.getDefaultTokenDir();
     const tokenStore = new FileTokenStore(
       tokenStoreOrFileOperationsOrResolver,
       { getUserAuthDir: () => authDir },
@@ -588,7 +589,6 @@ export class TokenManager {
     // Fall back to secure storage
     return this.retrieveGitHubToken();
   }
-
   private resolveUserId(): string {
     return this.userIdResolver();
   }

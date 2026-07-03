@@ -10,7 +10,7 @@
 |----------|---------|
 | `~/.dollhouse/config.yml` | Primary configuration file created by `ConfigManager` the first time you run the server or the setup wizard. |
 | `~/.dollhouse/config.yml.backup` | Automatic backup taken before each write so you can recover from a bad edit. |
-| `~/.dollhouse/` (directory) | Also stores OAuth helper state and logs (`.auth/`, `oauth-helper.log`). |
+| `~/.dollhouse/` (directory) | Also stores OAuth helper state under `.auth/`; helper logs are written to `oauth-helper.log` only when `DOLLHOUSE_OAUTH_DEBUG=true`. |
 
 Configuration is YAML-based. Manual edits are allowed, but using the `dollhouse_config` MCP tool keeps validation and backups automatic.
 
