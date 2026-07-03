@@ -19,6 +19,7 @@ import type {
   IIntegrationDescriptorStore,
   IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
+import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import { ConfiguredOAuthIntegrationProvider } from './ConfiguredOAuthIntegrationProvider.js';
 import type { DnsLookup } from './IntegrationPublicHostGuard.js';
 import type { PinnedOutboundFactory } from './PinnedOutboundFactory.js';
@@ -73,7 +74,7 @@ export function buildConfiguredIntegrationProviders(
   const providers: IIntegrationProvider[] = [];
   for (const descriptor of descriptors) {
     try {
-      const provider = buildProvider(descriptor, secretEncryption, outbound);
+      const provider = buildIntegrationProviderFromDescriptor(descriptor, secretEncryption, outbound);
       if (provider) providers.push(provider);
     } catch (err) {
       logger.error(
@@ -85,7 +86,40 @@ export function buildConfiguredIntegrationProviders(
   return providers;
 }
 
-function buildProvider(
+/**
+ * Per-request provider resolution for descriptors that are not in the
+ * boot-time registry — runtime-authored BYO descriptors above all. Resolves
+ * the caller-visible descriptor from the store and interprets it on the
+ * spot, so a just-authored descriptor is connectable without a restart.
+ * Chosen over registry-refresh-on-write, which would reintroduce shared
+ * mutable cross-session state and race in multi-replica deployments.
+ */
+export type IntegrationProviderResolver = (
+  userId: string,
+  providerId: UserIntegrationProvider,
+) => Promise<IIntegrationProvider | null>;
+
+export function createStoreIntegrationProviderResolver(params: {
+  readonly descriptorStore: IIntegrationDescriptorStore;
+  readonly secretEncryption: ISecretEncryptionService;
+  readonly outbound?: CuratedProviderOutboundOptions;
+}): IntegrationProviderResolver {
+  return async (userId, providerId) => {
+    const descriptor = await params.descriptorStore.findVisibleByProvider(userId, providerId);
+    if (!descriptor) return null;
+    try {
+      return buildIntegrationProviderFromDescriptor(descriptor, params.secretEncryption, params.outbound ?? {});
+    } catch (err) {
+      logger.error(
+        `[CuratedIntegrationProviders] Per-request provider build failed for '${descriptor.provider}'`,
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      return null;
+    }
+  };
+}
+
+export function buildIntegrationProviderFromDescriptor(
   descriptor: IntegrationDescriptorRecord,
   secretEncryption: ISecretEncryptionService,
   outbound: CuratedProviderOutboundOptions,

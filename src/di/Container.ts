@@ -93,6 +93,7 @@ import {
   AuthorizedIntegrationOperationCatalog,
   AuthorizedIntegrationRemoteMcpBridge,
   createGitHubIntegrationProvider,
+  createStoreIntegrationProviderResolver,
   IntegrationRequestPolicyEnforcer,
   IntegrationTokenRefreshService,
   serializeGitHubIntegrationStatus,
@@ -1802,13 +1803,24 @@ export class DollhouseContainer {
       ? this.resolve<IRateLimitStore>('RateLimitStore')
       : null;
     const providerRegistry = this.resolveIntegrationProviderRegistry();
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     const tokenRefresh = new IntegrationTokenRefreshService({
       store: integrationStore,
       providers: providerRegistry,
+      // The boot registry only carries the bespoke GitHub provider here;
+      // descriptor-backed providers (curated and runtime-authored BYO) refresh
+      // through per-request store resolution so no restart is ever needed.
+      resolveProvider: createStoreIntegrationProviderResolver({
+        descriptorStore,
+        secretEncryption,
+        outbound: {
+          ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
+          ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+        },
+      }),
       secretEncryption,
     });
-    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
-    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     return new IntegrationRequestGateway({
       integrationStore,
       descriptorStore,

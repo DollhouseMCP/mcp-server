@@ -559,6 +559,17 @@ export class WebConsoleRegistrar {
     registerRouteModule(registry, this.options, 'me-logs', () => createMeLogsModule({
       logSource: resolveConsoleLogSource(container),
     }));
+    // Same outbound overrides the gateway/bridge honor, so curated and
+    // per-request-built provider OAuth token-endpoint calls share one guarded
+    // transport (and wired tests can route them to a local upstream).
+    const integrationProviderOutbound = {
+      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory)
+        ? { pinnedOutbound: container.resolve<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory) }
+        : {}),
+      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup)
+        ? { dnsLookup: container.resolve<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup) }
+        : {}),
+    };
     // Curated, data-driven providers: load descriptor seed files into the store and
     // build their connect/callback providers so the generic /:provider routes activate.
     // Requires secret encryption (to decrypt deployment OAuth client secrets); without
@@ -568,17 +579,7 @@ export class WebConsoleRegistrar {
           seedDir: this.options.integrationDescriptorSeedDir,
           descriptorStore: stores.integrationDescriptorStore,
           secretEncryption,
-          // Same outbound overrides the gateway/bridge honor, so curated OAuth
-          // token-endpoint calls share one guarded transport (and wired tests
-          // can route them to a local upstream).
-          outbound: {
-            ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory)
-              ? { pinnedOutbound: container.resolve<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory) }
-              : {}),
-            ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup)
-              ? { dnsLookup: container.resolve<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup) }
-              : {}),
-          },
+          outbound: integrationProviderOutbound,
           ...(this.options.now ? { now: this.options.now } : {}),
         })
       : [];
@@ -591,6 +592,7 @@ export class WebConsoleRegistrar {
       secretEncryption,
       githubProvider: githubIntegrationProvider,
       configuredProviders: configuredIntegrationProviders,
+      providerOutbound: integrationProviderOutbound,
       publicBaseUrl: integrationPublicBaseUrl,
       now: this.options.now,
     }));

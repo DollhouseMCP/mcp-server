@@ -2,15 +2,22 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   AeadSecretEncryptionService,
+  CONSOLE_INTEGRATION_STATE_COOKIE,
   createIntegrationModule,
+  HmacConsoleOpaqueValueService,
   InMemoryIntegrationDescriptorStore,
   InMemoryIntegrationOpenApiSpecStore,
+  InMemoryLoginTransactionStore,
   InMemoryUserIntegrationStore,
+  IntegrationProviderRegistry,
+  IntegrationTokenRefreshService,
   type ConsoleRequest,
+  type ConsoleRouteDefinition,
   type IntegrationDescriptorRecord,
 } from '../../../../src/web-console/index.js';
 import { IntegrationDescriptorAuthoringService } from '../../../../src/web-console/modules/integrations/IntegrationDescriptorAuthoringService.js';
-import { integrationDescriptorClientSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
+import { createStoreIntegrationProviderResolver } from '../../../../src/web-console/modules/integrations/CuratedIntegrationProviders.js';
+import { integrationDescriptorClientSecretContext, integrationSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
@@ -457,6 +464,231 @@ describe('IntegrationDescriptorAuthoringService spec management', () => {
     const noDescriptor = await service.getSpec(consoleRequest({ params: { id: UNKNOWN_ID } }));
     expect(noDescriptor.status).toBe(404);
     expect(bodyOf(noDescriptor)).toMatchObject({ code: 'integration_descriptor_not_found' });
+  });
+});
+
+describe('IntegrationModule per-request provider routes', () => {
+  const PUBLIC_BASE_URL = 'https://console.example';
+  const PUBLIC_TEST_ADDRESS = [8, 8, 8, 8].join('.');
+
+  function findRoute(
+    routes: readonly ConsoleRouteDefinition[],
+    path: string,
+    method = 'GET',
+  ): ConsoleRouteDefinition {
+    const route = routes.find(candidate => candidate.path === path && candidate.method === method);
+    if (!route) throw new Error(`missing route ${method} ${path}`);
+    return route;
+  }
+
+  function cookieValue(result: Awaited<ReturnType<ConsoleRouteDefinition['handler']>>, name: string): string | null {
+    const cookie = result.cookies?.find(candidate => candidate.operation === 'set' && candidate.name === name);
+    return cookie?.operation === 'set' ? cookie.value : null;
+  }
+
+  function moduleFixture(fetchImpl?: (input: string | URL, init?: RequestInit) => Promise<Response>) {
+    const integrationStore = new InMemoryUserIntegrationStore();
+    const descriptorStore = new InMemoryIntegrationDescriptorStore();
+    const secretEncryption = encryption();
+    const module = createIntegrationModule({
+      integrationStore,
+      descriptorStore,
+      openApiSpecStore: new InMemoryIntegrationOpenApiSpecStore(),
+      loginTransactions: new InMemoryLoginTransactionStore(),
+      opaqueValues: new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8)),
+      secretEncryption,
+      publicBaseUrl: PUBLIC_BASE_URL,
+      ...(fetchImpl
+        ? {
+          providerOutbound: {
+            pinnedOutbound: () => ({ fetch: fetchImpl, close: () => Promise.resolve() }),
+            dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
+          },
+        }
+        : {}),
+      now: () => NOW,
+    });
+    return { module, integrationStore, secretEncryption };
+  }
+
+  async function authorDescriptor(module: ReturnType<typeof createIntegrationModule>, body: Record<string, unknown>) {
+    const create = findRoute(module.routes, DESCRIPTORS_PATH, 'POST');
+    const result = await create.handler(consoleRequest({ body }));
+    expect(result.status).toBe(201);
+    return bodyOf(result);
+  }
+
+  it('connects a runtime-authored BYO static-key descriptor without a restart', async () => {
+    const { module, secretEncryption, integrationStore } = moduleFixture();
+    await authorDescriptor(module, staticKeyBody());
+
+    const connect = findRoute(module.routes, '/api/v1/me/integrations/:provider/connect', 'POST');
+    const connected = await connect.handler(consoleRequest({
+      params: { provider: 'airtable' },
+      body: { api_key: 'airtable-api-key-secret', account_label: 'Alice Airtable' },
+    }));
+    expect(connected).toMatchObject({
+      status: 200,
+      body: { provider: 'airtable', status: 'connected', account_label: 'Alice Airtable' },
+    });
+    expect(JSON.stringify(connected.body)).not.toContain('airtable-api-key-secret');
+    const stored = await integrationStore.findByProvider(USER_ID, 'airtable');
+    expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), integrationSecretContext('access_token', USER_ID, 'airtable')).toString('utf8'))
+      .toBe('airtable-api-key-secret');
+
+    const status = findRoute(module.routes, '/api/v1/me/integrations/:provider');
+    await expect(status.handler(consoleRequest({ params: { provider: 'airtable' } }))).resolves.toMatchObject({
+      status: 200,
+      body: { provider: 'airtable', status: 'connected' },
+    });
+
+    const disconnect = findRoute(module.routes, '/api/v1/me/integrations/:provider', 'DELETE');
+    await expect(disconnect.handler(consoleRequest({ params: { provider: 'airtable' } }))).resolves.toMatchObject({
+      status: 200,
+      body: { provider: 'airtable', status: 'disconnected' },
+    });
+  });
+
+  it('runs the full OAuth flow for a runtime-authored BYO descriptor', async () => {
+    const fetchCalls: Array<{ url: string }> = [];
+    const fetchImpl = (input: string | URL) => {
+      fetchCalls.push({ url: String(input) });
+      return Promise.resolve(new Response(JSON.stringify({
+        access_token: 'mycrm-access-token-secret',
+        refresh_token: 'mycrm-refresh-token-secret',
+        email: 'alice@example.com',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    };
+    const { module, integrationStore, secretEncryption } = moduleFixture(fetchImpl);
+    await authorDescriptor(module, oauthBody({
+      oauth: {
+        ...(oauthBody().oauth as Record<string, unknown>),
+        account_label: { field: 'email' },
+      },
+    }));
+
+    const connect = findRoute(module.routes, '/api/v1/me/integrations/:provider/connect', 'POST');
+    const started = await connect.handler(consoleRequest({
+      params: { provider: MYCRM },
+      body: {},
+    }));
+    expect(started.status).toBe(200);
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    expect(authorizeUrl.origin + authorizeUrl.pathname).toBe('https://auth.mycrm.example/authorize');
+    expect(authorizeUrl.searchParams.get('redirect_uri')).toBe(`${PUBLIC_BASE_URL}/api/v1/me/integrations/${MYCRM}/callback`);
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error('connect did not start a transaction');
+
+    const callback = findRoute(module.routes, '/api/v1/me/integrations/:provider/callback');
+    const result = await callback.handler(consoleRequest({
+      params: { provider: MYCRM },
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: 'provider-code', state },
+    }));
+    expect(result).toMatchObject({ status: 302 });
+    expect(fetchCalls[0]?.url).toBe('https://auth.mycrm.example/token');
+
+    const stored = await integrationStore.findByProvider(USER_ID, MYCRM);
+    expect(stored?.externalAccountLabel).toBe('alice@example.com');
+    expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), integrationSecretContext('access_token', USER_ID, MYCRM)).toString('utf8'))
+      .toBe('mycrm-access-token-secret');
+  });
+
+  it('fails closed for BYO OAuth descriptors without a stored client secret', async () => {
+    const { module } = moduleFixture();
+    const oauthWithoutSecret = { ...(oauthBody().oauth as Record<string, unknown>) };
+    delete oauthWithoutSecret.client_secret;
+    await authorDescriptor(module, oauthBody({ oauth: oauthWithoutSecret }));
+
+    const connect = findRoute(module.routes, '/api/v1/me/integrations/:provider/connect', 'POST');
+    await expect(connect.handler(consoleRequest({
+      params: { provider: MYCRM },
+      body: {},
+    }))).resolves.toMatchObject({ status: 404 });
+  });
+
+  it('refuses reserved, malformed, and unknown provider ids on the parameterized routes', async () => {
+    const { module } = moduleFixture();
+    const status = findRoute(module.routes, '/api/v1/me/integrations/:provider');
+
+    // The guard path returns synchronously; unknown-but-well-formed ids go
+    // through async store resolution. Await both shapes uniformly.
+    for (const provider of ['descriptors', 'github', 'NOT-LOWER', 'x', 'unknown-svc']) {
+      const result = await status.handler(consoleRequest({ params: { provider } }));
+      expect(result).toMatchObject({
+        status: 404,
+        body: { code: 'integration_provider_not_found' },
+      });
+    }
+  });
+});
+
+describe('IntegrationTokenRefreshService per-request resolution', () => {
+  it('refreshes through a store-resolved provider absent from the boot registry', async () => {
+    const secretEncryption = encryption();
+    const descriptorStore = new InMemoryIntegrationDescriptorStore();
+    const authoring = new IntegrationDescriptorAuthoringService({
+      descriptorStore,
+      specStore: new InMemoryIntegrationOpenApiSpecStore(),
+      secretEncryption,
+      now: () => NOW,
+    });
+    const created = bodyOf(await authoring.create(consoleRequest({ body: oauthBody() })));
+    expect(created.provider).toBe(MYCRM);
+
+    const integrationStore = new InMemoryUserIntegrationStore([{
+      id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+      userId: USER_ID,
+      provider: MYCRM,
+      externalAccountLabel: 'alice',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['crm.read'] },
+      accessTokenCiphertext: secretEncryption.encrypt(Buffer.from('stale-access', 'utf8'), integrationSecretContext('access_token', USER_ID, MYCRM)),
+      refreshTokenCiphertext: secretEncryption.encrypt(Buffer.from('mycrm-refresh-token', 'utf8'), integrationSecretContext('refresh_token', USER_ID, MYCRM)),
+      credentialKeyVersion: null,
+      status: 'connected',
+      errorReason: null,
+      connectedAt: NOW,
+      lastSyncAt: null,
+      revokedAt: null,
+    }]);
+    const record = await integrationStore.findByProvider(USER_ID, MYCRM);
+    if (!record?.accessTokenCiphertext) throw new Error('fixture integration missing');
+
+    const refresh = new IntegrationTokenRefreshService({
+      store: integrationStore,
+      providers: new IntegrationProviderRegistry([]),
+      resolveProvider: createStoreIntegrationProviderResolver({
+        descriptorStore,
+        secretEncryption,
+        outbound: {
+          pinnedOutbound: () => ({
+            fetch: () => Promise.resolve(new Response(JSON.stringify({
+              access_token: 'fresh-access-token',
+              refresh_token: 'fresh-refresh-token',
+            }), { status: 200, headers: { 'Content-Type': 'application/json' } })),
+            close: () => Promise.resolve(),
+          }),
+          dnsLookup: () => Promise.resolve([{ address: [8, 8, 8, 8].join('.'), family: 4 }]),
+        },
+      }),
+      secretEncryption,
+      now: () => NOW,
+    });
+
+    const result = await refresh.refreshOnDemand({
+      userId: USER_ID,
+      provider: MYCRM,
+      staleAccessTokenCiphertext: record.accessTokenCiphertext,
+    });
+
+    expect(result.kind).toBe('refreshed');
+    if (result.kind !== 'refreshed') throw new Error('expected refreshed result');
+    expect(secretEncryption.decrypt(
+      result.record.accessTokenCiphertext ?? Buffer.alloc(0),
+      integrationSecretContext('access_token', USER_ID, MYCRM),
+    ).toString('utf8')).toBe('fresh-access-token');
   });
 });
 

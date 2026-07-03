@@ -32,6 +32,20 @@ export function projectIntegrationConnect(value: unknown): { readonly authorize_
   return { authorize_url: typeof input.authorize_url === 'string' ? input.authorize_url : '' };
 }
 
+/**
+ * Connect projection for parameterized provider routes, where the strategy is
+ * unknown until the descriptor resolves per-request: an OAuth connect returns
+ * `authorize_url`, a static-key connect returns the provider status DTO.
+ */
+export function projectIntegrationConnectOrStatus(
+  value: unknown,
+): { readonly authorize_url: string } | ConfiguredIntegrationStatusDto {
+  const input = asRecord(value);
+  return typeof input.authorize_url === 'string'
+    ? projectIntegrationConnect(input)
+    : projectConfiguredIntegrationStatus(input);
+}
+
 export function projectGitHubIntegrationStatus(value: unknown): GitHubIntegrationStatusDto {
   const input = asRecord(value);
   return {

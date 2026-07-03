@@ -24,6 +24,7 @@ import type {
   IntegrationCallbackRejectedReason,
 } from './IntegrationSecurityEvents.js';
 import { integrationSecretContext, type IntegrationSecretContext } from './IntegrationSecretContext.js';
+import type { IntegrationProviderResolver } from './CuratedIntegrationProviders.js';
 import type { IIntegrationProvider } from './IntegrationProvider.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 
@@ -36,6 +37,12 @@ export class IntegrationService {
   constructor(private readonly options: {
     readonly store: IUserIntegrationStore;
     readonly providers: IntegrationProviderRegistry;
+    /**
+     * Per-request fallback consulted when the boot-time registry has no
+     * provider for the id — how runtime-authored BYO descriptors become
+     * connectable without a restart.
+     */
+    readonly resolveProvider?: IntegrationProviderResolver | null;
     readonly loginTransactions?: ILoginTransactionStore | null;
     readonly opaqueValues?: IConsoleOpaqueValueService | null;
     readonly secretEncryption?: ISecretEncryptionService | null;
@@ -76,7 +83,7 @@ export class IntegrationService {
 
   async getProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const provider = this.options.providers.get(providerId);
+    const provider = await this.resolveProviderFor(auth.userId, providerId);
     if (!provider) return providerNotFound(providerId);
     const record = await this.options.store.findByProvider(auth.userId, providerId);
     return {
@@ -91,14 +98,14 @@ export class IntegrationService {
 
   async connectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const provider = this.options.providers.get(providerId);
+    const provider = await this.resolveProviderFor(auth.userId, providerId);
     if (!provider) return providerNotFound(providerId);
     if (provider.credentialStrategy === 'static_api_key') {
-      const deps = this.credentialDependencies(providerId);
+      const deps = this.credentialDependencies(provider);
       if (!deps) return serviceUnavailable(`${providerId} integration linking is not configured.`);
       return this.captureStaticApiKey(req, auth, deps);
     }
-    const deps = this.writeDependencies(providerId);
+    const deps = this.writeDependencies(provider);
     if (!deps) return serviceUnavailable(`${providerId} integration linking is not configured.`);
     const now = this.now();
     const transactionId = deps.opaqueValues.createOpaqueValue();
@@ -148,7 +155,8 @@ export class IntegrationService {
 
   async completeProviderCallback(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const deps = this.writeDependencies(providerId);
+    const provider = await this.resolveProviderFor(auth.userId, providerId);
+    const deps = this.writeDependencies(provider);
     if (!deps) return failedIntegrationCallback();
     const transactionId = readCookie(req.headers.cookie, CONSOLE_INTEGRATION_STATE_COOKIE);
     const code = singleQueryValue(req.query.code);
@@ -244,7 +252,8 @@ export class IntegrationService {
 
   async disconnectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const deps = this.credentialDependencies(providerId);
+    const provider = await this.resolveProviderFor(auth.userId, providerId);
+    const deps = this.credentialDependencies(provider);
     if (!deps) return serviceUnavailable(`${providerId} integration disconnect is not configured.`);
     const active = await this.options.store.findByProvider(auth.userId, providerId);
     if (active) {
@@ -299,13 +308,23 @@ export class IntegrationService {
     }
   }
 
-  private writeDependencies(providerId: UserIntegrationProvider): {
+  /** Boot-time registry first, then the per-request store-backed fallback. */
+  private async resolveProviderFor(
+    userId: string,
+    providerId: UserIntegrationProvider,
+  ): Promise<IIntegrationProvider | null> {
+    const registered = this.options.providers.get(providerId);
+    if (registered) return registered;
+    if (!this.options.resolveProvider) return null;
+    return this.options.resolveProvider(userId, providerId);
+  }
+
+  private writeDependencies(provider: IIntegrationProvider | null): {
     readonly loginTransactions: ILoginTransactionStore;
     readonly opaqueValues: IConsoleOpaqueValueService;
     readonly secretEncryption: ISecretEncryptionService;
     readonly provider: IIntegrationProvider;
   } | null {
-    const provider = this.options.providers.get(providerId);
     if (!this.options.loginTransactions ||
         !this.options.opaqueValues ||
         !this.options.secretEncryption ||
@@ -350,11 +369,10 @@ export class IntegrationService {
     };
   }
 
-  private credentialDependencies(providerId: UserIntegrationProvider): {
+  private credentialDependencies(provider: IIntegrationProvider | null): {
     readonly secretEncryption: ISecretEncryptionService;
     readonly provider: IIntegrationProvider;
   } | null {
-    const provider = this.options.providers.get(providerId);
     if (!this.options.secretEncryption || !provider?.authorizationConfigured) {
       return null;
     }
