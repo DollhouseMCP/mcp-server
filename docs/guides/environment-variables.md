@@ -558,6 +558,8 @@ These variables configure the runtime identity and filesystem paths used by the 
 | `DOLLHOUSE_HOME_DIR` | `~` (os.homedir) | Override the home directory for telemetry and auth file storage. |
 | `DOLLHOUSE_CACHE_DIR` | _(auto)_ | Override the collection cache directory path. |
 | `DOLLHOUSE_OAUTH_HELPER` | _(none)_ | Override the OAuth helper binary path for GitHub authentication. |
+| `DOLLHOUSE_OAUTH_DEBUG` | `false` | Enable OAuth helper debug logging to `~/.dollhouse/oauth-helper.log`. |
+| `DOLLHOUSE_OAUTH_TOKEN_URL` | GitHub token endpoint | Override the OAuth device-flow token endpoint. Intended for local tests and diagnostics. |
 | `DOLLHOUSE_DEBUG` | _(none)_ | Enable extra debug output at server startup. When set, additional diagnostic info is logged. |
 
 ### Feature Flags
