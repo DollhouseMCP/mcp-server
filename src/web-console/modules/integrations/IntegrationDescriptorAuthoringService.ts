@@ -337,17 +337,21 @@ function parseStaticApiKeyBody(value: unknown): IntegrationStaticApiKeyDescripto
   const input = requireRecord(value, 'static_api_key');
   const injection = requireRecord(input.injection, 'static_api_key.injection');
   const location = injection.location;
-  if (location !== 'header' && location !== 'query') {
-    throw new DescriptorBodyError('static_api_key.injection.location must be header or query');
+  if (location !== 'header' && location !== 'query' && location !== 'basic') {
+    throw new DescriptorBodyError('static_api_key.injection.location must be header, query, or basic');
   }
   const valuePrefix = injection.value_prefix;
   if (valuePrefix !== undefined && valuePrefix !== null && typeof valuePrefix !== 'string') {
     throw new DescriptorBodyError('static_api_key.injection.value_prefix must be a string or null');
   }
+  // Basic owns its header; the name defaults so callers need only the location.
+  const name = location === 'basic' && injection.name === undefined
+    ? 'Authorization'
+    : requireString(injection.name, 'static_api_key.injection.name');
   return {
     injection: {
       location,
-      name: requireString(injection.name, 'static_api_key.injection.name'),
+      name,
       valuePrefix: typeof valuePrefix === 'string' ? valuePrefix : null,
     },
   };

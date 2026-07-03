@@ -50,7 +50,12 @@ export interface IntegrationOAuthDescriptor {
 
 export interface IntegrationStaticApiKeyDescriptor {
   readonly injection: {
-    readonly location: 'header' | 'query';
+    /**
+     * `basic` sends `Authorization: Basic base64(credential)` where the
+     * stored credential is `username:password`; name is fixed to
+     * `Authorization` and no valuePrefix applies.
+     */
+    readonly location: 'header' | 'query' | 'basic';
     readonly name: string;
     readonly valuePrefix: string | null;
   };
@@ -283,8 +288,18 @@ function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor): void {
 
 function validateStaticApiKeyDescriptor(staticApiKey: IntegrationStaticApiKeyDescriptor): void {
   const location: string = staticApiKey.injection.location;
-  if (location !== 'header' && location !== 'query') {
-    throw new ConsoleStoreValidationError('staticApiKey.injection.location must be header or query');
+  if (location !== 'header' && location !== 'query' && location !== 'basic') {
+    throw new ConsoleStoreValidationError('staticApiKey.injection.location must be header, query, or basic');
+  }
+  if (location === 'basic') {
+    // The Basic scheme owns the header and encoding; nothing is configurable.
+    if (staticApiKey.injection.name !== 'Authorization') {
+      throw new ConsoleStoreValidationError('basic injection name must be Authorization');
+    }
+    if (staticApiKey.injection.valuePrefix !== null) {
+      throw new ConsoleStoreValidationError('basic injection must not declare a valuePrefix');
+    }
+    return;
   }
   assertDisplayString(staticApiKey.injection.name, 'staticApiKey.injection.name', 120);
   assertNullableDisplayString(staticApiKey.injection.valuePrefix, 'staticApiKey.injection.valuePrefix', 40);

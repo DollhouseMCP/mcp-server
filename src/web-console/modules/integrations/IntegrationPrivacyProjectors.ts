@@ -150,11 +150,16 @@ function projectDescriptorStaticApiKey(value: unknown): IntegrationDescriptorSta
   const injection = asRecord((value as Record<string, unknown>).injection);
   return {
     injection: {
-      location: injection.location === 'query' ? 'query' : 'header',
+      location: injectionLocation(injection.location),
       name: stringField(injection, 'name'),
       value_prefix: nullableStringField(injection, 'value_prefix'),
     },
   };
+}
+
+function injectionLocation(value: unknown): 'header' | 'query' | 'basic' {
+  if (value === 'query' || value === 'basic') return value;
+  return 'header';
 }
 
 function descriptorOwnership(value: unknown): IntegrationDescriptorOwnership {

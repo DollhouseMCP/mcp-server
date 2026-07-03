@@ -28,6 +28,7 @@ const SELF_CAPABILITY = 'console:self';
 const MYCRM = 'mycrm';
 const CLIENT_SECRET = 'super-secret-client-credential';
 const DESCRIPTORS_PATH = '/api/v1/me/integrations/descriptors';
+const TWILIO_LIKE = 'twilio-like';
 
 function authenticatedContext(userId = USER_ID): NonNullable<ConsoleRequest['consoleAuthentication']> {
   return {
@@ -593,6 +594,42 @@ describe('IntegrationModule per-request provider routes', () => {
     expect(stored?.externalAccountLabel).toBe('alice@example.com');
     expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), integrationSecretContext('access_token', USER_ID, MYCRM)).toString('utf8'))
       .toBe('mycrm-access-token-secret');
+  });
+
+  it('captures Basic username/password credentials for basic-injection descriptors', async () => {
+    const { module, integrationStore, secretEncryption } = moduleFixture();
+    await authorDescriptor(module, staticKeyBody({
+      provider: TWILIO_LIKE,
+      static_api_key: { injection: { location: 'basic' } },
+    }));
+
+    const connect = findRoute(module.routes, '/api/v1/me/integrations/:provider/connect', 'POST');
+
+    // Missing password and colon-bearing usernames fail closed before storage.
+    await expect(connect.handler(consoleRequest({
+      params: { provider: TWILIO_LIKE },
+      body: { username: 'account-sid' },
+    }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_basic_credential' } });
+    await expect(connect.handler(consoleRequest({
+      params: { provider: TWILIO_LIKE },
+      body: { username: 'account:sid', password: 'secret' },
+    }))).resolves.toMatchObject({ status: 400, body: { code: 'invalid_basic_credential' } });
+
+    const connected = await connect.handler(consoleRequest({
+      params: { provider: TWILIO_LIKE },
+      body: { username: 'account-sid', password: 'auth-token-secret' },
+    }));
+    expect(connected).toMatchObject({
+      status: 200,
+      body: { provider: TWILIO_LIKE, status: 'connected', account_label: 'account-sid' },
+    });
+    expect(JSON.stringify(connected.body)).not.toContain('auth-token-secret');
+
+    const stored = await integrationStore.findByProvider(USER_ID, TWILIO_LIKE);
+    expect(secretEncryption.decrypt(
+      stored?.accessTokenCiphertext ?? Buffer.alloc(0),
+      integrationSecretContext('access_token', USER_ID, TWILIO_LIKE),
+    ).toString('utf8')).toBe('account-sid:auth-token-secret');
   });
 
   it('fails closed for BYO OAuth descriptors without a stored client secret', async () => {

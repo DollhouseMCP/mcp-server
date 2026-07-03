@@ -706,6 +706,32 @@ describe('InMemoryIntegrationDescriptorStore', () => {
       updatedAt: NOW,
     })).resolves.toMatchObject({ provider: 'airtable' });
   });
+
+  it('validates basic static-key injection: fixed Authorization header, no prefix', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const basicInput = (injection: { location: 'basic'; name: string; valuePrefix: string | null }) => ({
+      provider: 'twilio',
+      ownership: 'byo' as const,
+      ownerUserId: USER_ID,
+      displayName: 'Twilio',
+      category: 'messaging',
+      authStrategy: 'static_api_key' as const,
+      apiHosts: ['api.twilio.example'],
+      staticApiKey: { injection },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    await expect(store.upsert(basicInput({ location: 'basic', name: 'Authorization', valuePrefix: null })))
+      .resolves.toMatchObject({ staticApiKey: { injection: { location: 'basic' } } });
+    await expect(store.upsert(basicInput({ location: 'basic', name: 'X-Custom', valuePrefix: null })))
+      .rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(basicInput({ location: 'basic', name: 'Authorization', valuePrefix: 'Basic ' })))
+      .rejects.toThrow(ConsoleStoreValidationError);
+  });
 });
 
 describe('InMemoryIntegrationOpenApiSpecStore', () => {

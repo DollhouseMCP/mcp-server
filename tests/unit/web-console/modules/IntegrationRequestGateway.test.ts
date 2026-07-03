@@ -144,6 +144,37 @@ describe('IntegrationRequestGateway', () => {
     expect(JSON.stringify(result)).not.toContain('airtable-key');
   });
 
+  it('emits Authorization: Basic for basic-injection static credentials without leaking them', async () => {
+    const fetches: Array<{ url: string; init: RequestInit | undefined }> = [];
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'basic', name: 'Authorization', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('twilio-sid:twilio-secret', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: (url, init) => {
+        fetches.push({ url: urlString(url), init });
+        return Promise.resolve(jsonResponse(200, { records: [] }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/v0/app/table',
+    }));
+
+    const authorization = new Headers(fetches[0]?.init?.headers).get('Authorization');
+    expect(authorization).toBe(`Basic ${Buffer.from('twilio-sid:twilio-secret', 'utf8').toString('base64')}`);
+    // Neither the raw credential nor the query string carries the secret.
+    expect(fetches[0]?.url).toBe('https://api.airtable.com/v0/app/table');
+    expect(JSON.stringify(result)).not.toContain('twilio-secret');
+  });
+
   it('fails closed on disallowed method, host escape, oversized body, and rate limit', async () => {
     const gateway = gatewayFixture({
       fetch: () => Promise.resolve(jsonResponse(200, { ok: true })),

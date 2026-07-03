@@ -347,17 +347,19 @@ export class IntegrationService {
     deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
   ): Promise<ConsoleHandlerResult> {
     const { provider, secretEncryption } = deps;
-    const apiKey = readStaticApiKey(req.body);
-    if (!apiKey) return badRequest('invalid_static_api_key', 'A non-empty api_key is required.');
+    const captured = provider.staticApiKeyInjection?.location === 'basic'
+      ? readBasicCredential(req.body)
+      : readApiKeyCredential(req.body);
+    if ('error' in captured) return captured.error;
     const connectedAt = this.now();
     const record = await this.options.store.connect({
       userId: auth.userId,
       provider: provider.descriptor.id,
-      externalAccountLabel: readBodyAccountLabel(req.body),
+      externalAccountLabel: readBodyAccountLabel(req.body) ?? captured.defaultAccountLabel,
       externalInstallationId: null,
       authorizedPermissions: { scopes: [] },
       accessTokenCiphertext: secretEncryption.encrypt(
-        Buffer.from(apiKey, 'utf8'),
+        Buffer.from(captured.credential, 'utf8'),
         integrationSecretContext('access_token', auth.userId, provider.descriptor.id),
       ),
       refreshTokenCiphertext: null,
@@ -469,6 +471,39 @@ function readStaticApiKey(body: unknown): string | null {
   const value = record.api_key.trim();
   if (value.length === 0 || Buffer.byteLength(value, 'utf8') > 8192) return null;
   return value;
+}
+
+type CapturedStaticCredential =
+  | { readonly credential: string; readonly defaultAccountLabel: string | null }
+  | { readonly error: ConsoleHandlerResult };
+
+function readApiKeyCredential(body: unknown): CapturedStaticCredential {
+  const apiKey = readStaticApiKey(body);
+  if (!apiKey) return { error: badRequest('invalid_static_api_key', 'A non-empty api_key is required.') };
+  return { credential: apiKey, defaultAccountLabel: null };
+}
+
+/**
+ * Basic-injection providers capture the two-part credential and store it as
+ * `username:password` (RFC 7617); the gateway base64-encodes at injection
+ * time. The username must not contain `:` — it would shift the password
+ * boundary the upstream decodes.
+ */
+function readBasicCredential(body: unknown): CapturedStaticCredential {
+  const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
+  const username = typeof record.username === 'string' ? record.username.trim() : '';
+  const password = typeof record.password === 'string' ? record.password : '';
+  if (username.length === 0 || password.length === 0) {
+    return { error: badRequest('invalid_basic_credential', 'Non-empty username and password are required.') };
+  }
+  if (username.includes(':')) {
+    return { error: badRequest('invalid_basic_credential', 'username must not contain ":".') };
+  }
+  const credential = `${username}:${password}`;
+  if (Buffer.byteLength(credential, 'utf8') > 8192) {
+    return { error: badRequest('invalid_basic_credential', 'Credential is too large.') };
+  }
+  return { credential, defaultAccountLabel: username.slice(0, 200) };
 }
 
 function singleQueryValue(value: unknown): string | null {

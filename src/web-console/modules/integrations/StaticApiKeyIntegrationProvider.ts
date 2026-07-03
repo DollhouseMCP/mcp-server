@@ -14,6 +14,7 @@ export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'static_api_key';
+  readonly staticApiKeyInjection;
 
   constructor(private readonly record: IntegrationDescriptorRecord) {
     if (record.authStrategy !== 'static_api_key' || !record.staticApiKey) {
@@ -24,6 +25,7 @@ export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
       displayName: record.displayName,
       category: record.category,
     };
+    this.staticApiKeyInjection = record.staticApiKey.injection;
   }
 
   createAuthorizationUrl(_request: IntegrationAuthorizationRequest): string {

@@ -200,7 +200,7 @@ export interface IntegrationDescriptorOAuthDto {
 
 export interface IntegrationDescriptorStaticApiKeyDto {
   readonly injection: {
-    readonly location: 'header' | 'query';
+    readonly location: 'header' | 'query' | 'basic';
     readonly name: string;
     readonly value_prefix: string | null;
   };
