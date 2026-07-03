@@ -37,8 +37,11 @@ function createFileOperationsMock(): jest.Mocked<FileOperationsService> {
     deleteFile: jest.fn().mockImplementation(async (filePath: string) => {
       try {
         await fs.unlink(filePath);
-      } catch (error: any) {
-        if (error.code !== 'ENOENT') throw error;
+      } catch (error: unknown) {
+        const code = error instanceof Error && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (code !== 'ENOENT') throw error;
       }
     }),
     // Add other methods that might be needed (returning defaults)
@@ -210,7 +213,7 @@ describe('GitHubAuthHandler (DI)', () => {
   });
 
   describe('setupGitHubAuth helper orchestration', () => {
-    it('spawns helper and writes state file with device code details', async () => {
+    it('spawns helper and writes state file without persisting the device code', async () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-home-'));
       const originalHome = process.env.HOME;
       const originalUserProfile = process.env.USERPROFILE;
@@ -221,6 +224,9 @@ describe('GitHubAuthHandler (DI)', () => {
       const helperPath = path.join(tempHome, 'oauth-helper.mjs');
       await fs.writeFile(helperPath, 'console.log(\"helper\");', 'utf-8');
       process.env.DOLLHOUSE_OAUTH_HELPER = helperPath;
+      const staleResultFile = path.join(tempHome, '.dollhouse', '.auth', 'oauth-helper-result.json');
+      await fs.mkdir(path.dirname(staleResultFile), { recursive: true });
+      await fs.writeFile(staleResultFile, JSON.stringify({ status: 'failed' }), 'utf-8');
 
       const unref = jest.fn();
       const spawnSpy = jest.spyOn(handler as any, 'spawnHelperProcess').mockReturnValue({
@@ -247,8 +253,10 @@ describe('GitHubAuthHandler (DI)', () => {
 
       const stateFile = path.join(tempHome, '.dollhouse', '.auth', 'oauth-helper-state.json');
       const state = JSON.parse(await fs.readFile(stateFile, 'utf-8'));
-      expect(state.deviceCode).toBe('device-code');
+      expect(state.deviceCode).toBeUndefined();
+      expect(typeof state.flowId).toBe('string');
       expect(state.userCode).toBe('CODE-1234');
+      await expect(fs.access(staleResultFile)).rejects.toMatchObject({ code: 'ENOENT' });
 
       await fs.rm(tempHome, { recursive: true, force: true });
       delete process.env.DOLLHOUSE_OAUTH_HELPER;
@@ -295,7 +303,6 @@ describe('GitHubAuthHandler (DI)', () => {
           path.join(stateDir, 'oauth-helper-state.json'),
           JSON.stringify({
             pid: 9999,
-            deviceCode: 'device',
             userCode: 'STATE-9999',
             startTime: new Date().toISOString(),
             expiresAt
@@ -326,7 +333,6 @@ describe('GitHubAuthHandler (DI)', () => {
           path.join(stateDir, 'oauth-helper-state.json'),
           JSON.stringify({
             pid: 5555,
-            deviceCode: 'device',
             userCode: 'EXPIRED-1234',
             startTime: new Date(Date.now() - 3600_000).toISOString(),
             expiresAt: new Date(Date.now() - 60_000).toISOString()
@@ -343,6 +349,265 @@ describe('GitHubAuthHandler (DI)', () => {
         expect(response.content[0].text).toContain('Authentication Expired');
         expect(response.content[0].text).toContain('EXPIRED-1234');
         expect(response.content[0].text).toContain('ERROR polling failed');
+
+        const diagnostics = await handler.getOAuthHelperStatus();
+        const diagnosticsText = diagnostics.content[0].text;
+
+        expect(diagnosticsText).toContain('Run `setup_github_auth` to try again.');
+        expect(diagnosticsText).not.toContain('Run \nsetup_github_auth\n');
+      });
+    });
+
+    it('formats crashed-helper diagnostics with inline setup command text', async () => {
+      if (process.platform === 'win32') {
+        return;
+      }
+
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 9999,
+            userCode: 'CRASHED-9999',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => {
+          throw Object.assign(new Error('process not found'), { code: 'ESRCH' });
+        });
+
+        const diagnostics = await handler.getOAuthHelperStatus();
+        const diagnosticsText = diagnostics.content[0].text;
+
+        expect(diagnosticsText).toContain('Process appears to have stopped');
+        expect(diagnosticsText).toContain('You may need to run `setup_github_auth` again.');
+        expect(diagnosticsText).not.toContain('run \nsetup_github_auth\n');
+
+        killSpy.mockRestore();
+      });
+    });
+
+    it('reports terminal helper failure from result file without calling it active or crashed', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 7777,
+            userCode: 'FAILED-7777',
+            startTime: new Date(Date.now() - 10_000).toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'failed',
+            attempts: 2,
+            completedAt: new Date().toISOString(),
+            errorCode: 'token_storage_failed',
+            message: 'OAuth token could not be stored securely.'
+          }, null, 2),
+          'utf-8'
+        );
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('GitHub Authentication Failed');
+        expect(text).toContain('OAuth token could not be stored securely.');
+        expect(text).not.toContain('Authentication In Progress');
+        expect(text).not.toContain('may have crashed');
+
+        const diagnostics = await handler.getOAuthHelperStatus();
+        const diagnosticsText = diagnostics.content[0].text;
+
+        expect(diagnosticsText).toContain('FAILED');
+        expect(diagnosticsText).toContain('Attempts:** 2');
+        expect(diagnosticsText).not.toContain('ACTIVE - Authentication in progress');
+        expect(diagnosticsText).not.toContain('may have crashed');
+      });
+    });
+
+    it('ignores a stale helper result from an older OAuth flow while a newer flow is active', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 7777,
+            flowId: 'new-flow',
+            userCode: 'ACTIVE-7777',
+            startTime: new Date(Date.now() - 10_000).toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'failed',
+            flowId: 'old-flow',
+            pid: 1111,
+            attempts: 3,
+            completedAt: new Date().toISOString(),
+            errorCode: 'expired_token',
+            message: 'The previous GitHub authentication request expired.'
+          }, null, 2),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => undefined as any);
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Authentication In Progress');
+        expect(text).toContain('ACTIVE-7777');
+        expect(text).not.toContain('GitHub Authentication Failed');
+        expect(text).not.toContain('previous GitHub authentication request expired');
+
+        killSpy.mockRestore();
+      });
+    });
+
+    it('ignores malformed helper result JSON without throwing or leaking raw content', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(path.join(stateDir, 'oauth-helper-result.json'), '{not-json', 'utf-8');
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Not Connected to GitHub');
+        expect(text).not.toContain('{not-json');
+      });
+    });
+
+    it('ignores malformed helper state JSON without checking an invalid process id', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: -1,
+            userCode: 'BAD-PID',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => undefined as any);
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Not Connected to GitHub');
+        expect(text).not.toContain('BAD-PID');
+        expect(killSpy).not.toHaveBeenCalled();
+
+        killSpy.mockRestore();
+      });
+    });
+
+    it('treats EPERM during helper process checks as alive', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 9999,
+            userCode: 'EPERM-9999',
+            startTime: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+
+        const killSpy = jest.spyOn(process, 'kill').mockImplementation(() => {
+          throw Object.assign(new Error('permission denied'), { code: 'EPERM' });
+        });
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false } as any);
+        const response = await handler.checkGitHubAuth();
+
+        expect(response.content[0].text).toContain('Authentication In Progress');
+        expect(response.content[0].text).toContain('Process Status:** ✅ Running');
+
+        killSpy.mockRestore();
+      });
+    });
+
+    it('sanitizes helper result messages before rendering them', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-state.json'),
+          JSON.stringify({
+            pid: 8888,
+            userCode: 'FAILED-8888',
+            startTime: new Date(Date.now() - 10_000).toISOString(),
+            expiresAt: new Date(Date.now() + 120_000).toISOString()
+          }, null, 2),
+          'utf-8'
+        );
+        await fs.writeFile(
+          path.join(stateDir, 'oauth-helper-result.json'),
+          JSON.stringify({
+            status: 'failed',
+            attempts: 1,
+            completedAt: new Date().toISOString(),
+            errorCode: 'fatal_error',
+            message: `Bad\u0000message ${'x'.repeat(700)}`
+          }, null, 2),
+          'utf-8'
+        );
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Bad message');
+        expect(text).not.toContain('\u0000');
+        expect(text).not.toContain('x'.repeat(600));
+      });
+    });
+
+    it('removes stale plaintext pending-token fallback files before reporting disconnected status', async () => {
+      await withTempHome(async (homeDir) => {
+        const stateDir = path.join(homeDir, '.dollhouse', '.auth');
+        const pendingToken = path.join(stateDir, 'pending_token.txt');
+        await fs.mkdir(stateDir, { recursive: true });
+        await fs.writeFile(pendingToken, 'gho_stale_plaintext_token_from_old_flow', { mode: 0o600 });
+
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false, hasToken: false } as any);
+
+        const response = await handler.checkGitHubAuth();
+        const text = response.content[0].text;
+
+        expect(text).toContain('Not Connected to GitHub');
+        expect(text).toContain('stale plaintext OAuth fallback file from an earlier failed flow was removed');
+        await expect(fs.access(pendingToken)).rejects.toMatchObject({ code: 'ENOENT' });
       });
     });
   });
