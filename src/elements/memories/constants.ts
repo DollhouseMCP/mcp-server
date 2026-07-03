@@ -56,7 +56,7 @@ export const MEMORY_CONSTANTS = {
    * - 1MB: Parse time ~50-100ms (acceptable but not ideal)
    * - >5MB: Parse time >500ms (unacceptable, blocks UI)
    */
-  MAX_YAML_SIZE: 256 * 1024,           // 256KB max YAML size for import
+  MAX_YAML_SIZE: 256 * 1024,           // 256KB max serialized memory YAML — enforced on save, load, import, and index extraction (#2329)
 
   /**
    * Privacy Level Hierarchy:

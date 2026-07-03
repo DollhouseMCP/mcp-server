@@ -41,6 +41,7 @@ import { ElementStorageLayer } from '../../storage/ElementStorageLayer.js';
 import type { IStorageLayer } from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
+import { MEMORY_CONSTANTS } from '../memories/constants.js';
 import {
   getValidatedScanCooldown,
   getValidatedElementCacheTTL,
@@ -602,7 +603,10 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         );
       }
     } else if (this.elementType === ElementType.MEMORY) {
-      const rawYaml = SecureYamlParser.parseRawYaml(content, SECURITY_LIMITS.MAX_YAML_LENGTH);
+      // Issue #2329: memories are whole pure-YAML documents capped at MAX_YAML_SIZE
+      // (256KB) on save and load — MAX_YAML_LENGTH (64KB) is a frontmatter limit
+      // and rejected every save of a memory that grew past it.
+      const rawYaml = SecureYamlParser.parseRawYaml(content, MEMORY_CONSTANTS.MAX_YAML_SIZE);
       validateGatekeeperMetadata(rawYaml, 'YAML root');
       if (rawYaml.metadata && typeof rawYaml.metadata === 'object' && !Array.isArray(rawYaml.metadata)) {
         validateGatekeeperMetadata(rawYaml.metadata as Record<string, unknown>, 'metadata');

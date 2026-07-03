@@ -145,7 +145,9 @@ payload: !!js/function "function () { return process.env; }"
     });
 
     it('should fail closed for oversized YAML input', () => {
-      const hugeValue = 'a'.repeat(70 * 1024);
+      // Issue #2329: the cap is MAX_YAML_SIZE (256KB, matching save/load) — a
+      // 70KB memory is legitimate and must extract; past 256KB fails closed.
+      const hugeValue = 'a'.repeat(280 * 1024);
       const raw = `
 name: Oversized
 description: ${hugeValue}
@@ -310,6 +312,30 @@ tags:
       expect(result.description).toBe('Session for café notes');
       expect(result.author).toBe('José');
       expect(result.tags).toEqual(['café', 'notes']);
+    });
+
+    it('should extract metadata from memory files larger than 64KB (#2329)', () => {
+      // Memories up to MAX_YAML_SIZE (256KB) are valid on disk; the extractor
+      // previously capped at 64KB and indexed such files as 'unnamed'.
+      const bigEntry = 'research finding lorem ipsum dolor sit amet '.repeat(400);
+      const entries = Array.from({ length: 6 }, (_, i) =>
+        `  - content: "entry-${i} ${bigEntry}"`
+      ).join('\n');
+      const raw = `
+metadata:
+  name: Large Memory
+  description: Grown past the old 64KB extractor cap
+  version: 1.0.0
+entries:
+${entries}
+`;
+      expect(raw.length).toBeGreaterThan(64 * 1024);
+
+      const result = MemoryMetadataExtractor.extractMetadata(raw, 'large.yml');
+
+      expect(result.name).toBe('Large Memory');
+      expect(result.description).toBe('Grown past the old 64KB extractor cap');
+      expect(result.totalEntries).toBe(6);
     });
   });
 
