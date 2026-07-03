@@ -82,9 +82,13 @@ describe('MCPAQLHandler', () => {
         find: jest.fn().mockResolvedValue({
           metadata: { name: TEST_MEMORY_NAME },
           addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
+          removeEntry: jest.fn().mockReturnValue(true),
+          getEntries: jest.fn().mockReturnValue(new Map()),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
         }),
         save: jest.fn().mockResolvedValue(undefined),
+        // Issue #2329: addEntry pre-flights persistence before reporting success
+        assertPersistable: jest.fn().mockResolvedValue(undefined),
       },
       agentManager: {
         executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
@@ -1644,9 +1648,13 @@ describe('MCPAQLHandler', () => {
           find: jest.fn().mockResolvedValue({
             metadata: { name: TEST_MEMORY_NAME },
             addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
+            removeEntry: jest.fn().mockReturnValue(true),
+            getEntries: jest.fn().mockReturnValue(new Map()),
             clearAll: jest.fn().mockResolvedValue({ cleared: true }),
           }),
           save: jest.fn().mockResolvedValue(undefined),
+          // Issue #2329: addEntry pre-flights persistence before reporting success
+          assertPersistable: jest.fn().mockResolvedValue(undefined),
         },
         agentManager: {
           executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
