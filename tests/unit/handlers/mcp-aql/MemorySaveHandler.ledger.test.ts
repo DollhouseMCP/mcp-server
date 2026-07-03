@@ -34,7 +34,8 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
     find: jest.Mock;
     save: jest.Mock;
     assertPersistable: jest.Mock;
-    isMemoryDeleted: jest.Mock;
+    isMemoryDeletedAt: jest.Mock;
+    getMemoryProbeToken: jest.Mock;
   };
   let handler: MemorySaveHandler;
 
@@ -44,7 +45,8 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
       find: jest.fn(async () => memory),
       save: jest.fn(async () => undefined),
       assertPersistable: jest.fn(async () => undefined),
-      isMemoryDeleted: jest.fn(async () => false),
+      isMemoryDeletedAt: jest.fn(async () => false),
+      getMemoryProbeToken: jest.fn(() => '/portfolio/users/a/memories/doomed-memory.yaml'),
     };
     handler = new MemorySaveHandler(
       { memoryManager: manager } as unknown as HandlerRegistry,
@@ -63,11 +65,17 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
   it('drops the ledger entry instead of retrying when deletion is storage-confirmed', async () => {
     await seedFailedSave();
 
+    // Codex P1 (PR #2337): the probe target must have been resolved when the
+    // failure was RECORDED (session context live), not at retry time — and the
+    // retry must probe that captured token.
+    expect(manager.getMemoryProbeToken).toHaveBeenCalledWith(memory);
+
     // Another session (same portfolio) deleted the memory: storage confirms ENOENT.
-    manager.isMemoryDeleted.mockResolvedValue(true);
+    manager.isMemoryDeletedAt.mockResolvedValue(true);
     manager.save.mockClear();
 
     await handler.flushPendingSaves();
+    expect(manager.isMemoryDeletedAt).toHaveBeenCalledWith('/portfolio/users/a/memories/doomed-memory.yaml');
     // No resurrection: the retained instance must NOT be re-saved.
     expect(manager.save).not.toHaveBeenCalled();
 
@@ -92,7 +100,7 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
 
   it('fails closed and retries when the deletion probe throws (Codex P1: transient lookup failures must not drop the last copy)', async () => {
     await seedFailedSave();
-    manager.isMemoryDeleted.mockRejectedValue(new Error('transient storage read failure'));
+    manager.isMemoryDeletedAt.mockRejectedValue(new Error('transient storage read failure'));
     manager.save.mockClear();
 
     await handler.flushPendingSaves();
@@ -102,7 +110,7 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
 
   it('applies the same guard during session cleanup', async () => {
     await seedFailedSave();
-    manager.isMemoryDeleted.mockResolvedValue(true);
+    manager.isMemoryDeletedAt.mockResolvedValue(true);
     manager.save.mockClear();
 
     handler.cleanupSession('session-a');

@@ -18,11 +18,17 @@ interface PendingSave {
  * exist only in that instance, so recovery must retry it (a freshly loaded
  * instance would lack them), and holding the reference keeps it alive across
  * cache eviction.
+ *
+ * probeToken (Codex P1, PR #2337): the deletion-probe target resolved at
+ * record time, while the owning session's path context is still live. Probing
+ * via live resolution during dispose/cleanup would fall back to the flat
+ * portfolio dir in per-user HTTP mode and misread a live memory as deleted.
  */
 interface FailedSave {
   error: Error;
   memory: Memory;
   manager: MemoryManager;
+  probeToken: string | null;
 }
 
 interface SaveFrequencyCounter {
@@ -157,7 +163,7 @@ export class MemorySaveHandler {
   ): Promise<boolean> {
     let confirmedDeleted = false;
     try {
-      confirmedDeleted = await entry.manager.isMemoryDeleted(entry.memory);
+      confirmedDeleted = await entry.manager.isMemoryDeletedAt(entry.probeToken);
     } catch (probeErr) {
       logger.warn(`[MCPAQLHandler] ${context}: could not confirm whether memory '${key}' still exists (${probeErr instanceof Error ? probeErr.message : probeErr}); failing closed and retrying the save`);
     }
@@ -262,6 +268,10 @@ export class MemorySaveHandler {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
           manager,
+          // Codex P1 (PR #2337): resolve the deletion-probe target NOW, while
+          // the owning session's path context is live — dispose-time
+          // resolution can point at the wrong portfolio in per-user mode.
+          probeToken: manager.getMemoryProbeToken(memory),
         });
       }
       throw err;

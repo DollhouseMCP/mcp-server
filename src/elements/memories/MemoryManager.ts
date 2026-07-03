@@ -685,6 +685,24 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /**
+   * Issue #2329 (Codex P1s, PR #2337): resolve a context-independent probe
+   * token for later deletion checks. MUST be called while the owning session's
+   * context is still live: `memoriesDir` is a dynamic getter that routes to the
+   * per-user portfolio only when a session context is active, so a path
+   * resolved at probe time (e.g. during dispose/cleanup) could point at the
+   * wrong portfolio and produce a false "deleted" verdict.
+   *
+   * Returns the element UUID in DB mode, the absolute file path in file mode,
+   * or null for a memory that was never persisted.
+   */
+  getMemoryProbeToken(element: Memory): string | null {
+    const persistedPath = element.getFilePath();
+    if (!persistedPath) return null;
+    if (isWritableStorageLayer(this.storageLayer)) return persistedPath;
+    return path.join(this.memoriesDir, persistedPath);
+  }
+
+  /**
    * Issue #2329 (Codex P1, PR #2337): positive deletion check for failure-ledger
    * retries. Returns true ONLY when the storage layer confirms absence (ENOENT);
    * transient lookup failures THROW so callers can fail closed — retry the save —
@@ -692,23 +710,23 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * deliberately not find(): find() swallows storage errors into an empty list,
    * which conflates "deleted" with "lookup failed".
    *
-   * A memory with no persisted path was never saved and returns false — the
+   * A null token means the memory was never persisted and returns false — the
    * retry IS its first persist.
    */
-  async isMemoryDeleted(element: Memory): Promise<boolean> {
-    const persistedPath = element.getFilePath();
-    if (!persistedPath) return false;
+  async isMemoryDeletedAt(probeToken: string | null): Promise<boolean> {
+    if (!probeToken) return false;
 
     try {
       if (isWritableStorageLayer(this.storageLayer)) {
-        // DB mode: persistedPath is the element UUID. readContent throws
+        // DB mode: the token is the element UUID. readContent throws
         // code='ENOENT' for a missing row; query/connection failures throw
         // other errors and propagate.
-        await this.storageLayer.readContent(persistedPath);
+        await this.storageLayer.readContent(probeToken);
       } else {
-        // File mode: persistedPath is relative to memoriesDir. fs.stat throws
-        // code='ENOENT' for a missing file; other I/O errors propagate.
-        await fs.stat(path.join(this.memoriesDir, persistedPath));
+        // File mode: the token is an absolute path captured under the owning
+        // session's context. fs.stat throws code='ENOENT' for a missing file;
+        // other I/O errors propagate.
+        await fs.stat(probeToken);
       }
       return false;
     } catch (err) {
