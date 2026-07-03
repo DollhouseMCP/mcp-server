@@ -1639,6 +1639,10 @@ export class MCPAQLHandler {
       await manager.save(memory);
       if (this.memorySaveAttempts.get(key) === attempt) {
         this.failedMemorySaves.delete(key);
+        // Prune the counter on latest-success so the map stays bounded by
+        // currently-failing memories. A stale in-flight save then sees
+        // undefined !== its attempt and correctly skips ledger updates.
+        this.memorySaveAttempts.delete(key);
       }
     } catch (err) {
       if (this.memorySaveAttempts.get(key) === attempt) {
@@ -1904,7 +1908,7 @@ export class MCPAQLHandler {
           this.pendingSaves.delete(clearKey);
         }
         // Memory.clearAll(confirm) - requires explicit confirmation
-        const clearResult = memory.clearAll(true);
+        const clearResult = await memory.clearAll(true);
         // Fix #438: Persist to disk so cleared state survives restart.
         // Tracked so a success clears any stale failure record for this memory.
         await this.saveMemoryTracked(clearKey, memory, manager);
