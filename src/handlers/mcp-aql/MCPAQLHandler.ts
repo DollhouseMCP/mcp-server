@@ -562,6 +562,13 @@ export class MCPAQLHandler {
   /** Issue #656: Debounce metrics — tracks saves coalesced vs actually written. */
   private readonly debounceMetrics = { coalesced: 0, written: 0 };
   /**
+   * Issue #2329: Memories whose most recent deferred save failed.
+   * Key: normalized memory name, Value: the failure. The next addEntry on that
+   * memory retries the save synchronously and reports the error to the caller
+   * instead of silently accepting more entries that would also be lost.
+   */
+  private readonly failedMemorySaves = new Map<string, Error>();
+  /**
    * Issue #657: Per-memory save frequency tracker.
    * Sliding window counter: tracks addEntry calls per memory within the monitor window.
    * Logs warnings at configurable thresholds to catch runaway loops early.
@@ -1611,7 +1618,12 @@ export class MCPAQLHandler {
       this.pendingSaves.delete(key);
       this.debounceMetrics.written++;
       logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
-      manager.save(memory).catch((err) => {
+      manager.save(memory).then(() => {
+        this.failedMemorySaves.delete(key);
+      }).catch((err) => {
+        // Issue #2329: record the failure so the next addEntry on this memory can
+        // surface it to the caller — a log line alone means silent data loss.
+        this.failedMemorySaves.set(key, err instanceof Error ? err : new Error(String(err)));
         logger.error(`[MCPAQLHandler] Debounced save failed for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written}): ${err}`);
       });
     }, debounceMs);
@@ -1711,7 +1723,10 @@ export class MCPAQLHandler {
       try {
         await manager.save(memory);
         this.debounceMetrics.written++;
+        this.failedMemorySaves.delete(key);
       } catch (err) {
+        // Issue #2329: record the failure so later operations can surface it.
+        this.failedMemorySaves.set(key, err instanceof Error ? err : new Error(String(err)));
         const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
         logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' (entries: ${entryCount}, pending remaining: ${pending.length}): ${err}`);
       }
@@ -1759,7 +1774,41 @@ export class MCPAQLHandler {
         const content = params.content as string;
         const tags = params.tags as string[] | undefined;
         const metadata = params.metadata as Record<string, unknown> | undefined;
-        const entryResult = memory.addEntry(content, tags, metadata);
+
+        // Issue #2329: if a previous deferred save for this memory failed (e.g.
+        // disk error), recover before accepting more entries — otherwise they
+        // pile up in RAM behind the same failure and are lost on restart.
+        const saveKey = memoryName.toLowerCase();
+        const priorFailure = this.failedMemorySaves.get(saveKey);
+        if (priorFailure) {
+          try {
+            await manager.save(memory);
+            this.failedMemorySaves.delete(saveKey);
+          } catch (retryErr) {
+            throw new Error(
+              `Entry NOT saved: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
+              `(${priorFailure.message}) and the retry also failed: ` +
+              `${retryErr instanceof Error ? retryErr.message : retryErr}`
+            );
+          }
+        }
+
+        const entryResult = await memory.addEntry(content, tags, metadata);
+
+        // Issue #2329: verify the memory can still be persisted BEFORE reporting
+        // success. The disk write below is deferred (debounced), so a validation
+        // failure there can never reach the caller — entries were acknowledged
+        // with an id and then silently lost when the memory outgrew save limits.
+        try {
+          await manager.assertPersistable(memory);
+        } catch (validationErr) {
+          memory.removeEntry(entryResult.id);
+          throw new Error(
+            `Entry NOT saved to memory '${memoryName}': ` +
+            `${validationErr instanceof Error ? validationErr.message : validationErr}`
+          );
+        }
+
         // Issue #657: Track save frequency and alert on anomalous patterns.
         this.trackSaveFrequency(memoryName);
         // Issue #656: Debounce saves to prevent FD exhaustion from rapid addEntry calls.

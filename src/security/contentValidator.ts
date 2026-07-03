@@ -561,15 +561,22 @@ export class ContentValidator {
   /**
    * Validates YAML frontmatter for malicious content
    * SECURITY FIX #364: Added YAML bomb detection to prevent denial of service
+   *
+   * @param yamlContent - YAML string to validate
+   * @param maxLength - Size cap for the content. Defaults to MAX_YAML_LENGTH (64KB,
+   *   the frontmatter limit). Callers validating whole pure-YAML documents (e.g.
+   *   memory files, capped at 256KB — issue #2329) must pass their own limit.
+   *   Must not exceed MAX_CONTENT_LENGTH (500KB) or the MALICIOUS_YAML_PATTERNS
+   *   scan below would reject the content on size instead.
    */
-  static validateYamlContent(yamlContent: string): boolean {
+  static validateYamlContent(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
     // Length validation before pattern matching
-    if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+    if (yamlContent.length > maxLength) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'HIGH',
         source: 'yaml_validation',
-        details: `YAML content exceeds maximum length: ${yamlContent.length} > ${SECURITY_LIMITS.MAX_YAML_LENGTH}`
+        details: `YAML content exceeds maximum length: ${yamlContent.length} > ${maxLength}`
       });
       return false;
     }
@@ -580,7 +587,7 @@ export class ContentValidator {
       // Use RegexValidator to safely check patterns with timeout protection
       // This prevents ReDoS attacks from maliciously crafted YAML
       const isMatch = RegexValidator.validate(yamlContent, pattern, {
-        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+        maxLength,
         rejectDangerousPatterns: false, // Our patterns are trusted
         logEvents: false // We handle logging ourselves
       });
