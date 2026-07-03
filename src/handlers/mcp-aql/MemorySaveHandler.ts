@@ -136,25 +136,32 @@ export class MemorySaveHandler {
   }
 
   /**
-   * Issue #2329 (Codex review, PR #2336): retry a failure-ledger entry only if
-   * the memory still exists — another session sharing the same portfolio may
-   * have deleted it, and re-saving the retained instance would resurrect the
-   * deleted memory. The existence check goes through the entry's OWN manager,
-   * so in multi-user mode it resolves against the correct user's portfolio.
+   * Issue #2329 (Codex review, PR #2336): retry a failure-ledger entry unless
+   * the memory is POSITIVELY confirmed deleted — another session sharing the
+   * same portfolio may have deleted it, and re-saving the retained instance
+   * would resurrect the deleted memory. The check goes through the entry's OWN
+   * manager, so in multi-user mode it resolves against the correct portfolio.
+   *
+   * Codex P1 (PR #2337): the check must fail closed. isMemoryDeleted() returns
+   * true only on a storage-confirmed ENOENT and throws on transient lookup
+   * failures; on any ambiguity we RETRY rather than drop — the ledger holds the
+   * last in-RAM copy of unpersisted entries, and dropping it on a transient
+   * read blip would be exactly the silent loss #2329 eliminated. The worst case
+   * of retrying under ambiguity is resurrecting a deleted memory, which is
+   * recoverable; dropped entries are not.
    */
   private async retryLedgerEntryIfAlive(
     key: string,
     entry: FailedSave,
     context: string,
   ): Promise<boolean> {
-    const memoryName = entry.memory.metadata.name;
-    let exists = true;
+    let confirmedDeleted = false;
     try {
-      exists = await entry.manager.find(m => m.metadata.name === memoryName) !== undefined;
-    } catch {
-      // Lookup failure must not drop data — proceed and let the save decide.
+      confirmedDeleted = await entry.manager.isMemoryDeleted(entry.memory);
+    } catch (probeErr) {
+      logger.warn(`[MCPAQLHandler] ${context}: could not confirm whether memory '${key}' still exists (${probeErr instanceof Error ? probeErr.message : probeErr}); failing closed and retrying the save`);
     }
-    if (!exists) {
+    if (confirmedDeleted) {
       logger.info(`[MCPAQLHandler] ${context}: memory '${key}' was deleted; dropping failed-save ledger entry instead of retrying`);
       this.failedMemorySaves.delete(key);
       this.memorySaveAttempts.delete(key);

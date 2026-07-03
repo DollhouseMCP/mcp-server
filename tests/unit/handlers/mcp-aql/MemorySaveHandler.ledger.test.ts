@@ -1,13 +1,17 @@
 /**
  * Unit tests for MemorySaveHandler's failure-ledger retry guard (#2329,
- * Codex review on PR #2336).
+ * Codex review on PR #2336, hardened per Codex P1 on PR #2337).
  *
  * The ledger retains the failing Memory instance so recovery can re-save the
  * exact state that was lost. But bookkeeping keys are session-scoped: if a
  * DIFFERENT session (sharing the same portfolio) deletes the memory, this
  * session's ledger entry survives — and a blind retry at flush would re-save
- * the retained instance, resurrecting the deleted memory. Every ledger retry
- * must therefore re-check existence through the entry's own manager first.
+ * the retained instance, resurrecting the deleted memory.
+ *
+ * The guard must fail closed (Codex P1): the ledger holds the LAST copy of
+ * unpersisted entries, so it is dropped only on a storage-confirmed deletion
+ * (manager.isMemoryDeleted() === true). Ambiguous lookups (probe throws)
+ * retry the save rather than drop.
  */
 
 import { describe, it, expect, jest, beforeEach } from '@jest/globals';
@@ -26,7 +30,12 @@ function makeMemory(name: string) {
 
 describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
   let memory: ReturnType<typeof makeMemory>;
-  let manager: { find: jest.Mock; save: jest.Mock; assertPersistable: jest.Mock };
+  let manager: {
+    find: jest.Mock;
+    save: jest.Mock;
+    assertPersistable: jest.Mock;
+    isMemoryDeleted: jest.Mock;
+  };
   let handler: MemorySaveHandler;
 
   beforeEach(() => {
@@ -35,6 +44,7 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
       find: jest.fn(async () => memory),
       save: jest.fn(async () => undefined),
       assertPersistable: jest.fn(async () => undefined),
+      isMemoryDeleted: jest.fn(async () => false),
     };
     handler = new MemorySaveHandler(
       { memoryManager: manager } as unknown as HandlerRegistry,
@@ -50,11 +60,11 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
     expect(manager.save).toHaveBeenCalledTimes(1);
   }
 
-  it('drops the ledger entry instead of retrying when the memory no longer exists', async () => {
+  it('drops the ledger entry instead of retrying when deletion is storage-confirmed', async () => {
     await seedFailedSave();
 
-    // Another session (same portfolio) deleted the memory: find() now misses.
-    manager.find.mockResolvedValue(undefined);
+    // Another session (same portfolio) deleted the memory: storage confirms ENOENT.
+    manager.isMemoryDeleted.mockResolvedValue(true);
     manager.save.mockClear();
 
     await handler.flushPendingSaves();
@@ -80,18 +90,19 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
     expect(manager.save).not.toHaveBeenCalled();
   });
 
-  it('still retries when the existence check itself fails (lookup errors must not drop data)', async () => {
+  it('fails closed and retries when the deletion probe throws (Codex P1: transient lookup failures must not drop the last copy)', async () => {
     await seedFailedSave();
-    manager.find.mockRejectedValue(new Error('transient index failure'));
+    manager.isMemoryDeleted.mockRejectedValue(new Error('transient storage read failure'));
     manager.save.mockClear();
 
     await handler.flushPendingSaves();
     expect(manager.save).toHaveBeenCalledTimes(1);
+    expect(manager.save).toHaveBeenCalledWith(memory);
   });
 
   it('applies the same guard during session cleanup', async () => {
     await seedFailedSave();
-    manager.find.mockResolvedValue(undefined);
+    manager.isMemoryDeleted.mockResolvedValue(true);
     manager.save.mockClear();
 
     handler.cleanupSession('session-a');

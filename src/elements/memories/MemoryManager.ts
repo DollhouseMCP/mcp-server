@@ -40,6 +40,7 @@ import { ValidationService } from '../../services/validation/ValidationService.j
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
 import * as path from 'path';
+import * as fs from 'node:fs/promises';
 import * as crypto from 'crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -681,6 +682,39 @@ export class MemoryManager extends BaseElementManager<Memory> {
   async assertPersistable(element: Memory): Promise<void> {
     const yamlContent = await this.serializeElement(element);
     this.validateSerializedContent(yamlContent);
+  }
+
+  /**
+   * Issue #2329 (Codex P1, PR #2337): positive deletion check for failure-ledger
+   * retries. Returns true ONLY when the storage layer confirms absence (ENOENT);
+   * transient lookup failures THROW so callers can fail closed — retry the save —
+   * instead of dropping the last in-RAM copy of unpersisted entries. This is
+   * deliberately not find(): find() swallows storage errors into an empty list,
+   * which conflates "deleted" with "lookup failed".
+   *
+   * A memory with no persisted path was never saved and returns false — the
+   * retry IS its first persist.
+   */
+  async isMemoryDeleted(element: Memory): Promise<boolean> {
+    const persistedPath = element.getFilePath();
+    if (!persistedPath) return false;
+
+    try {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        // DB mode: persistedPath is the element UUID. readContent throws
+        // code='ENOENT' for a missing row; query/connection failures throw
+        // other errors and propagate.
+        await this.storageLayer.readContent(persistedPath);
+      } else {
+        // File mode: persistedPath is relative to memoriesDir. fs.stat throws
+        // code='ENOENT' for a missing file; other I/O errors propagate.
+        await fs.stat(path.join(this.memoriesDir, persistedPath));
+      }
+      return false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return true;
+      throw err;
+    }
   }
 
   /**
