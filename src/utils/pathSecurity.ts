@@ -13,6 +13,15 @@ function isMissingPathError(error: unknown): boolean {
  * nothing up to the filesystem root exists. Used to vet paths that will be
  * created later: their containment depends on the directory they will be
  * created inside.
+ *
+ * KNOWN LIMIT (#2344): this stops at the first ancestor lstat can see, and
+ * lstat resolves intermediate symlinks — so a symlink whose target already
+ * contains a matching subdirectory is reported as a plain directory and the
+ * symlink component itself is never inspected. Walking every lexical ancestor
+ * instead is not an option: system symlinks (macOS /tmp -> /private/tmp,
+ * /var -> /private/var) sit above every temp path and would false-positive.
+ * Full protection needs a caller-known boundary, which is exactly what
+ * vetOutputBase() provides — see the contract note on resolvePathWithinBase.
  */
 function nearestExistingAncestorStats(startPath: string): fs.Stats | null {
   let previous = startPath;
@@ -80,6 +89,14 @@ function assertNoSymlinkedDescendants(resolvedBase: string, resolvedTarget: stri
  * exist yet is vetted through its nearest existing ancestor: if that ancestor
  * is a symlink, the recursive mkdir/write that follows would be redirected
  * outside the intended tree, so it is rejected too (#2342).
+ *
+ * CONTRACT (#2344): the base's own ancestry can only be best-effort vetted
+ * here — a symlink whose target pre-contains matching subdirectories is not
+ * detectable without a caller-known boundary (see nearestExistingAncestorStats
+ * for why walking every ancestor false-positives on system symlinks). Do NOT
+ * pass user-controlled base paths directly to this function: vet them first
+ * with vetOutputBase(), which contains them canonically against an anchor and
+ * returns the canonical base to use here. Every current caller does this.
  */
 export function resolvePathWithinBase(baseDir: string, ...segments: string[]): string {
   if (!baseDir || typeof baseDir !== 'string') {
