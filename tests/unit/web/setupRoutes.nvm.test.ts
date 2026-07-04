@@ -689,6 +689,9 @@ describe('repairNvmLauncherOnStartup', () => {
 
 describe('repairNvmLauncherOnStartup — #2338 self-heal acceptance matrix', () => {
   it('Row 1: no NVM + config points at a dead wrapper → restores command to npx (args preserved)', async () => {
+    // repairNvmLauncherOnStartup (and the whole NVM mitigation) is macOS/Linux
+    // only — on win32 it returns before self-heal, so the heal cannot happen.
+    if (isWindows) return;
     // tempDir has NO .nvm — this machine has no NVM installed.
     const deadWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'); // never created
     const configPath = join(tempDir, 'claude.json');
