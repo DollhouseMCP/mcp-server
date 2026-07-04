@@ -1,5 +1,11 @@
 # Changelog
 
+## [2.0.37] - 2026-07-04
+
+- Fix MCP client configs (Claude Desktop, Cursor, Windsurf, LM Studio, Gemini CLI, VS Code, Cline) left pointing at a dead NVM launcher wrapper: the server now self-heals broken entries on startup — restoring bare `npx` when NVM is absent, or regenerating the real wrapper when NVM is present — and refuses to ever persist a temp-directory wrapper into a client config. Also isolates the test suite so it can no longer write to real client configs. (#2338, #2339)
+- Harden path containment to reject symlink-based escapes from allowed directories, and preserve element metadata and base-path handling through edit operations. (#2334)
+- Tighten content validator input-length checks and make ensemble element updates explicit. (#2334)
+
 ## [2.0.36] - 2026-07-03
 
 - Fix silent memory data loss: `addEntry` reported success while entries were never persisted when a memory's serialized YAML exceeded 64KB. Saves now persist correctly and surface errors instead of failing silently. (#2329, #2330, #2332)
