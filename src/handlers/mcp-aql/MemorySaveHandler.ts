@@ -18,11 +18,17 @@ interface PendingSave {
  * exist only in that instance, so recovery must retry it (a freshly loaded
  * instance would lack them), and holding the reference keeps it alive across
  * cache eviction.
+ *
+ * probeToken (Codex P1, PR #2337): the deletion-probe target resolved at
+ * record time, while the owning session's path context is still live. Probing
+ * via live resolution during dispose/cleanup would fall back to the flat
+ * portfolio dir in per-user HTTP mode and misread a live memory as deleted.
  */
 interface FailedSave {
   error: Error;
   memory: Memory;
   manager: MemoryManager;
+  probeToken: string | null;
 }
 
 interface SaveFrequencyCounter {
@@ -98,9 +104,7 @@ export class MemorySaveHandler {
     }
     for (const [key, entry] of this.failedMemorySaves) {
       if (key.startsWith(prefix) && !this.pendingSaves.has(key)) {
-        this.saveMemoryTracked(key, entry.memory, entry.manager).catch((err) => {
-          logger.error(`[MCPAQLHandler] Session-cleanup retry failed for memory '${key}' — unpersisted entries will be lost: ${err}`);
-        }).finally(() => {
+        this.retryLedgerEntryIfAlive(key, entry, 'Session-cleanup').finally(() => {
           // Session is gone either way — release the retained instance.
           this.failedMemorySaves.delete(key);
           this.memorySaveAttempts.delete(key);
@@ -116,6 +120,14 @@ export class MemorySaveHandler {
    * and the flush/retry paths re-save it, resurrecting the deleted file. A save
    * already in flight when the delete lands can still race the file back — that
    * narrow window is inherent to fire-and-forget writes and unchanged here.
+   *
+   * Scope: this clears the CURRENT session's bookkeeping only — keys are
+   * session-scoped, and in multi-user HTTP mode a same-named memory in another
+   * session may belong to a different user's portfolio, so clearing across
+   * sessions by name would drop a legitimate recovery record. Cross-session
+   * resurrection is prevented at the retry sites instead: every ledger retry
+   * first re-checks existence through the entry's own manager
+   * (retryLedgerEntryIfAlive), which resolves against the correct portfolio.
    */
   clearMemorySaveBookkeeping(memoryName: string): void {
     const key = this.saveKey(memoryName);
@@ -127,6 +139,47 @@ export class MemorySaveHandler {
     this.failedMemorySaves.delete(key);
     this.memorySaveAttempts.delete(key);
     this.saveFrequencyCounters.delete(key);
+  }
+
+  /**
+   * Issue #2329 (Codex review, PR #2336): retry a failure-ledger entry unless
+   * the memory is POSITIVELY confirmed deleted — another session sharing the
+   * same portfolio may have deleted it, and re-saving the retained instance
+   * would resurrect the deleted memory. The check goes through the entry's OWN
+   * manager, so in multi-user mode it resolves against the correct portfolio.
+   *
+   * Codex P1 (PR #2337): the check must fail closed. isMemoryDeleted() returns
+   * true only on a storage-confirmed ENOENT and throws on transient lookup
+   * failures; on any ambiguity we RETRY rather than drop — the ledger holds the
+   * last in-RAM copy of unpersisted entries, and dropping it on a transient
+   * read blip would be exactly the silent loss #2329 eliminated. The worst case
+   * of retrying under ambiguity is resurrecting a deleted memory, which is
+   * recoverable; dropped entries are not.
+   */
+  private async retryLedgerEntryIfAlive(
+    key: string,
+    entry: FailedSave,
+    context: string,
+  ): Promise<boolean> {
+    let confirmedDeleted = false;
+    try {
+      confirmedDeleted = await entry.manager.isMemoryDeletedAt(entry.probeToken);
+    } catch (probeErr) {
+      logger.warn(`[MCPAQLHandler] ${context}: could not confirm whether memory '${key}' still exists (${probeErr instanceof Error ? probeErr.message : probeErr}); failing closed and retrying the save`);
+    }
+    if (confirmedDeleted) {
+      logger.info(`[MCPAQLHandler] ${context}: memory '${key}' was deleted; dropping failed-save ledger entry instead of retrying`);
+      this.failedMemorySaves.delete(key);
+      this.memorySaveAttempts.delete(key);
+      return false;
+    }
+    try {
+      await this.saveMemoryTracked(key, entry.memory, entry.manager);
+      return true;
+    } catch (err) {
+      logger.error(`[MCPAQLHandler] ${context} retry failed for memory '${key}' — unpersisted entries will be lost: ${err}`);
+      return false;
+    }
   }
 
   async dispose(): Promise<void> {
@@ -157,17 +210,14 @@ export class MemorySaveHandler {
         logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' (entries: ${entryCount}, pending remaining: ${pending.length}): ${err}`);
       }
     }
-    // Direct Map iteration is safe here: saveMemoryTracked only deletes the
-    // current key on success, which the iteration protocol tolerates.
-    for (const [key, { memory, manager }] of this.failedMemorySaves) {
+    // Direct Map iteration is safe here: retryLedgerEntryIfAlive only deletes
+    // the current key, which the iteration protocol tolerates.
+    for (const [key, entry] of this.failedMemorySaves) {
       if (flushedKeys.has(key)) continue; // just attempted above
-      try {
-        await this.saveMemoryTracked(key, memory, manager);
+      const recovered = await this.retryLedgerEntryIfAlive(key, entry, 'Final flush');
+      if (recovered) {
         this.debounceMetrics.written++;
         logger.info(`[MCPAQLHandler] Recovered previously failed save for memory '${key}' during flush`);
-      } catch (err) {
-        const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
-        logger.error(`[MCPAQLHandler] Final flush retry failed for memory '${key}' (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
       }
     }
   }
@@ -218,6 +268,10 @@ export class MemorySaveHandler {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
           manager,
+          // Codex P1 (PR #2337): resolve the deletion-probe target NOW, while
+          // the owning session's path context is live — dispose-time
+          // resolution can point at the wrong portfolio in per-user mode.
+          probeToken: manager.getMemoryProbeToken(memory),
         });
       }
       throw err;

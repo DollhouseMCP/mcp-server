@@ -40,6 +40,7 @@ import { ValidationService } from '../../services/validation/ValidationService.j
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
 import * as path from 'path';
+import * as fs from 'node:fs/promises';
 import * as crypto from 'crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -681,6 +682,57 @@ export class MemoryManager extends BaseElementManager<Memory> {
   async assertPersistable(element: Memory): Promise<void> {
     const yamlContent = await this.serializeElement(element);
     this.validateSerializedContent(yamlContent);
+  }
+
+  /**
+   * Issue #2329 (Codex P1s, PR #2337): resolve a context-independent probe
+   * token for later deletion checks. MUST be called while the owning session's
+   * context is still live: `memoriesDir` is a dynamic getter that routes to the
+   * per-user portfolio only when a session context is active, so a path
+   * resolved at probe time (e.g. during dispose/cleanup) could point at the
+   * wrong portfolio and produce a false "deleted" verdict.
+   *
+   * Returns the element UUID in DB mode, the absolute file path in file mode,
+   * or null for a memory that was never persisted.
+   */
+  getMemoryProbeToken(element: Memory): string | null {
+    const persistedPath = element.getFilePath();
+    if (!persistedPath) return null;
+    if (isWritableStorageLayer(this.storageLayer)) return persistedPath;
+    return path.join(this.memoriesDir, persistedPath);
+  }
+
+  /**
+   * Issue #2329 (Codex P1, PR #2337): positive deletion check for failure-ledger
+   * retries. Returns true ONLY when the storage layer confirms absence (ENOENT);
+   * transient lookup failures THROW so callers can fail closed — retry the save —
+   * instead of dropping the last in-RAM copy of unpersisted entries. This is
+   * deliberately not find(): find() swallows storage errors into an empty list,
+   * which conflates "deleted" with "lookup failed".
+   *
+   * A null token means the memory was never persisted and returns false — the
+   * retry IS its first persist.
+   */
+  async isMemoryDeletedAt(probeToken: string | null): Promise<boolean> {
+    if (!probeToken) return false;
+
+    try {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        // DB mode: the token is the element UUID. readContent throws
+        // code='ENOENT' for a missing row; query/connection failures throw
+        // other errors and propagate.
+        await this.storageLayer.readContent(probeToken);
+      } else {
+        // File mode: the token is an absolute path captured under the owning
+        // session's context. fs.stat throws code='ENOENT' for a missing file;
+        // other I/O errors propagate.
+        await fs.stat(probeToken);
+      }
+      return false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return true;
+      throw err;
+    }
   }
 
   /**
