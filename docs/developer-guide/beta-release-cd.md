@@ -22,7 +22,7 @@ Allowed deployment refs are:
 
 - `beta`
 - `refs/heads/beta`
-- SemVer beta tags, such as `v2.1.0-beta` or `v2.1.0-beta.1`
+- SemVer beta tags, such as `v2.1.0-beta.1` or `v2.1.0-beta.1.1`
 
 The workflow requires the `alpha` GitHub environment to provide these secrets:
 

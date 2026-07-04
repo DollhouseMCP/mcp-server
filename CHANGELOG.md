@@ -1,5 +1,15 @@
 # Changelog
 
+## [2.1.0-beta.1] - 2026-07-04
+
+First versioned build of the 2.1 beta line. Not published to npm; deployed to the hosted beta environment.
+
+- Package the web console UI: `src/web-console/ui` is copied into `dist/web-console/ui` during postbuild, included in the package file list, and required by the asset verifier — `/ui/` no longer depends on a manual hot-copy into the running image. (#2312)
+- Port the memory silent-save-loss fix (#2329) with hardened recovery paths and deleted-memory ledger guards. (#2336, #2337)
+- Port the OAuth helper token handoff hardening. (#2325 ports)
+- Port the NVM launcher config self-heal and test isolation. (#2338, #2340)
+- Port the symlink containment fixes for convert CLI output paths, including canonical containment. (#2342, #2344, #2345, #2347)
+
 ## [2.1.0-beta] - 2026-06-25
 
 Start beta line for 2.1 hosted HTTP and expanded description limits.
