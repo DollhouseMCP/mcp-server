@@ -12,12 +12,15 @@ name: Publish to GitHub Packages
 # 3. Invalid/empty version → should fail gracefully with error
 # 4. Authentication issues → should proceed to publish (fails safely if duplicate)
 
+# Trigger: GitHub Releases only (plus manual dispatch). The old push-tags
+# trigger is deliberately removed — a stable release emits BOTH the tag push
+# and release.published, double-publishing the same version in racing runs,
+# and a prerelease tag push would bypass the release-flag channel guard below.
+# Every publish therefore goes through an explicit GitHub Release, where the
+# guard can validate the version against the release's prerelease flag.
 on:
   release:
     types: [published]
-  push:
-    tags:
-      - 'v*'  # Triggers on version tags like v1.2.3
   workflow_dispatch:  # Allow manual trigger
     inputs:
       dry_run:

@@ -60,6 +60,25 @@ jobs:
           fetch-depth: 0
           ref: ${{ steps.source-ref.outputs.ref }}
 
+      - name: Guard stable channel (version string, not just release flag)
+        shell: bash
+        env:
+          SOURCE_REF: ${{ steps.source-ref.outputs.ref }}
+        run: |
+          # Belt-and-braces on top of the job-level prerelease-flag check: a
+          # beta tag released with the prerelease checkbox unset, or a manual
+          # workflow_dispatch rerun with release_ref=refs/tags/v2.1.0-beta.1,
+          # must still be refused. The MCP Registry lists stable builds only.
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          TAG_PART="${SOURCE_REF#refs/tags/v}"
+          for candidate in "${PACKAGE_VERSION}" "${TAG_PART}"; do
+            if [[ -n "${candidate}" && "${candidate}" != refs/* && "${candidate}" == *-* ]]; then
+              echo "::error::Refusing to publish prerelease '${candidate}' to the MCP Registry (package.json: ${PACKAGE_VERSION}, ref: ${SOURCE_REF}). Stable releases only."
+              exit 1
+            fi
+          done
+          echo "✅ Stable channel confirmed (version ${PACKAGE_VERSION}, ref ${SOURCE_REF})"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:

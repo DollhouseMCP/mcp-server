@@ -171,6 +171,31 @@ jobs:
           echo "Package would be published: @dollhousemcp/mcp-server@${{ steps.package_version.outputs.version }} with npm dist-tag ${DIST_TAG}"
           npm publish --dry-run --tag "${DIST_TAG}"
 
+      - name: Verify latest dist-tag integrity
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        shell: bash
+        run: |
+          # Post-publish invariant: `latest` must NEVER point at a prerelease.
+          # Every default install path (npx @dollhousemcp/mcp-server, bare
+          # npm install, and the @latest pin our installer writes into client
+          # configs) resolves through this dist-tag — including installs by
+          # users on OLD versions that predate any client-side checks. If a
+          # prerelease ever lands on `latest` (manual publish without --tag,
+          # registry hiccup), stable users would silently update onto beta.
+          sleep 10  # allow registry propagation before reading back
+          LATEST=$(npm view @dollhousemcp/mcp-server dist-tags.latest 2>/dev/null || echo "")
+          echo "npm dist-tags.latest resolves to: ${LATEST:-<unreadable>}"
+          if [[ -z "${LATEST}" ]]; then
+            echo "::warning::Could not read back dist-tags.latest (registry propagation delay?) — verify manually"
+            exit 0
+          fi
+          if [[ "${LATEST}" == *-* ]]; then
+            echo "::error::dist-tags.latest points at a PRERELEASE (${LATEST}). Stable users installing via npx/@latest will receive it. Repair immediately:"
+            echo "::error::  npm dist-tag add @dollhousemcp/mcp-server@<highest-stable-version> latest"
+            exit 1
+          fi
+          echo "✅ latest dist-tag integrity OK (${LATEST} is a stable version)"
+
       - name: Notify success
         if: ${{ success() && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
