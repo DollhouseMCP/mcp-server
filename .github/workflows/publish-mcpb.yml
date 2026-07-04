@@ -32,6 +32,24 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Guard stable channel (version string, not just release flag)
+        shell: bash
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name || inputs.tag_name || '' }}
+        run: |
+          # Belt-and-braces on top of the job-level prerelease-flag check: a
+          # beta tag released with the prerelease checkbox unset, or a manual
+          # workflow_dispatch rerun with a prerelease tag_name, must still be
+          # refused — MCPB bundles are an end-user install surface.
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          for candidate in "${PACKAGE_VERSION}" "${EVENT_TAG#v}"; do
+            if [[ -n "${candidate}" && "${candidate}" == *-* ]]; then
+              echo "::error::Refusing to publish an MCPB bundle for prerelease '${candidate}' (package.json: ${PACKAGE_VERSION}, tag: ${EVENT_TAG:-<none>}). Stable releases only."
+              exit 1
+            fi
+          done
+          echo "✅ Stable channel confirmed (version ${PACKAGE_VERSION}, tag ${EVENT_TAG:-<none>})"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
