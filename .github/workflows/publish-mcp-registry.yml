@@ -86,7 +86,9 @@ jobs:
 
           # Pinned for reproducibility. v1.3.3 used the retired shared OIDC
           # audience ("mcp-registry"); current registry auth expects the
-          # registry URL as the audience.
+          # registry URL as the audience. When bumping this CLI, update
+          # VERSION, ARCHIVE, EXPECTED_SHA256, and the Sigstore identity
+          # expectation from the same upstream release.
           VERSION="v1.7.9"
           ARCHIVE="mcp-publisher_linux_amd64.tar.gz"
           EXPECTED_SHA256="ab128162b0616090b47cf245afe0a23f3ef08936fdce19074f5ba0a4469281ac"

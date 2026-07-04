@@ -81,6 +81,16 @@ export class Template extends BaseElement implements IElement {
   private compiledTemplate?: CompiledTemplate;
   // Issue #705: Cache parsed sections to avoid re-running regex on every render/validate
   private parsedSections?: TemplateSections;
+
+  public override get content(): string {
+    return this._content;
+  }
+
+  public override set content(value: string) {
+    this._content = value;
+    this.compiledTemplate = undefined;
+    this.parsedSections = undefined;
+  }
   
   // SECURITY FIX #4: Memory management constants
   // Prevents unbounded template size and variable count that could exhaust memory
