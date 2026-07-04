@@ -55,6 +55,9 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        // Stub the NVM mitigation: the real one runs against the real homedir()
+        // and, on a machine WITH NVM, would patch real client configs (#2338).
+        _applyNvmLauncher: async () => 'not-applicable',
         _installPermissionHook: async (client: string) => ({
           supported: false,
           installed: false,
@@ -201,6 +204,7 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _applyNvmLauncher: async () => 'not-applicable',
         _installPermissionHook: async () => ({
           supported: true,
           installed: true,
@@ -245,6 +249,7 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _applyNvmLauncher: async () => 'not-applicable',
         _installPermissionHook: installPermissionHookMock,
         _skipRateLimit: true,
       });

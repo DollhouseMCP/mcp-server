@@ -583,6 +583,13 @@ export function createSetupRoutes(opts?: {
   _installPermissionHook?: (client: string) => Promise<InstallPermissionHookResult>;
   /** Override permission hook status reconciler. For testing only. */
   _reconcilePermissionHookStatus?: (client: string) => Promise<PermissionHookStatus>;
+  /**
+   * Override the NVM launcher mitigation applied after a successful install.
+   * For testing only. Without this seam the install handler runs the real
+   * applyNvmLauncherIfNeeded against the real homedir(); on a machine WITH NVM
+   * that patches the developer's real client configs (issue #2338).
+   */
+  _applyNvmLauncher?: (client: string) => Promise<NvmLauncherResult>;
   /** Enable automatic hook asset repair during detect. Defaults off in tests. */
   _autoRepairPermissionHooksOnDetect?: boolean;
   /** Skip the sliding-window rate limiter. For testing only. */
@@ -600,6 +607,7 @@ export function createSetupRoutes(opts?: {
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
   const permissionHookInstaller = opts?._installPermissionHook ?? installPermissionHook;
+  const nvmLauncherApplier = opts?._applyNvmLauncher ?? applyNvmLauncherIfNeeded;
   const autoRepairPermissionHooksOnDetect = opts?._autoRepairPermissionHooksOnDetect ?? process.env.NODE_ENV !== 'test';
   const hookStatusReconciler = opts?._reconcilePermissionHookStatus ?? (async (client: string) =>
     reconcilePermissionHookStatus(client, { autoRepair: autoRepairPermissionHooksOnDetect }));
@@ -709,7 +717,8 @@ export function createSetupRoutes(opts?: {
       // Best-effort NVM mitigation (macOS/Linux only).
       // Extracted into applyNvmLauncherIfNeeded to keep this handler's
       // cognitive complexity within bounds (SonarCloud S3776).
-      const nvmResult = await applyNvmLauncherIfNeeded(normalizedClient);
+      // Injectable (_applyNvmLauncher) so tests don't touch the real homedir.
+      const nvmResult = await nvmLauncherApplier(normalizedClient);
 
       const nvmMitigationApplied = toNvmMitigationApplied(nvmResult);
 
@@ -1090,9 +1099,17 @@ function captureInstallAnalytics(event: string, properties: Record<string, unkno
 /** Result of attempting to apply the NVM launcher mitigation. */
 export type NvmLauncherResult = 'applied' | 'not-applicable' | 'failed';
 
-/** JSON-format clients eligible for NVM launcher repair on startup. */
+/**
+ * JSON-format clients eligible for NVM launcher patch/repair/heal.
+ *
+ * This MUST be the full set of clients whose JSON config the install flow can
+ * patch via applyNvmLauncherIfNeeded → patchConfigForNvmLauncher — otherwise a
+ * client that was patched at install time (e.g. VS Code or Cline pointing at a
+ * now-dead wrapper) would never self-heal on startup (issue #2338). Codex is
+ * excluded because its config is TOML, which patchConfigForNvmLauncher skips.
+ */
 const JSON_FORMAT_CLIENTS = [
-  'claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli',
+  'claude', 'claude-code', 'cursor', 'vscode', 'cline', 'windsurf', 'lmstudio', 'gemini-cli',
 ] as const;
 
 /**

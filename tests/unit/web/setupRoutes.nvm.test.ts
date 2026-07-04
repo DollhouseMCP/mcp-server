@@ -689,6 +689,9 @@ describe('repairNvmLauncherOnStartup', () => {
 
 describe('repairNvmLauncherOnStartup — #2338 self-heal acceptance matrix', () => {
   it('Row 1: no NVM + config points at a dead wrapper → restores command to npx (args preserved)', async () => {
+    // repairNvmLauncherOnStartup (and the whole NVM mitigation) is macOS/Linux
+    // only — on win32 it returns before self-heal, so the heal cannot happen.
+    if (isWindows) return;
     // tempDir has NO .nvm — this machine has no NVM installed.
     const deadWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'); // never created
     const configPath = join(tempDir, 'claude.json');
@@ -767,5 +770,34 @@ describe('repairNvmLauncherOnStartup — #2338 self-heal acceptance matrix', () 
     // Second repair on an already-healthy config must be byte-identical.
     await repairNvmLauncherOnStartup(tempDir, resolver);
     expect(await readFile(configPath, 'utf-8')).toBe(configHealthy);
+  });
+
+  it('self-heal covers VS Code (servers key) and Cline — now in JSON_FORMAT_CLIENTS', async () => {
+    if (isWindows) return;
+    // No NVM on this machine. The install flow can patch vscode/cline JSON
+    // configs, so startup self-heal must iterate them too (#2338). The resolver
+    // is only consulted for clients repairNvmLauncherOnStartup actually visits,
+    // so a heal here proves vscode + cline are in the iterated client set.
+    const deadWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'); // never created
+    const vscodeCfg = join(tempDir, 'vscode-settings.json');
+    const clineCfg = join(tempDir, 'cline-settings.json');
+    // VS Code uses the `servers` key; Cline uses `mcpServers`.
+    await writeFile(vscodeCfg, JSON.stringify({
+      servers: { dollhousemcp: { command: deadWrapper, args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2));
+    await writeFile(clineCfg, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: deadWrapper, args: ['@dollhousemcp/mcp-server@rc'] } },
+    }, null, 2));
+
+    const resolver = (client: string) =>
+      client === 'vscode' ? vscodeCfg : client === 'cline' ? clineCfg : null;
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+
+    const vscodeAfter = JSON.parse(await readFile(vscodeCfg, 'utf-8'));
+    const clineAfter = JSON.parse(await readFile(clineCfg, 'utf-8'));
+    expect(vscodeAfter.servers.dollhousemcp.command).toBe('npx');
+    expect(vscodeAfter.servers.dollhousemcp.args).toEqual(['@dollhousemcp/mcp-server@latest']);
+    expect(clineAfter.mcpServers.dollhousemcp.command).toBe('npx');
+    expect(clineAfter.mcpServers.dollhousemcp.args).toEqual(['@dollhousemcp/mcp-server@rc']);
   });
 });

@@ -97,9 +97,25 @@ function detectConfigPollution(configPath) {
   return null;
 }
 
+// Baseline: a config may already be polluted before this run starts — e.g. a
+// pre-fix `npm test` left a dead wrapper, which is exactly the state #2338
+// repairs. We must NOT blame the first unrelated test for that. Record which
+// paths are already polluted at setup and only fail on NEW pollution.
+const PRE_EXISTING_POLLUTION = new Set(
+  REAL_CLIENT_CONFIG_PATHS.filter((p) => detectConfigPollution(p)),
+);
+if (PRE_EXISTING_POLLUTION.size > 0) {
+  console.warn(
+    `[#2338 guard] Pre-existing MCP client config pollution detected before this ` +
+    `run (NOT caused by these tests): ${[...PRE_EXISTING_POLLUTION].join(', ')}. ` +
+    `Ignoring as baseline — repair these separately (see setupRoutes NVM self-heal).`,
+  );
+}
+
 afterEach(() => {
   const violations = [];
   for (const p of REAL_CLIENT_CONFIG_PATHS) {
+    if (PRE_EXISTING_POLLUTION.has(p)) continue; // already polluted before the run — not this test's fault
     const reason = detectConfigPollution(p);
     if (reason) violations.push(`  - ${p} — ${reason}`);
   }
