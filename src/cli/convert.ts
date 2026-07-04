@@ -43,9 +43,23 @@ import {
 } from '../converters/index.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { resolvePathWithinBase } from '../utils/pathSecurity.js';
+import { resolvePathWithinBase, vetOutputBase } from '../utils/pathSecurity.js';
 
 const program = new Command();
+
+/**
+ * Vet the user's output base and return the canonical directory to write to
+ * (#2344). Relative outputs are contained within the working directory even
+ * when a symlink tries to redirect them; explicit outside destinations are
+ * honoured but their real location is disclosed when it differs.
+ */
+function vetConvertOutput(requestedOutput: string): string {
+    return vetOutputBase(requestedOutput, {
+        onDisclose: (canonicalBase) => {
+            console.log(chalk.yellow(`  Note: output resolves through a symbolic link — real destination: ${canonicalBase}`));
+        }
+    });
+}
 
 /**
  * Maximum ZIP file size (100MB) - prevents DoS attacks and system resource exhaustion
@@ -344,8 +358,9 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
         const structure = await converter.convertSkill(inputContent);
         logConversionSteps(structure, operationsLog, options.verbose);
 
-        // Determine output directory
-        const outputDir = resolvePathWithinBase(options.output || './anthropic-skills', skillName);
+        // Determine output directory (canonical containment per #2344)
+        const outputBase = vetConvertOutput(options.output || './anthropic-skills');
+        const outputDir = resolvePathWithinBase(outputBase, skillName);
 
         if (options.dryRun) {
             console.log(chalk.yellow('\n[DRY RUN] Would create:'));
@@ -459,8 +474,8 @@ async function convertFromAnthropic(input: string, options: ConvertOptions): Pro
         const dollhouseSkill = await converter.convertSkill(actualInput);
         logReverseConversionSteps(actualInput, operationsLog, options.verbose);
 
-        // Determine output file
-        const outputDir = path.resolve(options.output || getDefaultSkillsDirectory());
+        // Determine output file (canonical containment per #2344)
+        const outputDir = vetConvertOutput(options.output || getDefaultSkillsDirectory());
         const outputFile = resolvePathWithinBase(outputDir, `${skillName}.md`);
 
         if (options.dryRun) {

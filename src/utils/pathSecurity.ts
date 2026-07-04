@@ -110,3 +110,92 @@ export function resolvePathWithinBase(baseDir: string, ...segments: string[]): s
 
   throw new Error('Resolved path escapes the base directory');
 }
+
+/** True when a base-relative path points outside the base. */
+function escapesBase(relativePath: string): boolean {
+  return relativePath === '..'
+    || relativePath.startsWith('..' + path.sep)
+    || path.isAbsolute(relativePath);
+}
+
+/**
+ * Canonical (realpath) form of a path that may not fully exist yet: the
+ * deepest existing ancestor is resolved through every symlink, and the
+ * not-yet-created suffix is appended unchanged. This answers "where would a
+ * recursive mkdir/write on this path REALLY land?" — which per-component
+ * lstat checks cannot, because lstat resolves intermediate symlinks and only
+ * reports on the final component (#2344).
+ */
+export function canonicalizePath(inputPath: string): string {
+  const resolved = path.resolve(inputPath);
+  const missing: string[] = [];
+  let current = resolved;
+  for (;;) {
+    try {
+      const canonical = fs.realpathSync(current);
+      return missing.length ? path.join(canonical, ...missing) : canonical;
+    } catch (error) {
+      if (!isMissingPathError(error)) {
+        throw error;
+      }
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      // Nothing on the chain exists (should not happen for absolute paths —
+      // the root exists — but keep a lexical fallback rather than throwing).
+      return missing.length ? path.join(current, ...missing) : current;
+    }
+    missing.unshift(path.basename(current));
+    current = parent;
+  }
+}
+
+/**
+ * Vets a user-supplied output base for CLI writes and returns the canonical
+ * path all subsequent writes should use (#2344).
+ *
+ * Two regimes, split by what the user lexically named:
+ *
+ *  - Base inside the anchor (relative outputs like the './anthropic-skills'
+ *    default): the canonical base must stay inside the canonical anchor.
+ *    A symlink that redirects it elsewhere — including one whose target
+ *    already contains matching subdirectories, the case per-component lstat
+ *    checks miss — is rejected. Comparing in canonical space means system
+ *    links above the anchor (macOS /tmp -> /private/tmp) never false-positive.
+ *
+ *  - Base outside the anchor (explicit absolute or ../ outputs): the user
+ *    named that destination, so there is no boundary to defend. Instead of
+ *    guessing intent, the real destination is disclosed via `onDisclose`
+ *    whenever it differs from the lexical path, and the canonical path is
+ *    returned so what was vetted is what gets written.
+ */
+export function vetOutputBase(
+  baseDir: string,
+  options?: { anchor?: string; onDisclose?: (canonicalBase: string) => void },
+): string {
+  if (!baseDir || typeof baseDir !== 'string') {
+    throw new TypeError('Base directory must be a non-empty string');
+  }
+  if (baseDir.includes('\0')) {
+    throw new Error('Path segment contains a null byte');
+  }
+
+  const resolvedAnchor = path.resolve(options?.anchor ?? process.cwd());
+  const resolvedBase = path.resolve(baseDir);
+  const canonicalBase = canonicalizePath(resolvedBase);
+
+  if (!escapesBase(path.relative(resolvedAnchor, resolvedBase))) {
+    const canonicalAnchor = canonicalizePath(resolvedAnchor);
+    if (escapesBase(path.relative(canonicalAnchor, canonicalBase))) {
+      throw new Error(
+        `Output path resolves outside the working directory through a symbolic link (real destination: ${canonicalBase})`,
+      );
+    }
+    return canonicalBase;
+  }
+
+  if (canonicalBase !== resolvedBase) {
+    options?.onDisclose?.(canonicalBase);
+  }
+  return canonicalBase;
+}
