@@ -46,7 +46,11 @@ if (expected === null) {
 
 if (actual !== expected) {
   console.error(`✖ Refusing to publish ${version} to dist-tag "${actual}".`);
-  if (expected !== 'latest') {
+  if (expected === 'latest') {
+    console.error('');
+    console.error(`  This is a STABLE version — it belongs on "latest", not "${actual}".`);
+    console.error('  Publish without a --tag flag (or with --tag latest).');
+  } else {
     console.error('');
     console.error(`  This checkout is a PRERELEASE. Publishing it to "${actual}" would make`);
     console.error('  every default install (npx @dollhousemcp/mcp-server, npm install,');
@@ -55,10 +59,6 @@ if (actual !== expected) {
     console.error('');
     console.error(`  Publish it to its channel instead:`);
     console.error(`    npm publish --tag ${expected}`);
-  } else {
-    console.error('');
-    console.error(`  This is a STABLE version — it belongs on "latest", not "${actual}".`);
-    console.error('  Publish without a --tag flag (or with --tag latest).');
   }
   process.exit(1);
 }
