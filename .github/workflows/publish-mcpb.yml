@@ -23,6 +23,9 @@ permissions:
 jobs:
   publish-mcpb:
     name: Build and upload .mcpb
+    # Stable releases only: MCPB bundles are an end-user install surface, so
+    # prerelease (alpha/beta/rc) GitHub Releases must not publish one.
+    if: github.event_name != 'release' || github.event.release.prerelease != true
     runs-on: ubuntu-latest
 
     steps:
