@@ -43,16 +43,21 @@ const REAL_CLIENT_CONFIG_PATHS = (() => {
   const home = homedir();
   const plat = platform();
   const appData = process.env.APPDATA || join(home, 'AppData', 'Roaming');
-  const codeUserDir = plat === 'darwin'
-    ? join(home, 'Library', 'Application Support', 'Code', 'User')
-    : plat === 'win32'
-      ? join(appData, 'Code', 'User')
-      : join(home, '.config', 'Code', 'User');
-  const claudeDesktop = plat === 'darwin'
-    ? join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json')
-    : plat === 'win32'
-      ? join(appData, 'Claude', 'claude_desktop_config.json')
-      : join(home, '.config', 'Claude', 'claude_desktop_config.json');
+  const byPlatform = (darwinPath, win32Path, linuxPath) => {
+    if (plat === 'darwin') return darwinPath;
+    if (plat === 'win32') return win32Path;
+    return linuxPath;
+  };
+  const codeUserDir = byPlatform(
+    join(home, 'Library', 'Application Support', 'Code', 'User'),
+    join(appData, 'Code', 'User'),
+    join(home, '.config', 'Code', 'User'),
+  );
+  const claudeDesktop = byPlatform(
+    join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json'),
+    join(appData, 'Claude', 'claude_desktop_config.json'),
+    join(home, '.config', 'Claude', 'claude_desktop_config.json'),
+  );
   return [
     claudeDesktop,                                              // Claude Desktop
     join(home, '.claude.json'),                                 // Claude Code
