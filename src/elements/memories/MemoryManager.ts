@@ -31,7 +31,6 @@ import { LRUCache } from '../../cache/LRUCache.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { ContentValidator } from '../../security/contentValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
@@ -41,6 +40,7 @@ import { ValidationService } from '../../services/validation/ValidationService.j
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
 import * as path from 'path';
+import * as fs from 'node:fs/promises';
 import * as crypto from 'crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -674,43 +674,101 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /**
+   * Issue #2329: Serialize and run the full save-path validation without writing to disk.
+   * Lets callers reject a mutation immediately (e.g. addEntry) when the memory can no
+   * longer be persisted, instead of the failure surfacing only in a deferred save
+   * where it cannot be reported back to the caller.
+   */
+  async assertPersistable(element: Memory): Promise<void> {
+    const yamlContent = await this.serializeElement(element);
+    this.validateSerializedContent(yamlContent);
+  }
+
+  /**
+   * Issue #2329 (Codex P1s, PR #2337): resolve a context-independent probe
+   * token for later deletion checks. MUST be called while the owning session's
+   * context is still live: `memoriesDir` is a dynamic getter that routes to the
+   * per-user portfolio only when a session context is active, so a path
+   * resolved at probe time (e.g. during dispose/cleanup) could point at the
+   * wrong portfolio and produce a false "deleted" verdict.
+   *
+   * Returns the element UUID in DB mode, the absolute file path in file mode,
+   * or null for a memory that was never persisted.
+   */
+  getMemoryProbeToken(element: Memory): string | null {
+    const persistedPath = element.getFilePath();
+    if (!persistedPath) return null;
+    if (isWritableStorageLayer(this.storageLayer)) return persistedPath;
+    return path.join(this.memoriesDir, persistedPath);
+  }
+
+  /**
+   * Issue #2329 (Codex P1, PR #2337): positive deletion check for failure-ledger
+   * retries. Returns true ONLY when the storage layer confirms absence (ENOENT);
+   * transient lookup failures THROW so callers can fail closed — retry the save —
+   * instead of dropping the last in-RAM copy of unpersisted entries. This is
+   * deliberately not find(): find() swallows storage errors into an empty list,
+   * which conflates "deleted" with "lookup failed".
+   *
+   * A null token means the memory was never persisted and returns false — the
+   * retry IS its first persist.
+   */
+  async isMemoryDeletedAt(probeToken: string | null): Promise<boolean> {
+    if (!probeToken) return false;
+
+    try {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        // DB mode: the token is the element UUID. readContent throws
+        // code='ENOENT' for a missing row; query/connection failures throw
+        // other errors and propagate.
+        await this.storageLayer.readContent(probeToken);
+      } else {
+        // File mode: the token is an absolute path captured under the owning
+        // session's context. fs.stat throws code='ENOENT' for a missing file;
+        // other I/O errors propagate.
+        await fs.stat(probeToken);
+      }
+      return false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return true;
+      throw err;
+    }
+  }
+
+  /**
    * Memory-specific content validation.
    * Memories are pure YAML (no frontmatter delimiters), so they need different
    * validation than frontmatter-based elements. The base class validateSerializedContent
    * handles frontmatter elements; this override handles pure YAML memories.
-   *
-   * Checks: size enforcement (Fix #916/#918), YAML bomb detection (Fix #908/#918),
-   * and gatekeeper policy validation.
+   * Shared by save() (via super.save) and assertPersistable() so the pre-flight
+   * check and the actual write can never disagree.
    */
   protected override validateSerializedContent(content: string): void {
-    // Size enforcement (Fix #916/#918)
-    if (content.length > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
+    // Fix #916/#918, tightened for #2329: cap at MAX_YAML_SIZE (256KB) — the same
+    // limit parseContent() enforces on load. The previous 2MB cap allowed writing
+    // files the loader would then reject.
+    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
         severity: 'HIGH',
         source: 'MemoryManager.validateSerializedContent',
-        details: `Memory exceeds maximum file size (${content.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`,
+        details: `Memory exceeds maximum serialized size (${content.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
       });
       throw new Error(
-        `Memory exceeds maximum file size (${content.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`
+        `Memory exceeds maximum serialized size (${content.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
+        `This memory is full — start a new memory for additional entries.`
       );
     }
 
-    // YAML bomb detection (Fix #908/#918)
-    if (content.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
-      if (!ContentValidator.validateYamlContent(content)) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'YAML_INJECTION_ATTEMPT',
-          severity: 'CRITICAL',
-          source: 'MemoryManager.validateSerializedContent',
-          details: 'Serialized memory contains malicious YAML patterns — write blocked',
-        });
-        throw new Error('Serialized memory contains malicious YAML patterns — write blocked');
-      }
-    }
-
-    // Gatekeeper policy validation (pure YAML structure — root + nested metadata)
-    const parsedYaml = SecureYamlParser.parseRawYaml(content, SECURITY_LIMITS.MAX_YAML_LENGTH);
+    // Bomb/injection detection + gatekeeper policy validation. Issue #2329 root
+    // cause: this parse previously capped at MAX_YAML_LENGTH (64KB — a frontmatter
+    // limit), so every save of a memory whose serialized YAML exceeded 64KB threw
+    // here, and the deferred save path swallowed the error while addEntry kept
+    // reporting success. The cap now matches the memory size limit enforced above
+    // and on load. parseRawYaml runs ContentValidator.validateYamlContent with the
+    // same cap internally (Fix #908/#918), covering every size — the previous
+    // `<= MAX_YAML_LENGTH` guard skipped bomb detection for content over 64KB.
+    const parsedYaml = SecureYamlParser.parseRawYaml(content, MEMORY_CONSTANTS.MAX_YAML_SIZE);
     const gatekeeperErrors = [
       ...getGatekeeperAuthoringErrors(parsedYaml),
       ...getGatekeeperAuthoringErrors(

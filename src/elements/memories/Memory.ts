@@ -1186,7 +1186,14 @@ export class Memory extends BaseElement implements IElement {
    * @returns true if entry was removed, false if not found
    */
   public removeEntry(entryId: string): boolean {
-    return this.entries.delete(entryId);
+    const removed = this.entries.delete(entryId);
+    if (removed) {
+      // Issue #2329: keep the search index consistent with the entries map —
+      // previously removed entries stayed searchable until a full index rebuild.
+      this.searchIndex.removeEntry(entryId);
+      this._isDirty = true;
+    }
+    return removed;
   }
 
   /**

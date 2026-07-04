@@ -90,6 +90,7 @@ import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
 import type { OperationMetricsTracker } from '../../metrics/OperationMetricsTracker.js';
 import type { GatekeeperMetricsTracker } from '../../metrics/GatekeeperMetricsTracker.js';
 import { ElementType, type PortfolioManager } from '../../portfolio/PortfolioManager.js';
+import { normalizeElementType } from '../../utils/elementTypeNormalization.js';
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
 import type { AutonomyMetricsSnapshot } from '../../elements/agents/autonomyEvaluator.js';
 
@@ -867,6 +868,7 @@ export class MCPAQLHandler {
         elementType,
         params: mergedParams,
       });
+      this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
 
       // Step 5: Apply field selection (Issue #202)
       // Transform name → element_name for LLM consistency
@@ -1255,6 +1257,27 @@ export class MCPAQLHandler {
 
   async flushPendingSaves(): Promise<void> {
     await this.memorySaveHandler.flushPendingSaves();
+  }
+
+  /**
+   * Issue #2329 (Codex review): a successfully deleted memory must drop its
+   * save bookkeeping — a retained failure-ledger instance or pending debounce
+   * timer would otherwise re-save the in-RAM state and resurrect the deleted
+   * file. Called after dispatch in executeOperation so the schema-dispatch,
+   * legacy, and batch paths are all covered.
+   */
+  private cleanupDeletedMemoryBookkeeping(
+    operation: string,
+    elementType: string | undefined,
+    params: Record<string, unknown> | undefined,
+  ): void {
+    if (operation !== 'delete_element') return;
+    const p = params ?? {};
+    const type = (elementType ?? p.element_type ?? p.type) as string | undefined;
+    const name = (p.element_name ?? p.name) as string | undefined;
+    if (name && normalizeElementType(type) === ElementType.MEMORY) {
+      this.memorySaveHandler.clearMemorySaveBookkeeping(name);
+    }
   }
 
   private get saveFrequencyCounters(): Map<string, unknown> {

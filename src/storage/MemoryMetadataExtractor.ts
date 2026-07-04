@@ -10,12 +10,16 @@
 
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
 import type { ElementIndexEntry } from './types.js';
 import { logger } from '../utils/logger.js';
 
 export class MemoryMetadataExtractor {
-  /** Align with SecureYamlParser default raw YAML limit (64KB). */
-  private static readonly MAX_YAML_SIZE = 64 * 1024;
+  /**
+   * Align with the memory save/load limit (256KB). Issue #2329: this was 64KB,
+   * so memories that grew past it indexed as 'unnamed' with default metadata.
+   */
+  private static readonly MAX_YAML_SIZE = MEMORY_CONSTANTS.MAX_YAML_SIZE;
 
   /**
    * Extract index-relevant metadata from raw YAML memory content.
