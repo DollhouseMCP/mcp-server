@@ -105,4 +105,57 @@ describe('resolvePathWithinBase', () => {
       fs.rmSync(sandbox, { recursive: true, force: true });
     }
   });
+
+  // #2342: a base that does not exist yet must be vetted through its nearest
+  // existing ancestor — otherwise `/safe/link/new` (where `/safe/link` is a
+  // symlink to an outside directory) passes the lstat-ENOENT check and the
+  // recursive mkdir/write that follows escapes the intended tree.
+  it('rejects a missing base directory whose nearest existing ancestor is a symlink', () => {
+    const sandbox = fs.mkdtempSync(path.join(tmpdir(), 'dollhouse-path-security-'));
+    const outside = path.join(sandbox, 'outside-target');
+    const link = path.join(sandbox, 'link');
+
+    try {
+      fs.mkdirSync(outside, { recursive: true });
+
+      try {
+        fs.symlinkSync(outside, link, 'dir');
+      } catch (error) {
+        const code = typeof error === 'object' && error !== null && 'code' in error
+          ? (error as NodeJS.ErrnoException).code
+          : undefined;
+        if (code === 'EPERM' || code === 'EACCES') {
+          return;
+        }
+        throw error;
+      }
+
+      // Base does not exist yet; its nearest existing ancestor is the symlink.
+      const missingBase = path.join(link, 'new-base');
+      expect(() => resolvePathWithinBase(missingBase, 'file.md')).toThrow(
+        'Base directory resolves through a symbolic link'
+      );
+
+      // Same for a base several missing levels below the symlink.
+      const deepMissingBase = path.join(link, 'a', 'b', 'new-base');
+      expect(() => resolvePathWithinBase(deepMissingBase, 'file.md')).toThrow(
+        'Base directory resolves through a symbolic link'
+      );
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
+
+  it('allows a missing base directory under real existing ancestors', () => {
+    const sandbox = fs.mkdtempSync(path.join(tmpdir(), 'dollhouse-path-security-'));
+
+    try {
+      const missingBase = path.join(sandbox, 'not-created-yet', 'sub');
+      expect(resolvePathWithinBase(missingBase, 'file.md')).toBe(
+        path.resolve(missingBase, 'file.md')
+      );
+    } finally {
+      fs.rmSync(sandbox, { recursive: true, force: true });
+    }
+  });
 });
