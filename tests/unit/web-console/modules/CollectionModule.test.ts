@@ -241,6 +241,21 @@ describe('CollectionModule', () => {
       expect(body.has_more).toBe(false);
     });
 
+    it('advertises install_enabled=false on a browse-only module and true when install is wired', async () => {
+      const browseOnly = (await invoke(route(LIST_PATH), consoleRequest())).body as CollectionElementListDto;
+      expect(browseOnly.install_enabled).toBe(false);
+
+      const listRoute = routeWith(LIST_PATH, {
+        ...fakePorts(),
+        install: {
+          installer: { fetchAndValidate: () => Promise.reject(new Error('unused')) },
+          portfolioStore: {} as unknown as IPortfolioElementStore,
+        },
+      });
+      const body = (await invoke(listRoute, consoleRequest())).body as CollectionElementListDto;
+      expect(body.install_enabled).toBe(true);
+    });
+
     it('returns the degraded state when the index is unavailable', async () => {
       const errors: unknown[] = [];
       const definition = routeWith(LIST_PATH, fakePorts({

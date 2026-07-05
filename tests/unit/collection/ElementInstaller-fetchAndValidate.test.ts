@@ -132,6 +132,20 @@ entries:
       .rejects.toThrow(/missing required name or description/);
   });
 
+  it('rejects a memory document whose name is not a string', async () => {
+    // parseRawYaml yields `name: 2024` as a number; letting it escape typed as
+    // string would TypeError deep in the portfolio store instead of 422ing.
+    githubFileResponse(`metadata:\n  name: 2024\n  description: Year notes\nentries: []\n`);
+    await expect(installer.fetchAndValidate('library/memories/year.yaml'))
+      .rejects.toThrow(/missing required name or description/);
+  });
+
+  it('rejects a memory document whose description is not a string', async () => {
+    githubFileResponse(`metadata:\n  name: Guide\n  description: true\nentries: []\n`);
+    await expect(installer.fetchAndValidate('library/memories/guide.yaml'))
+      .rejects.toThrow(/missing required name or description/);
+  });
+
   it('propagates a not-found error from the GitHub client', async () => {
     mockGitHubClient.fetchFromGitHub.mockRejectedValue(new Error('File not found in collection. Try search.'));
     await expect(installer.fetchAndValidate('library/skills/missing.md'))

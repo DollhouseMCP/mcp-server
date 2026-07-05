@@ -10,6 +10,7 @@ import {
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
 import { serializePortfolioElementDetail, portfolioElementEtag } from '../portfolio/PortfolioDtos.js';
+import { validateElementPayload } from '../portfolio/PortfolioService.js';
 
 /**
  * A collection element fetched and fully validated but not written. Structural
@@ -69,16 +70,46 @@ export class CollectionInstallService {
         'The collection element is not a supported portfolio element type.');
     }
     const type: ConsolePortfolioElementType = validated.elementType;
+    const displayName = displayNameFrom(validated.metadata) ?? validated.name;
+    const tags = tagsFrom(validated.metadata);
+
+    // The installer's own caps are looser than the console's portfolio record
+    // contract (name/displayName <= 200, tags <= 50 x 80 chars, content <= 1 MiB,
+    // metadata <= 64 KiB). Apply the SAME pre-write validation the direct create
+    // route uses, so an out-of-contract catalog element 422s here instead of
+    // being persisted by the manager-backed store and only failing afterwards
+    // in record validation — which would strand an element the console can
+    // neither read nor delete.
+    const issues = validateElementPayload({
+      name: validated.name,
+      displayName,
+      metadata: validated.metadata,
+      content: validated.content,
+      tags,
+    });
+    if (issues.length > 0) {
+      return {
+        status: 422,
+        body: {
+          type: 'about:blank',
+          title: 'Unprocessable element',
+          status: 422,
+          code: 'collection_element_invalid',
+          detail: 'The collection element does not meet portfolio element limits and was not installed.',
+          issues,
+        },
+      };
+    }
 
     try {
       const record = await this.options.portfolioStore.create({
         userId: auth.userId,
         type,
         name: validated.name,
-        displayName: displayNameFrom(validated.metadata) ?? validated.name,
+        displayName,
         metadata: validated.metadata,
         content: validated.content,
-        tags: tagsFrom(validated.metadata),
+        tags,
         now: this.now(),
       });
       return {
@@ -127,7 +158,8 @@ function classifyFetchError(error: unknown): ConsoleHandlerResult {
     message.includes('Unknown element type') ||
     message.includes('Invalid file type') ||
     message.includes('Path traversal') ||
-    message.includes('Invalid path')
+    message.includes('Invalid path') ||
+    message.includes('Path too deep')
   ) {
     return problem(400, 'invalid_request', 'Invalid request', 'The collection path is not valid.');
   }
@@ -135,7 +167,11 @@ function classifyFetchError(error: unknown): ConsoleHandlerResult {
     message.includes('Security threat') ||
     message.includes('Security validation failed') ||
     message.includes('missing required name or description') ||
-    message.includes('File too large')
+    message.includes('File too large') ||
+    // GitHub's contents API omits inline content for oversized files, which
+    // surfaces as validateContentSize's non-empty-string failure — permanent
+    // for that element, not a transient outage.
+    message.includes('Content must be a non-empty string')
   ) {
     return problem(422, 'collection_element_invalid', 'Unprocessable element',
       'The collection element failed validation and was not installed.');

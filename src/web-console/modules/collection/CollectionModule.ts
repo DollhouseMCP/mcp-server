@@ -33,7 +33,7 @@ export interface CollectionModuleOptions extends CollectionServiceOptions {
  * (wired in WebConsoleRegistrar); install lands in a later slice.
  */
 export function createCollectionModule(options: CollectionModuleOptions): ConsoleModuleDescriptor {
-  const service = new CollectionService(options);
+  const service = new CollectionService({ ...options, installEnabled: options.install !== undefined });
   const routes: ConsoleRouteDefinition[] = [
     {
       method: 'GET',

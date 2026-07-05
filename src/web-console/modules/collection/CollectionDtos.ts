@@ -62,6 +62,12 @@ export interface CollectionElementListDto {
   readonly has_more: boolean;
   readonly source_status: CollectionSourceStatus;
   readonly source_detail: string | null;
+  /**
+   * Whether this deployment registers the install route (collection AND
+   * portfolio-write flags both on). Lets the UI hide Install affordances on
+   * browse-only deployments instead of offering a button that can only 404.
+   */
+  readonly install_enabled: boolean;
 }
 
 /**
@@ -114,6 +120,7 @@ export function serializeCollectionElementList(input: {
    * Omit it when the caller holds the full result set and slices it locally.
    */
   readonly hasMore?: boolean;
+  readonly installEnabled: boolean;
 }): CollectionElementListDto {
   return {
     elements: input.elements,
@@ -123,5 +130,6 @@ export function serializeCollectionElementList(input: {
     has_more: input.hasMore ?? input.page * input.pageSize < input.total,
     source_status: input.sourceStatus,
     source_detail: input.sourceDetail ?? null,
+    install_enabled: input.installEnabled,
   };
 }

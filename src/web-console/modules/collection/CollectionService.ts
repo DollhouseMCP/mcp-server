@@ -44,6 +44,11 @@ export interface CollectionServiceOptions {
   readonly details: CollectionDetailPort;
   /** Observability hook for engine failures behind the degraded state. */
   readonly reportSourceError?: (error: unknown) => void;
+  /**
+   * Whether this deployment registers the install route; surfaced on the list
+   * DTO (`install_enabled`) so the UI hides Install on browse-only deployments.
+   */
+  readonly installEnabled?: boolean;
 }
 
 // Canonical catalog names are file stems: no separators, no leading dot, so a
@@ -53,7 +58,11 @@ const ELEMENT_NAME_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const DEGRADED_DETAIL = 'The collection catalog is currently unavailable. Showing no elements; this is not an empty collection.';
 
 export class CollectionService {
-  constructor(private readonly options: CollectionServiceOptions) {}
+  private readonly installEnabled: boolean;
+
+  constructor(private readonly options: CollectionServiceOptions) {
+    this.installEnabled = options.installEnabled === true;
+  }
 
   async listElements(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     requireConsoleAuthentication(req);
@@ -120,7 +129,7 @@ export class CollectionService {
       index = await this.options.index.getIndex();
     } catch (error) {
       this.options.reportSourceError?.(error);
-      return degradedList(page, pageSize);
+      return degradedList(page, pageSize, this.installEnabled);
     }
 
     const types = type ? [type] : CONSOLE_PORTFOLIO_ELEMENT_TYPES;
@@ -138,6 +147,7 @@ export class CollectionService {
       page,
       pageSize,
       sourceStatus: 'ok',
+      installEnabled: this.installEnabled,
     });
   }
 
@@ -156,7 +166,7 @@ export class CollectionService {
       });
     } catch (error) {
       this.options.reportSourceError?.(error);
-      return degradedList(page, pageSize);
+      return degradedList(page, pageSize, this.installEnabled);
     }
 
     return serializeCollectionElementList({
@@ -171,11 +181,12 @@ export class CollectionService {
       // (unfiltered) total would advertise pages the filtered view can't fill.
       hasMore: results.hasMore,
       sourceStatus: 'ok',
+      installEnabled: this.installEnabled,
     });
   }
 }
 
-function degradedList(page: number, pageSize: number): unknown {
+function degradedList(page: number, pageSize: number, installEnabled: boolean): unknown {
   return serializeCollectionElementList({
     elements: [],
     total: 0,
@@ -183,6 +194,7 @@ function degradedList(page: number, pageSize: number): unknown {
     pageSize,
     sourceStatus: 'degraded',
     sourceDetail: DEGRADED_DETAIL,
+    installEnabled,
   });
 }
 

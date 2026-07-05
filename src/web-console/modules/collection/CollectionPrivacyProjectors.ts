@@ -21,6 +21,7 @@ export function projectCollectionElementList(value: unknown): CollectionElementL
     has_more: input.has_more === true,
     source_status: sourceStatus(input.source_status),
     source_detail: nullableString(input.source_detail),
+    install_enabled: input.install_enabled === true,
   };
 }
 

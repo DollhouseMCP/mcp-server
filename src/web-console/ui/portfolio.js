@@ -40,7 +40,9 @@ const state = {
   page: 1,
   // Collection browse cache (lazy-loaded on first switch to the Collection tab).
   // status: idle | loading | ok | degraded | unavailable | error
-  collection: { status: 'idle', detail: '', elements: [] },
+  // installEnabled mirrors the list DTO's install_enabled: browse-only servers
+  // don't register the install route, so no Install affordances should render.
+  collection: { status: 'idle', detail: '', elements: [], installEnabled: true },
   // Catalog paths installed this session, so their cards can flip to "Installed".
   installed: new Set(),
 };
@@ -167,6 +169,7 @@ async function loadCollection() {
   render();
 
   const elements = [];
+  let installEnabled = true;
   let page = 1;
   try {
     for (; page <= COLLECTION_MAX_PAGES; page++) {
@@ -174,15 +177,16 @@ async function loadCollection() {
       if (res.status === 404) { state.collection.status = 'unavailable'; paint(); return; }
       if (res.status !== 200 || !res.body) { state.collection.status = 'error'; paint(); return; }
       const body = res.body;
+      if (typeof body.install_enabled === 'boolean') installEnabled = body.install_enabled;
       for (const el of (body.elements ?? []).filter(Boolean)) elements.push(mapCollectionElement(el));
       if (body.source_status === 'degraded') {
-        state.collection = { status: 'degraded', detail: str(body.source_detail) ?? '', elements };
+        state.collection = { status: 'degraded', detail: str(body.source_detail) ?? '', elements, installEnabled };
         paint();
         return;
       }
       if (!body.has_more) break;
     }
-    state.collection = { status: 'ok', detail: '', elements };
+    state.collection = { status: 'ok', detail: '', elements, installEnabled };
   } catch {
     state.collection.status = 'error';
   }
@@ -297,6 +301,7 @@ function card(el) {
   const isCollection = el.source === 'collection';
   return `
   <article class="element-card" data-type="${escapeAttr(singular)}" data-key="${escapeAttr(el.type)}" data-name="${escapeAttr(el.name)}"
+    ${isCollection && el.path ? `data-path="${escapeAttr(el.path)}"` : ''}
     role="listitem" tabindex="0" aria-label="View ${escapeHtml(title(el))}">
     <div class="card-header">
       <h3 class="card-title">${escapeHtml(title(el))}</h3>
@@ -343,8 +348,10 @@ function versionMeta(version) {
 }
 
 // Install action for collection cards. Always visible (unlike the list-only
-// download action) since installing is the primary collection interaction.
+// download action) since installing is the primary collection interaction —
+// except on browse-only servers, where the install route doesn't exist.
 function installAction(el) {
+  if (!state.collection.installEnabled) return '';
   if (state.installed.has(el.path)) {
     return '<div class="card-install-wrap"><button class="card-install-btn" data-action="install" disabled aria-disabled="true">Installed ✓</button></div>';
   }
@@ -382,8 +389,12 @@ function wireControls() {
   host.querySelector('#pf-source').addEventListener('click', (e) => toggleGroup(e, '.source-btn', '#pf-source', v => {
     state.source = v; state.page = 1;
     renderTypeFilters(); // counts follow the active source
-    // Lazy-load the catalog the first time the Collection tab is opened.
-    if (v === 'collection' && state.collection.status === 'idle') loadCollection();
+    // Lazy-load the catalog the first time the Collection tab is opened, and
+    // re-try when the last attempt failed or came back empty-degraded —
+    // otherwise a transient blip would brick the tab for the whole session.
+    const cst = state.collection.status;
+    if (v === 'collection' && (cst === 'idle' || cst === 'error' ||
+        (cst === 'degraded' && state.collection.elements.length === 0))) loadCollection();
   }));
   host.querySelector('#pf-type-filters').addEventListener('click', (e) => {
     const btn = e.target.closest('.type-filter'); if (!btn) return;
@@ -395,7 +406,11 @@ function wireControls() {
   host.querySelector('#pf-grid').addEventListener('click', (e) => {
     const cardEl = e.target.closest('.element-card'); if (!cardEl) return;
     const list = visibleElements();
-    const idx = list.findIndex(el => el.type === cardEl.dataset.key && el.name === cardEl.dataset.name);
+    // Collection cards resolve by catalog path — the only key unique across
+    // categorized catalogs (names are file stems, unique per directory only).
+    const idx = cardEl.dataset.path
+      ? list.findIndex(el => el.path === cardEl.dataset.path)
+      : list.findIndex(el => el.type === cardEl.dataset.key && el.name === cardEl.dataset.name);
     if (idx < 0) return;
     const installBtn = e.target.closest('[data-action="install"]');
     if (installBtn) { e.stopPropagation(); installCard(list[idx], installBtn); return; }   // install without opening
@@ -490,7 +505,7 @@ function setHeader(el) {
   // The Install action shows only for collection elements, and reflects whether
   // this session has already installed it.
   const installBtn = dlg.querySelector('.modal-install-btn');
-  const isCollection = el.source === 'collection';
+  const isCollection = el.source === 'collection' && state.collection.installEnabled;
   installBtn.hidden = !isCollection;
   if (isCollection) {
     const done = state.installed.has(el.path);
@@ -585,7 +600,15 @@ async function downloadCard(el, btn) {
 // portfolio in the background so the Portfolio tab reflects it. Returns true when
 // the element is now in the portfolio.
 async function performInstall(el) {
-  const res = await post('/me/portfolio/from-collection', { body: { path: el.path } });
+  let res;
+  try {
+    res = await post('/me/portfolio/from-collection', { body: { path: el.path } });
+  } catch {
+    // fetch() rejects on network-level failures (drop, restart mid-request) —
+    // the slowest console call must not strand the button at "Installing…".
+    notify(`Couldn't install “${title(el)}” — network error. Try again.`, 'error');
+    return false;
+  }
   if (res.status === 201 || res.status === 409) {
     state.installed.add(el.path);
     notify(res.status === 409

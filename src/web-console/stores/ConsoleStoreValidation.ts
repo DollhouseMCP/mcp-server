@@ -72,11 +72,20 @@ export function assertUuid(value: string, name: string): void {
   }
 }
 
+/**
+ * Non-throwing form of the display-string record rule, so route-layer payload
+ * validation can enforce the exact same contract BEFORE a store write instead
+ * of discovering the violation post-persist.
+ */
+export function isValidDisplayString(value: string, maxLength: number): boolean {
+  return typeof value === 'string' &&
+    value.trim() !== '' &&
+    value.length <= maxLength &&
+    !containsControlCharacter(value);
+}
+
 export function assertDisplayString(value: string, name: string, maxLength: number): void {
-  if (typeof value !== 'string' ||
-      value.trim() === '' ||
-      value.length > maxLength ||
-      containsControlCharacter(value)) {
+  if (!isValidDisplayString(value, maxLength)) {
     throw new ConsoleStoreValidationError(`${name} must be a printable non-empty string up to ${maxLength} characters`);
   }
 }

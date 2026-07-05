@@ -926,13 +926,20 @@ export class ElementInstaller {
     const rawMetadata = isPlainRecord(parsed.metadata) ? parsed.metadata : parsed;
     const metadata = this.sanitizeMetadata(rawMetadata as unknown as IElementMetadata);
     this.validateMetadataSecurity(metadata);
-    if (!metadata.name || !metadata.description) {
+    // The parsed YAML is untrusted: unlike the markdown path (whose parser
+    // enforces string-typed identity fields), parseRawYaml happily yields
+    // `name: 2024` as a number — which would escape here typed as string and
+    // TypeError deep in the portfolio store. Require real non-empty strings.
+    const name: unknown = metadata.name;
+    const description: unknown = metadata.description;
+    if (typeof name !== 'string' || name.trim() === '' ||
+        typeof description !== 'string' || description.trim() === '') {
       throw new Error('Invalid content: missing required name or description');
     }
 
     return {
       elementType,
-      name: metadata.name,
+      name,
       metadata,
       content: sanitizedContent,
     };

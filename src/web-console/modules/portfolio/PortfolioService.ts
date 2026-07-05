@@ -15,6 +15,7 @@ import {
   type ConsolePortfolioElementType,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
+import { isValidDisplayString } from '../../stores/ConsoleStoreValidation.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import {
   isPortfolioSyncJobConflictPolicy,
@@ -479,7 +480,13 @@ function parseSyncBody(body: unknown):
   };
 }
 
-function validateElementPayload(input: {
+/**
+ * Pre-write payload validation mirroring the store record contract
+ * (validatePortfolioElementSummaryRecord), so contract violations 422 BEFORE
+ * anything persists. Exported so the collection install path applies the same
+ * caps as the direct create/update routes.
+ */
+export function validateElementPayload(input: {
   readonly name?: string;
   readonly displayName?: string | null;
   readonly metadata?: Readonly<Record<string, unknown>>;
@@ -489,8 +496,13 @@ function validateElementPayload(input: {
   const issues: PortfolioElementValidationIssueDto[] = [];
   if (!input.name || input.name.trim() === '') issues.push(issue('name', 'required', 'name is required.'));
   if (input.name && canonicalizePortfolioElementName(input.name) === '') issues.push(issue('name', 'invalid', 'name must have a canonical form.'));
+  if (input.name && input.name.trim() !== '' && !isValidDisplayString(input.name, 200)) {
+    issues.push(issue('name', 'invalid', 'name must be a printable string of at most 200 characters.'));
+  }
   if (input.displayName?.trim() === '') {
     issues.push(issue('display_name', 'invalid', 'display_name must be non-empty when provided.'));
+  } else if (input.displayName != null && !isValidDisplayString(input.displayName, 200)) {
+    issues.push(issue('display_name', 'invalid', 'display_name must be a printable string of at most 200 characters.'));
   }
   issues.push(...validateMetadataPayload(input.metadata));
   if (input.content === undefined || input.content.trim() === '') issues.push(issue('content', 'required', 'content is required.'));
@@ -517,7 +529,11 @@ function validateTagsPayload(tags: readonly string[]): readonly PortfolioElement
     issues.push(issue('tags', 'too_many', `tags must contain at most ${PORTFOLIO_ELEMENT_TAGS_MAX} entries.`));
   }
   for (const [index, tag] of tags.entries()) {
-    if (tag.trim() === '') issues.push(issue(`tags.${index}`, 'invalid', 'tags must be non-empty strings.'));
+    if (tag.trim() === '') {
+      issues.push(issue(`tags.${index}`, 'invalid', 'tags must be non-empty strings.'));
+    } else if (!isValidDisplayString(tag, 80)) {
+      issues.push(issue(`tags.${index}`, 'invalid', 'tags must be printable strings of at most 80 characters.'));
+    }
   }
   return issues;
 }

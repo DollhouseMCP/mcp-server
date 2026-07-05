@@ -134,6 +134,20 @@ describe('CollectionInstallService', () => {
     expect((await run(service, { path: 'library/gadgets/x.md' })).status).toBe(400);
   });
 
+  it('maps a too-deep path fetch error to 400, not a retryable 503', async () => {
+    const service = serviceWith(installerThrowing(new Error('Path too deep (max 10 levels)')));
+    const result = await run(service, { path: 'library/skills/a/b/c/d/e/f/g/h/i/x.md' });
+    expect(result.status).toBe(400);
+    expect((result.body as { code: string }).code).toBe('invalid_request');
+  });
+
+  it('maps missing inline content (oversized upstream file) to 422, not 503', async () => {
+    const service = serviceWith(installerThrowing(new Error('Content must be a non-empty string')));
+    const result = await run(service, { path: 'library/skills/huge.md' });
+    expect(result.status).toBe(422);
+    expect((result.body as { code: string }).code).toBe('collection_element_invalid');
+  });
+
   it('maps a security/validation fetch error to 422', async () => {
     const service = serviceWith(installerThrowing(new Error('Security threat in content: bad')));
     const result = await run(service, { path: 'library/skills/evil.md' });
@@ -153,6 +167,33 @@ describe('CollectionInstallService', () => {
     const result = await run(service, { path: 'library/skills/x.md' });
     expect(result.status).toBe(422);
     expect((result.body as { code: string }).code).toBe('collection_element_unsupported');
+  });
+
+  it('rejects an element violating the portfolio record contract with 422 before any store write', async () => {
+    const store = { create: jest.fn<IPortfolioElementStore['create']>() } as unknown as IPortfolioElementStore;
+    const tooManyTags = Array.from({ length: 51 }, (_, i) => `tag-${i}`);
+    const service = serviceWith(installerReturning(validatedSkill({
+      metadata: { name: CODE_REVIEW_NAME, description: 'Reviews PRs', tags: tooManyTags },
+    })), store);
+    const result = await run(service, { path: 'library/skills/code-review.md' });
+
+    expect(result.status).toBe(422);
+    expect((result.body as { code: string }).code).toBe('collection_element_invalid');
+    expect((result.body as { issues: unknown[] }).issues.length).toBeGreaterThan(0);
+    expect(store.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects an over-long element name with 422 before any store write', async () => {
+    const store = { create: jest.fn<IPortfolioElementStore['create']>() } as unknown as IPortfolioElementStore;
+    const longName = 'n'.repeat(201);
+    const service = serviceWith(installerReturning(validatedSkill({
+      name: longName,
+      metadata: { name: longName, description: 'd' },
+    })), store);
+    const result = await run(service, { path: 'library/skills/long.md' });
+
+    expect(result.status).toBe(422);
+    expect(store.create).not.toHaveBeenCalled();
   });
 
   it('maps a duplicate element to 409', async () => {
