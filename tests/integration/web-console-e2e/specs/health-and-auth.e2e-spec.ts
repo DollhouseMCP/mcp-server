@@ -37,6 +37,17 @@ describe('authentication gate', () => {
     expect(res.body).toBeTruthy();
   });
 
+  it('GET /auth/me carries the profile header fields', async () => {
+    const res = await world.clients.userA.get('/api/v1/auth/me');
+    expect(res.status).toBe(200);
+    const body = res.body as Record<string, unknown>;
+    // The SPA profile header reads these; they mirror /me/profile's source.
+    expect(body).toHaveProperty('display_name');
+    expect(body).toHaveProperty('email');
+    expect(Array.isArray(body.auth_methods)).toBe(true);
+    expect(Array.isArray(body.granted_capabilities)).toBe(true);
+  });
+
   it('an elevated admin can list users', async () => {
     const res = await world.clients.admin.get('/api/v1/admin/accounts/users');
     expect(res.status).toBe(200);
