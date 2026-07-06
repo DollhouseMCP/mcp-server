@@ -22,9 +22,16 @@ describe('/me/portfolio reads', () => {
     expect(res.status).toBe(200);
   });
 
-  it('404s an unknown element', async () => {
+  it('404s an unknown element as an RFC 9457 problem document', async () => {
     const res = await world.clients.userA.get(`${base}/does-not-exist`);
     expect(res.status).toBe(404);
+    // Handler errors must ship the same problem+json envelope as middleware
+    // errors: typed `type` URI, `instance` echoing the request correlation id.
+    expect(res.headers.get('content-type')).toContain('application/problem+json');
+    const problem = res.body as Record<string, unknown>;
+    expect(problem.type).toBe('https://dollhousemcp.com/errors/portfolio_element_not_found');
+    expect(problem.code).toBe('portfolio_element_not_found');
+    expect(problem.instance).toBe(res.headers.get('x-correlation-id'));
   });
 });
 

@@ -9,6 +9,7 @@ import type {
 } from './ConsolePlatformTypes.js';
 import { serializeConsoleCookie, validateConsoleCookieDirectives } from '../middleware/ConsoleCookies.js';
 import { sendConsoleSseStream } from './ConsoleSseStream.js';
+import { problemInputFromHandlerBody, sendProblemResponse } from './ProblemResponses.js';
 import { renderAuthErrorPage, requestPrefersHtml } from '../../auth/embedded-as/browserErrorPage.js';
 
 const ALLOWED_HANDLER_HEADERS = new Set<keyof ConsoleResponseHeaders>([
@@ -120,6 +121,21 @@ export function sendConsoleHandlerResult(response: Response, result: ConsoleHand
     if (problem) {
       response.status(result.status).type('text/html')
         .send(renderAuthErrorPage(result.status, problem.code, problem.detail, '/ui'));
+      return;
+    }
+  }
+  // Handler-returned error bodies are lifted into RFC 9457 problem documents
+  // here — one enforcement point for every module, present and future — so
+  // API clients get the contract's `application/problem+json` with a typed
+  // `type` URI and an `instance` correlation id, matching the middleware
+  // errors. `code`/`title`/`detail` and extension members (e.g. `issues`)
+  // pass through unchanged. Requires the request-context middleware for the
+  // correlation id; without it (bare test harnesses) the body ships as-is.
+  if (result.status >= 400) {
+    const problem = problemInputFromHandlerBody(result.body, result.status);
+    const correlationId = request?.consoleContext?.correlationId;
+    if (problem && correlationId) {
+      sendProblemResponse(response, problem, correlationId);
       return;
     }
   }
