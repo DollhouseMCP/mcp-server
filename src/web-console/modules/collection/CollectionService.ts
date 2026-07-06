@@ -1,4 +1,5 @@
 import type { CollectionIndex, SearchOptions, SearchResults } from '../../../types/collection.js';
+import { CollectionElementNotFoundError, isCollectionError } from '../../../collection/CollectionErrors.js';
 import type {
   ConsoleHandlerResult,
   ConsoleRequest,
@@ -227,7 +228,10 @@ function positiveIntParam(value: unknown, fallback: number, max?: number): numbe
 }
 
 function isNotFoundError(error: unknown): boolean {
-  return error instanceof Error && error.message.includes('File not found in collection');
+  // Typed check first (cause-chain-aware, so the GitHub client's McpError
+  // wrapper doesn't hide the type); message fallback as belt-and-braces.
+  return isCollectionError(error, CollectionElementNotFoundError) ||
+    (error instanceof Error && error.message.includes('File not found in collection'));
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

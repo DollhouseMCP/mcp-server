@@ -11,6 +11,14 @@ import {
 } from '../../stores/IPortfolioElementStore.js';
 import { serializePortfolioElementDetail, portfolioElementEtag } from '../portfolio/PortfolioDtos.js';
 import { validateElementPayload } from '../portfolio/PortfolioService.js';
+import {
+  CollectionContentInvalidError,
+  CollectionElementNotFoundError,
+  CollectionPathInvalidError,
+  isCollectionError,
+} from '../../../collection/CollectionErrors.js';
+import { ApplicationError, ErrorCategory } from '../../../utils/ErrorHandler.js';
+import { ValidationErrorCodes } from '../../../utils/errorCodes.js';
 
 /**
  * A collection element fetched and fully validated but not written. Structural
@@ -149,6 +157,30 @@ function collectionPathFromBody(body: unknown):
 }
 
 function classifyFetchError(error: unknown): ConsoleHandlerResult {
+  // Typed classification first — stable against message rewording, and
+  // cause-chain-aware so a typed error survives the GitHub client's McpError
+  // wrapper. The installer/GitHub client throw CollectionErrors for their own
+  // failures; the shared input validators (validatePath / validateContentSize)
+  // throw ApplicationError with VALIDATION_ERROR category: INVALID_PATH codes
+  // are bad path input (400), the rest are content-shape failures (422 — e.g.
+  // GitHub's contents API omitting inline content for oversized files).
+  if (isCollectionError(error, CollectionElementNotFoundError)) {
+    return problem(404, 'collection_element_not_found', 'Not found', 'Collection element was not found.');
+  }
+  if (isCollectionError(error, CollectionPathInvalidError)) {
+    return problem(400, 'invalid_request', 'Invalid request', 'The collection path is not valid.');
+  }
+  if (error instanceof ApplicationError && error.code === ValidationErrorCodes.INVALID_PATH) {
+    return problem(400, 'invalid_request', 'Invalid request', 'The collection path is not valid.');
+  }
+  if (isCollectionError(error, CollectionContentInvalidError) ||
+      (error instanceof ApplicationError && error.category === ErrorCategory.VALIDATION_ERROR)) {
+    return problem(422, 'collection_element_invalid', 'Unprocessable element',
+      'The collection element failed validation and was not installed.');
+  }
+
+  // Message fallback, retained as belt-and-braces for errors from layers that
+  // neither throw typed collection errors nor preserve them as `cause`.
   const message = error instanceof Error ? error.message : String(error);
   if (message.includes('File not found in collection') || message.includes('Path does not point to a file')) {
     return problem(404, 'collection_element_not_found', 'Not found', 'Collection element was not found.');
@@ -168,9 +200,6 @@ function classifyFetchError(error: unknown): ConsoleHandlerResult {
     message.includes('Security validation failed') ||
     message.includes('missing required name or description') ||
     message.includes('File too large') ||
-    // GitHub's contents API omits inline content for oversized files, which
-    // surfaces as validateContentSize's non-empty-string failure — permanent
-    // for that element, not a transient outage.
     message.includes('Content must be a non-empty string')
   ) {
     return problem(422, 'collection_element_invalid', 'Unprocessable element',

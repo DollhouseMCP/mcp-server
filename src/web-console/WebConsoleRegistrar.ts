@@ -1,6 +1,7 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
 import type { Router } from 'express';
 import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { Gatekeeper } from '../handlers/mcp-aql/Gatekeeper.js';
@@ -650,6 +651,18 @@ export class WebConsoleRegistrar {
     const collectionFetchRateLimiter = this.options.enableCollectionRoutes === true
       ? resolveCollectionFetchRateLimiter(container, this.options)
       : null;
+    if (this.options.enableCollectionRoutes === true && env.DOLLHOUSE_RATE_LIMIT_BACKEND !== 'postgres') {
+      // The collection-fetch deployment budget lives in the rate-limit store.
+      // With the process-local (in-memory) backend each replica keeps its own
+      // budget, so a multi-replica deployment multiplies the shared GitHub
+      // budget it is meant to cap. Warn so operators set a shared backend.
+      logger.warn(
+        '[WebConsoleRegistrar] Collection browse is enabled but DOLLHOUSE_RATE_LIMIT_BACKEND is not "postgres". ' +
+        'The collection-fetch deployment budget is process-local, so a multi-replica deployment enforces one budget ' +
+        'per replica and multiplies the shared GitHub API budget it exists to protect. Set ' +
+        'DOLLHOUSE_RATE_LIMIT_BACKEND=postgres for a single cross-replica budget.',
+      );
+    }
     const protectedCorrelationRateLimitStore = resolveRateLimitStore(container);
     assertWebConsoleProductionActivation({
       activationProfile,

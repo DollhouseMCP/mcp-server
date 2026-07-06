@@ -10,6 +10,13 @@ import {
   type ConsoleRequest,
   type IPortfolioElementStore,
 } from '../../../../src/web-console/index.js';
+import {
+  CollectionContentInvalidError,
+  CollectionElementNotFoundError,
+  CollectionPathInvalidError,
+} from '../../../../src/collection/CollectionErrors.js';
+import { ApplicationError, ErrorCategory } from '../../../../src/utils/ErrorHandler.js';
+import { ValidationErrorCodes } from '../../../../src/utils/errorCodes.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const NOW = new Date('2026-07-03T12:00:00.000Z');
@@ -122,44 +129,39 @@ describe('CollectionInstallService', () => {
     expect(installer.fetchAndValidate).not.toHaveBeenCalled();
   });
 
-  it('maps a not-found fetch error to 404', async () => {
-    const service = serviceWith(installerThrowing(new Error('File not found in collection. Try search.')));
-    const result = await run(service, { path: 'library/skills/missing.md' });
-    expect(result.status).toBe(404);
-    expect((result.body as { code: string }).code).toBe('collection_element_not_found');
-  });
-
-  it('maps an invalid-path fetch error to 400', async () => {
-    const service = serviceWith(installerThrowing(new Error('Unknown element type: gadgets.')));
-    expect((await run(service, { path: 'library/gadgets/x.md' })).status).toBe(400);
-  });
-
-  it('maps a too-deep path fetch error to 400, not a retryable 503', async () => {
-    const service = serviceWith(installerThrowing(new Error('Path too deep (max 10 levels)')));
-    const result = await run(service, { path: 'library/skills/a/b/c/d/e/f/g/h/i/x.md' });
-    expect(result.status).toBe(400);
-    expect((result.body as { code: string }).code).toBe('invalid_request');
-  });
-
-  it('maps missing inline content (oversized upstream file) to 422, not 503', async () => {
-    const service = serviceWith(installerThrowing(new Error('Content must be a non-empty string')));
-    const result = await run(service, { path: 'library/skills/huge.md' });
-    expect(result.status).toBe(422);
-    expect((result.body as { code: string }).code).toBe('collection_element_invalid');
-  });
-
-  it('maps a security/validation fetch error to 422', async () => {
-    const service = serviceWith(installerThrowing(new Error('Security threat in content: bad')));
-    const result = await run(service, { path: 'library/skills/evil.md' });
-    expect(result.status).toBe(422);
-    expect((result.body as { code: string }).code).toBe('collection_element_invalid');
-  });
-
-  it('maps an unexpected fetch error to 503', async () => {
-    const service = serviceWith(installerThrowing(new Error('GitHub API error: 500')));
+  // Exhaustive fetch-error classification: typed errors from the installer /
+  // GitHub client, ApplicationErrors from the shared input validators, and the
+  // message-based fallbacks for errors that crossed a wrapping boundary.
+  it.each([
+    ['typed not-found', new CollectionElementNotFoundError('File not found in collection. Try search.'), 404, 'collection_element_not_found'],
+    ['typed not-a-file', new CollectionElementNotFoundError('Path does not point to a file'), 404, 'collection_element_not_found'],
+    ['typed invalid path', new CollectionPathInvalidError('Unknown element type: gadgets. Valid types: personas'), 400, 'invalid_request'],
+    ['typed wrong extension', new CollectionPathInvalidError('Invalid file type for memories. Expected .yaml/.yml.'), 400, 'invalid_request'],
+    ['typed invalid content', new CollectionContentInvalidError('Security threat in content: bad'), 422, 'collection_element_invalid'],
+    ['typed missing fields', new CollectionContentInvalidError('Invalid content: missing required name or description'), 422, 'collection_element_invalid'],
+    ['typed oversized file', new CollectionContentInvalidError('File too large (3000000 bytes, max 2097152 bytes)'), 422, 'collection_element_invalid'],
+    ['validator path too deep', new ApplicationError('Path too deep (max 10 levels)', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH), 400, 'invalid_request'],
+    ['validator traversal', new ApplicationError('Path traversal attempt detected', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.INVALID_PATH), 400, 'invalid_request'],
+    ['validator missing inline content', new ApplicationError('Content must be a non-empty string', ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.REQUIRED_FIELD), 422, 'collection_element_invalid'],
+    // The GitHub client wraps everything in an McpError whose message may be
+    // redacted — the typed original survives as `cause` and must classify even
+    // when the wrapper message matches no fallback string.
+    ['wrapped typed not-found via cause chain', (() => {
+      const wrapper = new Error('Failed to fetch from GitHub: [REDACTED]');
+      wrapper.cause = new CollectionElementNotFoundError('File not found in collection.');
+      return wrapper;
+    })(), 404, 'collection_element_not_found'],
+    ['fallback not-found message', new Error('File not found in collection. Try search.'), 404, 'collection_element_not_found'],
+    ['fallback invalid-path message', new Error('Unknown element type: gadgets.'), 400, 'invalid_request'],
+    ['fallback path-too-deep message', new Error('Path too deep (max 10 levels)'), 400, 'invalid_request'],
+    ['fallback security message', new Error('Security threat in content: bad'), 422, 'collection_element_invalid'],
+    ['fallback missing-content message', new Error('Content must be a non-empty string'), 422, 'collection_element_invalid'],
+    ['unclassified upstream failure', new Error('GitHub API error: 500'), 503, 'collection_unavailable'],
+  ])('maps %s to the right status', async (_case, error, status, code) => {
+    const service = serviceWith(installerThrowing(error));
     const result = await run(service, { path: 'library/skills/x.md' });
-    expect(result.status).toBe(503);
-    expect((result.body as { code: string }).code).toBe('collection_unavailable');
+    expect(result.status).toBe(status);
+    expect((result.body as { code: string }).code).toBe(code);
   });
 
   it('rejects an element whose type is not a supported portfolio type with 422', async () => {

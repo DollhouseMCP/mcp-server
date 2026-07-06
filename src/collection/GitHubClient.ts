@@ -3,6 +3,7 @@
  */
 
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
+import { CollectionElementNotFoundError } from './CollectionErrors.js';
 import type { APICache } from '../cache/APICache.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import type { TokenManager } from '../security/tokenManager.js';
@@ -170,7 +171,7 @@ export class GitHubClient {
       throw new Error('GitHub API authentication failed. Please check your GITHUB_TOKEN.');
     }
     if (response.status === 404) {
-      throw new Error('File not found in collection. Try using search to get the correct path: search_collection_enhanced "your-search-term"');
+      throw new CollectionElementNotFoundError('File not found in collection. Try using search to get the correct path: search_collection_enhanced "your-search-term"');
     }
     throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
   }

@@ -192,43 +192,40 @@ describe('GitHubClient', () => {
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('rejects a path-traversal URL that would normalize to a different endpoint', async () => {
-      // Would collapse to https://api.github.com/orgs/DollhouseMCP — a different
-      // endpoint that still passes a hostname-only allowlist. Must be blocked
-      // BEFORE the URL constructor normalizes the `..` segments.
-      await expect(
-        githubClient.fetchFromGitHub(
-          'https://api.github.com/repos/DollhouseMCP/collection/contents/library/../../../orgs/DollhouseMCP'
-        )
-      ).rejects.toThrow(/path-traversal/);
+    // Each traversal shape must be blocked BEFORE the URL constructor
+    // normalizes it: raw `..` would collapse to a different (still-allowlisted)
+    // endpoint, `%2e%2e` decodes to `..` during parsing with no literal dot-dot
+    // segment in the raw string, and single-dot / backslash variants are the
+    // parser-collapse equivalents.
+    it.each([
+      [
+        'raw dot-dot segments that would normalize to a different endpoint',
+        'https://api.github.com/repos/DollhouseMCP/collection/contents/library/../../../orgs/DollhouseMCP',
+      ],
+      [
+        'a single-dot path segment',
+        'https://api.github.com/repos/./collection',
+      ],
+      [
+        'percent-encoded traversal that the URL parser would collapse',
+        'https://api.github.com/repos/DollhouseMCP/collection/contents/library/%2e%2e/%2e%2e/%2e%2e/orgs/evil',
+      ],
+      [
+        'backslash-encoded traversal segments',
+        String.raw`https://api.github.com/repos/DollhouseMCP/collection/contents/library/..\..\..\orgs/evil`,
+      ],
+    ])('rejects %s', async (_case, url) => {
+      await expect(githubClient.fetchFromGitHub(url)).rejects.toThrow(/path-traversal/);
       expect(mockFetch).not.toHaveBeenCalled();
     });
 
-    it('rejects a single-dot path segment', async () => {
+    it('rejects a percent-encoded non-allowlisted hostname', async () => {
+      // `evil%2ecom` decodes to `evil.com` during URL parsing — the allowlist
+      // check runs on the parsed hostname, so an attacker cannot smuggle a
+      // disallowed host past it with percent-encoding.
       await expect(
-        githubClient.fetchFromGitHub('https://api.github.com/repos/./collection')
-      ).rejects.toThrow(/path-traversal/);
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it('rejects percent-encoded traversal that the URL parser would collapse', async () => {
-      // new URL(...) decodes %2e%2e and collapses it to /repos/DollhouseMCP/orgs/evil,
-      // reaching a token-authenticated endpoint. The decoded raw-path check must
-      // catch it despite there being no literal ".." segment.
-      await expect(
-        githubClient.fetchFromGitHub(
-          'https://api.github.com/repos/DollhouseMCP/collection/contents/library/%2e%2e/%2e%2e/%2e%2e/orgs/evil'
-        )
-      ).rejects.toThrow(/path-traversal/);
-      expect(mockFetch).not.toHaveBeenCalled();
-    });
-
-    it('rejects backslash-encoded traversal segments', async () => {
-      await expect(
-        githubClient.fetchFromGitHub(
-          String.raw`https://api.github.com/repos/DollhouseMCP/collection/contents/library/..\..\..\orgs/evil`
-        )
-      ).rejects.toThrow(/path-traversal/);
+        githubClient.fetchFromGitHub('https://evil%2ecom/repos/DollhouseMCP/collection/contents/library/x.md')
+      ).rejects.toThrow(/non-allowed URL/);
       expect(mockFetch).not.toHaveBeenCalled();
     });
 

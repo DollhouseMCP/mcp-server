@@ -31,6 +31,11 @@ import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityError } from '../errors/SecurityError.js';
+import {
+  CollectionContentInvalidError,
+  CollectionElementNotFoundError,
+  CollectionPathInvalidError,
+} from './CollectionErrors.js';
 import type { PortfolioManager } from '../portfolio/PortfolioManager.js';
 import { ElementType } from '../portfolio/PortfolioManager.js';
 import type { SourcePriorityConfig } from '../config/sourcePriority.js';
@@ -111,6 +116,11 @@ const COLLECTION_ELEMENT_TYPE_BY_SEGMENT: Readonly<Record<string, ElementType>> 
 
 function isPlainRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Canonical on-disk extension per element type: memories are YAML, the rest markdown. */
+function elementFileExtension(elementType: ElementType): string {
+  return elementType === ElementType.MEMORY ? '.yaml' : '.md';
 }
 
 export class ElementInstaller {
@@ -788,7 +798,7 @@ export class ElementInstaller {
     const content = await this.fetchCollectionContent(sanitizedPath);
 
     // STEP 2: PERFORM ALL VALIDATION BEFORE ANY DISK OPERATIONS
-    const { sanitizedContent, metadata } = this.validateCollectionContent(content);
+    const { sanitizedContent, metadata } = this.validateCollectionElement(elementType, content);
 
     // STEP 3: PREPARE FILE PATH AND CHECK EXISTENCE
     // FIX (SonarCloud L704): Remove unused elementDir variable
@@ -884,17 +894,17 @@ export class ElementInstaller {
   private resolveCollectionElementType(sanitizedPath: string): ElementType {
     const pathParts = sanitizedPath.split('/');
     if (pathParts.length < 3 || pathParts[0] !== 'library') {
-      throw new Error('Invalid collection path format. Expected: library/[element-type]/[element].[ext]');
+      throw new CollectionPathInvalidError('Invalid collection path format. Expected: library/[element-type]/[element].[ext]');
     }
     const elementType = COLLECTION_ELEMENT_TYPE_BY_SEGMENT[pathParts[1]];
     if (!elementType) {
-      throw new Error(`Unknown element type: ${pathParts[1]}. Valid types: ${Object.keys(COLLECTION_ELEMENT_TYPE_BY_SEGMENT).join(', ')}`);
+      throw new CollectionPathInvalidError(`Unknown element type: ${pathParts[1]}. Valid types: ${Object.keys(COLLECTION_ELEMENT_TYPE_BY_SEGMENT).join(', ')}`);
     }
     const isMemory = elementType === ElementType.MEMORY;
     const hasMemoryExtension = sanitizedPath.endsWith('.yaml') || sanitizedPath.endsWith('.yml');
     const hasMarkdownExtension = sanitizedPath.endsWith('.md');
     if (isMemory ? !hasMemoryExtension : !hasMarkdownExtension) {
-      throw new Error(`Invalid file type for ${pathParts[1]}. Expected ${isMemory ? '.yaml/.yml' : '.md'}.`);
+      throw new CollectionPathInvalidError(`Invalid file type for ${pathParts[1]}. Expected ${isMemory ? '.yaml/.yml' : '.md'}.`);
     }
     return elementType;
   }
@@ -916,7 +926,7 @@ export class ElementInstaller {
       parsed = SecureYamlParser.parseRawYaml(sanitizedContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
     } catch (error) {
       if (error instanceof SecurityError) {
-        throw new Error(`Security threat in content: ${error.message}`);
+        throw new CollectionContentInvalidError(`Security threat in content: ${error.message}`);
       }
       throw error;
     }
@@ -934,7 +944,7 @@ export class ElementInstaller {
     const description: unknown = metadata.description;
     if (typeof name !== 'string' || name.trim() === '' ||
         typeof description !== 'string' || description.trim() === '') {
-      throw new Error('Invalid content: missing required name or description');
+      throw new CollectionContentInvalidError('Invalid content: missing required name or description');
     }
 
     return {
@@ -967,7 +977,7 @@ export class ElementInstaller {
     // path stays consistent if someone wires this through it.
     const layer = this.storageLayerFactory.createForElement(elementType, {
       elementDir: this.portfolioManager.getElementDir(elementType),
-      fileExtension: '.md',
+      fileExtension: elementFileExtension(elementType),
       scanCooldownMs: 0,
     });
     if (!isWritableStorageLayer(layer)) {
@@ -1018,20 +1028,11 @@ export class ElementInstaller {
    * @private
    */
   private validateAndExtractElementType(sanitizedPath: string): ElementType {
-    // SECURITY: Detect element type from path structure and validate format
-    // Expected format: library/[element-type]/[category]/[element].md
-    const pathParts = sanitizedPath.split('/');
-    if (pathParts.length < 3 || pathParts[0] !== 'library') {
-      throw new Error('Invalid collection path format. Expected: library/[element-type]/[category]/[element].md');
-    }
-
-    // SECURITY: Ensure the path ends with .md to prevent arbitrary file types
-    if (!sanitizedPath.endsWith('.md')) {
-      throw new Error('Invalid file type. Only .md files are allowed.');
-    }
-
-    const elementTypeStr = pathParts[1];
-    return this.getElementTypeFromString(elementTypeStr);
+    // All six element types with per-type extension enforcement (memories are
+    // .yaml/.yml, everything else .md) — the same resolution the web-console
+    // seam uses, so the MCP install path and the console path can never
+    // disagree about what is installable.
+    return this.resolveCollectionElementType(sanitizedPath);
   }
 
   /**
@@ -1048,12 +1049,12 @@ export class ElementInstaller {
     const data = await this.githubClient.fetchFromGitHub(url);
 
     if (data.type !== 'file') {
-      throw new Error('Path does not point to a file');
+      throw new CollectionElementNotFoundError('Path does not point to a file');
     }
 
     // SECURITY: Check file size before downloading to prevent DoS attacks
     if (data.size > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
-      throw new Error(`File too large (${data.size} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`);
+      throw new CollectionContentInvalidError(`File too large (${data.size} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`);
     }
 
     // Decode Base64 content into memory only
@@ -1061,8 +1062,25 @@ export class ElementInstaller {
   }
 
   /**
-   * Validate and sanitize collection content
-   * Extracted from installFromCollection() to reduce cognitive complexity
+   * Type-aware validation dispatch for the install paths: memories are pure
+   * YAML with their own secure branch; every other type runs the markdown
+   * frontmatter pipeline. Keeps the MCP install paths and the web-console
+   * seam validating identically for all six element types.
+   */
+  private validateCollectionElement(elementType: ElementType, content: string): {
+    sanitizedContent: string;
+    metadata: IElementMetadata;
+  } {
+    if (elementType === ElementType.MEMORY) {
+      const validated = this.validateCollectionMemory(elementType, content);
+      return { sanitizedContent: validated.content, metadata: validated.metadata };
+    }
+    const { sanitizedContent, metadata } = this.validateCollectionContent(content);
+    return { sanitizedContent, metadata };
+  }
+
+  /**
+   * Validate and sanitize collection content (markdown frontmatter pipeline)
    *
    * @param content - Raw content from collection
    * @returns Sanitized content and parsed metadata
@@ -1089,7 +1107,7 @@ export class ElementInstaller {
 
     // SECURITY: Validate required metadata fields
     if (!metadata.name || !metadata.description) {
-      throw new Error('Invalid content: missing required name or description');
+      throw new CollectionContentInvalidError('Invalid content: missing required name or description');
     }
 
     return { sanitizedContent, metadata, body: parsed.content };
@@ -1127,7 +1145,7 @@ export class ElementInstaller {
       return { data: parsed.data as IElementMetadata, content: parsed.content };
     } catch (error) {
       if (error instanceof SecurityError) {
-        throw new Error(`Security threat in content: ${error.message}`);
+        throw new CollectionContentInvalidError(`Security threat in content: ${error.message}`);
       }
       throw error;
     }
@@ -1144,7 +1162,7 @@ export class ElementInstaller {
   private validateMetadataSecurity(metadata: IElementMetadata): void {
     const metadataValidation = ContentValidator.validateMetadata(metadata);
     if (!metadataValidation.isValid) {
-      throw new Error(`Security validation failed: ${metadataValidation.detectedPatterns?.join(', ')}`);
+      throw new CollectionContentInvalidError(`Security validation failed: ${metadataValidation.detectedPatterns?.join(', ')}`);
     }
   }
 
@@ -1230,7 +1248,7 @@ export class ElementInstaller {
     const sanitizedPath = validatePath(collectionPath);
     const elementType = this.validateAndExtractElementType(sanitizedPath);
     const content = await this.fetchCollectionContent(sanitizedPath);
-    const { sanitizedContent, metadata } = this.validateCollectionContent(content);
+    const { sanitizedContent, metadata } = this.validateCollectionElement(elementType, content);
 
     const sourceUrl = `github://DollhouseMCP/collection/${sanitizedPath}`;
     const result = await sharedPoolInstaller.install({
@@ -1248,7 +1266,7 @@ export class ElementInstaller {
           success: true,
           message: 'AI customization element installed to shared pool!',
           metadata,
-          filename: `${metadata.name}.md`,
+          filename: `${metadata.name}${elementFileExtension(elementType)}`,
           elementType,
         };
 
@@ -1257,7 +1275,7 @@ export class ElementInstaller {
           success: true,
           message: result.reason,
           metadata,
-          filename: `${metadata.name}.md`,
+          filename: `${metadata.name}${elementFileExtension(elementType)}`,
           elementType,
           alreadyExists: true,
         };
@@ -1315,25 +1333,6 @@ export class ElementInstaller {
       // Re-throw the original error to maintain error handling semantics
       throw error;
     }
-  }
-
-  /**
-   * Get ElementType from string
-   */
-  private getElementTypeFromString(typeStr: string): ElementType {
-    const typeMap: Record<string, ElementType> = {
-      'personas': ElementType.PERSONA,
-      'skills': ElementType.SKILL,
-      'templates': ElementType.TEMPLATE,
-      'agents': ElementType.AGENT
-    };
-
-    const elementType = typeMap[typeStr];
-    if (!elementType) {
-      throw new Error(`Unknown element type: ${typeStr}. Valid types: ${Object.keys(typeMap).join(', ')}`);
-    }
-
-    return elementType;
   }
 
   /**

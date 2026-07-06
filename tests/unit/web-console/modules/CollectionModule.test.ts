@@ -13,6 +13,7 @@ import {
   type ConsoleRouteDefinition,
   type IPortfolioElementStore,
 } from '../../../../src/web-console/index.js';
+import { collectionElementNameFromPath } from '../../../../src/web-console/modules/collection/CollectionDtos.js';
 import type { CollectionIndexManager } from '../../../../src/collection/CollectionIndexManager.js';
 import type { CollectionSearch } from '../../../../src/collection/CollectionSearch.js';
 import type { PersonaDetails } from '../../../../src/collection/PersonaDetails.js';
@@ -200,6 +201,19 @@ describe('CollectionModule', () => {
       const body = result.body as CollectionElementListDto;
       expect(body.total).toBe(1);
       expect(body.elements[0].type).toBe('skills');
+    });
+
+    // The stem IS the element's install/detail name: only the final catalog
+    // extension is stripped, inner dots survive (a `guide.yaml.md` file lists
+    // as `guide.yaml` and round-trips through the detail route unchanged).
+    it.each([
+      ['library/personas/code-review.md', 'code-review'],
+      ['library/memories/guide.yaml', 'guide'],
+      ['library/memories/guide.yml', 'guide'],
+      ['library/personas/guide.yaml.md', 'guide.yaml'],
+      ['library/personas/no-extension', 'no-extension'],
+    ])('derives the element name from catalog path %s as %s', (catalogPath, expected) => {
+      expect(collectionElementNameFromPath(catalogPath, 'fallback')).toBe(expected);
     });
 
     it('strips the .yaml extension from memory element names', async () => {

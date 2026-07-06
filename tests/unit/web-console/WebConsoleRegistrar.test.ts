@@ -407,6 +407,51 @@ describe('WebConsoleRegistrar', () => {
     }
   });
 
+  it('warns when collection routes are enabled with a process-local rate-limit backend', async () => {
+    // Default DOLLHOUSE_RATE_LIMIT_BACKEND is "memory" (process-local), so the
+    // collection-fetch deployment budget is per-replica — the registrar must
+    // warn operators to switch to a shared backend.
+    const { logger } = await import('../../../src/utils/logger.js');
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const container = new TestContainer();
+      container.seed('CollectionIndexManager', { getIndex: jest.fn() });
+      container.seed('CollectionSearch', { searchCollectionWithOptions: jest.fn() });
+      container.seed('PersonaDetails', { getCollectionContent: jest.fn() });
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+      await new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 23),
+        enableCollectionRoutes: true,
+        registerCleanup: false,
+      }).bootstrapAndRegister(container);
+
+      const warned = warn.mock.calls.some(call =>
+        typeof call[0] === 'string' && call[0].includes('DOLLHOUSE_RATE_LIMIT_BACKEND'));
+      expect(warned).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not emit the rate-limit-backend warning when collection routes are disabled', async () => {
+    const { logger } = await import('../../../src/utils/logger.js');
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+      await new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 25),
+        registerCleanup: false,
+      }).bootstrapAndRegister(new TestContainer());
+
+      const warned = warn.mock.calls.some(call =>
+        typeof call[0] === 'string' && call[0].includes('DOLLHOUSE_RATE_LIMIT_BACKEND'));
+      expect(warned).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('adds the install route only when collection AND portfolio write flags are both enabled', async () => {
     const container = new TestContainer();
     container.seed('CollectionIndexManager', { getIndex: jest.fn() });
