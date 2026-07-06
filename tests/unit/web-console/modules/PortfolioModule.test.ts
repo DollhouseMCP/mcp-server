@@ -503,6 +503,37 @@ describe('PortfolioModule', () => {
         issues: [expect.objectContaining({ path: 'tags', code: 'too_many' })],
       },
     });
+    // Store record contract mirrored pre-write: name/tag caps 422 here instead
+    // of the store persisting the element and only then throwing on toRecord.
+    await expect(create.handler(consoleRequest({
+      params: { type: 'skills' },
+      body: {
+        name: 'n'.repeat(201),
+        metadata: {},
+        content: '# Long name',
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({ path: 'name', code: 'invalid' })],
+      },
+    });
+    await expect(create.handler(consoleRequest({
+      params: { type: 'skills' },
+      body: {
+        name: 'long-tag',
+        metadata: {},
+        content: '# Long tag',
+        tags: ['t'.repeat(81)],
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({ path: 'tags.0', code: 'invalid' })],
+      },
+    });
   });
 
   it('updates portfolio elements only with the current element ETag', async () => {

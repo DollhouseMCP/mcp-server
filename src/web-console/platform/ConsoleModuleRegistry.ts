@@ -25,8 +25,11 @@ const IDEMPOTENCY_POLICIES = new Set<string>(['not_applicable', 'required']);
 const OWNERSHIP_POLICIES = new Set<string>(['none', 'flow_transaction', 'authenticated_user', 'owned_session']);
 const RESPONSE_KINDS = new Set<string>(['json', 'sse']);
 const MUTATING_METHODS = new Set<ConsoleHttpMethod>(['POST', 'PUT', 'PATCH', 'DELETE']);
-const SELF_PRIVACY_CLASSES = new Set<ConsolePrivacyClass>(['self_private', 'self_security']);
-const SELF_PATH_PATTERN = /^\/api\/v1\/(me|auth)(\/|$)/;
+// Privacy classes a self-audience route may declare. `public_catalog` is the
+// one non-personal member: collection catalog routes are session-gated (they
+// spend server-funded upstream budget) but serve global public data.
+const SELF_PRIVACY_CLASSES = new Set<ConsolePrivacyClass>(['self_private', 'self_security', 'public_catalog']);
+const SELF_PATH_PATTERN = /^\/api\/v1\/(me|auth|collection)(\/|$)/;
 const PUBLIC_AUTH_PATH_PATTERN = /^\/api\/v1\/auth(\/|$)/;
 const PUBLIC_HEALTH_PATH_PATTERN = /^\/api\/v1\/health(\/ready)?$/;
 const MAX_STREAM_EVENT_BYTES = 1024 * 1024;
@@ -430,6 +433,12 @@ export class ConsoleModuleRegistry {
     }
     if (!route.privacyClass || !SELF_PRIVACY_CLASSES.has(route.privacyClass)) {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" self-service route ${routeKey(route)} has invalid privacy class`);
+    }
+    // public_catalog and /api/v1/collection are pairwise-locked: catalog routes
+    // must not claim a personal privacy class, and personal routes must not
+    // launder data through the catalog class.
+    if ((route.privacyClass === 'public_catalog') !== route.path.startsWith('/api/v1/collection')) {
+      throw new ConsoleModuleRegistrationError(`Module "${module.id}" self-service route ${routeKey(route)} pairs the public_catalog privacy class and /api/v1/collection paths inconsistently`);
     }
     if (!route.ownership || route.ownership === 'none') {
       throw new ConsoleModuleRegistrationError(`Module "${module.id}" self-service route ${routeKey(route)} is missing an ownership policy`);

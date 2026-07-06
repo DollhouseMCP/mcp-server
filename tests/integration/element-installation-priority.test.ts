@@ -84,7 +84,8 @@ describe('Element Installation Priority Integration Tests', () => {
     // Initialize element installer
     elementInstaller = new ElementInstaller(githubClient, {
       portfolioManager,
-      unifiedIndexManager
+      unifiedIndexManager,
+      fileOperations
     });
   });
 

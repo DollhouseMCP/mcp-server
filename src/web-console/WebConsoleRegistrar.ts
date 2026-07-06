@@ -1,6 +1,7 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
 import type { Router } from 'express';
 import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { Gatekeeper } from '../handlers/mcp-aql/Gatekeeper.js';
@@ -144,6 +145,13 @@ import {
   type OperationsHealthChecks,
 } from './modules/operations/index.js';
 import type { ISystemMetricsSource } from './modules/operations/SystemMetricsSource.js';
+import {
+  createCollectionModule,
+  type CollectionDetailPort,
+  type CollectionIndexPort,
+  type CollectionInstallPort,
+  type CollectionSearchPort,
+} from './modules/collection/index.js';
 import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
@@ -167,6 +175,7 @@ import {
 } from './modules/account-admin/AccountAdminMutationTransaction.js';
 import type { IRateLimitStore } from '../auth/embedded-as/storage/IRateLimitStore.js';
 import { ConsoleProtectedCorrelationRateLimiter } from './services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
+import { ConsoleCollectionFetchRateLimiter } from './services/rate-limit/ConsoleCollectionFetchRateLimiter.js';
 import {
   assertWebConsoleProductionActivation,
   markWebConsoleProductionAdapter,
@@ -280,6 +289,12 @@ export interface WebConsoleRegistrarOptions {
   readonly portfolioStore?: IPortfolioElementStore | null;
   readonly enableManagerBackedPortfolioStore?: boolean;
   readonly enablePortfolioWriteRoutes?: boolean;
+  /**
+   * Registers the collection catalog browse routes (/api/v1/collection/*).
+   * Off by default: the surface spends server-funded outbound GitHub budget,
+   * so operators opt in via DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED.
+   */
+  readonly enableCollectionRoutes?: boolean;
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
   readonly portfolioSyncWorker?: IConsolePortfolioSyncWorker | null;
   readonly portfolioSyncJobExecutor?: IPortfolioSyncJobExecutor | null;
@@ -603,6 +618,25 @@ export class WebConsoleRegistrar {
       enablePortfolioWriteRoutes: this.options.enablePortfolioWriteRoutes === true,
       now: this.options.now,
     }));
+    // Whole-module gate (not per-route like portfolio writes): when the flag is
+    // off, the catalog surface is absent from the manifest entirely. The install
+    // route additionally requires the portfolio write flag — install is a
+    // portfolio mutation sourced from the catalog.
+    if (this.options.enableCollectionRoutes === true) {
+      const enableInstall = this.options.enablePortfolioWriteRoutes === true;
+      registerRouteModule(registry, this.options, 'collection', () => createCollectionModule({
+        index: resolveCollectionEngineService<CollectionIndexPort>(container, 'CollectionIndexManager'),
+        search: resolveCollectionEngineService<CollectionSearchPort>(container, 'CollectionSearch'),
+        details: resolveCollectionEngineService<CollectionDetailPort>(container, 'PersonaDetails'),
+        install: enableInstall
+          ? {
+              installer: resolveCollectionEngineService<CollectionInstallPort>(container, 'ElementInstaller'),
+              portfolioStore: stores.portfolioStore,
+              now: this.options.now,
+            }
+          : undefined,
+      }));
+    }
     registerRouteModule(registry, this.options, 'selfService', () => createSelfServiceModule({
       accountAdminStore: stores.accountAdminStore,
       userConfigStore,
@@ -614,6 +648,21 @@ export class WebConsoleRegistrar {
       now: this.options.now,
     }));
     const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
+    const collectionFetchRateLimiter = this.options.enableCollectionRoutes === true
+      ? resolveCollectionFetchRateLimiter(container, this.options)
+      : null;
+    if (this.options.enableCollectionRoutes === true && env.DOLLHOUSE_RATE_LIMIT_BACKEND !== 'postgres') {
+      // The collection-fetch deployment budget lives in the rate-limit store.
+      // With the process-local (in-memory) backend each replica keeps its own
+      // budget, so a multi-replica deployment multiplies the shared GitHub
+      // budget it is meant to cap. Warn so operators set a shared backend.
+      logger.warn(
+        '[WebConsoleRegistrar] Collection browse is enabled but DOLLHOUSE_RATE_LIMIT_BACKEND is not "postgres". ' +
+        'The collection-fetch deployment budget is process-local, so a multi-replica deployment enforces one budget ' +
+        'per replica and multiplies the shared GitHub API budget it exists to protect. Set ' +
+        'DOLLHOUSE_RATE_LIMIT_BACKEND=postgres for a single cross-replica budget.',
+      );
+    }
     const protectedCorrelationRateLimitStore = resolveRateLimitStore(container);
     assertWebConsoleProductionActivation({
       activationProfile,
@@ -630,6 +679,7 @@ export class WebConsoleRegistrar {
           oauthGrantRevocationService,
           protectedCorrelationRateLimiter,
           protectedCorrelationRateLimitStore,
+          collectionFetchRateLimiter,
           adminAuditQuery,
           approvalAuditQuery,
           authenticationAuditQuery,
@@ -672,6 +722,7 @@ export class WebConsoleRegistrar {
       runtimeStore: stores.runtimeSessionControlStore,
       authPolicyStore,
       protectedCorrelationRateLimiter,
+      collectionFetchRateLimiter,
       apiV1MountState,
       userContext: resolveConsoleUserContext(container),
     });
@@ -785,6 +836,7 @@ export function createProductionRouteDependencies(options: {
     readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
     readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
     readonly protectedCorrelationRateLimitStore: IRateLimitStore | null;
+    readonly collectionFetchRateLimiter: ConsoleCollectionFetchRateLimiter | null;
     readonly adminAuditQuery: IAdminAuditQuery;
     readonly approvalAuditQuery: IApprovalAuditQuery;
     readonly authenticationAuditQuery: IAuthenticationAuditQuery;
@@ -820,6 +872,8 @@ export function createProductionRouteDependencies(options: {
       'accountAdmin protected correlation routes require a production protected-correlation rate limiter or must be omitted before hosted/shared mount.'),
     routeDependency('accountAdmin', 'protectedCorrelationRateLimitStore', options.services.protectedCorrelationRateLimitStore,
       'accountAdmin protected correlation routes require a production rate-limit store or must be omitted before hosted/shared mount.'),
+    routeDependency('collection', 'collectionFetchRateLimiter', options.services.collectionFetchRateLimiter,
+      'collection catalog routes require a production collection-fetch rate limiter or must be omitted before hosted/shared mount.'),
     routeDependency('runtimeSessions', 'runtimeSessionControlStore', options.stores.runtimeSessionControlStore,
       'runtime session routes require production runtime-control persistence or must be omitted before hosted/shared mount.'),
     routeDependency('runtimeSessions', 'accountAdminStore', options.stores.accountAdminStore,
@@ -1027,6 +1081,7 @@ function createApiV1Mount(options: {
   readonly runtimeStore: IRuntimeSessionControlStore;
   readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly collectionFetchRateLimiter: ConsoleCollectionFetchRateLimiter | null;
   readonly apiV1MountState: Pick<WebConsoleApiV1Mount, 'mounted' | 'markMounted'>;
   readonly userContext: ReturnType<typeof resolveConsoleUserContext>;
 }): WebConsoleApiV1Mount | null {
@@ -1045,6 +1100,7 @@ function createApiV1Mount(options: {
     runtimeStore: options.runtimeStore,
     authPolicyStore: options.authPolicyStore,
     protectedCorrelationRateLimiter: options.protectedCorrelationRateLimiter,
+    collectionFetchRateLimiter: options.collectionFetchRateLimiter,
     idleTimeoutMs: options.options.consoleSessionIdleTimeoutMs ?? 30 * 60 * 1000,
     now: options.options.now,
     reportInternalError: options.options.reportApiV1InternalError,
@@ -1420,6 +1476,43 @@ function resolveProtectedCorrelationRateLimiter(
     selectorHmacKey: Buffer.from(key),
     now: options.now,
   }), 'ConsoleProtectedCorrelationRateLimiter');
+}
+
+/**
+ * Collection-fetch limiter for the catalog routes. Reuses the protected
+ * correlation selector HMAC key (the limiter derives its own selectors under a
+ * distinct prefix) so enabling the collection surface needs no extra key
+ * material; the shared RateLimitStore keeps the budget replica-wide.
+ */
+function resolveCollectionFetchRateLimiter(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): ConsoleCollectionFetchRateLimiter | null {
+  const key = options.protectedCorrelationSelectorHmacKey ??
+    (container.hasRegistration('WebConsoleProtectedCorrelationSelectorHmacKey')
+      ? container.resolve<Buffer>('WebConsoleProtectedCorrelationSelectorHmacKey')
+      : null);
+  if (!key) return null;
+  if (!container.hasRegistration('RateLimitStore')) {
+    throw new Error('Web console collection routes require RateLimitStore');
+  }
+  return markProductionAdapter(new ConsoleCollectionFetchRateLimiter({
+    store: container.resolve<IRateLimitStore>('RateLimitStore'),
+    selectorHmacKey: Buffer.from(key),
+    now: options.now,
+  }), 'ConsoleCollectionFetchRateLimiter');
+}
+
+/**
+ * The collection engine services live in the main DI container (registered by
+ * CollectionServiceRegistrar during server bootstrap). Resolve with a clear
+ * failure when a partial container enables the collection routes without them.
+ */
+function resolveCollectionEngineService<T>(container: DiContainerFacade, name: string): T {
+  if (!container.hasRegistration(name)) {
+    throw new Error(`Web console collection routes require the "${name}" collection engine service`);
+  }
+  return container.resolve<T>(name);
 }
 
 function resolveRateLimitStore(container: DiContainerFacade): IRateLimitStore | null {
