@@ -381,7 +381,7 @@ async function reload() {
   updateSelectionUI();
   // The endpoint returns newest-first; the buffer is oldest→newest (newest at
   // the bottom, like the legacy stream).
-  const entries = (res.body.entries || []).slice().reverse();
+  const entries = (res.body.items || []).slice().reverse();
   for (const entry of entries) buffer.push(entry);
   newestTs = entries.length ? entries[entries.length - 1].ts : newestTs;
   noteSessions(entries);
@@ -438,7 +438,7 @@ async function poll() {
     }
     if (lastPollFailed) setStatus(paused ? 'paused' : 'live');
     lastPollFailed = false;
-    applyFreshEntries((res.body.entries || []).slice().reverse()); // oldest→newest
+    applyFreshEntries((res.body.items || []).slice().reverse()); // oldest→newest
   } catch {
     markPollFailed();
   } finally {

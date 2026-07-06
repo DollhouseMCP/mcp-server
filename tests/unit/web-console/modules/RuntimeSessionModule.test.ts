@@ -204,10 +204,13 @@ describe('RuntimeSessionModule', () => {
 
     await expect(listRoute.handler(request())).resolves.toMatchObject({
       status: 200,
-      body: [{
-        session_id: SESSION_ID,
-        client_info: { name: 'Dollhouse CLI', version: '1.0.0' },
-      }],
+      // Snapshot-family envelope: noun-keyed, never a bare array.
+      body: {
+        sessions: [{
+          session_id: SESSION_ID,
+          client_info: { name: 'Dollhouse CLI', version: '1.0.0' },
+        }],
+      },
     });
     const result = await showRoute.handler(request({ params: { session_id: SESSION_ID } }));
     expect(result.body).not.toHaveProperty('account_correlation_id');
@@ -239,7 +242,8 @@ describe('RuntimeSessionModule', () => {
     const route = findRoute(module.routes, 'GET', '/api/v1/admin/accounts/users/:user_id/sessions');
 
     const result = await route.handler(request({ params: { user_id: USER_ID } }));
-    const projected = projectRuntimeSessionAccount((result.body as unknown[])[0]);
+    const sessions = (result.body as { sessions: unknown[] }).sessions;
+    const projected = projectRuntimeSessionAccount(sessions[0]);
 
     expect(projected).toEqual({
       session_id: SESSION_ID,
@@ -318,7 +322,7 @@ describe('RuntimeSessionModule', () => {
     const deleteRoute = findRoute(module.routes, 'DELETE', '/api/v1/admin/operate/sessions/:session_id');
 
     const list = await listRoute.handler(request());
-    const projected = projectRuntimeSessionOperational((list.body as unknown[])[0]);
+    const projected = projectRuntimeSessionOperational((list.body as { sessions: unknown[] }).sessions[0]);
     expect(projected).toMatchObject({
       session_id: SESSION_ID,
       account_correlation_id: ACCOUNT_CORRELATION_ID,

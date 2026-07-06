@@ -11,6 +11,7 @@ import {
   objectValue,
   stringField,
 } from '../../platform/ConsoleProjectorHelpers.js';
+import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
 
 const SELF_CAPABILITY = 'console:self';
 
@@ -29,6 +30,8 @@ export interface ConsoleLogQueryOptions {
   readonly sessionId: string | null;
   readonly since: string | null;
   readonly limit: number;
+  /** Continuation position within the filtered result set (0 = first page). */
+  readonly offset: number;
 }
 
 export interface ConsoleLogEntry {
@@ -44,8 +47,17 @@ export interface ConsoleLogEntry {
 
 export interface ConsoleLogPage {
   readonly entries: readonly ConsoleLogEntry[];
-  readonly total: number;
   readonly has_more: boolean;
+}
+
+/** Cursor-family response envelope (`{items, page:{limit, cursor, next_cursor}}`). */
+export interface ConsoleLogPageDto {
+  readonly items: readonly ConsoleLogEntry[];
+  readonly page: {
+    readonly limit: number;
+    readonly cursor: string | null;
+    readonly next_cursor: string | null;
+  };
 }
 
 export interface IConsoleLogSource {
@@ -74,11 +86,12 @@ export function createMeLogsModule(options: MeLogsModuleOptions): ConsoleModuleD
         elevation: 'none',
         privacyClass: 'self_private',
         idempotency: 'not_applicable',
-        privacyProjector: projectConsoleLogPage,
+        privacyProjector: projectConsoleLogPageDto,
         handler: (req): ConsoleHandlerResult => {
           const actor = requireConsoleAuthentication(req);
-          const page = logSource.queryUserLogs(parseLogQuery(req, actor.userId));
-          return { status: 200, body: projectConsoleLogPage(page) };
+          const query = parseLogQuery(req, actor.userId);
+          const page = logSource.queryUserLogs(query);
+          return { status: 200, body: serializeConsoleLogPage(page, query) };
         },
       },
     ],
@@ -95,15 +108,31 @@ function parseLogQuery(req: ConsoleRequest, userId: string): ConsoleLogQueryOpti
     sessionId: boundedString(firstString(req.query.session_id), 200),
     since: boundedString(firstString(req.query.since), 64),
     limit: boundedLimit(firstString(req.query.limit), 200),
+    offset: offsetFromConsoleCursor(boundedString(firstString(req.query.cursor), 512)),
   };
 }
 
-function projectConsoleLogPage(value: unknown): ConsoleLogPage {
-  const record = objectValue(value);
+function serializeConsoleLogPage(page: ConsoleLogPage, query: ConsoleLogQueryOptions): ConsoleLogPageDto {
   return {
-    entries: arrayValue(record.entries).map(projectConsoleLogEntry),
-    total: numberField(record, 'total'),
-    has_more: record.has_more === true,
+    items: page.entries,
+    page: {
+      limit: query.limit,
+      cursor: query.offset > 0 ? offsetConsoleCursor(query.offset) : null,
+      next_cursor: page.has_more ? offsetConsoleCursor(query.offset + page.entries.length) : null,
+    },
+  };
+}
+
+function projectConsoleLogPageDto(value: unknown): ConsoleLogPageDto {
+  const record = objectValue(value);
+  const page = objectValue(record.page);
+  return {
+    items: arrayValue(record.items).map(projectConsoleLogEntry),
+    page: {
+      limit: numberField(page, 'limit'),
+      cursor: nullableStringField(page, 'cursor'),
+      next_cursor: nullableStringField(page, 'next_cursor'),
+    },
   };
 }
 

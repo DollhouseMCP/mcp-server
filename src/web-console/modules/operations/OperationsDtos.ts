@@ -136,12 +136,18 @@ export interface SystemMetricSnapshotDto {
   readonly errors: readonly string[];
 }
 
+/**
+ * Cursor-family envelope (`{items, page:{limit, cursor, next_cursor}}`).
+ * `oldest_available`/`newest_available` are ring-buffer anchors — domain
+ * metadata, not pagination — so they stay at the top level.
+ */
 export interface SystemMetricsResponseDto {
-  readonly snapshots: readonly SystemMetricSnapshotDto[];
-  readonly total: number;
-  readonly has_more: boolean;
-  readonly limit: number;
-  readonly offset: number;
+  readonly items: readonly SystemMetricSnapshotDto[];
+  readonly page: {
+    readonly limit: number;
+    readonly cursor: string | null;
+    readonly next_cursor: string | null;
+  };
   readonly oldest_available: string;
   readonly newest_available: string;
 }

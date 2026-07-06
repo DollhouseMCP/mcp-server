@@ -751,8 +751,9 @@ describe('OperationsModule', () => {
     const result = await route.handler({ query: {}, params: {} } as never);
 
     expect(result.status).toBe(200);
+    // Cursor-family envelope; ring-buffer anchors stay top-level.
     expect(projectSystemMetrics(result.body)).toEqual({
-      snapshots: [{
+      items: [{
         id: 'snap-1',
         timestamp: NOW.toISOString(),
         duration_ms: 5,
@@ -762,13 +763,49 @@ describe('OperationsModule', () => {
           { name: 'op.latency', source: 'perf', unit: 'ms', type: 'histogram', value: { count: 3, sum: 30, min: 5, p95: 20 } },
         ],
       }],
-      total: 1,
-      has_more: false,
-      limit: 50,
-      offset: 0,
+      page: { limit: 50, cursor: null, next_cursor: null },
       oldest_available: NOW.toISOString(),
       newest_available: NOW.toISOString(),
     });
+  });
+
+  it('walks System A pages through opaque cursors, never raw offsets', async () => {
+    const source: ISystemMetricsSource = {
+      query: (options) => ({
+        snapshots: [{
+          id: `snap-${(options?.offset ?? 0) + 1}`,
+          timestamp: NOW.toISOString(),
+          durationMs: 5,
+          errors: [],
+          metrics: [],
+        }],
+        total: 2,
+        hasMore: (options?.offset ?? 0) === 0,
+        limit: 1,
+        offset: options?.offset ?? 0,
+        oldestAvailable: NOW.toISOString(),
+        newestAvailable: NOW.toISOString(),
+      }),
+    };
+    const route = findRoute(createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+      systemMetrics: source,
+      now: () => NOW,
+    }).routes, 'GET', SYSTEM_METRICS_PATH);
+
+    const first = projectSystemMetrics((await route.handler({ query: { limit: '1' }, params: {} } as never)).body);
+    expect(first.items[0].id).toBe('snap-1');
+    expect(first.page.next_cursor).not.toBeNull();
+    // The cursor is opaque — the raw offset never appears as a query param.
+    const second = projectSystemMetrics((await route.handler({
+      query: { limit: '1', cursor: first.page.next_cursor },
+      params: {},
+    } as never)).body);
+    expect(second.items[0].id).toBe('snap-2');
+    expect(second.page.cursor).toBe(first.page.next_cursor);
+    expect(second.page.next_cursor).toBeNull();
   });
 
   it('returns an empty System A result when metrics collection is disabled (no sink)', async () => {
@@ -777,7 +814,10 @@ describe('OperationsModule', () => {
     const result = await route.handler({ query: {}, params: {} } as never);
 
     expect(result.status).toBe(200);
-    expect(projectSystemMetrics(result.body)).toMatchObject({ snapshots: [], total: 0, has_more: false });
+    expect(projectSystemMetrics(result.body)).toMatchObject({
+      items: [],
+      page: { cursor: null, next_cursor: null },
+    });
   });
 
   it('streams operational metrics through SSE update events with allowlisted payloads', async () => {

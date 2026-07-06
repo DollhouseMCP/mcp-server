@@ -6,10 +6,11 @@ beforeAll(async () => { world = await setupWorld(); });
 const UNKNOWN = '00000000-0000-4000-8000-000000000000';
 
 describe('/me/sessions (MCP runtime sessions)', () => {
-  it('lists the caller runtime sessions', async () => {
+  it('lists the caller runtime sessions in the snapshot envelope', async () => {
     const res = await world.clients.userA.get('/api/v1/me/sessions');
     expect(res.status).toBe(200);
-    expect(res.body).toBeTruthy();
+    // Snapshot family: noun-keyed envelope, never a bare array.
+    expect(Array.isArray((res.body as { sessions: unknown[] }).sessions)).toBe(true);
   });
 
   it('an unknown session detail is 404', async () => {

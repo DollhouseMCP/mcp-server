@@ -21,8 +21,11 @@ export function projectRuntimeSessionSelf(value: unknown): RuntimeSessionSelfDto
   };
 }
 
-export function projectRuntimeSessionSelfList(value: unknown): RuntimeSessionSelfDto[] {
-  return arrayValue(value).map(item => projectRuntimeSessionSelf(item));
+// List envelopes: the snapshot family (`{sessions: [...]}`) — never a bare
+// array, so the shape can grow (e.g. a reserved `pagination` member) without
+// breaking consumers.
+export function projectRuntimeSessionSelfList(value: unknown): { sessions: RuntimeSessionSelfDto[] } {
+  return { sessions: arrayValue(objectValue(value).sessions).map(item => projectRuntimeSessionSelf(item)) };
 }
 
 export function projectRuntimeSessionAccount(value: unknown): RuntimeSessionAccountDto {
@@ -36,8 +39,8 @@ export function projectRuntimeSessionAccount(value: unknown): RuntimeSessionAcco
   };
 }
 
-export function projectRuntimeSessionAccountList(value: unknown): RuntimeSessionAccountDto[] {
-  return arrayValue(value).map(item => projectRuntimeSessionAccount(item));
+export function projectRuntimeSessionAccountList(value: unknown): { sessions: RuntimeSessionAccountDto[] } {
+  return { sessions: arrayValue(objectValue(value).sessions).map(item => projectRuntimeSessionAccount(item)) };
 }
 
 export function projectRuntimeSessionOperational(value: unknown): RuntimeSessionOperationalDto {
@@ -53,8 +56,8 @@ export function projectRuntimeSessionOperational(value: unknown): RuntimeSession
   };
 }
 
-export function projectRuntimeSessionOperationalList(value: unknown): RuntimeSessionOperationalDto[] {
-  return arrayValue(value).map(item => projectRuntimeSessionOperational(item));
+export function projectRuntimeSessionOperationalList(value: unknown): { sessions: RuntimeSessionOperationalDto[] } {
+  return { sessions: arrayValue(objectValue(value).sessions).map(item => projectRuntimeSessionOperational(item)) };
 }
 
 export function projectRuntimeTermination(value: unknown): RuntimeTerminationAcceptedDto {
