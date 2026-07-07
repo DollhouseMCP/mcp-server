@@ -27,7 +27,16 @@ export function boundedString(value: string | null, maxLength: number): string |
  * below 1 yields the endpoint's fallback.
  */
 export function boundedLimit(value: string | null, fallback: number, max: number): number {
+  return optionalLimit(value, max) ?? fallback;
+}
+
+/**
+ * Like boundedLimit, but with no endpoint-level fallback: absent/invalid
+ * input yields null so the caller can omit the option entirely and let the
+ * underlying source apply its own default.
+ */
+export function optionalLimit(value: string | null, max: number): number | null {
   const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) return fallback;
+  if (!Number.isSafeInteger(parsed) || parsed < 1) return null;
   return Math.min(parsed, max);
 }

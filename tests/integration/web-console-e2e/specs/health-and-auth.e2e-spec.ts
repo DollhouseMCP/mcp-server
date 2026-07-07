@@ -37,18 +37,17 @@ describe('authentication gate', () => {
     expect(res.body).toBeTruthy();
   });
 
-  it('GET /auth/me carries the profile header fields with contract types', async () => {
+  it('GET /auth/me carries the profile header fields with the seeded values', async () => {
     const res = await world.clients.userA.get('/api/v1/auth/me');
     expect(res.status).toBe(200);
     const body = res.body as Record<string, unknown>;
     // The SPA profile header reads these; they mirror /me/profile's source.
-    // Types are the contract: string-or-null scalars, string arrays.
-    expect(body.display_name === null || typeof body.display_name === 'string').toBe(true);
-    expect(body.email === null || typeof body.email === 'string').toBe(true);
-    expect(Array.isArray(body.auth_methods)).toBe(true);
-    expect((body.auth_methods as unknown[]).every(m => typeof m === 'string')).toBe(true);
-    expect(Array.isArray(body.granted_capabilities)).toBe(true);
-    expect((body.granted_capabilities as unknown[]).every(c => typeof c === 'string')).toBe(true);
+    // Pin the seeded user's actual values, not just the field types — a
+    // regression to null/[] for an existing principal must fail here.
+    expect(body.display_name).toBe(world.userA.username);
+    expect(body.email).toBe(world.userA.email);
+    expect(body.auth_methods).toEqual(['local']);
+    expect(body.granted_capabilities).toEqual(['console:self']);
   });
 
   it('an elevated admin can list users', async () => {

@@ -5,7 +5,7 @@ import type {
 } from '../../platform/ConsolePlatformTypes.js';
 import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
 import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
-import { boundedLimit, boundedString, firstString } from '../../platform/ConsoleQueryParams.js';
+import { boundedLimit, boundedString, firstString, optionalLimit } from '../../platform/ConsoleQueryParams.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import type { IOperatorConfigStore } from '../../../storage/operatorConfig/IOperatorConfigStore.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
@@ -417,9 +417,9 @@ function parseSystemMetricQuery(req: ConsoleRequest): MetricQueryOptions {
   if (until) options.until = until;
   const latest = firstString(req.query.latest);
   if (latest !== null) options.latest = latest !== 'false';
-  // 0 sentinel = absent/invalid, so the sink's own default page size applies.
-  const limit = boundedLimit(firstString(req.query.limit), 0, 1000);
-  if (limit > 0) options.limit = limit;
+  // Absent/invalid limit → omit the option so the sink's default applies.
+  const limit = optionalLimit(firstString(req.query.limit), 1000);
+  if (limit !== null) options.limit = limit;
   // Continuation position arrives as an opaque cursor (cursor family), never
   // as a raw offset parameter.
   const cursor = boundedString(firstString(req.query.cursor), 512);

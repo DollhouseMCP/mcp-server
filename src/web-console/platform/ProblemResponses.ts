@@ -100,6 +100,11 @@ export function problemInputFromHandlerBody(body: unknown, status: number): Cons
   const extensions: Record<string, ConsoleProblemExtension> = {};
   for (const [member, value] of Object.entries(record)) {
     if (!RESERVED_PROBLEM_MEMBERS.has(member)) {
+      // Extension values arrive from handler-authored JSON response bodies, so
+      // they are JSON-serializable by construction — a non-serializable value
+      // (Buffer, class instance) would have misbehaved identically in the
+      // pre-lift res.json() path. The cast records that provenance; it is not
+      // a validation point.
       extensions[member] = value as ConsoleProblemExtension;
     }
   }
