@@ -17,6 +17,9 @@ import {
   serializeConsoleCookie,
 } from '../../../../src/web-console/middleware/ConsoleCookies.js';
 
+const ABOUT_BLANK = 'about:blank';
+const TEST_ACTOR_USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+
 function route(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDefinition {
   return {
     method: 'GET',
@@ -35,7 +38,7 @@ function route(overrides: Partial<ConsoleRouteDefinition> = {}): ConsoleRouteDef
 function auditEvent(): ConsoleAdminAuditEvent {
   return {
     occurredAt: new Date('2026-05-26T12:00:00.000Z'),
-    actorUserId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
+    actorUserId: TEST_ACTOR_USER_ID,
     actorSub: 'github_user-7',
     actorRole: null,
     actorCapabilityRole: 'auditor',
@@ -78,7 +81,7 @@ describe('console route policy execution', () => {
   it('leaves administrative problem bodies unprojected', async () => {
     const projector = jest.fn(value => ({ visible: (value as { visible: boolean }).visible }));
     const problem = {
-      type: 'about:blank',
+      type: ABOUT_BLANK,
       title: 'Not found',
       status: 404,
       code: 'not_found',
@@ -115,7 +118,7 @@ describe('console route policy execution', () => {
   it('leaves self-service problem bodies unprojected', async () => {
     const projector = jest.fn(value => ({ visible: (value as { visible: boolean }).visible }));
     const problem = {
-      type: 'about:blank',
+      type: ABOUT_BLANK,
       title: 'Validation failed',
       status: 422,
       code: 'validation_failed',
@@ -288,6 +291,116 @@ describe('console route policy execution', () => {
     sendConsoleHandlerResult(response, { status: 200, body: { ok: true } });
     expect(response.status).toHaveBeenCalledWith(200);
     expect(json).toHaveBeenCalledWith({ ok: true });
+  });
+
+  it('lifts handler problem bodies into RFC 9457 problem documents', () => {
+    const json = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      json,
+      end: jest.fn(),
+    } as unknown as Response;
+    const request = {
+      headers: {},
+      consoleContext: { correlationId: TEST_ACTOR_USER_ID, receivedAt: new Date() },
+    } as unknown as Parameters<typeof sendConsoleHandlerResult>[2];
+
+    sendConsoleHandlerResult(response, {
+      status: 422,
+      body: {
+        type: ABOUT_BLANK,
+        title: 'Validation failed',
+        status: 422,
+        code: 'validation_failed',
+        detail: 'content is required.',
+        issues: [{ path: 'content', code: 'required', message: 'content is required.' }],
+      },
+    }, request);
+
+    expect(response.status).toHaveBeenCalledWith(422);
+    expect(type).toHaveBeenCalledWith('application/problem+json');
+    expect(json).toHaveBeenCalledWith({
+      type: 'https://dollhousemcp.com/errors/validation_failed',
+      title: 'Validation failed',
+      status: 422,
+      detail: 'content is required.',
+      instance: TEST_ACTOR_USER_ID,
+      code: 'validation_failed',
+      issues: [{ path: 'content', code: 'required', message: 'content is required.' }],
+    });
+  });
+
+  it('sends non-problem error bodies and status-mismatched bodies unchanged', () => {
+    const json = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      json,
+      end: jest.fn(),
+    } as unknown as Response;
+    const request = {
+      headers: {},
+      consoleContext: { correlationId: TEST_ACTOR_USER_ID, receivedAt: new Date() },
+    } as unknown as Parameters<typeof sendConsoleHandlerResult>[2];
+
+    // Not a problem document at all.
+    sendConsoleHandlerResult(response, { status: 400, body: { message: 'nope' } }, request);
+    expect(json).toHaveBeenLastCalledWith({ message: 'nope' });
+
+    // Problem-shaped but self-identifying as a different status: not lifted.
+    sendConsoleHandlerResult(response, {
+      status: 400,
+      body: { type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' },
+    }, request);
+    expect(json).toHaveBeenLastCalledWith({ type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' });
+    expect(type).not.toHaveBeenCalledWith('application/problem+json');
+  });
+
+  it('ships the plain body when no request context is available', () => {
+    const json = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      json,
+      end: jest.fn(),
+    } as unknown as Response;
+
+    sendConsoleHandlerResult(response, {
+      status: 404,
+      body: { type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' },
+    });
+
+    expect(json).toHaveBeenCalledWith({ type: ABOUT_BLANK, title: 'Not found', status: 404, code: 'not_found', detail: 'x' });
+    expect(type).not.toHaveBeenCalledWith('application/problem+json');
+  });
+
+  it('prefers the browser HTML error page over problem+json for document navigations', () => {
+    const send = jest.fn();
+    const type = jest.fn().mockReturnThis();
+    const response = {
+      status: jest.fn().mockReturnThis(),
+      type,
+      send,
+      json: jest.fn(),
+      end: jest.fn(),
+    } as unknown as Response;
+    const request = {
+      headers: { accept: 'text/html' },
+      consoleContext: { correlationId: TEST_ACTOR_USER_ID, receivedAt: new Date() },
+    } as unknown as Parameters<typeof sendConsoleHandlerResult>[2];
+
+    sendConsoleHandlerResult(response, {
+      status: 401,
+      body: { type: ABOUT_BLANK, title: 'Step-up required', status: 401, code: 'step_up_required', detail: 'x' },
+    }, request);
+
+    expect(type).toHaveBeenCalledWith('text/html');
+    expect(type).not.toHaveBeenCalledWith('application/problem+json');
+    expect(send).toHaveBeenCalledTimes(1);
   });
 
   it('emits platform-controlled cookie directives before completing a response', () => {

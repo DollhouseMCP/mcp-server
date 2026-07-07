@@ -218,12 +218,14 @@ function cloneAllowedValue(value: unknown): unknown {
 // is forwarded.
 export function projectSystemMetrics(value: unknown): SystemMetricsResponseDto {
   const record = objectValue(value);
+  const page = objectValue(record.page);
   return {
-    snapshots: arrayValue(record.snapshots).map(projectSystemMetricSnapshot),
-    total: numberField(record, 'total'),
-    has_more: record.hasMore === true,
-    limit: numberField(record, 'limit'),
-    offset: numberField(record, 'offset'),
+    items: arrayValue(record.items).map(projectSystemMetricSnapshot),
+    page: {
+      limit: numberField(page, 'limit'),
+      cursor: nullableStringField(page, 'cursor'),
+      next_cursor: nullableStringField(page, 'next_cursor'),
+    },
     oldest_available: stringField(record, 'oldestAvailable'),
     newest_available: stringField(record, 'newestAvailable'),
   };

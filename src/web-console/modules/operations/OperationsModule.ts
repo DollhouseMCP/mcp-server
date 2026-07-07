@@ -4,6 +4,8 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
+import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
+import { boundedLimit, boundedString, firstString, optionalLimit } from '../../platform/ConsoleQueryParams.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import type { IOperatorConfigStore } from '../../../storage/operatorConfig/IOperatorConfigStore.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
@@ -290,8 +292,26 @@ function querySystemMetrics(
   query: MetricQueryOptions,
   now: () => Date,
 ): ConsoleHandlerResult {
-  if (!source) return { status: 200, body: emptySystemMetrics(now()) };
-  return { status: 200, body: source.query(query) };
+  const result = source ? source.query(query) : emptySystemMetrics(now());
+  return { status: 200, body: serializeSystemMetrics(result) };
+}
+
+// Cursor-family envelope over the offset-backed ring buffer: the offset is
+// carried in an opaque cursor, never exposed raw. The ring-buffer anchors
+// (oldest/newest available) are domain metadata and stay top-level. Keys here
+// are the camelCase internal model — projectSystemMetrics maps them to the
+// snake_case DTO (oldestAvailable → oldest_available) at the trust boundary.
+function serializeSystemMetrics(result: MetricQueryResult): Record<string, unknown> {
+  return {
+    items: result.snapshots,
+    page: {
+      limit: result.limit,
+      cursor: result.offset > 0 ? offsetConsoleCursor(result.offset) : null,
+      next_cursor: result.hasMore ? offsetConsoleCursor(result.offset + result.snapshots.length) : null,
+    },
+    oldestAvailable: result.oldestAvailable,
+    newestAvailable: result.newestAvailable,
+  };
 }
 
 function emptySystemMetrics(at: Date): MetricQueryResult {
@@ -368,7 +388,7 @@ function projectMetricStreamFilters(value: unknown): Record<string, string | nul
 
 function parseLogQuery(req: ConsoleRequest): OperationalLogQuery {
   return {
-    limit: boundedLimit(firstString(req.query.limit), 100),
+    limit: boundedLimit(firstString(req.query.limit), 100, 100),
     cursor: boundedString(firstString(req.query.cursor), 256),
     level: boundedString(firstString(req.query.level), 16),
     subsystem: boundedString(firstString(req.query.subsystem), 64),
@@ -397,40 +417,16 @@ function parseSystemMetricQuery(req: ConsoleRequest): MetricQueryOptions {
   if (until) options.until = until;
   const latest = firstString(req.query.latest);
   if (latest !== null) options.latest = latest !== 'false';
-  const limit = boundedNonNegativeInt(firstString(req.query.limit), 1, 1000);
+  // Absent/invalid limit → omit the option so the sink's default applies.
+  const limit = optionalLimit(firstString(req.query.limit), 1000);
   if (limit !== null) options.limit = limit;
-  const offset = boundedNonNegativeInt(firstString(req.query.offset), 0, Number.MAX_SAFE_INTEGER);
-  if (offset !== null) options.offset = offset;
+  // Continuation position arrives as an opaque cursor (cursor family), never
+  // as a raw offset parameter.
+  const cursor = boundedString(firstString(req.query.cursor), 512);
+  if (cursor) options.offset = offsetFromConsoleCursor(cursor);
   return options;
 }
 
-function boundedNonNegativeInt(value: string | null, min: number, max: number): number | null {
-  if (value === null) return null;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isSafeInteger(parsed)) return null;
-  return Math.min(Math.max(parsed, min), max);
-}
-
-function boundedLimit(value: string | null, fallback: number): number {
-  const parsed = value ? Number.parseInt(value, 10) : fallback;
-  if (!Number.isSafeInteger(parsed)) return fallback;
-  return Math.min(Math.max(parsed, 1), 100);
-}
-
-function boundedString(value: string | null, maxLength: number): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.slice(0, maxLength);
-}
-
-function firstString(value: ConsoleRequest['query'][string] | string | readonly string[] | undefined): string | null {
-  if (Array.isArray(value)) {
-    const first = value[0];
-    return typeof first === 'string' ? first : null;
-  }
-  return typeof value === 'string' ? value : null;
-}
 
 export function operationalProblem(status: number, code: string, detail: string): ConsoleHandlerResult {
   return {

@@ -569,6 +569,7 @@ function validationFailed(issues: readonly PortfolioElementValidationIssueDto[])
       title: 'Validation failed',
       status: 422,
       code: 'validation_failed',
+      detail: 'The request failed validation; see issues.',
       issues,
     },
   };

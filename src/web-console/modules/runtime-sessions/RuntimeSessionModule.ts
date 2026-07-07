@@ -45,6 +45,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
+      privacyProjector: projectRuntimeSessionSelfList,
       handler: req => listSelfSessions(req, service),
     },
     {
@@ -56,6 +57,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
+      privacyProjector: projectRuntimeSessionSelf,
       handler: req => getSelfSession(req, service),
     },
     {
@@ -67,6 +69,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'required',
+      privacyProjector: projectRuntimeTermination,
       // Self termination provenance is retained in runtime_control_commands; admin_audit remains admin-scoped.
       handler: req => terminateSelfSession(req, service),
     },
@@ -130,7 +133,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       idempotency: 'not_applicable',
       auditOperation: 'operate.sessions.list',
       privacyProjector: projectRuntimeSessionOperationalList,
-      handler: () => service.listOperationalSessions().then(body => ({ status: 200, body })),
+      handler: () => service.listOperationalSessions().then(sessions => ({ status: 200, body: { sessions } })),
     },
     {
       method: 'GET',
@@ -171,7 +174,8 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
 
 async function listSelfSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
   const actor = requireConsoleAuthentication(req);
-  return { status: 200, body: projectRuntimeSessionSelfList(await service.listSelfSessions(actor.userId)) };
+  // Snapshot-family envelope; the kernel applies the declared projector.
+  return { status: 200, body: { sessions: await service.listSelfSessions(actor.userId) } };
 }
 
 async function getSelfSession(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
@@ -179,7 +183,8 @@ async function getSelfSession(req: ConsoleRequest, service: RuntimeSessionServic
   const sessionId = requiredParam(req, SESSION_ID_PARAM);
   if (!sessionId) return invalidParam(SESSION_ID_PARAM);
   const body = await service.getSelfSession(actor.userId, sessionId);
-  return body ? { status: 200, body: projectRuntimeSessionSelf(body) } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  // The route-declared projector runs in the kernel; no inline projection.
+  return body ? { status: 200, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
 }
 
 async function terminateSelfSession(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
@@ -187,7 +192,7 @@ async function terminateSelfSession(req: ConsoleRequest, service: RuntimeSession
   const sessionId = requiredParam(req, SESSION_ID_PARAM);
   if (!sessionId) return invalidParam(SESSION_ID_PARAM);
   const body = await service.terminateSelfSession(actor.userId, sessionId);
-  return body ? { status: 202, body: projectRuntimeTermination(body) } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
 }
 
 async function revokeAllSelfSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
@@ -199,8 +204,8 @@ async function revokeAllSelfSessions(req: ConsoleRequest, service: RuntimeSessio
 async function listAccountSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
   const userId = requiredParam(req, 'user_id');
   if (!userId) return invalidParam('user_id');
-  const body = await service.listAccountSessions(userId);
-  return body ? { status: 200, body } : notFound('User principal was not found.');
+  const sessions = await service.listAccountSessions(userId);
+  return sessions ? { status: 200, body: { sessions } } : notFound('User principal was not found.');
 }
 
 async function terminateAccountSession(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {

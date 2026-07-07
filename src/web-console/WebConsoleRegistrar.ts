@@ -500,6 +500,7 @@ export class WebConsoleRegistrar {
         loginTransactions: stores.loginTransactionStore,
         sessionStore: stores.sessionStore,
         identityResolver: stores.identityResolver,
+        accountAdminStore: stores.accountAdminStore,
         opaqueValues,
         secretEncryption,
         publicBaseUrl: integrationPublicBaseUrl,
