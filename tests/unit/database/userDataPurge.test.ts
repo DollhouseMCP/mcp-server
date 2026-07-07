@@ -1,0 +1,111 @@
+import { describe, expect, it } from '@jest/globals';
+import { eq } from 'drizzle-orm';
+
+import {
+  collectDeletionIdentity,
+  purgeNonCascadeUserIdentity,
+  purgeUserScopedData,
+} from '../../../src/database/userDataPurge.js';
+import {
+  approvalAuditEvents,
+  authAllowlist,
+  authIdentityEvents,
+  authKv,
+  consoleLoginTransactions,
+  consoleSessions,
+  elements,
+  integrationProviderDescriptors,
+  portfolioSyncJobs,
+  runtimeSessionPresence,
+  securityInvalidationEvents,
+  sessionActivationEvents,
+  sessionActivityEvents,
+  sessions,
+  userIntegrations,
+  userOauthTokens,
+  userSettings,
+} from '../../../src/database/schema/index.js';
+import type { DrizzleTx } from '../../../src/database/db-utils.js';
+
+const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+
+function captureTx() {
+  const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
+  const tx = {
+    delete: (table: unknown) => ({
+      where: (predicate: unknown) => {
+        deletes.push({ table, predicate });
+        return Promise.resolve();
+      },
+    }),
+  };
+  return { tx: tx as unknown as DrizzleTx, deletes };
+}
+
+describe('collectDeletionIdentity', () => {
+  it('gathers deduped, lowercased identity values from the account and its logins', () => {
+    const identity = collectDeletionIdentity('User@Example.com', [
+      { sub: 'sub-1', provider: 'github', externalSub: '42', email: 'GH@x.com', rawProfile: { login: 'OctoCat' } },
+      { sub: 'sub-2', provider: 'google', externalSub: 'g-1', email: null, rawProfile: null },
+    ]);
+
+    expect(identity.subs).toEqual(['sub-1', 'sub-2']);
+    expect([...identity.emails].sort((a, b) => a.localeCompare(b))).toEqual(['gh@x.com', 'user@example.com']);
+    expect(identity.githubIds).toEqual(['42']);
+    expect(identity.githubLogins).toEqual(['octocat']);
+  });
+
+  it('handles an account with no email or github login', () => {
+    const identity = collectDeletionIdentity(null, [
+      { sub: 's', provider: 'local', externalSub: 'x', email: null, rawProfile: null },
+    ]);
+    expect(identity).toEqual({ subs: ['s'], emails: [], githubIds: [], githubLogins: [] });
+  });
+});
+
+describe('purgeUserScopedData', () => {
+  it('purges the whole user-owned cascade closure, scoped to the user, sync-jobs before integrations', async () => {
+    const { tx, deletes } = captureTx();
+
+    await purgeUserScopedData(tx, USER_ID);
+
+    const tables = deletes.map(d => d.table);
+    for (const table of [
+      sessionActivityEvents, portfolioSyncJobs, userIntegrations, userOauthTokens,
+      integrationProviderDescriptors, securityInvalidationEvents, runtimeSessionPresence,
+      sessionActivationEvents, approvalAuditEvents, consoleLoginTransactions, consoleSessions,
+      sessions, userSettings, elements,
+    ]) {
+      expect(tables).toContain(table);
+    }
+    // Scope: each purge targets exactly this user.
+    expect(deletes.find(d => d.table === elements)?.predicate).toEqual(eq(elements.userId, USER_ID));
+    expect(deletes.find(d => d.table === integrationProviderDescriptors)?.predicate)
+      .toEqual(eq(integrationProviderDescriptors.ownerUserId, USER_ID));
+    // Ordering: RESTRICT dependency.
+    expect(tables.indexOf(portfolioSyncJobs)).toBeLessThan(tables.indexOf(userIntegrations));
+  });
+});
+
+describe('purgeNonCascadeUserIdentity', () => {
+  it('purges auth_kv per subject, identity events by sub, and allowlist by matched identity', async () => {
+    const { tx, deletes } = captureTx();
+
+    await purgeNonCascadeUserIdentity(tx, {
+      subs: ['sub-1', 'sub-2'],
+      emails: ['a@b.com'],
+      githubIds: ['42'],
+      githubLogins: ['octo'],
+    });
+
+    expect(deletes.filter(d => d.table === authKv)).toHaveLength(2); // one per sub
+    expect(deletes.filter(d => d.table === authIdentityEvents)).toHaveLength(1);
+    expect(deletes.filter(d => d.table === authAllowlist)).toHaveLength(1);
+  });
+
+  it('deletes nothing when the account has no resolvable identity', async () => {
+    const { tx, deletes } = captureTx();
+    await purgeNonCascadeUserIdentity(tx, { subs: [], emails: [], githubIds: [], githubLogins: [] });
+    expect(deletes).toHaveLength(0);
+  });
+});

@@ -3,16 +3,12 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
+import { accountFactors, authAccounts, userAdminRoles, users } from '../../database/schema/index.js';
 import {
-  accountFactors,
-  authAccounts,
-  portfolioSyncJobs,
-  sessionActivityEvents,
-  userAdminRoles,
-  userIntegrations,
-  userOauthTokens,
-  users,
-} from '../../database/schema/index.js';
+  collectDeletionIdentity,
+  purgeNonCascadeUserIdentity,
+  purgeUserScopedData,
+} from '../../database/userDataPurge.js';
 import type {
   ConsoleAdminRole,
   ConsolePrincipalSummary,
@@ -379,9 +375,22 @@ export async function deleteConsolePrincipalWithTx(
   input: PrincipalDeletionInput,
 ): Promise<PrincipalDeletionOutcome | null> {
   validatePrincipalDeletionInput(input);
-  const existing = await tx.select({ id: users.id }).from(users)
+  const existing = await tx.select({ id: users.id, email: users.email }).from(users)
     .where(and(eq(users.id, input.userId), isNull(users.deletedAt))).limit(1).for('update');
   if (existing.length === 0) return null;
+
+  // Capture the account's federated identity BEFORE deleting auth_accounts, then purge the
+  // non-FK identity/credential tables (auth_kv OIDC grants/tokens, auth_identity_events, and the
+  // auth_allowlist pre-approval) that no cascade reaches. Runs on BOTH paths — a hard delete
+  // does not reach these either.
+  const accounts = await tx.select({
+    sub: authAccounts.sub,
+    provider: authAccounts.provider,
+    externalSub: authAccounts.externalSub,
+    email: authAccounts.email,
+    rawProfile: authAccounts.rawProfile,
+  }).from(authAccounts).where(eq(authAccounts.userId, input.userId));
+  await purgeNonCascadeUserIdentity(tx, collectDeletionIdentity(existing[0]?.email ?? null, accounts));
 
   // Detach the account's own identity/credential/role surface first, so the
   // login stops working on either branch and so these rows don't themselves
@@ -401,16 +410,10 @@ export async function deleteConsolePrincipalWithTx(
     return { userId: input.userId, outcome: 'deleted', authzVersion: null };
   } catch (error) {
     if (!isForeignKeyViolation(error)) throw error;
-    // Anonymize-tombstone: the users row is kept, so ON DELETE CASCADE never fires. Explicitly
-    // purge the account's credentials and personal data so nothing sensitive survives under the
-    // tombstone. Order matters: portfolio_sync_jobs RESTRICT-references user_integrations, so it
-    // must be deleted before the integrations (which hold the OAuth access/refresh token
-    // ciphertext). Non-credential user content (elements, settings) is out of scope here and
-    // tracked separately for a full-erasure pass.
-    await tx.delete(sessionActivityEvents).where(eq(sessionActivityEvents.userId, input.userId));
-    await tx.delete(portfolioSyncJobs).where(eq(portfolioSyncJobs.userId, input.userId));
-    await tx.delete(userIntegrations).where(eq(userIntegrations.userId, input.userId));
-    await tx.delete(userOauthTokens).where(eq(userOauthTokens.userId, input.userId));
+    // Anonymize-tombstone: the users row is kept, so ON DELETE CASCADE never fires. Replay the
+    // cascade explicitly so no personal data survives under the tombstone; only the retained
+    // RESTRICT-anchored audit chain (and this user's actions on others) remain.
+    await purgeUserScopedData(tx, input.userId);
     const rows = await tx.update(users).set({
       // Username is NOT NULL + unique; the id guarantees a unique tombstone.
       username: `deleted-${input.userId}`,

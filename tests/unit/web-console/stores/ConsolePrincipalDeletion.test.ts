@@ -3,64 +3,78 @@ import { eq } from 'drizzle-orm';
 
 import { deleteConsolePrincipalWithTx } from '../../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
 import {
+  authKv,
+  elements,
   portfolioSyncJobs,
-  sessionActivityEvents,
   userIntegrations,
-  userOauthTokens,
+  users,
 } from '../../../../src/database/schema/index.js';
 import type { DrizzleTx } from '../../../../src/database/db-utils.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const DELETED_AT = new Date('2026-07-07T12:00:00.000Z');
+const ACCOUNTS = [
+  { sub: 'sub-1', provider: 'github', externalSub: '42', email: 'a@b.com', rawProfile: { login: 'octo' } },
+];
 
-// A transaction whose hard `DELETE FROM users` raises a foreign-key violation (23503),
-// as an audit-chain RESTRICT reference would, forcing the anonymize-tombstone branch.
-// Every `delete(table).where(predicate)` is captured so the purge scope can be asserted.
-function anonymizingTxMock() {
+interface SelectNode {
+  where(): SelectNode;
+  limit(): SelectNode;
+  for(): Promise<unknown>;
+  then(resolve: (value: unknown) => void, reject: (error: unknown) => void): Promise<unknown>;
+}
+
+// A tx where the hard `DELETE FROM users` raises a 23503 FK violation unless hardDelete is set,
+// forcing the anonymize-tombstone branch. Both selects (users, auth_accounts) are served.
+function txMock({ hardDelete = false } = {}) {
   const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
+  const from = (table: unknown): SelectNode => {
+    const rows = table === users ? [{ id: USER_ID, email: 'a@b.com' }] : ACCOUNTS;
+    const node: SelectNode = {
+      where: () => node,
+      limit: () => node,
+      for: () => Promise.resolve(rows),
+      then: (resolve, reject) => Promise.resolve(rows).then(resolve, reject),
+    };
+    return node;
+  };
   const tx = {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: () => ({ for: () => Promise.resolve([{ id: USER_ID }]) }),
-        }),
-      }),
-    }),
+    select: () => ({ from }),
     delete: (table: unknown) => ({
       where: (predicate: unknown) => {
         deletes.push({ table, predicate });
         return Promise.resolve();
       },
     }),
-    transaction: () => Promise.reject({ code: '23503' }),
+    transaction: () => (hardDelete ? Promise.resolve() : Promise.reject({ code: '23503' })),
     update: () => ({
-      set: () => ({
-        where: () => ({ returning: () => Promise.resolve([{ authzVersion: 5 }]) }),
-      }),
+      set: () => ({ where: () => ({ returning: () => Promise.resolve([{ authzVersion: 5 }]) }) }),
     }),
   };
   return { tx: tx as unknown as DrizzleTx, deletes };
 }
 
-describe('deleteConsolePrincipalWithTx (anonymize path)', () => {
-  it('purges the deleted user\'s activity and credential data, scoped to that user, when anonymize-tombstoned', async () => {
-    const { tx, deletes } = anonymizingTxMock();
+describe('deleteConsolePrincipalWithTx', () => {
+  it('anonymize-tombstones and erases the account content + non-FK identity, scoped to the user', async () => {
+    const { tx, deletes } = txMock();
 
     const outcome = await deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT });
 
     expect(outcome).toMatchObject({ userId: USER_ID, outcome: 'anonymized' });
-    // The users row is retained, so ON DELETE CASCADE never fires — these purges must be explicit,
-    // and each must be scoped to exactly this user (not a blanket delete of everyone's rows).
-    // user_integrations / user_oauth_tokens hold OAuth token ciphertext; portfolio_sync_jobs must
-    // precede user_integrations because it RESTRICT-references it.
-    for (const table of [sessionActivityEvents, portfolioSyncJobs, userIntegrations, userOauthTokens]) {
-      const purge = deletes.find(entry => entry.table === table);
-      expect(purge).toBeDefined();
-      expect(purge?.predicate).toEqual(eq(table.userId, USER_ID));
-    }
+    const tables = deletes.map(d => d.table);
+    // Cascade-closure content is purged (via purgeUserScopedData), scoped to this user...
+    expect(tables).toContain(elements);
+    expect(deletes.find(d => d.table === elements)?.predicate).toEqual(eq(elements.userId, USER_ID));
+    expect(tables.indexOf(portfolioSyncJobs)).toBeLessThan(tables.indexOf(userIntegrations));
+    // ...and the non-FK identity/credential tables are purged too (via purgeNonCascadeUserIdentity).
+    expect(tables).toContain(authKv);
+  });
 
-    // Sync jobs must be deleted before the integrations they RESTRICT-reference.
-    const order = (table: unknown) => deletes.findIndex(entry => entry.table === table);
-    expect(order(portfolioSyncJobs)).toBeLessThan(order(userIntegrations));
+  it('hard-deletes (users row removed) when nothing RESTRICT-references the user', async () => {
+    const { tx } = txMock({ hardDelete: true });
+
+    const outcome = await deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT });
+
+    expect(outcome).toMatchObject({ userId: USER_ID, outcome: 'deleted' });
   });
 });
