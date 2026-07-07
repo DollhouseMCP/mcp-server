@@ -3,6 +3,7 @@ import { describe, expect, it } from '@jest/globals';
 import {
   createPortfolioModule,
   InMemoryPortfolioActivityEventSink,
+  portfolioDeletionActivityMessage,
   InMemoryPortfolioElementStore,
   InMemoryPortfolioSyncJobStore,
   InMemoryUserIntegrationStore,
@@ -36,6 +37,7 @@ const REVIEW_HELPER_NAME = 'review-helper';
 const REVIEW_HELPER_V3_ETAG = 'W/"portfolio:skills:review-helper:v3"';
 const INTEGRATION_ID = '35e22a52-dc56-4cd0-9d13-b2802524fbd3';
 const CORRELATION_ID = '22222222-2222-4222-8222-222222222222';
+const CONTENT_HASH = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
 function authenticatedContext(userId = USER_ID): NonNullable<ConsoleRequest['consoleAuthentication']> {
   return {
@@ -647,9 +649,9 @@ describe('PortfolioModule', () => {
     await expect(store.findByName(USER_ID, 'skills', REVIEW_HELPER_NAME)).resolves.toBeNull();
   });
 
-  it('records a metadata-only deletion activity event on delete', async () => {
+  it('records a metadata-only deletion activity event carrying the content hash, not the content', async () => {
     const sink = new InMemoryPortfolioActivityEventSink();
-    const store = new InMemoryPortfolioElementStore([portfolioElement()]);
+    const store = new InMemoryPortfolioElementStore([portfolioElement({ contentHash: CONTENT_HASH })]);
     const module = createPortfolioModule({
       portfolioStore: store,
       integrationStore: new InMemoryUserIntegrationStore(),
@@ -677,10 +679,30 @@ describe('PortfolioModule', () => {
       userId: USER_ID,
       elementType: 'skills',
       canonicalName: REVIEW_HELPER_NAME,
+      contentHash: CONTENT_HASH,
       correlationId: CORRELATION_ID,
     });
     expect(events[0].consoleSessionId).toMatch(/^[0-9a-f]{64}$/u);
-    expect(events[0]).not.toHaveProperty('content');
+    // The persisted activity message must carry the hash and never the element's content.
+    const message = portfolioDeletionActivityMessage(events[0]);
+    expect(message).toContain(CONTENT_HASH);
+    expect(message).not.toContain('Owner private content.');
+  });
+
+  it('builds a content-free deletion message with and without a content hash', () => {
+    const base = {
+      type: 'console.portfolio.element.deleted.v1' as const,
+      userId: USER_ID,
+      consoleSessionId: 'a'.repeat(64),
+      elementType: 'skills' as const,
+      canonicalName: REVIEW_HELPER_NAME,
+      correlationId: CORRELATION_ID,
+      occurredAt: NOW,
+    };
+    expect(portfolioDeletionActivityMessage({ ...base, contentHash: CONTENT_HASH }))
+      .toBe(`Deleted skills/${REVIEW_HELPER_NAME} (sha256:${CONTENT_HASH})`);
+    expect(portfolioDeletionActivityMessage({ ...base, contentHash: null }))
+      .toBe(`Deleted skills/${REVIEW_HELPER_NAME}`);
   });
 
   it('enforces delete preconditions before deleting owned elements', async () => {
