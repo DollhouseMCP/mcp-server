@@ -476,22 +476,16 @@ export class WebConsoleRegistrar {
       database,
     );
     const apiV1MountState = createApiV1MountState();
-    const operationHealthChecks = createOperationHealthChecks({
+    const healthProbes = createConsoleHealthProbes({
       database,
       stores,
       authStorage,
-      container,
       securityInvalidationReadiness,
       routesMounted: apiV1MountState.mounted,
     });
+    const operationHealthChecks = createOperationHealthChecks(healthProbes, container);
     registry.register(createHealthModule({
-      readiness: createHealthReadinessInputs({
-        database,
-        stores,
-        authStorage,
-        securityInvalidationReadiness,
-        routesMounted: apiV1MountState.mounted,
-      }),
+      readiness: createHealthReadinessInputs(healthProbes, stores),
       now: this.options.now,
     }));
     if (consoleOAuthClient && secretEncryption && integrationPublicBaseUrl) {
@@ -1190,41 +1184,62 @@ interface ConsoleStoreSet {
   readonly identityResolver: IConsoleIdentityResolver;
 }
 
-function createHealthReadinessInputs(options: {
+type ConsoleSecurityInvalidationSnapshot = Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>;
+
+interface ConsoleHealthProbes {
+  readonly databaseAvailable: () => boolean;
+  readonly authServerAvailable: () => boolean;
+  readonly runtimeControlAvailable: () => boolean;
+  readonly apiV1Mounted: () => boolean;
+  readonly securityInvalidationReadiness: () => Promise<ConsoleSecurityInvalidationSnapshot>;
+}
+
+// Single source for the dependency probes shared by both the public readiness surface
+// and the admin operations health surface, so a new or changed probe is defined once.
+function createConsoleHealthProbes(options: {
   readonly database: DatabaseInstance | undefined;
   readonly stores: ConsoleStoreSet;
   readonly authStorage: IAuthStorageLayer | null;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly routesMounted: () => boolean;
-}): HealthReadinessChecks {
+}): ConsoleHealthProbes {
   return {
-    sessionStorageAvailable: () => Boolean(options.stores.sessionStore),
-    identityResolutionAvailable: () => Boolean(options.stores.identityResolver),
-    securityInvalidationReady: async () => (await options.securityInvalidationReadiness.getReadiness()).ready,
-    runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     databaseAvailable: () => Boolean(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
+    runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     apiV1Mounted: () => options.routesMounted(),
+    securityInvalidationReadiness: () => options.securityInvalidationReadiness.getReadiness(),
   };
 }
 
-function createOperationHealthChecks(options: {
-  readonly database: DatabaseInstance | undefined;
-  readonly stores: ConsoleStoreSet;
-  readonly authStorage: IAuthStorageLayer | null;
-  readonly container: DiContainerFacade;
-  readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
-  readonly routesMounted: () => boolean;
-}): OperationsHealthChecks {
+function createHealthReadinessInputs(
+  probes: ConsoleHealthProbes,
+  stores: ConsoleStoreSet,
+): HealthReadinessChecks {
   return {
-    database: () => Boolean(options.database),
-    authServer: () => Boolean(options.authStorage),
-    gatekeeper: () => options.container.hasRegistration('gatekeeper'),
-    runtimeControl: () => Boolean(options.stores.runtimeSessionControlStore),
+    sessionStorageAvailable: () => Boolean(stores.sessionStore),
+    identityResolutionAvailable: () => Boolean(stores.identityResolver),
+    securityInvalidationReady: async () => (await probes.securityInvalidationReadiness()).ready,
+    runtimeControlAvailable: probes.runtimeControlAvailable,
+    databaseAvailable: probes.databaseAvailable,
+    authServerAvailable: probes.authServerAvailable,
+    apiV1Mounted: probes.apiV1Mounted,
+  };
+}
+
+function createOperationHealthChecks(
+  probes: ConsoleHealthProbes,
+  container: DiContainerFacade,
+): OperationsHealthChecks {
+  return {
+    database: probes.databaseAvailable,
+    authServer: probes.authServerAvailable,
+    gatekeeper: () => container.hasRegistration('gatekeeper'),
+    runtimeControl: probes.runtimeControlAvailable,
     securityInvalidation: async () => operationHealthFromInvalidationReadiness(
-      await options.securityInvalidationReadiness.getReadiness(),
+      await probes.securityInvalidationReadiness(),
     ),
-    apiMount: () => options.routesMounted()
+    apiMount: () => probes.apiV1Mounted()
       ? {
         component: 'api_mount',
         status: 'ok',
@@ -1240,7 +1255,7 @@ function createOperationHealthChecks(options: {
   };
 }
 
-function operationHealthFromInvalidationReadiness(snapshot: Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>) {
+function operationHealthFromInvalidationReadiness(snapshot: ConsoleSecurityInvalidationSnapshot) {
   return {
     component: 'security_invalidation' as const,
     status: snapshot.status,
@@ -1249,6 +1264,14 @@ function operationHealthFromInvalidationReadiness(snapshot: Awaited<ReturnType<I
   };
 }
 
+// Console stores support exactly two backend families: Postgres-backed (durable,
+// per-user, RLS-enforced) when a database is configured, and in-memory otherwise.
+// In-memory is development/loopback only — it loses all session, approval, and audit
+// state on restart — so there is deliberately no file-backed durable family (a file
+// store for security-relevant state would lack RLS, transactional CAS, and tamper
+// evidence). Shared-hosted production activation fails loud on a memory backend (see
+// WebConsoleProductionActivation's database_required check), so a no-DB production
+// deployment is refused rather than left silently volatile.
 async function createConsoleStores(database: DatabaseInstance | undefined): Promise<ConsoleStoreSet> {
   if (database) {
     const [

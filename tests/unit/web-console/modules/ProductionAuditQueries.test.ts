@@ -14,6 +14,10 @@ const {
   PostgresAuthenticationAuditQuery,
 } = await import('../../../../src/web-console/modules/audit/index.js');
 
+const { integrityFromApprovalAuditVerification } = await import(
+  '../../../../src/web-console/modules/audit/PostgresProductionAuditQueries.js'
+);
+
 const NOW = new Date('2099-05-31T12:00:00.000Z');
 const APPROVAL_ID = 'cli-018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb2';
@@ -72,6 +76,39 @@ describe('production audit query adapters', () => {
       },
     });
     expect(withSystemContextMock).toHaveBeenCalledWith(db, expect.any(Function));
+  });
+
+  it('only reports verified integrity when a real verification succeeds', () => {
+    expect(integrityFromApprovalAuditVerification({ available: false })).toEqual({
+      status: 'not_available',
+      chain_key_id: null,
+      chain_prev: null,
+      chain_hmac: null,
+    });
+    expect(integrityFromApprovalAuditVerification({
+      available: true,
+      verified: false,
+      chainKeyId: 'key-1',
+      chainPrev: null,
+      chainHmac: 'hmac-1',
+    })).toEqual({
+      status: 'not_available',
+      chain_key_id: null,
+      chain_prev: null,
+      chain_hmac: null,
+    });
+    expect(integrityFromApprovalAuditVerification({
+      available: true,
+      verified: true,
+      chainKeyId: 'key-1',
+      chainPrev: 'prev-0',
+      chainHmac: 'hmac-1',
+    })).toEqual({
+      status: 'verified',
+      chain_key_id: 'key-1',
+      chain_prev: 'prev-0',
+      chain_hmac: 'hmac-1',
+    });
   });
 
   it('returns a single approval audit row by id', async () => {

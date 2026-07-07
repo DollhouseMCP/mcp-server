@@ -39,7 +39,7 @@ export function projectOperationHealthComponent(value: unknown): OperationHealth
     component: componentField(record, 'component'),
     status: healthStatusField(record, 'status'),
     checked_at: stringField(record, 'checked_at'),
-    failure_codes: arrayValue(record.failure_codes).filter((item): item is string => typeof item === 'string'),
+    failure_codes: arrayValue(record.failure_codes).filter(isStableCode),
   };
 }
 
@@ -101,15 +101,15 @@ export function projectOperationalLog(value: unknown): OperationalLogDto {
   return {
     ts: stringField(record, 'ts'),
     level: logLevelField(record, 'level'),
-    subsystem: stringField(record, 'subsystem'),
-    event: stringField(record, 'event'),
+    subsystem: stableCodeField(record, 'subsystem'),
+    event: stableCodeField(record, 'event'),
     correlation_id: nullableStringField(record, 'correlation_id'),
     account_correlation_id: nullableStringField(record, 'account_correlation_id'),
     session_id: nullableStringField(record, 'session_id'),
-    replica: stringField(record, 'replica'),
+    replica: stableCodeField(record, 'replica'),
     duration_ms: nullableNumberField(record, 'duration_ms'),
     status_code: nullableNumberField(record, 'status_code'),
-    error_code: nullableStringField(record, 'error_code'),
+    error_code: nullableStableCodeField(record, 'error_code'),
   };
 }
 
@@ -122,13 +122,13 @@ export function projectOperationalMetric(value: unknown): OperationalMetricDto {
     value: numberField(record, 'value'),
     unit: stringField(record, 'unit'),
     dimensions: {
-      ...optionalString(dimensions, 'subsystem'),
-      ...optionalString(dimensions, 'event'),
-      ...optionalString(dimensions, 'status_family'),
-      ...optionalString(dimensions, 'error_code'),
-      ...optionalString(dimensions, 'replica'),
-      ...optionalString(dimensions, 'transport'),
-      ...optionalString(dimensions, 'latency_bucket'),
+      ...optionalStableCode(dimensions, 'subsystem'),
+      ...optionalStableCode(dimensions, 'event'),
+      ...optionalStableCode(dimensions, 'status_family'),
+      ...optionalStableCode(dimensions, 'error_code'),
+      ...optionalStableCode(dimensions, 'replica'),
+      ...optionalStableCode(dimensions, 'transport'),
+      ...optionalStableCode(dimensions, 'latency_bucket'),
       ...optionalString(dimensions, 'account_correlation_id'),
     },
   };
@@ -152,6 +152,31 @@ function optionalString(record: UnknownRecord, key: string): Record<string, stri
 function optionalNumber(record: UnknownRecord, key: string): Record<string, number> {
   const value = record[key];
   return typeof value === 'number' && Number.isFinite(value) ? { [key]: value } : {};
+}
+
+// Stable-code contract for operator-facing telemetry codes. Operator surfaces forward
+// these free-string fields to admins, so a value that isn't a bounded, well-formed
+// identifier is treated as absent (fail-closed) rather than passed through — a future
+// telemetry producer must not be able to leak user content or PII through them.
+const STABLE_CODE_PATTERN = /^[A-Za-z0-9][\w.:/-]{0,63}$/u;
+
+function isStableCode(value: unknown): value is string {
+  return typeof value === 'string' && STABLE_CODE_PATTERN.test(value);
+}
+
+function stableCodeField(record: UnknownRecord, key: string): string {
+  const value = record[key];
+  return isStableCode(value) ? value : '';
+}
+
+function nullableStableCodeField(record: UnknownRecord, key: string): string | null {
+  const value = record[key];
+  return isStableCode(value) ? value : null;
+}
+
+function optionalStableCode(record: UnknownRecord, key: string): Record<string, string> {
+  const value = record[key];
+  return isStableCode(value) ? { [key]: value } : {};
 }
 
 function componentField(record: UnknownRecord, key: string): OperationHealthComponentDto['component'] {

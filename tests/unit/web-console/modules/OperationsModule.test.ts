@@ -949,6 +949,57 @@ describe('OperationsModule', () => {
     });
   });
 
+  it('drops telemetry codes that are not well-formed stable identifiers (fail-closed)', () => {
+    const projected = projectOperationalLogs({
+      items: [{
+        ts: NOW.toISOString(),
+        level: 'error',
+        subsystem: 'user report: crash in payment flow',
+        event: 'evt@example.com',
+        correlation_id: 'correlation-9',
+        account_correlation_id: 'account-9',
+        session_id: 'session-9',
+        replica: 'replica-a',
+        duration_ms: 3,
+        status_code: 500,
+        error_code: `contains spaces ${'x'.repeat(80)}`,
+      }],
+      page: { limit: 1, cursor: null, next_cursor: null },
+    });
+    expect(projected.items[0]).toMatchObject({
+      subsystem: '',
+      event: '',
+      replica: 'replica-a',
+      error_code: null,
+      correlation_id: 'correlation-9',
+      session_id: 'session-9',
+    });
+
+    const metrics = projectOperationalMetrics({
+      checked_at: NOW.toISOString(),
+      metrics: [{
+        name: RUNTIME_ERRORS_METRIC,
+        kind: 'counter',
+        value: 1,
+        unit: 'count',
+        dimensions: {
+          subsystem: 'runtime',
+          event: 'has space',
+          error_code: 'ok_code',
+          transport: 'tcp/secure',
+          latency_bucket: 'not a bucket!!',
+          account_correlation_id: 'account-4',
+        },
+      }],
+    });
+    expect(metrics.metrics[0].dimensions).toEqual({
+      subsystem: 'runtime',
+      error_code: 'ok_code',
+      transport: 'tcp/secure',
+      account_correlation_id: 'account-4',
+    });
+  });
+
   it('projects health by allowlist rather than source object shape', () => {
     expect(projectOperationHealthSummary({
       status: 'ok',
