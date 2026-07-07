@@ -2,7 +2,12 @@ import { describe, expect, it } from '@jest/globals';
 import { eq } from 'drizzle-orm';
 
 import { deleteConsolePrincipalWithTx } from '../../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
-import { sessionActivityEvents } from '../../../../src/database/schema/index.js';
+import {
+  portfolioSyncJobs,
+  sessionActivityEvents,
+  userIntegrations,
+  userOauthTokens,
+} from '../../../../src/database/schema/index.js';
 import type { DrizzleTx } from '../../../../src/database/db-utils.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
@@ -38,16 +43,24 @@ function anonymizingTxMock() {
 }
 
 describe('deleteConsolePrincipalWithTx (anonymize path)', () => {
-  it('purges only the deleted user\'s session_activity_events when anonymize-tombstoned', async () => {
+  it('purges the deleted user\'s activity and credential data, scoped to that user, when anonymize-tombstoned', async () => {
     const { tx, deletes } = anonymizingTxMock();
 
     const outcome = await deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT });
 
     expect(outcome).toMatchObject({ userId: USER_ID, outcome: 'anonymized' });
-    // The users row is retained, so ON DELETE CASCADE never fires — the activity purge must be explicit.
-    const activityPurge = deletes.find(entry => entry.table === sessionActivityEvents);
-    expect(activityPurge).toBeDefined();
-    // ...and it must be scoped to exactly this user, not a blanket delete of everyone's activity.
-    expect(activityPurge?.predicate).toEqual(eq(sessionActivityEvents.userId, USER_ID));
+    // The users row is retained, so ON DELETE CASCADE never fires — these purges must be explicit,
+    // and each must be scoped to exactly this user (not a blanket delete of everyone's rows).
+    // user_integrations / user_oauth_tokens hold OAuth token ciphertext; portfolio_sync_jobs must
+    // precede user_integrations because it RESTRICT-references it.
+    for (const table of [sessionActivityEvents, portfolioSyncJobs, userIntegrations, userOauthTokens]) {
+      const purge = deletes.find(entry => entry.table === table);
+      expect(purge).toBeDefined();
+      expect(purge?.predicate).toEqual(eq(table.userId, USER_ID));
+    }
+
+    // Sync jobs must be deleted before the integrations they RESTRICT-reference.
+    const order = (table: unknown) => deletes.findIndex(entry => entry.table === table);
+    expect(order(portfolioSyncJobs)).toBeLessThan(order(userIntegrations));
   });
 });

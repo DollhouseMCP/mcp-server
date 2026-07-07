@@ -3,7 +3,16 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
-import { accountFactors, authAccounts, sessionActivityEvents, userAdminRoles, users } from '../../database/schema/index.js';
+import {
+  accountFactors,
+  authAccounts,
+  portfolioSyncJobs,
+  sessionActivityEvents,
+  userAdminRoles,
+  userIntegrations,
+  userOauthTokens,
+  users,
+} from '../../database/schema/index.js';
 import type {
   ConsoleAdminRole,
   ConsolePrincipalSummary,
@@ -392,10 +401,16 @@ export async function deleteConsolePrincipalWithTx(
     return { userId: input.userId, outcome: 'deleted', authzVersion: null };
   } catch (error) {
     if (!isForeignKeyViolation(error)) throw error;
-    // Anonymize-tombstone: the users row is kept, so ON DELETE CASCADE never fires.
-    // Explicitly purge the user's activity telemetry (its message can hold PII) so the
-    // account's personal data is erased rather than surviving under the tombstone.
+    // Anonymize-tombstone: the users row is kept, so ON DELETE CASCADE never fires. Explicitly
+    // purge the account's credentials and personal data so nothing sensitive survives under the
+    // tombstone. Order matters: portfolio_sync_jobs RESTRICT-references user_integrations, so it
+    // must be deleted before the integrations (which hold the OAuth access/refresh token
+    // ciphertext). Non-credential user content (elements, settings) is out of scope here and
+    // tracked separately for a full-erasure pass.
     await tx.delete(sessionActivityEvents).where(eq(sessionActivityEvents.userId, input.userId));
+    await tx.delete(portfolioSyncJobs).where(eq(portfolioSyncJobs.userId, input.userId));
+    await tx.delete(userIntegrations).where(eq(userIntegrations.userId, input.userId));
+    await tx.delete(userOauthTokens).where(eq(userOauthTokens.userId, input.userId));
     const rows = await tx.update(users).set({
       // Username is NOT NULL + unique; the id guarantees a unique tombstone.
       username: `deleted-${input.userId}`,
