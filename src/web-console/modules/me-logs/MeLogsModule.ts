@@ -12,6 +12,7 @@ import {
   stringField,
 } from '../../platform/ConsoleProjectorHelpers.js';
 import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
+import { boundedLimit, boundedString, firstString } from '../../platform/ConsoleQueryParams.js';
 
 const SELF_CAPABILITY = 'console:self';
 
@@ -107,7 +108,7 @@ function parseLogQuery(req: ConsoleRequest, userId: string): ConsoleLogQueryOpti
     correlationId: boundedString(firstString(req.query.correlation_id), 128),
     sessionId: boundedString(firstString(req.query.session_id), 200),
     since: boundedString(firstString(req.query.since), 64),
-    limit: boundedLimit(firstString(req.query.limit), 200),
+    limit: boundedLimit(firstString(req.query.limit), 200, 1000),
     offset: offsetFromConsoleCursor(boundedString(firstString(req.query.cursor), 512)),
   };
 }
@@ -150,20 +151,3 @@ function projectConsoleLogEntry(value: unknown): ConsoleLogEntry {
   };
 }
 
-function boundedLimit(value: string | null, fallback: number): number {
-  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) return fallback;
-  return Math.min(parsed, 1000);
-}
-
-function boundedString(value: string | null, maxLength: number): string | null {
-  if (value === null) return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : null;
-}
-
-function firstString(value: ConsoleRequest['query'][string] | undefined): string | null {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
-  return null;
-}

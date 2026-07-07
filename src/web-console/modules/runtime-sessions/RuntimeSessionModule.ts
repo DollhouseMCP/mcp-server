@@ -57,6 +57,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
+      privacyProjector: projectRuntimeSessionSelf,
       handler: req => getSelfSession(req, service),
     },
     {
@@ -68,6 +69,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       elevation: 'none',
       privacyClass: 'self_private',
       idempotency: 'required',
+      privacyProjector: projectRuntimeTermination,
       // Self termination provenance is retained in runtime_control_commands; admin_audit remains admin-scoped.
       handler: req => terminateSelfSession(req, service),
     },
@@ -181,7 +183,8 @@ async function getSelfSession(req: ConsoleRequest, service: RuntimeSessionServic
   const sessionId = requiredParam(req, SESSION_ID_PARAM);
   if (!sessionId) return invalidParam(SESSION_ID_PARAM);
   const body = await service.getSelfSession(actor.userId, sessionId);
-  return body ? { status: 200, body: projectRuntimeSessionSelf(body) } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  // The route-declared projector runs in the kernel; no inline projection.
+  return body ? { status: 200, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
 }
 
 async function terminateSelfSession(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
@@ -189,7 +192,7 @@ async function terminateSelfSession(req: ConsoleRequest, service: RuntimeSession
   const sessionId = requiredParam(req, SESSION_ID_PARAM);
   if (!sessionId) return invalidParam(SESSION_ID_PARAM);
   const body = await service.terminateSelfSession(actor.userId, sessionId);
-  return body ? { status: 202, body: projectRuntimeTermination(body) } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
 }
 
 async function revokeAllSelfSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {

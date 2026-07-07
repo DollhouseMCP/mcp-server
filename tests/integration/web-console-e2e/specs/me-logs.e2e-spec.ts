@@ -20,4 +20,28 @@ describe('/me/logs', () => {
     expect(res.status).toBe(200);
     expect((res.body as { page: { cursor: unknown } }).page.cursor).toBeNull();
   });
+
+  it('walks a second page through the opaque cursor over real HTTP', async () => {
+    // Guarantee user-scoped log entries: portfolio mutations run inside the
+    // per-user context bridge, so the element managers' logging is attributed
+    // to this user (plain reads are not reliably attributed).
+    for (const name of ['Log-Walk-A', 'Log-Walk-B']) {
+      await world.clients.userA.post('/api/v1/me/portfolio/elements/personas', {
+        body: { name, content: `You are ${name}.`, metadata: {}, tags: [] },
+      });
+    }
+
+    type Page = { items: { id: string }[]; page: { cursor: string | null; next_cursor: string | null } };
+    const first = (await world.clients.userA.get('/api/v1/me/logs?limit=1')).body as Page;
+    expect(first.items).toHaveLength(1);
+    expect(first.page.next_cursor).not.toBeNull();
+
+    const second = (await world.clients.userA.get(
+      `/api/v1/me/logs?limit=1&cursor=${encodeURIComponent(first.page.next_cursor ?? '')}`,
+    )).body as Page;
+    expect(second.items).toHaveLength(1);
+    expect(second.page.cursor).toBe(first.page.next_cursor);
+    // The walk continues, and it never repeats the first page's entry.
+    expect(second.items[0].id).not.toBe(first.items[0].id);
+  });
 });

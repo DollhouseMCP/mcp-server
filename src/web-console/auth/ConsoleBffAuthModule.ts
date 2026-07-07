@@ -502,6 +502,9 @@ function invalidCapability(): ConsoleHandlerResult {
   return {
     status: 400,
     body: {
+      type: 'about:blank',
+      title: 'Invalid request',
+      status: 400,
       code: 'invalid_capability',
       detail: 'Step-up requires a valid administrative console capability.',
     },

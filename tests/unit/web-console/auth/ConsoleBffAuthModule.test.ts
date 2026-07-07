@@ -504,6 +504,23 @@ describe('ConsoleBffAuthModule', () => {
     expect(redirect.searchParams.get('redirect_uri')).toBe(`${ORIGIN}${STEP_UP_CALLBACK_PATH}`);
   });
 
+  it('rejects an invalid step-up capability as an RFC 9457 problem document', async () => {
+    const fixture = buildFixture();
+    const session = await loginSession(fixture);
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=not-a-capability`)
+      .set('Cookie', session.sessionCookie);
+
+    expect(response.status).toBe(400);
+    // The handler error must ride the kernel's problem lift like every other
+    // module error: typed type URI, instance = correlation id, problem+json.
+    expect(response.headers['content-type']).toContain('application/problem+json');
+    expect(response.body.type).toBe('https://dollhousemcp.com/errors/invalid_capability');
+    expect(response.body.code).toBe('invalid_capability');
+    expect(response.body.instance).toBe(response.headers['x-correlation-id']);
+  });
+
   it('completes step-up once and attaches TOTP-backed elevation to the current session', async () => {
     const fixture = buildFixture();
     fixture.oauthClient.claims = {
@@ -723,9 +740,14 @@ describe('ConsoleBffAuthModule', () => {
       .set('Cookie', session.sessionCookie);
 
     expect(response.status).toBe(400);
+    // Full RFC 9457 problem document via the kernel lift.
     expect(response.body).toEqual({
+      type: 'https://dollhousemcp.com/errors/invalid_capability',
+      title: 'Invalid request',
+      status: 400,
       code: 'invalid_capability',
       detail: 'Step-up requires a valid administrative console capability.',
+      instance: response.headers['x-correlation-id'],
     });
     expect(response.headers['set-cookie']).toBeUndefined();
   });

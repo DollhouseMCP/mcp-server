@@ -589,10 +589,12 @@ describe('OperationsModule', () => {
   it('bounds operational log limits for invalid and extreme requests', async () => {
     const route = findRoute(createModule(HEALTH_CHECKS, createTelemetry(150)).routes, 'GET', OPERATE_LOGS_PATH);
 
+    // Sub-1 and unparsable limits are invalid input → the endpoint default
+    // (shared ConsoleQueryParams semantics), not a clamp to 1.
     await expect(route.handler({ query: { limit: '0' }, params: {} } as never))
-      .resolves.toMatchObject({ body: { items: expect.arrayContaining([expect.any(Object)]), page: { limit: 1 } } });
+      .resolves.toMatchObject({ body: { items: expect.arrayContaining([expect.any(Object)]), page: { limit: 100 } } });
     await expect(route.handler({ query: { limit: '-10' }, params: {} } as never))
-      .resolves.toMatchObject({ body: { page: { limit: 1 } } });
+      .resolves.toMatchObject({ body: { page: { limit: 100 } } });
     await expect(route.handler({ query: { limit: '1000' }, params: {} } as never))
       .resolves.toMatchObject({ body: { items: expect.any(Array), page: { limit: 100 } } });
     await expect(route.handler({ query: { limit: 'not-a-number' }, params: {} } as never))
