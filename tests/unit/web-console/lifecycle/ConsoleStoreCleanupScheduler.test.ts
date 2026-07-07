@@ -18,12 +18,14 @@ function stores(overrides: {
   readonly login?: jest.Mock<(before?: Date) => Promise<number>>;
   readonly idempotency?: jest.Mock<(before?: Date) => Promise<number>>;
   readonly runtime?: jest.Mock<(before?: Date) => Promise<number>>;
+  readonly activity?: jest.Mock<(before?: Date) => Promise<number>>;
 } = {}) {
   return {
     sessionStore: { sweepExpired: overrides.sessions ?? jest.fn(() => Promise.resolve(1)) },
     loginTransactionStore: { sweepExpired: overrides.login ?? jest.fn(() => Promise.resolve(2)) },
     idempotencyStore: { sweepExpired: overrides.idempotency ?? jest.fn(() => Promise.resolve(3)) },
     ...(overrides.runtime ? { runtimeSessionControlStore: { sweepStalePresence: overrides.runtime } } : {}),
+    ...(overrides.activity ? { sessionActivityStore: { sweepExpired: overrides.activity } } : {}),
   };
 }
 
@@ -66,6 +68,7 @@ describe('ConsoleStoreCleanupScheduler', () => {
         loginTransactions: 2,
         idempotencyRecords: 3,
         runtimeSessionPresence: 0,
+        sessionActivityEvents: 0,
       },
       errors: [],
     });
@@ -117,6 +120,7 @@ describe('ConsoleStoreCleanupScheduler', () => {
         loginTransactions: 2,
         idempotencyRecords: 3,
         runtimeSessionPresence: 0,
+        sessionActivityEvents: 0,
       },
       errors: [{ store: 'consoleSessions', error: failure }],
     });
@@ -146,6 +150,7 @@ describe('ConsoleStoreCleanupScheduler', () => {
         loginTransactions: 2,
         idempotencyRecords: 0,
         runtimeSessionPresence: 0,
+        sessionActivityEvents: 0,
       },
       errors: [
         { store: 'consoleSessions', error: sessionFailure },
@@ -153,6 +158,20 @@ describe('ConsoleStoreCleanupScheduler', () => {
       ],
     });
     expect(cleanupStores.loginTransactionStore.sweepExpired).toHaveBeenCalledTimes(1);
+  });
+
+  it('sweeps session activity retention when an activity store is configured', async () => {
+    const activity = jest.fn(() => Promise.resolve(5));
+    const cleanupStores = stores({ activity });
+    const scheduler = new ConsoleStoreCleanupScheduler({
+      stores: cleanupStores,
+      now: () => NOW,
+    });
+
+    const result = await scheduler.runOnce();
+
+    expect(result?.removed.sessionActivityEvents).toBe(5);
+    expect(activity).toHaveBeenCalledWith(NOW);
   });
 
   it('sweeps stale runtime session presence when a runtime store is configured', async () => {

@@ -153,6 +153,12 @@ import {
   type CollectionSearchPort,
 } from './modules/collection/index.js';
 import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
+import {
+  InMemoryPortfolioActivityEventSink,
+  PostgresPortfolioActivityEventSink,
+  type IPortfolioActivityEventSink,
+} from './modules/portfolio/PortfolioActivityEvents.js';
+import { PostgresConsoleSessionActivityStore } from './stores/IConsoleSessionActivityStore.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
@@ -216,6 +222,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   integrationDescriptorStore: 'WebConsoleIntegrationDescriptorStore',
   integrationOpenApiSpecStore: 'WebConsoleIntegrationOpenApiSpecStore',
   portfolioStore: 'WebConsolePortfolioStore',
+  portfolioActivityEventSink: 'WebConsolePortfolioActivityEventSink',
   portfolioSyncJobStore: 'WebConsolePortfolioSyncJobStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
   runtimeSessionControlStore: 'WebConsoleRuntimeSessionControlStore',
@@ -287,6 +294,7 @@ export interface WebConsoleRegistrarOptions {
   /** Directory of curated integration descriptor seed files, loaded at bootstrap. */
   readonly integrationDescriptorSeedDir?: string;
   readonly portfolioStore?: IPortfolioElementStore | null;
+  readonly portfolioActivityEventSink?: IPortfolioActivityEventSink | null;
   readonly enableManagerBackedPortfolioStore?: boolean;
   readonly enablePortfolioWriteRoutes?: boolean;
   /**
@@ -612,6 +620,7 @@ export class WebConsoleRegistrar {
       syncJobStore: stores.portfolioSyncJobStore,
       enablePortfolioWriteRoutes: this.options.enablePortfolioWriteRoutes === true,
       now: this.options.now,
+      activityEventSink: resolvePortfolioActivityEventSink(container, database, this.options),
     }));
     // Whole-module gate (not per-route like portfolio writes): when the flag is
     // off, the catalog surface is absent from the manifest entirely. The install
@@ -721,7 +730,7 @@ export class WebConsoleRegistrar {
       apiV1MountState,
       userContext: resolveConsoleUserContext(container),
     });
-    const cleanupScheduler = this.createCleanupScheduler(stores, container);
+    const cleanupScheduler = this.createCleanupScheduler(stores, database, container);
     const composition: WebConsoleComposition = {
       activationProfile,
       registry,
@@ -772,6 +781,7 @@ export class WebConsoleRegistrar {
     stores: Pick<WebConsoleComposition,
       'sessionStore' | 'loginTransactionStore' | 'idempotencyStore' | 'runtimeSessionControlStore'
     >,
+    database: DatabaseInstance | undefined,
     container: DiContainerFacade,
   ): ConsoleStoreCleanupScheduler | null {
     if (this.options.registerCleanup === false) return null;
@@ -783,7 +793,12 @@ export class WebConsoleRegistrar {
       throw new Error('Web console cleanup registration requires LifecycleService');
     }
     const scheduler = new ConsoleStoreCleanupScheduler({
-      stores,
+      stores: {
+        ...stores,
+        sessionActivityStore: database
+          ? markProductionAdapter(new PostgresConsoleSessionActivityStore(database), 'PostgresConsoleSessionActivityStore')
+          : undefined,
+      },
       intervalMs: this.options.cleanupIntervalMs,
       now: this.options.now,
       reportError,
@@ -1620,6 +1635,23 @@ function resolveSessionApprovalEventSink(
   }
   if (database) return markProductionAdapter(new PostgresSessionApprovalEventSink(database), 'PostgresSessionApprovalEventSink');
   return new InMemorySessionApprovalEventSink();
+}
+
+function resolvePortfolioActivityEventSink(
+  container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
+  options: WebConsoleRegistrarOptions,
+): IPortfolioActivityEventSink {
+  if (options.portfolioActivityEventSink !== undefined) {
+    return options.portfolioActivityEventSink ?? new InMemoryPortfolioActivityEventSink();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioActivityEventSink)) {
+    return container.resolve<IPortfolioActivityEventSink>(WEB_CONSOLE_SERVICE_NAMES.portfolioActivityEventSink);
+  }
+  if (database) {
+    return markProductionAdapter(new PostgresPortfolioActivityEventSink(database), 'PostgresPortfolioActivityEventSink');
+  }
+  return new InMemoryPortfolioActivityEventSink();
 }
 
 function resolveSessionExecutionReader(

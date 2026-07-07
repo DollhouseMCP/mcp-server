@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   createPortfolioModule,
+  InMemoryPortfolioActivityEventSink,
   InMemoryPortfolioElementStore,
   InMemoryPortfolioSyncJobStore,
   InMemoryUserIntegrationStore,
@@ -34,6 +35,7 @@ const SYNC_STATUS_PATH = '/api/v1/me/portfolio/sync/:job_id';
 const REVIEW_HELPER_NAME = 'review-helper';
 const REVIEW_HELPER_V3_ETAG = 'W/"portfolio:skills:review-helper:v3"';
 const INTEGRATION_ID = '35e22a52-dc56-4cd0-9d13-b2802524fbd3';
+const CORRELATION_ID = '22222222-2222-4222-8222-222222222222';
 
 function authenticatedContext(userId = USER_ID): NonNullable<ConsoleRequest['consoleAuthentication']> {
   return {
@@ -643,6 +645,42 @@ describe('PortfolioModule', () => {
       },
     });
     await expect(store.findByName(USER_ID, 'skills', REVIEW_HELPER_NAME)).resolves.toBeNull();
+  });
+
+  it('records a metadata-only deletion activity event on delete', async () => {
+    const sink = new InMemoryPortfolioActivityEventSink();
+    const store = new InMemoryPortfolioElementStore([portfolioElement()]);
+    const module = createPortfolioModule({
+      portfolioStore: store,
+      integrationStore: new InMemoryUserIntegrationStore(),
+      syncJobStore: new InMemoryPortfolioSyncJobStore(),
+      enablePortfolioWriteRoutes: true,
+      now: () => NOW,
+      activityEventSink: sink,
+    });
+    const remove = findRoute(module.routes, ELEMENT_DETAIL_PATH, 'DELETE');
+    const detail = findRoute(module.routes, ELEMENT_DETAIL_PATH);
+    const current = await detail.handler(consoleRequest({
+      params: { type: 'skills', name: REVIEW_HELPER_NAME },
+    }));
+
+    await remove.handler(consoleRequest({
+      params: { type: 'skills', name: REVIEW_HELPER_NAME },
+      headers: { 'if-match': responseEtag(current) },
+      consoleContext: { correlationId: CORRELATION_ID, receivedAt: NOW },
+    }));
+
+    const events = sink.listEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'console.portfolio.element.deleted.v1',
+      userId: USER_ID,
+      elementType: 'skills',
+      canonicalName: REVIEW_HELPER_NAME,
+      correlationId: CORRELATION_ID,
+    });
+    expect(events[0].consoleSessionId).toMatch(/^[0-9a-f]{64}$/u);
+    expect(events[0]).not.toHaveProperty('content');
   });
 
   it('enforces delete preconditions before deleting owned elements', async () => {

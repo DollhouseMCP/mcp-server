@@ -3,7 +3,7 @@ import { and, eq, isNull, sql } from 'drizzle-orm';
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
-import { accountFactors, authAccounts, userAdminRoles, users } from '../../database/schema/index.js';
+import { accountFactors, authAccounts, sessionActivityEvents, userAdminRoles, users } from '../../database/schema/index.js';
 import type {
   ConsoleAdminRole,
   ConsolePrincipalSummary,
@@ -147,7 +147,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return rows.map(row => {
       assertAdminRole(row.role, 'role');
       return row.role;
-    }).sort();
+    }).sort((a, b) => a.localeCompare(b));
   }
 
   async grantRole(input: RoleGrantInput): Promise<ConsoleRoleAssignment> {
@@ -392,6 +392,10 @@ export async function deleteConsolePrincipalWithTx(
     return { userId: input.userId, outcome: 'deleted', authzVersion: null };
   } catch (error) {
     if (!isForeignKeyViolation(error)) throw error;
+    // Anonymize-tombstone: the users row is kept, so ON DELETE CASCADE never fires.
+    // Explicitly purge the user's activity telemetry (its message can hold PII) so the
+    // account's personal data is erased rather than surviving under the tombstone.
+    await tx.delete(sessionActivityEvents).where(eq(sessionActivityEvents.userId, input.userId));
     const rows = await tx.update(users).set({
       // Username is NOT NULL + unique; the id guarantees a unique tombstone.
       username: `deleted-${input.userId}`,

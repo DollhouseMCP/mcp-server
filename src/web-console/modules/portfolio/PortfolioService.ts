@@ -3,6 +3,8 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
+import { requireConsoleRequestContext } from '../../platform/ConsoleRequestContext.js';
+import type { IPortfolioActivityEventSink } from './PortfolioActivityEvents.js';
 import {
   canonicalizePortfolioElementName,
   isConsolePortfolioElementType,
@@ -53,6 +55,7 @@ export class PortfolioService {
     private readonly integrationStore: IUserIntegrationStore,
     private readonly syncJobStore: IPortfolioSyncJobStore,
     private readonly now: () => Date = () => new Date(),
+    private readonly activityEventSink: IPortfolioActivityEventSink | null = null,
   ) {}
 
   async getSummary(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
@@ -206,6 +209,10 @@ export class PortfolioService {
     }
   }
 
+  // Console deletion is an intentional HARD delete, mirroring the canonical `delete_element`
+  // semantics the manager-backed store delegates to — there is deliberately no recycle bin.
+  // The metadata-only activity event below is the forensic trail of what was removed
+  // (it records the contentHash, never the content).
   async deleteElement(
     req: ConsoleRequest,
     type: string,
@@ -228,6 +235,16 @@ export class PortfolioService {
         now: this.now(),
       });
       if (!deleted) return notFound();
+      await this.activityEventSink?.recordElementDeleted({
+        type: 'console.portfolio.element.deleted.v1',
+        userId: auth.userId,
+        consoleSessionId: auth.sessionIdHash.toString('hex'),
+        elementType: deleted.type,
+        canonicalName: deleted.canonicalName,
+        contentHash: deleted.contentHash ?? null,
+        correlationId: requireConsoleRequestContext(req).correlationId,
+        occurredAt: this.now(),
+      });
       return {
         status: 200,
         body: {
