@@ -156,7 +156,9 @@ export function collectDeletionIdentity(
  */
 export async function purgeNonCascadeUserIdentity(tx: DrizzleTx, identity: DeletionIdentity): Promise<void> {
   for (const sub of identity.subs) {
-    // OIDC grants/tokens: model rows carry the subject in payload->>'accountId'.
+    // OIDC grants/tokens: account-linked model rows (Grant, Session, AccessToken, RefreshToken,
+    // …) carry the subject in payload->>'accountId'. Pre-auth Interaction rows have no accountId
+    // and self-expire. Looped rather than batched: an account has one or two subjects.
     await tx.delete(authKv).where(sql`${authKv.payload}->>'accountId' = ${sub}`);
   }
   if (identity.subs.length > 0) {

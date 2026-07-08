@@ -379,6 +379,10 @@ export async function deleteConsolePrincipalWithTx(
     .where(and(eq(users.id, input.userId), isNull(users.deletedAt))).limit(1).for('update');
   if (existing.length === 0) return null;
 
+  // Everything below runs in the caller's single `withSystemContext` transaction, so any thrown
+  // error (the FK violation on the hard delete, or any other DB failure) rolls back every delete
+  // here atomically — there is no partially-erased intermediate state.
+
   // Capture the account's federated identity BEFORE deleting auth_accounts, then purge the
   // non-FK identity/credential tables (auth_kv OIDC grants/tokens, auth_identity_events, and the
   // auth_allowlist pre-approval) that no cascade reaches. Runs on BOTH paths — a hard delete

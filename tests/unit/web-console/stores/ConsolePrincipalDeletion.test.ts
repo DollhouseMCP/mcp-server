@@ -26,7 +26,7 @@ interface SelectNode {
 
 // A tx where the hard `DELETE FROM users` raises a 23503 FK violation unless hardDelete is set,
 // forcing the anonymize-tombstone branch. Both selects (users, auth_accounts) are served.
-function txMock({ hardDelete = false } = {}) {
+function txMock({ hardDelete = false, transactionError }: { hardDelete?: boolean; transactionError?: unknown } = {}) {
   const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
   const from = (table: unknown): SelectNode => {
     const rows = table === users ? [{ id: USER_ID, email: 'a@b.com' }] : ACCOUNTS;
@@ -46,7 +46,10 @@ function txMock({ hardDelete = false } = {}) {
         return Promise.resolve();
       },
     }),
-    transaction: () => (hardDelete ? Promise.resolve() : Promise.reject({ code: '23503' })),
+    transaction: () => {
+      if (hardDelete) return Promise.resolve();
+      return Promise.reject(transactionError ?? { code: '23503' });
+    },
     update: () => ({
       set: () => ({ where: () => ({ returning: () => Promise.resolve([{ authzVersion: 5 }]) }) }),
     }),
@@ -76,5 +79,12 @@ describe('deleteConsolePrincipalWithTx', () => {
     const outcome = await deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT });
 
     expect(outcome).toMatchObject({ userId: USER_ID, outcome: 'deleted' });
+  });
+
+  it('propagates a non-FK error from the hard-delete attempt (the whole tx then rolls back)', async () => {
+    const { tx } = txMock({ transactionError: { code: '40001' } }); // serialization failure, not 23503
+
+    await expect(deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT }))
+      .rejects.toMatchObject({ code: '40001' });
   });
 });

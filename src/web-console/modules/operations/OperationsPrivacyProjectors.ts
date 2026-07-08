@@ -23,6 +23,7 @@ import {
   stringField,
   type UnknownRecord,
 } from '../../platform/ConsoleProjectorHelpers.js';
+import { OPERATION_HEALTH_COMPONENTS } from './OperationsHealth.js';
 
 export function projectOperationHealthSummary(value: unknown): OperationHealthSummaryDto {
   const record = objectValue(value);
@@ -181,15 +182,10 @@ function optionalStableCode(record: UnknownRecord, key: string): Record<string, 
 
 function componentField(record: UnknownRecord, key: string): OperationHealthComponentDto['component'] {
   const value = record[key];
-  if (
-    value === 'database' ||
-    value === 'auth_server' ||
-    value === 'gatekeeper' ||
-    value === 'runtime_control' ||
-    value === 'security_invalidation' ||
-    value === 'api_mount'
-  ) {
-    return value;
+  // Derive the allowlist from the single source of truth so a new component added to the health
+  // builder can't silently coerce to the fallback (see OperationsHealth.OPERATION_HEALTH_COMPONENTS).
+  if (typeof value === 'string' && (OPERATION_HEALTH_COMPONENTS as readonly string[]).includes(value)) {
+    return value as OperationHealthComponentDto['component'];
   }
   return 'api_mount';
 }

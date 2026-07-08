@@ -17,6 +17,7 @@ import {
   type ISystemMetricsSource,
   type OperationsHealthChecks,
 } from '../../../../src/web-console/index.js';
+import { OPERATION_HEALTH_COMPONENTS } from '../../../../src/web-console/modules/operations/OperationsHealth.js';
 
 const NOW = new Date('2026-05-29T10:30:00.000Z');
 const MUST_NOT_LEAK = 'must-not-leak';
@@ -998,6 +999,27 @@ describe('OperationsModule', () => {
       transport: 'tcp/secure',
       account_correlation_id: 'account-4',
     });
+  });
+
+  it('accepts every health component the builder can emit (no silent drift to the fallback)', () => {
+    for (const component of OPERATION_HEALTH_COMPONENTS) {
+      const projected = projectOperationHealthComponent({
+        component,
+        status: 'ok',
+        checked_at: NOW.toISOString(),
+        failure_codes: [],
+      });
+      expect(projected.component).toBe(component);
+    }
+    // A component the builder never emits is coerced to a valid member (defensive), not passed through.
+    const coerced = projectOperationHealthComponent({
+      component: 'queue_processor',
+      status: 'ok',
+      checked_at: NOW.toISOString(),
+      failure_codes: [],
+    });
+    expect(OPERATION_HEALTH_COMPONENTS).toContain(coerced.component);
+    expect(coerced.component).not.toBe('queue_processor');
   });
 
   it('projects health by allowlist rather than source object shape', () => {
