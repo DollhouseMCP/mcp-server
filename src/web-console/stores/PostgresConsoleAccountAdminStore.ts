@@ -4,6 +4,11 @@ import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
 import { accountFactors, authAccounts, userAdminRoles, users } from '../../database/schema/index.js';
+import {
+  collectDeletionIdentity,
+  purgeNonCascadeUserIdentity,
+  purgeUserScopedData,
+} from '../../database/userDataPurge.js';
 import type {
   ConsoleAdminRole,
   ConsolePrincipalSummary,
@@ -147,7 +152,7 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return rows.map(row => {
       assertAdminRole(row.role, 'role');
       return row.role;
-    }).sort();
+    }).sort((a, b) => a.localeCompare(b));
   }
 
   async grantRole(input: RoleGrantInput): Promise<ConsoleRoleAssignment> {
@@ -370,9 +375,26 @@ export async function deleteConsolePrincipalWithTx(
   input: PrincipalDeletionInput,
 ): Promise<PrincipalDeletionOutcome | null> {
   validatePrincipalDeletionInput(input);
-  const existing = await tx.select({ id: users.id }).from(users)
+  const existing = await tx.select({ id: users.id, email: users.email }).from(users)
     .where(and(eq(users.id, input.userId), isNull(users.deletedAt))).limit(1).for('update');
   if (existing.length === 0) return null;
+
+  // Everything below runs in the caller's single `withSystemContext` transaction, so any thrown
+  // error (the FK violation on the hard delete, or any other DB failure) rolls back every delete
+  // here atomically — there is no partially-erased intermediate state.
+
+  // Capture the account's federated identity BEFORE deleting auth_accounts, then purge the
+  // non-FK identity/credential tables (auth_kv OIDC grants/tokens, auth_identity_events, and the
+  // auth_allowlist pre-approval) that no cascade reaches. Runs on BOTH paths — a hard delete
+  // does not reach these either.
+  const accounts = await tx.select({
+    sub: authAccounts.sub,
+    provider: authAccounts.provider,
+    externalSub: authAccounts.externalSub,
+    email: authAccounts.email,
+    rawProfile: authAccounts.rawProfile,
+  }).from(authAccounts).where(eq(authAccounts.userId, input.userId));
+  await purgeNonCascadeUserIdentity(tx, collectDeletionIdentity(existing[0]?.email ?? null, accounts));
 
   // Detach the account's own identity/credential/role surface first, so the
   // login stops working on either branch and so these rows don't themselves
@@ -392,6 +414,10 @@ export async function deleteConsolePrincipalWithTx(
     return { userId: input.userId, outcome: 'deleted', authzVersion: null };
   } catch (error) {
     if (!isForeignKeyViolation(error)) throw error;
+    // Anonymize-tombstone: the users row is kept, so ON DELETE CASCADE never fires. Replay the
+    // cascade explicitly so no personal data survives under the tombstone; only the retained
+    // RESTRICT-anchored audit chain (and this user's actions on others) remain.
+    await purgeUserScopedData(tx, input.userId);
     const rows = await tx.update(users).set({
       // Username is NOT NULL + unique; the id guarantees a unique tombstone.
       username: `deleted-${input.userId}`,

@@ -6,6 +6,7 @@ import type {
 import type { IPortfolioElementStore } from '../../stores/IPortfolioElementStore.js';
 import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
 import type { IPortfolioSyncJobStore } from '../../stores/IPortfolioSyncJobStore.js';
+import type { IPortfolioActivityEventSink } from './PortfolioActivityEvents.js';
 import {
   projectPortfolioElementDelete,
   projectPortfolioElementDetail,
@@ -25,10 +26,17 @@ export interface PortfolioModuleOptions {
   readonly syncJobStore: IPortfolioSyncJobStore;
   readonly enablePortfolioWriteRoutes?: boolean;
   readonly now?: () => Date;
+  readonly activityEventSink?: IPortfolioActivityEventSink | null;
 }
 
 export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleModuleDescriptor {
-  const service = new PortfolioService(options.portfolioStore, options.integrationStore, options.syncJobStore, options.now);
+  const service = new PortfolioService(
+    options.portfolioStore,
+    options.integrationStore,
+    options.syncJobStore,
+    options.now,
+    options.activityEventSink ?? null,
+  );
   const routes: ConsoleModuleDescriptor['routes'] = [
     ...(options.enablePortfolioWriteRoutes === true ? writeRoutes(service) : []),
     {

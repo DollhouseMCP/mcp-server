@@ -17,6 +17,7 @@ import {
   type ISystemMetricsSource,
   type OperationsHealthChecks,
 } from '../../../../src/web-console/index.js';
+import { OPERATION_HEALTH_COMPONENTS } from '../../../../src/web-console/modules/operations/OperationsHealth.js';
 
 const NOW = new Date('2026-05-29T10:30:00.000Z');
 const MUST_NOT_LEAK = 'must-not-leak';
@@ -947,6 +948,78 @@ describe('OperationsModule', () => {
         },
       }],
     });
+  });
+
+  it('drops telemetry codes that are not well-formed stable identifiers (fail-closed)', () => {
+    const projected = projectOperationalLogs({
+      items: [{
+        ts: NOW.toISOString(),
+        level: 'error',
+        subsystem: 'user report: crash in payment flow',
+        event: 'evt@example.com',
+        correlation_id: 'correlation-9',
+        account_correlation_id: 'account-9',
+        session_id: 'session-9',
+        replica: 'replica-a',
+        duration_ms: 3,
+        status_code: 500,
+        error_code: `contains spaces ${'x'.repeat(80)}`,
+      }],
+      page: { limit: 1, cursor: null, next_cursor: null },
+    });
+    expect(projected.items[0]).toMatchObject({
+      subsystem: '',
+      event: '',
+      replica: 'replica-a',
+      error_code: null,
+      correlation_id: 'correlation-9',
+      session_id: 'session-9',
+    });
+
+    const metrics = projectOperationalMetrics({
+      checked_at: NOW.toISOString(),
+      metrics: [{
+        name: RUNTIME_ERRORS_METRIC,
+        kind: 'counter',
+        value: 1,
+        unit: 'count',
+        dimensions: {
+          subsystem: 'runtime',
+          event: 'has space',
+          error_code: 'ok_code',
+          transport: 'tcp/secure',
+          latency_bucket: 'not a bucket!!',
+          account_correlation_id: 'account-4',
+        },
+      }],
+    });
+    expect(metrics.metrics[0].dimensions).toEqual({
+      subsystem: 'runtime',
+      error_code: 'ok_code',
+      transport: 'tcp/secure',
+      account_correlation_id: 'account-4',
+    });
+  });
+
+  it('accepts every health component the builder can emit (no silent drift to the fallback)', () => {
+    for (const component of OPERATION_HEALTH_COMPONENTS) {
+      const projected = projectOperationHealthComponent({
+        component,
+        status: 'ok',
+        checked_at: NOW.toISOString(),
+        failure_codes: [],
+      });
+      expect(projected.component).toBe(component);
+    }
+    // A component the builder never emits is coerced to a valid member (defensive), not passed through.
+    const coerced = projectOperationHealthComponent({
+      component: 'queue_processor',
+      status: 'ok',
+      checked_at: NOW.toISOString(),
+      failure_codes: [],
+    });
+    expect(OPERATION_HEALTH_COMPONENTS).toContain(coerced.component);
+    expect(coerced.component).not.toBe('queue_processor');
   });
 
   it('projects health by allowlist rather than source object shape', () => {

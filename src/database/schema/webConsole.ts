@@ -337,7 +337,7 @@ export const integrationOpenApiSpecs = pgTable('integration_openapi_specs', {
 
 export type PortfolioSyncDirection = 'pull' | 'push' | 'bidirectional';
 export type PortfolioSyncConflictPolicy = 'fail' | 'prefer_local' | 'prefer_remote';
-export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -357,7 +357,7 @@ export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
 }, (table) => [
   check('portfolio_sync_jobs_direction_check', sql`${table.direction} IN ('pull', 'push', 'bidirectional')`),
   check('portfolio_sync_jobs_conflict_policy_check', sql`${table.conflictPolicy} IN ('fail', 'prefer_local', 'prefer_remote')`),
-  check('portfolio_sync_jobs_status_check', sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
+  check('portfolio_sync_jobs_status_check', sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed')`),
   check('portfolio_sync_jobs_shape_check', sql`
     ${table.claimVersion} >= 0
     AND ${table.attemptCount} >= 0
@@ -383,8 +383,8 @@ export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
         AND ${table.leaseUntil} IS NULL)
     )
     AND (
-      (${table.status} IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NOT NULL)
-      OR (${table.status} NOT IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NULL)
+      (${table.status} IN ('succeeded', 'failed') AND ${table.completedAt} IS NOT NULL)
+      OR (${table.status} NOT IN ('succeeded', 'failed') AND ${table.completedAt} IS NULL)
     )
     AND (
       (${table.status} = 'failed' AND ${table.operationalErrorCode} IS NOT NULL)

@@ -153,6 +153,12 @@ import {
   type CollectionSearchPort,
 } from './modules/collection/index.js';
 import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
+import {
+  InMemoryPortfolioActivityEventSink,
+  PostgresPortfolioActivityEventSink,
+  type IPortfolioActivityEventSink,
+} from './modules/portfolio/PortfolioActivityEvents.js';
+import { PostgresConsoleSessionActivityStore } from './stores/IConsoleSessionActivityStore.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
@@ -216,6 +222,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   integrationDescriptorStore: 'WebConsoleIntegrationDescriptorStore',
   integrationOpenApiSpecStore: 'WebConsoleIntegrationOpenApiSpecStore',
   portfolioStore: 'WebConsolePortfolioStore',
+  portfolioActivityEventSink: 'WebConsolePortfolioActivityEventSink',
   portfolioSyncJobStore: 'WebConsolePortfolioSyncJobStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
   runtimeSessionControlStore: 'WebConsoleRuntimeSessionControlStore',
@@ -287,6 +294,7 @@ export interface WebConsoleRegistrarOptions {
   /** Directory of curated integration descriptor seed files, loaded at bootstrap. */
   readonly integrationDescriptorSeedDir?: string;
   readonly portfolioStore?: IPortfolioElementStore | null;
+  readonly portfolioActivityEventSink?: IPortfolioActivityEventSink | null;
   readonly enableManagerBackedPortfolioStore?: boolean;
   readonly enablePortfolioWriteRoutes?: boolean;
   /**
@@ -476,22 +484,16 @@ export class WebConsoleRegistrar {
       database,
     );
     const apiV1MountState = createApiV1MountState();
-    const operationHealthChecks = createOperationHealthChecks({
+    const healthProbes = createConsoleHealthProbes({
       database,
       stores,
       authStorage,
-      container,
       securityInvalidationReadiness,
       routesMounted: apiV1MountState.mounted,
     });
+    const operationHealthChecks = createOperationHealthChecks(healthProbes, container);
     registry.register(createHealthModule({
-      readiness: createHealthReadinessInputs({
-        database,
-        stores,
-        authStorage,
-        securityInvalidationReadiness,
-        routesMounted: apiV1MountState.mounted,
-      }),
+      readiness: createHealthReadinessInputs(healthProbes, stores),
       now: this.options.now,
     }));
     if (consoleOAuthClient && secretEncryption && integrationPublicBaseUrl) {
@@ -618,6 +620,7 @@ export class WebConsoleRegistrar {
       syncJobStore: stores.portfolioSyncJobStore,
       enablePortfolioWriteRoutes: this.options.enablePortfolioWriteRoutes === true,
       now: this.options.now,
+      activityEventSink: resolvePortfolioActivityEventSink(container, database, this.options),
     }));
     // Whole-module gate (not per-route like portfolio writes): when the flag is
     // off, the catalog surface is absent from the manifest entirely. The install
@@ -727,7 +730,7 @@ export class WebConsoleRegistrar {
       apiV1MountState,
       userContext: resolveConsoleUserContext(container),
     });
-    const cleanupScheduler = this.createCleanupScheduler(stores, container);
+    const cleanupScheduler = this.createCleanupScheduler(stores, database, container);
     const composition: WebConsoleComposition = {
       activationProfile,
       registry,
@@ -778,6 +781,7 @@ export class WebConsoleRegistrar {
     stores: Pick<WebConsoleComposition,
       'sessionStore' | 'loginTransactionStore' | 'idempotencyStore' | 'runtimeSessionControlStore'
     >,
+    database: DatabaseInstance | undefined,
     container: DiContainerFacade,
   ): ConsoleStoreCleanupScheduler | null {
     if (this.options.registerCleanup === false) return null;
@@ -789,7 +793,12 @@ export class WebConsoleRegistrar {
       throw new Error('Web console cleanup registration requires LifecycleService');
     }
     const scheduler = new ConsoleStoreCleanupScheduler({
-      stores,
+      stores: {
+        ...stores,
+        sessionActivityStore: database
+          ? markProductionAdapter(new PostgresConsoleSessionActivityStore(database), 'PostgresConsoleSessionActivityStore')
+          : undefined,
+      },
       intervalMs: this.options.cleanupIntervalMs,
       now: this.options.now,
       reportError,
@@ -1190,41 +1199,62 @@ interface ConsoleStoreSet {
   readonly identityResolver: IConsoleIdentityResolver;
 }
 
-function createHealthReadinessInputs(options: {
+type ConsoleSecurityInvalidationSnapshot = Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>;
+
+interface ConsoleHealthProbes {
+  readonly databaseAvailable: () => boolean;
+  readonly authServerAvailable: () => boolean;
+  readonly runtimeControlAvailable: () => boolean;
+  readonly apiV1Mounted: () => boolean;
+  readonly securityInvalidationReadiness: () => Promise<ConsoleSecurityInvalidationSnapshot>;
+}
+
+// Single source for the dependency probes shared by both the public readiness surface
+// and the admin operations health surface, so a new or changed probe is defined once.
+function createConsoleHealthProbes(options: {
   readonly database: DatabaseInstance | undefined;
   readonly stores: ConsoleStoreSet;
   readonly authStorage: IAuthStorageLayer | null;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly routesMounted: () => boolean;
-}): HealthReadinessChecks {
+}): ConsoleHealthProbes {
   return {
-    sessionStorageAvailable: () => Boolean(options.stores.sessionStore),
-    identityResolutionAvailable: () => Boolean(options.stores.identityResolver),
-    securityInvalidationReady: async () => (await options.securityInvalidationReadiness.getReadiness()).ready,
-    runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     databaseAvailable: () => Boolean(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
+    runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     apiV1Mounted: () => options.routesMounted(),
+    securityInvalidationReadiness: () => options.securityInvalidationReadiness.getReadiness(),
   };
 }
 
-function createOperationHealthChecks(options: {
-  readonly database: DatabaseInstance | undefined;
-  readonly stores: ConsoleStoreSet;
-  readonly authStorage: IAuthStorageLayer | null;
-  readonly container: DiContainerFacade;
-  readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
-  readonly routesMounted: () => boolean;
-}): OperationsHealthChecks {
+function createHealthReadinessInputs(
+  probes: ConsoleHealthProbes,
+  stores: ConsoleStoreSet,
+): HealthReadinessChecks {
   return {
-    database: () => Boolean(options.database),
-    authServer: () => Boolean(options.authStorage),
-    gatekeeper: () => options.container.hasRegistration('gatekeeper'),
-    runtimeControl: () => Boolean(options.stores.runtimeSessionControlStore),
+    sessionStorageAvailable: () => Boolean(stores.sessionStore),
+    identityResolutionAvailable: () => Boolean(stores.identityResolver),
+    securityInvalidationReady: async () => (await probes.securityInvalidationReadiness()).ready,
+    runtimeControlAvailable: probes.runtimeControlAvailable,
+    databaseAvailable: probes.databaseAvailable,
+    authServerAvailable: probes.authServerAvailable,
+    apiV1Mounted: probes.apiV1Mounted,
+  };
+}
+
+function createOperationHealthChecks(
+  probes: ConsoleHealthProbes,
+  container: DiContainerFacade,
+): OperationsHealthChecks {
+  return {
+    database: probes.databaseAvailable,
+    authServer: probes.authServerAvailable,
+    gatekeeper: () => container.hasRegistration('gatekeeper'),
+    runtimeControl: probes.runtimeControlAvailable,
     securityInvalidation: async () => operationHealthFromInvalidationReadiness(
-      await options.securityInvalidationReadiness.getReadiness(),
+      await probes.securityInvalidationReadiness(),
     ),
-    apiMount: () => options.routesMounted()
+    apiMount: () => probes.apiV1Mounted()
       ? {
         component: 'api_mount',
         status: 'ok',
@@ -1240,7 +1270,7 @@ function createOperationHealthChecks(options: {
   };
 }
 
-function operationHealthFromInvalidationReadiness(snapshot: Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>) {
+function operationHealthFromInvalidationReadiness(snapshot: ConsoleSecurityInvalidationSnapshot) {
   return {
     component: 'security_invalidation' as const,
     status: snapshot.status,
@@ -1249,6 +1279,14 @@ function operationHealthFromInvalidationReadiness(snapshot: Awaited<ReturnType<I
   };
 }
 
+// Console stores support exactly two backend families: Postgres-backed (durable,
+// per-user, RLS-enforced) when a database is configured, and in-memory otherwise.
+// In-memory is development/loopback only — it loses all session, approval, and audit
+// state on restart — so there is deliberately no file-backed durable family (a file
+// store for security-relevant state would lack RLS, transactional CAS, and tamper
+// evidence). Shared-hosted production activation fails loud on a memory backend (see
+// WebConsoleProductionActivation's database_required check), so a no-DB production
+// deployment is refused rather than left silently volatile.
 async function createConsoleStores(database: DatabaseInstance | undefined): Promise<ConsoleStoreSet> {
   if (database) {
     const [
@@ -1597,6 +1635,23 @@ function resolveSessionApprovalEventSink(
   }
   if (database) return markProductionAdapter(new PostgresSessionApprovalEventSink(database), 'PostgresSessionApprovalEventSink');
   return new InMemorySessionApprovalEventSink();
+}
+
+function resolvePortfolioActivityEventSink(
+  container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
+  options: WebConsoleRegistrarOptions,
+): IPortfolioActivityEventSink {
+  if (options.portfolioActivityEventSink !== undefined) {
+    return options.portfolioActivityEventSink ?? new InMemoryPortfolioActivityEventSink();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioActivityEventSink)) {
+    return container.resolve<IPortfolioActivityEventSink>(WEB_CONSOLE_SERVICE_NAMES.portfolioActivityEventSink);
+  }
+  if (database) {
+    return markProductionAdapter(new PostgresPortfolioActivityEventSink(database), 'PostgresPortfolioActivityEventSink');
+  }
+  return new InMemoryPortfolioActivityEventSink();
 }
 
 function resolveSessionExecutionReader(

@@ -302,6 +302,13 @@
       "when": 1779085000000,
       "tag": "0042_web_console_integration_token_refresh",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1779085100000,
+      "tag": "0043_drop_portfolio_sync_cancelled_status",
+      "breakpoints": true
     }
   ]
 }
