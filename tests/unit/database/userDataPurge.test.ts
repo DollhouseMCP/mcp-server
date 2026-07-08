@@ -29,9 +29,10 @@ import type { DrizzleTx } from '../../../src/database/db-utils.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 
-function captureTx() {
+function captureTx(grantRows: readonly { id: string }[] = []) {
   const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
   const tx = {
+    select: () => ({ from: () => ({ where: () => Promise.resolve(grantRows) }) }),
     delete: (table: unknown) => ({
       where: (predicate: unknown) => {
         deletes.push({ table, predicate });
@@ -98,9 +99,18 @@ describe('purgeNonCascadeUserIdentity', () => {
       githubLogins: ['octo'],
     });
 
-    expect(deletes.filter(d => d.table === authKv)).toHaveLength(2); // one per sub
+    expect(deletes.filter(d => d.table === authKv)).toHaveLength(2); // one accountId delete per sub (no grants)
     expect(deletes.filter(d => d.table === authIdentityEvents)).toHaveLength(1);
     expect(deletes.filter(d => d.table === authAllowlist)).toHaveLength(1);
+  });
+
+  it('also purges auth_kv rows linked to the account\'s grants by grantId', async () => {
+    const { tx, deletes } = captureTx([{ id: 'grant-1' }, { id: 'grant-2' }]);
+
+    await purgeNonCascadeUserIdentity(tx, { subs: ['sub-1'], emails: [], githubIds: [], githubLogins: [] });
+
+    // one subject → two grant-linked deletes (by grantId) + one accountId delete.
+    expect(deletes.filter(d => d.table === authKv)).toHaveLength(3);
   });
 
   it('deletes nothing when the account has no resolvable identity', async () => {

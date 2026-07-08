@@ -1,27 +1,41 @@
 import { describe, expect, it } from '@jest/globals';
-import { readdirSync, readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { getTableConfig, PgTable } from 'drizzle-orm/pg-core';
+import { getTableName, is } from 'drizzle-orm';
 
+import * as schema from '../../../src/database/schema/index.js';
+import { users } from '../../../src/database/schema/index.js';
 import {
   USER_SCOPED_CASCADE_PURGE_TABLES,
   USER_SCOPED_CASCADE_PURGED_ON_DETACH,
   USER_SCOPED_CASCADE_VIA_PARENT,
 } from '../../../src/database/userDataPurge.js';
 
-const SCHEMA_DIR = join(dirname(fileURLToPath(import.meta.url)), '../../../src/database/schema');
+// Read the compiled FK metadata straight from Drizzle rather than parsing source — immune to
+// formatting/quoting and reflects exactly what the DB will enforce.
+function allTableConfigs() {
+  const configs: ReturnType<typeof getTableConfig>[] = [];
+  for (const value of Object.values(schema)) {
+    // Skip non-table exports (types, enum consts, helpers) via Drizzle's runtime guard.
+    if (is(value, PgTable)) configs.push(getTableConfig(value));
+  }
+  return configs;
+}
 
-// Every `pgTable('name', ...)` whose body declares references(() => users.id, {onDelete:'cascade'}).
-function cascadeOffUsersTables(): string[] {
-  const found: string[] = [];
-  for (const file of readdirSync(SCHEMA_DIR).filter(f => f.endsWith('.ts') && f !== 'index.ts')) {
-    const src = readFileSync(join(SCHEMA_DIR, file), 'utf8');
-    const decls = [...src.matchAll(/pgTable\(\s*['"]([a-z0-9_]+)['"]/g)]
-      .map(m => ({ name: m[1], index: m.index }));
-    for (let i = 0; i < decls.length; i += 1) {
-      const body = src.slice(decls[i].index, i + 1 < decls.length ? decls[i + 1].index : undefined);
-      if (/users\.id\s*,\s*\{[^}]*onDelete:\s*['"]cascade['"]/u.test(body)) {
-        found.push(decls[i].name);
+function cascadeOffUsersTables(): Set<string> {
+  const usersName = getTableName(users);
+  const found = new Set<string>();
+  for (const cfg of allTableConfigs()) {
+    for (const fk of cfg.foreignKeys) {
+      const ref = fk.reference();
+      let foreignTable = '';
+      try {
+        foreignTable = getTableName(ref.foreignTable);
+      } catch {
+        continue;
+      }
+      const referencesUserId = ref.foreignColumns.some((c: { readonly name: string }) => c.name === 'id');
+      if (foreignTable === usersName && referencesUserId && fk.onDelete === 'cascade') {
+        found.add(cfg.name);
       }
     }
   }
@@ -35,20 +49,26 @@ describe('user-data purge coverage (schema drift guard)', () => {
       ...USER_SCOPED_CASCADE_VIA_PARENT,
       ...USER_SCOPED_CASCADE_PURGED_ON_DETACH,
     ]);
-    const cascadeTables = cascadeOffUsersTables();
+    const cascade = cascadeOffUsersTables();
 
-    // Sanity: the parser actually found the cascade set (guards against a regex that silently matches nothing).
-    expect(cascadeTables.length).toBeGreaterThan(10);
+    // Sanity: introspection actually found the real cascade set.
+    expect(cascade.size).toBeGreaterThan(10);
+    expect(cascade.has('elements')).toBe(true);
 
-    const uncovered = [...new Set(cascadeTables)].filter(t => !covered.has(t)).sort((a, b) => a.localeCompare(b));
-    // If this fails, a new user-owned table was added that cascades off users.id but is not
-    // erased on account deletion — add it to purgeUserScopedData (or the via-parent list).
+    // If this fails, a new user-owned table cascades off users.id but is not erased on account
+    // deletion — add it to purgeUserScopedData (or the via-parent / detach list).
+    const uncovered = [...cascade].filter(t => !covered.has(t)).sort((a, b) => a.localeCompare(b));
     expect(uncovered).toEqual([]);
   });
 
-  it('does not list purge tables that are not actually user-owned cascade tables', () => {
-    const cascadeTables = new Set(cascadeOffUsersTables());
-    const stale = USER_SCOPED_CASCADE_PURGE_TABLES.filter(t => !cascadeTables.has(t));
+  it('lists no purge / via-parent / detach table that no longer exists in the schema', () => {
+    const allTables = new Set(allTableConfigs().map(c => c.name));
+    const listed = [
+      ...USER_SCOPED_CASCADE_PURGE_TABLES,
+      ...USER_SCOPED_CASCADE_VIA_PARENT,
+      ...USER_SCOPED_CASCADE_PURGED_ON_DETACH,
+    ];
+    const stale = listed.filter(t => !allTables.has(t)).sort((a, b) => a.localeCompare(b));
     expect(stale).toEqual([]);
   });
 });

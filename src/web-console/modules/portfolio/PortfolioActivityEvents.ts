@@ -17,6 +17,11 @@ export interface PortfolioElementDeletedEvent {
   readonly consoleSessionId: string;
   readonly elementType: ConsolePortfolioElementType;
   readonly canonicalName: string;
+  /**
+   * The deleted element's SHA-256 content digest (64 lowercase hex), or null. The activity message
+   * renders it with a `sha256:` prefix, so a store that changes the digest algorithm must update
+   * {@link portfolioDeletionActivityMessage} accordingly.
+   */
   readonly contentHash: string | null;
   readonly correlationId: string | null;
   readonly occurredAt: Date;

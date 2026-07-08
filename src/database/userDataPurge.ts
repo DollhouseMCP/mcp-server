@@ -40,6 +40,8 @@ export async function purgeUserScopedData(tx: DrizzleTx, userId: string): Promis
   await tx.delete(securityInvalidationEvents).where(eq(securityInvalidationEvents.userId, userId));
   await tx.delete(runtimeSessionPresence).where(eq(runtimeSessionPresence.userId, userId));
   await tx.delete(sessionActivationEvents).where(eq(sessionActivationEvents.userId, userId));
+  // approval_audit_events is the user's OWN gatekeeper approval decisions (cascade-off-users), not
+  // the retained tamper-evident admin_audit chain — so it is erased with the account.
   await tx.delete(approvalAuditEvents).where(eq(approvalAuditEvents.userId, userId));
   await tx.delete(consoleLoginTransactions).where(eq(consoleLoginTransactions.userId, userId));
   await tx.delete(consoleSessions).where(eq(consoleSessions.userId, userId));
@@ -156,9 +158,16 @@ export function collectDeletionIdentity(
  */
 export async function purgeNonCascadeUserIdentity(tx: DrizzleTx, identity: DeletionIdentity): Promise<void> {
   for (const sub of identity.subs) {
-    // OIDC grants/tokens: account-linked model rows (Grant, Session, AccessToken, RefreshToken,
-    // …) carry the subject in payload->>'accountId'. Pre-auth Interaction rows have no accountId
-    // and self-expire. Looped rather than batched: an account has one or two subjects.
+    // OIDC storage: a Grant carries the subject as payload.accountId, while tokens/sessions/codes
+    // are linked to it via payload.grantId (this mirrors the adapter's own revokeByGrantId). Purge
+    // both, so no token or session survives even if it does not itself carry accountId. Pre-auth
+    // Interaction rows have no account linkage and self-expire. Looped: an account has one or two
+    // subjects, each with a handful of grants.
+    const grants = await tx.select({ id: authKv.id }).from(authKv)
+      .where(and(eq(authKv.model, 'Grant'), sql`${authKv.payload}->>'accountId' = ${sub}`));
+    for (const grant of grants) {
+      await tx.delete(authKv).where(sql`${authKv.payload}->>'grantId' = ${grant.id}`);
+    }
     await tx.delete(authKv).where(sql`${authKv.payload}->>'accountId' = ${sub}`);
   }
   if (identity.subs.length > 0) {
