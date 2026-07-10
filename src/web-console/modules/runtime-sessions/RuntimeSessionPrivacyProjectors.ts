@@ -1,11 +1,18 @@
+import type { ConsolePageInfo } from '../../platform/ConsolePlatformTypes.js';
 import type {
   RuntimeSessionAccountDto,
   RuntimeSessionOperationalDto,
+  RuntimeSessionOperationalListDto,
   RuntimeSessionRevokeAllDto,
   RuntimeSessionSelfDto,
   RuntimeTerminationAcceptedDto,
+  RuntimeTerminationCommandStatusDto,
 } from './RuntimeSessionDtos.js';
 import { isRuntimeTerminationReason } from '../../services/runtime/IRuntimeSessionControlStore.js';
+
+const COMMAND_STATUS_VALUES = new Set<RuntimeTerminationCommandStatusDto['status']>([
+  'pending', 'terminated', 'already_absent', 'failed',
+]);
 
 export function projectRuntimeSessionSelf(value: unknown): RuntimeSessionSelfDto {
   const record = objectValue(value);
@@ -56,8 +63,42 @@ export function projectRuntimeSessionOperational(value: unknown): RuntimeSession
   };
 }
 
-export function projectRuntimeSessionOperationalList(value: unknown): { sessions: RuntimeSessionOperationalDto[] } {
-  return { sessions: arrayValue(objectValue(value).sessions).map(item => projectRuntimeSessionOperational(item)) };
+// Family-B cursor page (cross-user aggregate scales with the session population).
+export function projectRuntimeSessionOperationalList(value: unknown): RuntimeSessionOperationalListDto {
+  const record = objectValue(value);
+  return {
+    items: arrayValue(record.items).map(item => projectRuntimeSessionOperational(item)),
+    page: projectConsolePageInfo(record.page),
+  };
+}
+
+export function projectRuntimeCommandStatus(value: unknown): RuntimeTerminationCommandStatusDto {
+  const record = objectValue(value);
+  const status = record.status;
+  const projectedStatus = typeof status === 'string' && COMMAND_STATUS_VALUES.has(status as RuntimeTerminationCommandStatusDto['status'])
+    ? status as RuntimeTerminationCommandStatusDto['status']
+    : 'pending';
+  return {
+    command_id: stringField(record, 'command_id'),
+    status: projectedStatus,
+    acknowledged_at: nullableStringField(record, 'acknowledged_at'),
+    replica_id: nullableStringField(record, 'replica_id'),
+    error_code: nullableStringField(record, 'error_code'),
+  };
+}
+
+function projectConsolePageInfo(value: unknown): ConsolePageInfo {
+  const page = objectValue(value);
+  return {
+    limit: numberField(page, 'limit'),
+    cursor: nullableStringField(page, 'cursor'),
+    next_cursor: nullableStringField(page, 'next_cursor'),
+  };
+}
+
+function nullableStringField(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' ? value : null;
 }
 
 export function projectRuntimeTermination(value: unknown): RuntimeTerminationAcceptedDto {

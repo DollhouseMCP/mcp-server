@@ -18,9 +18,11 @@ import {
   serializeIntegrationDescriptor,
   serializeIntegrationDescriptorList,
   serializeIntegrationOpenApiSpecMetadata,
+  serializeIntegrationSpecOperations,
 } from './IntegrationDtos.js';
 import {
   countSpecOperations,
+  deriveSpecOperationSummaries,
   IntegrationOperationCatalogError,
   prepareOpenApiSpecForDescriptor,
 } from './IntegrationOperationCatalog.js';
@@ -237,6 +239,22 @@ export class IntegrationDescriptorAuthoringService {
         spec: record.spec,
         createdAt: record.createdAt,
         updatedAt: record.updatedAt,
+      }),
+    };
+  }
+
+  async listSpecOperations(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
+    const auth = requireConsoleAuthentication(req);
+    const descriptor = await this.findOwned(singleParamValue(req.params.id), auth.userId);
+    if (!descriptor) return notFound();
+    const record = await this.options.specStore.findByDescriptorId(descriptor.id);
+    if (!record) return specNotFound();
+    return {
+      status: 200,
+      body: serializeIntegrationSpecOperations({
+        descriptorId: record.descriptorId,
+        specHash: record.specHash,
+        operations: deriveSpecOperationSummaries(descriptor, record.spec),
       }),
     };
   }

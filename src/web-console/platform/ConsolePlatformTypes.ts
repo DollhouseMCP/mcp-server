@@ -286,3 +286,19 @@ export interface ConsoleRouteManifest {
   readonly apiVersion: 'v1';
   readonly routes: readonly ConsoleRouteManifestEntry[];
 }
+
+/**
+ * Family-B (cursor list) page envelope shared by every paginated console list
+ * surface. `next_cursor: null` is the sole exhaustion signal — there is no
+ * `has_more` and no `total` (API contract §5.3).
+ */
+export interface ConsolePageInfo {
+  readonly limit: number;
+  readonly cursor: string | null;
+  readonly next_cursor: string | null;
+}
+
+export interface ConsolePageDto<T> {
+  readonly items: readonly T[];
+  readonly page: ConsolePageInfo;
+}

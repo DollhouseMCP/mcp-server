@@ -24,7 +24,7 @@ export class AccountAdminBootstrapService {
         sub: state.adminSub,
         limit: 1,
       });
-      adminUserId = matches[0]?.userId ?? null;
+      adminUserId = matches.items[0]?.userId ?? null;
     }
     return {
       status: 200,

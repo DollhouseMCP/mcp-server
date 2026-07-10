@@ -9,6 +9,7 @@ import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemor
 const CONSOLE_SELF_CAPABILITY = 'console:self';
 const SHARED_HOSTED_PROFILE = 'shared-hosted';
 const TEST_PUBLIC_BASE_URL = 'https://console.example.test';
+const FIXED_NOW_ISO = '2026-05-26T12:00:00.000Z';
 
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleSessionStore.js', () => ({
   PostgresConsoleSessionStore: class PostgresConsoleSessionStore {
@@ -193,7 +194,7 @@ describe('WebConsoleRegistrar', () => {
     const composition = await new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 11),
       reportCleanupError,
-      now: () => new Date('2026-05-26T12:00:00.000Z'),
+      now: () => new Date(FIXED_NOW_ISO),
     }).bootstrapAndRegister(container);
 
     expect(composition).toMatchObject({
@@ -836,7 +837,7 @@ describe('WebConsoleRegistrar', () => {
 
   it('serves representative public, self, and admin paths through the dormant mounted router', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
     container.seed('SigningKeyStore', productionAdapter());
@@ -877,7 +878,7 @@ describe('WebConsoleRegistrar', () => {
       approvalAuditQuery: productionAdapter(),
       authenticationAuditQuery: productionAdapter(),
       registerCleanup: false,
-      now: () => new Date('2026-05-26T12:00:00.000Z'),
+      now: () => new Date(FIXED_NOW_ISO),
     }).bootstrapAndRegister(container);
 
     const app = express();
@@ -889,7 +890,7 @@ describe('WebConsoleRegistrar', () => {
       body: {
         status: 'ok',
         ready: true,
-        checked_at: '2026-05-26T12:00:00.000Z',
+        checked_at: FIXED_NOW_ISO,
       },
     });
     await expect(request(app).get('/api/v1/me/profile')).resolves.toMatchObject({
@@ -902,9 +903,71 @@ describe('WebConsoleRegistrar', () => {
     });
   });
 
+  it('reports readiness as degraded when the database liveness probe fails', async () => {
+    const container = new TestContainer();
+    // The real `SELECT 1` liveness probe now fails closed instead of the
+    // representative-paths fixture's always-succeeding stub.
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockRejectedValue(new Error('db down')) });
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', productionAdapter());
+    container.seed('SigningKeyStore', productionAdapter());
+    container.seed('RateLimitStore', productionAdapter());
+    container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
+    container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      enableApiV1Mount: true,
+      productionReadiness: {
+        databaseVerificationReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      securityInvalidationReplicaId: 'replica-a',
+      opaqueValueHmacKey: Buffer.alloc(32, 37),
+      protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 38),
+      secretEncryptionKey: {
+        keyId: 'prod-key',
+        key: Buffer.alloc(32, 39),
+      },
+      authStorage: productionAdapter(),
+      oauthGrantRevocationService: productionAdapter(),
+      consoleOAuthClient: productionAdapter(),
+      accountInviteIssuer: productionAdapter(),
+      githubIntegrationProvider: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      portfolioStore: productionAdapter(),
+      approvalStore: productionAdapter(),
+      approvalEventSink: productionAdapter(),
+      executionReader: productionAdapter(),
+      gatekeeperReader: productionAdapter(),
+      telemetryQuery: productionAdapter(),
+      ownedActivityQuery: productionAdapter(),
+      ownedMetricQuery: productionAdapter(),
+      approvalAuditQuery: productionAdapter(),
+      authenticationAuditQuery: productionAdapter(),
+      registerCleanup: false,
+      now: () => new Date(FIXED_NOW_ISO),
+    }).bootstrapAndRegister(container);
+
+    const app = express();
+    app.use(composition.apiV1Mount?.router ?? express.Router());
+    composition.apiV1Mount?.markMounted();
+
+    await expect(request(app).get('/api/v1/health/ready')).resolves.toMatchObject({
+      status: 503,
+      body: {
+        status: 'not_ready',
+        ready: false,
+        checked_at: FIXED_NOW_ISO,
+      },
+    });
+  });
+
   it('uses the deployment-derived replica id when hosted/shared startup omits an explicit one', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
     container.seed('SigningKeyStore', productionAdapter());
@@ -993,7 +1056,7 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container);
 
     const registeredIds = new Set(composition.registry.createRouteManifest().routes.map(route => route.moduleId));
-    expect([...registeredIds].sort((a, b) => a.localeCompare(b))).toEqual(['auth', 'health']);
+    expect([...registeredIds].sort((a, b) => a.localeCompare(b))).toEqual(['auth', 'consoleMeta', 'health']);
     expect(composition.apiV1Mount).toBeNull();
     expect(composition.routesMounted).toBe(false);
   });
@@ -1561,7 +1624,7 @@ describe('WebConsoleRegistrar', () => {
 
   it('fails clearly when PostgreSQL self-service settings lacks UserConfigStore', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     seedCanonicalPortfolioManagers(container);
@@ -1575,7 +1638,7 @@ describe('WebConsoleRegistrar', () => {
 
   it('fails clearly when PostgreSQL storage lacks durable admin audit HMAC resolution', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     seedCanonicalPortfolioManagers(container);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
@@ -1588,7 +1651,7 @@ describe('WebConsoleRegistrar', () => {
 
   it('fails clearly when a database is configured but the element managers are unregistered', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
     container.seed('SigningKeyStore', new InMemorySigningKeyStore());
@@ -1606,7 +1669,7 @@ describe('WebConsoleRegistrar', () => {
 
   it('fails clearly when a database is configured and the manager-backed portfolio store is disabled', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
     container.seed('SigningKeyStore', new InMemorySigningKeyStore());

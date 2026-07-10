@@ -81,6 +81,9 @@ const ROUTE_MODULES_WITH_GLOBAL_PRODUCTION_DEPENDENCIES = new Set<string>([
   // me-logs reads the in-memory log sink (a backend-agnostic source), not a
   // production storage adapter — so it has no per-module readiness evidence.
   'me-logs',
+  // consoleMeta serves static route-manifest + role-catalog data with no external
+  // dependency (the registry reference is in-process), so it declares no adapters.
+  'consoleMeta',
 ]);
 
 const ADAPTER_METADATA = new WeakMap<object | ((...args: never[]) => unknown), WebConsoleProductionAdapterMetadata>();

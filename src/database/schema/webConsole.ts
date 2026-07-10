@@ -550,6 +550,10 @@ export const runtimeSessionPresence = pgTable('runtime_session_presence', {
   index('idx_runtime_session_presence_user').on(table.userId, table.status, table.leaseUntil),
   index('idx_runtime_session_presence_replica').on(table.replicaId, table.leaseUntil),
   index('idx_runtime_session_presence_correlation').on(table.accountCorrelationId),
+  // Keyset pagination for the cross-user operational sessions list (Family B): matches
+  // `WHERE status=? ORDER BY last_active_at DESC, session_id DESC` + `(last_active_at, session_id) < cursor`.
+  index('idx_runtime_session_presence_active_ordering')
+    .on(table.status, table.lastActiveAt.desc(), table.sessionId.desc()),
 ]);
 
 export type SessionActivationElementType =

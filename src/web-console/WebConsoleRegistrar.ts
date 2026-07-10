@@ -126,7 +126,9 @@ import {
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createActivationModule } from './modules/activations/index.js';
 import { createMeLogsModule, createMemoryConsoleLogSource, type IConsoleLogSource } from './modules/me-logs/index.js';
+import { sql } from 'drizzle-orm';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
+import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
 import {
   GitHubAppIntegrationProvider,
   type GitHubAppIntegrationProviderConfig,
@@ -495,6 +497,11 @@ export class WebConsoleRegistrar {
     registry.register(createHealthModule({
       readiness: createHealthReadinessInputs(healthProbes, stores),
       now: this.options.now,
+    }));
+    // Bootstrap metadata (route manifest + role catalog); the manifest is resolved
+    // lazily so it reflects every module registered after this point.
+    registry.register(createConsoleMetaModule({
+      getRouteManifest: () => registry.createRouteManifest(),
     }));
     if (consoleOAuthClient && secretEncryption && integrationPublicBaseUrl) {
       registry.register(createConsoleBffAuthModule({
@@ -1202,7 +1209,12 @@ interface ConsoleStoreSet {
 type ConsoleSecurityInvalidationSnapshot = Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>;
 
 interface ConsoleHealthProbes {
-  readonly databaseAvailable: () => boolean;
+  // Real liveness: actually reaches the database, so a wired-but-unreachable
+  // backend reports degraded instead of a misleading green.
+  readonly databaseAvailable: () => Promise<boolean>;
+  // Presence probes. authServer is backed by the same Postgres in hosted mode, so
+  // databaseAvailable already covers its reachability; runtime control + api mount
+  // are in-process wiring where presence is liveness (no network hop to fail).
   readonly authServerAvailable: () => boolean;
   readonly runtimeControlAvailable: () => boolean;
   readonly apiV1Mounted: () => boolean;
@@ -1219,12 +1231,23 @@ function createConsoleHealthProbes(options: {
   readonly routesMounted: () => boolean;
 }): ConsoleHealthProbes {
   return {
-    databaseAvailable: () => Boolean(options.database),
+    databaseAvailable: () => probeDatabaseLiveness(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
     runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     apiV1Mounted: () => options.routesMounted(),
     securityInvalidationReadiness: () => options.securityInvalidationReadiness.getReadiness(),
   };
+}
+
+/** True only if a trivial `SELECT 1` round-trips — not merely that a DB handle is wired. */
+async function probeDatabaseLiveness(database: DatabaseInstance | undefined): Promise<boolean> {
+  if (!database) return false;
+  try {
+    await database.execute(sql`SELECT 1`);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function createHealthReadinessInputs(

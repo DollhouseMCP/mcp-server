@@ -1,3 +1,4 @@
+import type { ConsolePageDto, ConsolePageInfo } from '../../platform/ConsolePlatformTypes.js';
 import type { LinkedIdentity } from '../../stores/IConsoleAccountAdminStore.js';
 
 /**
@@ -59,4 +60,14 @@ export function serializeAccountIdentityMutation(
   linked: boolean,
 ): AccountIdentityMutationDto {
   return { user_id: userId, sub, linked };
+}
+
+/** Keyset-paged list of logins not yet attached to any user — the link picker's source. */
+export type AccountUnlinkedIdentityListDto = ConsolePageDto<AccountIdentityDto>;
+
+export function serializeAccountUnlinkedIdentityList(
+  identities: readonly LinkedIdentity[],
+  page: ConsolePageInfo,
+): AccountUnlinkedIdentityListDto {
+  return { items: identities.map(serializeAccountIdentity), page };
 }

@@ -1524,22 +1524,25 @@ describe('PostgresConsoleAccountAdminStore', () => {
     transaction.execute = jest.fn(() => Promise.resolve([row]));
     const store = new PostgresConsoleAccountAdminStore({} as DatabaseInstance);
 
-    await expect(store.listPrincipals({ sub: PRIMARY_SUB, limit: 20 })).resolves.toEqual([{
-      userId: USER_ID,
-      primarySub: PRIMARY_SUB,
-      username: 'alice',
-      displayName: 'Alice',
-      email: ALICE_EMAIL,
-      emailVerified: true,
-      authMethods: ['github'],
-      roles: ['account_admin'],
-      disabledAt: null,
-      createdAt: NOW,
-      lastLoginAt: FIVE_MINUTES,
-      adminFactorEnrolled: true,
-      accountCorrelationId: ACCOUNT_CORRELATION_ID,
-      authzVersion: 3,
-    }]);
+    await expect(store.listPrincipals({ sub: PRIMARY_SUB, limit: 20 })).resolves.toEqual({
+      items: [{
+        userId: USER_ID,
+        primarySub: PRIMARY_SUB,
+        username: 'alice',
+        displayName: 'Alice',
+        email: ALICE_EMAIL,
+        emailVerified: true,
+        authMethods: ['github'],
+        roles: ['account_admin'],
+        disabledAt: null,
+        createdAt: NOW,
+        lastLoginAt: FIVE_MINUTES,
+        adminFactorEnrolled: true,
+        accountCorrelationId: ACCOUNT_CORRELATION_ID,
+        authzVersion: 3,
+      }],
+      nextCursor: null,
+    });
 
     transaction.execute = jest.fn(() => Promise.resolve([principalProjectionRow({ roles: ['unknown'] })]));
     await expect(store.findPrincipal(USER_ID)).rejects.toThrow('unknown administrative role');
@@ -1741,7 +1744,7 @@ describe('PostgresRuntimeSessionControlStore', () => {
 
     await expect(store.findPresence(RUNTIME_SESSION_ID, NOW)).resolves.toMatchObject({ sessionId: RUNTIME_SESSION_ID });
     await expect(store.listPresenceByUser(USER_ID, { now: NOW })).resolves.toHaveLength(1);
-    await expect(store.listOperationalPresence({ now: NOW })).resolves.toHaveLength(1);
+    expect((await store.listOperationalPresence({ now: NOW })).items).toHaveLength(1);
   });
 
   it('sweeps stale runtime presence rows', async () => {

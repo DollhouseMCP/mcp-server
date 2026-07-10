@@ -1,4 +1,4 @@
-import { and, eq, isNull, sql } from 'drizzle-orm';
+import { and, eq, isNull, sql, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -21,6 +21,7 @@ import type {
   PrincipalAuthzVersionBumpInput,
   PrincipalDeletionInput,
   PrincipalDeletionOutcome,
+  PrincipalDirectoryPage,
   PrincipalDirectoryQuery,
   PrincipalDisableInput,
   PrincipalEnableInput,
@@ -28,6 +29,8 @@ import type {
   PrincipalStateChange,
   RoleGrantInput,
   RoleRevokeInput,
+  UnlinkedIdentityPage,
+  UnlinkedIdentityQuery,
 } from './IConsoleAccountAdminStore.js';
 import {
   assertAdminRole,
@@ -37,6 +40,7 @@ import {
   validateIdentitySub,
   validateIdentityUnlinkInput,
   validatePrincipalDirectoryQuery,
+  validateUnlinkedIdentityQuery,
   validatePrincipalDisableInput,
   validatePrincipalEnableInput,
   validatePrincipalAuthzVersionBumpInput,
@@ -72,7 +76,7 @@ type PrincipalRow = Record<string, unknown> & {
 export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminStore {
   constructor(private readonly db: DatabaseInstance) {}
 
-  async listPrincipals(query: PrincipalDirectoryQuery = {}): Promise<ConsolePrincipalSummary[]> {
+  async listPrincipals(query: PrincipalDirectoryQuery = {}): Promise<PrincipalDirectoryPage> {
     validatePrincipalDirectoryQuery(query);
     const limit = query.limit ?? 100;
     const rows: PrincipalRow[] = await withSystemContext(this.db, tx => tx.execute(sql`
@@ -115,14 +119,16 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
         WHERE uar.user_id = u.id AND uar.revoked_at IS NULL
       ) role_summary ON true
       WHERE u.deleted_at IS NULL
-        AND (${query.sub ?? null}::TEXT IS NULL OR EXISTS (
-          SELECT 1 FROM auth_accounts aa
-          WHERE aa.user_id = u.id AND aa.sub = ${query.sub ?? null}
-        ))
+        ${buildPrincipalDirectoryFilters(query)}
       ORDER BY u.created_at ASC, u.id ASC
-      LIMIT ${limit}
+      LIMIT ${limit + 1}
     `));
-    return rows.map(row => fromPrincipalRow(row));
+    const items = rows.slice(0, limit).map(row => fromPrincipalRow(row));
+    const last = items.at(-1);
+    const nextCursor = rows.length > limit && last
+      ? { createdAt: last.createdAt, userId: last.userId }
+      : null;
+    return { items, nextCursor };
   }
 
   async findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null> {
@@ -207,6 +213,26 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return rows[0] ? toLinkedIdentity(rows[0]) : null;
   }
 
+  async listUnlinkedIdentities(query: UnlinkedIdentityQuery = {}): Promise<UnlinkedIdentityPage> {
+    validateUnlinkedIdentityQuery(query);
+    const limit = query.limit ?? 100;
+    const conditions: SQL[] = [isNull(authAccounts.userId)];
+    if (query.after) {
+      conditions.push(sql`(${authAccounts.createdAt}, ${authAccounts.sub}) > (${query.after.createdAt}::timestamptz, ${query.after.sub})`);
+    }
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select(IDENTITY_COLUMNS).from(authAccounts)
+        .where(and(...conditions))
+        .orderBy(authAccounts.createdAt, authAccounts.sub)
+        .limit(limit + 1));
+    const items = rows.slice(0, limit).map(toLinkedIdentity);
+    const last = items.at(-1);
+    const nextCursor = rows.length > limit && last
+      ? { createdAt: last.createdAt, sub: last.sub }
+      : null;
+    return { items, nextCursor };
+  }
+
   async linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null> {
     return withSystemContext(this.db, tx => linkConsoleIdentityWithTx(tx, input));
   }
@@ -232,6 +258,40 @@ export class PostgresConsoleAccountAdminStore implements IConsoleAccountAdminSto
     return rows[0] ? fromPrincipalRow(rows[0]) : null;
   }
 
+}
+
+/** Escape LIKE metacharacters so user input is matched literally (prefix search uses `... ESCAPE '\'`). */
+function escapeLikePrefix(term: string): string {
+  return term.replaceAll(/[\\%_]/g, match => `\\${match}`);
+}
+
+/**
+ * Compose the optional users-directory predicates (sub / search / role / enabled / keyset cursor)
+ * as trailing `AND …` fragments appended after the base `WHERE u.deleted_at IS NULL`.
+ */
+function buildPrincipalDirectoryFilters(query: PrincipalDirectoryQuery): SQL {
+  const parts: SQL[] = [];
+  if (query.sub) {
+    parts.push(sql`AND EXISTS (SELECT 1 FROM auth_accounts aa WHERE aa.user_id = u.id AND aa.sub = ${query.sub})`);
+  }
+  if (query.search) {
+    const prefix = `${escapeLikePrefix(query.search)}%`;
+    parts.push(sql`AND (
+      lower(u.username) LIKE lower(${prefix}) ESCAPE '\\'
+      OR lower(COALESCE(u.email, primary_account.email, '')) LIKE lower(${prefix}) ESCAPE '\\'
+      OR lower(COALESCE(u.display_name, primary_account.display_name, '')) LIKE lower(${prefix}) ESCAPE '\\'
+    )`);
+  }
+  if (query.role) {
+    parts.push(sql`AND EXISTS (SELECT 1 FROM user_admin_roles uar WHERE uar.user_id = u.id AND uar.revoked_at IS NULL AND uar.role = ${query.role})`);
+  }
+  if (query.enabled !== undefined) {
+    parts.push(query.enabled ? sql`AND u.disabled_at IS NULL` : sql`AND u.disabled_at IS NOT NULL`);
+  }
+  if (query.after) {
+    parts.push(sql`AND (u.created_at, u.id) > (${query.after.createdAt}::timestamptz, ${query.after.userId}::uuid)`);
+  }
+  return parts.length > 0 ? sql.join(parts, sql` `) : sql``;
 }
 
 export async function grantConsoleAdminRoleWithTx(

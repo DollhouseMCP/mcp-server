@@ -7,7 +7,9 @@ import type { IAuthStorageLayer } from '../../../auth/embedded-as/storage/IAuthS
 import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import type { IConsoleAccountAllowlistStore } from '../../stores/IConsoleAccountAllowlistStore.js';
-import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
+import type { ConsoleAdminRole, IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
+import { CONSOLE_ADMIN_ROLES } from '../../stores/IConsoleAccountAdminStore.js';
+import { tupleIncludes } from '../../stores/ConsoleStoreValidation.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { AccountAdminAllowlistService } from './AccountAdminAllowlistService.js';
@@ -20,7 +22,11 @@ import {
   type IConsoleAccountInviteIssuer,
 } from './AccountAdminInviteService.js';
 import { AccountAdminLifecycleMutationService } from './AccountAdminLifecycleMutationService.js';
-import { AccountAdminReadService } from './AccountAdminReadService.js';
+import {
+  AccountAdminReadService,
+  type AccountPrincipalListQuery,
+  type AccountUnlinkedIdentityListQuery,
+} from './AccountAdminReadService.js';
 import { AccountAdminRoleMutationService } from './AccountAdminRoleMutationService.js';
 import { AccountAdminRuntimeTerminationService } from './AccountAdminRuntimeTerminationService.js';
 import {
@@ -35,6 +41,7 @@ import {
   projectAccountPrincipalLifecycle,
   projectAccountPrincipalList,
   projectAccountRoleList,
+  projectAccountUnlinkedIdentityList,
 } from './AccountAdminPrivacyProjectors.js';
 
 const ACCOUNT_ADMIN_AUDIT = {
@@ -46,6 +53,7 @@ const ACCOUNT_ADMIN_AUDIT = {
   usersDelete: 'accounts.users.delete',
   usersCredentialsRevokeAll: 'accounts.users.credentials.revoke_all',
   identitiesList: 'accounts.identities.list',
+  identitiesUnlinkedList: 'accounts.identities.unlinked.list',
   identitiesLink: 'accounts.identities.link',
   identitiesUnlink: 'accounts.identities.unlink',
   rolesList: 'accounts.roles.list',
@@ -364,6 +372,18 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     },
     linkIdentityRoute,
     unlinkIdentityRoute,
+    {
+      method: 'GET',
+      path: '/api/v1/admin/accounts/identities/unlinked',
+      audience: 'admin',
+      requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+      elevation: 'admin_30m',
+      privacyClass: 'account_metadata',
+      idempotency: 'not_applicable',
+      auditOperation: ACCOUNT_ADMIN_AUDIT.identitiesUnlinkedList,
+      privacyProjector: projectAccountUnlinkedIdentityList,
+      handler: req => listUnlinkedIdentities(req, service),
+    },
     ...(options.enableAccountAllowlistRoutes === true ? [
       {
         method: 'GET',
@@ -432,6 +452,12 @@ function listUsers(req: ConsoleRequest, service: AccountAdminReadService): Promi
   const query = parseUserListQuery(req);
   if (query.kind === 'invalid') return Promise.resolve(problem(400, 'invalid_request', query.detail));
   return service.listUsers(query.value).then(body => ({ status: 200, body }));
+}
+
+function listUnlinkedIdentities(req: ConsoleRequest, service: AccountAdminReadService): Promise<ConsoleHandlerResult> {
+  const query = parseUnlinkedIdentityQuery(req);
+  if (query.kind === 'invalid') return Promise.resolve(problem(400, 'invalid_request', query.detail));
+  return service.listUnlinkedIdentities(query.value).then(body => ({ status: 200, body }));
 }
 
 async function getUser(req: ConsoleRequest, service: AccountAdminReadService): Promise<ConsoleHandlerResult> {
@@ -588,26 +614,82 @@ async function resolveCorrelation(
   return body ? { status: 200, body } : problem(404, 'not_found', 'Account correlation id was not found.');
 }
 
-function parseUserListQuery(
-  req: ConsoleRequest,
-): { readonly kind: 'valid'; readonly value: { readonly sub?: string; readonly limit?: number } }
-  | { readonly kind: 'invalid'; readonly detail: string } {
-  const query: { sub?: string; limit?: number } = {};
-  if (typeof req.query.sub === 'string') {
-    query.sub = req.query.sub;
-  } else if (req.query.sub !== undefined) {
-    return { kind: 'invalid', detail: 'sub must be a string.' };
+type QueryParse<T> =
+  | { readonly kind: 'valid'; readonly value: T }
+  | { readonly kind: 'invalid'; readonly detail: string };
+
+function parseUserListQuery(req: ConsoleRequest): QueryParse<AccountPrincipalListQuery> {
+  const sub = parseOptionalStringParam(req.query.sub, 'sub');
+  if (sub.kind === 'invalid') return sub;
+  const search = parseOptionalStringParam(req.query.search, 'search');
+  if (search.kind === 'invalid') return search;
+  const role = parseRoleParam(req.query.role);
+  if (role.kind === 'invalid') return role;
+  const enabled = parseEnabledParam(req.query.enabled);
+  if (enabled.kind === 'invalid') return enabled;
+  const limit = parseListLimit(req.query.limit);
+  if (limit.kind === 'invalid') return limit;
+  const cursor = parseOptionalStringParam(req.query.cursor, 'cursor');
+  if (cursor.kind === 'invalid') return cursor;
+  return {
+    kind: 'valid',
+    value: {
+      ...(sub.value === undefined ? {} : { sub: sub.value }),
+      ...(search.value === undefined ? {} : { search: search.value }),
+      ...(role.value === undefined ? {} : { role: role.value }),
+      ...(enabled.value === undefined ? {} : { enabled: enabled.value }),
+      ...(limit.value === undefined ? {} : { limit: limit.value }),
+      ...(cursor.value === undefined ? {} : { cursor: cursor.value }),
+    },
+  };
+}
+
+function parseOptionalStringParam(
+  raw: ConsoleRequest['query'][string],
+  name: string,
+): QueryParse<string | undefined> {
+  if (raw === undefined) return { kind: 'valid', value: undefined };
+  if (typeof raw !== 'string') return { kind: 'invalid', detail: `${name} must be a string.` };
+  return { kind: 'valid', value: raw };
+}
+
+function parseRoleParam(raw: ConsoleRequest['query'][string]): QueryParse<ConsoleAdminRole | undefined> {
+  if (raw === undefined) return { kind: 'valid', value: undefined };
+  if (typeof raw !== 'string') return { kind: 'invalid', detail: 'role must be a string.' };
+  if (!tupleIncludes(CONSOLE_ADMIN_ROLES, raw)) {
+    return { kind: 'invalid', detail: 'role must be a valid administrative role.' };
   }
-  if (typeof req.query.limit === 'string') {
-    const limit = Number(req.query.limit);
-    if (!Number.isInteger(limit)) {
-      return { kind: 'invalid', detail: 'limit must be an integer.' };
-    }
-    query.limit = limit;
-  } else if (req.query.limit !== undefined) {
-    return { kind: 'invalid', detail: 'limit must be a string integer.' };
+  return { kind: 'valid', value: raw };
+}
+
+function parseEnabledParam(raw: ConsoleRequest['query'][string]): QueryParse<boolean | undefined> {
+  if (raw === undefined) return { kind: 'valid', value: undefined };
+  if (raw !== 'true' && raw !== 'false') {
+    return { kind: 'invalid', detail: 'enabled must be "true" or "false".' };
   }
-  return { kind: 'valid', value: query };
+  return { kind: 'valid', value: raw === 'true' };
+}
+
+function parseUnlinkedIdentityQuery(req: ConsoleRequest): QueryParse<AccountUnlinkedIdentityListQuery> {
+  const limit = parseListLimit(req.query.limit);
+  if (limit.kind === 'invalid') return limit;
+  const cursor = parseOptionalStringParam(req.query.cursor, 'cursor');
+  if (cursor.kind === 'invalid') return cursor;
+  return {
+    kind: 'valid',
+    value: {
+      ...(limit.value === undefined ? {} : { limit: limit.value }),
+      ...(cursor.value === undefined ? {} : { cursor: cursor.value }),
+    },
+  };
+}
+
+function parseListLimit(raw: ConsoleRequest['query'][string]): QueryParse<number | undefined> {
+  if (raw === undefined) return { kind: 'valid', value: undefined };
+  if (typeof raw !== 'string') return { kind: 'invalid', detail: 'limit must be a string integer.' };
+  const limit = Number(raw);
+  if (!Number.isInteger(limit)) return { kind: 'invalid', detail: 'limit must be an integer.' };
+  return { kind: 'valid', value: limit };
 }
 
 function problem(status: number, code: string, detail: string): ConsoleHandlerResult {
