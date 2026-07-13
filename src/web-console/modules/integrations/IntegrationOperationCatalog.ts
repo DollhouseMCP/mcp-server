@@ -459,6 +459,18 @@ export function countSpecOperations(
   return deriveOperations(descriptor, spec, new Set()).length;
 }
 
+/**
+ * Scope-independent operation summaries for the spec-authoring surface. Works on an
+ * owned-but-not-connected descriptor (no granted scopes), so it powers the BYO
+ * "which operations does this spec expose" picker without requiring a live connection.
+ */
+export function deriveSpecOperationSummaries(
+  descriptor: IntegrationDescriptorRecord,
+  spec: Readonly<Record<string, unknown>>,
+): readonly IntegrationOperationSummary[] {
+  return deriveOperations(descriptor, spec, new Set());
+}
+
 function deriveOperations(
   descriptor: IntegrationDescriptorRecord,
   spec: Readonly<Record<string, unknown>>,

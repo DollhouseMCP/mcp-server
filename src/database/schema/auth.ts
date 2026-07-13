@@ -72,6 +72,9 @@ export const authAccounts = pgTable('auth_accounts', {
   primaryKey({ columns: [table.provider, table.externalSub] }),
   uniqueIndex('idx_auth_accounts_sub').on(table.sub),
   index('idx_auth_accounts_user_id').on(table.userId),
+  // Keyset pagination for the admin unlinked-logins directory (Family B): `(created_at, sub)`
+  // over logins not yet attached to a user, backing the identity-link picker.
+  index('idx_auth_accounts_unlinked').on(table.createdAt, table.sub).where(sql`user_id IS NULL`),
 ]);
 
 /**

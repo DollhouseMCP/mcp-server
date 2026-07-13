@@ -155,6 +155,12 @@ const CONTRACT_ROUTES = [
   'GET /api/v1/admin/security/auth-policy',
   'PUT /api/v1/admin/security/auth-policy',
   'POST /api/v1/admin/security/users/:user_id/factors/totp/reset',
+  'GET /api/v1/me/manifest',
+  'GET /api/v1/me/role-catalog',
+  'GET /api/v1/admin/accounts/identities/unlinked',
+  'GET /api/v1/me/sessions/commands/:command_id',
+  'GET /api/v1/admin/operate/sessions/commands/:command_id',
+  'GET /api/v1/me/integrations/descriptors/:id/spec/operations',
   'GET /api/v1/health',
   'GET /api/v1/health/ready',
 ].sort((a, b) => a.localeCompare(b));

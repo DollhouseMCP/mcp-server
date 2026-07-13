@@ -1367,7 +1367,7 @@ describe('InMemoryRuntimeSessionControlStore', () => {
       },
     });
     await expect(store.listPresenceByUser(USER_ID, { now: FIVE_MINUTES })).resolves.toHaveLength(1);
-    await expect(store.listOperationalPresence({ now: FIVE_MINUTES })).resolves.toHaveLength(1);
+    expect((await store.listOperationalPresence({ now: FIVE_MINUTES })).items).toHaveLength(1);
     await expect(store.findPresence(RUNTIME_SESSION_ID, THIRTY_MINUTES)).resolves.toBeNull();
     await expect(store.findPresence(RUNTIME_SESSION_ID, ONE_HOUR)).resolves.toBeNull();
 
@@ -1447,9 +1447,10 @@ describe('InMemoryRuntimeSessionControlStore', () => {
     ]);
     await expect(store.sweepStalePresence(FIVE_MINUTES)).resolves.toBe(0);
     await expect(store.sweepStalePresence(THIRTY_MINUTES)).resolves.toBe(1);
-    await expect(store.listOperationalPresence({ now: THIRTY_MINUTES })).resolves.toEqual([
-      expect.objectContaining({ sessionId: RUNTIME_SESSION_ID, replicaId: 'replica-b' }),
-    ]);
+    await expect(store.listOperationalPresence({ now: THIRTY_MINUTES })).resolves.toEqual({
+      items: [expect.objectContaining({ sessionId: RUNTIME_SESSION_ID, replicaId: 'replica-b' })],
+      nextCursor: null,
+    });
   });
 
   it('persists pending termination commands and idempotent acknowledgements', async () => {

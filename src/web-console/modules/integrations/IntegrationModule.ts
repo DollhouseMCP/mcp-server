@@ -30,6 +30,7 @@ import {
   projectIntegrationDescriptorList,
   projectIntegrationList,
   projectIntegrationOpenApiSpecMetadata,
+  projectIntegrationSpecOperations,
 } from './IntegrationPrivacyProjectors.js';
 
 const SELF_CAPABILITY = 'console:self';
@@ -361,6 +362,18 @@ function byoDescriptorRoutes(
       idempotency: 'not_applicable',
       privacyProjector: projectIntegrationOpenApiSpecMetadata,
       handler: req => authoring.getSpec(req),
+    },
+    {
+      method: 'GET',
+      path: `${basePath}/:id/spec/operations`,
+      audience: 'self',
+      requiredCapability: SELF_CAPABILITY,
+      ownership: 'authenticated_user',
+      elevation: 'none',
+      privacyClass: 'self_private',
+      idempotency: 'not_applicable',
+      privacyProjector: projectIntegrationSpecOperations,
+      handler: req => authoring.listSpecOperations(req),
     },
   ];
 }

@@ -7,6 +7,8 @@ import {
   type IntegrationDescriptorStaticApiKeyDto,
   type IntegrationListDto,
   type IntegrationOpenApiSpecMetadataDto,
+  type IntegrationSpecOperationDto,
+  type IntegrationSpecOperationsDto,
   type IntegrationStatusDto,
   type IntegrationStatusDtoStatus,
   type PortfolioSyncDirection,
@@ -123,6 +125,29 @@ export function projectIntegrationOpenApiSpecMetadata(value: unknown): Integrati
     spec_bytes: numberField(input, 'spec_bytes'),
     created_at: stringField(input, 'created_at'),
     updated_at: stringField(input, 'updated_at'),
+  };
+}
+
+export function projectIntegrationSpecOperations(value: unknown): IntegrationSpecOperationsDto {
+  const input = asRecord(value);
+  const operations = Array.isArray(input.operations) ? input.operations : [];
+  return {
+    descriptor_id: stringField(input, 'descriptor_id'),
+    spec_hash: stringField(input, 'spec_hash'),
+    operations: operations.map(projectSpecOperation),
+  };
+}
+
+function projectSpecOperation(value: unknown): IntegrationSpecOperationDto {
+  const op = asRecord(value);
+  return {
+    operation_id: stringField(op, 'operation_id'),
+    method: stringField(op, 'method'),
+    path: stringField(op, 'path'),
+    read_write_class: stringField(op, 'read_write_class') === 'write' ? 'write' : 'read',
+    summary: nullableStringField(op, 'summary'),
+    description: nullableStringField(op, 'description'),
+    required_scopes: stringArray(op.required_scopes),
   };
 }
 

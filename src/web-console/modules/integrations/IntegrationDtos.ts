@@ -4,6 +4,7 @@ import type {
   UserIntegrationRecord,
   UserIntegrationStatus,
 } from '../../stores/IUserIntegrationStore.js';
+import type { IntegrationOperationSummary } from './IntegrationOperationCatalog.js';
 import type {
   IntegrationAuthStrategy,
   IntegrationDescriptorOwnership,
@@ -292,5 +293,42 @@ export function serializeIntegrationOpenApiSpecMetadata(input: {
     spec_bytes: Buffer.byteLength(JSON.stringify(input.spec), 'utf8'),
     created_at: input.createdAt.toISOString(),
     updated_at: input.updatedAt.toISOString(),
+  };
+}
+
+export interface IntegrationSpecOperationDto {
+  readonly operation_id: string;
+  readonly method: string;
+  readonly path: string;
+  readonly read_write_class: 'read' | 'write';
+  readonly summary: string | null;
+  readonly description: string | null;
+  readonly required_scopes: readonly string[];
+}
+
+/** The operations a BYO descriptor's uploaded spec exposes (scope-independent). */
+export interface IntegrationSpecOperationsDto {
+  readonly descriptor_id: string;
+  readonly spec_hash: string;
+  readonly operations: readonly IntegrationSpecOperationDto[];
+}
+
+export function serializeIntegrationSpecOperations(input: {
+  readonly descriptorId: string;
+  readonly specHash: string;
+  readonly operations: readonly IntegrationOperationSummary[];
+}): IntegrationSpecOperationsDto {
+  return {
+    descriptor_id: input.descriptorId,
+    spec_hash: input.specHash,
+    operations: input.operations.map(op => ({
+      operation_id: op.operationId,
+      method: op.method,
+      path: op.path,
+      read_write_class: op.readWriteClass,
+      summary: op.summary,
+      description: op.description,
+      required_scopes: [...op.requiredScopes],
+    })),
   };
 }

@@ -634,6 +634,55 @@ describe('IntegrationDescriptorAuthoringService spec management', () => {
     expect(noDescriptor.status).toBe(404);
     expect(bodyOf(noDescriptor)).toMatchObject({ code: 'integration_descriptor_not_found' });
   });
+
+  it('lists the operations exposed by an owned descriptor spec', async () => {
+    const { service } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+
+    const beforeIngest = await service.listSpecOperations(consoleRequest({ params: { id: descriptorId } }));
+    expect(beforeIngest.status).toBe(404);
+    expect(bodyOf(beforeIngest)).toMatchObject({ code: 'integration_spec_not_found' });
+
+    const putResult = await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: { spec: openApiSpec() },
+    }));
+    const specHash = bodyOf(putResult).spec_hash as string;
+
+    const result = await service.listSpecOperations(consoleRequest({ params: { id: descriptorId } }));
+    expect(result.status).toBe(200);
+    expect(bodyOf(result)).toEqual({
+      descriptor_id: descriptorId,
+      spec_hash: specHash,
+      operations: [expect.objectContaining({
+        operation_id: 'listContacts',
+        method: 'GET',
+        path: '/contacts',
+        read_write_class: 'read',
+      })],
+    });
+  });
+
+  it('scopes spec operation listing to the descriptor owner and 404s an unknown descriptor', async () => {
+    const { service } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+    await service.putSpec(consoleRequest({
+      params: { id: descriptorId },
+      body: { spec: openApiSpec() },
+    }));
+
+    const foreign = await service.listSpecOperations(consoleRequest({
+      params: { id: descriptorId },
+      consoleAuthentication: authenticatedContext(OTHER_USER_ID),
+    }));
+    expect(foreign.status).toBe(404);
+    expect(bodyOf(foreign)).toMatchObject({ code: 'integration_descriptor_not_found' });
+
+    const unknown = await service.listSpecOperations(consoleRequest({ params: { id: UNKNOWN_ID } }));
+    expect(unknown.status).toBe(404);
+  });
 });
 
 describe('IntegrationModule per-request provider routes', () => {
@@ -912,6 +961,7 @@ describe('IntegrationModule descriptor routes', () => {
       `GET ${DESCRIPTORS_PATH}`,
       `GET ${DESCRIPTORS_PATH}/:id`,
       `GET ${DESCRIPTORS_PATH}/:id/spec`,
+      `GET ${DESCRIPTORS_PATH}/:id/spec/operations`,
       `PATCH ${DESCRIPTORS_PATH}/:id`,
       `POST ${DESCRIPTORS_PATH}`,
       `PUT ${DESCRIPTORS_PATH}/:id/spec`,
