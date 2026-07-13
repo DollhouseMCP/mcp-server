@@ -27,24 +27,3 @@ export function boundedString(value: string | null, maxLength: number): string |
   const trimmed = value.trim();
   return trimmed ? trimmed.slice(0, maxLength) : null;
 }
-
-export interface ConsolePageParams {
-  readonly limit: number;
-  readonly cursor: string | null;
-}
-
-/**
- * Standard Family-B page params off a request: `?limit` (1..`ceiling`, default
- * `defaultLimit`) and `?cursor` (opaque, ≤512 chars — the {@link
- * import('./ConsoleCursor.js')} guard rejects longer tokens as first-page).
- */
-export function parseConsolePageParams(
-  req: ConsoleRequest,
-  defaultLimit = 100,
-  ceiling = 100,
-): ConsolePageParams {
-  return {
-    limit: boundedLimit(firstQueryValue(req.query.limit), defaultLimit, ceiling),
-    cursor: boundedString(firstQueryValue(req.query.cursor), 512),
-  };
-}

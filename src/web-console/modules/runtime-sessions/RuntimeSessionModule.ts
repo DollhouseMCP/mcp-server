@@ -10,6 +10,7 @@ import type {
 import { isRuntimeSessionStatus } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import { boundedString, firstQueryValue } from '../../platform/ConsoleListQuery.js';
+import { isUuid } from '../../stores/ConsoleStoreValidation.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import { RuntimeSessionService, type OperationalSessionListQuery } from './RuntimeSessionService.js';
 import {
@@ -297,7 +298,10 @@ function parseOperationalListQuery(
   const cursor = boundedString(firstQueryValue(req.query.cursor), 512);
   if (cursor !== null) value.cursor = cursor;
   const userId = boundedString(firstQueryValue(req.query.user_id), 64);
-  if (userId !== null) value.userId = userId;
+  if (userId !== null) {
+    if (!isUuid(userId)) return { kind: 'invalid', detail: 'user_id must be a UUID.' };
+    value.userId = userId;
+  }
   const statusRaw = firstQueryValue(req.query.status);
   if (statusRaw !== null) {
     if (!isRuntimeSessionStatus(statusRaw)) return { kind: 'invalid', detail: 'status must be "active" or "closing".' };

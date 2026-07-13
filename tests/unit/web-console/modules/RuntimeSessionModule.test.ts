@@ -617,4 +617,13 @@ describe('RuntimeSessionModule', () => {
     expect(body.items.map(item => item.session_id).sort((a, b) => a.localeCompare(b)))
       .toEqual([SECOND_SESSION_ID, SESSION_ID].sort((a, b) => a.localeCompare(b)));
   });
+
+  it('rejects a non-UUID user_id filter with a 400 rather than reaching the store', async () => {
+    const { module } = await fixture();
+    const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
+
+    const result = await listRoute.handler(request({ query: { user_id: 'not-a-uuid' } }));
+    expect(result.status).toBe(400);
+    expect((result.body as { code: string }).code).toBe('invalid_request');
+  });
 });

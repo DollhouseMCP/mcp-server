@@ -67,9 +67,14 @@ export function assertDigest(value: Buffer, name: string): void {
 }
 
 export function assertUuid(value: string, name: string): void {
-  if (!UUID_PATTERN.test(value)) {
+  if (!isUuid(value)) {
     throw new ConsoleStoreValidationError(`${name} must be a UUID`);
   }
+}
+
+/** Non-throwing UUID-format check, for request parsers that return a 400 rather than throw. */
+export function isUuid(value: string): boolean {
+  return UUID_PATTERN.test(value);
 }
 
 /**

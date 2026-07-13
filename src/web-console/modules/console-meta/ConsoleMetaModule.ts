@@ -11,12 +11,13 @@
  * Both are `self`-audience reads (any authenticated console user) carrying no per-user
  * data; capabilities still gate the actual operations the manifest advertises.
  */
-import type {
-  ConsoleModuleDescriptor,
-  ConsoleRouteManifest,
-  ConsoleRouteManifestEntry,
+import {
+  CONSOLE_CAPABILITIES,
+  type ConsoleCapability,
+  type ConsoleModuleDescriptor,
+  type ConsoleRouteManifest,
+  type ConsoleRouteManifestEntry,
 } from '../../platform/ConsolePlatformTypes.js';
-import { CONSOLE_CAPABILITIES, type ConsoleCapability } from '../../platform/ConsolePlatformTypes.js';
 import { CONSOLE_ADMIN_ROLES, type ConsoleAdminRole } from '../../stores/IConsoleAccountAdminStore.js';
 import { ROLE_GRANT_CAPABILITIES } from '../account-admin/AccountAdminRoleAuthority.js';
 
