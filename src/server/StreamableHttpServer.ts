@@ -468,6 +468,36 @@ function runHostedDeploymentSafetyChecks(config: HostedDeploymentSafetyConfig): 
       `https:// redirect URI validation.`,
     );
   }
+
+  // Checked last: once the network-exposure guards above pass, the deployment is
+  // reachable correctly, so the only remaining concern is at-rest secret
+  // protection. Encrypted GitHub tokens (github_token.enc in file mode) and the
+  // OAuth device-flow handoff fall back to a machine-derived passphrase when
+  // DOLLHOUSE_TOKEN_SECRET is unset. That passphrase has no per-install entropy
+  // (derived from homedir + USER, with the PBKDF2 salt stored beside the
+  // ciphertext), so anyone who reads the on-disk ciphertext could derive the key
+  // and decrypt every user's tokens offline. Fail closed; an operator who has
+  // accepted this at-rest risk can opt back in with
+  // DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE=true.
+  if (!process.env.DOLLHOUSE_TOKEN_SECRET?.trim()) {
+    const insecureTokenStoreDetail =
+      'DOLLHOUSE_TOKEN_SECRET is not set for this exposed multi-user deployment. ' +
+      'Encrypted GitHub tokens and OAuth handoff files would use a machine-derived ' +
+      'passphrase with no per-install entropy, so anyone who reads the on-disk ' +
+      'ciphertext could decrypt every user\'s at-rest secrets offline. Set ' +
+      'DOLLHOUSE_TOKEN_SECRET to a strong random value.';
+    if (process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE?.trim().toLowerCase() === 'true') {
+      logger.warn(
+        `[StreamableHttpServer] ${insecureTokenStoreDetail} Continuing anyway because ` +
+        'DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE=true.',
+      );
+    } else {
+      throw new Error(
+        `[StreamableHttpServer] Refusing to start: ${insecureTokenStoreDetail} To start ` +
+        'anyway (not recommended), set DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE=true.',
+      );
+    }
+  }
 }
 
 export async function createStreamableHttpRuntime(

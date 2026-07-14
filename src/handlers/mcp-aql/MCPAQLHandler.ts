@@ -33,7 +33,7 @@ import { ElementCRUDDispatcher } from './ElementCRUDDispatcher.js';
 import { ConfigDispatcher } from './ConfigDispatcher.js';
 import { AgentExecutionHandler } from './AgentExecutionHandler.js';
 import { GatekeeperHandler } from './GatekeeperHandler.js';
-import { MemorySaveHandler } from './MemorySaveHandler.js';
+import { MemorySaveHandler, type SaveContextScope } from './MemorySaveHandler.js';
 import { buildOperationSummary } from './OperationSummary.js';
 import { applyFieldSelection } from './FieldSelection.js';
 import { initializeNormalizers } from './normalizers/index.js';
@@ -402,7 +402,7 @@ export interface HandlerRegistry {
  * Keeps coupling loose — only requires what MCPAQLHandler actually needs.
  * Issue #301: Request correlation support.
  */
-export interface CorrelationIdProvider {
+export interface CorrelationIdProvider extends SaveContextScope {
   getCorrelationId(): string | undefined;
   getSessionContext?(): { sessionId: string } | undefined;
 }
@@ -495,7 +495,9 @@ export class MCPAQLHandler {
     this.searchHandler = new SearchHandler(handlers);
     this.elementCRUDDispatcher = new ElementCRUDDispatcher(handlers);
     this.configDispatcher = new ConfigDispatcher(handlers);
-    this.memorySaveHandler = new MemorySaveHandler(handlers, (name) => this.sessionKey(name));
+    // Pass the context tracker so pending memory saves can re-establish their
+    // per-user context during a shutdown flush (#2329 multi-user correctness).
+    this.memorySaveHandler = new MemorySaveHandler(handlers, (name) => this.sessionKey(name), contextTracker);
     this.agentExecutionHandler = new AgentExecutionHandler(
       handlers,
       this.executingAgents,

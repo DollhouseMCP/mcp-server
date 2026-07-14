@@ -47,7 +47,7 @@ function makeMemory(name: string): MockMemory {
   };
 }
 
-function makeHandler(memory: MockMemory, sessionId = 'sessA') {
+function makeHandler(memory: MockMemory, sessionId = 'sessA', contextScope?: HandlerCtorArgs[2]) {
   const manager = {
     find: jest.fn(() => Promise.resolve(memory)),
     save: jest.fn(() => Promise.resolve()),
@@ -56,7 +56,7 @@ function makeHandler(memory: MockMemory, sessionId = 'sessA') {
   const handlers = { memoryManager: manager } as unknown as HandlerCtorArgs[0];
   // Session-scoped key, matching MCPAQLHandler.sessionKey('name') => `${sessionId}:${name}`
   let currentSession = sessionId;
-  const handler = new MemorySaveHandler(handlers, (name: string) => `${currentSession}:${name}`);
+  const handler = new MemorySaveHandler(handlers, (name: string) => `${currentSession}:${name}`, contextScope);
   const internals = handler as unknown as HandlerInternals;
   return {
     handler,
@@ -152,6 +152,88 @@ describe('MemorySaveHandler', () => {
       expect(ctx.internals.pendingSaves.has('sessA:shared-name')).toBe(true);
       expect(ctx.internals.pendingSaves.has('sessB:shared-name')).toBe(true);
       expect(ctx.internals.pendingSaves.size).toBe(2);
+    });
+  });
+
+  describe('shutdown flush re-establishes per-user context (#2329 multi-user)', () => {
+    // A time-sensitive context tracker: like AsyncLocalStorage, it exposes a
+    // context ONLY while a request is notionally active. At process shutdown the
+    // ambient context is gone. This distinguishes a correct implementation (which
+    // captures the context when the save is SCHEDULED) from the regression the fix
+    // guards against (re-fetching the context at FLUSH time, when it is empty).
+    function timeSensitiveScope() {
+      let ambient: unknown;
+      const runContexts: unknown[] = [];
+      const scope = {
+        getContext: jest.fn(() => ambient),
+        runAsync: jest.fn((ctx: unknown, fn: () => Promise<unknown>) => {
+          runContexts.push(ctx);
+          return fn();
+        }),
+      };
+      return {
+        scope,
+        runContexts,
+        setAmbient: (ctx: unknown) => { ambient = ctx; },
+      };
+    }
+
+    it('replays the context captured at schedule time, not one re-fetched at shutdown', async () => {
+      const memory = makeMemory('notes');
+      const scheduledContext = { session: { userId: 'alice', sessionId: 'sessA' } };
+      const { scope, runContexts, setAmbient } = timeSensitiveScope();
+      const { handler, manager } = makeHandler(memory, 'sessA', scope as unknown as HandlerCtorArgs[2]);
+
+      // Request active: the save captures alice's context as it is scheduled.
+      setAmbient(scheduledContext);
+      await handler.dispatch('addEntry', { element_name: 'notes', content: 'hi' });
+
+      // Shutdown: ambient context is gone. A regression that re-fetched
+      // getContext() here would get undefined, skip runAsync, and write to the
+      // shared baseDir. A correct flush replays the captured context instead.
+      setAmbient(undefined);
+      await handler.flushPendingSaves();
+
+      expect(scope.runAsync).toHaveBeenCalledTimes(1);
+      expect(runContexts).toEqual([scheduledContext]);
+      expect(manager.save).toHaveBeenCalledWith(memory);
+    });
+
+    it('flushes each session\'s save under its OWN captured context (no cross-user bleed)', async () => {
+      const memory = makeMemory('notes');
+      const ctxAlice = { session: { userId: 'alice', sessionId: 'sessA' } };
+      const ctxBob = { session: { userId: 'bob', sessionId: 'sessB' } };
+      const { scope, runContexts, setAmbient } = timeSensitiveScope();
+      const ctx = makeHandler(memory, 'sessA', scope as unknown as HandlerCtorArgs[2]);
+
+      // Alice schedules a save for 'notes' inside her request context.
+      setAmbient(ctxAlice);
+      await ctx.handler.dispatch('addEntry', { element_name: 'notes', content: 'from alice' });
+      // Bob schedules a save for the SAME-named memory inside his own context.
+      ctx.setSession('sessB');
+      setAmbient(ctxBob);
+      await ctx.handler.dispatch('addEntry', { element_name: 'notes', content: 'from bob' });
+
+      // Two independent pending saves keyed by session.
+      expect(ctx.internals.pendingSaves.size).toBe(2);
+
+      // Shutdown flush with no ambient context: each save must run under its own
+      // originating context — not undefined, not a single shared one, and not the
+      // other user's (which would land alice's entry in bob's dir or vice versa).
+      setAmbient(undefined);
+      await ctx.handler.flushPendingSaves();
+
+      expect(scope.runAsync).toHaveBeenCalledTimes(2);
+      expect(runContexts).toContain(ctxAlice);
+      expect(runContexts).toContain(ctxBob);
+    });
+
+    it('flushes directly when no context tracker is available (stdio / tests)', async () => {
+      const memory = makeMemory('notes');
+      const { handler, manager } = makeHandler(memory, 'sessA'); // no contextScope
+      await handler.dispatch('addEntry', { element_name: 'notes', content: 'hi' });
+      await handler.flushPendingSaves();
+      expect(manager.save).toHaveBeenCalledWith(memory);
     });
   });
 });
