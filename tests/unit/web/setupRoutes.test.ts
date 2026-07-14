@@ -39,6 +39,39 @@ describe('Setup Routes — API Endpoints', () => {
   });
 
   describe('POST /api/setup/install', () => {
+    // Isolate the install block from real MCP client configs (issue #2338).
+    // The default install handler runs the REAL install-mcp binary and installs a
+    // real permission hook, so `npm test` patched the developer's real
+    // claude_desktop_config.json (install-mcp resolves it via os.userInfo, which
+    // even ignores $HOME) and ~/.claude.json (the claude-code hook). Rebuild the
+    // app with stubbed _runInstallMcp / _installPermissionHook so no real external
+    // process or hook install runs. NOTE: HOME-sandboxing does NOT help here —
+    // jest's sandboxed process.env is not visible to libuv, so os.homedir()
+    // ignores a mutated HOME. The only client that still writes a real config
+    // in-process is LM Studio (installLmStudioConfig has no path override), so it
+    // is exercised by the dedicated "direct JSON MCP installs" tests below (which
+    // pass a temp configPath) rather than here.
+    beforeEach(async () => {
+      const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
+      const { installHandler } = createSetupRoutes({
+        _runInstallMcp: async () => 'Installed successfully.',
+        // Stub the NVM mitigation: the real one runs against the real homedir()
+        // and, on a machine WITH NVM, would patch real client configs (#2338).
+        _applyNvmLauncher: async () => 'not-applicable',
+        _installPermissionHook: async (client: string) => ({
+          supported: false,
+          installed: false,
+          configured: false,
+          host: client,
+          message: 'stubbed for tests',
+        }),
+        _skipRateLimit: true,
+      });
+      app = express();
+      app.use(express.json());
+      app.post('/api/setup/install', installHandler);
+    });
+
     it('rejects missing client field', async () => {
       const res = await request(app)
         .post('/api/setup/install')
@@ -78,10 +111,16 @@ describe('Setup Routes — API Endpoints', () => {
     });
 
     it('accepts all documented client names', async () => {
+      // 'lmstudio' is intentionally omitted: unlike every other client (which is
+      // routed through the stubbed _runInstallMcp), it is installed in-process via
+      // installLmStudioConfig(), which writes the REAL ~/.lmstudio/mcp.json with no
+      // path-override seam. Its validation acceptance is covered by the detect
+      // support-level tests and its write behaviour by the "direct JSON MCP
+      // installs" tests below (which pass a temp configPath). See issue #2338.
       const validClients = [
         'claude', 'claude-code', 'cursor', 'vscode', 'cline',
         'roo-cline', 'windsurf', 'witsy', 'enconvo', 'gemini-cli',
-        'goose', 'zed', 'warp', 'codex', 'lmstudio',
+        'goose', 'zed', 'warp', 'codex',
       ];
 
       for (const client of validClients) {
@@ -165,6 +204,7 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _applyNvmLauncher: async () => 'not-applicable',
         _installPermissionHook: async () => ({
           supported: true,
           installed: true,
@@ -209,6 +249,7 @@ describe('Setup Routes — API Endpoints', () => {
       const { createSetupRoutes } = await import('../../../src/web/routes/setupRoutes.js');
       const { installHandler } = createSetupRoutes({
         _runInstallMcp: async () => 'Installed successfully.',
+        _applyNvmLauncher: async () => 'not-applicable',
         _installPermissionHook: installPermissionHookMock,
         _skipRateLimit: true,
       });

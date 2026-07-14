@@ -1,0 +1,44 @@
+name: npm dist-tag audit
+
+# Detection net for out-of-band publishes: the prepublishOnly guard and the
+# CI channel mapping prevent a prerelease from landing on `latest` through
+# any path that runs our code — but a registry-side mistake (npm dist-tag
+# add by hand, support intervention) can still move tags. This audit reads
+# the live dist-tags weekly and fails loudly if `latest` points at a
+# prerelease, so the failure notification reaches maintainers within days
+# instead of at the next release.
+
+on:
+  schedule:
+    - cron: '0 14 * * 1'  # Mondays 14:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Verify latest dist-tag points at a stable version
+        shell: bash
+        run: |
+          TAGS=$(npm view @dollhousemcp/mcp-server dist-tags --json)
+          echo "Current dist-tags: ${TAGS}"
+          LATEST=$(echo "${TAGS}" | node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).latest")
+          if [[ -z "${LATEST}" || "${LATEST}" == "undefined" ]]; then
+            echo "::error::Could not resolve dist-tags.latest"
+            exit 1
+          fi
+          if [[ "${LATEST}" == *-* ]]; then
+            echo "::error::dist-tags.latest points at a PRERELEASE (${LATEST})."
+            echo "::error::Every default install (npx @dollhousemcp/mcp-server, @latest pins) is serving it to stable users."
+            echo "::error::Repair: npm dist-tag add @dollhousemcp/mcp-server@<highest-stable> latest"
+            exit 1
+          fi
+          echo "✅ dist-tags.latest = ${LATEST} (stable)"

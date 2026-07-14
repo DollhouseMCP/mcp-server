@@ -31,7 +31,6 @@ import { LRUCache } from '../../cache/LRUCache.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { ContentValidator } from '../../security/contentValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
@@ -679,38 +678,66 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * validation than frontmatter-based elements. The base class validateSerializedContent
    * handles frontmatter elements; this override handles pure YAML memories.
    *
+   * Called by the base class from super.save() before any write. Delegates to
+   * validateSerializedMemoryYaml so the on-save check and the assertPersistable()
+   * preflight can never disagree.
+   */
+  protected override validateSerializedContent(content: string): void {
+    this.validateSerializedMemoryYaml(content);
+  }
+
+  /**
+   * Issue #2329: Serialize and run the full save-path validation without writing to disk.
+   * Lets callers reject a mutation immediately (e.g. addEntry) when the memory can no
+   * longer be persisted, instead of the failure surfacing only in a deferred save
+   * where it cannot be reported back to the caller. File and DB modes return the same
+   * validation result because both run the identical serialized-YAML checks below.
+   */
+  async assertPersistable(element: Memory): Promise<void> {
+    const yamlContent = await this.serializeElement(element);
+    this.validateSerializedMemoryYaml(yamlContent);
+  }
+
+  /**
+   * Validation applied to serialized memory YAML before any disk write.
+   * Shared by save() (via validateSerializedContent) and assertPersistable() so the
+   * pre-flight check and the actual write can never disagree.
+   *
    * Checks: size enforcement (Fix #916/#918), YAML bomb detection (Fix #908/#918),
    * and gatekeeper policy validation.
    */
-  protected override validateSerializedContent(content: string): void {
-    // Size enforcement (Fix #916/#918)
-    if (content.length > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
+  private validateSerializedMemoryYaml(yamlContent: string): void {
+    // Fix #916/#918, tightened for #2329: cap at MAX_YAML_SIZE (256KB) — the same
+    // limit parseContent() enforces on load. The previous 2MB cap allowed writing
+    // files the loader would then reject.
+    if (yamlContent.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
         severity: 'HIGH',
-        source: 'MemoryManager.validateSerializedContent',
-        details: `Memory exceeds maximum file size (${content.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`,
+        source: 'MemoryManager.validateSerializedMemoryYaml',
+        details: `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
+        metadata: { contentLength: yamlContent.length, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE }
       });
       throw new Error(
-        `Memory exceeds maximum file size (${content.length} > ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES})`
+        `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
+        `This memory is full — start a new memory for additional entries.`
       );
     }
 
-    // YAML bomb detection (Fix #908/#918)
-    if (content.length <= SECURITY_LIMITS.MAX_YAML_LENGTH) {
-      if (!ContentValidator.validateYamlContent(content)) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'YAML_INJECTION_ATTEMPT',
-          severity: 'CRITICAL',
-          source: 'MemoryManager.validateSerializedContent',
-          details: 'Serialized memory contains malicious YAML patterns — write blocked',
-        });
-        throw new Error('Serialized memory contains malicious YAML patterns — write blocked');
-      }
+    // Bomb/injection detection + gatekeeper policy validation. Issue #2329 root
+    // cause: this parse previously capped at MAX_YAML_LENGTH (64KB — a frontmatter
+    // limit), so every save of a memory whose serialized YAML exceeded 64KB threw
+    // here, and the deferred save path swallowed the error while addEntry kept
+    // reporting success. The cap now matches the memory size limit enforced above
+    // and on load. parseRawYaml runs ContentValidator.validateYamlContent with the
+    // same cap internally (Fix #908/#918), so bomb detection covers every size —
+    // the previous `<= MAX_YAML_LENGTH` guard skipped it for content over 64KB.
+    const validationStart = Date.now();
+    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, MEMORY_CONSTANTS.MAX_YAML_SIZE);
+    const validationMs = Date.now() - validationStart;
+    if (validationMs > 50) {
+      logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
     }
-
-    // Gatekeeper policy validation (pure YAML structure — root + nested metadata)
-    const parsedYaml = SecureYamlParser.parseRawYaml(content, SECURITY_LIMITS.MAX_YAML_LENGTH);
     const gatekeeperErrors = [
       ...getGatekeeperAuthoringErrors(parsedYaml),
       ...getGatekeeperAuthoringErrors(

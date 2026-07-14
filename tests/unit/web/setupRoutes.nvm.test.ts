@@ -12,8 +12,14 @@
 
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { mkdtemp, rm, mkdir, writeFile, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { tmpdir } from 'node:os';
+
+// True when the repo checkout itself lives under os.tmpdir() (e.g. an ad-hoc CI
+// worktree in /tmp). In that case a "non-tmpdir" fixture cannot be created under
+// process.cwd(), so the tmpdir-guardrail test that needs a real (non-temp) config
+// location is skipped rather than asserting the wrong branch.
+const CWD_UNDER_TMPDIR = process.cwd() === tmpdir() || process.cwd().startsWith(tmpdir() + sep);
 
 import {
   isNvmPresent,
@@ -454,9 +460,56 @@ describe('patchConfigForNvmLauncher', () => {
     const result = await readFile(configPath, 'utf-8');
     expect(result).toContain('\t"mcpServers"');
   });
+
+  // ── Production guardrail (issue #2338, fix item 3) ────────────────────────
+  it('refuses to persist a temp-dir wrapper into a config OUTSIDE tmpdir', async () => {
+    // Needs a config location guaranteed to be outside os.tmpdir(); when the
+    // checkout itself is under tmpdir we cannot construct one, so skip.
+    if (CWD_UNDER_TMPDIR) return;
+    // Wrapper lives under os.tmpdir() (the shape of the #2338 leak); the config
+    // lives OUTSIDE tmpdir (a persistent, "real" config). The guardrail must
+    // warn and no-op so the temp-dir path is never written into a durable config.
+    const tmpWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh');
+
+    // Create a non-tmpdir directory to stand in for a real config location.
+    const outsideDir = await mkdtemp(join(process.cwd(), 'guardrail-2338-'));
+    try {
+      const outsideConfig = join(outsideDir, 'config.json');
+      const original = JSON.stringify({
+        mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
+      }, null, 2) + '\n';
+      await writeFile(outsideConfig, original);
+
+      await patchConfigForNvmLauncher('claude', tmpWrapper, outsideConfig);
+
+      // Config must be byte-identical — the guardrail refused the write.
+      expect(await readFile(outsideConfig, 'utf-8')).toBe(original);
+    } finally {
+      await rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it('still patches when BOTH wrapper and config are under tmpdir (sandboxed test path)', async () => {
+    // The guardrail must NOT block sandboxed tests, or NVM-present coverage would
+    // be impossible (the wrapper is always created inside the fake temp home).
+    const tmpWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh');
+    const tmpConfig = join(tempDir, 'claude.json');
+    await writeFile(tmpConfig, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: 'npx', args: [] } },
+    }, null, 2));
+
+    await patchConfigForNvmLauncher('claude', tmpWrapper, tmpConfig);
+
+    const after = JSON.parse(await readFile(tmpConfig, 'utf-8'));
+    expect(after.mcpServers.dollhousemcp.command).toBe(tmpWrapper);
+  });
 });
 
 // ── applyNvmLauncherIfNeeded ─────────────────────────────────────────────────
+// NOTE (#2338): passing `tempDir` as `home` is now authoritative — the helper
+// derives the config path from that same home (getConfigPath(client, home)), so
+// the NVM-present path below writes only inside tempDir and never touches a real
+// client config. The global guard in tests/jest.setup.mjs backstops this.
 
 describe('applyNvmLauncherIfNeeded', () => {
   it('returns not-applicable when NVM is not present', async () => {
@@ -492,6 +545,11 @@ describe('applyNvmLauncherIfNeeded', () => {
 });
 
 // ── repairNvmLauncherOnStartup ───────────────────────────────────────────────
+// NOTE (#2338): calls that pass only `tempDir` rely on the default resolver,
+// which is now home-derived — `(client) => getConfigPath(client, tempDir)`.
+// Config writes therefore stay inside tempDir; the previous default reached the
+// real homedir() and patched live client configs. Tests that assert config
+// patching still inject an explicit resolver so intent is unambiguous.
 
 describe('repairNvmLauncherOnStartup', () => {
   it('is a function', () => {
@@ -622,5 +680,124 @@ describe('repairNvmLauncherOnStartup', () => {
 
     expect(wrapperFirst).toBe(wrapperSecond);
     expect(configFirst).toBe(configSecond);
+  });
+});
+
+// ── #2338 self-heal acceptance matrix ────────────────────────────────────────
+// All three user states must end healthy after repairNvmLauncherOnStartup runs.
+// See the acceptance matrix in issue #2338's clarifying comment.
+
+describe('repairNvmLauncherOnStartup — #2338 self-heal acceptance matrix', () => {
+  it('Row 1: no NVM + config points at a dead wrapper → restores command to npx (args preserved)', async () => {
+    // repairNvmLauncherOnStartup (and the whole NVM mitigation) is macOS/Linux
+    // only — on win32 it returns before self-heal, so the heal cannot happen.
+    if (isWindows) return;
+    // tempDir has NO .nvm — this machine has no NVM installed.
+    const deadWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'); // never created
+    const configPath = join(tempDir, 'claude.json');
+    await writeFile(configPath, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: deadWrapper, args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2));
+
+    const resolver = (client: string) => client === 'claude' ? configPath : null;
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+
+    const after = JSON.parse(await readFile(configPath, 'utf-8'));
+    expect(after.mcpServers.dollhousemcp.command).toBe('npx');
+    expect(after.mcpServers.dollhousemcp.args).toEqual(['@dollhousemcp/mcp-server@latest']);
+
+    // No wrapper must be created when NVM is absent.
+    await expect(
+      stat(join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'))
+    ).rejects.toThrow();
+  });
+
+  it('Row 1b: no NVM + healthy npx config → left byte-identical (no spurious heal)', async () => {
+    const configPath = join(tempDir, 'claude.json');
+    const original = JSON.stringify({
+      mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2) + '\n';
+    await writeFile(configPath, original);
+
+    const resolver = (client: string) => client === 'claude' ? configPath : null;
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+
+    expect(await readFile(configPath, 'utf-8')).toBe(original);
+  });
+
+  it('Row 2: NVM present + config points at a dead wrapper → regenerates real wrapper and repoints config', async () => {
+    if (isWindows) return;
+    await mkdir(join(tempDir, '.nvm'), { recursive: true });
+    await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
+
+    // Simulate a config left pointing at a now-deleted temp-dir wrapper.
+    const deadWrapper = join(tmpdir(), 'dollhouse-nvm-test-GONE', '.dollhouse', 'bin', 'dollhousemcp-nvm.sh');
+    const configPath = join(tempDir, 'claude.json');
+    await writeFile(configPath, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: deadWrapper, args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2));
+
+    const resolver = (client: string) => client === 'claude' ? configPath : null;
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+
+    // The real wrapper is regenerated inside the (fake) home...
+    const realWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh');
+    expect((await stat(realWrapper)).isFile()).toBe(true);
+
+    // ...and the config now points at it, keeping the #1902 protection (not bare npx).
+    const after = JSON.parse(await readFile(configPath, 'utf-8'));
+    expect(after.mcpServers.dollhousemcp.command).toBe(realWrapper);
+    expect(after.mcpServers.dollhousemcp.args).toEqual(['@dollhousemcp/mcp-server@latest']);
+  });
+
+  it('Row 3: NVM present + healthy config already pointing at the real wrapper → byte-identical no-op', async () => {
+    if (isWindows) return;
+    await mkdir(join(tempDir, '.nvm'), { recursive: true });
+    await writeFile(join(tempDir, '.nvm', 'nvm.sh'), '# nvm');
+
+    const configPath = join(tempDir, 'claude.json');
+    await writeFile(configPath, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: 'npx', args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2));
+    const resolver = (client: string) => client === 'claude' ? configPath : null;
+
+    // First repair establishes the wrapper and a healthy config pointing at it.
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+    const realWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh');
+    const configHealthy = await readFile(configPath, 'utf-8');
+    expect(JSON.parse(configHealthy).mcpServers.dollhousemcp.command).toBe(realWrapper);
+
+    // Second repair on an already-healthy config must be byte-identical.
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+    expect(await readFile(configPath, 'utf-8')).toBe(configHealthy);
+  });
+
+  it('self-heal covers VS Code (servers key) and Cline — now in JSON_FORMAT_CLIENTS', async () => {
+    if (isWindows) return;
+    // No NVM on this machine. The install flow can patch vscode/cline JSON
+    // configs, so startup self-heal must iterate them too (#2338). The resolver
+    // is only consulted for clients repairNvmLauncherOnStartup actually visits,
+    // so a heal here proves vscode + cline are in the iterated client set.
+    const deadWrapper = join(tempDir, '.dollhouse', 'bin', 'dollhousemcp-nvm.sh'); // never created
+    const vscodeCfg = join(tempDir, 'vscode-settings.json');
+    const clineCfg = join(tempDir, 'cline-settings.json');
+    // VS Code uses the `servers` key; Cline uses `mcpServers`.
+    await writeFile(vscodeCfg, JSON.stringify({
+      servers: { dollhousemcp: { command: deadWrapper, args: ['@dollhousemcp/mcp-server@latest'] } },
+    }, null, 2));
+    await writeFile(clineCfg, JSON.stringify({
+      mcpServers: { dollhousemcp: { command: deadWrapper, args: ['@dollhousemcp/mcp-server@rc'] } },
+    }, null, 2));
+
+    const resolver = (client: string) =>
+      client === 'vscode' ? vscodeCfg : client === 'cline' ? clineCfg : null;
+    await repairNvmLauncherOnStartup(tempDir, resolver);
+
+    const vscodeAfter = JSON.parse(await readFile(vscodeCfg, 'utf-8'));
+    const clineAfter = JSON.parse(await readFile(clineCfg, 'utf-8'));
+    expect(vscodeAfter.servers.dollhousemcp.command).toBe('npx');
+    expect(vscodeAfter.servers.dollhousemcp.args).toEqual(['@dollhousemcp/mcp-server@latest']);
+    expect(clineAfter.mcpServers.dollhousemcp.command).toBe('npx');
+    expect(clineAfter.mcpServers.dollhousemcp.args).toEqual(['@dollhousemcp/mcp-server@rc']);
   });
 });

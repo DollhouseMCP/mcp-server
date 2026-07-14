@@ -18,10 +18,32 @@ interface SaveFrequencyCounter {
   critical: boolean;
 }
 
+/**
+ * Issue #2329: a memory whose most recent save attempt failed. Holds the
+ * failing Memory instance and its manager — the unpersisted entries exist only
+ * in that instance, so recovery must retry it (a freshly loaded instance would
+ * lack them).
+ */
+interface FailedSave {
+  error: Error;
+  memory: Memory;
+  manager: MemoryManager;
+}
+
 export class MemorySaveHandler {
   private readonly pendingSaves = new Map<string, PendingSave>();
   private readonly debounceMetrics = { coalesced: 0, written: 0 };
   private readonly saveFrequencyCounters = new Map<string, SaveFrequencyCounter>();
+  /**
+   * Issue #2329: memories whose most recent save attempt failed, keyed by the
+   * session-scoped save key. Recovery on the next addEntry / flush retries these.
+   */
+  private readonly failedMemorySaves = new Map<string, FailedSave>();
+  /**
+   * Issue #2329: per-key save attempt counter. The newest-started save wins —
+   * an older in-flight save resolving late cannot erase a newer failure.
+   */
+  private readonly memorySaveAttempts = new Map<string, number>();
 
   constructor(
     private readonly handlers: HandlerRegistry,
@@ -45,20 +67,42 @@ export class MemorySaveHandler {
       case 'addEntry':
         return this.addEntry(memoryName, memory, manager, params);
       case 'clear':
-        return this.clear(memory, manager);
+        return this.clear(memoryName, memory, manager);
       default:
         throw new Error(`Unknown Memory method: ${method}`);
     }
   }
 
+  /**
+   * Clean up bookkeeping for a disconnecting HTTP session WITHOUT writing.
+   *
+   * Issue #2329 (multi-user correctness): this runs during session disposal,
+   * OUTSIDE the session's AsyncLocalStorage context. A save issued from here
+   * would resolve the per-user element directory to the flat shared baseDir
+   * (file mode) — or throw (database mode) — so it must never write. Each pending
+   * save's debounce timer was scheduled INSIDE the request context, which
+   * AsyncLocalStorage propagates across setTimeout, so leaving the timer to fire
+   * persists the entry to the CORRECT per-user location. Per runbook §6: "retain
+   * the pending save until its timer completes and remove only non-durability
+   * bookkeeping."
+   *
+   * Failed saves cannot be safely retried from here (no session context, and the
+   * earlier in-context save already failed for a real reason). Surface the
+   * potential loss and drop the ledger entry.
+   */
   cleanupSession(sessionId: string): void {
     const prefix = `${sessionId}:`;
-    for (const [key, entry] of this.pendingSaves) {
-      if (key.startsWith(prefix)) {
-        clearTimeout(entry.timer);
-        this.pendingSaves.delete(key);
-      }
+
+    for (const [key, { error, memory }] of this.failedMemorySaves) {
+      if (!key.startsWith(prefix)) continue;
+      const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
+      logger.error(`[MCPAQLHandler] Session closed with an unrecovered memory save for '${key}' (entries: ${entryCount}) — ${error.message}. Any unpersisted entries are lost.`);
     }
+    this.deleteByPrefix(this.failedMemorySaves, prefix);
+
+    // Non-durability bookkeeping only. Pending saves and their timers are left
+    // intact so they fire — and persist — in their propagated per-user context.
+    this.deleteByPrefix(this.memorySaveAttempts, prefix);
     this.deleteByPrefix(this.saveFrequencyCounters, prefix);
   }
 
@@ -66,21 +110,51 @@ export class MemorySaveHandler {
     await this.flushPendingSaves();
   }
 
+  /**
+   * Issue #2329: on shutdown, flush every pending debounced save, then retry any
+   * memory still in the failure ledger. saveMemoryTracked clears a key on
+   * success, so the second loop only re-attempts genuinely unwritten memories.
+   * Unrecoverable losses are reported loudly. Unlike session cleanup, shutdown
+   * is a last-ditch best-effort flush across all sessions.
+   *
+   * Multi-user caveat: this runs at process shutdown, so unlike the per-session
+   * debounce timers (which persist in their propagated AsyncLocalStorage context)
+   * it may execute with no active session context. In file mode with a per-user
+   * layout a save issued here can resolve to the shared baseDir rather than the
+   * owning user's dir — an accepted best-effort tradeoff at process death, where
+   * losing the entry entirely would be worse. The durable fix (session/user
+   * context propagation into shutdown) is tracked with the broader per-session-DI
+   * hardening, not here.
+   */
   async flushPendingSaves(): Promise<void> {
     const pending = [...this.pendingSaves.entries()];
     this.pendingSaves.clear();
     if (pending.length > 0) {
       logger.info(`[MCPAQLHandler] Flushing ${pending.length} pending memory save(s) on shutdown (total coalesced: ${this.debounceMetrics.coalesced}, total written: ${this.debounceMetrics.written})`);
     }
+    const flushedKeys = new Set<string>();
     for (const [key, { timer, memory, manager }] of pending) {
       clearTimeout(timer);
-      try {
-        await manager.save(memory);
-        this.debounceMetrics.written++;
-      } catch (err) {
-        const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
-        logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' (entries: ${entryCount}, pending remaining: ${pending.length}): ${err}`);
-      }
+      flushedKeys.add(key);
+      await this.flushOne(key, memory, manager, 'shutdown');
+    }
+    // Retry any failure-ledger entry not already attempted above. Direct Map
+    // iteration is safe: saveMemoryTracked only deletes the current key on
+    // success, which the iteration protocol tolerates.
+    for (const [key, { memory, manager }] of this.failedMemorySaves) {
+      if (flushedKeys.has(key)) continue;
+      await this.flushOne(key, memory, manager, 'shutdown-retry');
+    }
+  }
+
+  /** Write one tracked save during shutdown flush, reporting unrecoverable loss. */
+  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string): Promise<void> {
+    try {
+      await this.saveMemoryTracked(key, memory, manager);
+      this.debounceMetrics.written++;
+    } catch (err) {
+      const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
+      logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' on ${reason} (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
     }
   }
 
@@ -92,24 +166,88 @@ export class MemorySaveHandler {
     this.trackSaveFrequency(memoryName);
   }
 
-  private addEntry(
+  /**
+   * Issue #2329: drop all save bookkeeping for a deleted memory. Called by
+   * MCPAQLHandler after a successful delete_element so a retained failure-ledger
+   * instance or a pending debounce timer can't re-save the in-RAM state and
+   * resurrect the deleted file. A save already in flight when the delete lands
+   * can still race the file back — that narrow window is inherent to
+   * fire-and-forget writes and unchanged here.
+   */
+  cleanupDeletedMemory(memoryName: string): void {
+    const key = this.memorySaveKey(memoryName);
+    const pending = this.pendingSaves.get(key);
+    if (pending) {
+      clearTimeout(pending.timer);
+      this.pendingSaves.delete(key);
+    }
+    this.failedMemorySaves.delete(key);
+    this.memorySaveAttempts.delete(key);
+    this.saveFrequencyCounters.delete(key);
+  }
+
+  private async addEntry(
     memoryName: string,
     memory: Memory,
     manager: MemoryManager,
     params: Record<string, unknown>
-  ): unknown {
+  ): Promise<unknown> {
     if (params.entry !== undefined && params.content === undefined) {
       params.content = params.entry;
     }
     this.validateContent(memoryName, params);
+    const content = params.content as string;
+    const tags = params.tags as string[] | undefined;
+    const metadata = params.metadata as Record<string, unknown> | undefined;
 
-    const pendingKey = this.sessionKey(memoryName.toLowerCase());
-    const targetMemory = this.pendingSaves.get(pendingKey)?.memory ?? memory;
-    const entryResult = targetMemory.addEntry(
-      params.content as string,
-      params.tags as string[] | undefined,
-      params.metadata as Record<string, unknown> | undefined,
-    );
+    // Issue #2329: operate on the authoritative instance. Unpersisted entries
+    // live only in the instance held by the failure ledger or a pending
+    // debounced save; after cache eviction find() reloads a fresh copy from
+    // disk that lacks them, and writing through that copy would clobber the
+    // recovered state.
+    const saveKey = this.memorySaveKey(memoryName);
+    const priorFailure = this.failedMemorySaves.get(saveKey);
+    const targetMemory = priorFailure?.memory ?? this.pendingSaves.get(saveKey)?.memory ?? memory;
+
+    // Issue #2329: if a previous save of this memory failed (e.g. disk error),
+    // recover before accepting more entries — otherwise they pile up in RAM
+    // behind the same failure and are lost on restart.
+    if (priorFailure) {
+      try {
+        await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
+      } catch (retryErr) {
+        throw new Error(
+          `Entry NOT saved: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
+          `(${priorFailure.error.message}) and the retry also failed: ` +
+          `${retryErr instanceof Error ? retryErr.message : retryErr}`
+        );
+      }
+    }
+
+    const entriesBefore = targetMemory.getEntries().size;
+    const entryResult = await targetMemory.addEntry(content, tags, metadata);
+
+    // Issue #2329: verify the memory can still be persisted BEFORE reporting
+    // success. The disk write below is deferred (debounced), so a validation
+    // failure there can never reach the caller — entries were acknowledged with
+    // an id and then silently lost when the memory outgrew save limits.
+    try {
+      await manager.assertPersistable(targetMemory);
+    } catch (validationErr) {
+      targetMemory.removeEntry(entryResult.id);
+      // addEntry may have evicted old entries (retention/capacity policy) before
+      // validation failed. The eviction stands — it would happen on any future
+      // successful add — but it must reach disk, or RAM and disk silently
+      // diverge with no save scheduled.
+      if (targetMemory.getEntries().size !== entriesBefore) {
+        this.debouncedMemorySave(memoryName, targetMemory, manager);
+      }
+      throw new Error(
+        `Entry NOT saved to memory '${memoryName}': ` +
+        `${validationErr instanceof Error ? validationErr.message : validationErr}`
+      );
+    }
+
     this.trackSaveFrequency(memoryName);
     this.debouncedMemorySave(memoryName, targetMemory, manager);
     return entryResult;
@@ -129,9 +267,19 @@ export class MemorySaveHandler {
     );
   }
 
-  private async clear(memory: Memory, manager: MemoryManager): Promise<unknown> {
+  private async clear(memoryName: string, memory: Memory, manager: MemoryManager): Promise<unknown> {
+    // Issue #2329: cancel any pending debounced save first — a stale timer
+    // firing after the clear would resurrect the pre-clear entries on disk.
+    const clearKey = this.memorySaveKey(memoryName);
+    const pendingClear = this.pendingSaves.get(clearKey);
+    if (pendingClear) {
+      clearTimeout(pendingClear.timer);
+      this.pendingSaves.delete(clearKey);
+    }
     const clearResult = memory.clearAll(true);
-    await manager.save(memory);
+    // Fix #438: persist so cleared state survives restart. Tracked so a success
+    // clears any stale failure record for this memory.
+    await this.saveMemoryTracked(clearKey, memory, manager);
     return clearResult;
   }
 
@@ -140,7 +288,7 @@ export class MemorySaveHandler {
     memory: Memory,
     manager: MemoryManager,
   ): void {
-    const key = this.sessionKey(memoryName.toLowerCase());
+    const key = this.memorySaveKey(memoryName);
     const existing = this.pendingSaves.get(key);
     if (existing) {
       clearTimeout(existing.timer);
@@ -151,7 +299,7 @@ export class MemorySaveHandler {
       this.pendingSaves.delete(key);
       this.debounceMetrics.written++;
       logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
-      manager.save(memory).catch((err) => {
+      this.saveMemoryTracked(key, memory, manager).catch((err) => {
         logger.error(`[MCPAQLHandler] Debounced save failed for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written}): ${err}`);
       });
     }, STORAGE_LAYER_CONFIG.MEMORY_SAVE_DEBOUNCE_MS);
@@ -161,8 +309,54 @@ export class MemorySaveHandler {
     this.pendingSaves.set(key, { timer, memory, manager });
   }
 
+  /**
+   * Issue #2329: save a memory with failure-ledger bookkeeping. On failure the
+   * ledger records the error AND the failing instance (its unpersisted entries
+   * exist nowhere else); on success the record clears. The attempt counter makes
+   * the newest-started save win: an older in-flight save resolving late cannot
+   * erase a newer failure. Rethrows the save error.
+   */
+  private async saveMemoryTracked(
+    key: string,
+    memory: Memory,
+    manager: MemoryManager,
+  ): Promise<void> {
+    const attempt = (this.memorySaveAttempts.get(key) ?? 0) + 1;
+    this.memorySaveAttempts.set(key, attempt);
+    try {
+      await manager.save(memory);
+      if (this.memorySaveAttempts.get(key) === attempt) {
+        this.failedMemorySaves.delete(key);
+        // Prune the counter on latest-success so the map stays bounded by
+        // currently-failing memories. A stale in-flight save then sees
+        // undefined !== its attempt and correctly skips ledger updates.
+        this.memorySaveAttempts.delete(key);
+      }
+    } catch (err) {
+      if (this.memorySaveAttempts.get(key) === attempt) {
+        this.failedMemorySaves.set(key, {
+          error: err instanceof Error ? err : new Error(String(err)),
+          memory,
+          manager,
+        });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Normalized, session-scoped key shared by pendingSaves, failedMemorySaves,
+   * memorySaveAttempts, and saveFrequencyCounters. All memory-save bookkeeping
+   * must use this — a mismatched key silently disconnects the failure ledger
+   * from recovery (#2329), and the session prefix keeps one HTTP user's saves
+   * from touching another's (integration multi-user isolation).
+   */
+  private memorySaveKey(memoryName: string): string {
+    return this.sessionKey(memoryName.toLowerCase());
+  }
+
   private trackSaveFrequency(memoryName: string): void {
-    const key = this.sessionKey(memoryName.toLowerCase());
+    const key = this.memorySaveKey(memoryName);
     const now = Date.now();
     const windowMs = STORAGE_LAYER_CONFIG.MEMORY_SAVE_MONITOR_WINDOW_MS;
     const warnThreshold = STORAGE_LAYER_CONFIG.MEMORY_SAVE_FREQUENCY_WARN_THRESHOLD;
