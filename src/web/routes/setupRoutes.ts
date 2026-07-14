@@ -10,12 +10,15 @@
 
 import type { Request, Response } from 'express';
 import { execFile } from 'node:child_process';
-import { accessSync, constants as fsConstants } from 'node:fs';
+import { accessSync, existsSync, constants as fsConstants } from 'node:fs';
 import { access, chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join, dirname } from 'node:path';
-import { homedir, platform } from 'node:os';
+import { join, dirname, sep } from 'node:path';
+import { homedir, platform, tmpdir } from 'node:os';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
+// Integration resolves the package root via PackageResourceLocator rather than
+// import.meta.url/__dirname (#2339 must not reintroduce cwd/module-URL path
+// assumptions). sep/tmpdir are used by the NVM launcher self-heal below.
 const _locator = new PackageResourceLocator();
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
@@ -108,9 +111,15 @@ const installLimiter = new SlidingWindowRateLimiter(5, 60_000);
 /**
  * Known config file paths per client.
  * Returns the absolute path for the current platform.
+ *
+ * @param home - Home directory used to resolve every path. Defaults to
+ *               os.homedir(), but is injectable so callers (and tests) can make
+ *               `home` authoritative and keep config writes inside a sandbox.
+ *               See https://github.com/DollhouseMCP/mcp-server/issues/2338 —
+ *               without this override, NVM helpers driven by a fake home still
+ *               resolved to the real client configs and patched them.
  */
-function getConfigPath(client: string): string | null {
-  const home = homedir();
+function getConfigPath(client: string, home = homedir()): string | null {
   const plat = platform();
 
   const paths: Record<ConfigPathClient, () => string | null> = {
@@ -577,6 +586,13 @@ export function createSetupRoutes(opts?: {
   _installPermissionHook?: (client: string) => Promise<InstallPermissionHookResult>;
   /** Override permission hook status reconciler. For testing only. */
   _reconcilePermissionHookStatus?: (client: string) => Promise<PermissionHookStatus>;
+  /**
+   * Override the NVM launcher mitigation applied after a successful install.
+   * For testing only. Without this seam the install handler runs the real
+   * applyNvmLauncherIfNeeded against the real homedir(); on a machine WITH NVM
+   * that patches the developer's real client configs (issue #2338).
+   */
+  _applyNvmLauncher?: (client: string) => Promise<NvmLauncherResult>;
   /** Enable automatic hook asset repair during detect. Defaults off in tests. */
   _autoRepairPermissionHooksOnDetect?: boolean;
   /** Skip the sliding-window rate limiter. For testing only. */
@@ -594,6 +610,7 @@ export function createSetupRoutes(opts?: {
 } {
   const installer = opts?._runInstallMcp ?? runInstallMcp;
   const permissionHookInstaller = opts?._installPermissionHook ?? installPermissionHook;
+  const nvmLauncherApplier = opts?._applyNvmLauncher ?? applyNvmLauncherIfNeeded;
   const autoRepairPermissionHooksOnDetect = opts?._autoRepairPermissionHooksOnDetect ?? process.env.NODE_ENV !== 'test';
   const hookStatusReconciler = opts?._reconcilePermissionHookStatus ?? (async (client: string) =>
     reconcilePermissionHookStatus(client, { autoRepair: autoRepairPermissionHooksOnDetect }));
@@ -703,7 +720,8 @@ export function createSetupRoutes(opts?: {
       // Best-effort NVM mitigation (macOS/Linux only).
       // Extracted into applyNvmLauncherIfNeeded to keep this handler's
       // cognitive complexity within bounds (SonarCloud S3776).
-      const nvmResult = await applyNvmLauncherIfNeeded(normalizedClient);
+      // Injectable (_applyNvmLauncher) so tests don't touch the real homedir.
+      const nvmResult = await nvmLauncherApplier(normalizedClient);
 
       const nvmMitigationApplied = toNvmMitigationApplied(nvmResult);
 
@@ -1084,9 +1102,17 @@ function captureInstallAnalytics(event: string, properties: Record<string, unkno
 /** Result of attempting to apply the NVM launcher mitigation. */
 export type NvmLauncherResult = 'applied' | 'not-applicable' | 'failed';
 
-/** JSON-format clients eligible for NVM launcher repair on startup. */
+/**
+ * JSON-format clients eligible for NVM launcher patch/repair/heal.
+ *
+ * This MUST be the full set of clients whose JSON config the install flow can
+ * patch via applyNvmLauncherIfNeeded → patchConfigForNvmLauncher — otherwise a
+ * client that was patched at install time (e.g. VS Code or Cline pointing at a
+ * now-dead wrapper) would never self-heal on startup (issue #2338). Codex is
+ * excluded because its config is TOML, which patchConfigForNvmLauncher skips.
+ */
 const JSON_FORMAT_CLIENTS = [
-  'claude', 'claude-code', 'cursor', 'windsurf', 'lmstudio', 'gemini-cli',
+  'claude', 'claude-code', 'cursor', 'vscode', 'cline', 'windsurf', 'lmstudio', 'gemini-cli',
 ] as const;
 
 /**
@@ -1105,7 +1131,11 @@ export async function applyNvmLauncherIfNeeded(client: string, home = homedir())
   }
   try {
     const wrapperPath = await ensureNvmLauncher(home);
-    await patchConfigForNvmLauncher(client, wrapperPath);
+    // Derive the config path from the SAME `home` that located NVM and the
+    // wrapper. Passing it explicitly (rather than letting patchConfigForNvmLauncher
+    // fall back to the real homedir()) is what makes `home` authoritative and
+    // keeps a fake-home test from patching real client configs (#2338).
+    await patchConfigForNvmLauncher(client, wrapperPath, getConfigPath(client, home) ?? undefined);
     logger.info(`[Setup] NVM-aware launcher applied for ${client}`);
     captureInstallAnalytics('nvm_launcher_applied', { client, platform: platform() });
     return 'applied';
@@ -1121,27 +1151,40 @@ export async function applyNvmLauncherIfNeeded(client: string, home = homedir())
 }
 
 /**
- * Startup repair: re-creates the wrapper and re-patches all known JSON-format
- * client configs on every server start. Handles two cases:
- *   1. Wrapper was deleted — recreates it so configs pointing to it keep working.
- *   2. Pre-existing install (user installed before this fix shipped) — patches
- *      configs that still use bare `npx`.
+ * Startup repair + self-heal: reconciles every known JSON-format client config
+ * on each server start. Behaviour depends on whether NVM is installed, matching
+ * the acceptance matrix in https://github.com/DollhouseMCP/mcp-server/issues/2338:
+ *
+ *   • NVM present  → (re)create the wrapper and point each config at it. Covers a
+ *     deleted wrapper, a pre-fix install still on bare `npx`, and a config left
+ *     pointing at a dead temp-dir wrapper (regenerates the real one). Healthy
+ *     configs re-serialise byte-identically, so this is a no-op for them.
+ *   • NVM absent   → never create a wrapper, but SELF-HEAL any config whose
+ *     command points at a `dollhousemcp-nvm.sh` that no longer exists (e.g. the
+ *     #2338 test leak, or a user who removed ~/.dollhouse/bin) back to bare `npx`,
+ *     preserving args so the client can launch DollhouseMCP again.
  *
  * Fire-and-forget from startWebServer. All errors are swallowed and logged.
  *
  * @param home               - Override home directory (injectable for tests)
  * @param configPathResolver - Override config path lookup (injectable for tests).
- *                             Return null to skip a client entirely.
- *                             Defaults to the production getConfigPath.
+ *                             Return null to skip a client entirely. Defaults to a
+ *                             home-derived resolver so `home` stays authoritative
+ *                             — the default must NOT reach the real homedir() when
+ *                             a fake home is supplied (#2338).
  */
 export async function repairNvmLauncherOnStartup(
   home = homedir(),
-  configPathResolver: (client: string) => string | null = getConfigPath,
+  configPathResolver: (client: string) => string | null = (client) => getConfigPath(client, home),
 ): Promise<void> {
   if (platform() === 'win32') return;
   logger.debug('[Setup] NVM launcher startup repair: checking for NVM...');
+
   if (!await isNvmPresent(home)) {
-    logger.debug('[Setup] NVM launcher startup repair: NVM not present — nothing to repair');
+    // NVM absent: we must NOT create a wrapper, but we DO restore any config
+    // still pointing at a now-missing wrapper so the client is not left broken.
+    logger.debug('[Setup] NVM launcher startup repair: NVM not present — scanning for dead wrapper references');
+    await healClientsWithoutNvm(configPathResolver);
     return;
   }
 
@@ -1153,6 +1196,19 @@ export async function repairNvmLauncherOnStartup(
     return;
   }
 
+  await patchClientsForNvm(wrapperPath, configPathResolver);
+  logger.info('[Setup] NVM launcher startup repair complete');
+}
+
+/**
+ * Point every resolvable JSON-format client config at the (real) NVM wrapper.
+ * Extracted from repairNvmLauncherOnStartup to keep its cognitive complexity
+ * within SonarCloud limits (S3776).
+ */
+async function patchClientsForNvm(
+  wrapperPath: string,
+  configPathResolver: (client: string) => string | null,
+): Promise<void> {
   await Promise.allSettled(
     JSON_FORMAT_CLIENTS.map(client => {
       const configPath = configPathResolver(client);
@@ -1163,8 +1219,70 @@ export async function repairNvmLauncherOnStartup(
         );
     })
   );
+}
 
-  logger.info('[Setup] NVM launcher startup repair complete');
+/**
+ * Self-heal path for machines WITHOUT NVM: restore any config that points at a
+ * missing wrapper back to bare `npx`. Extracted for cognitive-complexity limits.
+ */
+async function healClientsWithoutNvm(
+  configPathResolver: (client: string) => string | null,
+): Promise<void> {
+  await Promise.allSettled(
+    JSON_FORMAT_CLIENTS.map(client => {
+      const configPath = configPathResolver(client);
+      if (!configPath) return Promise.resolve(); // resolver returned null — skip this client
+      return restoreNpxIfWrapperMissing(client, configPath)
+        .catch(err =>
+          logger.warn(`[Setup] NVM self-heal: failed to heal ${client}: ${err instanceof Error ? err.message : String(err)}`)
+        );
+    })
+  );
+}
+
+/**
+ * If a client's dollhousemcp entry points at a `dollhousemcp-nvm.sh` wrapper
+ * that no longer exists on disk, rewrite `command` back to `npx` (args preserved)
+ * and persist the config. Any other state is left byte-for-byte untouched.
+ *
+ * The trigger is intentionally prefix-independent (command ends with
+ * `dollhousemcp-nvm.sh` AND the file is missing) so it heals not just the
+ * original `dollhouse-nvm-test-*` leak but any future temp-dir leak or a user
+ * who wiped ~/.dollhouse/bin. A wrapper that still exists is deliberately kept.
+ */
+async function restoreNpxIfWrapperMissing(client: string, configPath: string): Promise<void> {
+  let raw: string;
+  try {
+    raw = await readFile(configPath, 'utf-8');
+  } catch {
+    return; // Config not present/readable — nothing to heal
+  }
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return; // Malformed JSON — don't touch it
+  }
+
+  let healed = false;
+  for (const key of ['mcpServers', 'servers']) {
+    const section = parsed[key] as Record<string, Record<string, unknown>> | undefined;
+    const entry = section?.dollhousemcp;
+    if (!entry) continue;
+    const command = entry.command;
+    if (typeof command === 'string' && command.endsWith('dollhousemcp-nvm.sh') && !existsSync(command)) {
+      entry.command = 'npx';
+      healed = true;
+    }
+    break; // dollhousemcp entry located (healed or already healthy) — stop scanning keys
+  }
+
+  if (!healed) return;
+
+  const indent = detectIndent(raw);
+  await writeFile(configPath, JSON.stringify(parsed, null, indent) + '\n', 'utf-8');
+  logger.info(`[Setup] NVM self-heal: restored ${client} config to bare npx (dead wrapper path removed)`);
 }
 
 /**
@@ -1297,6 +1415,17 @@ function detectIndent(raw: string): number | string {
 }
 
 /**
+ * Returns true if `p` resolves inside the OS temp directory.
+ * Used as a production guardrail so a wrapper created in a throwaway temp dir
+ * (the shape of the #2338 test leak) can never be persisted into a real,
+ * long-lived client config.
+ */
+function isUnderTmpdir(p: string): boolean {
+  const t = tmpdir();
+  return p === t || p.startsWith(t + sep);
+}
+
+/**
  * Patches the dollhousemcp entry in an MCP client's JSON config to use
  * the NVM-aware launcher instead of bare `npx`.
  *
@@ -1313,6 +1442,19 @@ export async function patchConfigForNvmLauncher(client: string, wrapperPath: str
   }
   if (configPath.endsWith('.toml')) {
     logger.debug(`[Setup] patchConfigForNvmLauncher: TOML config for ${client} — skipping (not JSON-format)`);
+    return;
+  }
+  // Guardrail (#2338): never persist a temp-dir wrapper into a real, persistent
+  // client config. A wrapper under os.tmpdir() is a throwaway path that will be
+  // deleted, so writing it into a durable config would break the client on the
+  // next launch. When BOTH the wrapper and the config live under tmpdir we are
+  // in a sandboxed test and allow it, so NVM-present coverage still exercises
+  // the real patch path.
+  if (isUnderTmpdir(wrapperPath) && !isUnderTmpdir(configPath)) {
+    logger.warn(
+      `[Setup] patchConfigForNvmLauncher: refusing to write a temp-dir wrapper (${wrapperPath}) ` +
+      `into a persistent ${client} config (${configPath}) — see issue #2338`,
+    );
     return;
   }
 

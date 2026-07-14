@@ -49,6 +49,8 @@ import {
   type BatchResult,
   type BatchOperationResult,
   isBatchRequest,
+  ElementType as AqlElementType,
+  normalizeMCPAQLElementType,
 } from './types.js';
 import {
   type ExecutingAgentEntry,
@@ -581,6 +583,11 @@ export class MCPAQLHandler {
    * disconnect, causing a slow memory leak in long-running HTTP servers.
    *
    * Called by DollhouseContainer.createServerForHttpSession()'s dispose callback.
+   *
+   * Issue #2329: the memory handler's session cleanup is deliberately
+   * non-writing — it leaves each pending save's debounce timer to fire in its
+   * propagated per-user context (a write from this context-less disposal path
+   * would land in the flat shared dir). So this stays synchronous bookkeeping.
    */
   cleanupSession(sessionId: string): void {
     const prefix = `${sessionId}:`;
@@ -595,6 +602,30 @@ export class MCPAQLHandler {
     this.verificationRateLimiters.delete(sessionId);
     this.permissionPromptLimiters.delete(sessionId);
     this.cliApprovalLimiters.delete(sessionId);
+  }
+
+  /**
+   * Issue #2329: after a successful delete_element of a memory, delegate to the
+   * memory handler to drop its save bookkeeping. Kept thin here — all durability
+   * state lives in MemorySaveHandler; this only recognizes the delete and the
+   * element type. elementType is already the resolved MCP-AQL enum from
+   * executeOperation (the same type resolveInputElementType returns).
+   */
+  private cleanupDeletedMemoryBookkeeping(
+    operation: string,
+    elementType: AqlElementType | undefined,
+    params: Record<string, unknown>,
+  ): void {
+    if (operation !== 'delete_element') return;
+    // The type may arrive as the resolved top-level elementType OR inside params
+    // (element_type/type), and as a plural alias ('memories'); resolve from all
+    // three and normalize so both singular and plural forms clean up the ledger.
+    const rawType = (elementType ?? params.element_type ?? params.type) as string | undefined;
+    if (!rawType || normalizeMCPAQLElementType(rawType) !== AqlElementType.Memory) return;
+    const name = (params.element_name ?? params.name) as string | undefined;
+    if (name) {
+      this.memorySaveHandler.cleanupDeletedMemory(name);
+    }
   }
 
   /**
@@ -878,6 +909,12 @@ export class MCPAQLHandler {
         elementType,
         params: mergedParams,
       });
+
+      // Issue #2329: after a successful memory delete, drop its save bookkeeping
+      // so a pending debounce timer or failure-ledger entry can't re-save the
+      // in-RAM state and resurrect the deleted file. Covers the schema-dispatch,
+      // legacy, and batch routes because they all funnel through here.
+      this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
 
       // Step 5: Apply field selection (Issue #202)
       // Transform name → element_name for LLM consistency

@@ -13,20 +13,41 @@
  * between tool calls, breaking background OAuth polling.
  */
 
-import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import { homedir } from 'os';
 
-// Get the directory of this script
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 // Constants
 const DEFAULT_POLL_INTERVAL = 5;
 const DEFAULT_EXPIRES_IN = 900; // 15 minutes
 const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
+const DOLLHOUSE_HOME_DIR = process.env.DOLLHOUSE_HOME_DIR || homedir();
+// Per-user paths: the server passes DOLLHOUSE_OAUTH_HELPER_AUTH_DIR / _LOG_FILE
+// resolved for the current user (hosted HTTP mode). Fall back to the legacy
+// global home layout for standalone/operator use.
+const AUTH_DIR = process.env.DOLLHOUSE_OAUTH_HELPER_AUTH_DIR || join(DOLLHOUSE_HOME_DIR, '.dollhouse', '.auth');
+const PID_FILE = join(AUTH_DIR, 'oauth-helper.pid');
+const STATE_FILE = join(AUTH_DIR, 'oauth-helper-state.json');
+const RESULT_FILE = join(AUTH_DIR, 'oauth-helper-result.json');
+const LOG_FILE = process.env.DOLLHOUSE_OAUTH_HELPER_LOG_FILE || join(DOLLHOUSE_HOME_DIR, '.dollhouse', 'oauth-helper.log');
+const FLOW_ID = process.env.DOLLHOUSE_OAUTH_HELPER_FLOW_ID || '';
+const TOKEN_URL = process.env.DOLLHOUSE_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token';
+const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
+
+const RESULT_MESSAGES = {
+  success: 'OAuth helper completed successfully.',
+  expired_token: 'Device code expired before authorization completed.',
+  access_denied: 'User denied the GitHub authorization request.',
+  timeout: 'Authorization timed out before the user completed GitHub authorization.',
+  token_storage_failed: 'OAuth token could not be stored securely.',
+  network_failure: 'Too many network errors while contacting the OAuth token endpoint.',
+  fatal_error: 'OAuth helper stopped after an unrecoverable error.',
+  interrupted: 'OAuth helper was interrupted before authentication completed.',
+  unknown_response: 'OAuth token endpoint returned an unrecognized response.',
+};
+
+const ALLOWED_RESULT_ERROR_CODES = new Set(Object.keys(RESULT_MESSAGES));
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -36,8 +57,8 @@ if (args.length < 4) {
 }
 
 const [deviceCode, intervalStr, expiresInStr, clientId] = args;
-const pollInterval = parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
-const expiresIn = parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
+const pollIntervalSeconds = Number.parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
+const expiresIn = Number.parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 
 // Validate client ID is provided (no hardcoded fallback)
 if (!clientId || clientId === 'undefined') {
@@ -49,13 +70,6 @@ if (!clientId || clientId === 'undefined') {
   await log('OAUTH_HELPER_43: Process exiting - missing client ID');
   process.exit(1);
 }
-
-// User-scoped runtime files. The parent process passes these when the helper
-// is launched from a per-user session; standalone legacy launches keep the
-// historical operator-home locations.
-const AUTH_DIR = process.env.DOLLHOUSE_OAUTH_HELPER_AUTH_DIR || join(homedir(), '.dollhouse', '.auth');
-const LOG_FILE = process.env.DOLLHOUSE_OAUTH_HELPER_LOG_FILE || join(homedir(), '.dollhouse', 'oauth-helper.log');
-const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
 
 async function log(message) {
   if (!LOG_ENABLED) return;
@@ -89,13 +103,18 @@ async function log(message) {
   }
 }
 
+function sanitizeDiagnostic(value) {
+  return String(value ?? '')
+    .replace(/\bgithub_pat_\w+\b/g, '[REDACTED_GITHUB_TOKEN]')
+    .replace(/\bgh[a-z]_\w+\b/gi, '[REDACTED_GITHUB_TOKEN]')
+    .replaceAll(deviceCode, '[REDACTED_DEVICE_CODE]');
+}
+
 async function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 async function pollGitHub(deviceCode, clientId) {
-  const TOKEN_URL = 'https://github.com/login/oauth/access_token';
-  
   try {
     const response = await fetch(TOKEN_URL, {
       method: 'POST',
@@ -124,77 +143,170 @@ async function storeToken(token) {
     await log('Invalid token size');
     throw new Error('Invalid token received');
   }
-  
+
+  // The detached helper runs outside the server's DI/session context and cannot
+  // write the session's ITokenStore — in database mode it has no DB pool, master
+  // key, or RLS context. It therefore writes the token to an encrypted, per-user,
+  // flow-bound handoff file; the server validates the matching terminal result
+  // and flow id, then stores the token through the session's TokenManager (file
+  // or database) and deletes the handoff. A flow id is mandatory: without it the
+  // server cannot correlate or read the handoff, so there is nothing to hand off.
+  if (!FLOW_ID) {
+    await log('No flow id provided; cannot hand the token to the server securely');
+    throw new Error('Missing OAuth helper flow id');
+  }
+
   try {
-    // Import the compiled TokenManager
-    const { TokenManager } = await import('./dist/security/tokenManager.js');
-    
-    // Store the token using the secure storage mechanism
-    await TokenManager.storeGitHubToken(token);
-    await log('Token stored successfully using TokenManager');
+    const { writeHandoffToken } = await import(
+      new URL('./dist/security/oauthHelperTokenHandoff.js', import.meta.url).href
+    );
+    await writeHandoffToken(AUTH_DIR, FLOW_ID, token);
+    await log('Token written to encrypted handoff for server import');
     return true;
-  } catch {
-    await log('Failed to store token using TokenManager');
-    
-    // Fallback: Write to a temporary file for the MCP server to pick up
-    try {
-      const tempTokenFile = join(AUTH_DIR, 'pending_token.txt');
-      const tempDir = dirname(tempTokenFile);
-      
-      // Create directory with secure permissions
-      await fs.mkdir(tempDir, { recursive: true, mode: 0o700 });
-      
-      // Verify directory permissions
-      const dirStats = await fs.stat(tempDir);
-      const dirMode = dirStats.mode & parseInt('777', 8);
-      if (dirMode !== parseInt('700', 8)) {
-        await fs.chmod(tempDir, 0o700);
-      }
-      
-      // Write token with secure permissions
-      await fs.writeFile(tempTokenFile, token, { mode: 0o600 });
-      
-      // Verify file permissions
-      await fs.chmod(tempTokenFile, 0o600);
-      
-      await log('Token written to fallback file with secure permissions');
-      return true;
-    } catch (fallbackError) {
-      await log('Fallback storage also failed');
-      throw fallbackError;
-    }
+  } catch (error) {
+    await log(`Failed to write token handoff: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
+    throw error;
   }
 }
 
 function cleanupPidFileSync() {
   try {
-    const pidFile = join(AUTH_DIR, 'oauth-helper.pid');
-    if (fsSync.existsSync(pidFile)) {
-      fsSync.unlinkSync(pidFile);
+    if (pidFileBelongsToThisHelperSync()) {
+      fsSync.unlinkSync(PID_FILE);
     }
-  } catch (error) {
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
+function cleanupStateFileSync() {
+  try {
+    if (stateFileBelongsToThisHelperSync()) {
+      fsSync.unlinkSync(STATE_FILE);
+    }
+  } catch {
     // Ignore cleanup errors
   }
 }
 
 async function cleanupPidFile() {
   try {
-    const pidFile = join(AUTH_DIR, 'oauth-helper.pid');
-    await fs.unlink(pidFile).catch(() => {});
-    await log('PID file cleaned up');
-  } catch (error) {
+    if (await pidFileBelongsToThisHelper()) {
+      await fs.unlink(PID_FILE).catch(() => {});
+      await log('PID file cleaned up');
+    } else {
+      await log('PID file belongs to another helper flow; leaving it in place');
+    }
+  } catch {
     // Ignore cleanup errors
+  }
+}
+
+async function cleanupStateFile() {
+  try {
+    if (await stateFileBelongsToThisHelper()) {
+      await fs.unlink(STATE_FILE).catch(() => {});
+      await log('OAuth helper state file cleaned up');
+    } else {
+      await log('OAuth helper state belongs to another flow; leaving it in place');
+    }
+  } catch {
+    // Ignore cleanup errors
+  }
+}
+
+function buildTerminalResult(status, attempts, errorCode = '') {
+  const safeErrorCode = ALLOWED_RESULT_ERROR_CODES.has(errorCode) ? errorCode : 'fatal_error';
+  const result = {
+    status,
+    attempts,
+    completedAt: new Date().toISOString(),
+    pid: process.pid
+  };
+
+  if (FLOW_ID) {
+    result.flowId = FLOW_ID;
+  }
+
+  if (status !== 'success') {
+    result.errorCode = safeErrorCode;
+    result.message = RESULT_MESSAGES[safeErrorCode];
+  }
+
+  return { result, safeErrorCode };
+}
+
+async function writeTerminalResult(status, attempts, errorCode = '') {
+  try {
+    await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
+    const { result, safeErrorCode } = buildTerminalResult(status, attempts, errorCode);
+
+    await fs.writeFile(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
+    const resultSuffix = status === 'success' ? '' : `/${safeErrorCode}`;
+    await log(`Terminal result written: ${status}${resultSuffix}`);
+  } catch {
+    await log('Failed to write terminal result');
+  }
+}
+
+function writeTerminalResultSync(status, attempts, errorCode = '') {
+  try {
+    fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
+    const { result } = buildTerminalResult(status, attempts, errorCode);
+
+    fsSync.writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
+  } catch {
+    // Ignore cleanup/status errors during process termination
+  }
+}
+
+async function pidFileBelongsToThisHelper() {
+  if (!FLOW_ID) return true;
+  try {
+    const pid = (await fs.readFile(PID_FILE, 'utf8')).trim();
+    return pid === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+function pidFileBelongsToThisHelperSync() {
+  if (!FLOW_ID) return fsSync.existsSync(PID_FILE);
+  try {
+    const pid = fsSync.readFileSync(PID_FILE, 'utf8').trim();
+    return pid === String(process.pid);
+  } catch {
+    return false;
+  }
+}
+
+async function stateFileBelongsToThisHelper() {
+  if (!FLOW_ID) return true;
+  try {
+    const state = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
+    return state?.flowId === FLOW_ID &&
+      (typeof state.pid !== 'number' || state.pid === process.pid);
+  } catch {
+    return false;
+  }
+}
+
+function stateFileBelongsToThisHelperSync() {
+  if (!FLOW_ID) return fsSync.existsSync(STATE_FILE);
+  try {
+    const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+    return state?.flowId === FLOW_ID &&
+      (typeof state.pid !== 'number' || state.pid === process.pid);
+  } catch {
+    return false;
   }
 }
 
 async function writePidFile() {
   try {
-    const pidFile = join(AUTH_DIR, 'oauth-helper.pid');
-    const pidDir = dirname(pidFile);
-    
-    await fs.mkdir(pidDir, { recursive: true, mode: 0o700 });
-    await fs.writeFile(pidFile, process.pid.toString(), { mode: 0o600 });
-    await log(`PID file written: ${pidFile}`);
+    await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
+    await fs.writeFile(PID_FILE, process.pid.toString(), { mode: 0o600 });
+    await log(`PID file written: ${PID_FILE}`);
   } catch {
     await log('Failed to write PID file');
   }
@@ -203,7 +315,7 @@ async function writePidFile() {
 async function main() {
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
-  await log(`[CONFIG] Poll interval: ${pollInterval}s, Expires in: ${expiresIn}s`);
+  await log(`[CONFIG] Poll interval: ${pollIntervalSeconds}s, Expires in: ${expiresIn}s`);
   await log(`[CONFIG] Node version: ${process.version}`);
   await log(`[CONFIG] Platform: ${process.platform}`);
   // Never log client ID
@@ -222,6 +334,7 @@ async function main() {
   const timeout = startTime + (expiresIn * 1000);
   let attempts = 0;
   let consecutiveErrors = 0;
+  let currentPollIntervalMs = pollIntervalSeconds * 1000;
   const MAX_CONSECUTIVE_ERRORS = 5;
   
   // Set up cleanup on exit - use synchronous cleanup for exit event
@@ -236,14 +349,26 @@ async function main() {
   });
   
   process.on('SIGINT', () => {
+    writeTerminalResultSync('failed', attempts, 'interrupted');
+    cleanupStateFileSync();
     cleanupPidFileSync();
-    process.exit(0);
+    process.exit(1);
   });
   
   process.on('SIGTERM', () => {
+    writeTerminalResultSync('failed', attempts, 'interrupted');
+    cleanupStateFileSync();
     cleanupPidFileSync();
-    process.exit(0);
+    process.exit(1);
   });
+
+  async function finish(status, errorCode, exitCode) {
+    clearInterval(heartbeatInterval);
+    await writeTerminalResult(status, attempts, errorCode);
+    await cleanupStateFile();
+    await cleanupPidFile();
+    process.exit(exitCode);
+  }
   
   while (Date.now() < timeout) {
     attempts++;
@@ -261,51 +386,51 @@ async function main() {
             break;
             
           case 'slow_down':
-            // GitHub is asking us to slow down
-            await log(`[RATE_LIMIT] GitHub requested slower polling - increasing interval to ${pollInterval * 1.5}s`);
-            await sleep(pollInterval * 1500);
+            // GitHub asks clients to add 5s to the polling interval, then wait
+            // the updated interval before the next request.
+            currentPollIntervalMs += 5000;
+            await log(`[RATE_LIMIT] GitHub requested slower polling - increasing interval to ${currentPollIntervalMs / 1000}s`);
+            await sleep(currentPollIntervalMs);
             continue;
             
           case 'expired_token':
             await log('OAUTH_HELPER_264: Device code expired - authentication window closed');
             console.error('OAUTH_EXPIRED: Device code expired at line 264 - authentication window closed');
-            clearInterval(heartbeatInterval);
-            await cleanupPidFile();
-            process.exit(1);
+            return finish('expired', 'expired_token', 1);
             
           case 'access_denied':
             await log('OAUTH_HELPER_270: User denied authorization request');
             console.error('OAUTH_ACCESS_DENIED: User denied authorization at line 270');
-            clearInterval(heartbeatInterval);
-            await cleanupPidFile();
-            process.exit(1);
+            return finish('denied', 'access_denied', 1);
             
           default:
             await log('OAUTH_HELPER_276: Unknown error from GitHub during device flow polling');
             await log('[ERROR] GitHub returned an unrecognized OAuth polling response');
             console.error('OAUTH_UNKNOWN_RESPONSE: Unknown GitHub OAuth response at line 276');
+            return finish('failed', 'unknown_response', 1);
         }
       } else if (response.access_token) {
         // Success! We got the token
         await log('[SUCCESS] ✅ Token received from GitHub!');
         consecutiveErrors = 0; // Reset error counter
         
-        // Store the token
-        const stored = await storeToken(response.access_token);
+        let stored = false;
+        try {
+          stored = await storeToken(response.access_token);
+        } catch {
+          console.error('OAUTH_TOKEN_STORAGE_FAILED: Failed to store authentication token securely');
+          return finish('failed', 'token_storage_failed', 1);
+        }
         
         if (stored) {
           await log('[SUCCESS] ✅ OAuth authentication completed successfully');
           await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
           console.log('✅ GitHub authentication successful! Token has been stored.');
-          clearInterval(heartbeatInterval);
-          await cleanupPidFile();
-          process.exit(0);
+          return finish('success', 'success', 0);
         } else {
           await log('[ERROR] ❌ Failed to store token');
           console.error('❌ Failed to store authentication token');
-          clearInterval(heartbeatInterval);
-          await cleanupPidFile();
-          process.exit(1);
+          return finish('failed', 'token_storage_failed', 1);
         }
       } else {
         // Reset error counter on successful communication
@@ -330,37 +455,33 @@ async function main() {
         if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
           await log('OAUTH_HELPER_323: Too many consecutive network errors, exiting');
           console.error(`OAUTH_NETWORK_FAILURE: Too many network errors (${MAX_CONSECUTIVE_ERRORS}) at line 323 - check internet connection`);
-          clearInterval(heartbeatInterval);
-          await cleanupPidFile();
-          process.exit(1);
+          return finish('failed', 'network_failure', 1);
         }
       } else {
         // Non-network error, likely fatal
-        await log('OAUTH_HELPER_330: Non-recoverable error');
+        await log(`OAUTH_HELPER_330: Non-recoverable error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
         console.error('OAUTH_FATAL_ERROR: Non-recoverable error at line 330');
-        clearInterval(heartbeatInterval);
-        await cleanupPidFile();
-        process.exit(1);
+        return finish('failed', 'fatal_error', 1);
       }
     }
     
     // Wait before next poll
-    await sleep(pollInterval * 1000);
+    await sleep(currentPollIntervalMs);
   }
   
   // Timeout reached
   await log('OAUTH_HELPER_342: OAuth authorization timed out');
   await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
   console.error(`OAUTH_TIMEOUT: Authorization timed out at line 342 after ${Math.round((Date.now() - startTime) / 1000)}s - user did not authorize in time`);
-  clearInterval(heartbeatInterval);
-  await cleanupPidFile();
-  process.exit(1);
+  return finish('timeout', 'timeout', 1);
 }
 
 // Run the main function
-main().catch(async () => {
-  await log('Fatal error');
+main().catch(async (error) => {
+  await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
+  await writeTerminalResult('failed', 0, 'fatal_error');
+  await cleanupStateFile();
   await cleanupPidFile();
   process.exit(1);
 });

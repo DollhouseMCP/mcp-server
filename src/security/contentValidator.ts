@@ -561,30 +561,71 @@ export class ContentValidator {
   /**
    * Validates YAML frontmatter for malicious content
    * SECURITY FIX #364: Added YAML bomb detection to prevent denial of service
+   *
+   * @param yamlContent - YAML string to validate
+   * @param maxLength - Size cap for the content. Defaults to MAX_YAML_LENGTH (64KB,
+   *   the frontmatter limit). Callers validating whole pure-YAML documents (e.g.
+   *   memory files, capped at 256KB — issue #2329) must pass their own limit.
+   *   Values above MAX_CONTENT_LENGTH (500KB) are clamped: an explicit maxLength
+   *   overrides RegexValidator's complexity-based ReDoS caps, and the
+   *   MALICIOUS_YAML_PATTERNS scan below is bounded by MAX_CONTENT_LENGTH, so
+   *   larger content is rejected here rather than scanned or thrown on.
    */
-  static validateYamlContent(yamlContent: string): boolean {
+  static validateYamlContent(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
+    const effectiveMaxLength = Math.min(maxLength, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
     // Length validation before pattern matching
-    if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+    if (yamlContent.length > effectiveMaxLength) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'HIGH',
         source: 'yaml_validation',
-        details: `YAML content exceeds maximum length: ${yamlContent.length} > ${SECURITY_LIMITS.MAX_YAML_LENGTH}`
+        details: `YAML content exceeds maximum length: ${yamlContent.length} > ${effectiveMaxLength}`
       });
       return false;
     }
 
-    // SECURITY FIX #364: Check for YAML bombs before other validation
-    // SECURITY FIX (PR #552 review): Use RegexValidator for ReDoS protection
+    if (this.hasYamlBombPattern(yamlContent, effectiveMaxLength)) {
+      return false;
+    }
+
+    if (this.hasExcessiveAliasAmplification(yamlContent)) {
+      return false;
+    }
+
+    if (this.hasCircularAnchorReferences(yamlContent)) {
+      return false;
+    }
+
+    // Unicode normalization preprocessing for YAML content
+    const unicodeResult = UnicodeValidator.normalize(yamlContent);
+
+    if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'YAML_UNICODE_ATTACK',
+        severity: (unicodeResult.severity?.toUpperCase() || 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
+        source: 'yaml_validation',
+        details: `Unicode attack detected in YAML: ${unicodeResult.detectedIssues.join(', ')}`
+      });
+      return false;
+    }
+
+    return !this.hasMaliciousYamlPattern(unicodeResult.normalizedContent);
+  }
+
+  /**
+   * SECURITY FIX #364: Check for YAML bombs before other validation.
+   * SECURITY FIX (PR #552 review): Uses RegexValidator for ReDoS protection.
+   */
+  private static hasYamlBombPattern(yamlContent: string, effectiveMaxLength: number): boolean {
     for (const pattern of this.YAML_BOMB_PATTERNS) {
       // Use RegexValidator to safely check patterns with timeout protection
       // This prevents ReDoS attacks from maliciously crafted YAML
       const isMatch = RegexValidator.validate(yamlContent, pattern, {
-        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+        maxLength: effectiveMaxLength,
         rejectDangerousPatterns: false, // Our patterns are trusted
         logEvents: false // We handle logging ourselves
       });
-      
+
       if (isMatch) {
         SecurityMonitor.logSecurityEvent({
           type: 'YAML_INJECTION_ATTEMPT',
@@ -606,12 +647,17 @@ export class ContentValidator {
           { patternType: 'YAML_BOMB', contentLength: yamlContent.length }
         );
 
-        return false;
+        return true;
       }
     }
-    
-    // SECURITY FIX #364: Count anchor/alias ratio for amplification detection
-    // SECURITY FIX #1298: Use configurable threshold for easier tuning
+    return false;
+  }
+
+  /**
+   * SECURITY FIX #364: Count anchor/alias ratio for amplification detection.
+   * SECURITY FIX #1298: Uses configurable threshold for easier tuning.
+   */
+  private static hasExcessiveAliasAmplification(yamlContent: string): boolean {
     const anchorMatches = yamlContent.match(/&\w+/g) || [];
     // Fix #906: Use negative lookbehind to exclude markdown bold (**word**) from
     // matching as YAML aliases. Without this, markdown bold inside YAML strings
@@ -631,15 +677,17 @@ export class ContentValidator {
           ratio: amplificationRatio
         }
       });
-      return false;
+      return true;
     }
-    
-    // SECURITY FIX #364: Detect circular reference chains
-    // SECURITY FIX (PR #552 review): Optimized from O(n²) to O(n) using Set-based lookups
+    return false;
+  }
+
+  /**
+   * First pass of circular-reference detection: map each anchor to the alias
+   * names referenced within its next 5 lines.
+   */
+  private static buildAnchorReferenceMap(lines: string[]): Map<string, Set<string>> {
     const anchorRefs = new Map<string, Set<string>>();
-    const lines = yamlContent.split('\n');
-    
-    // First pass: Build reference map efficiently
     for (let i = 0; i < lines.length; i++) {
       const anchorMatch = lines[i].match(/&(\w+)/);
       if (anchorMatch) {
@@ -647,7 +695,7 @@ export class ContentValidator {
         // Get references in next 5 lines
         const contextEnd = Math.min(i + 5, lines.length);
         const references = new Set<string>();
-        
+
         for (let j = i; j < contextEnd; j++) {
           const aliasMatches = lines[j].match(/\*(\w+)/g);
           if (aliasMatches) {
@@ -656,12 +704,21 @@ export class ContentValidator {
             });
           }
         }
-        
+
         anchorRefs.set(anchorName, references);
       }
     }
-    
-    // Second pass: Check for circular references (O(n) with Set lookups)
+    return anchorRefs;
+  }
+
+  /**
+   * SECURITY FIX #364: Detect circular reference chains.
+   * SECURITY FIX (PR #552 review): Optimized from O(n²) to O(n) using Set-based lookups.
+   */
+  private static hasCircularAnchorReferences(yamlContent: string): boolean {
+    const anchorRefs = this.buildAnchorReferenceMap(yamlContent.split('\n'));
+
+    // Check for circular references (O(n) with Set lookups)
     for (const [anchor1, refs1] of anchorRefs) {
       for (const refAnchor of refs1) {
         const refs2 = anchorRefs.get(refAnchor);
@@ -677,25 +734,15 @@ export class ContentValidator {
               anchors: [anchor1, refAnchor]
             }
           });
-          return false;
+          return true;
         }
       }
     }
-    
-    // Unicode normalization preprocessing for YAML content
-    const unicodeResult = UnicodeValidator.normalize(yamlContent);
-    const normalizedYaml = unicodeResult.normalizedContent;
-    
-    if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_UNICODE_ATTACK',
-        severity: (unicodeResult.severity?.toUpperCase() || 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
-        source: 'yaml_validation',
-        details: `Unicode attack detected in YAML: ${unicodeResult.detectedIssues.join(', ')}`
-      });
-      return false;
-    }
+    return false;
+  }
 
+  /** Scan normalized YAML for the MALICIOUS_YAML_PATTERNS set. */
+  private static hasMaliciousYamlPattern(normalizedYaml: string): boolean {
     for (const pattern of this.MALICIOUS_YAML_PATTERNS) {
       // These are trusted internal patterns, so we disable ReDoS rejection
       if (RegexValidator.validate(normalizedYaml, pattern, {
@@ -710,10 +757,10 @@ export class ContentValidator {
           details: `Malicious YAML pattern detected: ${pattern}`,
         });
         // Early exit on first match for performance
-        return false;
+        return true;
       }
     }
-    return true;
+    return false;
   }
 
   /**
