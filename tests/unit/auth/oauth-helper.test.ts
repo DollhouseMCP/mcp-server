@@ -15,6 +15,8 @@ import {
 const TEST_CLIENT_ID = 'Ov23liABCDEFGHIJKLMNOP';
 // A fixed UUID flow id used where the server would normally generate one.
 const TEST_FLOW_ID = '11111111-1111-4111-8111-111111111111';
+const HELPER_FILENAME = 'oauth-helper.mjs';
+const HELPER_STATE_FILE = 'oauth-helper-state.json';
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   const chunks: Buffer[] = [];
@@ -48,7 +50,6 @@ function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string, extr
   const stderr: string[] = [];
   const child = spawn(process.execPath, [
     helperPath,
-    'device-code-for-test',
     '1',
     '20',
     TEST_CLIENT_ID
@@ -59,6 +60,8 @@ function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string, extr
       DOLLHOUSE_OAUTH_TOKEN_URL: tokenUrl,
       DOLLHOUSE_OAUTH_DEBUG: 'true',
       DOLLHOUSE_TOKEN_SECRET: 'oauth-helper-test-secret',
+      // device_code now travels via env (out of argv); the stub endpoint asserts it below.
+      DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE: 'device-code-for-test',
       GITHUB_TOKEN: '',
       TEST_GITHUB_TOKEN: '',
       GITHUB_TEST_TOKEN: '',
@@ -67,8 +70,8 @@ function spawnHelper(helperPath: string, tokenUrl: string, homeDir: string, extr
     stdio: ['ignore', 'pipe', 'pipe']
   });
 
-  child.stdout?.on('data', chunk => stdout.push(String(chunk)));
-  child.stderr?.on('data', chunk => stderr.push(String(chunk)));
+  child.stdout.on('data', chunk => stdout.push(String(chunk)));
+  child.stderr.on('data', chunk => stderr.push(String(chunk)));
 
   return Object.assign(child, {
     readOutput: () => ({
@@ -106,9 +109,9 @@ async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
   throw new Error(`Timed out waiting for ${filePath}`);
 }
 
-describe('oauth-helper.mjs', () => {
+describe(HELPER_FILENAME, () => {
   it('writes the token to an encrypted handoff and keeps no plaintext or canonical store', async () => {
-    const helperSource = await fs.readFile(path.join(process.cwd(), 'oauth-helper.mjs'), 'utf-8');
+    const helperSource = await fs.readFile(path.join(process.cwd(), HELPER_FILENAME), 'utf-8');
 
     // The detached helper must hand the token off encrypted, not write the
     // canonical token store or a plaintext fallback (#2334).
@@ -119,7 +122,7 @@ describe('oauth-helper.mjs', () => {
   });
 
   it('hands a device-flow token to the server via the encrypted handoff and writes a terminal result', async () => {
-    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const distHandoffPath = path.join(process.cwd(), 'dist', 'security', 'oauthHelperTokenHandoff.js');
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-e2e-'));
     const originalTokenSecret = process.env.DOLLHOUSE_TOKEN_SECRET;
@@ -159,7 +162,7 @@ describe('oauth-helper.mjs', () => {
     await fs.mkdir(authDir, { recursive: true });
     // The server writes the state (with the flow id) before spawning; simulate that.
     await fs.writeFile(
-      path.join(authDir, 'oauth-helper-state.json'),
+      path.join(authDir, HELPER_STATE_FILE),
       JSON.stringify({ flowId: TEST_FLOW_ID, userCode: 'ABCD-1234' }),
       'utf-8'
     );
@@ -198,7 +201,7 @@ describe('oauth-helper.mjs', () => {
       await expect(fs.access(path.join(authDir, 'github_token.enc'))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.access(path.join(authDir, LEGACY_PLAINTEXT_TOKEN_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
       // State/pid cleaned up on success (state flow id matched this flow).
-      await expect(fs.access(path.join(authDir, 'oauth-helper-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(path.join(authDir, HELPER_STATE_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await closeServer(server);
@@ -209,12 +212,12 @@ describe('oauth-helper.mjs', () => {
   }, 15_000);
 
   it('persists GitHub slow_down backoff across polling attempts', async () => {
-    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-slow-down-'));
     const expectedToken = 'gho_test_slow_down_token_1234567890';
     let polls = 0;
 
-    const server = createServer(async (_req, res) => {
+    const server = createServer((_req, res) => {
       polls += 1;
       if (polls === 1) {
         json(res, 200, { error: 'slow_down' });
@@ -264,7 +267,7 @@ describe('oauth-helper.mjs', () => {
       return;
     }
 
-    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-interrupt-'));
 
     const server = createServer((_req, res) => {
@@ -279,7 +282,7 @@ describe('oauth-helper.mjs', () => {
 
     const authDir = path.join(tempHome, '.dollhouse', '.auth');
     await fs.mkdir(authDir, { recursive: true });
-    await fs.writeFile(path.join(authDir, 'oauth-helper-state.json'), JSON.stringify({ stale: true }), 'utf-8');
+    await fs.writeFile(path.join(authDir, HELPER_STATE_FILE), JSON.stringify({ stale: true }), 'utf-8');
 
     try {
       const child = spawnHelper(helperPath, `http://127.0.0.1:${address.port}/token`, tempHome);
@@ -298,7 +301,7 @@ describe('oauth-helper.mjs', () => {
       expect(terminalResult.errorCode).toBe('interrupted');
       expect(terminalResult.message).toBe('OAuth helper was interrupted before authentication completed.');
 
-      await expect(fs.access(path.join(authDir, 'oauth-helper-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(path.join(authDir, HELPER_STATE_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await closeServer(server);
@@ -307,7 +310,7 @@ describe('oauth-helper.mjs', () => {
   }, 15_000);
 
   it('does not remove state or pid files owned by a newer helper flow', async () => {
-    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const helperPath = path.join(process.cwd(), HELPER_FILENAME);
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-flow-race-'));
     let releaseOldFlow = false;
 
@@ -323,7 +326,7 @@ describe('oauth-helper.mjs', () => {
 
     const authDir = path.join(tempHome, '.dollhouse', '.auth');
     const pidFile = path.join(authDir, 'oauth-helper.pid');
-    const stateFile = path.join(authDir, 'oauth-helper-state.json');
+    const stateFile = path.join(authDir, HELPER_STATE_FILE);
     const resultFile = path.join(authDir, 'oauth-helper-result.json');
 
     try {
@@ -395,6 +398,16 @@ describe('oauthHelperTokenHandoff', () => {
     expect(onDisk).not.toContain('gho_round_trip_token');
 
     await expect(readHandoffToken(authDir, FLOW_A)).resolves.toBe('gho_round_trip_token');
+  });
+
+  it('round-trips using the machine-passphrase fallback when DOLLHOUSE_TOKEN_SECRET is unset', async () => {
+    // Exercise the getMachinePassphrase() fallback path (the other tests always
+    // set DOLLHOUSE_TOKEN_SECRET). Write and read run in the same process, so the
+    // machine-derived passphrase matches and the token round-trips.
+    delete process.env.DOLLHOUSE_TOKEN_SECRET;
+    const authDir = path.join(tempRoot, 'user', '.auth');
+    await writeHandoffToken(authDir, FLOW_A, 'gho_machine_fallback_token');
+    await expect(readHandoffToken(authDir, FLOW_A)).resolves.toBe('gho_machine_fallback_token');
   });
 
   it('returns null for a different (stale/foreign) flow id', async () => {

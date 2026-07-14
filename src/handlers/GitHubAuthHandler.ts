@@ -6,7 +6,7 @@
  * @security-audit-suppress DMCP-SEC-006
  */
 
-import { GitHubAuthManager, DeviceCodeResponse } from '../auth/GitHubAuthManager.js';
+import type { GitHubAuthManager, DeviceCodeResponse } from '../auth/GitHubAuthManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { logger } from '../utils/logger.js';
 import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
@@ -14,10 +14,10 @@ import * as path from 'path';
 import { homedir } from 'os';
 import * as child_process from 'child_process';
 import { randomUUID } from 'node:crypto';
-import { InitializationService } from '../services/InitializationService.js';
-import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
+import type { InitializationService } from '../services/InitializationService.js';
+import type { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { FileOperationsService } from '../services/FileOperationsService.js';
+import type { FileOperationsService } from '../services/FileOperationsService.js';
 import type { PathService } from '../paths/PathService.js';
 import { readHandoffToken, deleteHandoffToken, sweepHandoffArtifacts } from '../security/oauthHelperTokenHandoff.js';
 
@@ -244,7 +244,7 @@ export class GitHubAuthHandler {
     private logSpawningOAuthHelper(helperPath: string, clientId: string, deviceResponse: DeviceCodeResponse): void {
         logger.debug('OAUTH_STEP_6: Spawning helper process', {
           helperPath,
-          clientId: clientId?.substring(0, 8) + '...',
+          clientId: clientId.substring(0, 8) + '...',
           deviceCode: deviceResponse.device_code.substring(0, 8) + '...'
         });
     }
@@ -283,9 +283,9 @@ export class GitHubAuthHandler {
         logger.error('OAUTH_INDEX_2774: Failed to spawn OAuth helper process', {
           error: spawnError,
           helperPath,
-          clientId: clientId?.substring(0, 8) + '...',
-          errorCode: (spawnError as any)?.code,
-          syscall: (spawnError as any)?.syscall
+          clientId: clientId.substring(0, 8) + '...',
+          errorCode: (spawnError as NodeJS.ErrnoException | undefined)?.code,
+          syscall: (spawnError as NodeJS.ErrnoException | undefined)?.syscall
         });
 
         const errorDetail = this.formatOAuthHelperSpawnError(spawnError, helperPath);
@@ -1118,7 +1118,6 @@ export class GitHubAuthHandler {
     private spawnHelperProcess(helperPath: string, deviceResponse: DeviceCodeResponse, clientId: string, flowId: string) {
         return child_process.spawn('node', [
             helperPath,
-            deviceResponse.device_code,
             (deviceResponse.interval || 5).toString(),
             deviceResponse.expires_in.toString(),
             clientId
@@ -1130,7 +1129,10 @@ export class GitHubAuthHandler {
                 ...process.env,
                 DOLLHOUSE_OAUTH_HELPER_AUTH_DIR: this.getOAuthHelperAuthDir(),
                 DOLLHOUSE_OAUTH_HELPER_LOG_FILE: this.getOAuthHelperLogFile(),
-                DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId
+                DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId,
+                // device_code is a bearer secret — pass via env, not argv (which is
+                // visible to other local processes via `ps` / /proc/<pid>/cmdline).
+                DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE: deviceResponse.device_code
             }
         });
     }

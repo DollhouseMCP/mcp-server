@@ -7,7 +7,8 @@
  * It's spawned as a detached process when authentication is initiated, polls GitHub
  * for the OAuth token, stores it securely, and then exits.
  * 
- * Usage: node oauth-helper.mjs <device_code> <interval> <expires_in> <client_id>
+ * Usage: DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE=<device_code> node oauth-helper.mjs <interval> <expires_in> <client_id>
+ *   (device_code is passed via env, not argv, to keep the bearer secret out of ps/proc)
  * 
  * This solves the MCP server lifecycle issue where the server may shut down
  * between tool calls, breaking background OAuth polling.
@@ -49,14 +50,21 @@ const RESULT_MESSAGES = {
 
 const ALLOWED_RESULT_ERROR_CODES = new Set(Object.keys(RESULT_MESSAGES));
 
-// Parse command line arguments
+// Parse command line arguments. The device_code is a short-lived bearer secret
+// for the pending authorization, so it is passed via environment variable rather
+// than argv (argv is visible to other local processes via `ps` / /proc/<pid>/cmdline).
 const args = process.argv.slice(2);
-if (args.length < 4) {
-  console.error('Usage: oauth-helper.mjs <device_code> <interval> <expires_in> <client_id>');
+if (args.length < 3) {
+  console.error('Usage: oauth-helper.mjs <interval> <expires_in> <client_id>  (device code via DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE)');
   process.exit(1);
 }
 
-const [deviceCode, intervalStr, expiresInStr, clientId] = args;
+const [intervalStr, expiresInStr, clientId] = args;
+const deviceCode = process.env.DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE || '';
+if (!deviceCode) {
+  console.error('OAUTH_HELPER: missing DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE environment variable');
+  process.exit(1);
+}
 const pollIntervalSeconds = Number.parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
 const expiresIn = Number.parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 

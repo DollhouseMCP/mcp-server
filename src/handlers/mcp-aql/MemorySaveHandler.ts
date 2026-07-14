@@ -3,13 +3,28 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
 import type { Memory } from '../../elements/memories/Memory.js';
+import type { ExecutionContext } from '../../security/encryption/ContextTracker.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 import { validateRequiredString } from './shared.js';
+
+/**
+ * Capability used to re-establish a save's originating per-user execution context
+ * when persisting outside the original request. The shutdown flush runs with no
+ * ambient AsyncLocalStorage context, so without re-establishing it a file-mode
+ * per-user save resolves to the shared baseDir. Both methods are optional so
+ * callers without a context tracker (stdio, tests) degrade to context-less saves.
+ */
+export interface SaveContextScope {
+  getContext?(): ExecutionContext | undefined;
+  runAsync?<T>(context: ExecutionContext, fn: () => Promise<T>): Promise<T>;
+}
 
 interface PendingSave {
   timer: ReturnType<typeof setTimeout>;
   memory: Memory;
   manager: MemoryManager;
+  /** Per-user execution context captured when the save was scheduled (#2329). */
+  context?: ExecutionContext;
 }
 
 interface SaveFrequencyCounter {
@@ -28,6 +43,8 @@ interface FailedSave {
   error: Error;
   memory: Memory;
   manager: MemoryManager;
+  /** Per-user execution context captured at the time the save failed (#2329). */
+  context?: ExecutionContext;
 }
 
 export class MemorySaveHandler {
@@ -48,6 +65,7 @@ export class MemorySaveHandler {
   constructor(
     private readonly handlers: HandlerRegistry,
     private readonly sessionKey: (name: string) => string,
+    private readonly contextScope?: SaveContextScope,
   ) {}
 
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -117,14 +135,13 @@ export class MemorySaveHandler {
    * Unrecoverable losses are reported loudly. Unlike session cleanup, shutdown
    * is a last-ditch best-effort flush across all sessions.
    *
-   * Multi-user caveat: this runs at process shutdown, so unlike the per-session
-   * debounce timers (which persist in their propagated AsyncLocalStorage context)
-   * it may execute with no active session context. In file mode with a per-user
-   * layout a save issued here can resolve to the shared baseDir rather than the
-   * owning user's dir — an accepted best-effort tradeoff at process death, where
-   * losing the entry entirely would be worse. The durable fix (session/user
-   * context propagation into shutdown) is tracked with the broader per-session-DI
-   * hardening, not here.
+   * Multi-user handling: this runs at process shutdown, outside the per-session
+   * debounce timers' propagated AsyncLocalStorage context. Each pending and failed
+   * save captures its owning session's context when it is scheduled, and the flush
+   * re-establishes that context (runInSaveContext) before writing, so in file mode
+   * with a per-user layout each save resolves to the owning user's dir rather than
+   * the shared baseDir. When no context was captured (stdio/single-user) the write
+   * proceeds context-less as before.
    */
   async flushPendingSaves(): Promise<void> {
     const pending = [...this.pendingSaves.entries()];
@@ -133,29 +150,41 @@ export class MemorySaveHandler {
       logger.info(`[MCPAQLHandler] Flushing ${pending.length} pending memory save(s) on shutdown (total coalesced: ${this.debounceMetrics.coalesced}, total written: ${this.debounceMetrics.written})`);
     }
     const flushedKeys = new Set<string>();
-    for (const [key, { timer, memory, manager }] of pending) {
+    for (const [key, { timer, memory, manager, context }] of pending) {
       clearTimeout(timer);
       flushedKeys.add(key);
-      await this.flushOne(key, memory, manager, 'shutdown');
+      await this.flushOne(key, memory, manager, 'shutdown', context);
     }
     // Retry any failure-ledger entry not already attempted above. Direct Map
     // iteration is safe: saveMemoryTracked only deletes the current key on
     // success, which the iteration protocol tolerates.
-    for (const [key, { memory, manager }] of this.failedMemorySaves) {
+    for (const [key, { memory, manager, context }] of this.failedMemorySaves) {
       if (flushedKeys.has(key)) continue;
-      await this.flushOne(key, memory, manager, 'shutdown-retry');
+      await this.flushOne(key, memory, manager, 'shutdown-retry', context);
     }
   }
 
   /** Write one tracked save during shutdown flush, reporting unrecoverable loss. */
-  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string): Promise<void> {
+  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string, context?: ExecutionContext): Promise<void> {
     try {
-      await this.saveMemoryTracked(key, memory, manager);
+      // Re-establish the save's originating per-user context. Shutdown runs with
+      // no ambient AsyncLocalStorage context, so without this a file-mode
+      // per-user save would resolve to the shared baseDir instead of the owner's.
+      await this.runInSaveContext(context, () => this.saveMemoryTracked(key, memory, manager));
       this.debounceMetrics.written++;
     } catch (err) {
       const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
       logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' on ${reason} (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
     }
+  }
+
+  /** Run a save within a previously-captured per-user context when one is
+   *  available (and the tracker supports it); otherwise run directly. */
+  private runInSaveContext<T>(context: ExecutionContext | undefined, fn: () => Promise<T>): Promise<T> {
+    if (context && this.contextScope?.runAsync) {
+      return this.contextScope.runAsync(context, fn);
+    }
+    return fn();
   }
 
   getSaveFrequencyCountersForTesting(): Map<string, SaveFrequencyCounter> {
@@ -289,6 +318,9 @@ export class MemorySaveHandler {
     manager: MemoryManager,
   ): void {
     const key = this.memorySaveKey(memoryName);
+    // Capture the originating per-user context now, while a request context is
+    // active, so a shutdown flush (which runs with none) can re-establish it.
+    const context = this.contextScope?.getContext?.();
     const existing = this.pendingSaves.get(key);
     if (existing) {
       clearTimeout(existing.timer);
@@ -306,7 +338,7 @@ export class MemorySaveHandler {
     if (typeof timer === 'object' && 'unref' in timer) {
       timer.unref();
     }
-    this.pendingSaves.set(key, { timer, memory, manager });
+    this.pendingSaves.set(key, { timer, memory, manager, context });
   }
 
   /**
@@ -338,6 +370,10 @@ export class MemorySaveHandler {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
           manager,
+          // getContext() here returns the ambient context on the normal debounced
+          // path, and the re-established context when retried from the shutdown
+          // flush (flushOne runs saveMemoryTracked inside runInSaveContext).
+          context: this.contextScope?.getContext?.(),
         });
       }
       throw err;
