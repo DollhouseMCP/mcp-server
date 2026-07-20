@@ -6,11 +6,14 @@ import { test, expect, type Page } from '@playwright/test';
 import { TOTP, Secret } from 'otpauth';
 
 import { SEED_PASSWORD } from '../harness/seed.js';
+import { installSessionUiMock } from '../harness/sessionUiMock.js';
 import { BASE_URL } from '../setup/provision.js';
 
 const USER = 'e2e_admin';
 const OPERATE = '/api/v1/admin/operate/health';
 const MANIFEST_URL = '**/api/v1/me/manifest';
+const SESSIONS_TAB = '.console-tab[data-tab="sessions"]';
+const SESSION_DETAIL_HEADER = '#session-detail-header';
 
 async function filterManifestRoutes(page: Page, unavailableRoutes: ReadonlySet<string>): Promise<void> {
   await page.route(MANIFEST_URL, async route => {
@@ -85,7 +88,7 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await page.locator('#pf-grid').waitFor({ state: 'visible' });
 
   await expect(page.locator('.console-tab[data-tab="portfolio"]')).toBeVisible();
-  await expect(page.locator('.console-tab[data-tab="sessions"]')).toBeVisible();
+  await expect(page.locator(SESSIONS_TAB)).toBeVisible();
   await expect(page.locator('.console-tab[data-tab="permissions"]')).toHaveCount(0);
   await expect(page.locator('.console-tab[data-tab="setup"]')).toHaveCount(0);
   await expect(page.locator('#pf-source')).toBeHidden();
@@ -95,7 +98,7 @@ test('console UI serves its asset graph and boots from server metadata', async (
   expect([...loadedPaths]).toContain('/ui/portfolio.js');
   expect(assetFailures).toEqual([]);
 
-  await page.locator('.console-tab[data-tab="sessions"]').click();
+  await page.locator(SESSIONS_TAB).click();
   await expect(page.locator('#sessions-body .session-card').first()).toBeVisible();
   await expect(page.locator('[data-revoke-console], [data-disconnect-mcp]')).toHaveCount(0);
   await expect(page.locator('#sess-revoke-others')).toHaveText('Sign out other console sessions');
@@ -104,6 +107,98 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await page.locator('#account-security').click();
   await expect(page.locator('#security-modal')).toBeVisible();
   await expect(page.locator('#sec-enroll')).toHaveCount(0);
+});
+
+test('owned session workspace handles HITL, snapshots, polling cleanup, and termination acknowledgement', async ({ page }) => {
+  const mock = await installSessionUiMock(page);
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+
+  await page.locator('[data-inspect-mcp]').click();
+  await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('Claude Code 1.2.3');
+  await expect(page.locator('.session-detail-panel--approvals')).toContainText('install_collection_content');
+  await expect(page.locator('.session-detail-panel--logs')).toContainText('request.completed');
+  await expect(page.locator('.session-detail-panel--metrics')).toContainText('requests.total');
+
+  const approvals = page.locator('.session-approval');
+  const installApproval = approvals.filter({ hasText: 'install_collection_content' });
+  await installApproval.locator('[data-approval-action="approve"][data-approval-scope="once"]').click();
+  await expect(installApproval).toContainText('approved');
+
+  const deleteApproval = approvals.filter({ hasText: 'delete_element' });
+  await deleteApproval.locator('[data-approval-action="deny"]').click();
+  await page.locator('[data-confirm="1"]').click();
+  await expect(deleteApproval).toContainText('denied');
+
+  await page.locator('#session-activation-form select[name="type"]').selectOption('skills');
+  await page.locator('#session-activation-form input[name="name"]').fill('beta-skill');
+  await page.locator('#session-activation-form button[type="submit"]').click();
+  await expect(page.locator('.session-detail-panel--activations')).toContainText('beta-skill');
+
+  await page.locator('[data-deactivate-name="beta-skill"]').click();
+  await page.locator('[data-confirm="1"]').click();
+  await expect(page.locator('.session-detail-panel--activations')).toContainText('No elements are active for this session.');
+
+  await page.locator('[data-execution-id]').click();
+  await expect(page.locator('#session-execution-detail')).toContainText('Package validation started.');
+
+  await page.locator('.console-tab[data-tab="portfolio"]').click();
+  await page.waitForTimeout(100);
+  const readsWhileHidden = mock.approvalReads;
+  await page.waitForTimeout(4_500);
+  expect(mock.approvalReads, 'session polling stops while another tab is active').toBe(readsWhileHidden);
+
+  await page.locator(SESSIONS_TAB).click();
+  await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('Claude Code 1.2.3');
+  await page.locator('[data-session-disconnect]').click();
+  await page.locator('[data-confirm="1"]').click();
+  await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('Session unavailable');
+  expect(mock.commandReads).toBeGreaterThanOrEqual(2);
+});
+
+test('session termination keeps a failed acknowledgement visible', async ({ page }) => {
+  const mock = await installSessionUiMock(page, { commandOutcome: 'failed' });
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+  await page.locator('[data-inspect-mcp]').click();
+
+  await page.locator('[data-session-disconnect]').click();
+  await page.locator('[data-confirm="1"]').click();
+
+  await expect(page.locator('.session-command-status')).toContainText('Waiting for the owning replica');
+  expect(mock.commandReads).toBe(1);
+  await page.locator('.console-tab[data-tab="portfolio"]').click();
+  const readsWhileHidden = mock.commandReads;
+  await page.waitForTimeout(1_000);
+  expect(mock.commandReads, 'termination polling stops while another tab is active').toBe(readsWhileHidden);
+
+  await page.locator(SESSIONS_TAB).click();
+  await expect(page.locator('.session-command-status')).toContainText('Disconnect failed (session_disconnect_failed).');
+  await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('Claude Code 1.2.3');
+  expect(mock.commandReads).toBeGreaterThanOrEqual(2);
+});
+
+test('bulk session termination reports command acknowledgement accurately', async ({ page }) => {
+  const mock = await installSessionUiMock(page);
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+
+  await page.locator('#sess-revoke-others').click();
+  await page.locator('[data-confirm="1"]').click();
+
+  await expect(page.locator('#sessions-command-summary')).toContainText('1 disconnect(s) acknowledged.');
+  expect(mock.commandReads).toBeGreaterThanOrEqual(2);
+});
+
+test('session detail uses the same neutral state for missing or non-owned sessions', async ({ page }) => {
+  await installSessionUiMock(page, { detailUnavailable: true });
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+  await page.locator('[data-inspect-mcp]').click();
+
+  await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('Session unavailable');
+  await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('ended, expired, or is not available to this account');
+  await expect(page.locator('#session-detail-panels')).toBeHidden();
 });
 
 test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> logout', async ({ page }) => {
