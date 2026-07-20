@@ -9,12 +9,11 @@
 import { get } from './api.js';
 
 const API_PREFIX = '/api/v1';
+const NO_CONSOLE_ROUTES = new Set();
 
 /** Fail-closed route predicate used until server metadata is injected. */
 export function noConsoleRoute(method, path) {
-  void method;
-  void path;
-  return false;
+  return NO_CONSOLE_ROUTES.has(routeKey(method, path));
 }
 
 function canonicalPath(path) {
