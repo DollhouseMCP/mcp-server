@@ -8,10 +8,10 @@
  * Collection data from /api/v1/collection/* (browse) with install writing to
  * /api/v1/me/portfolio/from-collection.
  *
- * Collection is lazy-loaded the first time its source tab is opened. When the
- * server hasn't enabled the collection surface the browse call 404s and the tab
- * shows a clear "not enabled" state; a degraded upstream shows the source's own
- * message rather than a misleading "empty collection".
+ * Collection is lazy-loaded the first time its source tab is opened. The source
+ * control is absent when the route manifest omits collection browsing; a
+ * degraded upstream shows the source's own message rather than a misleading
+ * "empty collection".
  */
 
 import { get, post } from './api.js';
@@ -49,11 +49,17 @@ const state = {
 
 let host;
 let notify = () => {};
+let hasRoute = () => false;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
+  hasRoute = ctx.hasRoute || hasRoute;
+  state.collection.installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
   host.innerHTML = template();
+  const collectionAvailable = hasRoute('GET', '/collection/elements');
+  host.querySelector('#pf-source').hidden = !collectionAvailable;
+  if (!collectionAvailable) state.source = 'portfolio';
   wireControls();
   await load();
 }
@@ -169,7 +175,7 @@ async function loadCollection() {
   render();
 
   const elements = [];
-  let installEnabled = true;
+  let installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
   let page = 1;
   try {
     for (; page <= COLLECTION_MAX_PAGES; page++) {
@@ -177,7 +183,7 @@ async function loadCollection() {
       if (res.status === 404) { state.collection.status = 'unavailable'; paint(); return; }
       if (res.status !== 200 || !res.body) { state.collection.status = 'error'; paint(); return; }
       const body = res.body;
-      if (typeof body.install_enabled === 'boolean') installEnabled = body.install_enabled;
+      installEnabled = resolveInstallAvailability(installEnabled, body.install_enabled);
       for (const el of (body.elements ?? []).filter(Boolean)) elements.push(mapCollectionElement(el));
       if (body.source_status === 'degraded') {
         state.collection = { status: 'degraded', detail: str(body.source_detail) ?? '', elements, installEnabled };
@@ -191,6 +197,10 @@ async function loadCollection() {
     state.collection.status = 'error';
   }
   paint();
+}
+
+function resolveInstallAvailability(routeAvailable, advertisedAvailability) {
+  return routeAvailable && advertisedAvailability !== false;
 }
 
 // Map a collection list DTO to the shared card shape. Collection elements are

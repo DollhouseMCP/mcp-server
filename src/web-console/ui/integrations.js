@@ -36,12 +36,14 @@ const ROUTES = {
 
 let host;
 let notify = () => {};
+let hasRoute = () => false;
 
 const state = { byProvider: new Map(), loading: true, error: false };
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
+  hasRoute = ctx.hasRoute || hasRoute;
   host.innerHTML = shell();
   host.querySelector('#int-refresh').addEventListener('click', () => load());
   await load();
@@ -120,30 +122,35 @@ function statusChip(status) {
 }
 
 function connectedBody(provider, status) {
+  const canConnect = hasRoute('POST', `/me/integrations/${provider.id}/connect`);
+  const canDisconnect = hasRoute('DELETE', `/me/integrations/${provider.id}`);
   return `
     <div class="int-account">${status.account_label ? escapeHtml(status.account_label) : 'Connected'}</div>
     <div class="int-caps">${capabilityChips(status)}</div>
     <div class="int-meta">connected ${relAgo(status.connected_at)}${status.last_sync_at ? ` · last sync ${relAgo(status.last_sync_at)}` : ''}</div>
     <div class="int-actions">
-      <button class="btn btn-ghost" data-connect="${provider.id}" type="button">Reconnect</button>
-      <button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>
+      ${canConnect ? `<button class="btn btn-ghost" data-connect="${provider.id}" type="button">Reconnect</button>` : ''}
+      ${canDisconnect ? `<button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>` : ''}
     </div>`;
 }
 
 function erroredBody(provider, status) {
+  const canConnect = hasRoute('POST', `/me/integrations/${provider.id}/connect`);
+  const canDisconnect = hasRoute('DELETE', `/me/integrations/${provider.id}`);
   return `
     <div class="int-alert">Connection error${status.error_reason ? `: ${escapeHtml(formatReason(status.error_reason))}` : ''}</div>
     <div class="int-actions">
-      <button class="btn btn-primary" data-connect="${provider.id}" type="button">Reconnect</button>
-      <button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>
+      ${canConnect ? `<button class="btn btn-primary" data-connect="${provider.id}" type="button">Reconnect</button>` : ''}
+      ${canDisconnect ? `<button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>` : ''}
     </div>`;
 }
 
 function disconnectedBody(provider) {
+  const canConnect = hasRoute('POST', `/me/integrations/${provider.id}/connect`);
   return `
     <div class="int-blurb">${escapeHtml(provider.blurb)}</div>
     <div class="int-actions">
-      <button class="btn btn-primary" data-connect="${provider.id}" type="button">Connect</button>
+      ${canConnect ? `<button class="btn btn-primary" data-connect="${provider.id}" type="button">Connect</button>` : '<span class="int-meta">Not available in this deployment.</span>'}
     </div>`;
 }
 

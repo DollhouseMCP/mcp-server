@@ -139,7 +139,14 @@ export function bootApp(runDir: string): BootedApp {
   };
   const logPath = path.join(runDir, 'logs', `pw-app-${randomBytes(4).toString('hex')}.log`);
   const logStream = createWriteStream(logPath, { flags: 'a' });
-  const child = spawn('npx', ['tsx', path.join(process.cwd(), 'src/index.ts'), '--streamable-http'], {
+  const appEntry = process.env.E2E_APP_ENTRY ?? 'src/index.ts';
+  const resolvedEntry = path.resolve(process.cwd(), appEntry);
+  const runsTypeScript = appEntry.endsWith('.ts');
+  const command = runsTypeScript ? 'npx' : process.execPath;
+  const args = runsTypeScript
+    ? ['tsx', resolvedEntry, '--streamable-http']
+    : [resolvedEntry, '--streamable-http'];
+  const child = spawn(command, args, {
     cwd: path.join(runDir, 'cwd'), env, stdio: ['ignore', 'pipe', 'pipe'], detached: true,
   });
   child.stdout.pipe(logStream);

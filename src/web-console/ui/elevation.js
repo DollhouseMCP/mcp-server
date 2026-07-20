@@ -23,6 +23,7 @@ const ELEVATED_KEY = 'dh-elevated'; // sessionStorage marker → toast only on r
 const WARN_THRESHOLD_MS = 60_000;
 
 let toast = () => {};
+let hasRoute = () => false;
 let control;          // #elevation-control
 let band;             // #admin-band
 let capabilities = [];
@@ -32,6 +33,7 @@ let warned = false;
 
 export function initElevation(principal, ctx = {}) {
   toast = ctx.toast || toast;
+  hasRoute = ctx.hasRoute || hasRoute;
   control = document.getElementById('elevation-control');
   band = document.getElementById('admin-band');
   capabilities = Array.isArray(principal?.available_admin_capabilities)
@@ -153,15 +155,23 @@ async function onElevate() {
   // Non-dead-end: elevation requires a TOTP factor. If none is enrolled, route
   // into the deliberate enrollment surface instead of bouncing off the AS's
   // "TOTP required" wall.
+  if (!hasRoute('GET', '/me/security/factors')) {
+    startStepUp();
+    return;
+  }
   const elevateBtn = document.getElementById('elevate-btn');
   if (elevateBtn) elevateBtn.disabled = true;
   const status = await fetchFactorStatus();
   if (elevateBtn) elevateBtn.disabled = false;
   if (!status?.totp?.enrolled) {
     toast('Set up an authenticator first to elevate to admin access.', 'warn');
-    openSecurityPanel({ toast });
+    openSecurityPanel({ toast, hasRoute });
     return;
   }
+  startStepUp();
+}
+
+function startStepUp() {
   // Any one capability is enough — step-up grants the full role-entitled set.
   // Return to wherever we are now (relative path; validated server-side).
   const activeTab = document.querySelector('.console-tab.active')?.dataset.tab || 'portfolio';

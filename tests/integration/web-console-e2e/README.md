@@ -16,6 +16,14 @@ npm run test:console-e2e
 # step-down -> logout (uses system Google Chrome). Boots its own isolated app.
 npm run test:console-e2e:auth
 
+# Same browser suite against a fresh compiled server and dist/web-console/ui.
+# This is the production-delivery gate for replacement-console changes.
+npm run test:console-e2e:auth:compiled
+
+# Supported manual development loop (isolated port 3199 + preview database).
+npm run web-console:preview
+npm run web-console:preview:compiled
+
 # Target an already-running instance instead of auto-booting (dev loop):
 E2E_BASE_URL=http://localhost:3001 \
 E2E_DATABASE_ADMIN_URL='postgres://user:pw@localhost:5432/db' \
@@ -27,7 +35,7 @@ Prerequisites: the dev PostgreSQL container reachable on `localhost:5432` with a
 superuser (defaults to `dollhouse:dollhouse`, override via `E2E_PG_SUPERUSER_URL`).
 The HTTP suite uses port **3101** / db `dollhousemcp_console_e2e`; the Playwright
 suite uses port **3102** / db `dollhousemcp_console_e2e_pw` — neither collides
-with the manual `docker/poc` smoke setup (`:3001`).
+with the supported preview (`:3199`) or manual `docker/poc` smoke setup (`:3001`).
 
 ## How it works
 
@@ -45,7 +53,10 @@ with the manual `docker/poc` smoke setup (`:3001`).
 - **Seed** (`harness/seed.ts`): two normal users + one admin, plus
   `seedRuntimeSession()` for telemetry/SSE data.
 - **Real auth** (`specs/console-auth.pw-spec.ts`): Playwright drives the actual
-  login / TOTP / step-up code that forging skips.
+  login / TOTP / step-up code that forging skips. It also opens `/ui`, verifies
+  the manifest and role catalog bootstrap, and proves a real tab lazy-loads with
+  no failed UI asset requests. `test:console-e2e:auth:compiled` runs this against
+  `dist/index.js` after a clean build.
 
 ## Findings
 

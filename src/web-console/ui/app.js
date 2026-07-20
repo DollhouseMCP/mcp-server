@@ -7,6 +7,7 @@
  */
 
 import { whoami, login, logout, get } from './api.js';
+import { loadConsoleMetadata } from './console-meta.js';
 import { initElevation } from './elevation.js';
 import { openSecurityPanel } from './security.js';
 
@@ -40,16 +41,35 @@ function initTheme() {
  * doesn't change. A module exports `init(panelEl)`.
  */
 const TAB_MODULES = {
-  portfolio: () => import('./portfolio.js'),
-  sessions: () => import('./sessions.js'),
-  logs: () => import('./logs.js'),
-  'admin-metrics': () => import('./admin-metrics.js'),
-  integrations: () => import('./integrations.js'),
-  users: () => import('./users-admin.js'),
+  portfolio: {
+    load: () => import('./portfolio.js'),
+    requiredRoutes: [['GET', '/me/portfolio/elements']],
+  },
+  sessions: {
+    load: () => import('./sessions.js'),
+    requiredRoutes: [['GET', '/me/sessions'], ['GET', '/me/security/sessions']],
+  },
+  logs: {
+    load: () => import('./logs.js'),
+    requiredRoutes: [['GET', '/me/logs']],
+  },
+  'admin-metrics': {
+    load: () => import('./admin-metrics.js'),
+    requiredRoutes: [['GET', '/admin/operate/metrics/system']],
+  },
+  integrations: {
+    load: () => import('./integrations.js'),
+    requiredRoutes: [['GET', '/me/integrations']],
+  },
+  users: {
+    load: () => import('./users-admin.js'),
+    requiredRoutes: [['GET', '/admin/accounts/users']],
+  },
 };
 // Memoized load+init promise per tab, so callers (e.g. the Sessions→Logs jump)
 // can await a module being ready without racing the lazy import.
 const tabModulePromises = new Map();
+let consoleMetadata = null;
 
 function initTabs() {
   document.querySelectorAll('.console-tab').forEach(tab => {
@@ -58,6 +78,8 @@ function initTabs() {
 }
 
 function activateTab(name) {
+  const requestedTab = document.querySelector(`.console-tab[data-tab="${CSS.escape(name)}"]`);
+  if (!requestedTab || requestedTab.hidden) return;
   document.querySelectorAll('.console-tab').forEach(t =>
     t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(panel => {
@@ -70,12 +92,19 @@ function activateTab(name) {
 }
 
 function ensureTabModule(name) {
-  if (!TAB_MODULES[name]) return Promise.resolve();
+  const definition = TAB_MODULES[name];
+  if (!definition || !consoleMetadata?.hasRoutes(definition.requiredRoutes)) return Promise.resolve();
   if (tabModulePromises.has(name)) return tabModulePromises.get(name);
   const panel = document.getElementById(`tab-${name}`);
   const loading = (async () => {
-    const mod = await TAB_MODULES[name]();
-    await mod.init?.(panel, { toast, viewSessionLogs });
+    const mod = await definition.load();
+    await mod.init?.(panel, {
+      toast,
+      viewSessionLogs,
+      manifest: consoleMetadata.manifest,
+      roleCatalog: consoleMetadata.roleCatalog,
+      hasRoute: consoleMetadata.hasRoute,
+    });
   })().catch(err => {
     tabModulePromises.delete(name);
     if (panel) panel.innerHTML = '<div class="panel-placeholder">Failed to load this section.</div>';
@@ -83,6 +112,17 @@ function ensureTabModule(name) {
   });
   tabModulePromises.set(name, loading);
   return loading;
+}
+
+function configureAvailableTabs(metadata) {
+  consoleMetadata = metadata;
+  document.querySelectorAll('.console-tab').forEach(tab => {
+    const definition = TAB_MODULES[tab.dataset.tab];
+    const available = !!definition && metadata.hasRoutes(definition.requiredRoutes);
+    tab.dataset.featureAvailable = String(available);
+    tab.hidden = !available || !!tab.dataset.adminCap;
+  });
+  document.getElementById('account-security').hidden = !metadata.hasRoute('GET', '/me/security/factors');
 }
 
 /**
@@ -95,7 +135,7 @@ function ensureTabModule(name) {
 function applyAdminTabVisibility({ active, capabilities } = {}) {
   const caps = active ? (capabilities || []) : [];
   document.querySelectorAll('.console-tab[data-admin-cap]').forEach(tab => {
-    const allowed = caps.includes(tab.dataset.adminCap);
+    const allowed = tab.dataset.featureAvailable === 'true' && caps.includes(tab.dataset.adminCap);
     tab.hidden = !allowed;
     if (!allowed && tab.classList.contains('active')) activateTab('portfolio');
   });
@@ -105,6 +145,11 @@ function applyAdminTabVisibility({ active, capabilities } = {}) {
 // Awaits the lazy Logs module so the event isn't dispatched before its listener
 // is registered.
 async function viewSessionLogs(logSessionId) {
+  const logsTab = document.querySelector('.console-tab[data-tab="logs"]');
+  if (!logsTab || logsTab.hidden) {
+    toast('Session logs are not available in this deployment.', 'warn');
+    return;
+  }
   activateTab('logs');
   await ensureTabModule('logs');
   globalThis.dispatchEvent(new CustomEvent('dh:filter-logs-by-session', { detail: { sessionId: logSessionId } }));
@@ -144,7 +189,7 @@ function initAccountMenu() {
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') setOpen(false); });
   document.getElementById('account-security')?.addEventListener('click', () => {
     setOpen(false);
-    openSecurityPanel({ toast });
+    openSecurityPanel({ toast, hasRoute: consoleMetadata?.hasRoute });
   });
 }
 
@@ -177,7 +222,8 @@ function showGate(message) {
   if (shell) shell.hidden = true;
 }
 
-function showConsole(principal) {
+function showConsole(principal, metadata) {
+  configureAvailableTabs(metadata);
   document.getElementById('auth-gate').hidden = true;
   document.getElementById('console-shell').hidden = false;
   const account = document.getElementById('site-account');
@@ -192,15 +238,16 @@ function showConsole(principal) {
     }).catch(() => { /* keep the fallback label */ });
   }
   // Render the elevate control (no-op for non-admins).
-  initElevation(principal, { toast });
+  initElevation(principal, { toast, hasRoute: metadata.hasRoute });
 }
 
 // The tab to open on load: the `?tab=` param (e.g. when returning from step-up),
 // falling back to portfolio. Validated against the real tabs.
 function initialTab() {
   const requested = new URLSearchParams(globalThis.location.search).get('tab');
-  const known = [...document.querySelectorAll('.console-tab')].map(t => t.dataset.tab);
-  return known.includes(requested) ? requested : 'portfolio';
+  const available = [...document.querySelectorAll('.console-tab:not([hidden])')].map(t => t.dataset.tab);
+  if (available.includes(requested)) return requested;
+  return available.includes('portfolio') ? 'portfolio' : available[0];
 }
 
 // Strip a provider prefix (e.g. "local_live_user" → "live_user") for a friendlier
@@ -218,9 +265,17 @@ async function runAuthGate() {
     return;
   }
   if (principal) {
-    showConsole(principal);
+    let metadata;
+    try {
+      metadata = await loadConsoleMetadata();
+    } catch {
+      showGate('Console capabilities could not be loaded. Confirm the server is ready, then retry.');
+      return;
+    }
+    showConsole(principal, metadata);
     globalThis.dispatchEvent(new CustomEvent('dh:authenticated', { detail: { principal } }));
-    activateTab(initialTab()); // default tab, or the one we returned to after step-up
+    const tab = initialTab();
+    if (tab) activateTab(tab); // default tab, or the one we returned to after step-up
   } else {
     showGate();
   }

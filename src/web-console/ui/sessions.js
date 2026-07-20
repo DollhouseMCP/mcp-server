@@ -15,6 +15,13 @@ import { get, post, del } from './api.js';
 let host;
 let notify = () => {};
 let viewLogs = null; // ctx.viewSessionLogs(logSessionId) — set by the shell
+let canViewLogs = false;
+const availableActions = {
+  revokeConsole: false,
+  revokeOtherConsoleSessions: false,
+  disconnectMcp: false,
+  disconnectAllMcp: false,
+};
 
 const state = { console: [], mcp: [], loading: true, error: false };
 
@@ -22,9 +29,14 @@ export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
   viewLogs = ctx.viewSessionLogs || null;
+  canViewLogs = ctx.hasRoute?.('GET', '/me/logs') === true;
+  availableActions.revokeConsole = ctx.hasRoute?.('DELETE', '/me/security/sessions/:session_id') === true;
+  availableActions.revokeOtherConsoleSessions = ctx.hasRoute?.('POST', '/me/security/sessions/revoke-all-others') === true;
+  availableActions.disconnectMcp = ctx.hasRoute?.('DELETE', '/me/sessions/:session_id') === true;
+  availableActions.disconnectAllMcp = ctx.hasRoute?.('POST', '/me/sessions/revoke-all') === true;
   host.innerHTML = shell();
   host.querySelector('#sess-refresh').addEventListener('click', load);
-  host.querySelector('#sess-revoke-others').addEventListener('click', signOutEverywhereElse);
+  host.querySelector('#sess-revoke-others')?.addEventListener('click', signOutEverywhereElse);
   await load();
   // Re-fetch when the user returns to the tab (sessions drift over time).
   globalThis.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'sessions') load(); });
@@ -50,12 +62,13 @@ async function load() {
 /* ── Markup ─────────────────────────────────────────────────────────────── */
 
 function shell() {
+  const canRevokeEverythingElse = availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp;
   return `
   <div class="sessions-bar">
     <span class="sessions-title">Sessions</span>
     <div class="sessions-bar-actions">
       <button class="btn btn-ghost" id="sess-refresh" type="button">&#x21bb; Refresh</button>
-      <button class="btn btn-ghost session-danger" id="sess-revoke-others" type="button">Sign out everywhere else</button>
+      ${canRevokeEverythingElse ? '<button class="btn btn-ghost session-danger" id="sess-revoke-others" type="button">Sign out everywhere else</button>' : ''}
     </div>
   </div>
   <div id="sessions-body"></div>`;
@@ -116,10 +129,16 @@ function consoleCard(s) {
       </div>
       <div class="session-badges">${badges}</div>
       <div class="session-actions">
-        <button class="btn btn-ghost session-link" data-logs-console="${escapeHtml(s.session_id)}" type="button">View logs</button>
-        <button class="btn btn-ghost session-danger" data-revoke-console="${escapeHtml(s.session_id)}" data-current="${current ? '1' : '0'}" type="button">Sign out</button>
+        ${canViewLogs ? `<button class="btn btn-ghost session-link" data-logs-console="${escapeHtml(s.session_id)}" type="button">View logs</button>` : ''}
+        ${consoleRevokeAction(s.session_id, current)}
       </div>
     </div>`;
+}
+
+function consoleRevokeAction(sessionId, current) {
+  if (!availableActions.revokeConsole) return '';
+  const currentFlag = current ? '1' : '0';
+  return `<button class="btn btn-ghost session-danger" data-revoke-console="${escapeHtml(sessionId)}" data-current="${currentFlag}" type="button">Sign out</button>`;
 }
 
 function mcpCard(s) {
@@ -137,8 +156,8 @@ function mcpCard(s) {
       </div>
       <div class="session-badges">${recencyBadge(s.last_active_at)}</div>
       <div class="session-actions">
-        <button class="btn btn-ghost session-link" data-logs-mcp="${escapeHtml(s.session_id)}" type="button">View logs</button>
-        <button class="btn btn-ghost session-danger" data-disconnect-mcp="${escapeHtml(s.session_id)}" type="button">Disconnect</button>
+        ${canViewLogs ? `<button class="btn btn-ghost session-link" data-logs-mcp="${escapeHtml(s.session_id)}" type="button">View logs</button>` : ''}
+        ${availableActions.disconnectMcp ? `<button class="btn btn-ghost session-danger" data-disconnect-mcp="${escapeHtml(s.session_id)}" type="button">Disconnect</button>` : ''}
       </div>
     </div>`;
 }

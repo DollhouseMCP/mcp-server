@@ -640,10 +640,6 @@ function renderMemoryView(content) {
     return globalThis.DOMPurify ? DOMPurify.sanitize(html) : escapeHtml(html);
   }
 
-  function escapeAttr(str) {
-    return String(str || '').replaceAll('"', '&quot;').replaceAll("'", '&#x27;');
-  }
-
   function capitalize(str) {
     if (!str) return '';
     return str.charAt(0).toUpperCase() + str.slice(1);

@@ -65,9 +65,6 @@ let sessionSelect, categorySelect, levelSelect, sourceInput, searchInput, pauseB
 let detailModal, copySelectedBtn, selectCountEl;
 const rowPool = [];
 
-// Filters whose change requires a server re-query (vs. instant buffer re-filter).
-const SERVER_SIDE_FILTERS = new Set(['level', 'correlationId', 'sessionId']);
-
 // ── Entry point ────────────────────────────────────────────────────────────
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
