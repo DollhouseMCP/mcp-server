@@ -10,6 +10,13 @@ import { get } from './api.js';
 
 const API_PREFIX = '/api/v1';
 
+/** Fail-closed route predicate used until server metadata is injected. */
+export function noConsoleRoute(method, path) {
+  void method;
+  void path;
+  return false;
+}
+
 function canonicalPath(path) {
   const withoutQuery = String(path || '').split(/[?#]/, 1)[0];
   if (!withoutQuery.startsWith('/')) return `${API_PREFIX}/${withoutQuery}`;

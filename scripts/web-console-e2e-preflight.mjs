@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 
+import { readFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 
 import { chromium } from '@playwright/test';
+import dotenv from 'dotenv';
 import postgres from 'postgres';
 
 const host = '127.0.0.1';
 const port = Number(process.env.E2E_PW_PORT ?? 3102);
-const postgresUrl = process.env.E2E_PG_SUPERUSER_URL
-  ?? 'postgres://dollhouse:dollhouse@localhost:5432/postgres';
+const postgresUrl = resolvePostgresUrl();
 
 const checks = [
   {
@@ -63,6 +64,7 @@ if (failures.length > 0) {
 }
 
 async function checkPostgres() {
+  if (!postgresUrl) throw new Error('No PostgreSQL superuser connection is configured.');
   const sql = postgres(postgresUrl, {
     ssl: false,
     max: 1,
@@ -74,6 +76,20 @@ async function checkPostgres() {
     await sql`SELECT 1`;
   } finally {
     await sql.end({ timeout: 1 });
+  }
+}
+
+function resolvePostgresUrl() {
+  if (process.env.E2E_PG_SUPERUSER_URL) return process.env.E2E_PG_SUPERUSER_URL;
+  try {
+    const dockerEnv = dotenv.parse(readFileSync(new URL('../docker/.env.docker', import.meta.url)));
+    if (!dockerEnv.POSTGRES_USER || !dockerEnv.POSTGRES_PASSWORD) return null;
+    const url = new URL('postgres://localhost:5432/postgres');
+    url.username = dockerEnv.POSTGRES_USER;
+    url.password = dockerEnv.POSTGRES_PASSWORD;
+    return url.toString();
+  } catch {
+    return null;
   }
 }
 

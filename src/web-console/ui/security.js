@@ -12,12 +12,13 @@
  */
 
 import { get } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
 
 const ENROLL_URL = '/api/v1/me/security/factors/enroll/totp';
 const DISABLE_URL = '/api/v1/me/security/factors/disable/totp';
 
 let toast = () => {};
-let hasRoute = () => false;
+let hasRoute = noConsoleRoute;
 
 /** Current TOTP factor status, or null if unavailable. */
 export async function fetchFactorStatus() {

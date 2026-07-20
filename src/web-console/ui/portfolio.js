@@ -15,6 +15,7 @@
  */
 
 import { get, post } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
 import { renderElementDetail } from './portfolio-detail.js';
 
 // Plural API type → singular CSS/display type (drives the --family colour lanes
@@ -49,7 +50,7 @@ const state = {
 
 let host;
 let notify = () => {};
-let hasRoute = () => false;
+let hasRoute = noConsoleRoute;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;

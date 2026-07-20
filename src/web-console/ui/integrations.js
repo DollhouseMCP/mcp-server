@@ -14,6 +14,7 @@
  */
 
 import { get, post, del } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
 
 // UI-side provider catalog (Slice A). One entry per known provider.
 const PROVIDERS = [
@@ -36,7 +37,7 @@ const ROUTES = {
 
 let host;
 let notify = () => {};
-let hasRoute = () => false;
+let hasRoute = noConsoleRoute;
 
 const state = { byProvider: new Map(), loading: true, error: false };
 

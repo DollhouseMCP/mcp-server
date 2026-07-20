@@ -17,13 +17,14 @@
  */
 
 import { stepUp, stepDown } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
 import { fetchFactorStatus, openSecurityPanel } from './security.js';
 
 const ELEVATED_KEY = 'dh-elevated'; // sessionStorage marker → toast only on real transitions
 const WARN_THRESHOLD_MS = 60_000;
 
 let toast = () => {};
-let hasRoute = () => false;
+let hasRoute = noConsoleRoute;
 let factorDiscoveryAvailable = false;
 let control;          // #elevation-control
 let band;             // #admin-band
