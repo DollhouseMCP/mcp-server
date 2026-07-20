@@ -10,6 +10,16 @@ import { BASE_URL } from '../setup/provision.js';
 
 const USER = 'e2e_admin';
 const OPERATE = '/api/v1/admin/operate/health';
+const MANIFEST_URL = '**/api/v1/me/manifest';
+
+async function filterManifestRoutes(page: Page, unavailableRoutes: ReadonlySet<string>): Promise<void> {
+  await page.route(MANIFEST_URL, async route => {
+    const response = await route.fetch();
+    const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
+    const routes = manifest.routes.filter(item => !unavailableRoutes.has(`${item.method} ${item.path}`));
+    await route.fulfill({ response, json: { ...manifest, routes } });
+  });
+}
 
 async function status(page: Page, path: string): Promise<number> {
   const r = await page.request.get(BASE_URL + path, { maxRedirects: 0, failOnStatusCode: false });
@@ -51,17 +61,11 @@ test('console UI serves its asset graph and boots from server metadata', async (
   const loadedPaths = new Set<string>();
   const unavailableRoutes = new Set([
     'DELETE /api/v1/me/security/sessions/:session_id',
-    'POST /api/v1/me/security/sessions/revoke-all-others',
     'DELETE /api/v1/me/sessions/:session_id',
     'POST /api/v1/me/sessions/revoke-all',
     'GET /api/v1/me/security/factors/enroll/totp',
   ]);
-  await page.route('**/api/v1/me/manifest', async route => {
-    const response = await route.fetch();
-    const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
-    const routes = manifest.routes.filter(item => !unavailableRoutes.has(`${item.method} ${item.path}`));
-    await route.fulfill({ response, json: { ...manifest, routes } });
-  });
+  await filterManifestRoutes(page, unavailableRoutes);
   page.on('requestfailed', request => {
     const url = new URL(request.url());
     if (url.pathname.startsWith('/ui/')) assetFailures.push(`${url.pathname}: ${request.failure()?.errorText}`);
@@ -93,7 +97,8 @@ test('console UI serves its asset graph and boots from server metadata', async (
 
   await page.locator('.console-tab[data-tab="sessions"]').click();
   await expect(page.locator('#sessions-body .session-card').first()).toBeVisible();
-  await expect(page.locator('[data-revoke-console], [data-disconnect-mcp], #sess-revoke-others')).toHaveCount(0);
+  await expect(page.locator('[data-revoke-console], [data-disconnect-mcp]')).toHaveCount(0);
+  await expect(page.locator('#sess-revoke-others')).toHaveText('Sign out other console sessions');
 
   await page.locator('#site-account').click();
   await page.locator('#account-security').click();
@@ -114,6 +119,15 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   // 2. SELF works; ADMIN requires step-up (401 step_up_required)
   expect(await status(page, '/api/v1/me/profile')).toBe(200);
   expect(await status(page, OPERATE), 'admin needs elevation before step-up').toBe(401);
+
+  // A partial deployment without factor discovery must not send an unenrolled
+  // administrator into an AS step-up dead end.
+  await filterManifestRoutes(page, new Set(['GET /api/v1/me/security/factors']));
+  await page.goto(`${BASE_URL}/ui`, { waitUntil: 'domcontentloaded' });
+  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await expect(page.locator('#elevate-btn')).toBeDisabled();
+  await expect(page.locator('#elevate-btn')).toHaveText(/Elevation unavailable/);
+  await page.unroute(MANIFEST_URL);
 
   // 3. ENROLL TOTP
   await page.goto(`${BASE_URL}/api/v1/me/security/factors/enroll/totp`, { waitUntil: 'domcontentloaded' });
@@ -144,15 +158,25 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   // The Users surface gets its role list and grants from /me/role-catalog.
   const catalogResponse = await page.request.get(`${BASE_URL}/api/v1/me/role-catalog`);
   const catalog = await catalogResponse.json() as { roles: string[] };
+  await filterManifestRoutes(page, new Set([
+    'GET /api/v1/me/portfolio/elements',
+    'GET /api/v1/me/sessions',
+    'GET /api/v1/me/security/sessions',
+    'GET /api/v1/me/logs',
+    'GET /api/v1/me/integrations',
+  ]));
   await page.goto(`${BASE_URL}/ui?tab=users`, { waitUntil: 'domcontentloaded' });
   await page.locator('#console-shell').waitFor({ state: 'visible' });
   await expect(page.locator('.console-tab[data-tab="users"]')).toBeVisible();
   await page.locator('[data-user-row]').first().click();
   await expect(page.locator('[data-role-toggle]')).toHaveCount(catalog.roles.length);
+  await page.locator('#ua-drawer-close').click();
 
-  // 6. STEP-DOWN drops elevation; admin requires step-up again
-  const stepDown = await csrfPost(page, '/api/v1/auth/step-down');
-  expect(stepDown).toBe(204);
+  // 6. STEP-DOWN hides the privileged panel even when no non-admin tab exists.
+  await page.locator('#exit-btn').click();
+  await expect(page.locator('#console-empty-state')).toBeVisible();
+  await expect(page.locator('#tab-users')).toBeHidden();
+  await expect(page.locator('.console-tab[data-tab="users"]')).toBeHidden();
   expect(await status(page, OPERATE), 'admin gated again after step-down').toBe(401);
 
   // 7. LOGOUT ends the session

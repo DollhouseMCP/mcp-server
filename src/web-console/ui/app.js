@@ -80,6 +80,7 @@ function initTabs() {
 function activateTab(name) {
   const requestedTab = document.querySelector(`.console-tab[data-tab="${CSS.escape(name)}"]`);
   if (!requestedTab || requestedTab.hidden) return;
+  document.getElementById('console-empty-state')?.setAttribute('hidden', '');
   document.querySelectorAll('.console-tab').forEach(t =>
     t.classList.toggle('active', t.dataset.tab === name));
   document.querySelectorAll('.tab-panel').forEach(panel => {
@@ -122,7 +123,24 @@ function configureAvailableTabs(metadata) {
     tab.dataset.featureAvailable = String(available);
     tab.hidden = !available || !!tab.dataset.adminCap;
   });
-  document.getElementById('account-security').hidden = !metadata.hasRoute('GET', '/me/security/factors');
+  const accountSecurity = document.getElementById('account-security');
+  if (accountSecurity) accountSecurity.hidden = !metadata.hasRoute('GET', '/me/security/factors');
+}
+
+function showNoAvailableFeatures() {
+  document.querySelectorAll('.console-tab').forEach(tab => tab.classList.remove('active'));
+  document.querySelectorAll('.tab-panel').forEach(panel => {
+    panel.classList.remove('active');
+    panel.hidden = true;
+  });
+  const emptyState = document.getElementById('console-empty-state');
+  if (emptyState) emptyState.hidden = false;
+}
+
+function activateNonAdminFallback() {
+  const fallback = document.querySelector('.console-tab:not([data-admin-cap]):not([hidden])');
+  if (fallback?.dataset.tab) activateTab(fallback.dataset.tab);
+  else showNoAvailableFeatures();
 }
 
 /**
@@ -130,15 +148,18 @@ function configureAvailableTabs(metadata) {
  * is elevated AND the elevation grants the required capability. Driven by the
  * `dh:elevation-changed` event from the elevation control, so the tab appears
  * the moment admin mode is entered and disappears when it lapses. If elevation
- * drops while an admin tab is active, fall back to the portfolio tab.
+ * drops while an admin tab is active, fall back to the first non-admin tab or
+ * the explicit no-features state.
  */
 function applyAdminTabVisibility({ active, capabilities } = {}) {
   const caps = active ? (capabilities || []) : [];
+  let activeAdminTabRevoked = false;
   document.querySelectorAll('.console-tab[data-admin-cap]').forEach(tab => {
     const allowed = tab.dataset.featureAvailable === 'true' && caps.includes(tab.dataset.adminCap);
+    if (!allowed && tab.classList.contains('active')) activeAdminTabRevoked = true;
     tab.hidden = !allowed;
-    if (!allowed && tab.classList.contains('active')) activateTab('portfolio');
   });
+  if (activeAdminTabRevoked) activateNonAdminFallback();
 }
 
 // Cross-link used by the Sessions tab: open the Logs tab filtered to a session.
@@ -276,6 +297,7 @@ async function runAuthGate() {
     globalThis.dispatchEvent(new CustomEvent('dh:authenticated', { detail: { principal } }));
     const tab = initialTab();
     if (tab) activateTab(tab); // default tab, or the one we returned to after step-up
+    else showNoAvailableFeatures();
   } else {
     showGate();
   }

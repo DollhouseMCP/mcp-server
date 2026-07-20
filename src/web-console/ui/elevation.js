@@ -24,6 +24,7 @@ const WARN_THRESHOLD_MS = 60_000;
 
 let toast = () => {};
 let hasRoute = () => false;
+let factorDiscoveryAvailable = false;
 let control;          // #elevation-control
 let band;             // #admin-band
 let capabilities = [];
@@ -34,6 +35,7 @@ let warned = false;
 export function initElevation(principal, ctx = {}) {
   toast = ctx.toast || toast;
   hasRoute = ctx.hasRoute || hasRoute;
+  factorDiscoveryAvailable = hasRoute('GET', '/me/security/factors');
   control = document.getElementById('elevation-control');
   band = document.getElementById('admin-band');
   capabilities = Array.isArray(principal?.available_admin_capabilities)
@@ -88,6 +90,14 @@ function renderNormal() {
   hide(band);
   control.hidden = false;
   control.classList.remove('is-elevated');
+  if (!factorDiscoveryAvailable) {
+    control.innerHTML = `
+      <button class="btn btn-elevate" id="elevate-btn" type="button" disabled
+        title="Admin elevation is unavailable because factor discovery is not enabled">
+        <span class="elevate-icon" aria-hidden="true">&#x1f6e1;</span> Elevation unavailable
+      </button>`;
+    return;
+  }
   control.innerHTML = `
     <button class="btn btn-elevate" id="elevate-btn" type="button" title="Elevate to admin access (requires a one-time code)">
       <span class="elevate-icon" aria-hidden="true">&#x1f6e1;</span> Elevate
@@ -155,15 +165,19 @@ async function onElevate() {
   // Non-dead-end: elevation requires a TOTP factor. If none is enrolled, route
   // into the deliberate enrollment surface instead of bouncing off the AS's
   // "TOTP required" wall.
-  if (!hasRoute('GET', '/me/security/factors')) {
-    startStepUp();
-    return;
-  }
   const elevateBtn = document.getElementById('elevate-btn');
   if (elevateBtn) elevateBtn.disabled = true;
   const status = await fetchFactorStatus();
   if (elevateBtn) elevateBtn.disabled = false;
+  if (!status) {
+    toast('Could not verify authenticator status. Try again.', 'warn');
+    return;
+  }
   if (!status?.totp?.enrolled) {
+    if (!hasRoute('GET', '/me/security/factors/enroll/totp')) {
+      toast('Authenticator enrollment is not available in this deployment.', 'warn');
+      return;
+    }
     toast('Set up an authenticator first to elevate to admin access.', 'warn');
     openSecurityPanel({ toast, hasRoute });
     return;

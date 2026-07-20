@@ -12,9 +12,6 @@
  *     in AuthProviderFactory handles that case.
  */
 
-/* eslint-disable sonarjs/no-hardcoded-ip -- private-CIDR literals are intentional
-   trusted-proxy fixtures exercising the deployment-safety guards. */
-
 import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { assertHostedDeploymentSafety } from '../../../src/server/StreamableHttpServer.js';
 import { logger } from '../../../src/utils/logger.js';

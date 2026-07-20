@@ -94,10 +94,11 @@ function renderBody() {
 function providerCard(provider, status) {
   const connected = status?.status === 'connected';
   const errored = status?.status === 'error';
+  const routes = providerRouteAvailability(provider);
   let cardBody;
-  if (connected) cardBody = connectedBody(provider, status);
-  else if (errored) cardBody = erroredBody(provider, status);
-  else cardBody = disconnectedBody(provider);
+  if (connected) cardBody = connectedBody(provider, status, routes);
+  else if (errored) cardBody = erroredBody(provider, status, routes);
+  else cardBody = disconnectedBody(provider, routes);
   return `
     <div class="int-card${connected ? ' int-card--connected' : ''}">
       <div class="int-card-head">
@@ -114,6 +115,13 @@ function providerCard(provider, status) {
     </div>`;
 }
 
+function providerRouteAvailability(provider) {
+  return {
+    canConnect: hasRoute('POST', `/me/integrations/${provider.id}/connect`),
+    canDisconnect: hasRoute('DELETE', `/me/integrations/${provider.id}`),
+  };
+}
+
 function statusChip(status) {
   const s = status?.status;
   if (s === 'connected') return '<span class="int-chip int-chip--ok">Connected</span>';
@@ -121,36 +129,31 @@ function statusChip(status) {
   return '<span class="int-chip int-chip--off">Not connected</span>';
 }
 
-function connectedBody(provider, status) {
-  const canConnect = hasRoute('POST', `/me/integrations/${provider.id}/connect`);
-  const canDisconnect = hasRoute('DELETE', `/me/integrations/${provider.id}`);
+function connectedBody(provider, status, routes) {
   return `
     <div class="int-account">${status.account_label ? escapeHtml(status.account_label) : 'Connected'}</div>
     <div class="int-caps">${capabilityChips(status)}</div>
     <div class="int-meta">connected ${relAgo(status.connected_at)}${status.last_sync_at ? ` · last sync ${relAgo(status.last_sync_at)}` : ''}</div>
     <div class="int-actions">
-      ${canConnect ? `<button class="btn btn-ghost" data-connect="${provider.id}" type="button">Reconnect</button>` : ''}
-      ${canDisconnect ? `<button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>` : ''}
+      ${routes.canConnect ? `<button class="btn btn-ghost" data-connect="${provider.id}" type="button">Reconnect</button>` : ''}
+      ${routes.canDisconnect ? `<button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>` : ''}
     </div>`;
 }
 
-function erroredBody(provider, status) {
-  const canConnect = hasRoute('POST', `/me/integrations/${provider.id}/connect`);
-  const canDisconnect = hasRoute('DELETE', `/me/integrations/${provider.id}`);
+function erroredBody(provider, status, routes) {
   return `
     <div class="int-alert">Connection error${status.error_reason ? `: ${escapeHtml(formatReason(status.error_reason))}` : ''}</div>
     <div class="int-actions">
-      ${canConnect ? `<button class="btn btn-primary" data-connect="${provider.id}" type="button">Reconnect</button>` : ''}
-      ${canDisconnect ? `<button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>` : ''}
+      ${routes.canConnect ? `<button class="btn btn-primary" data-connect="${provider.id}" type="button">Reconnect</button>` : ''}
+      ${routes.canDisconnect ? `<button class="btn btn-ghost int-danger" data-disconnect="${provider.id}" type="button">Disconnect</button>` : ''}
     </div>`;
 }
 
-function disconnectedBody(provider) {
-  const canConnect = hasRoute('POST', `/me/integrations/${provider.id}/connect`);
+function disconnectedBody(provider, routes) {
   return `
     <div class="int-blurb">${escapeHtml(provider.blurb)}</div>
     <div class="int-actions">
-      ${canConnect ? `<button class="btn btn-primary" data-connect="${provider.id}" type="button">Connect</button>` : '<span class="int-meta">Not available in this deployment.</span>'}
+      ${routes.canConnect ? `<button class="btn btn-primary" data-connect="${provider.id}" type="button">Connect</button>` : '<span class="int-meta">Not available in this deployment.</span>'}
     </div>`;
 }
 

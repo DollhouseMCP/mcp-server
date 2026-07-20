@@ -62,16 +62,43 @@ async function load() {
 /* ── Markup ─────────────────────────────────────────────────────────────── */
 
 function shell() {
-  const canRevokeEverythingElse = availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp;
+  const bulkAction = bulkActionConfig();
   return `
   <div class="sessions-bar">
     <span class="sessions-title">Sessions</span>
     <div class="sessions-bar-actions">
       <button class="btn btn-ghost" id="sess-refresh" type="button">&#x21bb; Refresh</button>
-      ${canRevokeEverythingElse ? '<button class="btn btn-ghost session-danger" id="sess-revoke-others" type="button">Sign out everywhere else</button>' : ''}
+      ${bulkAction ? `<button class="btn btn-ghost session-danger" id="sess-revoke-others" type="button">${bulkAction.label}</button>` : ''}
     </div>
   </div>
   <div id="sessions-body"></div>`;
+}
+
+function bulkActionConfig() {
+  const consoleAvailable = availableActions.revokeOtherConsoleSessions;
+  const mcpAvailable = availableActions.disconnectAllMcp;
+  if (consoleAvailable && mcpAvailable) {
+    return {
+      label: 'Sign out everywhere else',
+      prompt: 'Sign out of all your other console sessions and disconnect all connected apps? This device stays signed in.',
+      confirmLabel: 'Sign out others',
+    };
+  }
+  if (consoleAvailable) {
+    return {
+      label: 'Sign out other console sessions',
+      prompt: 'Sign out of all your other console sessions? This device stays signed in.',
+      confirmLabel: 'Sign out others',
+    };
+  }
+  if (mcpAvailable) {
+    return {
+      label: 'Disconnect all connected apps',
+      prompt: 'Disconnect all connected apps? They will need to reconnect.',
+      confirmLabel: 'Disconnect apps',
+    };
+  }
+  return null;
 }
 
 function renderBody() {
@@ -210,20 +237,32 @@ async function disconnectMcp(sessionId) {
 }
 
 async function signOutEverywhereElse() {
-  const ok = await confirmDialog(
-    'Sign out of all your other console sessions and disconnect all connected apps? This device stays signed in.',
-    'Sign out others');
+  const bulkAction = bulkActionConfig();
+  if (!bulkAction) return;
+  const ok = await confirmDialog(bulkAction.prompt, bulkAction.confirmLabel);
   if (!ok) return;
   let consoleRevoked = 0;
   let appsDisconnected = 0;
   const [c, m] = await Promise.all([
-    post('/me/security/sessions/revoke-all-others').catch(() => null),
-    post('/me/sessions/revoke-all').catch(() => null),
+    availableActions.revokeOtherConsoleSessions
+      ? post('/me/security/sessions/revoke-all-others').catch(() => null)
+      : null,
+    availableActions.disconnectAllMcp
+      ? post('/me/sessions/revoke-all').catch(() => null)
+      : null,
   ]);
   if (c?.status === 200) consoleRevoked = Number(c.body?.revoked ?? 0);
   if (m && (m.status === 202 || m.status === 200)) appsDisconnected = Number(m.body?.requested ?? 0);
-  notify(`Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`, 'success');
+  notify(bulkActionResult(consoleRevoked, appsDisconnected), 'success');
   setTimeout(load, 900);
+}
+
+function bulkActionResult(consoleRevoked, appsDisconnected) {
+  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
+    return `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`;
+  }
+  if (availableActions.revokeOtherConsoleSessions) return `Signed out ${consoleRevoked} other session(s).`;
+  return `Disconnected ${appsDisconnected} app(s).`;
 }
 
 function jumpToLogs(logSessionId) {

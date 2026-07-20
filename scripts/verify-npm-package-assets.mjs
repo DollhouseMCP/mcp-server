@@ -83,11 +83,12 @@ let npmCacheDir = null;
 
 try {
   npmCacheDir = mkdtempSync(join(tmpdir(), 'dollhouse-npm-cache-'));
-  const packOutput = run('npm', ['pack', '--silent'], projectRoot, {
+  const packOutput = run('npm', ['pack', '--json'], projectRoot, {
     ...process.env,
     npm_config_cache: npmCacheDir,
   });
-  packedFile = packOutput.trim().split(/\r?\n/).at(-1);
+  const [packResult] = JSON.parse(packOutput);
+  packedFile = packResult?.filename;
 
   if (!packedFile) {
     throw new Error('npm pack did not return a package filename');

@@ -200,6 +200,8 @@ async function loadCollection() {
 }
 
 function resolveInstallAvailability(routeAvailable, advertisedAvailability) {
+  // install_enabled is deployment-wide and should match on every page. Retain
+  // a false value defensively if an inconsistent response is ever observed.
   return routeAvailable && advertisedAvailability !== false;
 }
 
