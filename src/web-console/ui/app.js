@@ -10,6 +10,7 @@ import { whoami, login, logout, get } from './api.js';
 import { loadConsoleMetadata } from './console-meta.js';
 import { initElevation } from './elevation.js';
 import { openSecurityPanel } from './security.js';
+import { openAccountSettings } from './account-settings.js';
 
 const THEME_KEY = 'dh-console-theme';
 
@@ -125,6 +126,10 @@ function configureAvailableTabs(metadata) {
   });
   const accountSecurity = document.getElementById('account-security');
   if (accountSecurity) accountSecurity.hidden = !metadata.hasRoute('GET', '/me/security/factors');
+  const accountSettings = document.getElementById('account-settings');
+  if (accountSettings) {
+    accountSettings.hidden = !metadata.hasRoute('GET', '/me/profile') && !metadata.hasRoute('GET', '/me/settings');
+  }
 }
 
 function showNoAvailableFeatures() {
@@ -211,6 +216,10 @@ function initAccountMenu() {
   document.getElementById('account-security')?.addEventListener('click', () => {
     setOpen(false);
     openSecurityPanel({ toast, hasRoute: consoleMetadata?.hasRoute });
+  });
+  document.getElementById('account-settings')?.addEventListener('click', () => {
+    setOpen(false);
+    openAccountSettings({ toast, hasRoute: consoleMetadata?.hasRoute || (() => false) });
   });
 }
 
@@ -312,6 +321,17 @@ function init() {
   initStepUp();
   // Reveal/hide admin-only tabs as elevation comes and goes.
   globalThis.addEventListener('dh:elevation-changed', (e) => applyAdminTabVisibility(e.detail));
+  globalThis.addEventListener('dh:profile-updated', event => {
+    const profile = event.detail?.profile;
+    const account = document.getElementById('site-account');
+    if (account && profile) account.textContent = profile.display_name || profile.username || account.textContent;
+  });
+  globalThis.addEventListener('dh:theme-setting-changed', event => {
+    const theme = event.detail?.theme;
+    if (theme !== 'light' && theme !== 'dark') return;
+    localStorage.setItem(THEME_KEY, theme);
+    applyTheme(theme);
+  });
   document.getElementById('auth-gate-signin')?.addEventListener('click', () => login('/ui'));
   document.getElementById('logout-btn')?.addEventListener('click', () => logout());
   runAuthGate();

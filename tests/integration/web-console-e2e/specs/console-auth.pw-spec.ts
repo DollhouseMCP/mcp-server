@@ -6,6 +6,8 @@ import { test, expect, type Page } from '@playwright/test';
 import { TOTP, Secret } from 'otpauth';
 
 import { SEED_PASSWORD } from '../harness/seed.js';
+import { installPortfolioUiMock } from '../harness/portfolioUiMock.js';
+import { installSelfServiceUiMock } from '../harness/selfServiceUiMock.js';
 import { installSessionUiMock } from '../harness/sessionUiMock.js';
 import { BASE_URL } from '../setup/provision.js';
 
@@ -14,6 +16,11 @@ const OPERATE = '/api/v1/admin/operate/health';
 const MANIFEST_URL = '**/api/v1/me/manifest';
 const SESSIONS_TAB = '.console-tab[data-tab="sessions"]';
 const SESSION_DETAIL_HEADER = '#session-detail-header';
+const CONFIRM_ACTION = '[data-confirm="1"]';
+const ACCOUNT_MENU = '#site-account';
+const EDITOR_FEEDBACK = '[data-editor-feedback]';
+const EDITOR_CONTENT = '.portfolio-editor [name="content"]';
+const THEME_SELECT = '#account-theme-form [name="theme"]';
 
 async function filterManifestRoutes(page: Page, unavailableRoutes: ReadonlySet<string>): Promise<void> {
   await page.route(MANIFEST_URL, async route => {
@@ -103,10 +110,144 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await expect(page.locator('[data-revoke-console], [data-disconnect-mcp]')).toHaveCount(0);
   await expect(page.locator('#sess-revoke-others')).toHaveText('Sign out other console sessions');
 
-  await page.locator('#site-account').click();
+  await page.locator(ACCOUNT_MENU).click();
   await page.locator('#account-security').click();
   await expect(page.locator('#security-modal')).toBeVisible();
   await expect(page.locator('#sec-enroll')).toHaveCount(0);
+});
+
+test('portfolio authoring validates drafts, preserves conflicts, and confirms hard deletion', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page, { conflictOnFirstPatch: true });
+  await loginFromConsole(page);
+
+  await page.locator('#pf-create').click();
+  await page.locator('[data-editor-validate]').click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Name is required');
+  await page.locator('.portfolio-editor [name="name"]').fill('browser-created');
+  await page.locator('[data-editor-validate]').click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('content is required');
+  await page.locator(EDITOR_CONTENT).fill('Created through the browser.');
+  await page.locator('[data-editor-validate]').click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Validation passed');
+  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await expect(page.locator('[data-name="browser-created"]')).toBeVisible();
+
+  await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
+  await page.locator(EDITOR_CONTENT).fill('Unsaved browser draft.');
+  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('changed after you opened it');
+  await expect(page.locator('[data-editor-reload]')).toBeVisible();
+  await page.locator('[data-editor-reload]').click();
+  await expect(page.locator(EDITOR_CONTENT)).toHaveValue('Latest server content.');
+  await page.locator('.portfolio-editor [data-editor-close]').first().click();
+
+  await page.locator('[data-name="alpha-persona"]').click();
+  await page.locator('.modal-delete-btn').click();
+  await page.locator('#portfolio-confirm [data-confirm="0"]').click();
+  expect(mock.deletes).toBe(0);
+  await page.locator('[data-name="alpha-persona"]').click();
+  await page.locator('.modal-delete-btn').click();
+  await page.locator('#portfolio-confirm [data-confirm="1"]').click();
+  await expect(page.locator('[data-name="alpha-persona"]')).toHaveCount(0);
+  expect(mock.deletes).toBe(1);
+});
+
+test('portfolio editor stays blocked when conflict reload omits its ETag', async ({ page }) => {
+  await installPortfolioUiMock(page, { conflictOnFirstPatch: true, omitEtagAfterConflict: true });
+  await loginFromConsole(page);
+
+  await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
+  await page.locator(EDITOR_CONTENT).fill('Draft that must not overwrite newer content.');
+  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await page.locator('[data-editor-reload]').click();
+
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('did not include an ETag');
+  await expect(page.locator('[data-editor-reload]')).toBeVisible();
+  await expect(page.locator(EDITOR_CONTENT)).toHaveValue('Draft that must not overwrite newer content.');
+});
+
+test('portfolio sync reports successful and failed terminal jobs', async ({ page }) => {
+  const success = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  await page.locator('#pf-sync').click();
+  await page.locator('.portfolio-sync button[type="submit"]').click();
+  await expect(page.locator('[data-sync-status]')).toContainText('Succeeded', { timeout: 5_000 });
+  expect(success.syncReads).toBeGreaterThanOrEqual(2);
+
+  await page.unroute('**/api/v1/me/portfolio**');
+  const failed = await installPortfolioUiMock(page, { syncOutcome: 'failed' });
+  await page.locator('[data-sync-close]').first().click();
+  await page.locator('#pf-sync').click();
+  await page.locator('.portfolio-sync button[type="submit"]').click();
+  await expect(page.locator('[data-sync-status]')).toContainText('github_sync_failed', { timeout: 5_000 });
+  expect(failed.syncReads).toBeGreaterThanOrEqual(2);
+});
+
+test('portfolio write controls disappear when the manifest omits write routes', async ({ page }) => {
+  await installPortfolioUiMock(page);
+  await filterManifestRoutes(page, new Set([
+    'POST /api/v1/me/portfolio/sync',
+    'GET /api/v1/me/portfolio/sync/:job_id',
+    'POST /api/v1/me/portfolio/elements/:type',
+    'PATCH /api/v1/me/portfolio/elements/:type/:name',
+    'DELETE /api/v1/me/portfolio/elements/:type/:name',
+    'POST /api/v1/me/portfolio/elements/:type/:name/validate',
+    'POST /api/v1/me/portfolio/elements/:type/:name/render',
+  ]));
+  await loginFromConsole(page);
+  await expect(page.locator('#pf-grid')).toBeVisible();
+  await expect(page.locator('#pf-create, #pf-sync, [data-action="edit"]')).toHaveCount(0);
+  await page.locator('[data-name="alpha-persona"]').click();
+  await expect(page.locator('.modal-edit-btn')).toBeHidden();
+  await expect(page.locator('.modal-delete-btn')).toBeHidden();
+});
+
+test('profile and allowlisted appearance settings persist without overwriting stale state', async ({ page }) => {
+  const mock = await installSelfServiceUiMock(page, { conflictOnFirstSettingsWrite: true });
+  await loginFromConsole(page);
+  await page.locator(ACCOUNT_MENU).click();
+  await page.locator('#account-settings').click();
+
+  await page.locator('#account-profile-form [name="display_name"]').fill('Browser Admin');
+  await page.locator('#account-profile-form button[type="submit"]').click();
+  await expect(page.locator(ACCOUNT_MENU)).toHaveText('Browser Admin');
+
+  await page.locator(THEME_SELECT).selectOption('light');
+  await page.locator('#account-theme-form button[type="submit"]').click();
+  await expect(page.locator('[data-theme-feedback]')).toContainText('not saved');
+  await expect(page.locator(THEME_SELECT)).toHaveValue('dark');
+  await page.locator(THEME_SELECT).selectOption('light');
+  await page.locator('#account-theme-form button[type="submit"]').click();
+  await expect(page.locator('[data-theme-feedback]')).toContainText('Appearance saved');
+
+  await page.locator('[data-account-close]').last().click();
+  await page.reload();
+  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(ACCOUNT_MENU).click();
+  await page.locator('#account-settings').click();
+  await expect(page.locator('#account-profile-form [name="display_name"]')).toHaveValue('Browser Admin');
+  await expect(page.locator(THEME_SELECT)).toHaveValue('light');
+  expect(mock.settingsWrites).toBe(2);
+});
+
+test('appearance settings preserve unsupported backend values until explicitly reset', async ({ page }) => {
+  const mock = await installSelfServiceUiMock(page, { initialTheme: 'system' });
+  await loginFromConsole(page);
+  await page.locator(ACCOUNT_MENU).click();
+  await page.locator('#account-settings').click();
+
+  const theme = page.locator(THEME_SELECT);
+  await expect(theme).toBeDisabled();
+  await expect(theme).toHaveValue('__unsupported_saved_theme__');
+  await expect(page.locator('[data-theme-feedback]')).toContainText('not supported');
+  await expect(page.locator('#account-theme-form button[type="submit"]')).toBeDisabled();
+  expect(mock.settingsWrites).toBe(0);
+
+  await page.locator('#account-theme-form [data-theme-reset]').click();
+  await expect(theme).toBeEnabled();
+  await expect(theme).toHaveValue('light');
+  expect(mock.theme).toBeNull();
+  expect(mock.settingsWrites).toBe(1);
 });
 
 test('owned session workspace handles HITL, snapshots, polling cleanup, and termination acknowledgement', async ({ page }) => {
@@ -127,7 +268,7 @@ test('owned session workspace handles HITL, snapshots, polling cleanup, and term
 
   const deleteApproval = approvals.filter({ hasText: 'delete_element' });
   await deleteApproval.locator('[data-approval-action="deny"]').click();
-  await page.locator('[data-confirm="1"]').click();
+  await page.locator(CONFIRM_ACTION).click();
   await expect(deleteApproval).toContainText('denied');
 
   await page.locator('#session-activation-form select[name="type"]').selectOption('skills');
@@ -136,7 +277,7 @@ test('owned session workspace handles HITL, snapshots, polling cleanup, and term
   await expect(page.locator('.session-detail-panel--activations')).toContainText('beta-skill');
 
   await page.locator('[data-deactivate-name="beta-skill"]').click();
-  await page.locator('[data-confirm="1"]').click();
+  await page.locator(CONFIRM_ACTION).click();
   await expect(page.locator('.session-detail-panel--activations')).toContainText('No elements are active for this session.');
 
   await page.locator('[data-execution-id]').click();
@@ -151,7 +292,7 @@ test('owned session workspace handles HITL, snapshots, polling cleanup, and term
   await page.locator(SESSIONS_TAB).click();
   await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('Claude Code 1.2.3');
   await page.locator('[data-session-disconnect]').click();
-  await page.locator('[data-confirm="1"]').click();
+  await page.locator(CONFIRM_ACTION).click();
   await expect(page.locator(SESSION_DETAIL_HEADER)).toContainText('Session unavailable');
   expect(mock.commandReads).toBeGreaterThanOrEqual(2);
 });
@@ -163,7 +304,7 @@ test('session termination keeps a failed acknowledgement visible', async ({ page
   await page.locator('[data-inspect-mcp]').click();
 
   await page.locator('[data-session-disconnect]').click();
-  await page.locator('[data-confirm="1"]').click();
+  await page.locator(CONFIRM_ACTION).click();
 
   await expect(page.locator('.session-command-status')).toContainText('Waiting for the owning replica');
   expect(mock.commandReads).toBe(1);
@@ -184,7 +325,7 @@ test('bulk session termination reports command acknowledgement accurately', asyn
   await page.locator(SESSIONS_TAB).click();
 
   await page.locator('#sess-revoke-others').click();
-  await page.locator('[data-confirm="1"]').click();
+  await page.locator(CONFIRM_ACTION).click();
 
   await expect(page.locator('#sessions-command-summary')).toContainText('1 disconnect(s) acknowledged.');
   expect(mock.commandReads).toBeGreaterThanOrEqual(2);

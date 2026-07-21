@@ -16,6 +16,7 @@
 
 import { get, post } from './api.js';
 import { noConsoleRoute } from './console-meta.js';
+import { createPortfolioAuthoring } from './portfolio-authoring.js';
 import { renderElementDetail } from './portfolio-detail.js';
 
 // Plural API type → singular CSS/display type (drives the --family colour lanes
@@ -46,16 +47,19 @@ const state = {
   collection: { status: 'idle', detail: '', elements: [], installEnabled: true },
   // Catalog paths installed this session, so their cards can flip to "Installed".
   installed: new Set(),
+  summary: null,
 };
 
 let host;
 let notify = () => {};
 let hasRoute = noConsoleRoute;
+let authoring;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
   hasRoute = ctx.hasRoute || hasRoute;
+  authoring = createPortfolioAuthoring({ hasRoute, notify, refresh: refreshPortfolio });
   state.collection.installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
   host.innerHTML = template();
   const collectionAvailable = hasRoute('GET', '/collection/elements');
@@ -69,6 +73,13 @@ export async function init(panelEl, ctx = {}) {
 
 function template() {
   return `
+  <div class="portfolio-command-bar">
+    <span class="portfolio-summary" id="pf-summary" aria-live="polite">Portfolio</span>
+    <div class="portfolio-command-actions">
+      ${authoring.capabilities.sync ? '<button class="btn btn-ghost" id="pf-sync" type="button">Sync with GitHub</button>' : ''}
+      ${authoring.capabilities.create ? '<button class="btn btn-primary" id="pf-create" type="button">Create element</button>' : ''}
+    </div>
+  </div>
   <div class="browse-controls">
     <div class="search-wrapper">
       <label for="pf-search" class="sr-only">Search elements</label>
@@ -120,13 +131,18 @@ function template() {
 async function load() {
   const grid = host.querySelector('#pf-grid');
   grid.innerHTML = '<li class="panel-placeholder">Loading portfolio…</li>';
-  const list = await get('/me/portfolio/elements');
+  const [list, summary] = await Promise.all([
+    get('/me/portfolio/elements'),
+    hasRoute('GET', '/me/portfolio') ? get('/me/portfolio') : Promise.resolve(null),
+  ]);
   if (list.status !== 200) {
     grid.innerHTML = `<li class="panel-placeholder">Couldn't load your portfolio (status ${list.status}).</li>`;
     return;
   }
   // Local portfolio elements are flagged so the LOCAL badge + Portfolio source filter work.
   state.elements = (list.body?.elements ?? []).filter(Boolean).map(el => ({ ...el, _local: true }));
+  state.summary = summary?.status === 200 ? summary.body : null;
+  renderSummary();
   paint();
   // The list DTO is lean; hydrate the rich card fields (description/author/
   // category) from each element's full detail — the legacy did the same. No
@@ -149,6 +165,7 @@ async function hydrateDetails() {
           const m = res.body.metadata ?? {};
           el.metadata = m;                 // keep the full stored frontmatter
           el.content = res.body.content;   // for the detail view (next increment)
+          el._etag = res.etag;
           el.description = str(m.description);
           el.author = str(m.author);
           el.category = str(m.category);
@@ -228,6 +245,16 @@ function mapCollectionElement(el) {
 // Repaint both the type-filter counts and the grid (use when the source or the
 // underlying element set changed; plain render() suffices for search/sort/view).
 function paint() { renderTypeFilters(); render(); }
+
+function renderSummary() {
+  const summary = host.querySelector('#pf-summary');
+  if (!summary) return;
+  const total = state.summary?.total_elements;
+  const plural = total === 1 ? '' : 's';
+  summary.textContent = Number.isSafeInteger(total)
+    ? `${total} portfolio element${plural}`
+    : 'Your portfolio';
+}
 
 function renderTypeFilters() {
   // Counts follow the active source, so the Collection tab shows catalog counts
@@ -312,6 +339,7 @@ function card(el) {
   const stale = el.validation_status && el.validation_status !== 'valid';
   const tagItems = (el.tags || []).slice(0, 5).map(t => `<li class="tag">${escapeHtml(t)}</li>`).join('');
   const isCollection = el.source === 'collection';
+  const actions = isCollection ? installAction(el) : portfolioCardActions(el);
   return `
   <article class="element-card" data-type="${escapeAttr(singular)}" data-key="${escapeAttr(el.type)}" data-name="${escapeAttr(el.name)}"
     ${isCollection && el.path ? `data-path="${escapeAttr(el.path)}"` : ''}
@@ -335,16 +363,20 @@ function card(el) {
         ${el.category ? `<span class="meta-category">${escapeHtml(el.category)}</span>` : ''}
         ${el.updated_at ? `<span class="meta-date">${formatDate(el.updated_at)}</span>` : ''}
       </div>
-      ${isCollection ? installAction(el) : `
-      <div class="card-actions">
-        <button class="card-download-btn" data-action="download" aria-label="Download ${escapeHtml(title(el))}" title="Download">&#10515;</button>
-      </div>`}
+      ${actions}
       ${el.tags?.length
         ? `<ul class="card-tags" aria-label="Tags">${tagItems}</ul>`
         : ''}
     </footer>
     <div class="card-inline-detail"></div>
   </article>`;
+}
+
+function portfolioCardActions(el) {
+  const edit = authoring.capabilities.edit
+    ? `<button class="card-download-btn" data-action="edit" aria-label="Edit ${escapeHtml(title(el))}" title="Edit">Edit</button>`
+    : '';
+  return `<div class="card-actions portfolio-card-edit">${edit}<button class="card-download-btn" data-action="download" aria-label="Download ${escapeHtml(title(el))}" title="Download">&#10515;</button></div>`;
 }
 
 // Version label for both the portfolio's numeric version and the collection's
@@ -396,6 +428,8 @@ function renderComponentSummary(el) {
 /* ── Controls ───────────────────────────────────────────────────────────── */
 
 function wireControls() {
+  host.querySelector('#pf-create')?.addEventListener('click', () => authoring.openCreate());
+  host.querySelector('#pf-sync')?.addEventListener('click', () => authoring.openSync());
   host.querySelector('#pf-search').addEventListener('input', (e) => { state.search = e.target.value; state.page = 1; render(); });
   host.querySelector('#pf-sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
   host.querySelector('#pf-view').addEventListener('click', (e) => toggleGroup(e, '.view-btn', '#pf-view', v => { state.view = v; }));
@@ -429,6 +463,8 @@ function wireControls() {
     if (installBtn) { e.stopPropagation(); installCard(list[idx], installBtn); return; }   // install without opening
     const dlBtn = e.target.closest('[data-action="download"]');
     if (dlBtn) { e.stopPropagation(); downloadCard(list[idx], dlBtn); return; }   // download without opening
+    const editBtn = e.target.closest('[data-action="edit"]');
+    if (editBtn) { e.stopPropagation(); editCard(list[idx], editBtn); return; }
     openModal(list, idx);
   });
 }
@@ -458,6 +494,8 @@ function ensureModal() {
       </header>
       <div class="modal-toolbar">
         <button class="modal-action-btn modal-install-btn" data-act="install" hidden>&#8681; Install</button>
+        <button class="modal-action-btn modal-edit-btn" data-act="edit" hidden>Edit</button>
+        <button class="modal-action-btn modal-delete-btn portfolio-danger" data-act="delete" hidden>Delete</button>
         <button class="modal-action-btn" data-act="render">&#8644; Raw</button>
         <button class="modal-action-btn" data-act="copy">&#9112; Copy</button>
         <button class="modal-action-btn" data-act="download">&#10515; Download</button>
@@ -470,20 +508,21 @@ function ensureModal() {
       <div class="modal-body" id="pf-modal-body" tabindex="-1"></div>
     </div>`;
   document.body.appendChild(dlg);
-  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });        // backdrop click
-  dlg.querySelector('#pf-modal-close').addEventListener('click', close);
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) closeDetailModal(); });        // backdrop click
+  dlg.querySelector('#pf-modal-close').addEventListener('click', closeDetailModal);
   dlg.querySelector('.modal-toolbar').addEventListener('click', onToolbar);
-  function close() { dlg.close(); document.body.classList.remove('modal-open'); }
 }
 
 let modalList = [];
 let modalIdx = -1;
 let modalEl = null;
 let modalContent = '';
+let modalPreviousFocus = null;
 
 async function openModal(list, idx) {
   ensureModal();
   modalList = list; modalIdx = idx; modalEl = list[idx];
+  modalPreviousFocus = document.activeElement;
   const dlg = document.getElementById('pf-modal');
   const body = dlg.querySelector('#pf-modal-body');
   setHeader(modalEl);
@@ -499,7 +538,7 @@ async function openModal(list, idx) {
     body.innerHTML = `<p class="panel-placeholder">Couldn't load this element (status ${res.status}).</p>`;
     return;
   }
-  modalEl = { ...modalEl, ...res.body, metadata: res.body.metadata ?? {} };
+  modalEl = { ...modalEl, ...res.body, metadata: res.body.metadata ?? {}, _etag: res.etag };
   modalContent = typeof res.body.content === 'string' ? res.body.content : '';
   setHeader(modalEl);
   renderModalBody();
@@ -525,6 +564,10 @@ function setHeader(el) {
     installBtn.disabled = done;
     installBtn.textContent = done ? 'Installed ✓' : '⭳ Install';
   }
+  const local = el.source !== 'collection';
+  const safelyLoaded = Boolean(el._etag);
+  dlg.querySelector('.modal-edit-btn').hidden = !local || !safelyLoaded || !authoring.capabilities.edit;
+  dlg.querySelector('.modal-delete-btn').hidden = !local || !safelyLoaded || !authoring.capabilities.delete;
 }
 
 function renderModalBody() {
@@ -588,6 +631,7 @@ async function ensureLoaded(el) {
   if (res.status === 200 && res.body) {
     el.metadata = res.body.metadata ?? {};
     el.content = typeof res.body.content === 'string' ? res.body.content : '';
+    el._etag = res.etag;
   }
   return el;
 }
@@ -671,9 +715,14 @@ async function installFromModal(btn) {
 // the Portfolio tab shows the new element without a jarring full "Loading…".
 async function refreshPortfolio() {
   try {
-    const list = await get('/me/portfolio/elements');
+    const [list, summary] = await Promise.all([
+      get('/me/portfolio/elements'),
+      hasRoute('GET', '/me/portfolio') ? get('/me/portfolio') : Promise.resolve(null),
+    ]);
     if (list.status !== 200) return;
     state.elements = (list.body?.elements ?? []).filter(Boolean).map(el => ({ ...el, _local: true }));
+    state.summary = summary?.status === 200 ? summary.body : state.summary;
+    renderSummary();
     if (state.source !== 'collection') paint();
     hydrateDetails();
   } catch { /* leave the current portfolio view; the next full load will catch up */ }
@@ -692,11 +741,44 @@ function onToolbar(e) {
     downloadElement(modalEl);
   } else if (act === 'install') {
     installFromModal(btn);
+  } else if (act === 'edit') {
+    const element = modalEl;
+    closeDetailModal();
+    authoring.openEdit(element);
+  } else if (act === 'delete') {
+    const element = modalEl;
+    closeDetailModal();
+    authoring.deleteElement(element);
   } else if (act === 'prev' && modalIdx > 0) {
     openModal(modalList, modalIdx - 1);
   } else if (act === 'next' && modalIdx < modalList.length - 1) {
     openModal(modalList, modalIdx + 1);
   }
+}
+
+async function editCard(element, button) {
+  const prior = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Loading…';
+  try {
+    await ensureLoaded(element);
+    if (!element._etag) {
+      notify('This element could not be opened for safe editing.', 'error');
+      return;
+    }
+    authoring.openEdit(element);
+  } finally {
+    button.disabled = false;
+    button.textContent = prior;
+  }
+}
+
+function closeDetailModal() {
+  const dialog = document.getElementById('pf-modal');
+  if (dialog?.open) dialog.close();
+  document.body.classList.remove('modal-open');
+  if (modalPreviousFocus instanceof HTMLElement && modalPreviousFocus.isConnected) modalPreviousFocus.focus();
+  modalPreviousFocus = null;
 }
 
 function toggleGroup(e, btnSel, groupSel, apply) {

@@ -36,6 +36,39 @@ describe('/me/portfolio reads', () => {
 });
 
 describe('/me/portfolio element authoring (write routes enabled)', () => {
+  it('creates, edits, and deletes every supported portfolio type', async () => {
+    const fixtures = [
+      { type: 'personas', name: 'alpha-all-types-persona', content: 'Persona instructions.', preserved: 'Persona instructions.', metadata: { description: 'Persona' } },
+      { type: 'skills', name: 'alpha-all-types-skill', content: 'Skill instructions.', preserved: 'Skill instructions.', metadata: { description: 'Skill' } },
+      { type: 'templates', name: 'alpha-all-types-template', content: 'Hello {{name}}', preserved: 'Hello {{name}}', metadata: { description: 'Template' } },
+      { type: 'agents', name: 'alpha-all-types-agent', content: 'Agent instructions.', preserved: 'Agent instructions.', metadata: { description: 'Agent', goal: 'Assist carefully' } },
+      { type: 'memories', name: 'alpha-all-types-memory', content: 'entries:\n  - content: Remember the alpha test.', preserved: 'Remember the alpha test.', metadata: { description: 'Memory' } },
+      { type: 'ensembles', name: 'alpha-all-types-ensemble', content: 'Alpha ensemble.', preserved: '"elements":[]', metadata: { description: 'Ensemble', elements: [] } },
+    ] as const;
+
+    for (const fixture of fixtures) {
+      const typeBase = `/api/v1/me/portfolio/elements/${fixture.type}`;
+      const created = await world.clients.userA.post(typeBase, {
+        body: { name: fixture.name, content: fixture.content, metadata: fixture.metadata, tags: ['all-types'] },
+      });
+      expect(created.status).toBe(201);
+      const read = await world.clients.userA.get(`${typeBase}/${fixture.name}`);
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({ type: fixture.type, name: fixture.name });
+      const edited = await world.clients.userA.patch(`${typeBase}/${fixture.name}`, {
+        body: { tags: ['edited-all-types'] },
+        ifMatch: read.etag,
+      });
+      expect(edited.status).toBe(200);
+      const afterEdit = await world.clients.userA.get(`${typeBase}/${fixture.name}`);
+      expect(afterEdit.status).toBe(200);
+      expect(JSON.stringify(afterEdit.body)).toContain(fixture.preserved);
+      expect(afterEdit.body.tags).toEqual(['edited-all-types']);
+      const deleted = await world.clients.userA.delete(`${typeBase}/${fixture.name}`, { ifMatch: edited.etag });
+      expect(deleted.status).toBe(200);
+    }
+  });
+
   it('full CRUD round-trip: create -> read -> validate -> render -> edit -> delete', async () => {
     // create
     const created = await world.clients.userA.post(base, {
@@ -154,6 +187,26 @@ describe('/me/portfolio element authoring (write routes enabled)', () => {
     // cleanup
     const read = await world.clients.userA.get(`${base}/precond-persona`);
     if (read.status === 200) await world.clients.userA.delete(`${base}/precond-persona`, { ifMatch: read.etag });
+  });
+
+  it('rejects stale ETags for both update and hard delete', async () => {
+    const name = 'stale-etag-persona';
+    const created = await world.clients.userA.post(base, { body: { name, content: 'first', metadata: {} } });
+    expect(created.status).toBe(201);
+    const updated = await world.clients.userA.patch(`${base}/${name}`, {
+      body: { content: 'second' },
+      ifMatch: created.etag,
+    });
+    expect(updated.status).toBe(200);
+    const staleUpdate = await world.clients.userA.patch(`${base}/${name}`, {
+      body: { content: 'third' },
+      ifMatch: created.etag,
+    });
+    expect(staleUpdate.status).toBe(412);
+    const staleDelete = await world.clients.userA.delete(`${base}/${name}`, { ifMatch: created.etag });
+    expect(staleDelete.status).toBe(412);
+    const cleanup = await world.clients.userA.delete(`${base}/${name}`, { ifMatch: updated.etag });
+    expect(cleanup.status).toBe(200);
   });
 });
 
