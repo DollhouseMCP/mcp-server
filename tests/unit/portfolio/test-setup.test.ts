@@ -180,4 +180,44 @@ describe('test-setup utilities', () => {
       expect(process.env.HOME).toBe(returnedOriginalHome);
     });
   });
+
+  describe('clearSuiteDirectory', () => {
+    it('removes the suite directory when cleanupFiles=true', async () => {
+      await setupTestEnvironment(true);
+      const suiteTempDir = process.env.HOME as string;
+
+      await clearSuiteDirectory(true);
+
+      expect(await pathExists(suiteTempDir)).toBe(false);
+    });
+
+    it('resets the suite directory cache', async () => {
+      await setupTestEnvironment(true);
+      const firstSuiteDir = process.env.HOME as string;
+      await clearSuiteDirectory(true);
+
+      // If the cache weren't reset, this call would reuse firstSuiteDir instead
+      // of creating a fresh one.
+      await setupTestEnvironment(true);
+      const secondSuiteDir = process.env.HOME as string;
+
+      expect(secondSuiteDir).not.toBe(firstSuiteDir);
+
+      await clearSuiteDirectory(true);
+    });
+
+    it('handles a missing directory gracefully when no suite directory is active', async () => {
+      await expect(clearSuiteDirectory(true)).resolves.not.toThrow();
+    });
+
+    it('handles cleanup errors gracefully when the suite directory was already removed', async () => {
+      await setupTestEnvironment(true);
+      const suiteTempDir = process.env.HOME as string;
+
+      // Remove it out-of-band so clearSuiteDirectory's own fs.rm hits a missing path
+      await fs.rm(suiteTempDir, { recursive: true, force: true });
+
+      await expect(clearSuiteDirectory(true)).resolves.not.toThrow();
+    });
+  });
 });
