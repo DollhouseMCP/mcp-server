@@ -126,4 +126,58 @@ describe('test-setup utilities', () => {
       await clearSuiteDirectory(true);
     });
   });
+
+  describe('cleanupTestEnvironment', () => {
+    it('restores the original HOME environment variable', async () => {
+      const returnedOriginalHome = await setupTestEnvironment(false);
+      await cleanupTestEnvironment(returnedOriginalHome, false);
+
+      expect(process.env.HOME).toBe(returnedOriginalHome);
+    });
+
+    it('removes the temp directory when cleanupFiles=true', async () => {
+      const returnedOriginalHome = await setupTestEnvironment(false);
+      const tempDir = process.env.HOME as string;
+
+      await cleanupTestEnvironment(returnedOriginalHome, true);
+
+      expect(await pathExists(tempDir)).toBe(false);
+    });
+
+    it('skips removal when cleanupFiles=false', async () => {
+      const returnedOriginalHome = await setupTestEnvironment(false);
+      const tempDir = process.env.HOME as string;
+
+      await cleanupTestEnvironment(returnedOriginalHome, false);
+
+      expect(await pathExists(tempDir)).toBe(true);
+
+      // Manual cleanup so the temp dir doesn't linger on disk
+      await fs.rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('does not delete the suite directory during individual test cleanup', async () => {
+      const suiteHome = await setupTestEnvironment(true);
+      const suiteTempDir = process.env.HOME as string;
+
+      // Simulate an individual test that reused the suite dir and then cleaned up
+      await cleanupTestEnvironment(suiteHome, true);
+
+      expect(await pathExists(suiteTempDir)).toBe(true);
+
+      await clearSuiteDirectory(true);
+    });
+
+    it('handles cleanup errors gracefully', async () => {
+      const returnedOriginalHome = await setupTestEnvironment(false);
+      const tempDir = process.env.HOME as string;
+
+      // Remove the directory out-of-band so fs.rm inside cleanup hits a missing path;
+      // fs.rm with force:true should not throw for a missing path either way.
+      await fs.rm(tempDir, { recursive: true, force: true });
+
+      await expect(cleanupTestEnvironment(returnedOriginalHome, true)).resolves.not.toThrow();
+      expect(process.env.HOME).toBe(returnedOriginalHome);
+    });
+  });
 });
