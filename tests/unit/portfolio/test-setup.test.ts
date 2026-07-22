@@ -256,4 +256,103 @@ describe('test-setup utilities', () => {
       await expect(resetSingletons()).resolves.toBeUndefined();
     });
   });
+
+  describe('parallel test execution', () => {
+    it('creates distinct, collision-free directories when called concurrently', async () => {
+      // Simulates multiple test workers calling setupTestEnvironment() around the same
+      // instant. Since concurrent calls in a single process all share the same PID,
+      // this exercises the timestamp/random portion of the naming scheme under load
+      // (true multi-process parallelism additionally varies by PID).
+      const before = new Set(
+        (await fs.readdir(os.tmpdir())).filter(name => name.startsWith('dollhouse-test-'))
+      );
+
+      const concurrency = 8;
+      await Promise.all(Array.from({ length: concurrency }, () => setupTestEnvironment(false)));
+
+      const after = await fs.readdir(os.tmpdir());
+      const created = after.filter(name => name.startsWith('dollhouse-test-') && !before.has(name));
+
+      // os.tmpdir() is a shared, global resource — other processes or leftover
+      // directories from unrelated runs can add entries between the two snapshots,
+      // so we can't assert an exact count. What we're actually verifying is that
+      // none of the 8 concurrent calls collided on the same generated name: a
+      // duplicate name would mean two calls wrote into the same directory, so the
+      // number of *distinct* new names must still be at least `concurrency`, and
+      // deduping the set must never shrink it (no repeated names among our own calls).
+      expect(created.length).toBeGreaterThanOrEqual(concurrency);
+      expect(new Set(created).size).toBe(created.length);
+
+      await Promise.all(
+        created.map(name => fs.rm(path.join(os.tmpdir(), name), { recursive: true, force: true }))
+      );
+    });
+  });
+
+  describe('error handling and recovery', () => {
+    it('remains usable after a consumer throws between setup and cleanup', async () => {
+      const returnedOriginalHome = await setupTestEnvironment(false);
+      const tempDir = process.env.HOME as string;
+
+      let caught: unknown;
+      try {
+        throw new Error('simulated failure inside a test body');
+      } catch (error) {
+        caught = error;
+      } finally {
+        await cleanupTestEnvironment(returnedOriginalHome, true);
+      }
+
+      expect(caught).toBeInstanceOf(Error);
+      expect(await pathExists(tempDir)).toBe(false);
+
+      // The utilities should work normally afterward — no lingering broken state
+      const nextOriginalHome = await setupTestEnvironment(false);
+      expect(process.env.HOME).not.toBe(tempDir);
+      await cleanupTestEnvironment(nextOriginalHome, true);
+    });
+
+    it('does not delete the suite directory if a consumer throws before calling cleanup', async () => {
+      await setupTestEnvironment(true);
+      const suiteTempDir = process.env.HOME as string;
+
+      try {
+        throw new Error('simulated failure before cleanup runs');
+      } catch {
+        // swallow — this test only verifies clearSuiteDirectory recovers cleanly afterward
+      }
+
+      expect(await pathExists(suiteTempDir)).toBe(true);
+      await expect(clearSuiteDirectory(true)).resolves.not.toThrow();
+      expect(await pathExists(suiteTempDir)).toBe(false);
+    });
+  });
+
+  describe('environment variable restoration after errors', () => {
+    it('restores HOME via cleanupTestEnvironment even when the consumer throws', async () => {
+      const returnedOriginalHome = await setupTestEnvironment(false);
+
+      try {
+        throw new Error('simulated mid-test failure');
+      } catch {
+        // intentionally ignored — see finally block
+      } finally {
+        await cleanupTestEnvironment(returnedOriginalHome, true);
+      }
+
+      expect(process.env.HOME).toBe(originalHome);
+    });
+
+    it('leaves HOME restorable even when the temp directory was already removed out-of-band', async () => {
+      const returnedOriginalHome = await setupTestEnvironment(false);
+      const tempDir = process.env.HOME as string;
+
+      // Simulate an error path that deletes the directory itself before cleanup runs
+      await fs.rm(tempDir, { recursive: true, force: true });
+
+      await cleanupTestEnvironment(returnedOriginalHome, true);
+
+      expect(process.env.HOME).toBe(originalHome);
+    });
+  });
 });
