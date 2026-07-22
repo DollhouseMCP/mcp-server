@@ -8,7 +8,16 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { setupTestEnvironment, cleanupTestEnvironment, clearSuiteDirectory } from './test-setup.js';
+import {
+  setupTestEnvironment,
+  cleanupTestEnvironment,
+  clearSuiteDirectory,
+  resetSingletons
+} from './test-setup.js';
+
+interface SingletonClass {
+  instance: unknown;
+}
 
 async function pathExists(p: string): Promise<boolean> {
   try {
@@ -218,6 +227,33 @@ describe('test-setup utilities', () => {
       await fs.rm(suiteTempDir, { recursive: true, force: true });
 
       await expect(clearSuiteDirectory(true)).resolves.not.toThrow();
+    });
+  });
+
+  describe('resetSingletons', () => {
+    it('successfully resets all singleton instances', async () => {
+      await resetSingletons();
+
+      const enhancedIndexModule = await import('../../../src/portfolio/EnhancedIndexManager.js');
+      const indexConfigModule = await import('../../../src/portfolio/config/IndexConfig.js');
+      const verbTriggerModule = await import('../../../src/portfolio/VerbTriggerManager.js');
+      const relationshipModule = await import('../../../src/portfolio/RelationshipManager.js');
+
+      expect((enhancedIndexModule.EnhancedIndexManager as unknown as SingletonClass).instance).toBeNull();
+      expect((indexConfigModule.IndexConfigManager as unknown as SingletonClass).instance).toBeNull();
+      expect((verbTriggerModule.VerbTriggerManager as unknown as SingletonClass).instance).toBeNull();
+      expect((relationshipModule.RelationshipManager as unknown as SingletonClass).instance).toBeNull();
+    });
+
+    it('works with the ES module dynamic import context', async () => {
+      // resetSingletons relies on await import(...) rather than require(); confirm
+      // it resolves cleanly under this project's ESM test setup.
+      await expect(resetSingletons()).resolves.toBeUndefined();
+    });
+
+    it('can be called multiple times in a row without error', async () => {
+      await resetSingletons();
+      await expect(resetSingletons()).resolves.toBeUndefined();
     });
   });
 });
