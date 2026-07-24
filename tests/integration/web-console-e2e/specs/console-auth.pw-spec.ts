@@ -15,6 +15,7 @@ const MANIFEST_URL = '**/api/v1/me/manifest';
 const SESSIONS_TAB = '.console-tab[data-tab="sessions"]';
 const SESSION_DETAIL_HEADER = '#session-detail-header';
 const CONFIRM_ACTION = '[data-confirm="1"]';
+const BULK_SESSION_ACTION = '#sess-revoke-others';
 const AUTH_ME_URL = '**/api/v1/auth/me';
 const ADMIN_USER_SESSIONS_URL = '**/api/v1/admin/accounts/users/*/sessions';
 
@@ -121,7 +122,7 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await page.locator(SESSIONS_TAB).click();
   await expect(page.locator('#sessions-body .session-card').first()).toBeVisible();
   await expect(page.locator('[data-revoke-console], [data-disconnect-mcp]')).toHaveCount(0);
-  await expect(page.locator('#sess-revoke-others')).toHaveText('Sign out other console sessions');
+  await expect(page.locator(BULK_SESSION_ACTION)).toHaveText('Sign out other console sessions');
 
   await page.locator('#site-account').click();
   await page.locator('#account-security').click();
@@ -203,11 +204,43 @@ test('bulk session termination reports command acknowledgement accurately', asyn
   await loginFromConsole(page);
   await page.locator(SESSIONS_TAB).click();
 
-  await page.locator('#sess-revoke-others').click();
+  await page.locator(BULK_SESSION_ACTION).click();
   await page.locator(CONFIRM_ACTION).click();
 
   await expect(page.locator('#sessions-command-summary')).toContainText('1 disconnect(s) acknowledged.');
   expect(mock.commandReads).toBeGreaterThanOrEqual(2);
+});
+
+test('bulk session termination reports partial failure without claiming full success', async ({ page }) => {
+  await installSessionUiMock(page, { bulkRequestFails: true });
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+
+  await page.locator(BULK_SESSION_ACTION).click();
+  await page.locator(CONFIRM_ACTION).click();
+
+  await expect(page.locator('#toast-stack .toast--warn')).toContainText(
+    'could not disconnect connected apps',
+  );
+  await expect(page.locator('#sessions-command-summary')).toBeEmpty();
+});
+
+test('bulk session termination reports total failure as an error', async ({ page }) => {
+  await filterManifestRoutes(page, new Set([
+    'POST /api/v1/me/security/sessions/revoke-all-others',
+  ]));
+  await installSessionUiMock(page, { bulkRequestFails: true });
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+
+  await expect(page.locator(BULK_SESSION_ACTION)).toHaveText('Disconnect all connected apps');
+  await page.locator(BULK_SESSION_ACTION).click();
+  await page.locator(CONFIRM_ACTION).click();
+
+  await expect(page.locator('#toast-stack .toast--error')).toContainText(
+    'Could not disconnect connected apps',
+  );
+  await expect(page.locator('#sessions-command-summary')).toBeEmpty();
 });
 
 test('session detail uses the same neutral state for missing or non-owned sessions', async ({ page }) => {

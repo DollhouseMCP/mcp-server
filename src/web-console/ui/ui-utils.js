@@ -39,8 +39,8 @@ export function confirmDialog(message, confirmLabel) {
     modal.id = 'confirm-modal';
     modal.innerHTML = `
       <div class="confirm-backdrop"></div>
-      <div class="confirm-card" role="dialog" aria-modal="true">
-        <p class="confirm-msg">${escapeHtml(message)}</p>
+      <div class="confirm-card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-message">
+        <p class="confirm-msg" id="confirm-modal-message">${escapeHtml(message)}</p>
         <div class="confirm-actions">
           <button class="btn btn-ghost" data-confirm="0" type="button">Cancel</button>
           <button class="btn btn-primary" data-confirm="1" type="button">${escapeHtml(confirmLabel)}</button>

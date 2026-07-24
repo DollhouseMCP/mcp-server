@@ -41,6 +41,10 @@ describe('web-console UI utilities', () => {
     opener.focus();
 
     const result = confirmDialog('<Disconnect & revoke?>', '"Disconnect"');
+    const dialog = document.querySelector('[role="dialog"]');
+    const labelId = dialog?.getAttribute('aria-labelledby');
+    expect(labelId).toBe('confirm-modal-message');
+    expect(document.getElementById(labelId ?? '')?.textContent).toBe('<Disconnect & revoke?>');
     expect(document.querySelector('.confirm-msg')?.textContent).toBe('<Disconnect & revoke?>');
     expect(document.querySelector('[data-confirm="1"]')?.textContent).toBe('"Disconnect"');
     expect(document.activeElement).toBe(document.querySelector('[data-confirm="1"]'));

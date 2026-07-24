@@ -15,7 +15,11 @@ export interface SessionUiMockState {
 
 export async function installSessionUiMock(
   page: Page,
-  options: { detailUnavailable?: boolean; commandOutcome?: CommandOutcome } = {},
+  options: {
+    detailUnavailable?: boolean;
+    commandOutcome?: CommandOutcome;
+    bulkRequestFails?: boolean;
+  } = {},
 ): Promise<SessionUiMockState> {
   const state: SessionUiMockState = {
     approvalReads: 0,
@@ -36,6 +40,7 @@ export async function installSessionUiMock(
       approvalStatuses,
       activations,
       commandOutcome: options.commandOutcome ?? 'terminated',
+      bulkRequestFails: options.bulkRequestFails ?? false,
       setApprovalStatus: (approvalId, value) => { approvalStatuses.set(approvalId, value); },
       setActivations: value => { activations = value; },
     });
@@ -48,6 +53,7 @@ interface MutableMockData {
   approvalStatuses: ReadonlyMap<string, string>;
   activations: Array<Record<string, unknown>>;
   commandOutcome: CommandOutcome;
+  bulkRequestFails: boolean;
   setApprovalStatus(approvalId: string, value: string): void;
   setActivations(value: Array<Record<string, unknown>>): void;
 }
@@ -86,6 +92,9 @@ function getResponse(path: string, base: string, state: SessionUiMockState, data
 
 function postResponse(path: string, base: string, data: MutableMockData) {
   if (path === '/api/v1/me/sessions/revoke-all') {
+    if (data.bulkRequestFails) {
+      return { status: 503, body: { code: 'service_unavailable' } };
+    }
     return {
       status: 202,
       body: {

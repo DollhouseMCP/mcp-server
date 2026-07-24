@@ -344,9 +344,12 @@ async function signOutEverywhereElse() {
       ? post('/me/sessions/revoke-all').catch(() => null)
       : null,
   ]);
-  if (c?.status === 200) consoleRevoked = Number(c.body?.revoked ?? 0);
-  if (m && (m.status === 202 || m.status === 200)) appsDisconnected = Number(m.body?.requested ?? 0);
-  notify(bulkActionResult(consoleRevoked, appsDisconnected), 'success');
+  const consoleFailed = availableActions.revokeOtherConsoleSessions && c?.status !== 200;
+  const appsFailed = availableActions.disconnectAllMcp && m?.status !== 202 && m?.status !== 200;
+  if (!consoleFailed) consoleRevoked = Number(c?.body?.revoked ?? 0);
+  if (!appsFailed) appsDisconnected = Number(m?.body?.requested ?? 0);
+  const outcome = bulkActionResult(consoleRevoked, appsDisconnected, consoleFailed, appsFailed);
+  notify(outcome.message, outcome.kind);
   const commands = Array.isArray(m?.body?.commands) ? m.body.commands : [];
   if (commands.length > 0) {
     commands.forEach(command => state.bulkCommandSessions.add(command.session_id));
@@ -369,12 +372,35 @@ async function signOutEverywhereElse() {
   renderBody();
 }
 
-function bulkActionResult(consoleRevoked, appsDisconnected) {
-  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
-    return `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`;
+function bulkActionResult(consoleRevoked, appsDisconnected, consoleFailed, appsFailed) {
+  if (consoleFailed && appsFailed) {
+    return {
+      message: 'Could not sign out other console sessions or disconnect connected apps.',
+      kind: 'error',
+    };
   }
-  if (availableActions.revokeOtherConsoleSessions) return `Signed out ${consoleRevoked} other session(s).`;
-  return `Disconnected ${appsDisconnected} app(s).`;
+  if (consoleFailed) {
+    const message = availableActions.disconnectAllMcp
+      ? `Could not sign out other console sessions; disconnected ${appsDisconnected} app(s).`
+      : 'Could not sign out other console sessions.';
+    return { message, kind: availableActions.disconnectAllMcp ? 'warn' : 'error' };
+  }
+  if (appsFailed) {
+    const message = availableActions.revokeOtherConsoleSessions
+      ? `Signed out ${consoleRevoked} other session(s); could not disconnect connected apps.`
+      : 'Could not disconnect connected apps.';
+    return { message, kind: availableActions.revokeOtherConsoleSessions ? 'warn' : 'error' };
+  }
+  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
+    return {
+      message: `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`,
+      kind: 'success',
+    };
+  }
+  if (availableActions.revokeOtherConsoleSessions) {
+    return { message: `Signed out ${consoleRevoked} other session(s).`, kind: 'success' };
+  }
+  return { message: `Disconnected ${appsDisconnected} app(s).`, kind: 'success' };
 }
 
 async function trackTerminationCommand(sessionId, commandId) {

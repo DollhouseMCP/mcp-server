@@ -52,6 +52,21 @@ export function createVisiblePoller(task, { intervalMs = 5_000, onError = () => 
   });
 }
 
+/**
+ * @typedef {{ status: string, error_code?: string | null }} PollStatus
+ * @typedef {{
+ *   signal?: AbortSignal,
+ *   intervalMs?: number,
+ *   timeoutMs?: number,
+ *   onUpdate?: (status: PollStatus) => void,
+ * }} PollUntilTerminalOptions
+ */
+
+/**
+ * @param {(signal?: AbortSignal) => Promise<PollStatus>} readStatus
+ * @param {PollUntilTerminalOptions} [options]
+ * @returns {Promise<{ timedOut: boolean, status: PollStatus | null }>}
+ */
 export async function pollUntilTerminal(
   readStatus,
   { signal, intervalMs = 500, timeoutMs = 10_000, onUpdate = () => {} } = {},

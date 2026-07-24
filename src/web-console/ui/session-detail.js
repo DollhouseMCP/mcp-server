@@ -2,6 +2,7 @@
 
 import { get, post, del } from './api.js';
 import { createVisiblePoller, isAbortError } from './polling.js';
+import { escapeHtml, relAgo } from './ui-utils.js';
 
 const POLL_INTERVAL_MS = 4_000;
 const ACTIVATABLE_TYPES = ['personas', 'skills', 'agents', 'memories', 'ensembles'];
@@ -620,24 +621,4 @@ function prettyJson(value) {
 function formatTime(value) {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? 'unknown' : date.toLocaleTimeString();
-}
-
-function relAgo(value) {
-  if (!value) return 'unknown';
-  const age = Date.now() - new Date(value).getTime();
-  if (!Number.isFinite(age) || age < 60_000) return 'just now';
-  const minutes = Math.floor(age / 60_000);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-function escapeHtml(value) {
-  return String(value ?? '')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('"', '&quot;')
-    .replaceAll("'", '&#39;');
 }
