@@ -17,6 +17,7 @@
 import { get, post } from './api.js';
 import { noConsoleRoute } from './console-meta.js';
 import { renderElementDetail } from './portfolio-detail.js';
+import { escapeHtml } from './ui-utils.js';
 
 // Plural API type → singular CSS/display type (drives the --family colour lanes
 // in styles.css: .element-card[data-type="persona"], etc.).
@@ -721,9 +722,6 @@ function detailPath(el) {
   return el.source === 'collection'
     ? `/collection/elements/${type}/${name}`
     : `/me/portfolio/elements/${type}/${name}`;
-}
-function escapeHtml(s) {
-  return String(s ?? '').replaceAll(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 function escapeAttr(s) { return escapeHtml(s); }
 function formatDate(iso) {

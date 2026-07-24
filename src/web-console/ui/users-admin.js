@@ -25,6 +25,7 @@
  */
 
 import { get, post, del } from './api.js';
+import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
 
 const DRAWER_ROOT_SELECTOR = '#ua-drawer-root';
 const USER_ROUTES = {
@@ -49,18 +50,36 @@ const state = {
   users: [], loading: true, error: false, selectedId: null, actorCaps: [],
   roleCatalog: { roles: [], grants: {} }, hasRoute: () => false,
 };
+let globalListenersBound = false;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
   state.roleCatalog = normalizeRoleCatalog(ctx.roleCatalog);
   state.hasRoute = ctx.hasRoute || state.hasRoute;
+  state.selectedId = null;
   host.innerHTML = shell();
   host.querySelector('#ua-refresh').addEventListener('click', load);
   host.querySelector('#ua-invite')?.addEventListener('click', openInvite);
-  // Re-fetch when re-entering the tab; accounts drift as other admins act.
-  globalThis.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'users') load(); });
+  bindGlobalListeners();
   await load();
+}
+
+function bindGlobalListeners() {
+  if (globalListenersBound) return;
+  // Re-fetch when re-entering the tab; accounts drift as other admins act.
+  globalThis.addEventListener('dh:tab-activated', onTabActivated);
+  // Never retain privileged drawer content after elevation ends.
+  globalThis.addEventListener('dh:elevation-changed', onElevationChanged);
+  globalListenersBound = true;
+}
+
+function onTabActivated(event) {
+  if (event.detail?.name === 'users') load();
+}
+
+function onElevationChanged(event) {
+  if (event.detail?.active === false) closeDrawer();
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
@@ -530,10 +549,12 @@ async function loadUserSessions(userId) {
   const box = host.querySelector(`#ua-user-sessions-${CSS.escape(userId)}`);
   if (!box) return;
   const res = await get(`/admin/accounts/users/${encodeURIComponent(userId)}/sessions`).catch(() => null);
-  const fallbackSessions = Array.isArray(res?.body) ? res.body : [];
-  const sessions = res?.status === 200 && Array.isArray(res.body?.sessions) ? res.body.sessions
-    : fallbackSessions;
   if (!box.isConnected) return;
+  if (res?.status !== 200 || !Array.isArray(res.body?.sessions)) {
+    box.innerHTML = '<span class="ua-muted">Couldn\'t load active sessions.</span>';
+    return;
+  }
+  const sessions = res.body.sessions;
   if (sessions.length === 0) { box.innerHTML = '<span class="ua-muted">No active sessions.</span>'; return; }
   box.innerHTML = sessions.map(s => `
     <div class="ua-session">
@@ -612,52 +633,8 @@ async function submitInvite(modal) {
   load();
 }
 
-/* ── Confirm dialog (Atelier-styled, mirrors sessions.js) ─────────────────── */
-
-function confirmDialog(message, confirmLabel) {
-  return new Promise((resolve) => {
-    document.getElementById('confirm-modal')?.remove();
-    const modal = document.createElement('div');
-    modal.className = 'confirm-modal';
-    modal.id = 'confirm-modal';
-    modal.innerHTML = `
-      <div class="confirm-backdrop"></div>
-      <div class="confirm-card" role="dialog" aria-modal="true">
-        <p class="confirm-msg">${escapeHtml(message)}</p>
-        <div class="confirm-actions">
-          <button class="btn btn-ghost" data-confirm="0" type="button">Cancel</button>
-          <button class="btn btn-primary" data-confirm="1" type="button">${escapeHtml(confirmLabel)}</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    const done = (val) => { modal.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
-    const onKey = (e) => { if (e.key === 'Escape') done(false); };
-    modal.querySelector('.confirm-backdrop').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="0"]').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="1"]').addEventListener('click', () => done(true));
-    document.addEventListener('keydown', onKey);
-  });
-}
-
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
 function shortId(id) {
   return typeof id === 'string' && id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : (id || '');
-}
-
-function relAgo(ts) {
-  if (!ts) return 'unknown';
-  const age = Date.now() - new Date(ts).getTime();
-  if (Number.isNaN(age)) return 'unknown';
-  if (age < 0 || age < 60_000) return 'just now';
-  const m = Math.floor(age / 60_000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
