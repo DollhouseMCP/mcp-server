@@ -23,4 +23,5 @@ for (const tree of runtimeAssetTrees) {
     rmSync(destination, { recursive: true, force: true });
   }
   cpSync(source, destination, { recursive: true });
+  console.log(`[copy-runtime-assets] ${tree.source} -> ${tree.destination}`);
 }

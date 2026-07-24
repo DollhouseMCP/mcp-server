@@ -13,6 +13,7 @@
 
 import { get } from './api.js';
 import { noConsoleRoute } from './console-meta.js';
+import { escapeHtml } from './ui-utils.js';
 
 const ENROLL_URL = '/api/v1/me/security/factors/enroll/totp';
 const DISABLE_URL = '/api/v1/me/security/factors/disable/totp';
@@ -112,9 +113,4 @@ function close() {
 
 function onEsc(e) {
   if (e.key === 'Escape') close();
-}
-
-function escapeHtml(s) {
-  if (!s) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

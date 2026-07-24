@@ -283,7 +283,7 @@ function initialTab() {
 // Strip a provider prefix (e.g. "local_live_user" → "live_user") for a friendlier
 // chip than the raw UUID before the profile loads.
 function cleanSub(sub) {
-  return typeof sub === 'string' ? sub.replace(/^[a-z0-9]+_/, '') : undefined;
+  return typeof sub === 'string' ? sub.replace(/^[a-z0-9]+_/i, '') : undefined;
 }
 
 async function runAuthGate() {
