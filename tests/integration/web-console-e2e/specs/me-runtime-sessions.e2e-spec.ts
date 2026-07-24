@@ -1,3 +1,4 @@
+import { seedRuntimeSession } from '../harness/seed.js';
 import { setupWorld, type World } from '../harness/world.js';
 
 let world: World;
@@ -21,6 +22,20 @@ describe('/me/sessions (MCP runtime sessions)', () => {
   it('terminating an unknown session is 404 (not 500)', async () => {
     const res = await world.clients.userA.delete(`/api/v1/me/sessions/${UNKNOWN}`);
     expect([404, 400]).toContain(res.status);
+  });
+
+  it('tracks an owned termination command without exposing it cross-user', async () => {
+    const sessionId = await seedRuntimeSession(world.userA);
+    const terminate = await world.clients.userA.delete(`/api/v1/me/sessions/${sessionId}`);
+    expect(terminate.status).toBe(202);
+    const commandId = (terminate.body as { command_id: string }).command_id;
+
+    const ownStatus = await world.clients.userA.get(`/api/v1/me/sessions/commands/${commandId}`);
+    expect(ownStatus.status).toBe(200);
+    expect(ownStatus.body).toMatchObject({ command_id: commandId, status: 'pending' });
+
+    const foreignStatus = await world.clients.userB.get(`/api/v1/me/sessions/commands/${commandId}`);
+    expect(foreignStatus.status).toBe(404);
   });
 });
 

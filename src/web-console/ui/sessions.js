@@ -11,64 +11,132 @@
  */
 
 import { get, post, del } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
+import { createSessionDetail } from './session-detail.js';
+import { isAbortError, pollUntilTerminal } from './polling.js';
 import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
 
+// app.js memoizes each tab's load/init promise, so this module is mounted once
+// per page. Module-level state and the global listener intentionally share that
+// same page lifetime.
 let host;
 let notify = () => {};
 let viewLogs = null; // ctx.viewSessionLogs(logSessionId) — set by the shell
 let canViewLogs = false;
+let routeAvailable = noConsoleRoute;
+let tabVisible = true;
+let listController;
+let detailController;
+let detailSessionId = null;
+const commandControllers = new Map();
 const availableActions = {
   revokeConsole: false,
   revokeOtherConsoleSessions: false,
   disconnectMcp: false,
   disconnectAllMcp: false,
+  inspectMcp: false,
+  commandStatus: false,
 };
 
-const state = { console: [], mcp: [], loading: true, error: false };
+const state = {
+  console: [],
+  mcp: [],
+  loading: true,
+  error: false,
+  commands: new Map(),
+  bulkCommandSessions: new Set(),
+  bulkStatus: '',
+};
 let globalListenersBound = false;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
   viewLogs = ctx.viewSessionLogs || null;
+  routeAvailable = ctx.hasRoute || routeAvailable;
   canViewLogs = ctx.hasRoute?.('GET', '/me/logs') === true;
   availableActions.revokeConsole = ctx.hasRoute?.('DELETE', '/me/security/sessions/:session_id') === true;
   availableActions.revokeOtherConsoleSessions = ctx.hasRoute?.('POST', '/me/security/sessions/revoke-all-others') === true;
   availableActions.disconnectMcp = ctx.hasRoute?.('DELETE', '/me/sessions/:session_id') === true;
   availableActions.disconnectAllMcp = ctx.hasRoute?.('POST', '/me/sessions/revoke-all') === true;
-  host.innerHTML = shell();
-  host.querySelector('#sess-refresh').addEventListener('click', load);
-  host.querySelector('#sess-revoke-others')?.addEventListener('click', signOutEverywhereElse);
+  availableActions.inspectMcp = ctx.hasRoute?.('GET', '/me/sessions/:session_id') === true;
+  availableActions.commandStatus = ctx.hasRoute?.('GET', '/me/sessions/commands/:command_id') === true;
+  showList();
   await load();
   bindGlobalListeners();
 }
 
+function showList({ refresh = false } = {}) {
+  detailController?.destroy();
+  detailController = undefined;
+  detailSessionId = null;
+  host.innerHTML = shell();
+  host.querySelector('#sess-refresh').addEventListener('click', load);
+  host.querySelector('#sess-revoke-others')?.addEventListener('click', signOutEverywhereElse);
+  renderBody();
+  if (refresh) load();
+}
+
+async function showDetail(sessionId) {
+  listController?.abort();
+  detailController?.destroy();
+  detailSessionId = sessionId;
+  detailController = await createSessionDetail(host, sessionId, {
+    toast: notify,
+    hasRoute: routeAvailable,
+    confirm: confirmDialog,
+    onBack: () => showList({ refresh: true }),
+    onDisconnect: disconnectMcp,
+  });
+  detailController.setVisible(tabVisible);
+}
+
 function bindGlobalListeners() {
   if (globalListenersBound) return;
-  // Re-fetch when the user returns to the tab (sessions drift over time).
   globalThis.addEventListener('dh:tab-activated', onTabActivated);
   globalListenersBound = true;
 }
 
 function onTabActivated(event) {
-  if (event.detail?.name === 'sessions') load();
+  tabVisible = event.detail?.name === 'sessions';
+  detailController?.setVisible(tabVisible);
+  if (!tabVisible) {
+    listController?.abort();
+    abortCommandPolling();
+    return;
+  }
+  resumeCommandPolling();
+  if (!detailController) load();
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
 
 async function load() {
+  if (!tabVisible || detailController) return;
+  listController?.abort();
+  const controller = new AbortController();
+  listController = controller;
   state.loading = true;
   state.error = false;
   renderBody();
-  const [sec, mcp] = await Promise.all([
-    get('/me/security/sessions').catch(() => null),
-    get('/me/sessions').catch(() => null),
-  ]);
-  state.console = sec?.status === 200 && Array.isArray(sec.body?.sessions) ? sec.body.sessions : [];
-  state.mcp = mcp?.status === 200 && Array.isArray(mcp.body?.sessions) ? mcp.body.sessions : [];
-  state.error = sec?.status !== 200;
-  state.loading = false;
-  renderBody();
+  try {
+    const [sec, mcp] = await Promise.all([
+      get('/me/security/sessions', { signal: controller.signal }),
+      get('/me/sessions', { signal: controller.signal }),
+    ]);
+    state.console = sec.status === 200 && Array.isArray(sec.body?.sessions) ? sec.body.sessions : [];
+    state.mcp = mcp.status === 200 && Array.isArray(mcp.body?.sessions) ? mcp.body.sessions : [];
+    state.error = sec.status !== 200 || mcp.status !== 200;
+    state.loading = false;
+    renderBody();
+  } catch (error) {
+    if (isAbortError(error)) return;
+    state.loading = false;
+    state.error = true;
+    renderBody();
+  } finally {
+    if (listController === controller) listController = undefined;
+  }
 }
 
 /* ── Markup ─────────────────────────────────────────────────────────────── */
@@ -83,6 +151,7 @@ function shell() {
       ${bulkAction ? `<button class="btn btn-ghost session-danger" id="sess-revoke-others" type="button">${bulkAction.label}</button>` : ''}
     </div>
   </div>
+  <div class="session-command-summary" id="sessions-command-summary" role="status" aria-live="polite">${escapeHtml(state.bulkStatus)}</div>
   <div id="sessions-body"></div>`;
 }
 
@@ -114,6 +183,8 @@ function bulkActionConfig() {
 }
 
 function renderBody() {
+  const summary = host.querySelector('#sessions-command-summary');
+  if (summary) summary.textContent = state.bulkStatus;
   const body = host.querySelector('#sessions-body');
   if (!body) return;
   if (state.loading) { body.innerHTML = '<div class="panel-placeholder">Loading sessions…</div>'; return; }
@@ -135,6 +206,8 @@ function renderBody() {
     b.addEventListener('click', () => revokeConsole(b.dataset.revokeConsole, b.dataset.current === '1')));
   body.querySelectorAll('[data-disconnect-mcp]').forEach(b =>
     b.addEventListener('click', () => disconnectMcp(b.dataset.disconnectMcp)));
+  body.querySelectorAll('[data-inspect-mcp]').forEach(b =>
+    b.addEventListener('click', () => showDetail(b.dataset.inspectMcp)));
   body.querySelectorAll('[data-logs-console]').forEach(b =>
     b.addEventListener('click', () => jumpToLogs('web-console:' + b.dataset.logsConsole)));
   body.querySelectorAll('[data-logs-mcp]').forEach(b =>
@@ -195,9 +268,11 @@ function mcpCard(s) {
       </div>
       <div class="session-badges">${recencyBadge(s.last_active_at)}</div>
       <div class="session-actions">
+        ${availableActions.inspectMcp ? `<button class="btn btn-primary" data-inspect-mcp="${escapeHtml(s.session_id)}" type="button">Inspect</button>` : ''}
         ${canViewLogs ? `<button class="btn btn-ghost session-link" data-logs-mcp="${escapeHtml(s.session_id)}" type="button">View logs</button>` : ''}
         ${availableActions.disconnectMcp ? `<button class="btn btn-ghost session-danger" data-disconnect-mcp="${escapeHtml(s.session_id)}" type="button">Disconnect</button>` : ''}
       </div>
+      ${sessionCommandMarkup(state.commands.get(s.session_id))}
     </div>`;
 }
 
@@ -244,8 +319,15 @@ async function disconnectMcp(sessionId) {
   if (!ok) return;
   const res = await del('/me/sessions/' + encodeURIComponent(sessionId)).catch(() => null);
   if (!res || (res.status !== 202 && res.status !== 200)) { notify('Could not disconnect that app.', 'error'); return; }
-  notify('Disconnect requested.', 'info');
-  setTimeout(load, 900); // termination is async (202 accepted)
+  const commandId = res.body?.command_id;
+  if (state.bulkCommandSessions.delete(sessionId)) updateBulkCommandStatus();
+  updateCommand(sessionId, { phase: 'accepted', status: 'accepted', commandId });
+  notify('Disconnect accepted.', 'info');
+  if (!commandId || !availableActions.commandStatus) {
+    updateCommand(sessionId, { phase: 'unavailable', status: 'accepted' });
+    return;
+  }
+  await trackTerminationCommand(sessionId, commandId);
 }
 
 async function signOutEverywhereElse() {
@@ -253,6 +335,8 @@ async function signOutEverywhereElse() {
   if (!bulkAction) return;
   const ok = await confirmDialog(bulkAction.prompt, bulkAction.confirmLabel);
   if (!ok) return;
+  state.bulkStatus = '';
+  state.bulkCommandSessions.clear();
   let consoleRevoked = 0;
   let appsDisconnected = 0;
   const [c, m] = await Promise.all([
@@ -263,18 +347,160 @@ async function signOutEverywhereElse() {
       ? post('/me/sessions/revoke-all').catch(() => null)
       : null,
   ]);
-  if (c?.status === 200) consoleRevoked = Number(c.body?.revoked ?? 0);
-  if (m && (m.status === 202 || m.status === 200)) appsDisconnected = Number(m.body?.requested ?? 0);
-  notify(bulkActionResult(consoleRevoked, appsDisconnected), 'success');
-  setTimeout(load, 900);
+  const consoleFailed = availableActions.revokeOtherConsoleSessions && c?.status !== 200;
+  const appsFailed = availableActions.disconnectAllMcp && m?.status !== 202 && m?.status !== 200;
+  if (!consoleFailed) consoleRevoked = Number(c?.body?.revoked ?? 0);
+  if (!appsFailed) appsDisconnected = Number(m?.body?.requested ?? 0);
+  const outcome = bulkActionResult(consoleRevoked, appsDisconnected, consoleFailed, appsFailed);
+  notify(outcome.message, outcome.kind);
+  const commands = Array.isArray(m?.body?.commands) ? m.body.commands : [];
+  if (commands.length > 0) {
+    commands.forEach(command => state.bulkCommandSessions.add(command.session_id));
+    commands.forEach(command => updateCommand(command.session_id, {
+      phase: 'accepted',
+      status: 'accepted',
+      commandId: command.command_id,
+    }));
+    if (availableActions.commandStatus) {
+      await Promise.all(commands.map(command => trackTerminationCommand(command.session_id, command.command_id)));
+    } else {
+      commands.forEach(command => updateCommand(command.session_id, {
+        phase: 'unavailable',
+        status: 'accepted',
+        commandId: command.command_id,
+      }));
+    }
+    updateBulkCommandStatus();
+  } else {
+    renderBody();
+  }
 }
 
-function bulkActionResult(consoleRevoked, appsDisconnected) {
-  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
-    return `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`;
+function bulkActionResult(consoleRevoked, appsDisconnected, consoleFailed, appsFailed) {
+  if (consoleFailed && appsFailed) {
+    return {
+      message: 'Could not sign out other console sessions or disconnect connected apps.',
+      kind: 'error',
+    };
   }
-  if (availableActions.revokeOtherConsoleSessions) return `Signed out ${consoleRevoked} other session(s).`;
-  return `Disconnected ${appsDisconnected} app(s).`;
+  if (consoleFailed) {
+    const message = availableActions.disconnectAllMcp
+      ? `Could not sign out other console sessions; disconnected ${appsDisconnected} app(s).`
+      : 'Could not sign out other console sessions.';
+    return { message, kind: availableActions.disconnectAllMcp ? 'warn' : 'error' };
+  }
+  if (appsFailed) {
+    const message = availableActions.revokeOtherConsoleSessions
+      ? `Signed out ${consoleRevoked} other session(s); could not disconnect connected apps.`
+      : 'Could not disconnect connected apps.';
+    return { message, kind: availableActions.revokeOtherConsoleSessions ? 'warn' : 'error' };
+  }
+  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
+    return {
+      message: `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`,
+      kind: 'success',
+    };
+  }
+  if (availableActions.revokeOtherConsoleSessions) {
+    return { message: `Signed out ${consoleRevoked} other session(s).`, kind: 'success' };
+  }
+  return { message: `Disconnected ${appsDisconnected} app(s).`, kind: 'success' };
+}
+
+async function trackTerminationCommand(sessionId, commandId) {
+  if (!commandId) return;
+  commandControllers.get(sessionId)?.abort();
+  const controller = new AbortController();
+  commandControllers.set(sessionId, controller);
+  try {
+    const result = await pollUntilTerminal(
+      async signal => {
+        const response = await get(`/me/sessions/commands/${encodeURIComponent(commandId)}`, { signal });
+        if (response.status === 200) return response.body;
+        return { status: 'failed', error_code: response.problemCode || 'command_status_unavailable' };
+      },
+      {
+        signal: controller.signal,
+        onUpdate: status => updateCommand(sessionId, {
+          phase: 'pending',
+          status: status?.status || 'pending',
+          commandId,
+        }),
+      },
+    );
+    if (result.timedOut) {
+      updateCommand(sessionId, { phase: 'timeout', status: 'pending', commandId });
+      return;
+    }
+    updateCommand(sessionId, {
+      phase: 'acknowledged',
+      status: result.status?.status,
+      errorCode: result.status?.error_code,
+      commandId,
+    });
+    if (result.status?.status === 'failed') notify('The connected app could not be disconnected.', 'error');
+    else notify('Connected app disconnected.', 'success');
+  } catch (error) {
+    if (!isAbortError(error)) updateCommand(sessionId, {
+      phase: 'timeout',
+      status: 'pending',
+      commandId,
+    });
+  } finally {
+    if (commandControllers.get(sessionId) === controller) commandControllers.delete(sessionId);
+  }
+}
+
+function updateCommand(sessionId, command) {
+  state.commands.set(sessionId, command);
+  if (state.bulkCommandSessions.has(sessionId)) updateBulkCommandStatus();
+  if (detailSessionId === sessionId) detailController?.setCommandStatus(command);
+  else renderBody();
+}
+
+function updateBulkCommandStatus() {
+  const counts = { acknowledged: 0, failed: 0, pending: 0, unavailable: 0 };
+  state.bulkCommandSessions.forEach(sessionId => {
+    const command = state.commands.get(sessionId);
+    if (command?.phase === 'acknowledged') {
+      counts[command.status === 'failed' ? 'failed' : 'acknowledged'] += 1;
+    } else if (command?.phase === 'unavailable') {
+      counts.unavailable += 1;
+    } else {
+      counts.pending += 1;
+    }
+  });
+  const parts = [];
+  if (counts.acknowledged > 0) parts.push(`${counts.acknowledged} disconnect(s) acknowledged`);
+  if (counts.failed > 0) parts.push(`${counts.failed} failed`);
+  if (counts.pending > 0) parts.push(`${counts.pending} still pending`);
+  if (counts.unavailable > 0) parts.push(`${counts.unavailable} accepted without status tracking`);
+  state.bulkStatus = parts.length > 0 ? `${parts.join('; ')}.` : '';
+}
+
+function abortCommandPolling() {
+  commandControllers.forEach(controller => controller.abort());
+  commandControllers.clear();
+}
+
+function resumeCommandPolling() {
+  state.commands.forEach((command, sessionId) => {
+    const pending = command.phase === 'accepted' || command.phase === 'pending';
+    if (!pending || !command.commandId || commandControllers.has(sessionId)) return;
+    trackTerminationCommand(sessionId, command.commandId).catch(() => null);
+  });
+}
+
+function sessionCommandMarkup(command) {
+  if (!command) return '';
+  const labels = {
+    accepted: 'accepted',
+    pending: 'pending acknowledgement',
+    acknowledged: command.status === 'failed' ? 'disconnect failed' : command.status,
+    timeout: 'still pending',
+    unavailable: 'accepted; status unavailable',
+  };
+  return `<span class="session-command-inline session-command-inline--${escapeHtml(command.phase)}">${escapeHtml(labels[command.phase] || 'updated')}</span>`;
 }
 
 function jumpToLogs(logSessionId) {

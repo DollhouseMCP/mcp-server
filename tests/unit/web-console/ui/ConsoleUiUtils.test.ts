@@ -31,20 +31,33 @@ describe('web-console UI utilities', () => {
   });
 
   it('renders escaped confirmation content and removes its key listener on completion', async () => {
-    const dom = new JSDOM('<!doctype html><body></body>');
+    const dom = new JSDOM('<!doctype html><body><button id="opener">Open</button></body>');
     const document = dom.window.document;
     Object.defineProperty(globalThis, 'document', {
       configurable: true,
       value: document,
     });
+    const opener = document.getElementById('opener') as HTMLButtonElement;
+    opener.focus();
 
     const result = confirmDialog('<Disconnect & revoke?>', '"Disconnect"');
+    const dialog = document.querySelector('[role="dialog"]');
+    const labelId = dialog?.getAttribute('aria-labelledby');
+    expect(labelId).toBe('confirm-modal-message');
+    expect(document.getElementById(labelId ?? '')?.textContent).toBe('<Disconnect & revoke?>');
     expect(document.querySelector('.confirm-msg')?.textContent).toBe('<Disconnect & revoke?>');
     expect(document.querySelector('[data-confirm="1"]')?.textContent).toBe('"Disconnect"');
+    expect(document.activeElement).toBe(document.querySelector('[data-confirm="1"]'));
+
+    document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab' }));
+    expect(document.activeElement).toBe(document.querySelector('[data-confirm="0"]'));
+    document.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true }));
+    expect(document.activeElement).toBe(document.querySelector('[data-confirm="1"]'));
 
     (document.querySelector('[data-confirm="1"]') as HTMLButtonElement).click();
 
     await expect(result).resolves.toBe(true);
     expect(document.getElementById('confirm-modal')).toBeNull();
+    expect(document.activeElement).toBe(opener);
   });
 });
