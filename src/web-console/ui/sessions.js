@@ -11,23 +11,47 @@
  */
 
 import { get, post, del } from './api.js';
+import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
 
 let host;
 let notify = () => {};
 let viewLogs = null; // ctx.viewSessionLogs(logSessionId) — set by the shell
+let canViewLogs = false;
+const availableActions = {
+  revokeConsole: false,
+  revokeOtherConsoleSessions: false,
+  disconnectMcp: false,
+  disconnectAllMcp: false,
+};
 
 const state = { console: [], mcp: [], loading: true, error: false };
+let globalListenersBound = false;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
   viewLogs = ctx.viewSessionLogs || null;
+  canViewLogs = ctx.hasRoute?.('GET', '/me/logs') === true;
+  availableActions.revokeConsole = ctx.hasRoute?.('DELETE', '/me/security/sessions/:session_id') === true;
+  availableActions.revokeOtherConsoleSessions = ctx.hasRoute?.('POST', '/me/security/sessions/revoke-all-others') === true;
+  availableActions.disconnectMcp = ctx.hasRoute?.('DELETE', '/me/sessions/:session_id') === true;
+  availableActions.disconnectAllMcp = ctx.hasRoute?.('POST', '/me/sessions/revoke-all') === true;
   host.innerHTML = shell();
   host.querySelector('#sess-refresh').addEventListener('click', load);
-  host.querySelector('#sess-revoke-others').addEventListener('click', signOutEverywhereElse);
+  host.querySelector('#sess-revoke-others')?.addEventListener('click', signOutEverywhereElse);
   await load();
+  bindGlobalListeners();
+}
+
+function bindGlobalListeners() {
+  if (globalListenersBound) return;
   // Re-fetch when the user returns to the tab (sessions drift over time).
-  globalThis.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'sessions') load(); });
+  globalThis.addEventListener('dh:tab-activated', onTabActivated);
+  globalListenersBound = true;
+}
+
+function onTabActivated(event) {
+  if (event.detail?.name === 'sessions') load();
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
@@ -40,7 +64,7 @@ async function load() {
     get('/me/security/sessions').catch(() => null),
     get('/me/sessions').catch(() => null),
   ]);
-  state.console = sec?.status === 200 && Array.isArray(sec.body?.sessions) ? sec.body?.sessions : [];
+  state.console = sec?.status === 200 && Array.isArray(sec.body?.sessions) ? sec.body.sessions : [];
   state.mcp = mcp?.status === 200 && Array.isArray(mcp.body?.sessions) ? mcp.body.sessions : [];
   state.error = sec?.status !== 200;
   state.loading = false;
@@ -50,15 +74,43 @@ async function load() {
 /* ── Markup ─────────────────────────────────────────────────────────────── */
 
 function shell() {
+  const bulkAction = bulkActionConfig();
   return `
   <div class="sessions-bar">
     <span class="sessions-title">Sessions</span>
     <div class="sessions-bar-actions">
       <button class="btn btn-ghost" id="sess-refresh" type="button">&#x21bb; Refresh</button>
-      <button class="btn btn-ghost session-danger" id="sess-revoke-others" type="button">Sign out everywhere else</button>
+      ${bulkAction ? `<button class="btn btn-ghost session-danger" id="sess-revoke-others" type="button">${bulkAction.label}</button>` : ''}
     </div>
   </div>
   <div id="sessions-body"></div>`;
+}
+
+function bulkActionConfig() {
+  const consoleAvailable = availableActions.revokeOtherConsoleSessions;
+  const mcpAvailable = availableActions.disconnectAllMcp;
+  if (consoleAvailable && mcpAvailable) {
+    return {
+      label: 'Sign out everywhere else',
+      prompt: 'Sign out of all your other console sessions and disconnect all connected apps? This device stays signed in.',
+      confirmLabel: 'Sign out others',
+    };
+  }
+  if (consoleAvailable) {
+    return {
+      label: 'Sign out other console sessions',
+      prompt: 'Sign out of all your other console sessions? This device stays signed in.',
+      confirmLabel: 'Sign out others',
+    };
+  }
+  if (mcpAvailable) {
+    return {
+      label: 'Disconnect all connected apps',
+      prompt: 'Disconnect all connected apps? They will need to reconnect.',
+      confirmLabel: 'Disconnect apps',
+    };
+  }
+  return null;
 }
 
 function renderBody() {
@@ -116,10 +168,16 @@ function consoleCard(s) {
       </div>
       <div class="session-badges">${badges}</div>
       <div class="session-actions">
-        <button class="btn btn-ghost session-link" data-logs-console="${escapeHtml(s.session_id)}" type="button">View logs</button>
-        <button class="btn btn-ghost session-danger" data-revoke-console="${escapeHtml(s.session_id)}" data-current="${current ? '1' : '0'}" type="button">Sign out</button>
+        ${canViewLogs ? `<button class="btn btn-ghost session-link" data-logs-console="${escapeHtml(s.session_id)}" type="button">View logs</button>` : ''}
+        ${consoleRevokeAction(s.session_id, current)}
       </div>
     </div>`;
+}
+
+function consoleRevokeAction(sessionId, current) {
+  if (!availableActions.revokeConsole) return '';
+  const currentFlag = current ? '1' : '0';
+  return `<button class="btn btn-ghost session-danger" data-revoke-console="${escapeHtml(sessionId)}" data-current="${currentFlag}" type="button">Sign out</button>`;
 }
 
 function mcpCard(s) {
@@ -137,8 +195,8 @@ function mcpCard(s) {
       </div>
       <div class="session-badges">${recencyBadge(s.last_active_at)}</div>
       <div class="session-actions">
-        <button class="btn btn-ghost session-link" data-logs-mcp="${escapeHtml(s.session_id)}" type="button">View logs</button>
-        <button class="btn btn-ghost session-danger" data-disconnect-mcp="${escapeHtml(s.session_id)}" type="button">Disconnect</button>
+        ${canViewLogs ? `<button class="btn btn-ghost session-link" data-logs-mcp="${escapeHtml(s.session_id)}" type="button">View logs</button>` : ''}
+        ${availableActions.disconnectMcp ? `<button class="btn btn-ghost session-danger" data-disconnect-mcp="${escapeHtml(s.session_id)}" type="button">Disconnect</button>` : ''}
       </div>
     </div>`;
 }
@@ -191,52 +249,37 @@ async function disconnectMcp(sessionId) {
 }
 
 async function signOutEverywhereElse() {
-  const ok = await confirmDialog(
-    'Sign out of all your other console sessions and disconnect all connected apps? This device stays signed in.',
-    'Sign out others');
+  const bulkAction = bulkActionConfig();
+  if (!bulkAction) return;
+  const ok = await confirmDialog(bulkAction.prompt, bulkAction.confirmLabel);
   if (!ok) return;
   let consoleRevoked = 0;
   let appsDisconnected = 0;
   const [c, m] = await Promise.all([
-    post('/me/security/sessions/revoke-all-others').catch(() => null),
-    post('/me/sessions/revoke-all').catch(() => null),
+    availableActions.revokeOtherConsoleSessions
+      ? post('/me/security/sessions/revoke-all-others').catch(() => null)
+      : null,
+    availableActions.disconnectAllMcp
+      ? post('/me/sessions/revoke-all').catch(() => null)
+      : null,
   ]);
   if (c?.status === 200) consoleRevoked = Number(c.body?.revoked ?? 0);
   if (m && (m.status === 202 || m.status === 200)) appsDisconnected = Number(m.body?.requested ?? 0);
-  notify(`Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`, 'success');
+  notify(bulkActionResult(consoleRevoked, appsDisconnected), 'success');
   setTimeout(load, 900);
+}
+
+function bulkActionResult(consoleRevoked, appsDisconnected) {
+  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
+    return `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`;
+  }
+  if (availableActions.revokeOtherConsoleSessions) return `Signed out ${consoleRevoked} other session(s).`;
+  return `Disconnected ${appsDisconnected} app(s).`;
 }
 
 function jumpToLogs(logSessionId) {
   if (viewLogs) viewLogs(logSessionId);
   else notify('Logs are unavailable right now.', 'warn');
-}
-
-/* ── Confirm dialog (Atelier-styled) ─────────────────────────────────────── */
-
-function confirmDialog(message, confirmLabel) {
-  return new Promise((resolve) => {
-    document.getElementById('confirm-modal')?.remove();
-    const modal = document.createElement('div');
-    modal.className = 'confirm-modal';
-    modal.id = 'confirm-modal';
-    modal.innerHTML = `
-      <div class="confirm-backdrop"></div>
-      <div class="confirm-card" role="dialog" aria-modal="true">
-        <p class="confirm-msg">${escapeHtml(message)}</p>
-        <div class="confirm-actions">
-          <button class="btn btn-ghost" data-confirm="0" type="button">Cancel</button>
-          <button class="btn btn-primary" data-confirm="1" type="button">${escapeHtml(confirmLabel)}</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    const done = (val) => { modal.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
-    const onKey = (e) => { if (e.key === 'Escape') done(false); };
-    modal.querySelector('.confirm-backdrop').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="0"]').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="1"]').addEventListener('click', () => done(true));
-    document.addEventListener('keydown', onKey);
-  });
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
@@ -247,17 +290,6 @@ function recencyBadge(ts) {
   const rel = relAgo(ts);
   const active = ts && (Date.now() - new Date(ts).getTime()) < ACTIVE_WINDOW_MS;
   return `<span class="session-badge${active ? ' session-badge--active' : ''}">${active ? '&#x25cf; active' : escapeHtml(rel)}</span>`;
-}
-
-function relAgo(ts) {
-  if (!ts) return 'unknown';
-  const age = Date.now() - new Date(ts).getTime();
-  if (age < 0 || age < 60_000) return 'just now';
-  const m = Math.floor(age / 60_000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }
 
 // Friendly browser/OS from a user-agent string (best-effort, display only).
@@ -284,9 +316,4 @@ function describeBrowser(ua) {
     [/Linux/, 'Linux'],
   ], '');
   return os ? `${browser} on ${os}` : browser;
-}
-
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

@@ -87,6 +87,7 @@ export default [
       'coverage/**',
       'coverage-*/**',
       'tests/fixtures/**',
+      'src/web-console/ui/vendor/**',
       'scripts/**/*.js',
       'scripts/**/*.cjs',
       'eslint.config.js',
@@ -94,6 +95,22 @@ export default [
       // Auto-generated coverage reports
       'tests/coverage/**/*.js',
     ],
+  },
+  {
+    files: ['src/web-console/ui/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        ...globals.browser,
+        DOMPurify: 'readonly',
+        jsyaml: 'readonly',
+        marked: 'readonly',
+      },
+    },
+    rules: {
+      ...pluginJs.configs.recommended.rules,
+    },
   },
   {
     files: ['src/**/*.ts', 'tests/**/*.ts'],

@@ -12,11 +12,14 @@
  */
 
 import { get } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
+import { escapeHtml } from './ui-utils.js';
 
 const ENROLL_URL = '/api/v1/me/security/factors/enroll/totp';
 const DISABLE_URL = '/api/v1/me/security/factors/disable/totp';
 
 let toast = () => {};
+let hasRoute = noConsoleRoute;
 
 /** Current TOTP factor status, or null if unavailable. */
 export async function fetchFactorStatus() {
@@ -35,6 +38,7 @@ export function startEnrollment() {
 
 export async function openSecurityPanel(ctx = {}) {
   toast = ctx.toast || toast;
+  hasRoute = ctx.hasRoute || hasRoute;
   const status = await fetchFactorStatus();
   renderModal(status);
 }
@@ -71,16 +75,25 @@ function renderModal(status) {
 
 function renderTotp(totp) {
   if (!totp.enrolled) {
+    const enrollmentAction = hasRoute('GET', '/me/security/factors/enroll/totp')
+      ? `<div class="security-actions">
+        <button class="btn btn-primary" id="sec-enroll" type="button">Set up authenticator</button>
+      </div>`
+      : '';
     return `
       <p class="security-status security-status--off"><span class="security-dot"></span>Not set up</p>
       <p class="security-muted">Set up an authenticator app (Google Authenticator, 1Password, etc.) to enable admin elevation.</p>
-      <div class="security-actions">
-        <button class="btn btn-primary" id="sec-enroll" type="button">Set up authenticator</button>
-      </div>`;
+      ${enrollmentAction}`;
   }
   const enrolled = totp.enrolled_at ? new Date(totp.enrolled_at).toLocaleDateString() : null;
   const lastUsed = totp.last_used_at ? new Date(totp.last_used_at).toLocaleString() : 'never';
   const codes = typeof totp.backup_codes_remaining === 'number' ? totp.backup_codes_remaining : null;
+  const replaceAction = hasRoute('GET', '/me/security/factors/enroll/totp')
+    ? '<button class="btn btn-ghost" id="sec-replace" type="button">Replace device</button>'
+    : '';
+  const disableAction = hasRoute('GET', '/me/security/factors/disable/totp')
+    ? '<button class="btn btn-ghost security-danger" id="sec-disable" type="button">Disable</button>'
+    : '';
   return `
     <p class="security-status security-status--on"><span class="security-dot"></span>Enrolled${enrolled ? ` · since ${enrolled}` : ''}</p>
     <dl class="security-meta">
@@ -88,8 +101,8 @@ function renderTotp(totp) {
       ${codes === null ? '' : `<div><dt>Backup codes left</dt><dd>${codes}</dd></div>`}
     </dl>
     <div class="security-actions">
-      <button class="btn btn-ghost" id="sec-replace" type="button">Replace device</button>
-      <button class="btn btn-ghost security-danger" id="sec-disable" type="button">Disable</button>
+      ${replaceAction}
+      ${disableAction}
     </div>`;
 }
 
@@ -100,9 +113,4 @@ function close() {
 
 function onEsc(e) {
   if (e.key === 'Escape') close();
-}
-
-function escapeHtml(s) {
-  if (!s) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

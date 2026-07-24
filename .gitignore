@@ -58,6 +58,9 @@ playwright-report/
 
 # Integration test temporary files
 .test-tmp/
+.console-e2e/
+.console-e2e-pw/
+.console-preview/
 
 # Performance test temp directories 
 tests/temp/*/
