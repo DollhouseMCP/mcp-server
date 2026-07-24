@@ -19,6 +19,7 @@
  */
 
 import { get } from './api.js';
+import { escapeHtml } from './ui-utils.js';
 
 const BUFFER_SIZE = 10000;
 const ROW_HEIGHT = 22;
@@ -766,9 +767,4 @@ function copyToClipboard(text) {
     document.execCommand('copy'); // NOSONAR — intentional fallback for browsers without navigator.clipboard support
     ta.remove();
   });
-}
-
-function escapeHtml(s) {
-  if (!s) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }
