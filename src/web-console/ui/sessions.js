@@ -16,6 +16,9 @@ import { createSessionDetail } from './session-detail.js';
 import { isAbortError, pollUntilTerminal } from './polling.js';
 import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
 
+// app.js memoizes each tab's load/init promise, so this module is mounted once
+// per page. Module-level state and the global listener intentionally share that
+// same page lifetime.
 let host;
 let notify = () => {};
 let viewLogs = null; // ctx.viewSessionLogs(logSessionId) — set by the shell
@@ -368,8 +371,9 @@ async function signOutEverywhereElse() {
       }));
     }
     updateBulkCommandStatus();
+  } else {
+    renderBody();
   }
-  renderBody();
 }
 
 function bulkActionResult(consoleRevoked, appsDisconnected, consoleFailed, appsFailed) {

@@ -61,4 +61,13 @@ describe('web-console polling utilities', () => {
     })).rejects.toMatchObject({ name: 'AbortError' });
     expect(readStatus).toHaveBeenCalledTimes(1);
   });
+
+  it('rejects a malformed status response instead of silently timing out', async () => {
+    const readStatus = jest.fn(() => Promise.resolve({}));
+
+    await expect(pollUntilTerminal(readStatus)).rejects.toThrow(
+      'Polling status response must include a non-empty status.',
+    );
+    expect(readStatus).toHaveBeenCalledTimes(1);
+  });
 });

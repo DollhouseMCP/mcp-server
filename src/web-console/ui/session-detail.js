@@ -68,6 +68,7 @@ export async function createSessionDetail(host, sessionId, ctx) {
     const sessionResponse = await get(basePath, { signal });
     if (!acceptSessionResponse(sessionResponse)) return;
     await Promise.all([
+      loadActivations(signal),
       loadApprovals(signal),
       loadExecutions(signal),
       loadGatekeeper(signal),
@@ -355,7 +356,7 @@ export async function createSessionDetail(host, sessionId, ctx) {
           <p class="session-detail-eyebrow">Connected app</p>
           <h2>${escapeHtml(client)}</h2>
           <p>${escapeHtml(relAgo(session.created_at))} · ${Number(session.request_count || 0).toLocaleString()} requests · ${Number(session.error_count || 0).toLocaleString()} errors</p>
-          ${sidLine(session.session_id)}
+          ${sessionIdCode(session.session_id)}
         </div>
         <div class="session-detail-actions">
           ${routes.disconnect ? '<button class="btn btn-ghost session-danger" data-session-disconnect type="button">Disconnect</button>' : ''}
@@ -602,7 +603,7 @@ function clientName(session) {
   return session.client_info?.version ? `${name} ${session.client_info.version}` : name;
 }
 
-function sidLine(id) {
+function sessionIdCode(id) {
   return `<code class="session-detail-id">${escapeHtml(id || '')}</code>`;
 }
 

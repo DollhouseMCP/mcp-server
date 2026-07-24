@@ -160,6 +160,10 @@ test('owned session workspace handles HITL, snapshots, polling cleanup, and term
   await page.locator(CONFIRM_ACTION).click();
   await expect(page.locator('.session-detail-panel--activations')).toContainText('No elements are active for this session.');
 
+  mock.setActivations(['remote-persona']);
+  await page.locator('[data-detail-refresh]').click();
+  await expect(page.locator('.session-detail-panel--activations')).toContainText('remote-persona');
+
   await page.locator('[data-execution-id]').click();
   await expect(page.locator('#session-execution-detail')).toContainText('Package validation started.');
 

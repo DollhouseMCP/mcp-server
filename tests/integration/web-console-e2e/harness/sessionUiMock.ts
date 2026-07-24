@@ -11,6 +11,7 @@ export interface SessionUiMockState {
   approvalReads: number;
   commandReads: number;
   detailUnavailable: boolean;
+  setActivations(names: readonly string[]): void;
 }
 
 export async function installSessionUiMock(
@@ -21,17 +22,17 @@ export async function installSessionUiMock(
     bulkRequestFails?: boolean;
   } = {},
 ): Promise<SessionUiMockState> {
+  let activations = [activation('alpha-persona')];
   const state: SessionUiMockState = {
     approvalReads: 0,
     commandReads: 0,
     detailUnavailable: options.detailUnavailable ?? false,
+    setActivations: names => { activations = names.map(name => activation(name)); },
   };
   const approvalStatuses = new Map([
     [APPROVE_APPROVAL_ID, 'pending'],
     [DENY_APPROVAL_ID, 'pending'],
   ]);
-  let activations = [activation('alpha-persona')];
-
   await page.route('**/api/v1/me/sessions**', async route => {
     const request = route.request();
     const path = new URL(request.url()).pathname;

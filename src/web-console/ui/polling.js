@@ -63,7 +63,7 @@ export function createVisiblePoller(task, { intervalMs = 5_000, onError = () => 
  */
 
 /**
- * @param {(signal?: AbortSignal) => Promise<PollStatus>} readStatus
+ * @param {(signal?: AbortSignal) => Promise<unknown>} readStatus
  * @param {PollUntilTerminalOptions} [options]
  * @returns {Promise<{ timedOut: boolean, status: PollStatus | null }>}
  */
@@ -72,17 +72,33 @@ export async function pollUntilTerminal(
   { signal, intervalMs = 500, timeoutMs = 10_000, onUpdate = () => {} } = {},
 ) {
   const deadline = Date.now() + timeoutMs;
+  /** @type {PollStatus | null} */
   let latest = null;
   while (Date.now() < deadline) {
     if (signal?.aborted) throw abortError();
-    latest = await readStatus(signal);
+    const status = await readStatus(signal);
+    if (!isPollStatus(status)) {
+      throw new TypeError('Polling status response must include a non-empty status.');
+    }
+    latest = status;
     onUpdate(latest);
-    if (latest?.status && latest.status !== 'pending') {
+    if (latest.status !== 'pending') {
       return { timedOut: false, status: latest };
     }
     await abortableDelay(intervalMs, signal);
   }
   return { timedOut: true, status: latest };
+}
+
+/**
+ * @param {unknown} value
+ * @returns {value is PollStatus}
+ */
+function isPollStatus(value) {
+  return value !== null &&
+    typeof value === 'object' &&
+    typeof value.status === 'string' &&
+    value.status.length > 0;
 }
 
 function abortableDelay(ms, signal) {
