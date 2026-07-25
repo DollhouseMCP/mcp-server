@@ -35,7 +35,10 @@ const AUTHORING_WORKSPACE = '[data-portfolio-authoring]';
 const THEME_SELECT = '#account-theme-form [name="theme"]';
 const OPERATIONS_TAB = '.console-tab[data-tab="operations"]';
 const SUBMIT_BUTTON = 'button[type="submit"]';
+const OPERATIONS_HEALTH_NAV = '[data-operations-nav="health"]';
+const OPERATIONS_CONFIG_NAV = '[data-operations-nav="config"]';
 const OPERATIONS_SESSIONS_NAV = '[data-operations-nav="sessions"]';
+const ENABLED_CONFIG_FORM = '[data-config-form="enhanced_index.enabled"]';
 const OPERATIONAL_SESSION_CARD = '[data-operational-session-id]';
 const BULK_SESSION_ACTION = '#sess-revoke-others';
 const USER_DRAWER = '.ua-drawer';
@@ -527,12 +530,12 @@ test('operations remains usable when a partial deployment omits health', async (
   });
   await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
   await page.locator(OPERATIONS_TAB).click();
-  await expect(page.locator('[data-operations-nav="health"]')).toHaveCount(0);
-  await expect(page.locator('[data-operations-nav="config"]')).toBeVisible();
-  await page.locator('[data-operations-nav="config"]').click();
-  await expect(page.locator('[data-config-form="enhanced_index.enabled"]')).toBeVisible();
-  await expect(page.locator('[data-config-form="enhanced_index.enabled"]')).toContainText('Not writable in this deployment');
-  await expect(page.locator('[data-config-form="enhanced_index.enabled"] select')).toBeDisabled();
+  await expect(page.locator(OPERATIONS_HEALTH_NAV)).toHaveCount(0);
+  await expect(page.locator(OPERATIONS_CONFIG_NAV)).toBeVisible();
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+  await expect(page.locator(ENABLED_CONFIG_FORM)).toBeVisible();
+  await expect(page.locator(ENABLED_CONFIG_FORM)).toContainText('Not writable in this deployment');
+  await expect(page.locator(`${ENABLED_CONFIG_FORM} select`)).toBeDisabled();
 });
 
 test('operations requires its capability and stops polling when privilege or visibility is lost', async ({ page }) => {
@@ -573,9 +576,9 @@ test('operator configuration preserves sibling drafts, per-setting concurrency, 
   const mock = await installOperationsUiMock(page, { conflictOnFirstConfigWrite: false });
   await loginFromConsole(page);
   await openMockOperations(page);
-  await page.locator('[data-operations-nav="config"]').click();
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
 
-  const enabled = page.locator('[data-config-form="enhanced_index.enabled"]');
+  const enabled = page.locator(ENABLED_CONFIG_FORM);
   const sibling = page.locator('[data-config-form="enhanced_index.max_cache_entries"]');
   const license = page.locator('[data-config-form="license.key"]');
   await expect(enabled).toContainText('Dynamic');
@@ -597,6 +600,20 @@ test('operator configuration preserves sibling drafts, per-setting concurrency, 
   await expect(sibling.locator('[data-config-feedback]')).not.toContainText('changed elsewhere');
 });
 
+test('operator configuration restarts loading after rapid section navigation', async ({ page }) => {
+  const mock = await installOperationsUiMock(page, { configListDelayMs: 500 });
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+  await expect.poll(() => mock.configReads).toBe(1);
+
+  await page.locator(OPERATIONS_HEALTH_NAV).click();
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+
+  await expect.poll(() => mock.configReads).toBe(2);
+  await expect(page.locator(ENABLED_CONFIG_FORM)).toBeVisible();
+});
+
 test('operations refresh includes embedded metrics and section changes stop its auto-refresh', async ({ page }) => {
   const mock = await installOperationsUiMock(page);
   await loginFromConsole(page);
@@ -613,10 +630,25 @@ test('operations refresh includes embedded metrics and section changes stop its 
   await expect.poll(() => mock.systemMetricsReads).toBeGreaterThan(systemBeforeRefresh);
 
   await page.locator('#am-auto').check();
-  await page.locator('[data-operations-nav="health"]').click();
+  await page.locator(OPERATIONS_HEALTH_NAV).click();
   const systemBeforeSectionChange = mock.systemMetricsReads;
   await page.clock.fastForward(11_000);
   expect(mock.systemMetricsReads, 'embedded metrics stop when their Operations section is hidden').toBe(systemBeforeSectionChange);
+});
+
+test('embedded system metrics refresh once when returning to Operations', async ({ page }) => {
+  const mock = await installOperationsUiMock(page);
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator('[data-operations-nav="metrics"]').click();
+  await expect.poll(() => mock.systemMetricsReads).toBeGreaterThan(0);
+
+  await page.locator('.console-tab[data-tab="portfolio"]').click();
+  const readsBeforeReturn = mock.systemMetricsReads;
+  await page.locator(OPERATIONS_TAB).click();
+  await expect.poll(() => mock.systemMetricsReads).toBe(readsBeforeReturn + 1);
+  await page.waitForTimeout(100);
+  expect(mock.systemMetricsReads, 'the parent lifecycle performs only one refresh').toBe(readsBeforeReturn + 1);
 });
 
 test('operations retains the last session snapshot through a transient refresh failure', async ({ page }) => {
@@ -919,16 +951,16 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   await expect(page.locator('[data-operations-panel="health"]')).toContainText('Degraded');
   await expect(page.locator('[data-operations-panel="health"]')).toContainText('runtime_ack_delayed');
 
-  await page.locator('[data-operations-nav="config"]').click();
-  const configForm = page.locator('[data-config-form="enhanced_index.enabled"]');
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+  const configForm = page.locator(ENABLED_CONFIG_FORM);
   await expect(page.locator('[data-config-form="license.key"] input')).toHaveValue('');
   await configForm.locator('select[name="value"]').selectOption('false');
   await configForm.locator(SUBMIT_BUTTON).click();
   await expect(configForm.locator('[data-config-feedback]')).toContainText('changed elsewhere');
   expect(operationsMock.configWrites).toBe(0);
   await configForm.locator('[data-config-reload]').click();
-  await page.locator('[data-config-form="enhanced_index.enabled"] select[name="value"]').selectOption('false');
-  await page.locator('[data-config-form="enhanced_index.enabled"] button[type="submit"]').click();
+  await page.locator(`${ENABLED_CONFIG_FORM} select[name="value"]`).selectOption('false');
+  await page.locator(`${ENABLED_CONFIG_FORM} button[type="submit"]`).click();
   await expect.poll(() => operationsMock.configWrites).toBe(1);
   expect(operationsMock.configValue).toBe(false);
 

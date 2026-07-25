@@ -133,7 +133,7 @@ export function createOperationalMetricsView(ctx = {}) {
         <section class="operations-system-metrics" data-system-metrics></section>`;
       const systemHost = container.querySelector('[data-system-metrics]');
       if (ctx.hasRoute?.('GET', '/admin/operate/metrics/system')) {
-        systemMetrics = initSystemMetrics(systemHost, { ...ctx, tabName: 'operations' });
+        systemMetrics = initSystemMetrics(systemHost);
       } else {
         systemHost.hidden = true;
       }

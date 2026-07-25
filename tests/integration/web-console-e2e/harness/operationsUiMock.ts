@@ -26,6 +26,7 @@ interface ConfigState {
 type CommandOutcome = 'terminated' | 'already_absent' | 'failed';
 
 interface OperationsUiMockOptions {
+  readonly configListDelayMs?: number;
   readonly conflictOnFirstConfigWrite?: boolean;
   readonly commandOutcome?: CommandOutcome;
   readonly detailUnavailable?: boolean;
@@ -39,6 +40,7 @@ interface RuntimeState {
 }
 
 export interface OperationsUiMockState {
+  configReads: number;
   configPutAttempts: number;
   configWrites: number;
   commandReads: number;
@@ -61,6 +63,7 @@ export async function installOperationsUiMock(
   options: OperationsUiMockOptions = {},
 ): Promise<OperationsUiMockState> {
   const state: OperationsUiMockState = {
+    configReads: 0,
     configPutAttempts: 0,
     configWrites: 0,
     commandReads: 0,
@@ -83,6 +86,7 @@ export async function installOperationsUiMock(
   };
   const runtime: RuntimeState = {
     options: {
+      configListDelayMs: options.configListDelayMs ?? 0,
       conflictOnFirstConfigWrite: options.conflictOnFirstConfigWrite ?? true,
       commandOutcome: options.commandOutcome ?? 'terminated',
       detailUnavailable: options.detailUnavailable ?? false,
@@ -96,7 +100,17 @@ export async function installOperationsUiMock(
     const request = route.request();
     const path = new URL(request.url()).pathname;
     const response = responseFor(request.method(), path, request.postDataJSON(), request.headers(), state, config, runtime);
-    await fulfill(route, response);
+    const delayedConfigRead = request.method() === 'GET'
+      && path === '/api/v1/admin/operate/config'
+      && state.configReads === 1
+      && runtime.options.configListDelayMs > 0;
+    if (delayedConfigRead) await delay(runtime.options.configListDelayMs);
+    try {
+      await fulfill(route, response);
+    } catch (error) {
+      if (!delayedConfigRead) throw error;
+      // The lifecycle regression intentionally navigates away while this request is pending.
+    }
   });
   return state;
 }
@@ -129,7 +143,10 @@ function staticGetResponse(path: string, state: OperationsUiMockState, config: C
     state.healthReads += 1;
     return { status: 503, body: health() };
   }
-  if (path === '/api/v1/admin/operate/config') return ok({ items: configItems(config) });
+  if (path === '/api/v1/admin/operate/config') {
+    state.configReads += 1;
+    return ok({ items: configItems(config) });
+  }
   if (path === `/api/v1/admin/operate/config/${CONFIG_KEY}`) return configResponse(CONFIG_KEY, config);
   if (path === `/api/v1/admin/operate/config/${SIBLING_CONFIG_KEY}`) return configResponse(SIBLING_CONFIG_KEY, config);
   if (path === '/api/v1/admin/operate/logs') {
@@ -454,6 +471,12 @@ async function fulfill(route: Route, response: MockResponse): Promise<void> {
     contentType: 'application/json',
     headers: response.etag ? { etag: response.etag } : undefined,
     body: JSON.stringify(response.body),
+  });
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => {
+    setTimeout(resolve, milliseconds);
   });
 }
 

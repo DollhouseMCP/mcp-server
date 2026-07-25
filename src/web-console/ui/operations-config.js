@@ -7,7 +7,6 @@ import { escapeAttr, escapeHtml, responseDetail } from './operations-ui.js';
 export function createOperatorConfigView(ctx = {}) {
   let container;
   let items = [];
-  let loading = false;
   let requestController;
   let requestVersion = 0;
 
@@ -19,21 +18,15 @@ export function createOperatorConfigView(ctx = {}) {
       container.addEventListener('click', onClick);
     },
     async load(signal) {
-      if (loading) return;
-      loading = true;
       const version = ++requestVersion;
-      try {
-        const response = await get('/admin/operate/config', { signal });
-        if (version !== requestVersion) return;
-        if (response.status !== 200 || !Array.isArray(response.body?.items)) {
-          showLoadProblem(responseDetail(response, 'Operator configuration could not be loaded.'));
-          return;
-        }
-        items = response.body.items;
-        render();
-      } finally {
-        loading = false;
+      const response = await get('/admin/operate/config', { signal });
+      if (version !== requestVersion) return;
+      if (response.status !== 200 || !Array.isArray(response.body?.items)) {
+        showLoadProblem(responseDetail(response, 'Operator configuration could not be loaded.'));
+        return;
       }
+      items = response.body.items;
+      render();
     },
     showError(message) {
       const grid = container?.querySelector('.operations-config-grid');

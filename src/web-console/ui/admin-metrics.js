@@ -22,24 +22,17 @@ const REFRESH_MS = 10000;
 const WIDE_INSTANCE_THRESHOLD = 7;
 
 let host;
-let notify = () => {};
 let timer = null;
-let tabActive = true;
 let sectionActive = false;
-let tabName = 'operations';
 let loadController;
 
 const state = { snapshot: null, meta: null, loading: true, error: false, disabled: false, autoRefresh: false };
 
-export function init(panelEl, ctx = {}) {
+export function init(panelEl) {
   host = panelEl;
-  notify = ctx.toast || notify;
-  tabName = ctx.tabName || tabName;
   host.innerHTML = shell();
   host.querySelector('#am-refresh').addEventListener('click', () => refresh());
   host.querySelector('#am-auto').addEventListener('change', (e) => { state.autoRefresh = e.target.checked; syncTimer(); });
-  globalThis.addEventListener('dh:tab-activated', onTabActivated);
-  document.addEventListener('visibilitychange', onDocumentVisibilityChanged);
   return Object.freeze({
     refresh,
     setVisible(visible) {
@@ -144,7 +137,7 @@ function renderBody() {
 // instead of a long, repetitive flat list.
 function instanceKeyOf(m) {
   const labels = m.labels || {};
-  const keys = Object.keys(labels).sort();
+  const keys = Object.keys(labels).sort((left, right) => left.localeCompare(right));
   return keys.length ? keys.map(k => labels[k]).join(' · ') : '(default)';
 }
 
@@ -286,21 +279,9 @@ function stat(value, label) {
 /* ── Polling ────────────────────────────────────────────────────────────── */
 
 function syncTimer() {
-  const shouldRun = state.autoRefresh && tabActive && sectionActive && !document.hidden;
+  const shouldRun = state.autoRefresh && sectionActive && !document.hidden;
   if (shouldRun && !timer) timer = setInterval(refresh, REFRESH_MS);
   else if (!shouldRun && timer) { clearInterval(timer); timer = null; }
-}
-
-function onTabActivated(e) {
-  tabActive = e.detail?.name === tabName;
-  if (tabActive && sectionActive) refresh();
-  syncTimer();
-}
-
-function onDocumentVisibilityChanged() {
-  if (document.hidden) abortLoad();
-  else if (tabActive && sectionActive) refresh();
-  syncTimer();
 }
 
 function abortLoad() {
