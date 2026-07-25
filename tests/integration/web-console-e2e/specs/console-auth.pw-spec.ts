@@ -21,16 +21,52 @@ const CONFIRM_ACTION = '[data-confirm="1"]';
 const ACCOUNT_MENU = '#site-account';
 const EDITOR_FEEDBACK = '[data-editor-feedback]';
 const EDITOR_CONTENT = '.portfolio-editor [name="content"]';
+const EDITOR_INSTRUCTIONS = '.portfolio-editor [name="instructions"]';
+const EDITOR_SUBMIT = '.portfolio-editor button[type="submit"]';
+const EDITOR_VALIDATE = '[data-editor-validate]';
+const AUTHORING_WORKSPACE = '[data-portfolio-authoring]';
 const THEME_SELECT = '#account-theme-form [name="theme"]';
 const BULK_SESSION_ACTION = '#sess-revoke-others';
 const AUTH_ME_URL = '**/api/v1/auth/me';
 const ADMIN_USER_SESSIONS_URL = '**/api/v1/admin/accounts/users/*/sessions';
+
+interface TextFileFixture {
+  readonly name: string;
+  readonly mimeType: string;
+  readonly content: string;
+}
+
+async function setTextInputFile(page: Page, selector: string, file: TextFileFixture): Promise<void> {
+  await page.locator(selector).evaluate((element, fixture) => {
+    if (!(element instanceof HTMLInputElement)) throw new Error('File fixture target must be an input element.');
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([fixture.content], fixture.name, { type: fixture.mimeType }));
+    element.files = transfer.files;
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, file);
+}
 
 async function filterManifestRoutes(page: Page, unavailableRoutes: ReadonlySet<string>): Promise<void> {
   await page.route(MANIFEST_URL, async route => {
     const response = await route.fetch();
     const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
     const routes = manifest.routes.filter(item => !unavailableRoutes.has(`${item.method} ${item.path}`));
+    await route.fulfill({ response, json: { ...manifest, routes } });
+  });
+}
+
+async function includeManifestRoutes(
+  page: Page,
+  additionalRoutes: ReadonlyArray<{ readonly method: string; readonly path: string }>,
+): Promise<void> {
+  await page.route(MANIFEST_URL, async route => {
+    const response = await route.fetch();
+    const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
+    const routeKeys = new Set(manifest.routes.map(item => `${item.method} ${item.path}`));
+    const routes = [
+      ...manifest.routes,
+      ...additionalRoutes.filter(item => !routeKeys.has(`${item.method} ${item.path}`)),
+    ];
     await route.fulfill({ response, json: { ...manifest, routes } });
   });
 }
@@ -137,25 +173,79 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await expect(page.locator('#sec-enroll')).toHaveCount(0);
 });
 
+test('All combines every collection page with the portfolio and reports source totals', async ({ page }) => {
+  await includeManifestRoutes(page, [
+    { method: 'GET', path: '/api/v1/collection/elements' },
+    { method: 'GET', path: '/api/v1/collection/elements/:type/:name' },
+  ]);
+  const mock = await installPortfolioUiMock(page, { includeCollection: true });
+  await loginFromConsole(page);
+
+  await expect(page.locator('#pf-source')).toBeVisible();
+  await expect(page.locator('#pf-summary')).toHaveText('3 total elements');
+  await expect(page.locator('#pf-count')).toHaveText('3 elements');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(3);
+  await expect(page.locator('#pf-grid .source-badge-collection')).toHaveCount(2);
+  await expect(page.locator('#pf-grid .source-badge', { hasText: 'LOCAL' })).toHaveCount(1);
+  await expect(page.locator('#pf-type-filters [data-key="personas"] .filter-count')).toHaveText('1');
+  await expect(page.locator('#pf-type-filters [data-key="skills"] .filter-count')).toHaveText('1');
+  await expect(page.locator('#pf-type-filters [data-key="templates"] .filter-count')).toHaveText('1');
+  expect(mock.collectionReads).toBe(2);
+
+  await page.locator('#pf-source [data-source="portfolio"]').click();
+  await expect(page.locator('#pf-summary')).toHaveText('1 portfolio element');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(1);
+
+  await page.locator('#pf-source [data-source="collection"]').click();
+  await expect(page.locator('#pf-summary')).toHaveText('2 collection elements');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(2);
+
+  await page.locator('#pf-source [data-source="all"]').click();
+  await page.locator('#pf-search').fill('Collection Skill');
+  await expect(page.locator('#pf-count')).toHaveText('1 element');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(1);
+  await expect(page.locator('#pf-grid .card-title')).toHaveText('Collection Skill');
+});
+
 test('portfolio authoring validates drafts, preserves conflicts, and confirms hard deletion', async ({ page }) => {
   const mock = await installPortfolioUiMock(page, { conflictOnFirstPatch: true });
   await loginFromConsole(page);
 
+  await expect(page.locator('.portfolio-start-action')).toHaveCount(2);
+  await expect(page.locator('#pf-create')).toContainText('Create new');
+  await expect(page.locator('#pf-import')).toContainText('Import file');
   await page.locator('#pf-create').click();
-  await page.locator('[data-editor-validate]').click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeVisible();
+  await expect(page.locator('.portfolio-type-choice')).toHaveCount(6);
+  await expect(page.locator('[data-builder-overview]')).toContainText('Building a Persona');
+  await expect(page.locator('.portfolio-editor [name="metadata"]')).toBeHidden();
+  await page.locator('[data-custom-metadata] summary').click();
+  await expect(page.locator('[data-custom-metadata-enable]')).toBeVisible();
+  await page.locator('[data-custom-metadata-enable]').click();
+  await page.locator('.portfolio-editor [name="metadata"]').fill('{');
+  await expect(page.locator('[data-custom-metadata-status]')).toContainText('must be valid JSON');
+  await page.locator('.portfolio-editor [name="metadata"]').fill('{"custom_note":"preserve me"}');
+  await expect(page.locator('[data-custom-metadata-status]')).toContainText('Valid JSON object');
+  await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Name is required');
+  await expect(page.locator(EDITOR_FEEDBACK)).toBeInViewport();
   await page.locator('.portfolio-editor [name="name"]').fill('browser-created');
-  await page.locator('[data-editor-validate]').click();
-  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('content is required');
-  await page.locator(EDITOR_CONTENT).fill('Created through the browser.');
-  await page.locator('[data-editor-validate]').click();
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Description is required');
+  await page.locator('.portfolio-editor [name="description"]').fill('A guided browser-created persona.');
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Behavioral instructions are required');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('You are a careful browser-created persona.');
+  await page.locator(EDITOR_CONTENT).fill('Optional reference material.');
+  await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Validation passed');
-  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await page.locator(EDITOR_SUBMIT).click();
   await expect(page.locator('[data-name="browser-created"]')).toBeVisible();
+  expect(mock.elements.find(item => item.name === 'browser-created')?.metadata.custom_note).toBe('preserve me');
 
   await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
   await page.locator(EDITOR_CONTENT).fill('Unsaved browser draft.');
-  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await page.locator(EDITOR_SUBMIT).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('changed after you opened it');
   await expect(page.locator('[data-editor-reload]')).toBeVisible();
   await page.locator('[data-editor-reload]').click();
@@ -173,13 +263,75 @@ test('portfolio authoring validates drafts, preserves conflicts, and confirms ha
   expect(mock.deletes).toBe(1);
 });
 
+test('portfolio imports a reviewed file without silently overwriting a duplicate', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  const file = {
+    name: 'imported-skill.md',
+    mimeType: 'text/markdown',
+    content: `---
+name: Imported Skill
+type: skill
+description: Imported from a local Dollhouse file.
+tags:
+  - imported
+  - browser
+custom_policy: reviewed
+---
+
+Follow the reviewed skill instructions.`,
+  };
+
+  await page.locator('#pf-import').click();
+  await expect(page.locator('[data-import-drop]')).toBeVisible();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await expect(page.locator('[data-import-source]')).toContainText('Skill detected');
+  await expect(page.locator('[name="type"][value="skills"]')).toBeChecked();
+  await expect(page.locator('.portfolio-editor [name="name"]')).toHaveValue('Imported Skill');
+  await expect(page.locator('.portfolio-editor [name="description"]')).toHaveValue('Imported from a local Dollhouse file.');
+  await expect.poll(async () => (await page.locator(EDITOR_INSTRUCTIONS).inputValue()).trim())
+    .toBe('Follow the reviewed skill instructions.');
+  await expect(page.locator(EDITOR_CONTENT)).toHaveValue('');
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('1 additional metadata field');
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('will be preserved');
+  await expect(page.locator('.portfolio-editor [name="metadata"]')).toHaveValue(/"custom_policy": "reviewed"/u);
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('ready to save');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="Imported Skill"]')).toBeVisible();
+  expect(mock.elements.filter(item => item.type === 'skills' && item.name === 'Imported Skill')).toHaveLength(1);
+  expect(mock.elements.find(item => item.type === 'skills' && item.name === 'Imported Skill')?.metadata.custom_policy)
+    .toBe('reviewed');
+
+  await page.locator('#pf-import').click();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Nothing was overwritten');
+  expect(mock.elements.filter(item => item.type === 'skills' && item.name === 'Imported Skill')).toHaveLength(1);
+
+  await page.locator('.portfolio-editor [data-editor-close]').last().click();
+  await page.locator('#portfolio-confirm [data-confirm="1"]').click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
+  await expect(page.locator('#pf-grid')).toBeVisible();
+});
+
+test('portfolio create cancel leaves the workspace without saving', async ({ page }) => {
+  await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator('#pf-create').click();
+  await page.locator('.portfolio-editor [data-editor-close]').last().click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
+  await expect(page.locator('#pf-grid')).toBeVisible();
+});
+
 test('portfolio editor stays blocked when conflict reload omits its ETag', async ({ page }) => {
   await installPortfolioUiMock(page, { conflictOnFirstPatch: true, omitEtagAfterConflict: true });
   await loginFromConsole(page);
 
   await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
   await page.locator(EDITOR_CONTENT).fill('Draft that must not overwrite newer content.');
-  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await page.locator(EDITOR_SUBMIT).click();
   await page.locator('[data-editor-reload]').click();
 
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('did not include an ETag');
@@ -217,7 +369,7 @@ test('portfolio write controls disappear when the manifest omits write routes', 
   ]));
   await loginFromConsole(page);
   await expect(page.locator('#pf-grid')).toBeVisible();
-  await expect(page.locator('#pf-create, #pf-sync, [data-action="edit"]')).toHaveCount(0);
+  await expect(page.locator('#pf-create, #pf-import, #pf-sync, [data-action="edit"]')).toHaveCount(0);
   await page.locator('[data-name="alpha-persona"]').click();
   await expect(page.locator('.modal-edit-btn')).toBeHidden();
   await expect(page.locator('.modal-delete-btn')).toBeHidden();
