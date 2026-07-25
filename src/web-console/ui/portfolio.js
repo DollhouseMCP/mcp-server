@@ -18,6 +18,7 @@ import { get, post } from './api.js';
 import { noConsoleRoute } from './console-meta.js';
 import { createPortfolioAuthoring } from './portfolio-authoring.js';
 import { renderElementDetail } from './portfolio-detail.js';
+import { escapeHtml } from './ui-utils.js';
 
 // Plural API type → singular CSS/display type (drives the --family colour lanes
 // in styles.css: .element-card[data-type="persona"], etc.).
@@ -59,25 +60,35 @@ export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
   hasRoute = ctx.hasRoute || hasRoute;
-  authoring = createPortfolioAuthoring({ hasRoute, notify, refresh: refreshPortfolio });
+  authoring = createPortfolioAuthoring({ host, hasRoute, notify, refresh: refreshPortfolio });
   state.collection.installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
   host.innerHTML = template();
   const collectionAvailable = hasRoute('GET', '/collection/elements');
   host.querySelector('#pf-source').hidden = !collectionAvailable;
   if (!collectionAvailable) state.source = 'portfolio';
   wireControls();
-  await load();
+  await Promise.all([
+    load(),
+    collectionAvailable ? loadCollection() : Promise.resolve(),
+  ]);
 }
 
 /* ── Markup ─────────────────────────────────────────────────────────────── */
 
 function template() {
   return `
+  <div data-portfolio-browser>
   <div class="portfolio-command-bar">
     <span class="portfolio-summary" id="pf-summary" aria-live="polite">Portfolio</span>
     <div class="portfolio-command-actions">
       ${authoring.capabilities.sync ? '<button class="btn btn-ghost" id="pf-sync" type="button">Sync with GitHub</button>' : ''}
-      ${authoring.capabilities.create ? '<button class="btn btn-primary" id="pf-create" type="button">Create element</button>' : ''}
+      ${authoring.capabilities.create ? `
+        <button class="portfolio-start-action" id="pf-create" type="button">
+          <strong>Create new</strong><span>Build an element with guided fields</span>
+        </button>
+        <button class="portfolio-start-action" id="pf-import" type="button">
+          <strong>Import file</strong><span>Review and add a local element file</span>
+        </button>` : ''}
     </div>
   </div>
   <div class="browse-controls">
@@ -123,7 +134,9 @@ function template() {
     <button class="pagination-btn" id="pf-prev" type="button">&#8249; Prev</button>
     <span class="pagination-info" id="pf-pageinfo"></span>
     <button class="pagination-btn" id="pf-next" type="button">Next &#8250;</button>
-  </nav>`;
+  </nav>
+  </div>
+  <section class="portfolio-workspace" data-portfolio-authoring hidden aria-label="Portfolio authoring"></section>`;
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
@@ -142,7 +155,6 @@ async function load() {
   // Local portfolio elements are flagged so the LOCAL badge + Portfolio source filter work.
   state.elements = (list.body?.elements ?? []).filter(Boolean).map(el => ({ ...el, _local: true }));
   state.summary = summary?.status === 200 ? summary.body : null;
-  renderSummary();
   paint();
   // The list DTO is lean; hydrate the rich card fields (description/author/
   // category) from each element's full detail — the legacy did the same. No
@@ -190,7 +202,7 @@ const COLLECTION_MAX_PAGES = 20;  // safety bound on the page walk
 async function loadCollection() {
   if (state.collection.status === 'loading') return;
   state.collection.status = 'loading';
-  render();
+  paint();
 
   const elements = [];
   let installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
@@ -209,6 +221,16 @@ async function loadCollection() {
         return;
       }
       if (!body.has_more) break;
+      if (page === COLLECTION_MAX_PAGES) {
+        state.collection = {
+          status: 'degraded',
+          detail: `Only the first ${elements.length} collection elements could be loaded.`,
+          elements,
+          installEnabled,
+        };
+        paint();
+        return;
+      }
     }
     state.collection = { status: 'ok', detail: '', elements, installEnabled };
   } catch {
@@ -244,21 +266,58 @@ function mapCollectionElement(el) {
 
 // Repaint both the type-filter counts and the grid (use when the source or the
 // underlying element set changed; plain render() suffices for search/sort/view).
-function paint() { renderTypeFilters(); render(); }
+function paint() { renderSummary(); renderTypeFilters(); render(); }
 
 function renderSummary() {
   const summary = host.querySelector('#pf-summary');
   if (!summary) return;
-  const total = state.summary?.total_elements;
-  const plural = total === 1 ? '' : 's';
-  summary.textContent = Number.isSafeInteger(total)
-    ? `${total} portfolio element${plural}`
-    : 'Your portfolio';
+  if (state.source === 'portfolio') {
+    const total = state.summary?.total_elements;
+    summary.textContent = Number.isSafeInteger(total)
+      ? elementCount(total, 'portfolio')
+      : 'Your portfolio';
+    return;
+  }
+  if (state.source === 'collection') {
+    summary.textContent = collectionSummary();
+    return;
+  }
+  summary.textContent = allSourcesSummary();
+}
+
+function elementCount(total, qualifier = '') {
+  const prefix = qualifier ? `${qualifier} ` : '';
+  return `${total} ${prefix}element${total === 1 ? '' : 's'}`;
+}
+
+function collectionSummary() {
+  const { status, elements, detail } = state.collection;
+  if (status === 'idle' || status === 'loading') return 'Loading collection…';
+  if (status === 'error' || status === 'unavailable') return 'Collection unavailable';
+  if (status === 'degraded') {
+    return `${elementCount(elements.length, 'available collection')} · ${detail || 'Collection may be incomplete'}`;
+  }
+  return elementCount(elements.length, 'collection');
+}
+
+function allSourcesSummary() {
+  const { status, detail } = state.collection;
+  if (status === 'idle' || status === 'loading') {
+    return `${elementCount(state.elements.length, 'portfolio')} · Loading collection…`;
+  }
+  if (status === 'error' || status === 'unavailable') {
+    return `${elementCount(state.elements.length, 'portfolio')} · Collection unavailable`;
+  }
+  const total = sourceElements().length;
+  if (status === 'degraded') {
+    return `${elementCount(total, 'available')} · ${detail || 'Collection may be incomplete'}`;
+  }
+  return elementCount(total, 'total');
 }
 
 function renderTypeFilters() {
-  // Counts follow the active source, so the Collection tab shows catalog counts
-  // rather than the user's portfolio counts.
+  // Counts follow the active source. All combines the complete catalog and the
+  // user's portfolio rather than acting as a second Portfolio filter.
   const items = sourceElements();
   const counts = {};
   for (const el of items) counts[el.type] = (counts[el.type] ?? 0) + 1;
@@ -274,14 +333,14 @@ function renderTypeFilters() {
 }
 
 function sourceElements() {
-  // Collection tab draws from the lazily-loaded catalog; All/Portfolio draw from
-  // the user's local elements (identical today — everything local is portfolio).
-  return state.source === 'collection' ? state.collection.elements : state.elements;
+  if (state.source === 'collection') return state.collection.elements;
+  if (state.source === 'portfolio') return state.elements;
+  return [...state.collection.elements, ...state.elements];
 }
 
 function visibleElements() {
   const q = state.search.trim().toLowerCase();
-  let items = sourceElements().filter(el => state.type === 'all' || el.type === state.type);
+  let items = [...sourceElements()].filter(el => state.type === 'all' || el.type === state.type);
   if (q) {
     items = items.filter(el =>
       (el.name || '').toLowerCase().includes(q) ||
@@ -429,18 +488,20 @@ function renderComponentSummary(el) {
 
 function wireControls() {
   host.querySelector('#pf-create')?.addEventListener('click', () => authoring.openCreate());
+  host.querySelector('#pf-import')?.addEventListener('click', () => authoring.openImport());
   host.querySelector('#pf-sync')?.addEventListener('click', () => authoring.openSync());
   host.querySelector('#pf-search').addEventListener('input', (e) => { state.search = e.target.value; state.page = 1; render(); });
   host.querySelector('#pf-sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
   host.querySelector('#pf-view').addEventListener('click', (e) => toggleGroup(e, '.view-btn', '#pf-view', v => { state.view = v; }));
   host.querySelector('#pf-source').addEventListener('click', (e) => toggleGroup(e, '.source-btn', '#pf-source', v => {
     state.source = v; state.page = 1;
+    renderSummary();
     renderTypeFilters(); // counts follow the active source
     // Lazy-load the catalog the first time the Collection tab is opened, and
     // re-try when the last attempt failed or came back empty-degraded —
     // otherwise a transient blip would brick the tab for the whole session.
     const cst = state.collection.status;
-    if (v === 'collection' && (cst === 'idle' || cst === 'error' ||
+    if ((v === 'all' || v === 'collection') && (cst === 'idle' || cst === 'error' ||
         (cst === 'degraded' && state.collection.elements.length === 0))) loadCollection();
   }));
   host.querySelector('#pf-type-filters').addEventListener('click', (e) => {
@@ -614,10 +675,11 @@ function rawSource(el) {
 }
 
 function downloadElement(el) {
-  const blob = new Blob([rawSource(el)], { type: 'text/markdown' });
+  const isMemory = el.type === 'memories';
+  const blob = new Blob([rawSource(el)], { type: isMemory ? 'application/yaml' : 'text/markdown' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${el.name}.md`;
+  a.download = `${el.name}${isMemory ? '.yaml' : '.md'}`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -803,9 +865,6 @@ function detailPath(el) {
   return el.source === 'collection'
     ? `/collection/elements/${type}/${name}`
     : `/me/portfolio/elements/${type}/${name}`;
-}
-function escapeHtml(s) {
-  return String(s ?? '').replaceAll(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 function escapeAttr(s) { return escapeHtml(s); }
 function formatDate(iso) {

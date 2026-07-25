@@ -14,7 +14,11 @@ import { get, post, del } from './api.js';
 import { noConsoleRoute } from './console-meta.js';
 import { createSessionDetail } from './session-detail.js';
 import { isAbortError, pollUntilTerminal } from './polling.js';
+import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
 
+// app.js memoizes each tab's load/init promise, so this module is mounted once
+// per page. Module-level state and the global listener intentionally share that
+// same page lifetime.
 let host;
 let notify = () => {};
 let viewLogs = null; // ctx.viewSessionLogs(logSessionId) — set by the shell
@@ -43,6 +47,7 @@ const state = {
   bulkCommandSessions: new Set(),
   bulkStatus: '',
 };
+let globalListenersBound = false;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
@@ -58,7 +63,7 @@ export async function init(panelEl, ctx = {}) {
   availableActions.commandStatus = ctx.hasRoute?.('GET', '/me/sessions/commands/:command_id') === true;
   showList();
   await load();
-  globalThis.addEventListener('dh:tab-activated', onTabActivated);
+  bindGlobalListeners();
 }
 
 function showList({ refresh = false } = {}) {
@@ -84,6 +89,12 @@ async function showDetail(sessionId) {
     onDisconnect: disconnectMcp,
   });
   detailController.setVisible(tabVisible);
+}
+
+function bindGlobalListeners() {
+  if (globalListenersBound) return;
+  globalThis.addEventListener('dh:tab-activated', onTabActivated);
+  globalListenersBound = true;
 }
 
 function onTabActivated(event) {
@@ -336,9 +347,12 @@ async function signOutEverywhereElse() {
       ? post('/me/sessions/revoke-all').catch(() => null)
       : null,
   ]);
-  if (c?.status === 200) consoleRevoked = Number(c.body?.revoked ?? 0);
-  if (m && (m.status === 202 || m.status === 200)) appsDisconnected = Number(m.body?.requested ?? 0);
-  notify(bulkActionResult(consoleRevoked, appsDisconnected), 'success');
+  const consoleFailed = availableActions.revokeOtherConsoleSessions && c?.status !== 200;
+  const appsFailed = availableActions.disconnectAllMcp && m?.status !== 202 && m?.status !== 200;
+  if (!consoleFailed) consoleRevoked = Number(c?.body?.revoked ?? 0);
+  if (!appsFailed) appsDisconnected = Number(m?.body?.requested ?? 0);
+  const outcome = bulkActionResult(consoleRevoked, appsDisconnected, consoleFailed, appsFailed);
+  notify(outcome.message, outcome.kind);
   const commands = Array.isArray(m?.body?.commands) ? m.body.commands : [];
   if (commands.length > 0) {
     commands.forEach(command => state.bulkCommandSessions.add(command.session_id));
@@ -357,16 +371,40 @@ async function signOutEverywhereElse() {
       }));
     }
     updateBulkCommandStatus();
+  } else {
+    renderBody();
   }
-  renderBody();
 }
 
-function bulkActionResult(consoleRevoked, appsDisconnected) {
-  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
-    return `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`;
+function bulkActionResult(consoleRevoked, appsDisconnected, consoleFailed, appsFailed) {
+  if (consoleFailed && appsFailed) {
+    return {
+      message: 'Could not sign out other console sessions or disconnect connected apps.',
+      kind: 'error',
+    };
   }
-  if (availableActions.revokeOtherConsoleSessions) return `Signed out ${consoleRevoked} other session(s).`;
-  return `Disconnected ${appsDisconnected} app(s).`;
+  if (consoleFailed) {
+    const message = availableActions.disconnectAllMcp
+      ? `Could not sign out other console sessions; disconnected ${appsDisconnected} app(s).`
+      : 'Could not sign out other console sessions.';
+    return { message, kind: availableActions.disconnectAllMcp ? 'warn' : 'error' };
+  }
+  if (appsFailed) {
+    const message = availableActions.revokeOtherConsoleSessions
+      ? `Signed out ${consoleRevoked} other session(s); could not disconnect connected apps.`
+      : 'Could not disconnect connected apps.';
+    return { message, kind: availableActions.revokeOtherConsoleSessions ? 'warn' : 'error' };
+  }
+  if (availableActions.revokeOtherConsoleSessions && availableActions.disconnectAllMcp) {
+    return {
+      message: `Signed out ${consoleRevoked} other session(s); disconnected ${appsDisconnected} app(s).`,
+      kind: 'success',
+    };
+  }
+  if (availableActions.revokeOtherConsoleSessions) {
+    return { message: `Signed out ${consoleRevoked} other session(s).`, kind: 'success' };
+  }
+  return { message: `Disconnected ${appsDisconnected} app(s).`, kind: 'success' };
 }
 
 async function trackTerminationCommand(sessionId, commandId) {
@@ -470,54 +508,6 @@ function jumpToLogs(logSessionId) {
   else notify('Logs are unavailable right now.', 'warn');
 }
 
-/* ── Confirm dialog (Atelier-styled) ─────────────────────────────────────── */
-
-function confirmDialog(message, confirmLabel) {
-  return new Promise((resolve) => {
-    document.getElementById('confirm-modal')?.remove();
-    const previousFocus = document.activeElement;
-    const modal = document.createElement('div');
-    modal.className = 'confirm-modal';
-    modal.id = 'confirm-modal';
-    modal.innerHTML = `
-      <div class="confirm-backdrop"></div>
-      <div class="confirm-card" role="dialog" aria-modal="true">
-        <p class="confirm-msg">${escapeHtml(message)}</p>
-        <div class="confirm-actions">
-          <button class="btn btn-ghost" data-confirm="0" type="button">Cancel</button>
-          <button class="btn btn-primary" data-confirm="1" type="button">${escapeHtml(confirmLabel)}</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    const buttons = [...modal.querySelectorAll('button')];
-    const done = (val) => {
-      modal.remove();
-      document.removeEventListener('keydown', onKey);
-      if (previousFocus instanceof HTMLElement) previousFocus.focus();
-      resolve(val);
-    };
-    const onKey = (e) => {
-      if (e.key === 'Escape') done(false);
-      if (e.key !== 'Tab' || buttons.length === 0) return;
-      const current = buttons.indexOf(document.activeElement);
-      const next = focusTargetIndex(current, buttons.length, e.shiftKey);
-      e.preventDefault();
-      buttons[next].focus();
-    };
-    modal.querySelector('.confirm-backdrop').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="0"]').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="1"]').addEventListener('click', () => done(true));
-    document.addEventListener('keydown', onKey);
-    modal.querySelector('[data-confirm="1"]').focus();
-  });
-}
-
-function focusTargetIndex(current, length, reverse) {
-  if (!reverse) return (current + 1) % length;
-  if (current <= 0) return length - 1;
-  return current - 1;
-}
-
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
 const ACTIVE_WINDOW_MS = 90_000;
@@ -526,17 +516,6 @@ function recencyBadge(ts) {
   const rel = relAgo(ts);
   const active = ts && (Date.now() - new Date(ts).getTime()) < ACTIVE_WINDOW_MS;
   return `<span class="session-badge${active ? ' session-badge--active' : ''}">${active ? '&#x25cf; active' : escapeHtml(rel)}</span>`;
-}
-
-function relAgo(ts) {
-  if (!ts) return 'unknown';
-  const age = Date.now() - new Date(ts).getTime();
-  if (age < 0 || age < 60_000) return 'just now';
-  const m = Math.floor(age / 60_000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
 }
 
 // Friendly browser/OS from a user-agent string (best-effort, display only).
@@ -563,9 +542,4 @@ function describeBrowser(ua) {
     [/Linux/, 'Linux'],
   ], '');
   return os ? `${browser} on ${os}` : browser;
-}
-
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

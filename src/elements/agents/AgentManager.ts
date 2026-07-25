@@ -842,7 +842,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     // deleting the associated UUID-keyed state rows.
     const lookupPath = isDb ? this.stripExtension(sanitizedPath) : sanitizedPath;
     const existing = isDb
-      ? await this.findByName(lookupPath).catch(() => {})
+      ? await this.findByName(lookupPath).catch(() => null)
       : await this.load(lookupPath).catch(() => null);
     const name = isDb
       ? existing?.metadata.name ?? sanitizedPath

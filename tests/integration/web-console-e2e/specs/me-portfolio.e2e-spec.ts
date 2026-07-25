@@ -1,3 +1,5 @@
+import { beforeAll, describe, expect, it } from '@jest/globals';
+
 import { setupWorld, type World } from '../harness/world.js';
 
 let world: World;
@@ -65,6 +67,83 @@ describe('/me/portfolio element authoring (write routes enabled)', () => {
       expect(JSON.stringify(afterEdit.body)).toContain(fixture.preserved);
       expect(afterEdit.body.tags).toEqual(['edited-all-types']);
       const deleted = await world.clients.userA.delete(`${typeBase}/${fixture.name}`, { ifMatch: edited.etag });
+      expect(deleted.status).toBe(200);
+    }
+  });
+
+  it('persists guided metadata when reference content is optional', async () => {
+    const fixtures = [
+      {
+        type: 'personas',
+        name: 'guided-empty-content-persona',
+        metadata: {
+          description: 'Guided persona',
+          instructions: 'You are a careful guided persona.',
+        },
+      },
+      {
+        type: 'skills',
+        name: 'guided-empty-content-skill',
+        metadata: {
+          description: 'Guided skill',
+          instructions: 'Follow the guided procedure in order.',
+        },
+      },
+      {
+        type: 'agents',
+        name: 'guided-empty-content-agent',
+        metadata: {
+          description: 'Guided agent',
+          instructions: 'Work incrementally and verify each result.',
+          goal: {
+            template: 'Research {topic} and recommend a path.',
+            parameters: [],
+          },
+        },
+      },
+      {
+        type: 'ensembles',
+        name: 'guided-empty-content-ensemble',
+        metadata: {
+          description: 'Guided ensemble',
+          instructions: 'Coordinate the configured elements.',
+          activationStrategy: 'priority',
+          conflictResolution: 'merge',
+          contextSharing: 'selective',
+          allowNested: false,
+          elements: [{
+            element_name: 'guided-empty-content-persona',
+            element_type: 'persona',
+            role: 'primary',
+            priority: 10,
+            activation: 'always',
+          }],
+        },
+      },
+    ] as const;
+
+    for (const fixture of fixtures) {
+      const typeBase = `/api/v1/me/portfolio/elements/${fixture.type}`;
+      const created = await world.clients.userA.post(typeBase, {
+        body: {
+          name: fixture.name,
+          metadata: fixture.metadata,
+          tags: ['guided'],
+        },
+      });
+      expect(created.status).toBe(201);
+
+      const read = await world.clients.userA.get(`${typeBase}/${fixture.name}`);
+      expect(read.status).toBe(200);
+      expect(read.body).toMatchObject({
+        type: fixture.type,
+        name: fixture.name,
+        tags: ['guided'],
+      });
+      expect(JSON.stringify(read.body.metadata)).toContain(fixture.metadata.description);
+      expect(read.body.metadata.instructions).toBe(fixture.metadata.instructions);
+
+      const deleted = await world.clients.userA.delete(`${typeBase}/${fixture.name}`, { ifMatch: read.etag });
       expect(deleted.status).toBe(200);
     }
   });

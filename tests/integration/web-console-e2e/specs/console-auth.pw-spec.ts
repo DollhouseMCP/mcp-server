@@ -19,23 +19,66 @@ import { BASE_URL } from '../setup/provision.js';
 const USER = 'e2e_admin';
 const OPERATE = '/api/v1/admin/operate/health';
 const MANIFEST_URL = '**/api/v1/me/manifest';
+const CONSOLE_SHELL = '#console-shell';
 const SESSIONS_TAB = '.console-tab[data-tab="sessions"]';
 const SESSION_DETAIL_HEADER = '#session-detail-header';
 const CONFIRM_ACTION = '[data-confirm="1"]';
 const ACCOUNT_MENU = '#site-account';
+const PORTFOLIO_CREATE = '#pf-create';
 const EDITOR_FEEDBACK = '[data-editor-feedback]';
 const EDITOR_CONTENT = '.portfolio-editor [name="content"]';
+const EDITOR_INSTRUCTIONS = '.portfolio-editor [name="instructions"]';
+const EDITOR_METADATA = '.portfolio-editor [name="metadata"]';
+const EDITOR_SUBMIT = '.portfolio-editor button[type="submit"]';
+const EDITOR_VALIDATE = '[data-editor-validate]';
+const AUTHORING_WORKSPACE = '[data-portfolio-authoring]';
 const THEME_SELECT = '#account-theme-form [name="theme"]';
 const OPERATIONS_TAB = '.console-tab[data-tab="operations"]';
 const SUBMIT_BUTTON = 'button[type="submit"]';
 const OPERATIONS_SESSIONS_NAV = '[data-operations-nav="sessions"]';
 const OPERATIONAL_SESSION_CARD = '[data-operational-session-id]';
+const BULK_SESSION_ACTION = '#sess-revoke-others';
+const USER_DRAWER = '.ua-drawer';
+const AUTH_ME_URL = '**/api/v1/auth/me';
+const ADMIN_USER_SESSIONS_URL = '**/api/v1/admin/accounts/users/*/sessions';
+
+interface TextFileFixture {
+  readonly name: string;
+  readonly mimeType: string;
+  readonly content: string;
+}
+
+async function setTextInputFile(page: Page, selector: string, file: TextFileFixture): Promise<void> {
+  await page.locator(selector).evaluate((element, fixture) => {
+    if (!(element instanceof HTMLInputElement)) throw new Error('File fixture target must be an input element.');
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([fixture.content], fixture.name, { type: fixture.mimeType }));
+    element.files = transfer.files;
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, file);
+}
 
 async function filterManifestRoutes(page: Page, unavailableRoutes: ReadonlySet<string>): Promise<void> {
   await page.route(MANIFEST_URL, async route => {
     const response = await route.fetch();
     const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
     const routes = manifest.routes.filter(item => !unavailableRoutes.has(`${item.method} ${item.path}`));
+    await route.fulfill({ response, json: { ...manifest, routes } });
+  });
+}
+
+async function includeManifestRoutes(
+  page: Page,
+  additionalRoutes: ReadonlyArray<{ readonly method: string; readonly path: string }>,
+): Promise<void> {
+  await page.route(MANIFEST_URL, async route => {
+    const response = await route.fetch();
+    const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
+    const routeKeys = new Set(manifest.routes.map(item => `${item.method} ${item.path}`));
+    const routes = [
+      ...manifest.routes,
+      ...additionalRoutes.filter(item => !routeKeys.has(`${item.method} ${item.path}`)),
+    ];
     await route.fulfill({ response, json: { ...manifest, routes } });
   });
 }
@@ -72,7 +115,24 @@ async function loginFromConsole(page: Page): Promise<void> {
   await page.fill('input[name="password"]', SEED_PASSWORD);
   await Promise.all([page.waitForLoadState('networkidle'), page.click('button[value="login"]')]);
   await approveClientConsentIfShown(page);
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
+}
+
+async function stepUpWithTotp(page: Page, totp: TOTP): Promise<void> {
+  await page.goto(
+    `${BASE_URL}/api/v1/auth/step-up?capability=console:admin:operate&return_to=/api/v1/auth/me`,
+    { waitUntil: 'domcontentloaded' },
+  );
+  if (await page.locator('button[value="login"]').count()) {
+    await page.fill('input[name="username"]', USER).catch(() => {});
+    await page.fill('input[name="password"]', SEED_PASSWORD).catch(() => {});
+    await Promise.all([page.waitForLoadState('networkidle'), page.click('button[value="login"]')]);
+  }
+  if (await page.locator('input[name="code"]').count()) {
+    await page.fill('input[name="code"]', totp.generate());
+    await Promise.all([page.waitForLoadState('networkidle'), page.click('button[type="submit"]')]);
+  }
+  await approveClientConsentIfShown(page);
 }
 
 async function openMockOperations(page: Page): Promise<void> {
@@ -127,7 +187,7 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await page.locator(SESSIONS_TAB).click();
   await expect(page.locator('#sessions-body .session-card').first()).toBeVisible();
   await expect(page.locator('[data-revoke-console], [data-disconnect-mcp]')).toHaveCount(0);
-  await expect(page.locator('#sess-revoke-others')).toHaveText('Sign out other console sessions');
+  await expect(page.locator(BULK_SESSION_ACTION)).toHaveText('Sign out other console sessions');
 
   await page.locator(ACCOUNT_MENU).click();
   await page.locator('#account-security').click();
@@ -135,25 +195,78 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await expect(page.locator('#sec-enroll')).toHaveCount(0);
 });
 
+test('All combines every collection page with the portfolio and reports source totals', async ({ page }) => {
+  await includeManifestRoutes(page, [
+    { method: 'GET', path: '/api/v1/collection/elements' },
+    { method: 'GET', path: '/api/v1/collection/elements/:type/:name' },
+  ]);
+  const mock = await installPortfolioUiMock(page, { includeCollection: true });
+  await loginFromConsole(page);
+
+  await expect(page.locator('#pf-source')).toBeVisible();
+  await expect(page.locator('#pf-summary')).toHaveText('3 total elements');
+  await expect(page.locator('#pf-count')).toHaveText('3 elements');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(3);
+  await expect(page.locator('#pf-grid .source-badge-collection')).toHaveCount(2);
+  await expect(page.locator('#pf-grid .source-badge', { hasText: 'LOCAL' })).toHaveCount(1);
+  await expect(page.locator('#pf-type-filters [data-key="personas"] .filter-count')).toHaveText('1');
+  await expect(page.locator('#pf-type-filters [data-key="skills"] .filter-count')).toHaveText('1');
+  await expect(page.locator('#pf-type-filters [data-key="templates"] .filter-count')).toHaveText('1');
+  expect(mock.collectionReads).toBe(2);
+
+  await page.locator('#pf-source [data-source="portfolio"]').click();
+  await expect(page.locator('#pf-summary')).toHaveText('1 portfolio element');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(1);
+
+  await page.locator('#pf-source [data-source="collection"]').click();
+  await expect(page.locator('#pf-summary')).toHaveText('2 collection elements');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(2);
+
+  await page.locator('#pf-source [data-source="all"]').click();
+  await page.locator('#pf-search').fill('Collection Skill');
+  await expect(page.locator('#pf-count')).toHaveText('1 element');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(1);
+  await expect(page.locator('#pf-grid .card-title')).toHaveText('Collection Skill');
+});
+
 test('portfolio authoring validates drafts, preserves conflicts, and confirms hard deletion', async ({ page }) => {
   const mock = await installPortfolioUiMock(page, { conflictOnFirstPatch: true });
   await loginFromConsole(page);
 
-  await page.locator('#pf-create').click();
-  await page.locator('[data-editor-validate]').click();
+  await expect(page.locator('.portfolio-start-action')).toHaveCount(2);
+  await expect(page.locator(PORTFOLIO_CREATE)).toContainText('Create new');
+  await expect(page.locator('#pf-import')).toContainText('Import file');
+  await page.locator(PORTFOLIO_CREATE).click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeVisible();
+  await expect(page.locator('.portfolio-type-choice')).toHaveCount(6);
+  await expect(page.locator('[data-builder-overview]')).toContainText('Building a Persona');
+  await expect(page.locator(EDITOR_METADATA)).toBeHidden();
+  await page.locator('[data-custom-metadata] summary').click();
+  await expect(page.locator('[data-custom-metadata-enable]')).toBeVisible();
+  await page.locator('[data-custom-metadata-enable]').click();
+  await page.locator(EDITOR_METADATA).fill('{');
+  await expect(page.locator('[data-custom-metadata-status]')).toContainText('must be valid JSON');
+  await page.locator(EDITOR_METADATA).fill('{"custom_note":"preserve me"}');
+  await expect(page.locator('[data-custom-metadata-status]')).toContainText('Valid JSON object');
+  await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Name is required');
+  await expect(page.locator(EDITOR_FEEDBACK)).toBeInViewport();
   await page.locator('.portfolio-editor [name="name"]').fill('browser-created');
-  await page.locator('[data-editor-validate]').click();
-  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('content is required');
-  await page.locator(EDITOR_CONTENT).fill('Created through the browser.');
-  await page.locator('[data-editor-validate]').click();
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Description is required');
+  await page.locator('.portfolio-editor [name="description"]').fill('A guided browser-created persona.');
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Behavioral instructions are required');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('You are a careful browser-created persona.');
+  await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Validation passed');
-  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await page.locator(EDITOR_SUBMIT).click();
   await expect(page.locator('[data-name="browser-created"]')).toBeVisible();
+  expect(mock.elements.find(item => item.name === 'browser-created')?.metadata.custom_note).toBe('preserve me');
 
   await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
   await page.locator(EDITOR_CONTENT).fill('Unsaved browser draft.');
-  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await page.locator(EDITOR_SUBMIT).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('changed after you opened it');
   await expect(page.locator('[data-editor-reload]')).toBeVisible();
   await page.locator('[data-editor-reload]').click();
@@ -171,13 +284,191 @@ test('portfolio authoring validates drafts, preserves conflicts, and confirms ha
   expect(mock.deletes).toBe(1);
 });
 
+test('portfolio guided authoring serializes agent and ensemble settings', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [name="type"][value="agents"]').check();
+  await page.locator('.portfolio-editor [name="name"]').fill('guided-agent');
+  await page.locator('.portfolio-editor [name="description"]').fill('An agent configured through guided fields.');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('Coordinate the selected elements and tools.');
+  await page.locator('.portfolio-editor [name="agent_goal_template"]').fill('Research {topic} and recommend a path.');
+  await page.locator('.portfolio-editor [name="agent_success_criteria"]').fill('Sources are cited\nTradeoffs are explicit');
+  await page.locator('.portfolio-editor [name="agent_activates_personas"]').fill('technical-writer, reviewer');
+  await page.locator('.portfolio-editor [name="agent_activates_skills"]').fill('web-research');
+  await page.locator('.portfolio-editor [name="agent_tools_allowed"]').fill('search, fetch');
+  await page.locator('.portfolio-editor [name="agent_tools_denied"]').fill('shell');
+  await page.locator('.portfolio-editor [name="agent_risk_tolerance"]').selectOption('conservative');
+  await page.locator('.portfolio-editor [name="agent_max_steps"]').fill('12');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="guided-agent"]')).toBeVisible();
+
+  expect(mock.elements.find(item => item.name === 'guided-agent')?.metadata).toMatchObject({
+    goal: {
+      template: 'Research {topic} and recommend a path.',
+      parameters: [],
+      successCriteria: ['Sources are cited', 'Tradeoffs are explicit'],
+    },
+    activates: {
+      personas: ['technical-writer', 'reviewer'],
+      skills: ['web-research'],
+    },
+    tools: {
+      allowed: ['search', 'fetch'],
+      denied: ['shell'],
+    },
+    autonomy: {
+      riskTolerance: 'conservative',
+      maxAutonomousSteps: 12,
+    },
+  });
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [name="type"][value="ensembles"]').check();
+  await page.locator('.portfolio-editor [name="name"]').fill('guided-ensemble');
+  await page.locator('.portfolio-editor [name="description"]').fill('An ensemble configured through guided fields.');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('Coordinate the ensemble members in priority order.');
+  await page.locator('.portfolio-editor [name="ensemble_activation_strategy"]').selectOption('priority');
+  await page.locator('.portfolio-editor [name="ensemble_conflict_resolution"]').selectOption('merge');
+  await page.locator('.portfolio-editor [name="ensemble_context_sharing"]').selectOption('selective');
+  await page.locator('.portfolio-editor [name="ensemble_allow_nested"]').check();
+  const elementRow = page.locator('[data-repeat-row="ensemble-elements"]');
+  await elementRow.locator('[data-row-field="name"]').fill('technical-writer');
+  await elementRow.locator('[data-row-field="type"]').selectOption('persona');
+  await elementRow.locator('[data-row-field="role"]').selectOption('primary');
+  await elementRow.locator('[data-row-field="activation"]').selectOption('always');
+  await elementRow.locator('[data-row-field="priority"]').fill('');
+  await elementRow.locator('[data-row-field="purpose"]').fill('Draft the final response.');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="guided-ensemble"]')).toBeVisible();
+
+  expect(mock.elements.find(item => item.name === 'guided-ensemble')?.metadata).toMatchObject({
+    activationStrategy: 'priority',
+    conflictResolution: 'merge',
+    contextSharing: 'selective',
+    allowNested: true,
+    elements: [{
+      element_name: 'technical-writer',
+      element_type: 'persona',
+      role: 'primary',
+      priority: 10,
+      activation: 'always',
+      purpose: 'Draft the final response.',
+    }],
+  });
+});
+
+test('portfolio imports a reviewed file without silently overwriting a duplicate', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  const file = {
+    name: 'imported-skill.md',
+    mimeType: 'text/markdown',
+    content: `---
+name: Imported Skill
+type: skill
+description: Imported from a local Dollhouse file.
+tags:
+  - imported
+  - browser
+custom_policy: reviewed
+---
+
+Follow the reviewed skill instructions.`,
+  };
+
+  await page.locator('#pf-import').click();
+  await expect(page.locator('[data-import-drop]')).toBeVisible();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await expect(page.locator('[data-import-source]')).toContainText('Skill detected');
+  await expect(page.locator('[name="type"][value="skills"]')).toBeChecked();
+  await expect(page.locator('.portfolio-editor [name="name"]')).toHaveValue('Imported Skill');
+  await expect(page.locator('.portfolio-editor [name="description"]')).toHaveValue('Imported from a local Dollhouse file.');
+  await expect.poll(async () => (await page.locator(EDITOR_INSTRUCTIONS).inputValue()).trim())
+    .toBe('Follow the reviewed skill instructions.');
+  await expect(page.locator(EDITOR_CONTENT)).toHaveValue('');
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('1 additional metadata field');
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('will be preserved');
+  await expect(page.locator(EDITOR_METADATA)).toHaveValue(/"custom_policy": "reviewed"/u);
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('ready to save');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="Imported Skill"]')).toBeVisible();
+  expect(mock.elements.filter(item => item.type === 'skills' && item.name === 'Imported Skill')).toHaveLength(1);
+  expect(mock.elements.find(item => item.type === 'skills' && item.name === 'Imported Skill')?.metadata.custom_policy)
+    .toBe('reviewed');
+
+  await page.locator('#pf-import').click();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Nothing was overwritten');
+  expect(mock.elements.filter(item => item.type === 'skills' && item.name === 'Imported Skill')).toHaveLength(1);
+
+  await page.locator('.portfolio-editor [data-editor-close]').last().click();
+  await page.locator('#portfolio-confirm [data-confirm="1"]').click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
+  await expect(page.locator('#pf-grid')).toBeVisible();
+});
+
+test('portfolio import keeps legacy instructions but strips internal extensions', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  const file = {
+    name: 'legacy-agent.json',
+    mimeType: 'application/json',
+    content: JSON.stringify({
+      type: 'agent',
+      name: 'legacy-extension-agent',
+      content: '',
+      metadata: {
+        description: 'An agent imported from a legacy JSON export.',
+        custom_policy: 'preserve this',
+        goal: {
+          template: 'Review {topic} and report findings.',
+          parameters: [],
+        },
+      },
+      extensions: {
+        instructions: 'Use the imported legacy operating instructions.',
+        runtime_state: 'do not import',
+      },
+    }),
+  };
+
+  await page.locator('#pf-import').click();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await expect(page.locator('[name="type"][value="agents"]')).toBeChecked();
+  await expect(page.locator(EDITOR_INSTRUCTIONS)).toHaveValue('Use the imported legacy operating instructions.');
+  await expect(page.locator(EDITOR_METADATA)).toHaveValue(/"custom_policy": "preserve this"/u);
+  await expect(page.locator(EDITOR_METADATA)).not.toHaveValue(/extensions|runtime_state/u);
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('1 additional metadata field');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="legacy-extension-agent"]')).toBeVisible();
+
+  const imported = mock.elements.find(item => item.name === 'legacy-extension-agent');
+  expect(imported?.metadata.custom_policy).toBe('preserve this');
+  expect(imported?.metadata.instructions).toBe('Use the imported legacy operating instructions.');
+  expect(imported?.metadata).not.toHaveProperty('extensions');
+});
+
+test('portfolio create cancel leaves the workspace without saving', async ({ page }) => {
+  await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [data-editor-close]').last().click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
+  await expect(page.locator('#pf-grid')).toBeVisible();
+});
+
 test('portfolio editor stays blocked when conflict reload omits its ETag', async ({ page }) => {
   await installPortfolioUiMock(page, { conflictOnFirstPatch: true, omitEtagAfterConflict: true });
   await loginFromConsole(page);
 
   await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
   await page.locator(EDITOR_CONTENT).fill('Draft that must not overwrite newer content.');
-  await page.locator('.portfolio-editor button[type="submit"]').click();
+  await page.locator(EDITOR_SUBMIT).click();
   await page.locator('[data-editor-reload]').click();
 
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('did not include an ETag');
@@ -215,7 +506,7 @@ test('portfolio write controls disappear when the manifest omits write routes', 
   ]));
   await loginFromConsole(page);
   await expect(page.locator('#pf-grid')).toBeVisible();
-  await expect(page.locator('#pf-create, #pf-sync, [data-action="edit"]')).toHaveCount(0);
+  await expect(page.locator('#pf-create, #pf-import, #pf-sync, [data-action="edit"]')).toHaveCount(0);
   await page.locator('[data-name="alpha-persona"]').click();
   await expect(page.locator('.modal-edit-btn')).toBeHidden();
   await expect(page.locator('.modal-delete-btn')).toBeHidden();
@@ -404,7 +695,7 @@ test('profile and allowlisted appearance settings persist without overwriting st
 
   await page.locator('[data-account-close]').last().click();
   await page.reload();
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
   await page.locator(ACCOUNT_MENU).click();
   await page.locator('#account-settings').click();
   await expect(page.locator('#account-profile-form [name="display_name"]')).toHaveValue('Browser Admin');
@@ -462,6 +753,10 @@ test('owned session workspace handles HITL, snapshots, polling cleanup, and term
   await page.locator(CONFIRM_ACTION).click();
   await expect(page.locator('.session-detail-panel--activations')).toContainText('No elements are active for this session.');
 
+  mock.setActivations(['remote-persona']);
+  await page.locator('[data-detail-refresh]').click();
+  await expect(page.locator('.session-detail-panel--activations')).toContainText('remote-persona');
+
   await page.locator('[data-execution-id]').click();
   await expect(page.locator('#session-execution-detail')).toContainText('Package validation started.');
 
@@ -506,11 +801,43 @@ test('bulk session termination reports command acknowledgement accurately', asyn
   await loginFromConsole(page);
   await page.locator(SESSIONS_TAB).click();
 
-  await page.locator('#sess-revoke-others').click();
+  await page.locator(BULK_SESSION_ACTION).click();
   await page.locator(CONFIRM_ACTION).click();
 
   await expect(page.locator('#sessions-command-summary')).toContainText('1 disconnect(s) acknowledged.');
   expect(mock.commandReads).toBeGreaterThanOrEqual(2);
+});
+
+test('bulk session termination reports partial failure without claiming full success', async ({ page }) => {
+  await installSessionUiMock(page, { bulkRequestFails: true });
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+
+  await page.locator(BULK_SESSION_ACTION).click();
+  await page.locator(CONFIRM_ACTION).click();
+
+  await expect(page.locator('#toast-stack .toast--warn')).toContainText(
+    'could not disconnect connected apps',
+  );
+  await expect(page.locator('#sessions-command-summary')).toBeEmpty();
+});
+
+test('bulk session termination reports total failure as an error', async ({ page }) => {
+  await filterManifestRoutes(page, new Set([
+    'POST /api/v1/me/security/sessions/revoke-all-others',
+  ]));
+  await installSessionUiMock(page, { bulkRequestFails: true });
+  await loginFromConsole(page);
+  await page.locator(SESSIONS_TAB).click();
+
+  await expect(page.locator(BULK_SESSION_ACTION)).toHaveText('Disconnect all connected apps');
+  await page.locator(BULK_SESSION_ACTION).click();
+  await page.locator(CONFIRM_ACTION).click();
+
+  await expect(page.locator('#toast-stack .toast--error')).toContainText(
+    'Could not disconnect connected apps',
+  );
+  await expect(page.locator('#sessions-command-summary')).toBeEmpty();
 });
 
 test('session detail uses the same neutral state for missing or non-owned sessions', async ({ page }) => {
@@ -542,7 +869,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   // administrator into an AS step-up dead end.
   await filterManifestRoutes(page, new Set(['GET /api/v1/me/security/factors']));
   await page.goto(`${BASE_URL}/ui`, { waitUntil: 'domcontentloaded' });
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
   await expect(page.locator('#elevate-btn')).toBeDisabled();
   await expect(page.locator('#elevate-btn')).toHaveText(/Elevation unavailable/);
   await page.unroute(MANIFEST_URL);
@@ -555,20 +882,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   await Promise.all([page.waitForLoadState('networkidle'), page.click(SUBMIT_BUTTON)]);
 
   // 4. STEP-UP for the operate capability (may re-prompt password, then TOTP)
-  await page.goto(
-    `${BASE_URL}/api/v1/auth/step-up?capability=console:admin:operate&return_to=/api/v1/auth/me`,
-    { waitUntil: 'domcontentloaded' },
-  );
-  if (await page.locator('button[value="login"]').count()) {
-    await page.fill('input[name="username"]', USER).catch(() => {});
-    await page.fill('input[name="password"]', SEED_PASSWORD).catch(() => {});
-    await Promise.all([page.waitForLoadState('networkidle'), page.click('button[value="login"]')]);
-  }
-  if (await page.locator('input[name="code"]').count()) {
-    await page.fill('input[name="code"]', totp.generate());
-    await Promise.all([page.waitForLoadState('networkidle'), page.click(SUBMIT_BUTTON)]);
-  }
-  await approveClientConsentIfShown(page);
+  await stepUpWithTotp(page, totp);
 
   // 5. ADMIN now reachable with fresh elevation
   expect(await status(page, OPERATE), 'admin reachable after step-up').toBe(200);
@@ -585,11 +899,19 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
     'GET /api/v1/me/integrations',
   ]));
   await page.goto(`${BASE_URL}/ui?tab=users`, { waitUntil: 'domcontentloaded' });
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
   await expect(page.locator('.console-tab[data-tab="users"]')).toBeVisible();
+  await page.route(ADMIN_USER_SESSIONS_URL, route => route.fulfill({
+    status: 403,
+    contentType: 'application/problem+json',
+    body: JSON.stringify({ status: 403, code: 'forbidden', detail: 'Not authorized.' }),
+  }));
   await page.locator('[data-user-row]').first().click();
   await expect(page.locator('[data-role-toggle]')).toHaveCount(catalog.roles.length);
+  await expect(page.locator('.ua-sessions')).toContainText('Couldn\'t load active sessions.');
+  await page.unroute(ADMIN_USER_SESSIONS_URL);
   await page.locator('#ua-drawer-close').click();
+  await expect(page.locator(USER_DRAWER)).toHaveCount(0);
 
   // The Operations workspace keeps configuration concurrency-safe, renders
   // only allowlisted telemetry, and follows async runtime termination to ack.
@@ -628,17 +950,59 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   expect(operationsMock.commandReads).toBeGreaterThanOrEqual(2);
   expect(operationsMock.terminated).toBe(true);
 
-  // 6. STEP-DOWN hides the privileged panel even when no non-admin tab exists.
-  await page.locator('#exit-btn').click();
+  // Reopen the Users drawer so step-down proves that both privileged
+  // workspaces are torn down, not merely hidden.
+  await page.locator('.console-tab[data-tab="users"]').click();
+  await page.locator('[data-user-row]').first().click();
+  await expect(page.locator(USER_DRAWER)).toBeVisible();
+
+  // 6. STEP-DOWN destroys the open privileged drawer and hides both admin
+  // panels even when no non-admin tab exists.
+  await page.locator('#exit-btn').dispatchEvent('click');
   await expect(page.locator('#console-empty-state')).toBeVisible();
   await expect(page.locator('#tab-users')).toBeHidden();
   await expect(page.locator('.console-tab[data-tab="users"]')).toBeHidden();
+  await expect(page.locator(USER_DRAWER)).toHaveCount(0);
   await expect(page.locator('#tab-operations')).toBeHidden();
   await expect(page.locator(OPERATIONS_TAB)).toBeHidden();
   await page.unroute('**/api/v1/admin/operate/**');
   expect(await status(page, OPERATE), 'admin gated again after step-down').toBe(401);
 
-  // 7. LOGOUT ends the session
+  // 7. TIMER EXPIRY takes the same fail-closed path without relying on Exit.
+  await stepUpWithTotp(page, totp);
+  expect(await status(page, OPERATE), 'admin reachable after second step-up').toBe(200);
+  const clockNow = new Date();
+  await page.clock.install({ time: clockNow });
+  await page.route(AUTH_ME_URL, async route => {
+    const response = await route.fetch();
+    const principal = await response.json() as {
+      elevation?: { active?: boolean; expires_at?: string };
+    };
+    await route.fulfill({
+      response,
+      json: {
+        ...principal,
+        elevation: {
+          ...principal.elevation,
+          active: true,
+          expires_at: new Date(clockNow.getTime() + 2_000).toISOString(),
+        },
+      },
+    });
+  });
+  await page.goto(`${BASE_URL}/ui?tab=users`, { waitUntil: 'domcontentloaded' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
+  await page.locator('[data-user-row]').first().click();
+  await expect(page.locator(USER_DRAWER)).toBeVisible();
+  await page.clock.fastForward(3_000);
+  await expect(page.locator('#console-empty-state')).toBeVisible();
+  await expect(page.locator('#tab-users')).toBeHidden();
+  await expect(page.locator(USER_DRAWER)).toHaveCount(0);
+  await page.unroute(AUTH_ME_URL);
+  expect(await status(page, OPERATE), 'server remains elevated until explicit cleanup').toBe(200);
+  expect(await csrfPost(page, '/api/v1/auth/step-down')).toBe(204);
+
+  // 8. LOGOUT ends the session
   const logout = await csrfPost(page, '/api/v1/auth/logout');
   expect(logout).toBe(204);
   expect(await status(page, '/api/v1/auth/me'), 'session ended after logout').toBe(401);

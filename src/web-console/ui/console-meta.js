@@ -9,14 +9,17 @@
 import { get } from './api.js';
 
 const API_PREFIX = '/api/v1';
-const NO_CONSOLE_ROUTES = new Set();
 
 /** Fail-closed route predicate used until server metadata is injected. */
-export function noConsoleRoute(method, path) {
-  return NO_CONSOLE_ROUTES.has(routeKey(method, path));
+export function noConsoleRoute() {
+  return false;
 }
 
-function canonicalPath(path) {
+/**
+ * Normalize manifest and caller paths to the same query-free /api/v1 form.
+ * Feature modules may use `/me/foo`, `me/foo`, or the fully-qualified API path.
+ */
+export function canonicalConsolePath(path) {
   const withoutQuery = String(path || '').split(/[?#]/, 1)[0];
   if (!withoutQuery.startsWith('/')) return `${API_PREFIX}/${withoutQuery}`;
   return withoutQuery.startsWith(`${API_PREFIX}/`) || withoutQuery === API_PREFIX
@@ -25,7 +28,7 @@ function canonicalPath(path) {
 }
 
 function routeKey(method, path) {
-  return `${String(method || '').toUpperCase()} ${canonicalPath(path)}`;
+  return `${String(method || '').toUpperCase()} ${canonicalConsolePath(path)}`;
 }
 
 function isRoleCatalog(value) {
