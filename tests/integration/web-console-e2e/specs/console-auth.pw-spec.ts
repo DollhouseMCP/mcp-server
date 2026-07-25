@@ -23,6 +23,7 @@ const PORTFOLIO_CREATE = '#pf-create';
 const EDITOR_FEEDBACK = '[data-editor-feedback]';
 const EDITOR_CONTENT = '.portfolio-editor [name="content"]';
 const EDITOR_INSTRUCTIONS = '.portfolio-editor [name="instructions"]';
+const EDITOR_METADATA = '.portfolio-editor [name="metadata"]';
 const EDITOR_SUBMIT = '.portfolio-editor button[type="submit"]';
 const EDITOR_VALIDATE = '[data-editor-validate]';
 const AUTHORING_WORKSPACE = '[data-portfolio-authoring]';
@@ -219,13 +220,13 @@ test('portfolio authoring validates drafts, preserves conflicts, and confirms ha
   await expect(page.locator(AUTHORING_WORKSPACE)).toBeVisible();
   await expect(page.locator('.portfolio-type-choice')).toHaveCount(6);
   await expect(page.locator('[data-builder-overview]')).toContainText('Building a Persona');
-  await expect(page.locator('.portfolio-editor [name="metadata"]')).toBeHidden();
+  await expect(page.locator(EDITOR_METADATA)).toBeHidden();
   await page.locator('[data-custom-metadata] summary').click();
   await expect(page.locator('[data-custom-metadata-enable]')).toBeVisible();
   await page.locator('[data-custom-metadata-enable]').click();
-  await page.locator('.portfolio-editor [name="metadata"]').fill('{');
+  await page.locator(EDITOR_METADATA).fill('{');
   await expect(page.locator('[data-custom-metadata-status]')).toContainText('must be valid JSON');
-  await page.locator('.portfolio-editor [name="metadata"]').fill('{"custom_note":"preserve me"}');
+  await page.locator(EDITOR_METADATA).fill('{"custom_note":"preserve me"}');
   await expect(page.locator('[data-custom-metadata-status]')).toContainText('Valid JSON object');
   await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Name is required');
@@ -237,7 +238,6 @@ test('portfolio authoring validates drafts, preserves conflicts, and confirms ha
   await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Behavioral instructions are required');
   await page.locator(EDITOR_INSTRUCTIONS).fill('You are a careful browser-created persona.');
-  await page.locator(EDITOR_CONTENT).fill('Optional reference material.');
   await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Validation passed');
   await page.locator(EDITOR_SUBMIT).click();
@@ -370,7 +370,7 @@ Follow the reviewed skill instructions.`,
   await expect(page.locator(EDITOR_CONTENT)).toHaveValue('');
   await expect(page.locator('[data-custom-metadata-notice]')).toContainText('1 additional metadata field');
   await expect(page.locator('[data-custom-metadata-notice]')).toContainText('will be preserved');
-  await expect(page.locator('.portfolio-editor [name="metadata"]')).toHaveValue(/"custom_policy": "reviewed"/u);
+  await expect(page.locator(EDITOR_METADATA)).toHaveValue(/"custom_policy": "reviewed"/u);
   await page.locator(EDITOR_VALIDATE).click();
   await expect(page.locator(EDITOR_FEEDBACK)).toContainText('ready to save');
   await page.locator(EDITOR_SUBMIT).click();
@@ -389,6 +389,47 @@ Follow the reviewed skill instructions.`,
   await page.locator('#portfolio-confirm [data-confirm="1"]').click();
   await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
   await expect(page.locator('#pf-grid')).toBeVisible();
+});
+
+test('portfolio import keeps legacy instructions but strips internal extensions', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  const file = {
+    name: 'legacy-agent.json',
+    mimeType: 'application/json',
+    content: JSON.stringify({
+      type: 'agent',
+      name: 'legacy-extension-agent',
+      content: '',
+      metadata: {
+        description: 'An agent imported from a legacy JSON export.',
+        custom_policy: 'preserve this',
+        goal: {
+          template: 'Review {topic} and report findings.',
+          parameters: [],
+        },
+      },
+      extensions: {
+        instructions: 'Use the imported legacy operating instructions.',
+        runtime_state: 'do not import',
+      },
+    }),
+  };
+
+  await page.locator('#pf-import').click();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await expect(page.locator('[name="type"][value="agents"]')).toBeChecked();
+  await expect(page.locator(EDITOR_INSTRUCTIONS)).toHaveValue('Use the imported legacy operating instructions.');
+  await expect(page.locator(EDITOR_METADATA)).toHaveValue(/"custom_policy": "preserve this"/u);
+  await expect(page.locator(EDITOR_METADATA)).not.toHaveValue(/extensions|runtime_state/u);
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('1 additional metadata field');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="legacy-extension-agent"]')).toBeVisible();
+
+  const imported = mock.elements.find(item => item.name === 'legacy-extension-agent');
+  expect(imported?.metadata.custom_policy).toBe('preserve this');
+  expect(imported?.metadata.instructions).toBe('Use the imported legacy operating instructions.');
+  expect(imported?.metadata).not.toHaveProperty('extensions');
 });
 
 test('portfolio create cancel leaves the workspace without saving', async ({ page }) => {

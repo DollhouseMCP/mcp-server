@@ -4,6 +4,7 @@ import { mutationProtocolProblem, preconditionProblem } from './requestProtocolM
 
 const CREATE_PATH_PATTERN = /^\/api\/v1\/me\/portfolio\/elements\/([^/]+)$/u;
 const ELEMENT_PATH_PATTERN = /^\/api\/v1\/me\/portfolio\/elements\/([^/]+)\/([^/]+)$/u;
+const VALIDATE_PATH_PATTERN = /^\/api\/v1\/me\/portfolio\/elements\/([^/]+)\/[^/]+\/validate$/u;
 
 interface MockResponse {
   readonly status: number;
@@ -118,12 +119,7 @@ function postResponse(path: string, body: unknown, state: PortfolioUiMockState):
   if (path === '/api/v1/me/portfolio/sync') return { status: 202, body: syncJob('queued') };
   if (path.endsWith('/validate')) {
     const candidate = asRecord(body);
-    const content = typeof candidate.content === 'string' ? candidate.content : '';
-    const metadata = asRecord(candidate.metadata);
-    const instructions = typeof metadata.instructions === 'string' ? metadata.instructions : '';
-    return ok(content.trim() || instructions.trim()
-      ? { valid: true, issues: [] }
-      : { valid: false, issues: [{ path: 'content', code: 'required', message: 'content or instructions are required.' }] });
+    return ok(mockValidation(path, candidate));
   }
   if (path.endsWith('/render')) {
     const candidate = asRecord(body);
@@ -147,6 +143,30 @@ function postResponse(path: string, body: unknown, state: PortfolioUiMockState):
   created.tags = Array.isArray(candidate.tags) ? candidate.tags.map(String) : [];
   state.elements.push(created);
   return { status: 201, body: created, etag: etag(created) };
+}
+
+function mockValidation(path: string, candidate: Record<string, unknown>): unknown {
+  const match = VALIDATE_PATH_PATTERN.exec(path);
+  const type = match ? decodeURIComponent(match[1]) : '';
+  const content = typeof candidate.content === 'string' ? candidate.content.trim() : '';
+  const metadata = asRecord(candidate.metadata);
+  const instructions = typeof metadata.instructions === 'string' ? metadata.instructions.trim() : '';
+  const requiresContent = type === 'templates' || type === 'memories';
+  const requiresInstructionsOrContent = type === 'personas' || type === 'skills';
+  const hasAgentDefinition = type === 'agents' && metadata.goal !== undefined;
+  const hasEnsembleDefinition = type === 'ensembles' && Array.isArray(metadata.elements) && metadata.elements.length > 0;
+  const valid = Boolean(content)
+    || requiresInstructionsOrContent && Boolean(instructions)
+    || !requiresContent && !requiresInstructionsOrContent && (
+      Boolean(instructions) || hasAgentDefinition || hasEnsembleDefinition
+    );
+  return valid
+    ? { valid: true, issues: [] }
+    : { valid: false, issues: [{ path: 'content', code: 'required', message: validationMessage(requiresContent) }] };
+}
+
+function validationMessage(requiresContent: boolean): string {
+  return requiresContent ? 'content is required.' : 'content or metadata.instructions is required.';
 }
 
 function patchResponse(

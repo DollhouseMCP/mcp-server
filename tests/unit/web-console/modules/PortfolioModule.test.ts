@@ -87,7 +87,7 @@ function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIn
   return {
     id: INTEGRATION_ID,
     userId: USER_ID,
-    provider: 'github',
+    provider: 'github' as UserIntegrationRecord['provider'],
     externalAccountLabel: 'alice',
     externalInstallationId: 'installation-123',
     authorizedPermissions: {
@@ -601,7 +601,9 @@ describe('PortfolioModule', () => {
 
     await expect(update.handler(consoleRequest({
       params: { type: 'skills', name: REVIEW_HELPER_NAME },
-      headers: { 'if-match': [REVIEW_HELPER_V3_ETAG] },
+      // Node may expose a repeated header as an array even though ConsoleRequest's
+      // normalized public type is string-valued; exercise that defensive path.
+      headers: { 'if-match': [REVIEW_HELPER_V3_ETAG] } as unknown as ConsoleRequest['headers'],
       body: { content: '# Array header' },
     }))).resolves.toMatchObject({
       status: 200,
@@ -820,6 +822,51 @@ describe('PortfolioModule', () => {
       version: 3,
       content: '# Review Helper\nOwner private content.',
     });
+  });
+
+  it('applies element-type content requirements to guided drafts', async () => {
+    const { module } = moduleFixture([]);
+    const validate = findRoute(module.routes, ELEMENT_VALIDATE_PATH, 'POST');
+    const contentOptional = [
+      { type: 'personas', metadata: { instructions: 'Act as a careful reviewer.' } },
+      { type: 'skills', metadata: { instructions: 'Review the input in ordered steps.' } },
+      { type: 'agents', metadata: { goal: { template: 'Review {topic}', parameters: [] } } },
+      {
+        type: 'ensembles',
+        metadata: {
+          elements: [{
+            element_name: 'review-helper',
+            element_type: 'skill',
+            role: 'primary',
+            priority: 10,
+            activation: 'always',
+          }],
+        },
+      },
+    ] as const;
+
+    for (const fixture of contentOptional) {
+      await expect(validate.handler(consoleRequest({
+        params: { type: fixture.type, name: `guided-${fixture.type}` },
+        body: { content: '', metadata: fixture.metadata },
+      }))).resolves.toEqual({
+        status: 200,
+        body: { valid: true, issues: [] },
+      });
+    }
+
+    for (const type of ['templates', 'memories']) {
+      await expect(validate.handler(consoleRequest({
+        params: { type, name: `empty-${type}` },
+        body: { content: '', metadata: {} },
+      }))).resolves.toMatchObject({
+        status: 200,
+        body: {
+          valid: false,
+          issues: [expect.objectContaining({ path: 'content', code: 'required' })],
+        },
+      });
+    }
   });
 
   it('starts portfolio sync jobs only for connected integrations with sufficient permissions', async () => {

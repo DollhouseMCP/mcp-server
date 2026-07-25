@@ -83,7 +83,7 @@ Owner: {{owner}}
 });
 const IMPORT_FILE_LIMIT_BYTES = 1_100_000;
 const IMPORT_ENVELOPE_KEYS = new Set([
-  'metadata', 'content', 'instructions', 'entries', 'stats', 'id', 'type', 'name', 'tags',
+  'metadata', 'content', 'instructions', 'entries', 'stats', 'extensions', 'id', 'type', 'name', 'tags',
   'display_name', 'canonical_name', 'validation_status', 'updated_at',
 ]);
 const GUIDED_METADATA_KEYS = new Set([
@@ -1197,7 +1197,11 @@ function normalizeImportedDraft(parsed, originalSource, filename) {
     portable,
     packageRecord,
   });
-  const explicitInstructions = firstString(nested.instructions, metadata.instructions);
+  const explicitInstructions = firstString(
+    nested.instructions,
+    metadata.instructions,
+    asRecord(nested.extensions).instructions,
+  );
   const legacyInstructionBody = parsed.format === 'markdown' &&
     ['personas', 'skills', 'agents'].includes(type) &&
     !explicitInstructions;
@@ -1244,7 +1248,7 @@ function importedMetadata(record) {
     return metadata;
   }
   const metadata = { ...record };
-  for (const key of ['content', 'instructions', 'entries', 'stats', 'extensions', 'id', 'type']) delete metadata[key];
+  for (const key of IMPORT_ENVELOPE_KEYS) delete metadata[key];
   return metadata;
 }
 
