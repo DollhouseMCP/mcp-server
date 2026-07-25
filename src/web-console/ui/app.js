@@ -54,9 +54,17 @@ const TAB_MODULES = {
     load: () => import('./logs.js'),
     requiredRoutes: [['GET', '/me/logs']],
   },
-  'admin-metrics': {
-    load: () => import('./admin-metrics.js'),
-    requiredRoutes: [['GET', '/admin/operate/metrics/system']],
+  operations: {
+    load: () => import('./operations.js'),
+    requiredRoutes: [],
+    requiredAnyRoutes: [
+      ['GET', '/admin/operate/health'],
+      ['GET', '/admin/operate/config'],
+      ['GET', '/admin/operate/logs'],
+      ['GET', '/admin/operate/metrics'],
+      ['GET', '/admin/operate/metrics/system'],
+      ['GET', '/admin/operate/sessions'],
+    ],
   },
   integrations: {
     load: () => import('./integrations.js'),
@@ -95,7 +103,7 @@ function activateTab(name) {
 
 function ensureTabModule(name) {
   const definition = TAB_MODULES[name];
-  if (!definition || !consoleMetadata?.hasRoutes(definition.requiredRoutes)) return Promise.resolve();
+  if (!tabDefinitionAvailable(definition, consoleMetadata)) return Promise.resolve();
   if (tabModulePromises.has(name)) return tabModulePromises.get(name);
   const panel = document.getElementById(`tab-${name}`);
   const loading = (async () => {
@@ -120,7 +128,7 @@ function configureAvailableTabs(metadata) {
   consoleMetadata = metadata;
   document.querySelectorAll('.console-tab').forEach(tab => {
     const definition = TAB_MODULES[tab.dataset.tab];
-    const available = !!definition && metadata.hasRoutes(definition.requiredRoutes);
+    const available = tabDefinitionAvailable(definition, metadata);
     tab.dataset.featureAvailable = String(available);
     tab.hidden = !available || !!tab.dataset.adminCap;
   });
@@ -130,6 +138,12 @@ function configureAvailableTabs(metadata) {
   if (accountSettings) {
     accountSettings.hidden = !metadata.hasRoute('GET', '/me/profile') && !metadata.hasRoute('GET', '/me/settings');
   }
+}
+
+function tabDefinitionAvailable(definition, metadata) {
+  if (!definition || !metadata?.hasRoutes(definition.requiredRoutes)) return false;
+  if (!definition.requiredAnyRoutes) return true;
+  return definition.requiredAnyRoutes.some(([method, path]) => metadata.hasRoute(method, path));
 }
 
 function showNoAvailableFeatures() {

@@ -9,6 +9,11 @@ import { SEED_PASSWORD } from '../harness/seed.js';
 import { installPortfolioUiMock } from '../harness/portfolioUiMock.js';
 import { installSelfServiceUiMock } from '../harness/selfServiceUiMock.js';
 import { installSessionUiMock } from '../harness/sessionUiMock.js';
+import {
+  installOperationsUiMock,
+  OPERATIONS_PRIVATE_MARKER,
+  SECOND_OPERATIONAL_SESSION_ID,
+} from '../harness/operationsUiMock.js';
 import { BASE_URL } from '../setup/provision.js';
 
 const USER = 'e2e_admin';
@@ -28,7 +33,15 @@ const EDITOR_SUBMIT = '.portfolio-editor button[type="submit"]';
 const EDITOR_VALIDATE = '[data-editor-validate]';
 const AUTHORING_WORKSPACE = '[data-portfolio-authoring]';
 const THEME_SELECT = '#account-theme-form [name="theme"]';
+const OPERATIONS_TAB = '.console-tab[data-tab="operations"]';
+const SUBMIT_BUTTON = 'button[type="submit"]';
+const OPERATIONS_HEALTH_NAV = '[data-operations-nav="health"]';
+const OPERATIONS_CONFIG_NAV = '[data-operations-nav="config"]';
+const OPERATIONS_SESSIONS_NAV = '[data-operations-nav="sessions"]';
+const ENABLED_CONFIG_FORM = '[data-config-form="enhanced_index.enabled"]';
+const OPERATIONAL_SESSION_CARD = '[data-operational-session-id]';
 const BULK_SESSION_ACTION = '#sess-revoke-others';
+const USER_DRAWER = '.ua-drawer';
 const AUTH_ME_URL = '**/api/v1/auth/me';
 const ADMIN_USER_SESSIONS_URL = '**/api/v1/admin/accounts/users/*/sessions';
 
@@ -123,6 +136,16 @@ async function stepUpWithTotp(page: Page, totp: TOTP): Promise<void> {
     await Promise.all([page.waitForLoadState('networkidle'), page.click('button[type="submit"]')]);
   }
   await approveClientConsentIfShown(page);
+}
+
+async function openMockOperations(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
+      detail: { active: true, capabilities: ['console:admin:operate'] },
+    }));
+  });
+  await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
+  await page.locator(OPERATIONS_TAB).click();
 }
 
 test('console UI serves its asset graph and boots from server metadata', async ({ page }) => {
@@ -492,6 +515,198 @@ test('portfolio write controls disappear when the manifest omits write routes', 
   await expect(page.locator('.modal-delete-btn')).toBeHidden();
 });
 
+test('operations remains usable when a partial deployment omits health', async ({ page }) => {
+  await installOperationsUiMock(page);
+  await filterManifestRoutes(page, new Set([
+    'GET /api/v1/admin/operate/health',
+    'PUT /api/v1/admin/operate/config/:key',
+  ]));
+  await loginFromConsole(page);
+
+  await page.evaluate(() => {
+    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
+      detail: { active: true, capabilities: ['console:admin:operate'] },
+    }));
+  });
+  await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
+  await page.locator(OPERATIONS_TAB).click();
+  await expect(page.locator(OPERATIONS_HEALTH_NAV)).toHaveCount(0);
+  await expect(page.locator(OPERATIONS_CONFIG_NAV)).toBeVisible();
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+  await expect(page.locator(ENABLED_CONFIG_FORM)).toBeVisible();
+  await expect(page.locator(ENABLED_CONFIG_FORM)).toContainText('Not writable in this deployment');
+  await expect(page.locator(`${ENABLED_CONFIG_FORM} select`)).toBeDisabled();
+});
+
+test('operations requires its capability and stops polling when privilege or visibility is lost', async ({ page }) => {
+  const mock = await installOperationsUiMock(page);
+  await loginFromConsole(page);
+
+  await page.evaluate(() => {
+    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
+      detail: { active: true, capabilities: ['console:admin:accounts'] },
+    }));
+  });
+  await expect(page.locator(OPERATIONS_TAB)).toBeHidden();
+
+  await page.clock.install();
+  await openMockOperations(page);
+  await expect.poll(() => mock.healthReads).toBeGreaterThan(0);
+  const beforeStepDown = mock.healthReads;
+  await page.evaluate(() => {
+    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
+      detail: { active: false, capabilities: [] },
+    }));
+  });
+  await page.clock.fastForward(11_000);
+  expect(mock.healthReads, 'step-down aborts and stops operator polling').toBe(beforeStepDown);
+
+  await openMockOperations(page);
+  await expect.poll(() => mock.healthReads).toBeGreaterThan(beforeStepDown);
+  const beforeHidden = mock.healthReads;
+  await page.evaluate(() => {
+    Object.defineProperty(globalThis.document, 'hidden', { configurable: true, value: true });
+    globalThis.document.dispatchEvent(new Event('visibilitychange'));
+  });
+  await page.clock.fastForward(11_000);
+  expect(mock.healthReads, 'background tabs do not poll operator routes').toBe(beforeHidden);
+});
+
+test('operator configuration preserves sibling drafts, per-setting concurrency, badges, and secret privacy', async ({ page }) => {
+  const mock = await installOperationsUiMock(page, { conflictOnFirstConfigWrite: false });
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+
+  const enabled = page.locator(ENABLED_CONFIG_FORM);
+  const sibling = page.locator('[data-config-form="enhanced_index.max_cache_entries"]');
+  const license = page.locator('[data-config-form="license.key"]');
+  await expect(enabled).toContainText('Dynamic');
+  await expect(enabled).toContainText('effective');
+  await expect(license).toContainText('Restart pending');
+  await expect(license).toContainText('not effective until restart');
+  await expect(page.locator('[data-config-form="private.feature_enabled"] select')).toHaveValue('');
+  await expect(page.locator('[data-config-form="private.provider_options"] textarea')).toHaveValue('');
+  await expect(page.locator('#tab-operations')).not.toContainText(OPERATIONS_PRIVATE_MARKER);
+
+  await sibling.locator('input[name="value"]').fill('2048');
+  await enabled.locator('select[name="value"]').selectOption('false');
+  await enabled.locator(SUBMIT_BUTTON).click();
+  await expect.poll(() => mock.configWrites).toBe(1);
+  await expect(sibling.locator('input[name="value"]')).toHaveValue('2048');
+  await sibling.locator(SUBMIT_BUTTON).click();
+  await expect.poll(() => mock.configWrites).toBe(2);
+  expect(mock.maxCacheEntries).toBe(2048);
+  await expect(sibling.locator('[data-config-feedback]')).not.toContainText('changed elsewhere');
+});
+
+test('operator configuration restarts loading after rapid section navigation', async ({ page }) => {
+  const mock = await installOperationsUiMock(page, { configListDelayMs: 500 });
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+  await expect.poll(() => mock.configReads).toBe(1);
+
+  await page.locator(OPERATIONS_HEALTH_NAV).click();
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+
+  await expect.poll(() => mock.configReads).toBe(2);
+  await expect(page.locator(ENABLED_CONFIG_FORM)).toBeVisible();
+});
+
+test('operations refresh includes embedded metrics and section changes stop its auto-refresh', async ({ page }) => {
+  const mock = await installOperationsUiMock(page);
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.clock.install();
+  await page.locator('[data-operations-nav="metrics"]').click();
+  await expect.poll(() => mock.metricsReads).toBeGreaterThan(0);
+  await expect.poll(() => mock.systemMetricsReads).toBeGreaterThan(0);
+
+  const operationalBeforeRefresh = mock.metricsReads;
+  const systemBeforeRefresh = mock.systemMetricsReads;
+  await page.locator('#operations-refresh').click();
+  await expect.poll(() => mock.metricsReads).toBeGreaterThan(operationalBeforeRefresh);
+  await expect.poll(() => mock.systemMetricsReads).toBeGreaterThan(systemBeforeRefresh);
+
+  await page.locator('#am-auto').check();
+  await page.locator(OPERATIONS_HEALTH_NAV).click();
+  const systemBeforeSectionChange = mock.systemMetricsReads;
+  await page.clock.fastForward(11_000);
+  expect(mock.systemMetricsReads, 'embedded metrics stop when their Operations section is hidden').toBe(systemBeforeSectionChange);
+});
+
+test('embedded system metrics refresh once when returning to Operations', async ({ page }) => {
+  const mock = await installOperationsUiMock(page);
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator('[data-operations-nav="metrics"]').click();
+  await expect.poll(() => mock.systemMetricsReads).toBeGreaterThan(0);
+
+  await page.locator('.console-tab[data-tab="portfolio"]').click();
+  const readsBeforeReturn = mock.systemMetricsReads;
+  await page.locator(OPERATIONS_TAB).click();
+  await expect.poll(() => mock.systemMetricsReads).toBe(readsBeforeReturn + 1);
+  await page.waitForTimeout(100);
+  expect(mock.systemMetricsReads, 'the parent lifecycle performs only one refresh').toBe(readsBeforeReturn + 1);
+});
+
+test('operations retains the last session snapshot through a transient refresh failure', async ({ page }) => {
+  const mock = await installOperationsUiMock(page);
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator(OPERATIONS_SESSIONS_NAV).click();
+  await expect(page.locator(OPERATIONAL_SESSION_CARD)).toBeVisible();
+
+  mock.failNextSessionRead = true;
+  await page.locator('#operations-refresh').click();
+  await expect(page.locator('[data-session-list-warning]')).toContainText('last successful snapshot');
+  await expect(page.locator(OPERATIONAL_SESSION_CARD)).toBeVisible();
+});
+
+test('session termination acknowledgements stay bound to their originating session', async ({ page }) => {
+  const mock = await installOperationsUiMock(page, { includeSecondSession: true });
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator(OPERATIONS_SESSIONS_NAV).click();
+  await page.locator(OPERATIONAL_SESSION_CARD).first().click();
+  await page.locator('[data-operational-session-terminate]').click();
+  await page.locator(CONFIRM_ACTION).click();
+  await expect.poll(() => mock.commandReads).toBe(1);
+
+  await page.locator(`[data-operational-session-id="${SECOND_OPERATIONAL_SESSION_ID}"]`).click();
+  await expect(page.locator('[data-operational-session-detail]')).toContainText('Second Browser Client');
+  await page.waitForTimeout(700);
+  await expect(page.locator('[data-operational-command-status]')).toBeEmpty();
+  await expect(page.locator(`[data-operational-session-id="${SECOND_OPERATIONAL_SESSION_ID}"]`)).toBeVisible();
+});
+
+for (const outcome of ['already_absent', 'failed'] as const) {
+  test(`session termination renders the ${outcome} terminal outcome`, async ({ page }) => {
+    await installOperationsUiMock(page, { commandOutcome: outcome });
+    await loginFromConsole(page);
+    await openMockOperations(page);
+    await page.locator(OPERATIONS_SESSIONS_NAV).click();
+    await page.locator(OPERATIONAL_SESSION_CARD).click();
+    await page.locator('[data-operational-session-terminate]').click();
+    await page.locator(CONFIRM_ACTION).click();
+
+    const expected = outcome === 'already_absent' ? 'already absent' : 'Termination failed';
+    await expect(page.locator('[data-operational-command-status]')).toContainText(expected);
+  });
+}
+
+test('unavailable operator session detail uses a cross-user-neutral message', async ({ page }) => {
+  await installOperationsUiMock(page, { detailUnavailable: true });
+  await loginFromConsole(page);
+  await openMockOperations(page);
+  await page.locator(OPERATIONS_SESSIONS_NAV).click();
+  await page.locator(OPERATIONAL_SESSION_CARD).click();
+
+  await expect(page.locator('[data-operational-session-detail]')).toContainText('ended, expired, or is not available');
+  await expect(page.locator('[data-operational-session-detail]')).not.toContainText('another account');
+});
+
 test('profile and allowlisted appearance settings persist without overwriting stale state', async ({ page }) => {
   const mock = await installSelfServiceUiMock(page, { conflictOnFirstSettingsWrite: true });
   await loginFromConsole(page);
@@ -696,7 +911,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   const secretText = (await page.locator('code').first().innerText()).trim().replaceAll(/\s+/g, '');
   const totp = new TOTP({ secret: Secret.fromBase32(secretText) });
   await page.fill('input[name="code"]', totp.generate());
-  await Promise.all([page.waitForLoadState('networkidle'), page.click('button[type="submit"]')]);
+  await Promise.all([page.waitForLoadState('networkidle'), page.click(SUBMIT_BUTTON)]);
 
   // 4. STEP-UP for the operate capability (may re-prompt password, then TOTP)
   await stepUpWithTotp(page, totp);
@@ -707,6 +922,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   // The Users surface gets its role list and grants from /me/role-catalog.
   const catalogResponse = await page.request.get(`${BASE_URL}/api/v1/me/role-catalog`);
   const catalog = await catalogResponse.json() as { roles: string[] };
+  const operationsMock = await installOperationsUiMock(page);
   await filterManifestRoutes(page, new Set([
     'GET /api/v1/me/portfolio/elements',
     'GET /api/v1/me/sessions',
@@ -726,15 +942,62 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   await expect(page.locator('[data-role-toggle]')).toHaveCount(catalog.roles.length);
   await expect(page.locator('.ua-sessions')).toContainText('Couldn\'t load active sessions.');
   await page.unroute(ADMIN_USER_SESSIONS_URL);
+  await page.locator('#ua-drawer-close').click();
+  await expect(page.locator(USER_DRAWER)).toHaveCount(0);
 
-  // 6. STEP-DOWN destroys an open privileged drawer and hides its panel even
-  // when no non-admin tab exists.
-  await expect(page.locator('.ua-drawer')).toBeVisible();
+  // The Operations workspace keeps configuration concurrency-safe, renders
+  // only allowlisted telemetry, and follows async runtime termination to ack.
+  await page.locator(OPERATIONS_TAB).click();
+  await expect(page.locator('[data-operations-panel="health"]')).toContainText('Degraded');
+  await expect(page.locator('[data-operations-panel="health"]')).toContainText('runtime_ack_delayed');
+
+  await page.locator(OPERATIONS_CONFIG_NAV).click();
+  const configForm = page.locator(ENABLED_CONFIG_FORM);
+  await expect(page.locator('[data-config-form="license.key"] input')).toHaveValue('');
+  await configForm.locator('select[name="value"]').selectOption('false');
+  await configForm.locator(SUBMIT_BUTTON).click();
+  await expect(configForm.locator('[data-config-feedback]')).toContainText('changed elsewhere');
+  expect(operationsMock.configWrites).toBe(0);
+  await configForm.locator('[data-config-reload]').click();
+  await page.locator(`${ENABLED_CONFIG_FORM} select[name="value"]`).selectOption('false');
+  await page.locator(`${ENABLED_CONFIG_FORM} button[type="submit"]`).click();
+  await expect.poll(() => operationsMock.configWrites).toBe(1);
+  expect(operationsMock.configValue).toBe(false);
+
+  await page.locator('[data-operations-nav="logs"]').click();
+  await expect(page.locator('[data-operational-log-body]')).toContainText('runtime.command.delayed');
+  await expect(page.locator('#tab-operations')).not.toContainText(OPERATIONS_PRIVATE_MARKER);
+
+  await page.locator('[data-operations-nav="metrics"]').click();
+  await expect(page.locator('[data-operational-metrics-body]')).toContainText('runtime.commands.pending');
+  await expect(page.locator('[data-system-metrics]')).toContainText('cache.hits');
+
+  await page.locator(OPERATIONS_SESSIONS_NAV).click();
+  await page.locator(OPERATIONAL_SESSION_CARD).click();
+  await expect(page.locator('[data-operational-session-detail]')).toContainText('replica-browser');
+  await expect(page.locator('#tab-operations')).not.toContainText(OPERATIONS_PRIVATE_MARKER);
+  await page.locator('[data-operational-session-terminate]').click();
+  await page.locator(CONFIRM_ACTION).click();
+  await expect(page.locator('[data-operational-command-status]')).toContainText('acknowledged termination');
+  expect(operationsMock.commandReads).toBeGreaterThanOrEqual(2);
+  expect(operationsMock.terminated).toBe(true);
+
+  // Reopen the Users drawer so step-down proves that both privileged
+  // workspaces are torn down, not merely hidden.
+  await page.locator('.console-tab[data-tab="users"]').click();
+  await page.locator('[data-user-row]').first().click();
+  await expect(page.locator(USER_DRAWER)).toBeVisible();
+
+  // 6. STEP-DOWN destroys the open privileged drawer and hides both admin
+  // panels even when no non-admin tab exists.
   await page.locator('#exit-btn').dispatchEvent('click');
   await expect(page.locator('#console-empty-state')).toBeVisible();
   await expect(page.locator('#tab-users')).toBeHidden();
   await expect(page.locator('.console-tab[data-tab="users"]')).toBeHidden();
-  await expect(page.locator('.ua-drawer')).toHaveCount(0);
+  await expect(page.locator(USER_DRAWER)).toHaveCount(0);
+  await expect(page.locator('#tab-operations')).toBeHidden();
+  await expect(page.locator(OPERATIONS_TAB)).toBeHidden();
+  await page.unroute('**/api/v1/admin/operate/**');
   expect(await status(page, OPERATE), 'admin gated again after step-down').toBe(401);
 
   // 7. TIMER EXPIRY takes the same fail-closed path without relying on Exit.
@@ -762,11 +1025,11 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   await page.goto(`${BASE_URL}/ui?tab=users`, { waitUntil: 'domcontentloaded' });
   await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
   await page.locator('[data-user-row]').first().click();
-  await expect(page.locator('.ua-drawer')).toBeVisible();
+  await expect(page.locator(USER_DRAWER)).toBeVisible();
   await page.clock.fastForward(3_000);
   await expect(page.locator('#console-empty-state')).toBeVisible();
   await expect(page.locator('#tab-users')).toBeHidden();
-  await expect(page.locator('.ua-drawer')).toHaveCount(0);
+  await expect(page.locator(USER_DRAWER)).toHaveCount(0);
   await page.unroute(AUTH_ME_URL);
   expect(await status(page, OPERATE), 'server remains elevated until explicit cleanup').toBe(200);
   expect(await csrfPost(page, '/api/v1/auth/step-down')).toBe(204);
