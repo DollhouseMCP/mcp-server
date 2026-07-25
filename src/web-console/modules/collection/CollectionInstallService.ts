@@ -88,7 +88,7 @@ export class CollectionInstallService {
     // being persisted by the manager-backed store and only failing afterwards
     // in record validation — which would strand an element the console can
     // neither read nor delete.
-    const issues = validateElementPayload({
+    const issues = validateElementPayload(type, {
       name: validated.name,
       displayName,
       metadata: validated.metadata,

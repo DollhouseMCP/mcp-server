@@ -6,24 +6,69 @@ import { test, expect, type Page } from '@playwright/test';
 import { TOTP, Secret } from 'otpauth';
 
 import { SEED_PASSWORD } from '../harness/seed.js';
+import { installPortfolioUiMock } from '../harness/portfolioUiMock.js';
+import { installSelfServiceUiMock } from '../harness/selfServiceUiMock.js';
 import { installSessionUiMock } from '../harness/sessionUiMock.js';
 import { BASE_URL } from '../setup/provision.js';
 
 const USER = 'e2e_admin';
 const OPERATE = '/api/v1/admin/operate/health';
 const MANIFEST_URL = '**/api/v1/me/manifest';
+const CONSOLE_SHELL = '#console-shell';
 const SESSIONS_TAB = '.console-tab[data-tab="sessions"]';
 const SESSION_DETAIL_HEADER = '#session-detail-header';
 const CONFIRM_ACTION = '[data-confirm="1"]';
+const ACCOUNT_MENU = '#site-account';
+const PORTFOLIO_CREATE = '#pf-create';
+const EDITOR_FEEDBACK = '[data-editor-feedback]';
+const EDITOR_CONTENT = '.portfolio-editor [name="content"]';
+const EDITOR_INSTRUCTIONS = '.portfolio-editor [name="instructions"]';
+const EDITOR_METADATA = '.portfolio-editor [name="metadata"]';
+const EDITOR_SUBMIT = '.portfolio-editor button[type="submit"]';
+const EDITOR_VALIDATE = '[data-editor-validate]';
+const AUTHORING_WORKSPACE = '[data-portfolio-authoring]';
+const THEME_SELECT = '#account-theme-form [name="theme"]';
 const BULK_SESSION_ACTION = '#sess-revoke-others';
 const AUTH_ME_URL = '**/api/v1/auth/me';
 const ADMIN_USER_SESSIONS_URL = '**/api/v1/admin/accounts/users/*/sessions';
+
+interface TextFileFixture {
+  readonly name: string;
+  readonly mimeType: string;
+  readonly content: string;
+}
+
+async function setTextInputFile(page: Page, selector: string, file: TextFileFixture): Promise<void> {
+  await page.locator(selector).evaluate((element, fixture) => {
+    if (!(element instanceof HTMLInputElement)) throw new Error('File fixture target must be an input element.');
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([fixture.content], fixture.name, { type: fixture.mimeType }));
+    element.files = transfer.files;
+    element.dispatchEvent(new Event('change', { bubbles: true }));
+  }, file);
+}
 
 async function filterManifestRoutes(page: Page, unavailableRoutes: ReadonlySet<string>): Promise<void> {
   await page.route(MANIFEST_URL, async route => {
     const response = await route.fetch();
     const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
     const routes = manifest.routes.filter(item => !unavailableRoutes.has(`${item.method} ${item.path}`));
+    await route.fulfill({ response, json: { ...manifest, routes } });
+  });
+}
+
+async function includeManifestRoutes(
+  page: Page,
+  additionalRoutes: ReadonlyArray<{ readonly method: string; readonly path: string }>,
+): Promise<void> {
+  await page.route(MANIFEST_URL, async route => {
+    const response = await route.fetch();
+    const manifest = await response.json() as { routes: Array<{ method: string; path: string }> };
+    const routeKeys = new Set(manifest.routes.map(item => `${item.method} ${item.path}`));
+    const routes = [
+      ...manifest.routes,
+      ...additionalRoutes.filter(item => !routeKeys.has(`${item.method} ${item.path}`)),
+    ];
     await route.fulfill({ response, json: { ...manifest, routes } });
   });
 }
@@ -60,7 +105,7 @@ async function loginFromConsole(page: Page): Promise<void> {
   await page.fill('input[name="password"]', SEED_PASSWORD);
   await Promise.all([page.waitForLoadState('networkidle'), page.click('button[value="login"]')]);
   await approveClientConsentIfShown(page);
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
 }
 
 async function stepUpWithTotp(page: Page, totp: TOTP): Promise<void> {
@@ -124,10 +169,375 @@ test('console UI serves its asset graph and boots from server metadata', async (
   await expect(page.locator('[data-revoke-console], [data-disconnect-mcp]')).toHaveCount(0);
   await expect(page.locator(BULK_SESSION_ACTION)).toHaveText('Sign out other console sessions');
 
-  await page.locator('#site-account').click();
+  await page.locator(ACCOUNT_MENU).click();
   await page.locator('#account-security').click();
   await expect(page.locator('#security-modal')).toBeVisible();
   await expect(page.locator('#sec-enroll')).toHaveCount(0);
+});
+
+test('All combines every collection page with the portfolio and reports source totals', async ({ page }) => {
+  await includeManifestRoutes(page, [
+    { method: 'GET', path: '/api/v1/collection/elements' },
+    { method: 'GET', path: '/api/v1/collection/elements/:type/:name' },
+  ]);
+  const mock = await installPortfolioUiMock(page, { includeCollection: true });
+  await loginFromConsole(page);
+
+  await expect(page.locator('#pf-source')).toBeVisible();
+  await expect(page.locator('#pf-summary')).toHaveText('3 total elements');
+  await expect(page.locator('#pf-count')).toHaveText('3 elements');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(3);
+  await expect(page.locator('#pf-grid .source-badge-collection')).toHaveCount(2);
+  await expect(page.locator('#pf-grid .source-badge', { hasText: 'LOCAL' })).toHaveCount(1);
+  await expect(page.locator('#pf-type-filters [data-key="personas"] .filter-count')).toHaveText('1');
+  await expect(page.locator('#pf-type-filters [data-key="skills"] .filter-count')).toHaveText('1');
+  await expect(page.locator('#pf-type-filters [data-key="templates"] .filter-count')).toHaveText('1');
+  expect(mock.collectionReads).toBe(2);
+
+  await page.locator('#pf-source [data-source="portfolio"]').click();
+  await expect(page.locator('#pf-summary')).toHaveText('1 portfolio element');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(1);
+
+  await page.locator('#pf-source [data-source="collection"]').click();
+  await expect(page.locator('#pf-summary')).toHaveText('2 collection elements');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(2);
+
+  await page.locator('#pf-source [data-source="all"]').click();
+  await page.locator('#pf-search').fill('Collection Skill');
+  await expect(page.locator('#pf-count')).toHaveText('1 element');
+  await expect(page.locator('#pf-grid .element-card')).toHaveCount(1);
+  await expect(page.locator('#pf-grid .card-title')).toHaveText('Collection Skill');
+});
+
+test('portfolio authoring validates drafts, preserves conflicts, and confirms hard deletion', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page, { conflictOnFirstPatch: true });
+  await loginFromConsole(page);
+
+  await expect(page.locator('.portfolio-start-action')).toHaveCount(2);
+  await expect(page.locator(PORTFOLIO_CREATE)).toContainText('Create new');
+  await expect(page.locator('#pf-import')).toContainText('Import file');
+  await page.locator(PORTFOLIO_CREATE).click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeVisible();
+  await expect(page.locator('.portfolio-type-choice')).toHaveCount(6);
+  await expect(page.locator('[data-builder-overview]')).toContainText('Building a Persona');
+  await expect(page.locator(EDITOR_METADATA)).toBeHidden();
+  await page.locator('[data-custom-metadata] summary').click();
+  await expect(page.locator('[data-custom-metadata-enable]')).toBeVisible();
+  await page.locator('[data-custom-metadata-enable]').click();
+  await page.locator(EDITOR_METADATA).fill('{');
+  await expect(page.locator('[data-custom-metadata-status]')).toContainText('must be valid JSON');
+  await page.locator(EDITOR_METADATA).fill('{"custom_note":"preserve me"}');
+  await expect(page.locator('[data-custom-metadata-status]')).toContainText('Valid JSON object');
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Name is required');
+  await expect(page.locator(EDITOR_FEEDBACK)).toBeInViewport();
+  await page.locator('.portfolio-editor [name="name"]').fill('browser-created');
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Description is required');
+  await page.locator('.portfolio-editor [name="description"]').fill('A guided browser-created persona.');
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Behavioral instructions are required');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('You are a careful browser-created persona.');
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Validation passed');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="browser-created"]')).toBeVisible();
+  expect(mock.elements.find(item => item.name === 'browser-created')?.metadata.custom_note).toBe('preserve me');
+
+  await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
+  await page.locator(EDITOR_CONTENT).fill('Unsaved browser draft.');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('changed after you opened it');
+  await expect(page.locator('[data-editor-reload]')).toBeVisible();
+  await page.locator('[data-editor-reload]').click();
+  await expect(page.locator(EDITOR_CONTENT)).toHaveValue('Latest server content.');
+  await page.locator('.portfolio-editor [data-editor-close]').first().click();
+
+  await page.locator('[data-name="alpha-persona"]').click();
+  await page.locator('.modal-delete-btn').click();
+  await page.locator('#portfolio-confirm [data-confirm="0"]').click();
+  expect(mock.deletes).toBe(0);
+  await page.locator('[data-name="alpha-persona"]').click();
+  await page.locator('.modal-delete-btn').click();
+  await page.locator('#portfolio-confirm [data-confirm="1"]').click();
+  await expect(page.locator('[data-name="alpha-persona"]')).toHaveCount(0);
+  expect(mock.deletes).toBe(1);
+});
+
+test('portfolio guided authoring serializes agent and ensemble settings', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [name="type"][value="agents"]').check();
+  await page.locator('.portfolio-editor [name="name"]').fill('guided-agent');
+  await page.locator('.portfolio-editor [name="description"]').fill('An agent configured through guided fields.');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('Coordinate the selected elements and tools.');
+  await page.locator('.portfolio-editor [name="agent_goal_template"]').fill('Research {topic} and recommend a path.');
+  await page.locator('.portfolio-editor [name="agent_success_criteria"]').fill('Sources are cited\nTradeoffs are explicit');
+  await page.locator('.portfolio-editor [name="agent_activates_personas"]').fill('technical-writer, reviewer');
+  await page.locator('.portfolio-editor [name="agent_activates_skills"]').fill('web-research');
+  await page.locator('.portfolio-editor [name="agent_tools_allowed"]').fill('search, fetch');
+  await page.locator('.portfolio-editor [name="agent_tools_denied"]').fill('shell');
+  await page.locator('.portfolio-editor [name="agent_risk_tolerance"]').selectOption('conservative');
+  await page.locator('.portfolio-editor [name="agent_max_steps"]').fill('12');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="guided-agent"]')).toBeVisible();
+
+  expect(mock.elements.find(item => item.name === 'guided-agent')?.metadata).toMatchObject({
+    goal: {
+      template: 'Research {topic} and recommend a path.',
+      parameters: [],
+      successCriteria: ['Sources are cited', 'Tradeoffs are explicit'],
+    },
+    activates: {
+      personas: ['technical-writer', 'reviewer'],
+      skills: ['web-research'],
+    },
+    tools: {
+      allowed: ['search', 'fetch'],
+      denied: ['shell'],
+    },
+    autonomy: {
+      riskTolerance: 'conservative',
+      maxAutonomousSteps: 12,
+    },
+  });
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [name="type"][value="ensembles"]').check();
+  await page.locator('.portfolio-editor [name="name"]').fill('guided-ensemble');
+  await page.locator('.portfolio-editor [name="description"]').fill('An ensemble configured through guided fields.');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('Coordinate the ensemble members in priority order.');
+  await page.locator('.portfolio-editor [name="ensemble_activation_strategy"]').selectOption('priority');
+  await page.locator('.portfolio-editor [name="ensemble_conflict_resolution"]').selectOption('merge');
+  await page.locator('.portfolio-editor [name="ensemble_context_sharing"]').selectOption('selective');
+  await page.locator('.portfolio-editor [name="ensemble_allow_nested"]').check();
+  const elementRow = page.locator('[data-repeat-row="ensemble-elements"]');
+  await elementRow.locator('[data-row-field="name"]').fill('technical-writer');
+  await elementRow.locator('[data-row-field="type"]').selectOption('persona');
+  await elementRow.locator('[data-row-field="role"]').selectOption('primary');
+  await elementRow.locator('[data-row-field="activation"]').selectOption('always');
+  await elementRow.locator('[data-row-field="priority"]').fill('');
+  await elementRow.locator('[data-row-field="purpose"]').fill('Draft the final response.');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="guided-ensemble"]')).toBeVisible();
+
+  expect(mock.elements.find(item => item.name === 'guided-ensemble')?.metadata).toMatchObject({
+    activationStrategy: 'priority',
+    conflictResolution: 'merge',
+    contextSharing: 'selective',
+    allowNested: true,
+    elements: [{
+      element_name: 'technical-writer',
+      element_type: 'persona',
+      role: 'primary',
+      priority: 10,
+      activation: 'always',
+      purpose: 'Draft the final response.',
+    }],
+  });
+});
+
+test('portfolio imports a reviewed file without silently overwriting a duplicate', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  const file = {
+    name: 'imported-skill.md',
+    mimeType: 'text/markdown',
+    content: `---
+name: Imported Skill
+type: skill
+description: Imported from a local Dollhouse file.
+tags:
+  - imported
+  - browser
+custom_policy: reviewed
+---
+
+Follow the reviewed skill instructions.`,
+  };
+
+  await page.locator('#pf-import').click();
+  await expect(page.locator('[data-import-drop]')).toBeVisible();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await expect(page.locator('[data-import-source]')).toContainText('Skill detected');
+  await expect(page.locator('[name="type"][value="skills"]')).toBeChecked();
+  await expect(page.locator('.portfolio-editor [name="name"]')).toHaveValue('Imported Skill');
+  await expect(page.locator('.portfolio-editor [name="description"]')).toHaveValue('Imported from a local Dollhouse file.');
+  await expect.poll(async () => (await page.locator(EDITOR_INSTRUCTIONS).inputValue()).trim())
+    .toBe('Follow the reviewed skill instructions.');
+  await expect(page.locator(EDITOR_CONTENT)).toHaveValue('');
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('1 additional metadata field');
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('will be preserved');
+  await expect(page.locator(EDITOR_METADATA)).toHaveValue(/"custom_policy": "reviewed"/u);
+  await page.locator(EDITOR_VALIDATE).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('ready to save');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="Imported Skill"]')).toBeVisible();
+  expect(mock.elements.filter(item => item.type === 'skills' && item.name === 'Imported Skill')).toHaveLength(1);
+  expect(mock.elements.find(item => item.type === 'skills' && item.name === 'Imported Skill')?.metadata.custom_policy)
+    .toBe('reviewed');
+
+  await page.locator('#pf-import').click();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('Nothing was overwritten');
+  expect(mock.elements.filter(item => item.type === 'skills' && item.name === 'Imported Skill')).toHaveLength(1);
+
+  await page.locator('.portfolio-editor [data-editor-close]').last().click();
+  await page.locator('#portfolio-confirm [data-confirm="1"]').click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
+  await expect(page.locator('#pf-grid')).toBeVisible();
+});
+
+test('portfolio import keeps legacy instructions but strips internal extensions', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  const file = {
+    name: 'legacy-agent.json',
+    mimeType: 'application/json',
+    content: JSON.stringify({
+      type: 'agent',
+      name: 'legacy-extension-agent',
+      content: '',
+      metadata: {
+        description: 'An agent imported from a legacy JSON export.',
+        custom_policy: 'preserve this',
+        goal: {
+          template: 'Review {topic} and report findings.',
+          parameters: [],
+        },
+      },
+      extensions: {
+        instructions: 'Use the imported legacy operating instructions.',
+        runtime_state: 'do not import',
+      },
+    }),
+  };
+
+  await page.locator('#pf-import').click();
+  await setTextInputFile(page, '[data-import-file]', file);
+  await expect(page.locator('[name="type"][value="agents"]')).toBeChecked();
+  await expect(page.locator(EDITOR_INSTRUCTIONS)).toHaveValue('Use the imported legacy operating instructions.');
+  await expect(page.locator(EDITOR_METADATA)).toHaveValue(/"custom_policy": "preserve this"/u);
+  await expect(page.locator(EDITOR_METADATA)).not.toHaveValue(/extensions|runtime_state/u);
+  await expect(page.locator('[data-custom-metadata-notice]')).toContainText('1 additional metadata field');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="legacy-extension-agent"]')).toBeVisible();
+
+  const imported = mock.elements.find(item => item.name === 'legacy-extension-agent');
+  expect(imported?.metadata.custom_policy).toBe('preserve this');
+  expect(imported?.metadata.instructions).toBe('Use the imported legacy operating instructions.');
+  expect(imported?.metadata).not.toHaveProperty('extensions');
+});
+
+test('portfolio create cancel leaves the workspace without saving', async ({ page }) => {
+  await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [data-editor-close]').last().click();
+  await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
+  await expect(page.locator('#pf-grid')).toBeVisible();
+});
+
+test('portfolio editor stays blocked when conflict reload omits its ETag', async ({ page }) => {
+  await installPortfolioUiMock(page, { conflictOnFirstPatch: true, omitEtagAfterConflict: true });
+  await loginFromConsole(page);
+
+  await page.locator('[data-name="alpha-persona"] [data-action="edit"]').click();
+  await page.locator(EDITOR_CONTENT).fill('Draft that must not overwrite newer content.');
+  await page.locator(EDITOR_SUBMIT).click();
+  await page.locator('[data-editor-reload]').click();
+
+  await expect(page.locator(EDITOR_FEEDBACK)).toContainText('did not include an ETag');
+  await expect(page.locator('[data-editor-reload]')).toBeVisible();
+  await expect(page.locator(EDITOR_CONTENT)).toHaveValue('Draft that must not overwrite newer content.');
+});
+
+test('portfolio sync reports successful and failed terminal jobs', async ({ page }) => {
+  const success = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+  await page.locator('#pf-sync').click();
+  await page.locator('.portfolio-sync button[type="submit"]').click();
+  await expect(page.locator('[data-sync-status]')).toContainText('Succeeded', { timeout: 5_000 });
+  expect(success.syncReads).toBeGreaterThanOrEqual(2);
+
+  await page.unroute('**/api/v1/me/portfolio**');
+  const failed = await installPortfolioUiMock(page, { syncOutcome: 'failed' });
+  await page.locator('[data-sync-close]').first().click();
+  await page.locator('#pf-sync').click();
+  await page.locator('.portfolio-sync button[type="submit"]').click();
+  await expect(page.locator('[data-sync-status]')).toContainText('github_sync_failed', { timeout: 5_000 });
+  expect(failed.syncReads).toBeGreaterThanOrEqual(2);
+});
+
+test('portfolio write controls disappear when the manifest omits write routes', async ({ page }) => {
+  await installPortfolioUiMock(page);
+  await filterManifestRoutes(page, new Set([
+    'POST /api/v1/me/portfolio/sync',
+    'GET /api/v1/me/portfolio/sync/:job_id',
+    'POST /api/v1/me/portfolio/elements/:type',
+    'PATCH /api/v1/me/portfolio/elements/:type/:name',
+    'DELETE /api/v1/me/portfolio/elements/:type/:name',
+    'POST /api/v1/me/portfolio/elements/:type/:name/validate',
+    'POST /api/v1/me/portfolio/elements/:type/:name/render',
+  ]));
+  await loginFromConsole(page);
+  await expect(page.locator('#pf-grid')).toBeVisible();
+  await expect(page.locator('#pf-create, #pf-import, #pf-sync, [data-action="edit"]')).toHaveCount(0);
+  await page.locator('[data-name="alpha-persona"]').click();
+  await expect(page.locator('.modal-edit-btn')).toBeHidden();
+  await expect(page.locator('.modal-delete-btn')).toBeHidden();
+});
+
+test('profile and allowlisted appearance settings persist without overwriting stale state', async ({ page }) => {
+  const mock = await installSelfServiceUiMock(page, { conflictOnFirstSettingsWrite: true });
+  await loginFromConsole(page);
+  await page.locator(ACCOUNT_MENU).click();
+  await page.locator('#account-settings').click();
+
+  await page.locator('#account-profile-form [name="display_name"]').fill('Browser Admin');
+  await page.locator('#account-profile-form button[type="submit"]').click();
+  await expect(page.locator(ACCOUNT_MENU)).toHaveText('Browser Admin');
+
+  await page.locator(THEME_SELECT).selectOption('light');
+  await page.locator('#account-theme-form button[type="submit"]').click();
+  await expect(page.locator('[data-theme-feedback]')).toContainText('not saved');
+  await expect(page.locator(THEME_SELECT)).toHaveValue('dark');
+  await page.locator(THEME_SELECT).selectOption('light');
+  await page.locator('#account-theme-form button[type="submit"]').click();
+  await expect(page.locator('[data-theme-feedback]')).toContainText('Appearance saved');
+
+  await page.locator('[data-account-close]').last().click();
+  await page.reload();
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
+  await page.locator(ACCOUNT_MENU).click();
+  await page.locator('#account-settings').click();
+  await expect(page.locator('#account-profile-form [name="display_name"]')).toHaveValue('Browser Admin');
+  await expect(page.locator(THEME_SELECT)).toHaveValue('light');
+  expect(mock.settingsWrites).toBe(2);
+});
+
+test('appearance settings preserve unsupported backend values until explicitly reset', async ({ page }) => {
+  const mock = await installSelfServiceUiMock(page, { initialTheme: 'system' });
+  await loginFromConsole(page);
+  await page.locator(ACCOUNT_MENU).click();
+  await page.locator('#account-settings').click();
+
+  const theme = page.locator(THEME_SELECT);
+  await expect(theme).toBeDisabled();
+  await expect(theme).toHaveValue('__unsupported_saved_theme__');
+  await expect(page.locator('[data-theme-feedback]')).toContainText('not supported');
+  await expect(page.locator('#account-theme-form button[type="submit"]')).toBeDisabled();
+  expect(mock.settingsWrites).toBe(0);
+
+  await page.locator('#account-theme-form [data-theme-reset]').click();
+  await expect(theme).toBeEnabled();
+  await expect(theme).toHaveValue('light');
+  expect(mock.theme).toBeNull();
+  expect(mock.settingsWrites).toBe(1);
 });
 
 test('owned session workspace handles HITL, snapshots, polling cleanup, and termination acknowledgement', async ({ page }) => {
@@ -276,7 +686,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
   // administrator into an AS step-up dead end.
   await filterManifestRoutes(page, new Set(['GET /api/v1/me/security/factors']));
   await page.goto(`${BASE_URL}/ui`, { waitUntil: 'domcontentloaded' });
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
   await expect(page.locator('#elevate-btn')).toBeDisabled();
   await expect(page.locator('#elevate-btn')).toHaveText(/Elevation unavailable/);
   await page.unroute(MANIFEST_URL);
@@ -305,7 +715,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
     'GET /api/v1/me/integrations',
   ]));
   await page.goto(`${BASE_URL}/ui?tab=users`, { waitUntil: 'domcontentloaded' });
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
   await expect(page.locator('.console-tab[data-tab="users"]')).toBeVisible();
   await page.route(ADMIN_USER_SESSIONS_URL, route => route.fulfill({
     status: 403,
@@ -350,7 +760,7 @@ test('console auth lifecycle: login -> enroll TOTP -> step-up -> step-down -> lo
     });
   });
   await page.goto(`${BASE_URL}/ui?tab=users`, { waitUntil: 'domcontentloaded' });
-  await page.locator('#console-shell').waitFor({ state: 'visible' });
+  await page.locator(CONSOLE_SHELL).waitFor({ state: 'visible' });
   await page.locator('[data-user-row]').first().click();
   await expect(page.locator('.ua-drawer')).toBeVisible();
   await page.clock.fastForward(3_000);

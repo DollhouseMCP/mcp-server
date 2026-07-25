@@ -126,9 +126,9 @@ export class PortfolioService {
     if (!isConsolePortfolioElementType(type)) {
       return invalidRequest('type path parameter must be a supported portfolio element type.');
     }
-    const parsed = parseElementBody(req.body, { requireName: true, requireContent: true });
+    const parsed = parseElementBody(req.body, { requireName: true, requireContent: false });
     if (parsed.kind === 'problem') return parsed.result;
-    const issues = validateElementPayload(parsed.value);
+    const issues = validateElementPayload(type, parsed.value);
     if (issues.length > 0) return validationFailed(issues);
     try {
       const record = await this.store.create({
@@ -180,7 +180,7 @@ export class PortfolioService {
       content: parsed.value.content ?? existing.content,
       tags: parsed.value.tags ?? existing.tags,
     };
-    const issues = validateElementPayload(candidate);
+    const issues = validateElementPayload(path.type, candidate);
     if (issues.length > 0) return validationFailed(issues);
     try {
       const updated = await this.store.update({
@@ -283,7 +283,7 @@ export class PortfolioService {
       content: parsed.value.content ?? existing?.content ?? '',
       tags: parsed.value.tags ?? existing?.tags ?? [],
     };
-    const issues = validateElementPayload(candidate);
+    const issues = validateElementPayload(path.type, candidate);
     return {
       status: 200,
       body: {
@@ -308,7 +308,7 @@ export class PortfolioService {
     const content = parsed.value.content ?? existing.content;
     let displayName = existing.displayName;
     if (parsed.value.displayName !== undefined) displayName = parsed.value.displayName;
-    const issues = validateElementPayload({
+    const issues = validateElementPayload(existing.type, {
       name: existing.name,
       displayName,
       metadata: parsed.value.metadata ?? existing.metadata,
@@ -503,7 +503,7 @@ function parseSyncBody(body: unknown):
  * anything persists. Exported so the collection install path applies the same
  * caps as the direct create/update routes.
  */
-export function validateElementPayload(input: {
+export function validateElementPayload(type: ConsolePortfolioElementType, input: {
   readonly name?: string;
   readonly displayName?: string | null;
   readonly metadata?: Readonly<Record<string, unknown>>;
@@ -521,13 +521,44 @@ export function validateElementPayload(input: {
   } else if (input.displayName != null && !isValidDisplayString(input.displayName, 200)) {
     issues.push(issue('display_name', 'invalid', 'display_name must be a printable string of at most 200 characters.'));
   }
-  issues.push(...validateMetadataPayload(input.metadata));
-  if (input.content === undefined || input.content.trim() === '') issues.push(issue('content', 'required', 'content is required.'));
+  issues.push(
+    ...validateMetadataPayload(input.metadata),
+    ...validateContentPayload(type, input.content, input.metadata),
+  );
   if (input.content !== undefined && Buffer.byteLength(input.content, 'utf8') > PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES) {
     issues.push(issue('content', 'too_large', 'content must be at most 1 MiB.'));
   }
   issues.push(...validateTagsPayload(input.tags ?? []));
   return issues;
+}
+
+function validateContentPayload(
+  type: ConsolePortfolioElementType,
+  content: string | undefined,
+  metadata: Readonly<Record<string, unknown>> | undefined,
+): readonly PortfolioElementValidationIssueDto[] {
+  const hasContent = typeof content === 'string' && content.trim() !== '';
+  if ((type === 'templates' || type === 'memories') && !hasContent) {
+    return [issue('content', 'required', 'content is required.')];
+  }
+  if ((type === 'personas' || type === 'skills') && !hasContent && !hasInstructions(metadata)) {
+    return [issue('content', 'required', 'content or metadata.instructions is required.')];
+  }
+  if (type === 'agents' && !hasContent && !hasInstructions(metadata) && metadata?.goal === undefined) {
+    return [issue('content', 'required', 'content, metadata.instructions, or metadata.goal is required.')];
+  }
+  if (type === 'ensembles' && !hasContent && !hasInstructions(metadata) && !hasEnsembleElements(metadata)) {
+    return [issue('content', 'required', 'content, metadata.instructions, or metadata.elements is required.')];
+  }
+  return [];
+}
+
+function hasInstructions(metadata: Readonly<Record<string, unknown>> | undefined): boolean {
+  return typeof metadata?.instructions === 'string' && metadata.instructions.trim() !== '';
+}
+
+function hasEnsembleElements(metadata: Readonly<Record<string, unknown>> | undefined): boolean {
+  return Array.isArray(metadata?.elements) && metadata.elements.length > 0;
 }
 
 function validateMetadataPayload(metadata: Readonly<Record<string, unknown>> | undefined): readonly PortfolioElementValidationIssueDto[] {
