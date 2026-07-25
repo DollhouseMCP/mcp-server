@@ -85,9 +85,14 @@
 .operations-health-grid,
 .operations-config-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
   gap: 1rem;
   margin-top: 1rem;
+}
+.operations-health-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+}
+.operations-config-grid {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 24rem), 1fr));
 }
 .operations-health-card { box-shadow: none; }
 .operations-health-card header { border-left: 0.25rem solid var(--teal); }
@@ -133,11 +138,37 @@
 .operations-inline-message--error { color: #b42318; }
 .operations-inline-message--success { color: var(--teal); }
 
-.operations-config-card { box-shadow: none; }
+.operations-config-card {
+  min-width: 0;
+  box-shadow: none;
+}
+.operations-config-card > header {
+  align-items: flex-start;
+}
+.operations-config-card > header > div {
+  min-width: 0;
+}
+.operations-config-card h3 {
+  min-width: 0;
+  font-size: var(--step-1);
+  line-height: 1.25;
+}
+.operations-config-card h3 code {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.operations-config-card > header > .operations-badge {
+  flex: 0 0 auto;
+}
 .operations-config-card > .operations-field { margin: 1rem; }
 .operations-config-meta,
 .operations-inline-feedback { margin: 0 1rem 1rem; color: var(--ink-500); font-size: var(--step--1); }
-.operations-config-card footer { display: grid; grid-template-columns: auto 1fr auto auto; }
+.operations-config-card footer {
+  flex-wrap: wrap;
+}
+.operations-config-card footer > span:empty {
+  flex: 1 1 1rem;
+}
 
 .operations-field,
 .operations-filter-bar label {
@@ -229,7 +260,7 @@ button.operations-session-card:hover { border-color: var(--signal); }
   .operations-header,
   .operations-section-heading { align-items: flex-start; flex-direction: column; }
   .operations-filter-bar { grid-template-columns: 1fr; }
-  .operations-config-card footer { grid-template-columns: 1fr; }
+  .operations-config-card > header { flex-direction: column; }
   .operations-session-card { grid-template-columns: 1fr; }
   .operations-detail-list > div { grid-template-columns: 1fr; gap: 0.2rem; }
 }
