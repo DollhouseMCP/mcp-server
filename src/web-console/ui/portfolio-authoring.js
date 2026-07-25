@@ -99,6 +99,8 @@ const GUIDED_METADATA_KEYS = new Set([
 const TERMINAL_SYNC_STATES = new Set(['succeeded', 'failed']);
 const SYNC_POLL_INTERVAL_MS = 1_000;
 const SYNC_POLL_LIMIT = 60;
+// The portfolio exposes one authoring workspace; opening another closes the
+// previous workspace and removes its document-level listeners first.
 let activeWorkspaceCleanup = null;
 
 export function createPortfolioAuthoring({ host, hasRoute, notify, refresh }) {
@@ -727,11 +729,12 @@ function definitionFromRow(row) {
 function ensembleElementFromRow(row) {
   const elementName = row.querySelector('[data-row-field="name"]').value.trim();
   if (!elementName) return null;
+  const priority = optionalNumber(row.querySelector('[data-row-field="priority"]').value.trim()) ?? 10;
   return compactRecord({
     element_name: elementName,
     element_type: row.querySelector('[data-row-field="type"]').value,
     role: row.querySelector('[data-row-field="role"]').value,
-    priority: Number(row.querySelector('[data-row-field="priority"]').value),
+    priority,
     activation: row.querySelector('[data-row-field="activation"]').value,
     purpose: row.querySelector('[data-row-field="purpose"]').value.trim(),
   });
@@ -891,6 +894,8 @@ async function reloadEditor(form, workspace, context) {
       showEditorMessage(workspace, 'The latest version did not include an ETag, so editing remains blocked.', 'error');
       return false;
     }
+    // Event handlers share this context, so replacing the element also advances
+    // the ETag used by every subsequent save in this editor.
     context.element = { ...response.body, _etag: response.etag };
     resetGuidedMetadata(form);
     form.elements.tags.value = Array.isArray(response.body.tags) ? response.body.tags.join(', ') : '';
@@ -1158,6 +1163,8 @@ function parseMarkdownImport(source) {
 }
 
 function loadYaml(source) {
+  // index.html loads the vendored js-yaml bundle before app.js. Keep the guard
+  // so direct module use fails with an actionable message instead of a TypeError.
   if (!globalThis.jsyaml) throw new Error('YAML support is not available in this browser session.');
   try {
     return globalThis.jsyaml.load(source, { schema: globalThis.jsyaml.JSON_SCHEMA });

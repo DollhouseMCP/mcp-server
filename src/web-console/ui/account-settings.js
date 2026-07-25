@@ -67,7 +67,7 @@ function accountPanel() {
         <button class="security-close" data-account-close type="button" aria-label="Close">&#x2715;</button>
       </header>
       <div class="account-settings-body">
-        <form class="account-settings-section" id="account-profile-form">
+        <form class="account-settings-section" id="account-profile-form" data-settings-form="profile">
           <h3>Profile</h3>
           <p class="account-settings-note">Your username and email are managed by your sign-in provider.</p>
           <label class="portfolio-field"><span>Display name</span><input name="display_name" maxlength="200" disabled></label>
@@ -75,7 +75,7 @@ function accountPanel() {
           <div class="account-settings-feedback" data-profile-feedback aria-live="polite"></div>
           <div class="account-settings-actions"><button class="btn btn-primary" type="submit" disabled>Save profile</button></div>
         </form>
-        <form class="account-settings-section" id="account-theme-form">
+        <form class="account-settings-section" id="account-theme-form" data-settings-form="theme">
           <h3>Appearance</h3>
           <p class="account-settings-note">Theme is the only advanced setting with a stable console contract today.</p>
           <label class="portfolio-field"><span>Theme</span><select name="theme" disabled><option value="light">Light</option><option value="dark">Dark</option></select></label>
@@ -188,6 +188,7 @@ async function settingsConflict(form, toast) {
 }
 
 function applySavedTheme(theme) {
+  // The app shell owns theme application and persists this event contract.
   globalThis.dispatchEvent(new CustomEvent('dh:theme-setting-changed', { detail: { theme } }));
 }
 
@@ -225,7 +226,7 @@ function settingValueLabel(value) {
 
 function setFormBusy(form, busy) {
   form.setAttribute('aria-busy', String(busy));
-  if (form.id === 'account-profile-form') {
+  if (form.dataset.settingsForm === 'profile') {
     form.elements.display_name.disabled = busy || form.dataset.canPatch !== 'true';
     form.querySelector('button[type="submit"]').disabled = busy || form.dataset.canPatch !== 'true';
     return;

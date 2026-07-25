@@ -19,6 +19,7 @@ const SESSIONS_TAB = '.console-tab[data-tab="sessions"]';
 const SESSION_DETAIL_HEADER = '#session-detail-header';
 const CONFIRM_ACTION = '[data-confirm="1"]';
 const ACCOUNT_MENU = '#site-account';
+const PORTFOLIO_CREATE = '#pf-create';
 const EDITOR_FEEDBACK = '[data-editor-feedback]';
 const EDITOR_CONTENT = '.portfolio-editor [name="content"]';
 const EDITOR_INSTRUCTIONS = '.portfolio-editor [name="instructions"]';
@@ -212,9 +213,9 @@ test('portfolio authoring validates drafts, preserves conflicts, and confirms ha
   await loginFromConsole(page);
 
   await expect(page.locator('.portfolio-start-action')).toHaveCount(2);
-  await expect(page.locator('#pf-create')).toContainText('Create new');
+  await expect(page.locator(PORTFOLIO_CREATE)).toContainText('Create new');
   await expect(page.locator('#pf-import')).toContainText('Import file');
-  await page.locator('#pf-create').click();
+  await page.locator(PORTFOLIO_CREATE).click();
   await expect(page.locator(AUTHORING_WORKSPACE)).toBeVisible();
   await expect(page.locator('.portfolio-type-choice')).toHaveCount(6);
   await expect(page.locator('[data-builder-overview]')).toContainText('Building a Persona');
@@ -261,6 +262,81 @@ test('portfolio authoring validates drafts, preserves conflicts, and confirms ha
   await page.locator('#portfolio-confirm [data-confirm="1"]').click();
   await expect(page.locator('[data-name="alpha-persona"]')).toHaveCount(0);
   expect(mock.deletes).toBe(1);
+});
+
+test('portfolio guided authoring serializes agent and ensemble settings', async ({ page }) => {
+  const mock = await installPortfolioUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [name="type"][value="agents"]').check();
+  await page.locator('.portfolio-editor [name="name"]').fill('guided-agent');
+  await page.locator('.portfolio-editor [name="description"]').fill('An agent configured through guided fields.');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('Coordinate the selected elements and tools.');
+  await page.locator('.portfolio-editor [name="agent_goal_template"]').fill('Research {topic} and recommend a path.');
+  await page.locator('.portfolio-editor [name="agent_success_criteria"]').fill('Sources are cited\nTradeoffs are explicit');
+  await page.locator('.portfolio-editor [name="agent_activates_personas"]').fill('technical-writer, reviewer');
+  await page.locator('.portfolio-editor [name="agent_activates_skills"]').fill('web-research');
+  await page.locator('.portfolio-editor [name="agent_tools_allowed"]').fill('search, fetch');
+  await page.locator('.portfolio-editor [name="agent_tools_denied"]').fill('shell');
+  await page.locator('.portfolio-editor [name="agent_risk_tolerance"]').selectOption('conservative');
+  await page.locator('.portfolio-editor [name="agent_max_steps"]').fill('12');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="guided-agent"]')).toBeVisible();
+
+  expect(mock.elements.find(item => item.name === 'guided-agent')?.metadata).toMatchObject({
+    goal: {
+      template: 'Research {topic} and recommend a path.',
+      parameters: [],
+      successCriteria: ['Sources are cited', 'Tradeoffs are explicit'],
+    },
+    activates: {
+      personas: ['technical-writer', 'reviewer'],
+      skills: ['web-research'],
+    },
+    tools: {
+      allowed: ['search', 'fetch'],
+      denied: ['shell'],
+    },
+    autonomy: {
+      riskTolerance: 'conservative',
+      maxAutonomousSteps: 12,
+    },
+  });
+
+  await page.locator(PORTFOLIO_CREATE).click();
+  await page.locator('.portfolio-editor [name="type"][value="ensembles"]').check();
+  await page.locator('.portfolio-editor [name="name"]').fill('guided-ensemble');
+  await page.locator('.portfolio-editor [name="description"]').fill('An ensemble configured through guided fields.');
+  await page.locator(EDITOR_INSTRUCTIONS).fill('Coordinate the ensemble members in priority order.');
+  await page.locator('.portfolio-editor [name="ensemble_activation_strategy"]').selectOption('priority');
+  await page.locator('.portfolio-editor [name="ensemble_conflict_resolution"]').selectOption('merge');
+  await page.locator('.portfolio-editor [name="ensemble_context_sharing"]').selectOption('selective');
+  await page.locator('.portfolio-editor [name="ensemble_allow_nested"]').check();
+  const elementRow = page.locator('[data-repeat-row="ensemble-elements"]');
+  await elementRow.locator('[data-row-field="name"]').fill('technical-writer');
+  await elementRow.locator('[data-row-field="type"]').selectOption('persona');
+  await elementRow.locator('[data-row-field="role"]').selectOption('primary');
+  await elementRow.locator('[data-row-field="activation"]').selectOption('always');
+  await elementRow.locator('[data-row-field="priority"]').fill('');
+  await elementRow.locator('[data-row-field="purpose"]').fill('Draft the final response.');
+  await page.locator(EDITOR_SUBMIT).click();
+  await expect(page.locator('[data-name="guided-ensemble"]')).toBeVisible();
+
+  expect(mock.elements.find(item => item.name === 'guided-ensemble')?.metadata).toMatchObject({
+    activationStrategy: 'priority',
+    conflictResolution: 'merge',
+    contextSharing: 'selective',
+    allowNested: true,
+    elements: [{
+      element_name: 'technical-writer',
+      element_type: 'persona',
+      role: 'primary',
+      priority: 10,
+      activation: 'always',
+      purpose: 'Draft the final response.',
+    }],
+  });
 });
 
 test('portfolio imports a reviewed file without silently overwriting a duplicate', async ({ page }) => {
@@ -319,7 +395,7 @@ test('portfolio create cancel leaves the workspace without saving', async ({ pag
   await installPortfolioUiMock(page);
   await loginFromConsole(page);
 
-  await page.locator('#pf-create').click();
+  await page.locator(PORTFOLIO_CREATE).click();
   await page.locator('.portfolio-editor [data-editor-close]').last().click();
   await expect(page.locator(AUTHORING_WORKSPACE)).toBeHidden();
   await expect(page.locator('#pf-grid')).toBeVisible();
