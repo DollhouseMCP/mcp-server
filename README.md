@@ -1,5 +1,7 @@
 # DollhouseMCP
 
+[![MCP Toplist](https://mcptoplist.com/badge/io.github.DollhouseMCP%2Fmcp-server.svg)](https://mcptoplist.com/server/io.github.DollhouseMCP%2Fmcp-server)
+
 [![npm version](https://img.shields.io/npm/v/@dollhousemcp/mcp-server.svg)](https://www.npmjs.com/package/@dollhousemcp/mcp-server)
 [![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL--3.0-blue.svg)](https://www.gnu.org/licenses/agpl-3.0)
 [![MCP Compatible](https://img.shields.io/badge/MCP-Compatible-green)](https://modelcontextprotocol.io)
