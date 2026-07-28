@@ -208,7 +208,10 @@ function specResponse(method: string, path: string, id: string, body: unknown, s
   }
   if (method === 'PUT') {
     const input = record(body);
-    if (record(input.spec).openapi) state.specWrites += 1;
+    // Accept any recognisable definition, not just OpenAPI 3 — gating on `openapi` alone made a
+    // successful PUT of a Swagger 2.0 document look like no spec had ever been stored.
+    const spec = record(input.spec);
+    if (spec.openapi || spec.swagger) state.specWrites += 1;
   }
   if (state.specWrites === 0) return { status: 404, body: { detail: 'No spec' } };
   return {

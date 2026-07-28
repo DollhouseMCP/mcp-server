@@ -19,10 +19,12 @@ export function createIntegrationDescriptorManager(options) {
     descriptors: [],
     loading: false,
     error: false,
+    truncated: false,
     mode: 'list',
     editing: null,
     spec: null,
     operations: [],
+    specVersion: 0,
   };
 
   manager.host.addEventListener('click', event => onClick(manager, event));
@@ -30,14 +32,16 @@ export function createIntegrationDescriptorManager(options) {
   manager.host.addEventListener('change', event => onChange(manager, event));
 
   return {
-    setDescriptors(descriptors, error = false) {
+    setDescriptors(descriptors, error = false, truncated = false) {
       manager.descriptors = descriptors;
       manager.error = error;
+      manager.truncated = truncated;
       if (manager.mode === 'list') render(manager);
     },
     show() {
       manager.mode = 'list';
       manager.editing = null;
+      manager.specVersion += 1;
       render(manager);
     },
   };
@@ -66,6 +70,7 @@ function renderList(manager) {
       ${canCreate ? '<button class="btn btn-primary" data-descriptor-create type="button">Add integration</button>' : ''}
     </div>
     ${manager.error ? '<div class="int-notice int-notice--error">Custom integrations could not be loaded.</div>' : ''}
+    ${manager.truncated ? '<div class="int-notice">This list is too long to show in full. Some custom integrations are not shown.</div>' : ''}
     ${descriptorList(manager)}`;
 }
 
@@ -303,7 +308,7 @@ function specSummary(manager) {
   if (!manager.spec) return '<div class="int-notice">No API definition has been imported yet.</div>';
   return `
     <div class="int-spec-summary">
-      <strong>${manager.spec.operation_count} operations discovered</strong>
+      <strong>${discoveredSummary(manager.spec.operation_count)}</strong>
       <span>${formatBytes(manager.spec.spec_bytes)} · hash ${escapeHtml(manager.spec.spec_hash.slice(0, 12))}</span>
     </div>`;
 }
@@ -346,6 +351,7 @@ async function onClick(manager, event) {
     manager.editing = null;
     manager.spec = null;
     manager.operations = [];
+    manager.specVersion += 1;
     render(manager);
     return;
   }
@@ -557,6 +563,11 @@ function promotedOperationIds(descriptor) {
   return new Set(Array.isArray(operations) ? operations.filter(entry => typeof entry === 'string') : []);
 }
 
+function discoveredSummary(count) {
+  const plural = count === 1 ? '' : 's';
+  return `${count} operation${plural} discovered`;
+}
+
 function promotionSummary(count) {
   if (count === 0) return 'No operations are exposed as their own tools.';
   const plural = count === 1 ? '' : 's';
@@ -596,12 +607,16 @@ async function openSpec(manager, id) {
   manager.loading = true;
   manager.spec = null;
   manager.operations = [];
+  // Leaving and re-entering this screen leaves the previous fetches in flight; without a
+  // generation check a late response would overwrite whatever is on screen by then.
+  const version = ++manager.specVersion;
   render(manager);
   const path = `${DESCRIPTORS_PATH}/${encodeURIComponent(id)}/spec`;
   const [specResponse, operationsResponse] = await Promise.all([
     get(path).catch(() => null),
     get(`${path}/operations`).catch(() => null),
   ]);
+  if (version !== manager.specVersion) return;
   manager.spec = specResponse?.status === 200 ? specResponse.body : null;
   manager.operations = operationsResponse?.status === 200 && Array.isArray(operationsResponse.body?.operations)
     ? operationsResponse.body.operations
@@ -654,8 +669,11 @@ function parseSpec(text) {
   try {
     value = JSON.parse(text);
   } catch {
+    // Without this the optional call yields undefined rather than throwing, and a missing YAML
+    // parser is reported as malformed content.
+    if (!globalThis.jsyaml) throw new Error('YAML support did not load. Paste the definition as JSON instead.');
     try {
-      value = globalThis.jsyaml?.load(text);
+      value = globalThis.jsyaml.load(text);
     } catch {
       throw new Error('The API definition is not valid JSON or YAML.');
     }
@@ -696,6 +714,9 @@ function staticStrategyLabel(descriptor) {
   return descriptor.static_api_key?.injection?.location === 'basic' ? 'Basic authentication' : 'API key';
 }
 
+// Deliberately narrower than the connect modal's same-named helper: this form survives a failed
+// save so the operator can correct it, and wiping every input would discard their whole descriptor.
+// Only the secrets are cleared.
 function clearCredentialFields(form) {
   for (const input of form?.querySelectorAll('input[type="password"]') ?? []) input.value = '';
 }

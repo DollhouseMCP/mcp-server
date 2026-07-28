@@ -29,6 +29,7 @@ const state = {
   loading: true,
   catalogError: false,
   descriptorError: false,
+  descriptorsTruncated: false,
   view: 'connections',
 };
 
@@ -71,7 +72,7 @@ async function load() {
     get('/me/integrations', { signal: controller.signal }).catch(() => null),
     canManageDescriptors()
       ? loadAllDescriptors(controller.signal)
-      : Promise.resolve({ descriptors: [], error: false }),
+      : Promise.resolve({ descriptors: [], error: false, truncated: false }),
   ]);
   if (controller.signal.aborted || version !== loadVersion) return;
 
@@ -81,13 +82,14 @@ async function load() {
     : new Map(catalogResponse.body.integrations.map(status => [status.provider, status]));
   state.descriptors = descriptorsResult.descriptors;
   state.descriptorError = descriptorsResult.error;
+  state.descriptorsTruncated = descriptorsResult.truncated;
 
   await loadMissingProviderStatuses(controller, version);
   if (controller.signal.aborted || version !== loadVersion) return;
 
   state.loading = false;
   renderConnections();
-  descriptorManager?.setDescriptors(state.descriptors, state.descriptorError);
+  descriptorManager?.setDescriptors(state.descriptors, state.descriptorError, state.descriptorsTruncated);
 }
 
 async function loadAllDescriptors(signal) {
@@ -98,15 +100,17 @@ async function loadAllDescriptors(signal) {
     const query = cursor ? `?cursor=${encodeURIComponent(cursor)}` : '';
     const response = await get(`${DESCRIPTORS_PATH}${query}`, { signal }).catch(() => null);
     if (response?.status !== 200 || !Array.isArray(response.body?.descriptors)) {
-      return { descriptors, error: true };
+      return { descriptors, error: true, truncated: false };
     }
     descriptors.push(...response.body.descriptors);
     const nextCursor = typeof response.body.next_cursor === 'string' ? response.body.next_cursor : null;
-    if (!nextCursor || seenCursors.has(nextCursor)) return { descriptors, error: false };
+    if (!nextCursor || seenCursors.has(nextCursor)) return { descriptors, error: false, truncated: false };
     seenCursors.add(nextCursor);
     cursor = nextCursor;
   }
-  return { descriptors, error: true };
+  // Page cap reached: what we have is valid, there is simply more of it. Reporting this as a load
+  // failure would be wrong, and reporting nothing would hide that the list is incomplete.
+  return { descriptors, error: false, truncated: true };
 }
 
 async function loadMissingProviderStatuses(controller, version) {
@@ -295,8 +299,13 @@ async function connect(providerId) {
     notify(problemDetail(response, 'The connection could not be started.'), 'error');
     return;
   }
-  if (typeof response.body?.authorize_url === 'string' && response.body.authorize_url) {
-    globalThis.location.href = response.body.authorize_url;
+  const authorizeUrl = httpsUrlOrNull(response.body?.authorize_url);
+  if (authorizeUrl) {
+    globalThis.location.href = authorizeUrl;
+    return;
+  }
+  if (response.body?.authorize_url) {
+    notify('The provider returned an unusable sign-in address.', 'error');
     return;
   }
   notify('Integration connected.', 'success');
@@ -446,6 +455,20 @@ function rawFormValue(data, name) {
   return typeof value === 'string' ? value : '';
 }
 
+// Descriptors are stored server-side and only ever reached over HTTPS, but this is the one place a
+// server-supplied string becomes a navigation, so the scheme is checked here too rather than trusted.
+function httpsUrlOrNull(value) {
+  if (typeof value !== 'string' || !value) return null;
+  try {
+    return new URL(value).protocol === 'https:' ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// Clears every field: this form only exists for the duration of one connect, so nothing here is
+// worth preserving. The descriptor editor deliberately clears only password inputs — see the note
+// on its own clearCredentialFields.
 function clearCredentialFields(form) {
   for (const input of form?.querySelectorAll('input') ?? []) input.value = '';
 }

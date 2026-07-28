@@ -477,7 +477,7 @@ test('custom integration authoring keeps secrets write-only and imports OpenAPI 
   await expect(page.locator('[name="spec_text"]')).toHaveValue(/openapi: 3\.0\.3/u);
   await page.locator('#int-spec-form button[type="submit"]').click();
 
-  await expect(page.locator('.int-spec-summary')).toContainText('1 operations discovered');
+  await expect(page.locator('.int-spec-summary')).toContainText('1 operation discovered');
   await expect(page.locator(INTEGRATION_OPERATION_ROW)).toContainText('listTasks');
   expect(mock.specWrites).toBe(1);
   expect(mock.descriptorWrites).toBe(2);
