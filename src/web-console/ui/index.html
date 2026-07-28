@@ -15,6 +15,7 @@
   <link rel="stylesheet" href="admin-metrics.css">
   <link rel="stylesheet" href="operations.css">
   <link rel="stylesheet" href="integrations.css">
+  <link rel="stylesheet" href="audit.css">
   <link rel="stylesheet" href="portfolio-actions.css">
 </head>
 <body>
@@ -68,6 +69,7 @@
           <!-- Admin-only: each revealed by app.js only while elevated AND holding the matching capability. -->
           <button class="console-tab console-tab--admin" data-tab="users" data-admin-cap="console:admin:accounts" hidden>Users</button>
           <button class="console-tab console-tab--admin" data-tab="operations" data-admin-cap="console:admin:operate" hidden>Operations</button>
+          <button class="console-tab console-tab--admin" data-tab="audit" data-admin-cap="console:admin:audit" hidden>Audit</button>
         </nav>
       </div>
     </header>
@@ -93,6 +95,9 @@
       </section>
       <section id="tab-operations" class="tab-panel" hidden aria-label="Operations">
         <div class="panel-placeholder">Loading operations…</div>
+      </section>
+      <section id="tab-audit" class="tab-panel" hidden aria-label="Audit">
+        <div class="panel-placeholder">Loading audit…</div>
       </section>
     </main>
   </div>

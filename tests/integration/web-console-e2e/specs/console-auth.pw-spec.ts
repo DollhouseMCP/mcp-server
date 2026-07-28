@@ -10,6 +10,7 @@ import { installPortfolioUiMock } from '../harness/portfolioUiMock.js';
 import { installSelfServiceUiMock } from '../harness/selfServiceUiMock.js';
 import { installSessionUiMock } from '../harness/sessionUiMock.js';
 import { installIntegrationsUiMock } from '../harness/integrationsUiMock.js';
+import { installAuditUiMock } from '../harness/auditUiMock.js';
 import {
   installOperationsUiMock,
   OPERATIONS_PRIVATE_MARKER,
@@ -155,11 +156,7 @@ async function stepUpWithTotp(page: Page, totp: TOTP): Promise<void> {
 }
 
 async function openMockOperations(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: true, capabilities: ['console:admin:operate'] },
-    }));
-  });
+  await setElevation(page, ['console:admin:operate']);
   await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
   await page.locator(OPERATIONS_TAB).click();
 }
@@ -489,6 +486,110 @@ test('custom integration authoring keeps secrets write-only and imports OpenAPI 
   await expect(customCard).toHaveCount(0);
 });
 
+const AUDIT_TAB = '.console-tab[data-tab="audit"]';
+const AUDIT_ADMIN_PANEL = '[data-audit-panel="admin"]';
+const AUDIT_ROW = '.audit-row';
+
+async function setElevation(page: Page, capabilities: readonly string[], active = true): Promise<void> {
+  await page.evaluate(({ caps, isActive }) => {
+    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
+      detail: { active: isActive, capabilities: caps },
+    }));
+  }, { caps: capabilities, isActive: active });
+}
+
+async function openAuditTab(page: Page): Promise<void> {
+  await setElevation(page, ['console:admin:audit']);
+  await page.locator(AUDIT_TAB).click();
+}
+
+test('audit lists page through records and report integrity without inventing filters', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await expect(page.locator('[data-audit-nav]')).toHaveText(['Admin actions', 'Approvals', 'Authentication']);
+
+  // The backend exposes no filter parameters, so the surface must not offer any.
+  await expect(panel.locator('input, select')).toHaveCount(0);
+
+  // 75 seeded records at a 50 page size: one full page, then the remainder.
+  await expect(panel.locator(AUDIT_ROW)).toHaveCount(51); // 50 rows + header
+  await expect(panel.locator('[data-audit-previous]')).toBeDisabled();
+  await panel.locator('[data-audit-next]').click();
+  await expect.poll(() => panel.locator(AUDIT_ROW).count()).toBe(26);
+  await expect(panel.locator('[data-audit-previous]')).toBeEnabled();
+  await expect(panel.locator('[data-audit-next]')).toBeDisabled();
+
+  // Integrity is reported as recorded, including records that failed verification.
+  await panel.locator('[data-audit-previous]').click();
+  await expect(panel.locator('.audit-chip--verified').first()).toBeVisible();
+  await expect(panel.locator('.audit-chip--failed').first()).toBeVisible();
+
+  // An unverifiable approval says so rather than implying it was verified.
+  await page.locator('[data-audit-nav="approvals"]').click();
+  const approvals = page.locator('[data-audit-panel="approvals"]');
+  await expect(approvals.locator('.audit-chip--not_available')).toContainText('not recorded');
+  expect(mock.listReads).toBeGreaterThan(0);
+});
+
+test('an audit record that needs fresher elevation says so instead of failing silently', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.detailStatus = 401; // list tier satisfied, detail tier is not
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-open]').first().click();
+
+  await expect(panel.locator('.audit-detail')).toContainText('more recent sign-in');
+  expect(mock.detailReads).toBe(1);
+  // The list is still usable: a stricter tier on one route must not break the page.
+  await expect(panel.locator(AUDIT_ROW).first()).toBeVisible();
+});
+
+test('the audit export finishes as a bounded download rather than a live stream', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-export]').click();
+
+  await expect(panel.locator('a[download]')).toBeVisible();
+  await expect(panel.locator('[data-audit-export-status]')).toContainText('3 records ready');
+  // Terminal: the run ends on the server's `end` frame and is not reopened.
+  await expect(panel.locator('[data-audit-export-cancel]')).toHaveCount(0);
+  expect(mock.exportReads).toBe(1);
+  await page.waitForTimeout(1000);
+  expect(mock.exportReads, 'a finished export must not reconnect').toBe(1);
+});
+
+test('an audit export refused for elevation reports it and offers no partial download', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.exportStatus = 401;
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-export]').click();
+
+  await expect(panel.locator('.audit-export-status--error')).toContainText('more recent sign-in');
+  await expect(panel.locator('a[download]')).toHaveCount(0);
+});
+
+test('the audit tab stays hidden without its capability', async ({ page }) => {
+  await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await setElevation(page, ['console:admin:accounts']);
+  await expect(page.locator(AUDIT_TAB)).toBeHidden();
+});
+
 test('a malformed authorization parameter is rejected before anything is saved', async ({ page }) => {
   await includeManifestRoutes(page, INTEGRATION_ROUTES);
   const mock = await installIntegrationsUiMock(page);
@@ -741,11 +842,7 @@ test('operations remains usable when a partial deployment omits health', async (
   ]));
   await loginFromConsole(page);
 
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: true, capabilities: ['console:admin:operate'] },
-    }));
-  });
+  await setElevation(page, ['console:admin:operate']);
   await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
   await page.locator(OPERATIONS_TAB).click();
   await expect(page.locator(OPERATIONS_HEALTH_NAV)).toHaveCount(0);
@@ -760,22 +857,14 @@ test('operations requires its capability and stops polling when privilege or vis
   const mock = await installOperationsUiMock(page);
   await loginFromConsole(page);
 
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: true, capabilities: ['console:admin:accounts'] },
-    }));
-  });
+  await setElevation(page, ['console:admin:accounts']);
   await expect(page.locator(OPERATIONS_TAB)).toBeHidden();
 
   await page.clock.install();
   await openMockOperations(page);
   await expect.poll(() => mock.healthReads).toBeGreaterThan(0);
   const beforeStepDown = mock.healthReads;
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: false, capabilities: [] },
-    }));
-  });
+  await setElevation(page, [], false);
   await page.clock.fastForward(11_000);
   expect(mock.healthReads, 'step-down aborts and stops operator polling').toBe(beforeStepDown);
 

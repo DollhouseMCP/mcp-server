@@ -74,6 +74,17 @@ const TAB_MODULES = {
     load: () => import('./users-admin.js'),
     requiredRoutes: [['GET', '/admin/accounts/users']],
   },
+  audit: {
+    load: () => import('./audit.js'),
+    requiredRoutes: [],
+    // Each log is independently composable, so the tab appears when any one of
+    // them is present rather than requiring the full set.
+    requiredAnyRoutes: [
+      ['GET', '/admin/audit/admin'],
+      ['GET', '/admin/audit/approvals'],
+      ['GET', '/admin/audit/authentication'],
+    ],
+  },
 };
 // Memoized load+init promise per tab, so callers (e.g. the Sessions→Logs jump)
 // can await a module being ready without racing the lazy import.
@@ -115,10 +126,10 @@ function ensureTabModule(name) {
       roleCatalog: consoleMetadata.roleCatalog,
       hasRoute: consoleMetadata.hasRoute,
     });
-  })().catch(err => {
+  })().catch(error => {
     tabModulePromises.delete(name);
     if (panel) panel.innerHTML = '<div class="panel-placeholder">Failed to load this section.</div>';
-    console.error(`[console] tab module "${name}" failed to load`, err);
+    console.error(`[console] tab module "${name}" failed to load`, error);
   });
   tabModulePromises.set(name, loading);
   return loading;
