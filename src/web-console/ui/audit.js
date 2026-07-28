@@ -186,6 +186,9 @@ function createAuditListView({ path, detailPath, exportPath = null, empty, colum
         }
         exportRun.count = records.length;
         if (records.length >= EXPORT_RECORD_CAP) {
+          // Stopping from inside the stream's own callback is safe: stop() only
+          // aborts the controller, and openStream suppresses onError once the
+          // signal is aborted, so nothing re-enters this handler.
           exportStream?.stop();
           finishExport(records, { capped: true });
           return;

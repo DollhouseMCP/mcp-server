@@ -352,8 +352,8 @@ export function createIdentityTriageView({ canLookup }) {
       </div>
       <div data-unlinked-list></div>
       <div class="acct-pager">
-        <button class="btn btn-ghost" data-unlinked-previous type="button">Previous</button>
-        <button class="btn btn-ghost" data-unlinked-next type="button">Next</button>
+        <button class="btn btn-ghost" data-unlinked-previous type="button"${pager.hasPrevious() ? '' : ' disabled'}>Previous</button>
+        <button class="btn btn-ghost" data-unlinked-next type="button"${pager.nextCursor() ? '' : ' disabled'}>Next</button>
       </div>`;
     repaint();
   }
