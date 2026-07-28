@@ -489,6 +489,39 @@ test('custom integration authoring keeps secrets write-only and imports OpenAPI 
   await expect(customCard).toHaveCount(0);
 });
 
+test('a malformed authorization parameter is rejected before anything is saved', async ({ page }) => {
+  await includeManifestRoutes(page, INTEGRATION_ROUTES);
+  const mock = await installIntegrationsUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(INTEGRATIONS_TAB).click();
+  await page.locator('[data-int-view="descriptors"]').click();
+  await page.locator('[data-descriptor-create]').click();
+
+  await page.locator('[name="display_name"]').fill('Param Check');
+  await page.locator('[name="provider"]').fill('param-check');
+  await page.locator('[name="category"]').fill('Testing');
+  await page.locator('[name="api_hosts"]').fill('api.param-check.test');
+  await page.locator('[name="oauth_client_id"]').fill('param-client');
+  await page.locator('[name="oauth_authorization_url"]').fill('https://auth.param-check.test/authorize');
+  await page.locator('[name="oauth_token_url"]').fill('https://auth.param-check.test/token');
+
+  await page.locator('.int-auth-advanced > summary').click();
+  const params = page.locator('[name="oauth_authorization_params"]');
+  await params.fill('audience=https://api.param-check.test\nprompt');
+  await page.locator('#int-descriptor-form button[type="submit"]').click();
+
+  // Rejected in the browser: the operator is told which line is wrong and nothing reaches the API.
+  await expect(page.locator('#int-descriptor-form [data-form-error]')).toContainText('name=value');
+  expect(mock.descriptorWrites).toBe(0);
+
+  // The same form saves once the line is well-formed, so the guard isn't rejecting valid input.
+  await params.fill('audience=https://api.param-check.test\nprompt=consent');
+  await page.locator('#int-descriptor-form button[type="submit"]').click();
+  await expect(page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Param Check' })).toBeVisible();
+  expect(mock.descriptorWrites).toBe(1);
+});
+
 test('selecting discovered operations promotes them without disturbing the remote MCP settings', async ({ page }) => {
   await includeManifestRoutes(page, INTEGRATION_ROUTES);
   const mock = await installIntegrationsUiMock(page);

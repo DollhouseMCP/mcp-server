@@ -287,6 +287,9 @@ async function connect(providerId) {
   const provider = providerCatalog().find(item => item.id === providerId);
   if (!provider) return;
   let body = { return_to: '/me/integrations' };
+  // GitHub alone needs the scope named at connect time so portfolio writes work once connected.
+  // It is not a general connect parameter — do not extend it to other providers; a provider that
+  // needs extra parameters should carry them on its descriptor instead.
   if (provider.id === 'github') body.contents_permission = 'write';
   if (provider.descriptor?.auth_strategy === 'static_api_key') {
     const credentials = await credentialDialog(provider);
