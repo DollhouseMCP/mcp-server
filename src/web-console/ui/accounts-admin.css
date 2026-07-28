@@ -1,0 +1,195 @@
+/* Account governance surfaces inside the Users tab: allowlist, identity triage,
+   and bootstrap status. The `ua-nav` rules belong here rather than to the
+   account list, which keeps its own styles in console.css. */
+
+.ua-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.ua-nav-item {
+  padding: 7px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-500);
+  font: inherit;
+  font-size: var(--step--1);
+  cursor: pointer;
+}
+
+.ua-nav-item:hover { color: var(--ink-900); }
+.ua-nav-item:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+
+.ua-nav-item.is-active {
+  color: var(--ink-900);
+  border-bottom-color: var(--signal);
+  font-weight: 600;
+}
+
+.acct-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+
+.acct-sub {
+  margin: 0;
+  color: var(--ink-500);
+  font-size: var(--step--1);
+  max-width: 68ch;
+}
+
+.acct-card {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.acct-card h3 {
+  margin: 0 0 4px;
+  font-family: var(--font-heading);
+  font-size: var(--step-0);
+}
+
+.acct-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.acct-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 170px;
+}
+
+.acct-field--wide { flex: 1 1 280px; }
+
+.acct-field > span {
+  font-size: var(--step--1);
+  color: var(--ink-700);
+}
+
+.acct-field input,
+.acct-field select {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink-900);
+  font: inherit;
+}
+
+.acct-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.acct-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(120px, 0.8fr) minmax(140px, 1.2fr) minmax(140px, 0.9fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  font-size: var(--step--1);
+  min-width: 640px;
+}
+
+.acct-row--triage {
+  grid-template-columns: minmax(140px, 0.8fr) minmax(220px, 1.6fr) minmax(150px, 0.9fr);
+  min-width: 520px;
+}
+
+.acct-row:first-child { border-top: 0; }
+
+.acct-row--head {
+  background: var(--surface-1);
+  color: var(--ink-500);
+  font-weight: 600;
+}
+
+.acct-row > span { overflow-wrap: anywhere; }
+
+.acct-row-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.acct-danger { color: #dc2626; } /* NOSONAR — destructive */
+
+.acct-detail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 18px;
+  margin: 12px 0 0;
+}
+
+.acct-detail dt {
+  color: var(--ink-500);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.acct-detail dd {
+  margin: 2px 0 0;
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.acct-pager {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.acct-loading,
+.acct-empty {
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-500);
+  font-size: var(--step--1);
+  text-align: center;
+}
+
+.acct-notice {
+  margin-bottom: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  font-size: var(--step--1);
+}
+
+.acct-notice--error { border-color: rgba(239, 68, 68, 0.35); }
+
+.acct-note-input {
+  width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink-900);
+  font: inherit;
+  font-size: var(--step--1);
+}

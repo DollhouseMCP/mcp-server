@@ -1,0 +1,217 @@
+/* Audit workspace: admin action, approval, and authentication logs. */
+
+.audit-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.audit-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: var(--step-1);
+  color: var(--ink-900);
+}
+
+.audit-sub {
+  margin: 0 0 14px;
+  color: var(--ink-500);
+  font-size: var(--step--1);
+}
+
+.audit-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.audit-nav-item {
+  padding: 7px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-500);
+  font: inherit;
+  font-size: var(--step--1);
+  cursor: pointer;
+}
+
+.audit-nav-item:hover { color: var(--ink-900); }
+.audit-nav-item:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+
+.audit-nav-item.is-active {
+  color: var(--ink-900);
+  border-bottom-color: var(--signal);
+  font-weight: 600;
+}
+
+.audit-list-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.audit-export {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.audit-export-status {
+  color: var(--ink-500);
+  font-size: var(--step--1);
+}
+
+.audit-export-status--error { color: var(--ink-700); }
+
+.audit-table {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.9fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(120px, 1fr) minmax(90px, 0.6fr) minmax(90px, 0.6fr) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 9px 12px;
+  border-top: 1px solid var(--line);
+  font-size: var(--step--1);
+  min-width: 720px;
+}
+
+.audit-row:first-child { border-top: 0; }
+
+.audit-row--head {
+  background: var(--surface-1);
+  color: var(--ink-500);
+  font-weight: 600;
+}
+
+.audit-row > span {
+  overflow-wrap: anywhere;
+}
+
+.audit-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-700);
+  font-size: 11px;
+}
+
+/* Integrity is a factual state, not a judgement: an unverifiable record is
+   reported plainly rather than styled as a failure. */
+.audit-chip--verified { border-color: rgba(16, 185, 129, 0.35); }
+.audit-chip--not_available { border-color: var(--line); font-style: italic; }
+.audit-chip--failed,
+.audit-chip--broken { border-color: rgba(239, 68, 68, 0.35); }
+
+.audit-pager {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+.audit-loading,
+.audit-empty {
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-500);
+  font-size: var(--step--1);
+  text-align: center;
+}
+
+.audit-notice {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  font-size: var(--step--1);
+}
+
+.audit-notice--error { border-color: rgba(239, 68, 68, 0.35); }
+
+.audit-detail {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.audit-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.audit-detail-head h3 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--step-0);
+}
+
+.audit-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+  gap: 10px 18px;
+  margin: 0;
+}
+
+.audit-detail-grid dt {
+  color: var(--ink-500);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.audit-detail-grid dd {
+  margin: 2px 0 0;
+  font-size: var(--step--1);
+  overflow-wrap: anywhere;
+}
+
+.audit-detail-note {
+  margin: 12px 0 0;
+  color: var(--ink-500);
+  font-size: var(--step--1);
+}
+
+.audit-payload {
+  margin-top: 14px;
+}
+
+.audit-payload h4 {
+  margin: 0 0 6px;
+  font-size: var(--step--1);
+  color: var(--ink-700);
+}
+
+.audit-payload pre {
+  margin: 0;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  font-size: 11px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

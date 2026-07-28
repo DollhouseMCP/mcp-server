@@ -1,0 +1,237 @@
+/* Security administration: signing keys and authentication policy. */
+
+.secadmin-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 4px;
+}
+
+.secadmin-title {
+  font-family: var(--font-heading);
+  font-weight: 700;
+  font-size: var(--step-1);
+  color: var(--ink-900);
+}
+
+.secadmin-sub {
+  margin: 0 0 14px;
+  color: var(--ink-500);
+  font-size: var(--step--1);
+}
+
+.secadmin-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.secadmin-nav-item {
+  padding: 7px 13px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--ink-500);
+  font: inherit;
+  font-size: var(--step--1);
+  cursor: pointer;
+}
+
+.secadmin-nav-item:hover { color: var(--ink-900); }
+.secadmin-nav-item:focus-visible { outline: 2px solid var(--signal); outline-offset: -2px; }
+
+.secadmin-nav-item.is-active {
+  color: var(--ink-900);
+  border-bottom-color: var(--signal);
+  font-weight: 600;
+}
+
+.secadmin-head {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 8px;
+}
+
+.secadmin-card {
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+}
+
+.secadmin-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.secadmin-card h3 {
+  margin: 0;
+  font-family: var(--font-heading);
+  font-size: var(--step-0);
+}
+
+.secadmin-card-sub {
+  display: block;
+  color: var(--ink-500);
+  font-size: var(--step--1);
+}
+
+.secadmin-key-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.secadmin-key {
+  display: grid;
+  grid-template-columns: minmax(160px, 1fr) minmax(0, 2fr) auto;
+  gap: 12px;
+  align-items: center;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.secadmin-key:first-child { border-top: 0; }
+
+.secadmin-key-id {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-items: flex-start;
+  overflow-wrap: anywhere;
+}
+
+.secadmin-key-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 18px;
+  margin: 0;
+  font-size: var(--step--1);
+}
+
+.secadmin-key-meta dt {
+  color: var(--ink-500);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.secadmin-key-meta dd { margin: 0; }
+
+.secadmin-key-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+}
+
+.secadmin-chip {
+  display: inline-block;
+  padding: 1px 7px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  color: var(--ink-700);
+  font-size: 11px;
+}
+
+.secadmin-chip--active { border-color: rgba(16, 185, 129, 0.35); }
+.secadmin-chip--verifying { border-color: rgba(245, 158, 11, 0.35); }
+.secadmin-chip--retired,
+.secadmin-chip--deleted { font-style: italic; }
+
+.secadmin-danger { color: #dc2626; } /* NOSONAR — destructive */
+
+.secadmin-invariants {
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  font-size: var(--step--1);
+}
+
+.secadmin-invariants li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.secadmin-policy-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.secadmin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-width: 320px;
+}
+
+.secadmin-field > span {
+  font-size: var(--step--1);
+  color: var(--ink-700);
+}
+
+.secadmin-field input {
+  padding: 7px 9px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink-900);
+  font: inherit;
+}
+
+.secadmin-field small { color: var(--ink-500); font-size: 11px; }
+
+.secadmin-form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.secadmin-receipt {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  align-items: center;
+  margin-bottom: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  font-size: var(--step--1);
+}
+
+.secadmin-receipt--failed { border-color: rgba(239, 68, 68, 0.35); }
+
+.secadmin-loading,
+.secadmin-empty {
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--ink-500);
+  font-size: var(--step--1);
+  text-align: center;
+}
+
+.secadmin-notice {
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-1);
+  font-size: var(--step--1);
+}
+
+.secadmin-notice--error { border-color: rgba(239, 68, 68, 0.35); }

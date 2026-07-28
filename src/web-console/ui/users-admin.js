@@ -26,6 +26,7 @@
 
 import { get, post, del } from './api.js';
 import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
+import { createAllowlistView, createIdentityTriageView, createBootstrapView } from './accounts-admin.js';
 
 const DRAWER_ROOT_SELECTOR = '#ua-drawer-root';
 const USER_ROUTES = {
@@ -51,6 +52,7 @@ const state = {
   roleCatalog: { roles: [], grants: {} }, hasRoute: () => false,
 };
 let globalListenersBound = false;
+let governanceSections = [];
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
@@ -58,7 +60,15 @@ export async function init(panelEl, ctx = {}) {
   state.roleCatalog = normalizeRoleCatalog(ctx.roleCatalog);
   state.hasRoute = ctx.hasRoute || state.hasRoute;
   state.selectedId = null;
+  governanceSections = governanceDefinitions();
   host.innerHTML = shell();
+  for (const section of governanceSections) {
+    section.view.mount(host.querySelector(`[data-ua-panel="${section.id}"]`));
+  }
+  host.querySelector('#ua-nav')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-ua-nav]');
+    if (button) selectUaSection(button.dataset.uaNav);
+  });
   host.querySelector('#ua-refresh').addEventListener('click', load);
   host.querySelector('#ua-invite')?.addEventListener('click', openInvite);
   bindGlobalListeners();
@@ -169,8 +179,78 @@ function shell() {
       ${hasUserRoute('invite') ? '<button class="btn btn-primary" id="ua-invite" type="button">+ Invite user</button>' : ''}
     </div>
   </div>
-  <div id="ua-list"></div>
-  <div id="ua-drawer-root"></div>`;
+  ${navMarkup()}
+  <div data-ua-panel="accounts">
+    <div id="ua-list"></div>
+    <div id="ua-drawer-root"></div>
+  </div>
+  ${governancePanelsMarkup()}`;
+}
+
+/**
+ * The account list keeps its own markup untouched; the governance surfaces are
+ * separate panels beside it so this tab gains sections without the list changing.
+ */
+function governancePanelsMarkup() {
+  return governanceSections.map(section => `<div data-ua-panel="${section.id}" hidden></div>`).join('');
+}
+
+function navMarkup() {
+  if (governanceSections.length === 0) return '';
+  const items = [
+    navItemMarkup('accounts', 'Accounts', true),
+    ...governanceSections.map(section => navItemMarkup(section.id, section.label, false)),
+  ];
+  return `
+    <div class="ua-nav" id="ua-nav" role="tablist" aria-label="Account administration views">
+      ${items.join('')}
+    </div>`;
+}
+
+function navItemMarkup(id, label, active) {
+  return `<button class="ua-nav-item${active ? ' is-active' : ''}" data-ua-nav="${id}" role="tab" aria-selected="${active}" type="button">${escapeHtml(label)}</button>`;
+}
+
+function governanceDefinitions() {
+  const definitions = [];
+  if (state.hasRoute('GET', '/admin/accounts/allowlist')) {
+    definitions.push({
+      id: 'allowlist',
+      label: 'Allowlist',
+      view: createAllowlistView({
+        notify: (text, tone) => notify(text, tone),
+        canAdd: state.hasRoute('POST', '/admin/accounts/allowlist'),
+        canEdit: state.hasRoute('PATCH', '/admin/accounts/allowlist/:id'),
+        canRemove: state.hasRoute('DELETE', '/admin/accounts/allowlist/:id'),
+      }),
+    });
+  }
+  if (state.hasRoute('GET', '/admin/accounts/identities/unlinked')) {
+    definitions.push({
+      id: 'triage',
+      label: 'Identity triage',
+      view: createIdentityTriageView({
+        canLookup: state.hasRoute('GET', '/admin/accounts/correlations/:account_correlation_id'),
+      }),
+    });
+  }
+  if (state.hasRoute('GET', '/admin/accounts/bootstrap')) {
+    definitions.push({ id: 'bootstrap', label: 'Bootstrap', view: createBootstrapView() });
+  }
+  return definitions;
+}
+
+function selectUaSection(id) {
+  const panels = [{ id: 'accounts' }, ...governanceSections];
+  for (const section of panels) {
+    const active = section.id === id;
+    const button = host.querySelector(`[data-ua-nav="${section.id}"]`);
+    const panel = host.querySelector(`[data-ua-panel="${section.id}"]`);
+    button?.classList.toggle('is-active', active);
+    button?.setAttribute('aria-selected', String(active));
+    if (panel) panel.hidden = !active;
+    if (active) section.view?.activate();
+  }
 }
 
 function renderList() {

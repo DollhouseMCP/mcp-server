@@ -10,6 +10,9 @@ import { installPortfolioUiMock } from '../harness/portfolioUiMock.js';
 import { installSelfServiceUiMock } from '../harness/selfServiceUiMock.js';
 import { installSessionUiMock } from '../harness/sessionUiMock.js';
 import { installIntegrationsUiMock } from '../harness/integrationsUiMock.js';
+import { installAuditUiMock } from '../harness/auditUiMock.js';
+import { installSecurityAdminUiMock } from '../harness/securityAdminUiMock.js';
+import { installAccountsAdminUiMock } from '../harness/accountsAdminUiMock.js';
 import {
   installOperationsUiMock,
   OPERATIONS_PRIVATE_MARKER,
@@ -155,11 +158,7 @@ async function stepUpWithTotp(page: Page, totp: TOTP): Promise<void> {
 }
 
 async function openMockOperations(page: Page): Promise<void> {
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: true, capabilities: ['console:admin:operate'] },
-    }));
-  });
+  await setElevation(page, ['console:admin:operate']);
   await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
   await page.locator(OPERATIONS_TAB).click();
 }
@@ -489,6 +488,363 @@ test('custom integration authoring keeps secrets write-only and imports OpenAPI 
   await expect(customCard).toHaveCount(0);
 });
 
+const AUDIT_TAB = '.console-tab[data-tab="audit"]';
+const AUDIT_ADMIN_PANEL = '[data-audit-panel="admin"]';
+const AUDIT_ROW = '.audit-row';
+
+async function setElevation(page: Page, capabilities: readonly string[], active = true): Promise<void> {
+  await page.evaluate(({ caps, isActive }) => {
+    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
+      detail: { active: isActive, capabilities: caps },
+    }));
+  }, { caps: capabilities, isActive: active });
+}
+
+async function openAuditTab(page: Page): Promise<void> {
+  await setElevation(page, ['console:admin:audit']);
+  await page.locator(AUDIT_TAB).click();
+}
+
+test('audit lists page through records and report integrity without inventing filters', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await expect(page.locator('[data-audit-nav]')).toHaveText(['Admin actions', 'Approvals', 'Authentication']);
+
+  // The backend exposes no filter parameters, so the surface must not offer any.
+  await expect(panel.locator('input, select')).toHaveCount(0);
+
+  // 75 seeded records at a 50 page size: one full page, then the remainder.
+  await expect(panel.locator(AUDIT_ROW)).toHaveCount(51); // 50 rows + header
+  await expect(panel.locator('[data-audit-previous]')).toBeDisabled();
+  await panel.locator('[data-audit-next]').click();
+  await expect.poll(() => panel.locator(AUDIT_ROW).count()).toBe(26);
+  await expect(panel.locator('[data-audit-previous]')).toBeEnabled();
+  await expect(panel.locator('[data-audit-next]')).toBeDisabled();
+
+  // Integrity is reported as recorded, including records that failed verification.
+  await panel.locator('[data-audit-previous]').click();
+  await expect(panel.locator('.audit-chip--verified').first()).toBeVisible();
+  await expect(panel.locator('.audit-chip--failed').first()).toBeVisible();
+
+  // An unverifiable approval says so rather than implying it was verified.
+  await page.locator('[data-audit-nav="approvals"]').click();
+  const approvals = page.locator('[data-audit-panel="approvals"]');
+  await expect(approvals.locator('.audit-chip--not_available')).toContainText('not recorded');
+  expect(mock.listReads).toBeGreaterThan(0);
+});
+
+test('an audit record that needs fresher elevation says so instead of failing silently', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.detailStatus = 401; // list tier satisfied, detail tier is not
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-open]').first().click();
+
+  await expect(panel.locator('.audit-detail')).toContainText('more recent sign-in');
+  expect(mock.detailReads).toBe(1);
+  // The list is still usable: a stricter tier on one route must not break the page.
+  await expect(panel.locator(AUDIT_ROW).first()).toBeVisible();
+});
+
+test('the audit export finishes as a bounded download rather than a live stream', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-export]').click();
+
+  await expect(panel.locator('a[download]')).toBeVisible();
+  await expect(panel.locator('[data-audit-export-status]')).toContainText('3 records ready');
+  // Terminal: the run ends on the server's `end` frame and is not reopened.
+  await expect(panel.locator('[data-audit-export-cancel]')).toHaveCount(0);
+  expect(mock.exportReads).toBe(1);
+  await page.waitForTimeout(1000);
+  expect(mock.exportReads, 'a finished export must not reconnect').toBe(1);
+});
+
+test('an audit export refused for elevation reports it and offers no partial download', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.exportStatus = 401;
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-export]').click();
+
+  await expect(panel.locator('.audit-export-status--error')).toContainText('more recent sign-in');
+  await expect(panel.locator('a[download]')).toHaveCount(0);
+});
+
+test('the audit tab stays hidden without its capability', async ({ page }) => {
+  await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await setElevation(page, ['console:admin:accounts']);
+  await expect(page.locator(AUDIT_TAB)).toBeHidden();
+});
+
+const SECURITY_TAB = '.console-tab[data-tab="security"]';
+const SECURITY_KEYS_PANEL = '[data-secadmin-panel="keys"]';
+const SECURITY_ERROR = '.secadmin-notice--error';
+const SECURITY_RECEIPT = '.secadmin-receipt';
+
+async function openSecurityTab(page: Page): Promise<void> {
+  await setElevation(page, ['console:admin:security']);
+  await page.locator(SECURITY_TAB).click();
+  await page.locator(`${SECURITY_KEYS_PANEL} .secadmin-card`).first().waitFor();
+}
+
+async function confirmDialogAction(page: Page): Promise<void> {
+  await page.locator('#confirm-modal [data-confirm="1"]').click();
+}
+
+test('a cancelled audit export leaves no download behind', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.exportTerminates = false; // still running, so there is something to cancel
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-export]').click();
+  await panel.locator('[data-audit-export-cancel]').click();
+
+  await expect(panel.locator('[data-audit-export-status]')).toContainText('Cancelled');
+  await expect(panel.locator('a[download]')).toHaveCount(0);
+  // Cancelling returns the control to its resting state rather than stranding it.
+  await expect(panel.locator('[data-audit-export]')).toBeVisible();
+});
+
+test('an audit list refused for elevation reports it without stranding the panel', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.listStatus = 401;
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await expect(panel.locator('.audit-notice--error')).toContainText('more recent sign-in');
+  await expect(panel.locator('.audit-loading')).toHaveCount(0);
+});
+
+test('opening an audit record while the list reloads leaves neither stuck', async ({ page }) => {
+  await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  // Interleaved list and detail requests must not cancel one another.
+  await panel.locator('[data-audit-refresh]').click();
+  await panel.locator('[data-audit-open]').first().click();
+
+  await expect(panel.locator('.audit-detail-grid')).toBeVisible();
+  await expect(panel.locator('.audit-loading')).toHaveCount(0);
+  await expect(panel.locator(AUDIT_ROW).first()).toBeVisible();
+});
+
+test('rotating a signing key confirms first and shows the returned receipt', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="rotate"][data-key-kind="jwks"]').click();
+  // The confirmation states the consequence rather than asking a bare "are you sure".
+  await expect(page.locator('#confirm-modal')).toContainText('tokens already issued keep working');
+  await confirmDialogAction(page);
+
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('rotate completed');
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('jwks-key-new');
+  expect(mock.rotateCalls).toBe(1);
+});
+
+test('a signing key operation refused for fresh elevation keeps its reason on screen', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  mock.mutationStatus = 401; // reads pass, mutations need a fresher sign-in
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="rotate"][data-key-kind="jwks"]').click();
+  await confirmDialogAction(page);
+
+  // Not a toast: the explanation has to survive long enough to act on.
+  await expect(keys.locator(SECURITY_ERROR)).toContainText('more recent sign-in');
+  await page.waitForTimeout(6000);
+  await expect(keys.locator(SECURITY_ERROR)).toBeVisible();
+  await expect(keys.locator(SECURITY_RECEIPT)).toHaveCount(0);
+  expect(mock.rotateCalls).toBe(0);
+});
+
+test('deleting a key inside its grace requires a second, explicit override', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="retire"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('retire completed');
+
+  await keys.locator('[data-key-action="delete"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+
+  // The server refuses the plain delete; the override names the actual consequence.
+  await expect(page.locator('#confirm-modal')).toContainText('can break verification');
+  await confirmDialogAction(page);
+
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('delete completed');
+  expect(mock.deleteCalls.map(call => call.forced)).toEqual([false, true]);
+});
+
+test('declining the grace override leaves the key in place', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="retire"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+  await keys.locator('[data-key-action="delete"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+  await page.locator('#confirm-modal [data-confirm="0"]').click();
+
+  expect(mock.deleteCalls.map(call => call.forced)).toEqual([false]);
+});
+
+test('the auth policy edits only its one mutable field and guards it with the ETag', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+  await page.locator('[data-secadmin-nav="policy"]').click();
+
+  const policy = page.locator('[data-secadmin-panel="policy"]');
+  await expect(policy.locator('.secadmin-invariants li')).toHaveCount(5);
+  // The invariants are stated, not offered as controls.
+  await expect(policy.locator('.secadmin-invariants input')).toHaveCount(0);
+  await expect(policy.locator('input')).toHaveCount(1);
+
+  await policy.locator('[name="max_admin_elevation_seconds"]').fill('900');
+  await policy.locator('button[type="submit"]').click();
+  await expect.poll(() => mock.policyPuts.length).toBe(1);
+  expect(mock.policyPuts[0].ifMatch).toBe('W/"security-auth-policy:1:1800"');
+  expect(mock.policyPuts[0].seconds).toBe(900);
+});
+
+test('a policy that changed elsewhere is reported without overwriting it', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  mock.policyPutStatus = 412;
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+  await page.locator('[data-secadmin-nav="policy"]').click();
+
+  const policy = page.locator('[data-secadmin-panel="policy"]');
+  await policy.locator('[name="max_admin_elevation_seconds"]').fill('900');
+  await policy.locator('button[type="submit"]').click();
+
+  await expect(policy.locator(SECURITY_ERROR)).toContainText('changed elsewhere');
+  expect(mock.policy.max_admin_elevation_seconds, 'the stored policy is untouched').toBe(1800);
+});
+
+test('the security tab stays hidden without its capability', async ({ page }) => {
+  await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await setElevation(page, ['console:admin:accounts']);
+  await expect(page.locator(SECURITY_TAB)).toBeHidden();
+});
+
+const ALLOWLIST_VALUE = '[name="value"]';
+
+async function openAccountsSection(page: Page, section: string) {
+  await setElevation(page, ['console:admin:accounts']);
+  await page.locator('.console-tab[data-tab="users"]').click();
+  await page.locator('#ua-list').waitFor();
+  await page.locator(`[data-ua-nav="${section}"]`).click();
+  return page.locator(`[data-ua-panel="${section}"]`);
+}
+
+test('the allowlist adds and removes an entry without disturbing the account list', async ({ page }) => {
+  const mock = await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'allowlist');
+
+  // An empty allowlist is a locked door, not an absence — say so.
+  await expect(panel.locator('.acct-empty')).toContainText('Every sign-in will be refused');
+
+  await panel.locator(ALLOWLIST_VALUE).fill('someone@example.test');
+  await panel.locator('[name="note"]').fill('vendor access');
+  await panel.locator('#acct-allow-form button[type="submit"]').click();
+
+  await expect(panel.locator('.acct-row')).toHaveCount(2); // header + entry
+  expect(mock.posts).toEqual([{ kind: 'email', value: 'someone@example.test', note: 'vendor access' }]);
+
+  await panel.locator('[data-allow-action="remove"]').first().click();
+  await expect(page.locator('#confirm-modal')).toContainText('no longer be able to sign in');
+  await page.locator('#confirm-modal [data-confirm="1"]').click();
+  await expect(panel.locator('.acct-empty')).toBeVisible();
+  expect(mock.deletes).toEqual(['allow-1']);
+
+  // The account list this tab already had must be untouched by any of that.
+  await page.locator('[data-ua-nav="accounts"]').click();
+  await expect(page.locator('#ua-list')).toBeVisible();
+});
+
+test('a refresh does not discard a part-typed allowlist entry', async ({ page }) => {
+  await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'allowlist');
+
+  await panel.locator(ALLOWLIST_VALUE).fill('half-typed@example.test');
+  await panel.locator('[data-allow-action="refresh"]').click();
+  await expect(panel.locator(ALLOWLIST_VALUE)).toHaveValue('half-typed@example.test');
+});
+
+test('editing an allowlist entry sends only its note', async ({ page }) => {
+  const mock = await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'allowlist');
+
+  await panel.locator(ALLOWLIST_VALUE).fill('someone@example.test');
+  await panel.locator('#acct-allow-form button[type="submit"]').click();
+  await expect(panel.locator('.acct-row')).toHaveCount(2);
+
+  await panel.locator('[data-allow-action="edit"]').first().click();
+  await panel.locator('[data-allow-note-input]').fill('revised note');
+  await panel.locator('[data-allow-action="save-edit"]').click();
+  await expect.poll(() => mock.patches.length).toBe(1);
+  // Kind and value are immutable server-side, so the request must carry neither.
+  expect(mock.patches[0].body).toEqual({ note: 'revised note' });
+});
+
+test('identity triage lists unlinked logins and resolves a correlation ID', async ({ page }) => {
+  await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'triage');
+
+  await expect(panel.locator('.acct-row')).toHaveCount(2); // header + one unlinked identity
+  await expect(panel.locator('.acct-row').nth(1)).toContainText('octocat');
+
+  await panel.locator('[name="correlation_id"]').fill('corr-1');
+  await panel.locator('#acct-correlation-form button[type="submit"]').click();
+  await expect(panel.locator('.acct-detail')).toContainText('e2e_admin');
+});
+
+test('bootstrap status reports that the first-administrator path is closed', async ({ page }) => {
+  await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'bootstrap');
+  await expect(panel.locator('.acct-card')).toContainText('one-time first-administrator path is closed');
+});
+
 test('a malformed authorization parameter is rejected before anything is saved', async ({ page }) => {
   await includeManifestRoutes(page, INTEGRATION_ROUTES);
   const mock = await installIntegrationsUiMock(page);
@@ -741,11 +1097,7 @@ test('operations remains usable when a partial deployment omits health', async (
   ]));
   await loginFromConsole(page);
 
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: true, capabilities: ['console:admin:operate'] },
-    }));
-  });
+  await setElevation(page, ['console:admin:operate']);
   await expect(page.locator(OPERATIONS_TAB)).toBeVisible();
   await page.locator(OPERATIONS_TAB).click();
   await expect(page.locator(OPERATIONS_HEALTH_NAV)).toHaveCount(0);
@@ -760,22 +1112,14 @@ test('operations requires its capability and stops polling when privilege or vis
   const mock = await installOperationsUiMock(page);
   await loginFromConsole(page);
 
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: true, capabilities: ['console:admin:accounts'] },
-    }));
-  });
+  await setElevation(page, ['console:admin:accounts']);
   await expect(page.locator(OPERATIONS_TAB)).toBeHidden();
 
   await page.clock.install();
   await openMockOperations(page);
   await expect.poll(() => mock.healthReads).toBeGreaterThan(0);
   const beforeStepDown = mock.healthReads;
-  await page.evaluate(() => {
-    globalThis.dispatchEvent(new CustomEvent('dh:elevation-changed', {
-      detail: { active: false, capabilities: [] },
-    }));
-  });
+  await setElevation(page, [], false);
   await page.clock.fastForward(11_000);
   expect(mock.healthReads, 'step-down aborts and stops operator polling').toBe(beforeStepDown);
 
