@@ -36,8 +36,16 @@ export interface AuditUiMockState {
   authenticationEvents: Array<Record<string, unknown>>;
   /** Records the export stream emits before its terminal `end` frame. */
   exportRecords: number;
+  /**
+   * When false the stream stops without its terminal frame, the way a connection
+   * dropped mid-export would. The run stays open, which is what makes cancelling
+   * an in-progress export testable.
+   */
+  exportTerminates: boolean;
   /** Set to 401 to model an elevation that satisfies the lists but not the detail. */
   detailStatus: number;
+  /** Set to 401 to model the list itself being refused. */
+  listStatus: number;
   /** Set to 401 to model the same for the export. */
   exportStatus: number;
   listReads: number;
@@ -51,7 +59,9 @@ export async function installAuditUiMock(page: Page): Promise<AuditUiMockState> 
     approvalEvents: [approvalEvent('verified'), approvalEvent('not_available')],
     authenticationEvents: [authenticationEvent()],
     exportRecords: 3,
+    exportTerminates: true,
     detailStatus: 200,
+    listStatus: 200,
     exportStatus: 200,
     listReads: 0,
     detailReads: 0,
@@ -86,6 +96,7 @@ function handleRoute(route: Route, state: AuditUiMockState): Promise<void> {
   }
 
   state.listReads += 1;
+  if (state.listStatus !== 200) return problem(route, state.listStatus, 'step_up_required');
   return route.fulfill({ status: 200, json: page_(listPool(path, state), url) as unknown as Record<string, unknown> });
 }
 
@@ -122,7 +133,7 @@ function exportBody(state: AuditUiMockState): string {
       batch_size: 100,
     }),
     ...Array.from({ length: state.exportRecords }, (_, index) => frame('update', adminEvent(index))),
-    frame('end', { status: 'complete' }),
+    ...(state.exportTerminates ? [frame('end', { status: 'complete' })] : []),
   ];
   return frames.join('');
 }

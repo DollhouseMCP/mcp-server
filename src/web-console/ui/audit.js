@@ -134,7 +134,10 @@ function createAuditListView({ path, detailPath, exportPath = null, empty, colum
   let detailState = 'idle';
   let detailMessage = '';
   let controller;
-  let version = 0;
+  // Separate counters: opening a record and reloading the list are independent
+  // operations, and a shared counter let one silently strand the other mid-load.
+  let listVersion = 0;
+  let detailVersion = 0;
   const pager = createCursorPager();
   const exportRun = { state: 'idle', count: 0, message: '', href: null, capped: false };
   let exportStream = null;
@@ -228,14 +231,14 @@ function createAuditListView({ path, detailPath, exportPath = null, empty, colum
   async function load() {
     controller?.abort();
     controller = new AbortController();
-    const current = ++version;
+    const current = ++listVersion;
     state = 'loading';
     render();
     const cursor = pager.cursor();
     const query = new URLSearchParams({ limit: String(PAGE_LIMIT) });
     if (cursor) query.set('cursor', cursor);
     const response = await get(`${path}?${query}`, { signal: controller.signal }).catch(() => null);
-    if (current !== version) return;
+    if (current !== listVersion) return;
     if (response?.status !== 200 || !Array.isArray(response.body?.items)) {
       state = 'error';
       message = elevationHint(response) ?? responseDetail(response, 'These records could not be loaded.');
@@ -250,12 +253,12 @@ function createAuditListView({ path, detailPath, exportPath = null, empty, colum
 
   async function openDetail(id) {
     if (!detailPath) return;
-    const current = ++version;
+    const current = ++detailVersion;
     detailState = 'loading';
     detail = null;
     render();
     const response = await get(detailPath(id)).catch(() => null);
-    if (current !== version) return;
+    if (current !== detailVersion) return;
     if (response?.status !== 200 || !response.body) {
       detailState = 'error';
       detailMessage = elevationHint(response) ?? responseDetail(response, 'This record could not be opened.');
@@ -372,7 +375,8 @@ function createAuditListView({ path, detailPath, exportPath = null, empty, colum
       if (state === 'idle') void load();
     },
     destroy() {
-      version += 1;
+      listVersion += 1;
+      detailVersion += 1;
       controller?.abort();
       exportStream?.stop();
       exportStream = null;
@@ -398,7 +402,14 @@ function elevationHint(response) {
 function integrityChip(integrity) {
   const status = integrity?.status ?? 'unknown';
   const label = status === 'not_available' ? 'not recorded' : status;
-  return `<span class="audit-chip audit-chip--${escapeHtml(status)}">${escapeHtml(label)}</span>`;
+  // escapeHtml already prevents breaking out of the attribute; this additionally
+  // stops an unexpected value from injecting extra class names via whitespace.
+  return `<span class="audit-chip audit-chip--${cssToken(status)}">${escapeHtml(label)}</span>`;
+}
+
+/** Reduce a server-supplied value to something safe to use as a class suffix. */
+function cssToken(value) {
+  return String(value ?? '').replaceAll(/[^a-zA-Z0-9_-]/g, '') || 'unknown';
 }
 
 function textCell(value, fallback = '—') {

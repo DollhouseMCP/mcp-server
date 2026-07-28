@@ -245,7 +245,7 @@ function createSigningKeysView({ notify, canRotate, canRetire, canDelete }) {
       <div class="secadmin-key">
         <div class="secadmin-key-id">
           <strong>${escapeHtml(key.kid)}</strong>
-          <span class="secadmin-chip secadmin-chip--${escapeHtml(key.state)}">${escapeHtml(key.state)}</span>
+          <span class="secadmin-chip secadmin-chip--${cssToken(key.state)}">${escapeHtml(key.state)}</span>
         </div>
         <dl class="secadmin-key-meta">
           <div><dt>Created</dt><dd>${escapeHtml(formatTimestamp(key.created_at))}</dd></div>
@@ -298,6 +298,18 @@ function receiptMarkup(receipt) {
     </div>`;
 }
 
+/** Reduce a server-supplied value to something safe to use as a class suffix. */
+function cssToken(value) {
+  return String(value ?? '').replaceAll(/[^a-zA-Z0-9_-]/g, '') || 'unknown';
+}
+
+/**
+ * The three delete refusals — still active, never retired, still inside the
+ * grace — all return the same `conflict` code, so the message is the only thing
+ * distinguishing them. Only the grace case can be forced, and offering the
+ * override for the other two would be a dead end, so they have to be told apart.
+ * A distinct server-side code would make this robust.
+ */
 function isGraceConflict(response) {
   return /grace/i.test(String(response?.body?.detail ?? ''));
 }

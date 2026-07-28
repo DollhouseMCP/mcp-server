@@ -40,6 +40,10 @@ export function createAllowlistView({ notify, canAdd, canEdit, canRemove }) {
   let state = 'idle';
   let message = '';
   let busy = false;
+  let editingId = null;
+  // Held in state so a reload landing mid-edit restores the draft instead of
+  // discarding it, the same reason the add form is never re-rendered.
+  let editingNote = '';
 
   async function load() {
     state = state === 'ready' ? 'ready' : 'loading';
@@ -86,13 +90,28 @@ export function createAllowlistView({ notify, canAdd, canEdit, canRemove }) {
     }));
   }
 
-  async function editNote(id) {
+  function beginEdit(id) {
     const entry = entries.find(item => item.id === id);
     if (!entry) return;
-    const next = globalThis.prompt('Note for this entry', entry.note ?? '');
-    if (next === null) return;
+    editingId = id;
+    editingNote = entry.note ?? '';
+    repaint();
+    container?.querySelector('[data-allow-note-input]')?.focus();
+  }
+
+  function cancelEdit() {
+    editingId = null;
+    editingNote = '';
+    repaint();
+  }
+
+  async function saveNote(id) {
+    const note = editingNote.trim();
+    editingId = null;
+    editingNote = '';
+    // Only the note is mutable server-side, so that is all the request carries.
     await runMutation('Allowlist note', () =>
-      patch(`${ALLOWLIST_PATH}/${encodeURIComponent(id)}`, { body: { note: next.trim() || null } }));
+      patch(`${ALLOWLIST_PATH}/${encodeURIComponent(id)}`, { body: { note: note || null } }));
   }
 
   async function remove(id) {
@@ -111,8 +130,14 @@ export function createAllowlistView({ notify, canAdd, canEdit, canRemove }) {
     if (!button) return;
     const { allowAction: action, allowId: id } = button.dataset;
     if (action === 'refresh') void load();
-    if (action === 'edit') void editNote(id);
+    if (action === 'edit') beginEdit(id);
+    if (action === 'cancel-edit') cancelEdit();
+    if (action === 'save-edit') void saveNote(id);
     if (action === 'remove') void remove(id);
+  }
+
+  function onInput(event) {
+    if (event.target.matches('[data-allow-note-input]')) editingNote = event.target.value;
   }
 
   function onSubmit(event) {
@@ -180,17 +205,24 @@ export function createAllowlistView({ notify, canAdd, canEdit, canRemove }) {
   }
 
   function entryRow(entry) {
+    const editing = entry.id === editingId;
     return `
       <div class="acct-row" role="row">
         <span role="cell"><strong>${escapeHtml(entry.value)}</strong></span>
         <span role="cell">${escapeHtml(kindLabel(entry.kind))}</span>
-        <span role="cell">${entry.note ? escapeHtml(entry.note) : '—'}</span>
+        <span role="cell">${editing ? noteEditorMarkup(editingNote) : noteMarkup(entry.note)}</span>
         <span role="cell">${escapeHtml(formatTimestamp(entry.created_at))}</span>
-        <span role="cell" class="acct-row-actions">
-          ${canEdit ? allowActionButton('Note', 'edit', entry.id, busy) : ''}
-          ${canRemove ? allowActionButton('Remove', 'remove', entry.id, busy, ' acct-danger') : ''}
-        </span>
+        <span role="cell" class="acct-row-actions">${rowActions(entry, editing)}</span>
       </div>`;
+  }
+
+  function rowActions(entry, editing) {
+    if (editing) {
+      return allowActionButton('Save', 'save-edit', entry.id, busy)
+        + allowActionButton('Cancel', 'cancel-edit', entry.id, busy);
+    }
+    return (canEdit ? allowActionButton('Note', 'edit', entry.id, busy) : '')
+      + (canRemove ? allowActionButton('Remove', 'remove', entry.id, busy, ' acct-danger') : '');
   }
 
   return Object.freeze({
@@ -198,6 +230,7 @@ export function createAllowlistView({ notify, canAdd, canEdit, canRemove }) {
       container = panel;
       container.addEventListener('click', onClick);
       container.addEventListener('submit', onSubmit);
+      container.addEventListener('input', onInput);
       render();
     },
     activate() {
@@ -207,6 +240,14 @@ export function createAllowlistView({ notify, canAdd, canEdit, canRemove }) {
       container = null;
     },
   });
+}
+
+function noteMarkup(note) {
+  return note ? escapeHtml(note) : '—';
+}
+
+function noteEditorMarkup(value) {
+  return `<input type="text" class="acct-note-input" data-allow-note-input maxlength="500" value="${escapeHtml(value)}" aria-label="Entry note">`;
 }
 
 function allowActionButton(label, action, id, busy, extraClass = '') {

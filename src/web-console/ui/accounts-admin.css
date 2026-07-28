@@ -182,3 +182,14 @@
 }
 
 .acct-notice--error { border-color: rgba(239, 68, 68, 0.35); }
+
+.acct-note-input {
+  width: 100%;
+  padding: 4px 7px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--paper);
+  color: var(--ink-900);
+  font: inherit;
+  font-size: var(--step--1);
+}

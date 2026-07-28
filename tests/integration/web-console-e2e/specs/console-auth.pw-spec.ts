@@ -607,6 +607,50 @@ async function confirmDialogAction(page: Page): Promise<void> {
   await page.locator('#confirm-modal [data-confirm="1"]').click();
 }
 
+test('a cancelled audit export leaves no download behind', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.exportTerminates = false; // still running, so there is something to cancel
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  await panel.locator('[data-audit-export]').click();
+  await panel.locator('[data-audit-export-cancel]').click();
+
+  await expect(panel.locator('[data-audit-export-status]')).toContainText('Cancelled');
+  await expect(panel.locator('a[download]')).toHaveCount(0);
+  // Cancelling returns the control to its resting state rather than stranding it.
+  await expect(panel.locator('[data-audit-export]')).toBeVisible();
+});
+
+test('an audit list refused for elevation reports it without stranding the panel', async ({ page }) => {
+  const mock = await installAuditUiMock(page);
+  mock.listStatus = 401;
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await expect(panel.locator('.audit-notice--error')).toContainText('more recent sign-in');
+  await expect(panel.locator('.audit-loading')).toHaveCount(0);
+});
+
+test('opening an audit record while the list reloads leaves neither stuck', async ({ page }) => {
+  await installAuditUiMock(page);
+  await loginFromConsole(page);
+  await openAuditTab(page);
+
+  const panel = page.locator(AUDIT_ADMIN_PANEL);
+  await panel.locator(AUDIT_ROW).first().waitFor();
+  // Interleaved list and detail requests must not cancel one another.
+  await panel.locator('[data-audit-refresh]').click();
+  await panel.locator('[data-audit-open]').first().click();
+
+  await expect(panel.locator('.audit-detail-grid')).toBeVisible();
+  await expect(panel.locator('.audit-loading')).toHaveCount(0);
+  await expect(panel.locator(AUDIT_ROW).first()).toBeVisible();
+});
+
 test('rotating a signing key confirms first and shows the returned receipt', async ({ page }) => {
   const mock = await installSecurityAdminUiMock(page);
   await loginFromConsole(page);
@@ -773,8 +817,9 @@ test('editing an allowlist entry sends only its note', async ({ page }) => {
   await panel.locator('#acct-allow-form button[type="submit"]').click();
   await expect(panel.locator('.acct-row')).toHaveCount(2);
 
-  page.once('dialog', dialog => void dialog.accept('revised note'));
   await panel.locator('[data-allow-action="edit"]').first().click();
+  await panel.locator('[data-allow-note-input]').fill('revised note');
+  await panel.locator('[data-allow-action="save-edit"]').click();
   await expect.poll(() => mock.patches.length).toBe(1);
   // Kind and value are immutable server-side, so the request must carry neither.
   expect(mock.patches[0].body).toEqual({ note: 'revised note' });
