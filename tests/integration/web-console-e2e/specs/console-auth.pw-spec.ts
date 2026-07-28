@@ -12,6 +12,7 @@ import { installSessionUiMock } from '../harness/sessionUiMock.js';
 import { installIntegrationsUiMock } from '../harness/integrationsUiMock.js';
 import { installAuditUiMock } from '../harness/auditUiMock.js';
 import { installSecurityAdminUiMock } from '../harness/securityAdminUiMock.js';
+import { installAccountsAdminUiMock } from '../harness/accountsAdminUiMock.js';
 import {
   installOperationsUiMock,
   OPERATIONS_PRIVATE_MARKER,
@@ -715,6 +716,88 @@ test('the security tab stays hidden without its capability', async ({ page }) =>
   await loginFromConsole(page);
   await setElevation(page, ['console:admin:accounts']);
   await expect(page.locator(SECURITY_TAB)).toBeHidden();
+});
+
+const ALLOWLIST_VALUE = '[name="value"]';
+
+async function openAccountsSection(page: Page, section: string) {
+  await setElevation(page, ['console:admin:accounts']);
+  await page.locator('.console-tab[data-tab="users"]').click();
+  await page.locator('#ua-list').waitFor();
+  await page.locator(`[data-ua-nav="${section}"]`).click();
+  return page.locator(`[data-ua-panel="${section}"]`);
+}
+
+test('the allowlist adds and removes an entry without disturbing the account list', async ({ page }) => {
+  const mock = await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'allowlist');
+
+  // An empty allowlist is a locked door, not an absence — say so.
+  await expect(panel.locator('.acct-empty')).toContainText('Every sign-in will be refused');
+
+  await panel.locator(ALLOWLIST_VALUE).fill('someone@example.test');
+  await panel.locator('[name="note"]').fill('vendor access');
+  await panel.locator('#acct-allow-form button[type="submit"]').click();
+
+  await expect(panel.locator('.acct-row')).toHaveCount(2); // header + entry
+  expect(mock.posts).toEqual([{ kind: 'email', value: 'someone@example.test', note: 'vendor access' }]);
+
+  await panel.locator('[data-allow-action="remove"]').first().click();
+  await expect(page.locator('#confirm-modal')).toContainText('no longer be able to sign in');
+  await page.locator('#confirm-modal [data-confirm="1"]').click();
+  await expect(panel.locator('.acct-empty')).toBeVisible();
+  expect(mock.deletes).toEqual(['allow-1']);
+
+  // The account list this tab already had must be untouched by any of that.
+  await page.locator('[data-ua-nav="accounts"]').click();
+  await expect(page.locator('#ua-list')).toBeVisible();
+});
+
+test('a refresh does not discard a part-typed allowlist entry', async ({ page }) => {
+  await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'allowlist');
+
+  await panel.locator(ALLOWLIST_VALUE).fill('half-typed@example.test');
+  await panel.locator('[data-allow-action="refresh"]').click();
+  await expect(panel.locator(ALLOWLIST_VALUE)).toHaveValue('half-typed@example.test');
+});
+
+test('editing an allowlist entry sends only its note', async ({ page }) => {
+  const mock = await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'allowlist');
+
+  await panel.locator(ALLOWLIST_VALUE).fill('someone@example.test');
+  await panel.locator('#acct-allow-form button[type="submit"]').click();
+  await expect(panel.locator('.acct-row')).toHaveCount(2);
+
+  page.once('dialog', dialog => void dialog.accept('revised note'));
+  await panel.locator('[data-allow-action="edit"]').first().click();
+  await expect.poll(() => mock.patches.length).toBe(1);
+  // Kind and value are immutable server-side, so the request must carry neither.
+  expect(mock.patches[0].body).toEqual({ note: 'revised note' });
+});
+
+test('identity triage lists unlinked logins and resolves a correlation ID', async ({ page }) => {
+  await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'triage');
+
+  await expect(panel.locator('.acct-row')).toHaveCount(2); // header + one unlinked identity
+  await expect(panel.locator('.acct-row').nth(1)).toContainText('octocat');
+
+  await panel.locator('[name="correlation_id"]').fill('corr-1');
+  await panel.locator('#acct-correlation-form button[type="submit"]').click();
+  await expect(panel.locator('.acct-detail')).toContainText('e2e_admin');
+});
+
+test('bootstrap status reports that the first-administrator path is closed', async ({ page }) => {
+  await installAccountsAdminUiMock(page);
+  await loginFromConsole(page);
+  const panel = await openAccountsSection(page, 'bootstrap');
+  await expect(panel.locator('.acct-card')).toContainText('one-time first-administrator path is closed');
 });
 
 test('a malformed authorization parameter is rejected before anything is saved', async ({ page }) => {
