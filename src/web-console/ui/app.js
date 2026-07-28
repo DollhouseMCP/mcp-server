@@ -85,6 +85,14 @@ const TAB_MODULES = {
       ['GET', '/admin/audit/authentication'],
     ],
   },
+  security: {
+    load: () => import('./security-admin.js'),
+    requiredRoutes: [],
+    requiredAnyRoutes: [
+      ['GET', '/admin/security/signing-keys'],
+      ['GET', '/admin/security/auth-policy'],
+    ],
+  },
 };
 // Memoized load+init promise per tab, so callers (e.g. the Sessions→Logs jump)
 // can await a module being ready without racing the lazy import.

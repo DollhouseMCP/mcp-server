@@ -11,6 +11,7 @@ import { installSelfServiceUiMock } from '../harness/selfServiceUiMock.js';
 import { installSessionUiMock } from '../harness/sessionUiMock.js';
 import { installIntegrationsUiMock } from '../harness/integrationsUiMock.js';
 import { installAuditUiMock } from '../harness/auditUiMock.js';
+import { installSecurityAdminUiMock } from '../harness/securityAdminUiMock.js';
 import {
   installOperationsUiMock,
   OPERATIONS_PRIVATE_MARKER,
@@ -588,6 +589,132 @@ test('the audit tab stays hidden without its capability', async ({ page }) => {
   await loginFromConsole(page);
   await setElevation(page, ['console:admin:accounts']);
   await expect(page.locator(AUDIT_TAB)).toBeHidden();
+});
+
+const SECURITY_TAB = '.console-tab[data-tab="security"]';
+const SECURITY_KEYS_PANEL = '[data-secadmin-panel="keys"]';
+const SECURITY_ERROR = '.secadmin-notice--error';
+const SECURITY_RECEIPT = '.secadmin-receipt';
+
+async function openSecurityTab(page: Page): Promise<void> {
+  await setElevation(page, ['console:admin:security']);
+  await page.locator(SECURITY_TAB).click();
+  await page.locator(`${SECURITY_KEYS_PANEL} .secadmin-card`).first().waitFor();
+}
+
+async function confirmDialogAction(page: Page): Promise<void> {
+  await page.locator('#confirm-modal [data-confirm="1"]').click();
+}
+
+test('rotating a signing key confirms first and shows the returned receipt', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="rotate"][data-key-kind="jwks"]').click();
+  // The confirmation states the consequence rather than asking a bare "are you sure".
+  await expect(page.locator('#confirm-modal')).toContainText('tokens already issued keep working');
+  await confirmDialogAction(page);
+
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('rotate completed');
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('jwks-key-new');
+  expect(mock.rotateCalls).toBe(1);
+});
+
+test('a signing key operation refused for fresh elevation keeps its reason on screen', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  mock.mutationStatus = 401; // reads pass, mutations need a fresher sign-in
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="rotate"][data-key-kind="jwks"]').click();
+  await confirmDialogAction(page);
+
+  // Not a toast: the explanation has to survive long enough to act on.
+  await expect(keys.locator(SECURITY_ERROR)).toContainText('more recent sign-in');
+  await page.waitForTimeout(6000);
+  await expect(keys.locator(SECURITY_ERROR)).toBeVisible();
+  await expect(keys.locator(SECURITY_RECEIPT)).toHaveCount(0);
+  expect(mock.rotateCalls).toBe(0);
+});
+
+test('deleting a key inside its grace requires a second, explicit override', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="retire"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('retire completed');
+
+  await keys.locator('[data-key-action="delete"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+
+  // The server refuses the plain delete; the override names the actual consequence.
+  await expect(page.locator('#confirm-modal')).toContainText('can break verification');
+  await confirmDialogAction(page);
+
+  await expect(keys.locator(SECURITY_RECEIPT)).toContainText('delete completed');
+  expect(mock.deleteCalls.map(call => call.forced)).toEqual([false, true]);
+});
+
+test('declining the grace override leaves the key in place', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+
+  const keys = page.locator(SECURITY_KEYS_PANEL);
+  await keys.locator('[data-key-action="retire"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+  await keys.locator('[data-key-action="delete"][data-key-kid="jwks-key-old"]').click();
+  await confirmDialogAction(page);
+  await page.locator('#confirm-modal [data-confirm="0"]').click();
+
+  expect(mock.deleteCalls.map(call => call.forced)).toEqual([false]);
+});
+
+test('the auth policy edits only its one mutable field and guards it with the ETag', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+  await page.locator('[data-secadmin-nav="policy"]').click();
+
+  const policy = page.locator('[data-secadmin-panel="policy"]');
+  await expect(policy.locator('.secadmin-invariants li')).toHaveCount(5);
+  // The invariants are stated, not offered as controls.
+  await expect(policy.locator('.secadmin-invariants input')).toHaveCount(0);
+  await expect(policy.locator('input')).toHaveCount(1);
+
+  await policy.locator('[name="max_admin_elevation_seconds"]').fill('900');
+  await policy.locator('button[type="submit"]').click();
+  await expect.poll(() => mock.policyPuts.length).toBe(1);
+  expect(mock.policyPuts[0].ifMatch).toBe('W/"security-auth-policy:1:1800"');
+  expect(mock.policyPuts[0].seconds).toBe(900);
+});
+
+test('a policy that changed elsewhere is reported without overwriting it', async ({ page }) => {
+  const mock = await installSecurityAdminUiMock(page);
+  mock.policyPutStatus = 412;
+  await loginFromConsole(page);
+  await openSecurityTab(page);
+  await page.locator('[data-secadmin-nav="policy"]').click();
+
+  const policy = page.locator('[data-secadmin-panel="policy"]');
+  await policy.locator('[name="max_admin_elevation_seconds"]').fill('900');
+  await policy.locator('button[type="submit"]').click();
+
+  await expect(policy.locator(SECURITY_ERROR)).toContainText('changed elsewhere');
+  expect(mock.policy.max_admin_elevation_seconds, 'the stored policy is untouched').toBe(1800);
+});
+
+test('the security tab stays hidden without its capability', async ({ page }) => {
+  await installSecurityAdminUiMock(page);
+  await loginFromConsole(page);
+  await setElevation(page, ['console:admin:accounts']);
+  await expect(page.locator(SECURITY_TAB)).toBeHidden();
 });
 
 test('a malformed authorization parameter is rejected before anything is saved', async ({ page }) => {
