@@ -9,6 +9,7 @@ import { SEED_PASSWORD } from '../harness/seed.js';
 import { installPortfolioUiMock } from '../harness/portfolioUiMock.js';
 import { installSelfServiceUiMock } from '../harness/selfServiceUiMock.js';
 import { installSessionUiMock } from '../harness/sessionUiMock.js';
+import { installIntegrationsUiMock } from '../harness/integrationsUiMock.js';
 import {
   installOperationsUiMock,
   OPERATIONS_PRIVATE_MARKER,
@@ -44,6 +45,21 @@ const BULK_SESSION_ACTION = '#sess-revoke-others';
 const USER_DRAWER = '.ua-drawer';
 const AUTH_ME_URL = '**/api/v1/auth/me';
 const ADMIN_USER_SESSIONS_URL = '**/api/v1/admin/accounts/users/*/sessions';
+const INTEGRATIONS_TAB = '.console-tab[data-tab="integrations"]';
+const INTEGRATION_DESCRIPTOR_CARD = '.int-descriptor-card';
+const INTEGRATION_OPERATION_ROW = '.int-operation';
+const INTEGRATION_ROUTES = [
+  { method: 'GET', path: '/api/v1/me/integrations/:provider' },
+  { method: 'POST', path: '/api/v1/me/integrations/:provider/connect' },
+  { method: 'DELETE', path: '/api/v1/me/integrations/:provider' },
+  { method: 'GET', path: '/api/v1/me/integrations/descriptors' },
+  { method: 'POST', path: '/api/v1/me/integrations/descriptors' },
+  { method: 'PATCH', path: '/api/v1/me/integrations/descriptors/:id' },
+  { method: 'DELETE', path: '/api/v1/me/integrations/descriptors/:id' },
+  { method: 'PUT', path: '/api/v1/me/integrations/descriptors/:id/spec' },
+  { method: 'GET', path: '/api/v1/me/integrations/descriptors/:id/spec' },
+  { method: 'GET', path: '/api/v1/me/integrations/descriptors/:id/spec/operations' },
+] as const;
 
 interface TextFileFixture {
   readonly name: string;
@@ -360,6 +376,175 @@ test('portfolio guided authoring serializes agent and ensemble settings', async 
       purpose: 'Draft the final response.',
     }],
   });
+});
+
+test('integration catalog connects static credentials without rendering them back', async ({ page }) => {
+  await includeManifestRoutes(page, INTEGRATION_ROUTES);
+  const mock = await installIntegrationsUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(INTEGRATIONS_TAB).click();
+  await expect(page.locator('.int-card')).toHaveCount(4);
+  const acmeCard = page.locator('.int-card', { hasText: 'Acme Tasks' });
+  await expect(acmeCard).toContainText('Not connected');
+  await acmeCard.locator('[data-connect]').click();
+
+  const secretMarker = 'e2e-api-key-private-marker';
+  await page.locator('#int-credential-modal [name="api_key"]').fill(secretMarker);
+  await page.locator('#int-credential-modal [name="account_label"]').fill('Work account');
+  await page.locator('#int-credential-modal button[type="submit"]').click();
+
+  await expect(acmeCard).toContainText('Connected');
+  await expect(page.locator('body')).not.toContainText(secretMarker);
+  expect(mock.staticConnects).toBe(1);
+  expect(mock.receivedApiKey).toBe(true);
+
+  const basicCard = page.locator('.int-card', { hasText: 'Legacy Reports' });
+  await basicCard.locator('[data-connect]').click();
+  await page.locator('#int-credential-modal [name="username"]').fill('report-user');
+  await page.locator('#int-credential-modal [name="password"]').fill('private-password-marker');
+  await page.locator('#int-credential-modal button[type="submit"]').click();
+  await expect(basicCard).toContainText('Connected');
+  await expect(page.locator('body')).not.toContainText('private-password-marker');
+  expect(mock.staticConnects).toBe(2);
+  expect(mock.receivedBasicCredential).toBe(true);
+});
+
+test('integration descriptor management stays hidden when its route is unavailable', async ({ page }) => {
+  await filterManifestRoutes(page, new Set(['GET /api/v1/me/integrations/descriptors']));
+  await installIntegrationsUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(INTEGRATIONS_TAB).click();
+  await expect(page.locator('[data-int-view="descriptors"]')).toHaveCount(0);
+  await expect(page.locator('.int-card', { hasText: 'GitHub' })).toBeVisible();
+});
+
+test('custom integration authoring keeps secrets write-only and imports OpenAPI files', async ({ page }) => {
+  await includeManifestRoutes(page, INTEGRATION_ROUTES);
+  const mock = await installIntegrationsUiMock(page);
+  await loginFromConsole(page);
+
+  await page.locator(INTEGRATIONS_TAB).click();
+  await page.locator('[data-int-view="descriptors"]').click();
+  await expect(page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Curated OAuth' }).locator('[data-descriptor-edit]')).toHaveCount(0);
+  await page.locator('[data-descriptor-create]').click();
+
+  const secretMarker = 'e2e-oauth-client-secret-marker';
+  await page.locator('[name="display_name"]').fill('Browser Calendar');
+  await page.locator('[name="provider"]').fill('browser-calendar');
+  await page.locator('[name="category"]').fill('Calendar');
+  await page.locator('[name="api_hosts"]').fill('api.calendar.test');
+  await page.locator('[name="oauth_client_id"]').fill('browser-client');
+  await page.locator('[name="oauth_client_secret"]').fill(secretMarker);
+  await page.locator('[name="oauth_authorization_url"]').fill('https://auth.calendar.test/authorize');
+  await page.locator('[name="oauth_token_url"]').fill('https://auth.calendar.test/token');
+  await page.locator('#int-descriptor-form button[type="submit"]').click();
+
+  await expect(page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Browser Calendar' })).toBeVisible();
+  await expect(page.locator('body')).not.toContainText(secretMarker);
+  expect(mock.receivedClientSecret).toBe(true);
+  expect(mock.clientSecretWrites).toBe(1);
+
+  let customCard = page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Browser Calendar' });
+  await customCard.locator('[data-descriptor-edit]').click();
+  await expect(page.locator('[name="oauth_client_secret"]')).toHaveValue('');
+  await page.locator('[name="display_name"]').fill('Browser Calendar Updated');
+  await page.locator('#int-descriptor-form button[type="submit"]').click();
+  await expect(page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Browser Calendar Updated' })).toBeVisible();
+  expect(mock.clientSecretWrites).toBe(1);
+
+  customCard = page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Browser Calendar Updated' });
+  await customCard.locator('[data-descriptor-spec]').click();
+  await setTextInputFile(page, '[name="spec_file"]', {
+    name: 'calendar.openapi.yaml',
+    mimeType: 'application/yaml',
+    content: [
+      'openapi: 3.0.3',
+      'info:',
+      '  title: Calendar API',
+      '  version: 1.0.0',
+      'paths:',
+      '  /tasks:',
+      '    get:',
+      '      operationId: listTasks',
+      '      summary: List tasks',
+      '      responses:',
+      "        '200':",
+      '          description: OK',
+    ].join('\n'),
+  });
+  await expect(page.locator('[name="spec_text"]')).toHaveValue(/openapi: 3\.0\.3/u);
+  await page.locator('#int-spec-form button[type="submit"]').click();
+
+  await expect(page.locator('.int-spec-summary')).toContainText('1 operations discovered');
+  await expect(page.locator(INTEGRATION_OPERATION_ROW)).toContainText('listTasks');
+  expect(mock.specWrites).toBe(1);
+  expect(mock.descriptorWrites).toBe(2);
+
+  await page.locator('[data-descriptor-back]').first().click();
+  customCard = page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Browser Calendar Updated' });
+  await customCard.locator('[data-descriptor-delete]').click();
+  await page.locator('#confirm-modal [data-confirm="1"]').click();
+  await expect(customCard).toHaveCount(0);
+});
+
+test('selecting discovered operations promotes them without disturbing the remote MCP settings', async ({ page }) => {
+  await includeManifestRoutes(page, INTEGRATION_ROUTES);
+  const mock = await installIntegrationsUiMock(page);
+  // Pre-existing remote MCP config on the same descriptor: promoting operations sends the whole
+  // operation_promotion object, so this is what a partial write would silently drop.
+  const remoteMcp = { serverUrl: 'https://api.acme.test/mcp', tools: ['search'] };
+  const seeded = mock.descriptors.find(item => item.provider === 'acme-tasks');
+  if (!seeded) throw new Error('The acme-tasks descriptor is missing from the mock seed.');
+  seeded.operation_promotion = { remoteMcp };
+  // Two operations, so selecting one proves only that one is promoted.
+  mock.operations = [
+    { operation_id: 'listTasks', method: 'GET', path: '/tasks', read_write_class: 'read', summary: 'List tasks', description: null, required_scopes: [] },
+    { operation_id: 'createTask', method: 'POST', path: '/tasks', read_write_class: 'write', summary: 'Create a task', description: null, required_scopes: [] },
+  ];
+  await loginFromConsole(page);
+
+  await page.locator(INTEGRATIONS_TAB).click();
+  await page.locator('[data-int-view="descriptors"]').click();
+  await page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Acme Tasks' })
+    .locator('[data-descriptor-spec]').click();
+
+  await setTextInputFile(page, '[name="spec_file"]', {
+    name: 'acme.openapi.yaml',
+    mimeType: 'application/yaml',
+    content: [
+      'openapi: 3.0.3',
+      'info:',
+      '  title: Acme API',
+      '  version: 1.0.0',
+      'paths:',
+      '  /tasks:',
+      '    get:',
+      '      operationId: listTasks',
+      '      responses:',
+      "        '200':",
+      '          description: OK',
+    ].join('\n'),
+  });
+  await page.locator('#int-spec-form button[type="submit"]').click();
+  await expect(page.locator(INTEGRATION_OPERATION_ROW)).toHaveCount(2);
+
+  // Nothing is promoted until the operator chooses, so both start unticked.
+  const listTasks = page.locator(INTEGRATION_OPERATION_ROW, { hasText: 'listTasks' }).locator('input[type="checkbox"]');
+  await expect(listTasks).not.toBeChecked();
+  await listTasks.check();
+  await page.locator('#int-promotion-form button[type="submit"]').click();
+
+  await expect.poll(() => mock.descriptors.find(item => item.provider === 'acme-tasks')?.operation_promotion)
+    .toEqual({ remoteMcp, operations: ['listTasks'] });
+
+  // Re-opening reflects the stored selection rather than resetting it.
+  await page.locator('[data-descriptor-back]').first().click();
+  await page.locator(INTEGRATION_DESCRIPTOR_CARD, { hasText: 'Acme Tasks' })
+    .locator('[data-descriptor-spec]').click();
+  await expect(page.locator(INTEGRATION_OPERATION_ROW, { hasText: 'listTasks' }).locator('input[type="checkbox"]')).toBeChecked();
+  await expect(page.locator(INTEGRATION_OPERATION_ROW, { hasText: 'createTask' }).locator('input[type="checkbox"]')).not.toBeChecked();
 });
 
 test('portfolio imports a reviewed file without silently overwriting a duplicate', async ({ page }) => {
