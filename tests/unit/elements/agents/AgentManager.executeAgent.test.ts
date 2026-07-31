@@ -674,6 +674,63 @@ activates:
       expect(result.activeElements.personas).toHaveLength(1);
       expect(result.activeElements.personas[0].content).toBe('You are a security analyst.');
     });
+
+    it('should prefer an exact-name match over an earlier slug-equivalent display name', async () => {
+      // 'Code Review' slugifies to 'code-review' and is listed FIRST; an element
+      // literally named 'code-review' follows. The exact match must win regardless
+      // of list order (Codex review on PR #2433).
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Code Review', type: 'persona' },
+                content: 'Display-named element that slugifies to code-review.'
+              },
+              {
+                metadata: { name: 'code-review', type: 'persona' },
+                content: 'Exactly-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('precedence-agent.md')) {
+          return `---
+name: "Precedence Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - code-review
+---
+
+# Precedence Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'precedence-agent',
+        { task: 'review' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('Exactly-named element.');
+    });
   });
 
   /**

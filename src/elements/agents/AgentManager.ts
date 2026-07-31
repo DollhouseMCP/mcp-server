@@ -95,12 +95,12 @@ type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) &
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
+  private readonly metadataService: MetadataService;
   // Track active agents by name (stable identifier)
-  private activeAgentNames: Set<string> = new Set();
+  private readonly activeAgentNames: Set<string> = new Set();
 
   // Static resolver for element manager lookup (DI pattern)
   // This allows Agent instances to resolve managers without tight coupling
@@ -1559,11 +1559,13 @@ export class AgentManager extends BaseElementManager<Agent> {
       const elements = await manager.list();
       // Issue #2432: activates: references use slugs (e.g. 'security-analyst') while
       // element metadata carries display names (e.g. 'Security Analyst'), so an exact
-      // match alone never resolves the shipped defaults. Fall back to slug comparison.
+      // match alone never resolves the shipped defaults. Exact-name matches are
+      // checked across the full list before any slug comparison, so an element named
+      // literally 'foo-bar' always beats one whose display name slugifies to it.
       const targetSlug = slugify(elementName);
-      const element = elements.find((e: any) =>
-        e.metadata.name === elementName || slugify(e.metadata.name ?? '') === targetSlug
-      );
+      const element =
+        elements.find((e: any) => e.metadata.name === elementName) ??
+        elements.find((e: any) => slugify(e.metadata.name ?? '') === targetSlug);
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);
