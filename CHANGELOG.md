@@ -1,5 +1,10 @@
 # Changelog
 
+## [2.0.39] - 2026-07-31
+
+- Fix agent sub-element activation: `activates:` references (canonical filename slugs like `security-analyst`) never resolved elements whose metadata carries display names (`Security Analyst`), so agents silently ran without their declared personas and skills — while their tool sandbox still fully applied. Lookup now matches exact names first, then falls back to the same filename normalization used when saving elements; degenerate references (empty or separator-only) warn instead of resolving. (#2432, #2433)
+- **Behavior change:** agents that previously ran bare will start loading their full declared context (personas and skills) after upgrading — expect richer agent behavior from the shipped defaults such as `code-reviewer`.
+
 ## [2.0.38] - 2026-07-04
 
 - Close the remaining symlink containment bypasses for convert CLI output paths. Output directories that do not exist yet are vetted through their nearest existing ancestor (#2342, #2343), and output bases are now contained canonically: relative outputs (including the default) must truly resolve inside the working directory even when a symlink tries to redirect them, and explicit outside destinations disclose their real location when a symlink diverts them (#2344, #2346).

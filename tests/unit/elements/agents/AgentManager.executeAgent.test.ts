@@ -551,6 +551,403 @@ Project context memory.`;
     });
   });
 
+  describe('Test 4b: Slug vs Display-Name Resolution (#2432)', () => {
+    it('should resolve activates: slug references against elements with display names', async () => {
+      // The shipped defaults reference elements by slug (e.g. 'security-analyst')
+      // while the element files carry display names (name: "Security Analyst").
+      // Before #2432, this lookup failed for every such element.
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Security Analyst', type: 'persona' },
+                content: 'You are a security analyst.'
+              }
+            ]
+          } as any;
+        }
+        if (managerName === 'SkillManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Code Review', type: 'skill' },
+                instructions: 'Review code for security and quality issues.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('slug-ref-agent.md')) {
+          return `---
+name: "Slug Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Review code in {directory}"
+  parameters:
+    - name: directory
+      type: string
+      required: true
+
+activates:
+  personas:
+    - security-analyst
+  skills:
+    - code-review
+---
+
+# Slug Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'slug-ref-agent',
+        { directory: 'src' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+
+      expect(result.activeElements.personas).toBeDefined();
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].name).toBe('security-analyst');
+      expect(result.activeElements.personas[0].content).toBe('You are a security analyst.');
+
+      expect(result.activeElements.skills).toBeDefined();
+      expect(result.activeElements.skills).toHaveLength(1);
+      expect(result.activeElements.skills[0].name).toBe('code-review');
+      expect(result.activeElements.skills[0].content).toBe('Review code for security and quality issues.');
+    });
+
+    it('should still resolve exact display-name references unchanged', async () => {
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Security Analyst', type: 'persona' },
+                content: 'You are a security analyst.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('display-ref-agent.md')) {
+          return `---
+name: "Display Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - Security Analyst
+---
+
+# Display Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'display-ref-agent',
+        { task: 'review' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('You are a security analyst.');
+    });
+
+    it('should prefer an exact-name match over an earlier slug-equivalent display name', async () => {
+      // 'Code Review' slugifies to 'code-review' and is listed FIRST; an element
+      // literally named 'code-review' follows. The exact match must win regardless
+      // of list order (Codex review on PR #2433).
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Code Review', type: 'persona' },
+                content: 'Display-named element that slugifies to code-review.'
+              },
+              {
+                metadata: { name: 'code-review', type: 'persona' },
+                content: 'Exactly-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('precedence-agent.md')) {
+          return `---
+name: "Precedence Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - code-review
+---
+
+# Precedence Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'precedence-agent',
+        { task: 'review' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('Exactly-named element.');
+    });
+
+    it('should resolve camelCase display names via canonical filename normalization', async () => {
+      // Managers save 'BugReport' as bug-report.md (normalizeFilename splits
+      // camelCase), so activates: references use 'bug-report'. Plain slugify
+      // would produce 'bugreport' and miss — the lookup must use the managers'
+      // canonical normalization (Codex review on PR #2433, round 2).
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'BugReport', type: 'persona' },
+                content: 'CamelCase-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('camelcase-agent.md')) {
+          return `---
+name: "CamelCase Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - bug-report
+---
+
+# CamelCase Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'camelcase-agent',
+        { task: 'triage' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('CamelCase-named element.');
+    });
+
+    it('should resolve separator-only names via the unnamed fallback, mirroring saved filenames', async () => {
+      // getElementFilename() saves a '---' name as unnamed.md (normalizeFilename
+      // yields '' and the || 'unnamed' fallback applies). The lookup must use the
+      // identical slug derivation on both sides so the canonical reference
+      // 'unnamed' resolves the element (Codex review on PR #2433, round 3).
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: '---', type: 'persona' },
+                content: 'Separator-only-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('unnamed-ref-agent.md')) {
+          return `---
+name: "Unnamed Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - unnamed
+---
+
+# Unnamed Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'unnamed-ref-agent',
+        { task: 'anything' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('Separator-only-named element.');
+    });
+
+    it('should not resolve unrelated references against separator-only-named elements', async () => {
+      // The unnamed fallback must only answer to the canonical 'unnamed' slug —
+      // a real reference like 'security-analyst' still warns when absent.
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: '---', type: 'persona' },
+                content: 'Separator-only-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('missing-ref-agent.md')) {
+          return `---
+name: "Missing Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - security-analyst
+---
+
+# Missing Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'missing-ref-agent',
+        { task: 'anything' }
+      );
+
+      expect(result.activationWarnings).toBeDefined();
+      expect(result.activationWarnings).toHaveLength(1);
+      expect(result.activationWarnings![0].elementName).toBe('security-analyst');
+    });
+
+    it('should warn on empty references instead of matching unnamed-fallback elements', async () => {
+      // validateActivates() only warns on empty entries, so activates: [''] reaches
+      // the lookup. An empty reference must stay unresolved — not ride the
+      // 'unnamed' fallback onto a separator-only-named element (Codex review on
+      // PR #2433, round 4).
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: '---', type: 'persona' },
+                content: 'Separator-only-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('empty-ref-agent.md')) {
+          return `---
+name: "Empty Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - ""
+---
+
+# Empty Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'empty-ref-agent',
+        { task: 'anything' }
+      );
+
+      expect(result.activationWarnings).toBeDefined();
+      expect(result.activationWarnings).toHaveLength(1);
+      expect(result.activationWarnings![0].elementType).toBe('personas');
+      expect(result.activeElements.personas ?? []).toHaveLength(0);
+    });
+  });
+
   /**
    * Test 5: Agent Without Activates (Minimal)
    *
