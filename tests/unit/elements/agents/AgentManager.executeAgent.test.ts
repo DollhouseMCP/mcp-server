@@ -891,6 +891,61 @@ activates:
       expect(result.activationWarnings).toHaveLength(1);
       expect(result.activationWarnings![0].elementName).toBe('security-analyst');
     });
+
+    it('should warn on empty references instead of matching unnamed-fallback elements', async () => {
+      // validateActivates() only warns on empty entries, so activates: [''] reaches
+      // the lookup. An empty reference must stay unresolved — not ride the
+      // 'unnamed' fallback onto a separator-only-named element (Codex review on
+      // PR #2433, round 4).
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: '---', type: 'persona' },
+                content: 'Separator-only-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('empty-ref-agent.md')) {
+          return `---
+name: "Empty Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - ""
+---
+
+# Empty Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'empty-ref-agent',
+        { task: 'anything' }
+      );
+
+      expect(result.activationWarnings).toBeDefined();
+      expect(result.activationWarnings).toHaveLength(1);
+      expect(result.activationWarnings![0].elementType).toBe('personas');
+      expect(result.activeElements.personas ?? []).toHaveLength(0);
+    });
   });
 
   /**

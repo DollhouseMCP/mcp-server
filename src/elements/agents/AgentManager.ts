@@ -1565,13 +1565,21 @@ export class AgentManager extends BaseElementManager<Agent> {
       // matches the element's on-disk filename (including camelCase splits and
       // separator-only names like '---' that save as unnamed.md).
       const canonicalSlug = (name: string): string => this.normalizeFilename(name) || 'unnamed';
-      const normalizedTarget = canonicalSlug(elementName);
+      // The 'unnamed' fallback applies only to candidate elements (mirroring how
+      // they were saved). A reference that is empty or normalizes to nothing
+      // ('', '   ', '---') can never name a saved file — validateActivates() only
+      // warns on such entries, so exclude them here or they would ride the
+      // fallback onto arbitrary separator-only-named elements.
+      const trimmedReference = elementName.trim();
+      const normalizedTarget = trimmedReference ? this.normalizeFilename(trimmedReference) : '';
       const element =
         elements.find((e: any) => e.metadata.name === elementName) ??
-        elements.find((e: any) =>
-          typeof e.metadata.name === 'string' &&
-          canonicalSlug(e.metadata.name) === normalizedTarget
-        );
+        (normalizedTarget
+          ? elements.find((e: any) =>
+              typeof e.metadata.name === 'string' &&
+              canonicalSlug(e.metadata.name) === normalizedTarget
+            )
+          : undefined);
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);
