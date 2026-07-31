@@ -1559,17 +1559,18 @@ export class AgentManager extends BaseElementManager<Agent> {
       // Issue #2432: activates: references use canonical filename slugs (e.g.
       // 'security-analyst', 'bug-report') while element metadata carries display
       // names ('Security Analyst', 'BugReport'). Exact-name matches win across the
-      // full list; otherwise fall back to normalizeFilename — the same normalization
-      // managers use when saving files — so any reference that matches a saved
-      // filename resolves (including camelCase splits slugify would miss). The
-      // truthiness guard skips empty names, which normalizeFilename maps to
-      // 'unnamed' and could otherwise false-match.
-      const normalizedTarget = this.normalizeFilename(elementName);
+      // full list; otherwise both sides map through the same slug derivation
+      // getElementFilename() uses when saving — normalizeFilename with its
+      // empty-result 'unnamed' fallback — so a reference resolves exactly when it
+      // matches the element's on-disk filename (including camelCase splits and
+      // separator-only names like '---' that save as unnamed.md).
+      const canonicalSlug = (name: string): string => this.normalizeFilename(name) || 'unnamed';
+      const normalizedTarget = canonicalSlug(elementName);
       const element =
         elements.find((e: any) => e.metadata.name === elementName) ??
         elements.find((e: any) =>
-          typeof e.metadata.name === 'string' && e.metadata.name.length > 0 &&
-          this.normalizeFilename(e.metadata.name) === normalizedTarget
+          typeof e.metadata.name === 'string' &&
+          canonicalSlug(e.metadata.name) === normalizedTarget
         );
 
       if (!element) {

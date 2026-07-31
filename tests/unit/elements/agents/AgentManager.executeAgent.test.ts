@@ -786,17 +786,19 @@ activates:
       expect(result.activeElements.personas[0].content).toBe('CamelCase-named element.');
     });
 
-    it('should not match elements with empty names against any reference', async () => {
-      // normalizeFilename('') → 'unnamed'; an element with a missing name must
-      // not accidentally resolve a reference that also normalizes to 'unnamed'.
+    it('should resolve separator-only names via the unnamed fallback, mirroring saved filenames', async () => {
+      // getElementFilename() saves a '---' name as unnamed.md (normalizeFilename
+      // yields '' and the || 'unnamed' fallback applies). The lookup must use the
+      // identical slug derivation on both sides so the canonical reference
+      // 'unnamed' resolves the element (Codex review on PR #2433, round 3).
       AgentManager.resetResolvers();
       AgentManager.setElementManagerResolver((managerName: string) => {
         if (managerName === 'PersonaManager') {
           return {
             list: async () => [
               {
-                metadata: { name: '', type: 'persona' },
-                content: 'Element with empty name.'
+                metadata: { name: '---', type: 'persona' },
+                content: 'Separator-only-named element.'
               }
             ]
           } as any;
@@ -805,9 +807,9 @@ activates:
       });
 
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
-        if (filePath.includes('empty-name-agent.md')) {
+        if (filePath.includes('unnamed-ref-agent.md')) {
           return `---
-name: "Empty Name Agent"
+name: "Unnamed Ref Agent"
 type: "agent"
 version: "2.0.0"
 
@@ -823,19 +825,71 @@ activates:
     - unnamed
 ---
 
-# Empty Name Agent`;
+# Unnamed Ref Agent`;
         }
         throw new Error(`Unexpected file read: ${filePath}`);
       });
 
       const result: ExecuteAgentResult = await agentManager.executeAgent(
-        'empty-name-agent',
+        'unnamed-ref-agent',
+        { task: 'anything' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('Separator-only-named element.');
+    });
+
+    it('should not resolve unrelated references against separator-only-named elements', async () => {
+      // The unnamed fallback must only answer to the canonical 'unnamed' slug —
+      // a real reference like 'security-analyst' still warns when absent.
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: '---', type: 'persona' },
+                content: 'Separator-only-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('missing-ref-agent.md')) {
+          return `---
+name: "Missing Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - security-analyst
+---
+
+# Missing Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'missing-ref-agent',
         { task: 'anything' }
       );
 
       expect(result.activationWarnings).toBeDefined();
       expect(result.activationWarnings).toHaveLength(1);
-      expect(result.activationWarnings![0].elementName).toBe('unnamed');
+      expect(result.activationWarnings![0].elementName).toBe('security-analyst');
     });
   });
 
