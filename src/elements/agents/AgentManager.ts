@@ -94,12 +94,12 @@ type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) &
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
+  private readonly metadataService: MetadataService;
   // Track active agents by name (stable identifier)
-  private activeAgentNames: Set<string> = new Set();
+  private readonly activeAgentNames: Set<string> = new Set();
 
   // Static resolver for element manager lookup (DI pattern)
   // This allows Agent instances to resolve managers without tight coupling
@@ -1556,7 +1556,30 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Get all elements of this type
       const elements = await manager.list();
-      const element = elements.find((e: any) => e.metadata.name === elementName);
+      // Issue #2432: activates: references use canonical filename slugs (e.g.
+      // 'security-analyst', 'bug-report') while element metadata carries display
+      // names ('Security Analyst', 'BugReport'). Exact-name matches win across the
+      // full list; otherwise both sides map through the same slug derivation
+      // getElementFilename() uses when saving — normalizeFilename with its
+      // empty-result 'unnamed' fallback — so a reference resolves exactly when it
+      // matches the element's on-disk filename (including camelCase splits and
+      // separator-only names like '---' that save as unnamed.md).
+      const canonicalSlug = (name: string): string => this.normalizeFilename(name) || 'unnamed';
+      // The 'unnamed' fallback applies only to candidate elements (mirroring how
+      // they were saved). A reference that is empty or normalizes to nothing
+      // ('', '   ', '---') can never name a saved file — validateActivates() only
+      // warns on such entries, so exclude them here or they would ride the
+      // fallback onto arbitrary separator-only-named elements.
+      const trimmedReference = elementName.trim();
+      const normalizedTarget = trimmedReference ? this.normalizeFilename(trimmedReference) : '';
+      const element =
+        elements.find((e: any) => e.metadata.name === elementName) ??
+        (normalizedTarget
+          ? elements.find((e: any) =>
+              typeof e.metadata.name === 'string' &&
+              canonicalSlug(e.metadata.name) === normalizedTarget
+            )
+          : undefined);
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);
