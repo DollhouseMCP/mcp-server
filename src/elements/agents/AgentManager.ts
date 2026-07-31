@@ -1768,7 +1768,26 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Get all elements of this type
       const elements = await manager.list();
-      const element = elements.find(e => e.metadata.name === elementName);
+      // Issue #2432: activates: references use canonical filename slugs (e.g.
+      // 'security-analyst', 'bug-report') while element metadata carries display
+      // names ('Security Analyst', 'BugReport'). Exact-name matches win across the
+      // full list; otherwise candidates map through the same slug derivation
+      // getElementFilename() uses when saving — normalizeFilename with its
+      // empty-result 'unnamed' fallback — so a reference resolves exactly when it
+      // matches the element's on-disk filename. The fallback applies only to
+      // candidates: a reference that is empty or normalizes to nothing ('', '   ',
+      // '---') can never name a saved file and stays unresolved.
+      const canonicalSlug = (name: string): string => this.normalizeFilename(name) || 'unnamed';
+      const trimmedReference = elementName.trim();
+      const normalizedTarget = trimmedReference ? this.normalizeFilename(trimmedReference) : '';
+      const element =
+        elements.find(e => e.metadata.name === elementName) ??
+        (normalizedTarget
+          ? elements.find(e =>
+              typeof e.metadata.name === 'string' &&
+              canonicalSlug(e.metadata.name) === normalizedTarget
+            )
+          : undefined);
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);
