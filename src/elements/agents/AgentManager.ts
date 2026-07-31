@@ -64,7 +64,6 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
-import { slugify } from '../../utils/filesystem.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 
@@ -1557,15 +1556,21 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Get all elements of this type
       const elements = await manager.list();
-      // Issue #2432: activates: references use slugs (e.g. 'security-analyst') while
-      // element metadata carries display names (e.g. 'Security Analyst'), so an exact
-      // match alone never resolves the shipped defaults. Exact-name matches are
-      // checked across the full list before any slug comparison, so an element named
-      // literally 'foo-bar' always beats one whose display name slugifies to it.
-      const targetSlug = slugify(elementName);
+      // Issue #2432: activates: references use canonical filename slugs (e.g.
+      // 'security-analyst', 'bug-report') while element metadata carries display
+      // names ('Security Analyst', 'BugReport'). Exact-name matches win across the
+      // full list; otherwise fall back to normalizeFilename — the same normalization
+      // managers use when saving files — so any reference that matches a saved
+      // filename resolves (including camelCase splits slugify would miss). The
+      // truthiness guard skips empty names, which normalizeFilename maps to
+      // 'unnamed' and could otherwise false-match.
+      const normalizedTarget = this.normalizeFilename(elementName);
       const element =
         elements.find((e: any) => e.metadata.name === elementName) ??
-        elements.find((e: any) => slugify(e.metadata.name ?? '') === targetSlug);
+        elements.find((e: any) =>
+          typeof e.metadata.name === 'string' && e.metadata.name.length > 0 &&
+          this.normalizeFilename(e.metadata.name) === normalizedTarget
+        );
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);

@@ -731,6 +731,112 @@ activates:
       expect(result.activeElements.personas).toHaveLength(1);
       expect(result.activeElements.personas[0].content).toBe('Exactly-named element.');
     });
+
+    it('should resolve camelCase display names via canonical filename normalization', async () => {
+      // Managers save 'BugReport' as bug-report.md (normalizeFilename splits
+      // camelCase), so activates: references use 'bug-report'. Plain slugify
+      // would produce 'bugreport' and miss — the lookup must use the managers'
+      // canonical normalization (Codex review on PR #2433, round 2).
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'BugReport', type: 'persona' },
+                content: 'CamelCase-named element.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('camelcase-agent.md')) {
+          return `---
+name: "CamelCase Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - bug-report
+---
+
+# CamelCase Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'camelcase-agent',
+        { task: 'triage' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('CamelCase-named element.');
+    });
+
+    it('should not match elements with empty names against any reference', async () => {
+      // normalizeFilename('') → 'unnamed'; an element with a missing name must
+      // not accidentally resolve a reference that also normalizes to 'unnamed'.
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: '', type: 'persona' },
+                content: 'Element with empty name.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('empty-name-agent.md')) {
+          return `---
+name: "Empty Name Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - unnamed
+---
+
+# Empty Name Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'empty-name-agent',
+        { task: 'anything' }
+      );
+
+      expect(result.activationWarnings).toBeDefined();
+      expect(result.activationWarnings).toHaveLength(1);
+      expect(result.activationWarnings![0].elementName).toBe('unnamed');
+    });
   });
 
   /**
