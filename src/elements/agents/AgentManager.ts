@@ -64,6 +64,7 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { slugify } from '../../utils/filesystem.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 
@@ -1556,7 +1557,13 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Get all elements of this type
       const elements = await manager.list();
-      const element = elements.find((e: any) => e.metadata.name === elementName);
+      // Issue #2432: activates: references use slugs (e.g. 'security-analyst') while
+      // element metadata carries display names (e.g. 'Security Analyst'), so an exact
+      // match alone never resolves the shipped defaults. Fall back to slug comparison.
+      const targetSlug = slugify(elementName);
+      const element = elements.find((e: any) =>
+        e.metadata.name === elementName || slugify(e.metadata.name ?? '') === targetSlug
+      );
 
       if (!element) {
         throw new Error(`${elementType} '${elementName}' not found`);

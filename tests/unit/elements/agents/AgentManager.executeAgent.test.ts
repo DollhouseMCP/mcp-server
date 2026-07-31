@@ -551,6 +551,131 @@ Project context memory.`;
     });
   });
 
+  describe('Test 4b: Slug vs Display-Name Resolution (#2432)', () => {
+    it('should resolve activates: slug references against elements with display names', async () => {
+      // The shipped defaults reference elements by slug (e.g. 'security-analyst')
+      // while the element files carry display names (name: "Security Analyst").
+      // Before #2432, this lookup failed for every such element.
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Security Analyst', type: 'persona' },
+                content: 'You are a security analyst.'
+              }
+            ]
+          } as any;
+        }
+        if (managerName === 'SkillManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Code Review', type: 'skill' },
+                instructions: 'Review code for security and quality issues.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('slug-ref-agent.md')) {
+          return `---
+name: "Slug Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Review code in {directory}"
+  parameters:
+    - name: directory
+      type: string
+      required: true
+
+activates:
+  personas:
+    - security-analyst
+  skills:
+    - code-review
+---
+
+# Slug Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'slug-ref-agent',
+        { directory: 'src' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+
+      expect(result.activeElements.personas).toBeDefined();
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].name).toBe('security-analyst');
+      expect(result.activeElements.personas[0].content).toBe('You are a security analyst.');
+
+      expect(result.activeElements.skills).toBeDefined();
+      expect(result.activeElements.skills).toHaveLength(1);
+      expect(result.activeElements.skills[0].name).toBe('code-review');
+      expect(result.activeElements.skills[0].content).toBe('Review code for security and quality issues.');
+    });
+
+    it('should still resolve exact display-name references unchanged', async () => {
+      AgentManager.resetResolvers();
+      AgentManager.setElementManagerResolver((managerName: string) => {
+        if (managerName === 'PersonaManager') {
+          return {
+            list: async () => [
+              {
+                metadata: { name: 'Security Analyst', type: 'persona' },
+                content: 'You are a security analyst.'
+              }
+            ]
+          } as any;
+        }
+        return null;
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('display-ref-agent.md')) {
+          return `---
+name: "Display Ref Agent"
+type: "agent"
+version: "2.0.0"
+
+goal:
+  template: "Do {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+
+activates:
+  personas:
+    - Security Analyst
+---
+
+# Display Ref Agent`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+
+      const result: ExecuteAgentResult = await agentManager.executeAgent(
+        'display-ref-agent',
+        { task: 'review' }
+      );
+
+      expect(result.activationWarnings ?? []).toHaveLength(0);
+      expect(result.activeElements.personas).toHaveLength(1);
+      expect(result.activeElements.personas[0].content).toBe('You are a security analyst.');
+    });
+  });
+
   /**
    * Test 5: Agent Without Activates (Minimal)
    *
