@@ -737,6 +737,18 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       completionSpy.mockRestore();
 
       expect(abort.success).toBe(false);
+      const stepAfterFailedAbort = await mcpAqlHandler.handleCreate({
+        operation: 'record_execution_step',
+        params: {
+          element_name: 'abort-save-conflict-agent',
+          stepDescription: 'Continue after failed abort',
+          outcome: 'success',
+          findings: 'The durable goal remains active',
+          confidence: 0.9,
+        },
+      });
+      expect(stepAfterFailedAbort.success).toBe(true);
+
       const deleteWhilePolicyRemains = await mcpAqlHandler.handleDelete({
         operation: 'delete_element',
         element_type: 'agent',

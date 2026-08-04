@@ -4095,11 +4095,6 @@ export class MCPAQLHandler {
             );
           }
 
-          // Mark all active goals as aborted
-          for (const goalId of activeGoalIds) {
-            this.abortedGoals.add(goalId);
-          }
-
           // Complete each exact goal from the strict snapshot before dropping policy.
           // Any storage or version conflict fails closed and preserves the sandbox.
           for (const goalId of activeGoalIds) {
@@ -4109,6 +4104,7 @@ export class MCPAQLHandler {
               outcome: 'failure',
               summary: `Execution aborted: ${reason}`,
             });
+            this.abortedGoals.add(goalId);
           }
 
           // A new execution may begin after the active-goal snapshot or after the
