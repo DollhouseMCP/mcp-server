@@ -287,6 +287,36 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       expect(deleteAfterRecovery.success).toBe(true);
     });
 
+    it('should recover policy state through an equivalent agent-name alias', async () => {
+      await createAgent('alias-policy-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('AliasPolicyAgent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'alias-policy-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'alias-policy-agent', reason: 'Recover aliased policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+
+      const deleteAfterRecovery = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'alias-policy-agent' },
+      });
+      expect(deleteAfterRecovery.success).toBe(true);
+    });
+
     it('should recover a stale policy after the executing agent is deleted', async () => {
       await createAgent('deleted-executing-agent', {
         gatekeeper: { deny: ['list_elements'] },

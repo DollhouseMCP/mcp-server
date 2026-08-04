@@ -650,7 +650,7 @@ export class MCPAQLHandler {
    * Issue #449
    */
   private readonly executingAgents = new Map<string, {
-    /** Agent element name (matches the Map key) */
+    /** Agent element name as supplied when execution began (Map key is canonical) */
     name: string;
     /** Metadata containing the resolved gatekeeper policy */
     metadata: Record<string, unknown>;
@@ -3822,6 +3822,7 @@ export class MCPAQLHandler {
     // Issue #323: Validate element_name parameter (was incorrectly using 'name')
     // All execute operations require element_name to identify the target
     const elementName = validateExecutionElementName(method, params);
+    const executionKey = manager.getExecutionIdentity(elementName);
 
     // Issue #110: Programmatic enforcement for DANGER_ZONE tier
     // Issue #402: Use DI-injected enforcer instead of singleton
@@ -3900,7 +3901,7 @@ export class MCPAQLHandler {
 
             // Always track if there's a gatekeeper policy, runtime override, or resilience policy
             if (gatekeeperPolicy || runtimeMaxSteps !== undefined || resiliencePolicy) {
-              this.executingAgents.set(elementName, {
+              this.executingAgents.set(executionKey, {
                 name: elementName,
                 metadata: {
                   ...(gatekeeperPolicy ? { gatekeeper: gatekeeperPolicy } : {}),
@@ -3916,7 +3917,7 @@ export class MCPAQLHandler {
             }
           } else if (runtimeMaxSteps !== undefined) {
             // No agent element to read, but we still need to store the override
-            this.executingAgents.set(elementName, {
+            this.executingAgents.set(executionKey, {
               name: elementName,
               metadata: { maxAutonomousSteps: runtimeMaxSteps },
               startedAt: Date.now(),
@@ -3967,7 +3968,7 @@ export class MCPAQLHandler {
         }
 
         // Issue #447: Apply runtime maxAutonomousSteps override if stored for this agent
-        const executingAgent = this.executingAgents.get(elementName);
+        const executingAgent = this.executingAgents.get(executionKey);
         const maxStepsOverride = executingAgent?.metadata?.maxAutonomousSteps as number | undefined;
 
         const updateResult = await manager.recordAgentStep({
@@ -3984,6 +3985,7 @@ export class MCPAQLHandler {
         // Issue #526: Evaluate resilience policy when autonomy says pause
         const resilienceResult = this.evaluateResilience(
           elementName,
+          executionKey,
           updateResult,
           params.outcome as string
         );
@@ -3992,7 +3994,7 @@ export class MCPAQLHandler {
         const finalResult = resilienceResult ?? updateResult;
         const autonomy = finalResult.autonomy as Record<string, unknown> | undefined;
         if (autonomy) {
-          const notifications = this.collectNotifications(elementName, autonomy);
+          const notifications = this.collectNotifications(executionKey, autonomy);
           if (notifications.length > 0) {
             autonomy.notifications = notifications;
           }
@@ -4012,7 +4014,7 @@ export class MCPAQLHandler {
         });
 
         // Issue #526: Track resilience outcome and reset circuit breaker on success
-        const completedAgent = this.executingAgents.get(elementName);
+        const completedAgent = this.executingAgents.get(executionKey);
         if (completedAgent?.resiliencePolicy && (completedAgent.continuationCount > 0 || completedAgent.retryCount > 0)) {
           const isSuccess = params.outcome === 'success';
           resilienceMetrics.recordCompletionAfterResilience(isSuccess);
@@ -4022,7 +4024,7 @@ export class MCPAQLHandler {
         }
 
         // Issue #449: Remove agent from executing set so its policies stop applying
-        this.executingAgents.delete(elementName);
+        this.executingAgents.delete(executionKey);
 
         // Issue #125: Return structured JSON with type discriminator
         return { _type: 'CompletionResult', ...completeResult };
@@ -4044,7 +4046,7 @@ export class MCPAQLHandler {
         const reason = (params.reason as string) || 'Aborted by user';
 
         // Find the active goal for this agent
-        const executionPolicyAtLookupStart = this.executingAgents.get(elementName);
+        const executionPolicyAtLookupStart = this.executingAgents.get(executionKey);
         const generationObservation = manager.observeExecutionGeneration(elementName);
         let activeGoalIds: string[];
         try {
@@ -4058,7 +4060,7 @@ export class MCPAQLHandler {
             // leaving the old map object unchanged and defeating identity checks
             // by themselves.
             const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, false);
-            const currentExecutionPolicy = this.executingAgents.get(elementName);
+            const currentExecutionPolicy = this.executingAgents.get(executionKey);
             if (
               revalidatedGoalIds.length > 0 ||
               manager.hasExecutionGenerationChanged(elementName, generationObservation.token) ||
@@ -4070,7 +4072,7 @@ export class MCPAQLHandler {
               );
             }
             if (executionPolicyAtLookupStart && currentExecutionPolicy === executionPolicyAtLookupStart) {
-              this.executingAgents.delete(elementName);
+              this.executingAgents.delete(executionKey);
               SecurityMonitor.logSecurityEvent({
                 type: 'AGENT_POLICY_RECOVERED',
                 severity: 'MEDIUM',
@@ -4115,13 +4117,13 @@ export class MCPAQLHandler {
         }
 
         // Issue #526: Track resilience outcome (abort = failure after resilience)
-        const abortedAgent = this.executingAgents.get(elementName);
+        const abortedAgent = this.executingAgents.get(executionKey);
         if (abortedAgent?.resiliencePolicy && (abortedAgent.continuationCount > 0 || abortedAgent.retryCount > 0)) {
           resilienceMetrics.recordCompletionAfterResilience(false);
         }
 
         // Clean up executingAgents Map (stop Gatekeeper policy enforcement)
-        this.executingAgents.delete(elementName);
+        this.executingAgents.delete(executionKey);
 
         SecurityMonitor.logSecurityEvent({
           type: 'AGENT_EXECUTED',
@@ -4329,11 +4331,11 @@ export class MCPAQLHandler {
    * @private
    */
   private collectNotifications(
-    agentName: string,
+    executionKey: string,
     autonomy: Record<string, unknown>
   ): AgentNotification[] {
     const notifications: AgentNotification[] = [];
-    const executingAgent = this.executingAgents.get(agentName);
+    const executingAgent = this.executingAgents.get(executionKey);
 
     // Source 1: Unreported gatekeeper blocks
     if (executingAgent?.recentBlocks) {
@@ -4409,6 +4411,7 @@ export class MCPAQLHandler {
    */
   private evaluateResilience(
     agentName: string,
+    executionKey: string,
     updateResult: Record<string, unknown>,
     stepOutcome: string
   ): Record<string, unknown> | null {
@@ -4417,7 +4420,7 @@ export class MCPAQLHandler {
     if (!autonomy || autonomy.continue === true) return null;
 
     // Look up the executing agent's resilience tracking state
-    const executingAgent = this.executingAgents.get(agentName);
+    const executingAgent = this.executingAgents.get(executionKey);
     if (!executingAgent?.resiliencePolicy) return null;
 
     // Determine what triggered the pause
@@ -4556,7 +4559,9 @@ export class MCPAQLHandler {
     suppressLookupErrors = true,
   ): Promise<string[]> {
     try {
-      const stateResult = await manager.getAgentStateForRecovery({ agentName });
+      const stateResult = suppressLookupErrors
+        ? await manager.getAgentState({ agentName })
+        : await manager.getAgentStateForRecovery({ agentName });
       if (stateResult?.state?.goals) {
         return stateResult.state.goals
           .filter((g: { status: string }) => g.status === 'in_progress')

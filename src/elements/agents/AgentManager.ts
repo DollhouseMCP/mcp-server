@@ -1254,7 +1254,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   /** Hold a bounded observation lease while stale-policy recovery is in flight. */
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
-    const key = this.normalizeFilename(name);
+    const key = this.getExecutionIdentity(name);
     const entry = this.getOrCreateExecutionGeneration(key);
     entry.observers += 1;
     let released = false;
@@ -1271,19 +1271,24 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   hasExecutionGenerationChanged(name: string, observedToken: object): boolean {
-    const entry = this.executionGenerations.get(this.normalizeFilename(name));
+    const entry = this.executionGenerations.get(this.getExecutionIdentity(name));
     return !entry || entry.activeExecutions > 0 || entry.token !== observedToken;
   }
 
+  /** Canonical identity shared by execution state, policy, and generation tracking. */
+  getExecutionIdentity(name: string): string {
+    return this.normalizeFilename(name);
+  }
+
   private beginExecutionAttempt(name: string): void {
-    const key = this.normalizeFilename(name);
+    const key = this.getExecutionIdentity(name);
     const entry = this.getOrCreateExecutionGeneration(key);
     entry.token = {};
     entry.activeExecutions += 1;
   }
 
   private endExecutionAttempt(name: string): void {
-    const key = this.normalizeFilename(name);
+    const key = this.getExecutionIdentity(name);
     const entry = this.executionGenerations.get(key);
     if (!entry) return;
     entry.activeExecutions = Math.max(0, entry.activeExecutions - 1);
