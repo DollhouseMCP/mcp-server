@@ -424,7 +424,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async readFlexibly(name: string): Promise<Agent | null> {
     try {
-      const agents = await this.list();
+      const agents = await this.listForFlexibleRead();
       if (agents.length === 0) return null;
 
       const searchLower = name.toLowerCase();
@@ -453,8 +453,19 @@ export class AgentManager extends BaseElementManager<Agent> {
       return match ?? null;
     } catch (listError) {
       logger.debug(`Flexible agent lookup failed for "${name}": ${listError}`);
-      return null;
+      throw listError;
     }
+  }
+
+  /**
+   * Enumerate fallback candidates without converting storage failures into an
+   * empty list. Flexible lookup can report "not found" only after every
+   * candidate was listed and loaded successfully.
+   */
+  private async listForFlexibleRead(): Promise<Agent[]> {
+    await this.fileOperations.createDirectory(this.elementDir);
+    const files = await this.portfolioManager.listElements(ElementType.AGENT);
+    return Promise.all(files.map(file => this.load(file)));
   }
 
   /**

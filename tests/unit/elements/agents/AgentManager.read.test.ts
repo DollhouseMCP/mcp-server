@@ -231,7 +231,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
   });
 
   describe('flexible fallback resilience', () => {
-    it('should return null if list() throws during fallback', async () => {
+    it('should propagate list failures through getAgentState()', async () => {
       // Direct lookup: ENOENT
       fileOperationsService.readFile.mockRejectedValue(
         Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
@@ -239,9 +239,21 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       // list() itself throws
       mockPortfolioManager.listElements.mockRejectedValue(new Error('Storage unavailable'));
 
-      const agent = await agentManager.read('failing-agent');
+      await expect(agentManager.getAgentState({ agentName: 'failing-agent' }))
+        .rejects.toThrow('Storage unavailable');
+    });
 
-      expect(agent).toBeNull();
+    it('should propagate candidate load failures through getAgentState()', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (path.basename(filePath) === 'failing-agent.md') {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        throw new Error('Candidate storage unavailable');
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['legacy-failing-agent.md']);
+
+      await expect(agentManager.getAgentState({ agentName: 'failing-agent' }))
+        .rejects.toThrow('Candidate storage unavailable');
     });
   });
 });
