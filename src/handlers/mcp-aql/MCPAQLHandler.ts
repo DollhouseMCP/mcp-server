@@ -4045,51 +4045,56 @@ export class MCPAQLHandler {
 
         // Find the active goal for this agent
         const executionPolicyAtLookupStart = this.executingAgents.get(elementName);
-        const executionGenerationAtLookupStart = manager.getExecutionGeneration();
-        const activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
-        if (activeGoalIds.length === 0) {
-          // Issue #2427: the durable goal may already be gone while the in-memory
-          // execution policy remains. Explicit abort is safer and narrower than
-          // clearing every active element through release_deadlock.
-          // Re-read durable state immediately before cleanup. A concurrent
-          // execute_agent can persist a new goal while policy tracking fails,
-          // leaving the old map object unchanged and defeating identity checks
-          // by themselves.
-          const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, false);
-          const currentExecutionPolicy = this.executingAgents.get(elementName);
-          if (
-            revalidatedGoalIds.length > 0 ||
-            manager.getExecutionGeneration() !== executionGenerationAtLookupStart ||
-            (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart)
-          ) {
+        const generationObservation = manager.observeExecutionGeneration(elementName);
+        let activeGoalIds: string[];
+        try {
+          activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
+          if (activeGoalIds.length === 0) {
+            // Issue #2427: the durable goal may already be gone while the in-memory
+            // execution policy remains. Explicit abort is safer and narrower than
+            // clearing every active element through release_deadlock.
+            // Re-read durable state immediately before cleanup. A concurrent
+            // execute_agent can persist a new goal while policy tracking fails,
+            // leaving the old map object unchanged and defeating identity checks
+            // by themselves.
+            const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, false);
+            const currentExecutionPolicy = this.executingAgents.get(elementName);
+            if (
+              revalidatedGoalIds.length > 0 ||
+              manager.hasExecutionGenerationChanged(elementName, generationObservation.token) ||
+              (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart)
+            ) {
+              throw new Error(
+                `Execution state changed while recovering agent '${elementName}'. ` +
+                `The newer execution policy was preserved; retry abort_execution to abort it.`
+              );
+            }
+            if (executionPolicyAtLookupStart && currentExecutionPolicy === executionPolicyAtLookupStart) {
+              this.executingAgents.delete(elementName);
+              SecurityMonitor.logSecurityEvent({
+                type: 'AGENT_POLICY_RECOVERED',
+                severity: 'MEDIUM',
+                source: 'MCPAQLHandler.dispatchExecute.abort',
+                details: `Recovered stale execution policy for agent: ${elementName}`,
+                additionalData: { agentName: elementName, reason: 'stale_execution_policy' },
+              });
+              return {
+                _type: 'AbortResult',
+                success: true,
+                agentName: elementName,
+                abortedGoalIds: [],
+                recoveredStalePolicy: true,
+                reason,
+                message: `Removed stale execution policy for agent '${elementName}'. No active goal remained.`,
+              };
+            }
             throw new Error(
-              `Execution state changed while recovering agent '${elementName}'. ` +
-              `The newer execution policy was preserved; retry abort_execution to abort it.`
+              `No active execution found for agent '${elementName}'. ` +
+              `Nothing to abort.`
             );
           }
-          if (executionPolicyAtLookupStart && currentExecutionPolicy === executionPolicyAtLookupStart) {
-            this.executingAgents.delete(elementName);
-            SecurityMonitor.logSecurityEvent({
-              type: 'AGENT_POLICY_RECOVERED',
-              severity: 'MEDIUM',
-              source: 'MCPAQLHandler.dispatchExecute.abort',
-              details: `Recovered stale execution policy for agent: ${elementName}`,
-              additionalData: { agentName: elementName, reason: 'stale_execution_policy' },
-            });
-            return {
-              _type: 'AbortResult',
-              success: true,
-              agentName: elementName,
-              abortedGoalIds: [],
-              recoveredStalePolicy: true,
-              reason,
-              message: `Removed stale execution policy for agent '${elementName}'. No active goal remained.`,
-            };
-          }
-          throw new Error(
-            `No active execution found for agent '${elementName}'. ` +
-            `Nothing to abort.`
-          );
+        } finally {
+          generationObservation.release();
         }
 
         // Mark all active goals as aborted
@@ -4551,7 +4556,7 @@ export class MCPAQLHandler {
     suppressLookupErrors = true,
   ): Promise<string[]> {
     try {
-      const stateResult = await manager.getAgentState({ agentName });
+      const stateResult = await manager.getAgentStateForRecovery({ agentName });
       if (stateResult?.state?.goals) {
         return stateResult.state.goals
           .filter((g: { status: string }) => g.status === 'in_progress')

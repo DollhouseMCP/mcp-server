@@ -239,7 +239,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(stateReads).toEqual(['legacy-poster.state.yaml']);
     });
 
-    it('should fail closed when a flexible match has no requested state identity', async () => {
+    it('should return empty state for an ordinary flexible read with no requested state identity', async () => {
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
         if (filename === 'legacy-poster.md' || filename.endsWith('.state.yaml')) {
@@ -251,6 +251,24 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       mockPortfolioManager.listElements.mockResolvedValue(['legacy-poster-agent.md']);
 
       await expect(agentManager.getAgentState({ agentName: 'legacy-poster' }))
+        .resolves.toEqual(expect.objectContaining({
+          agentName: 'legacy-poster',
+          state: expect.objectContaining({ goals: [] }),
+        }));
+    });
+
+    it('should fail closed during recovery when a flexible match has no requested state identity', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-poster.md' || filename.endsWith('.state.yaml')) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (filename === 'legacy-poster-agent.md') return AGENT_CONTENT_LEGACY;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['legacy-poster-agent.md']);
+
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'legacy-poster' }))
         .rejects.toThrow('Cannot verify durable state');
     });
   });
@@ -291,7 +309,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       await expect(agentManager.read('some-agent')).rejects.toThrow('EACCES');
     });
 
-    it('should propagate requested state failures through getAgentState()', async () => {
+    it('should propagate requested state failures through strict recovery reads', async () => {
       const cacheSpy = jest.spyOn(
         agentManager as unknown as {
           cacheElement: (agent: unknown, filename: string) => void;
@@ -307,7 +325,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
       });
 
-      await expect(agentManager.getAgentState({ agentName: 'my-agent' }))
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'my-agent' }))
         .rejects.toThrow('State storage unavailable');
       expect(cacheSpy).not.toHaveBeenCalled();
     });
@@ -322,7 +340,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         Object.assign(new Error('State mount unavailable'), { code: 'ENOENT' })
       );
 
-      await expect(agentManager.getAgentState({ agentName: 'my-agent' }))
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'my-agent' }))
         .rejects.toThrow('Agent state directory unavailable: State mount unavailable');
     });
 
@@ -339,7 +357,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(firstRead?.getState().goals[0]?.status).toBe('completed');
 
       requestedState = ACTIVE_REQUESTED_STATE;
-      const strictRead = await agentManager.getAgentState({ agentName: 'my-agent' });
+      const strictRead = await agentManager.getAgentStateForRecovery({ agentName: 'my-agent' });
       expect(strictRead.state.goals[0]?.status).toBe('in_progress');
     });
   });

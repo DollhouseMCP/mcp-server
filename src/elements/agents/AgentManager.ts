@@ -92,6 +92,17 @@ interface FlexibleReadCandidates {
   loadFailures: unknown[];
 }
 
+interface ExecutionGenerationEntry {
+  token: object;
+  activeExecutions: number;
+  observers: number;
+}
+
+export interface ExecutionGenerationObservation {
+  token: object;
+  release: () => void;
+}
+
 type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & {
   content?: string;
 };
@@ -103,8 +114,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
-  /** Bounded token replaced synchronously at every executeAgent entry point. */
-  private executionGeneration: object = {};
+  /** Per-agent tokens retained only while execution or recovery is in flight. */
+  private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   // Track active agents by name (stable identifier)
   private readonly activeAgentNames: Set<string> = new Set();
 
@@ -994,7 +1005,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): Promise<ExecuteAgentResult> {
     // Must happen before any await so recovery sees starts from MCP-AQL, legacy
     // tools, and any future caller that uses the shared manager entry point.
-    this.executionGeneration = {};
+    this.beginExecutionAttempt(name);
     try {
       // 1. Load agent by name
       const agent = await this.read(name);
@@ -1236,12 +1247,62 @@ export class AgentManager extends BaseElementManager<Agent> {
     } catch (error) {
       logger.error(`Failed to execute agent '${name}':`, error);
       throw error;
+    } finally {
+      this.endExecutionAttempt(name);
     }
   }
 
-  /** Return the opaque execution-attempt token used by stale-policy recovery. */
-  getExecutionGeneration(): object {
-    return this.executionGeneration;
+  /** Hold a bounded observation lease while stale-policy recovery is in flight. */
+  observeExecutionGeneration(name: string): ExecutionGenerationObservation {
+    const key = this.normalizeFilename(name);
+    const entry = this.getOrCreateExecutionGeneration(key);
+    entry.observers += 1;
+    let released = false;
+
+    return {
+      token: entry.token,
+      release: () => {
+        if (released) return;
+        released = true;
+        entry.observers -= 1;
+        this.cleanupExecutionGeneration(key, entry);
+      },
+    };
+  }
+
+  hasExecutionGenerationChanged(name: string, observedToken: object): boolean {
+    const entry = this.executionGenerations.get(this.normalizeFilename(name));
+    return !entry || entry.activeExecutions > 0 || entry.token !== observedToken;
+  }
+
+  private beginExecutionAttempt(name: string): void {
+    const key = this.normalizeFilename(name);
+    const entry = this.getOrCreateExecutionGeneration(key);
+    entry.token = {};
+    entry.activeExecutions += 1;
+  }
+
+  private endExecutionAttempt(name: string): void {
+    const key = this.normalizeFilename(name);
+    const entry = this.executionGenerations.get(key);
+    if (!entry) return;
+    entry.activeExecutions = Math.max(0, entry.activeExecutions - 1);
+    this.cleanupExecutionGeneration(key, entry);
+  }
+
+  private getOrCreateExecutionGeneration(key: string): ExecutionGenerationEntry {
+    let entry = this.executionGenerations.get(key);
+    if (!entry) {
+      entry = { token: {}, activeExecutions: 0, observers: 0 };
+      this.executionGenerations.set(key, entry);
+    }
+    return entry;
+  }
+
+  private cleanupExecutionGeneration(key: string, entry: ExecutionGenerationEntry): void {
+    if (entry.activeExecutions === 0 && entry.observers === 0) {
+      this.executionGenerations.delete(key);
+    }
   }
 
   /**
@@ -2972,7 +3033,24 @@ export class AgentManager extends BaseElementManager<Agent> {
     agentName: string;
     includeDecisionHistory?: boolean;
     includeContext?: boolean;
-  }): Promise<{
+  }) {
+    return this.getAgentStateWithPolicy(params, false);
+  }
+
+  /** Strict durable-state variant reserved for stale-policy recovery. */
+  async getAgentStateForRecovery(params: {
+    agentName: string;
+    includeDecisionHistory?: boolean;
+    includeContext?: boolean;
+  }) {
+    return this.getAgentStateWithPolicy(params, true);
+  }
+
+  private async getAgentStateWithPolicy(params: {
+    agentName: string;
+    includeDecisionHistory?: boolean;
+    includeContext?: boolean;
+  }, strictStateErrors: boolean): Promise<{
     success: boolean;
     agentName: string;
     state: {
@@ -3021,7 +3099,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }> {
     // 1. Load agent by name
-    const agent = await this.readWithStatePolicy(params.agentName, true);
+    const agent = await this.readWithStatePolicy(params.agentName, strictStateErrors);
     if (!agent) {
       // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
       throw new ElementNotFoundError('Agent', params.agentName);

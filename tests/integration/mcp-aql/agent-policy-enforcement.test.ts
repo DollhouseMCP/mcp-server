@@ -232,7 +232,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       });
 
       expect((await executeAgent('lookup-failure-agent')).success).toBe(true);
-      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
         .mockRejectedValueOnce(new Error('Agent state storage unavailable'));
 
       const recovery = await mcpAqlHandler.handleExecute({
@@ -336,7 +336,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       let releaseLookup!: () => void;
       const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
       const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
-      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
         .mockImplementationOnce(async () => {
           markLookupStarted();
           await lookupBlocked;
@@ -393,7 +393,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       let releaseLookup!: () => void;
       const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
       const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
-      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
         .mockImplementationOnce(async () => {
           markLookupStarted();
           await lookupBlocked;
@@ -462,7 +462,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       let releaseLookup!: () => void;
       const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
       const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
-      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
         .mockImplementationOnce(async () => {
           markLookupStarted();
           await lookupBlocked;
@@ -516,6 +516,59 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
         params: { element_name: 'restart-before-persist-agent' },
       });
       expect(deleteWhileSandboxRemains.success).toBe(false);
+    });
+
+    it('should ignore another agent execution during stale policy recovery', async () => {
+      await createAgent('independent-stale-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      await createAgent('unrelated-running-agent');
+
+      expect((await executeAgent('independent-stale-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'independent-stale-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const staleState = await agentManager.getAgentState({
+        agentName: 'independent-stale-agent',
+      });
+      const emptyStateSnapshot = {
+        ...staleState,
+        state: { ...staleState.state, goals: [] },
+      };
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
+        .mockImplementationOnce(async () => {
+          markLookupStarted();
+          await lookupBlocked;
+          return emptyStateSnapshot;
+        });
+
+      const recoveryPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'independent-stale-agent',
+          reason: 'Recover stale policy',
+        },
+      });
+      await lookupStarted;
+      expect((await executeAgent('unrelated-running-agent')).success).toBe(true);
+      releaseLookup();
+
+      const recovery = await recoveryPromise;
+      stateSpy.mockRestore();
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({
+          recoveredStalePolicy: true,
+          agentName: 'independent-stale-agent',
+        }));
+      }
     });
 
     it('should recover a stale policy without clearing a DangerZone block', async () => {
