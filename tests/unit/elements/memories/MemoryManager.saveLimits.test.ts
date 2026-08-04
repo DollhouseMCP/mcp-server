@@ -164,6 +164,27 @@ describe('MemoryManager save size limits (#2329)', () => {
     expect(loaded.content).not.toContain('exec("dangerous-command")');
   });
 
+  it('redacts flagged entries with malformed sanitized content after reload', async () => {
+    const memory = new Memory({
+      name: 'Malformed Flagged Entry',
+      description: 'Regression coverage for hand-edited sanitized content',
+    }, metadataService);
+    const entry = await memory.addEntry('Original flagged content must not render.');
+    entry.trustLevel = TRUST_LEVELS.FLAGGED;
+    (entry as unknown as { sanitizedContent: unknown }).sanitizedContent = {
+      unexpected: 'object'
+    };
+
+    await manager.save(memory, 'malformed-flagged-entry.yaml');
+    const loaded = await manager.load('malformed-flagged-entry.yaml');
+
+    expect(() => loaded.content).not.toThrow();
+    expect(loaded.content).toContain(
+      '[FLAGGED CONTENT REDACTED: sanitized representation unavailable]'
+    );
+    expect(loaded.content).not.toContain('Original flagged content must not render.');
+  });
+
   it('continues scanning memory instructions while historical entries are exempt', async () => {
     const memory = new Memory({
       name: 'Unsafe Instructions',

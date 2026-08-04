@@ -630,7 +630,9 @@ export class Memory extends BaseElement implements IElement {
         // Clearly mark untrusted content
         displayContent = this.sandboxUntrustedContent(entry.content, entry.source || 'unknown');
       } else if (trustLevel === TRUST_LEVELS.FLAGGED) {
-        const sanitizedContent = entry.sanitizedContent && entry.sanitizedContent !== entry.content
+        const sanitizedContent = typeof entry.sanitizedContent === 'string' &&
+          entry.sanitizedContent.trim().length > 0 &&
+          entry.sanitizedContent !== entry.content
           ? entry.sanitizedContent
           : '[FLAGGED CONTENT REDACTED: sanitized representation unavailable]';
         displayContent = this.sandboxUntrustedContent(
