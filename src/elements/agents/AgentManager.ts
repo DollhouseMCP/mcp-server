@@ -1889,11 +1889,19 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @returns The new state version after successful save
    * @protected Only accessible by subclasses (e.g., TestableAgentManager for testing)
    */
-  protected async saveAgentState(name: string, state: AgentState): Promise<number> {
-    await this.ensureStateDirectory();
+  protected async saveAgentState(
+    name: string,
+    state: AgentState,
+    strictExistingStateErrors = false,
+  ): Promise<number> {
+    if (strictExistingStateErrors) {
+      await this.assertStateDirectoryAvailable();
+    } else {
+      await this.ensureStateDirectory();
+    }
 
     // FIX: Normalize name for consistent state file naming
-    const normalizedName = this.normalizeFilename(name);
+    const normalizedName = normalizeElementStorageIdentity(name);
     const filePath = path.join(this.stateDir, `${normalizedName}${STATE_FILE_EXTENSION}`);
 
     // FIX (Issue #107 - CRIT-2): Acquire file lock to prevent TOCTOU race condition
@@ -1901,7 +1909,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     await this.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
       // FIX: Optimistic locking check (Issue #24)
       // Load existing state to compare versions before overwriting
-      const existingState = await this.loadAgentState(name);
+      const existingState = await this.loadAgentState(name, strictExistingStateErrors);
+      if (strictExistingStateErrors && !existingState) {
+        throw new Error(`Agent state disappeared while completing goal for '${name}'`);
+      }
       if (existingState && existingState.stateVersion !== undefined && state.stateVersion !== undefined) {
         // Check if our state is based on the current version
         // If versions don't match, it means another process updated the state
@@ -1991,7 +2002,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   private async loadAgentState(name: string, strictStateErrors = false): Promise<AgentState | null> {
     // FIX: Normalize name for consistent state file lookups
-    const normalizedName = this.normalizeFilename(name);
+    const normalizedName = normalizeElementStorageIdentity(name);
 
     // Security-sensitive state checks must re-read durable storage rather than
     // trusting a possibly stale process cache.
@@ -2935,7 +2946,26 @@ export class AgentManager extends BaseElementManager<Agent> {
     goalId?: string;
     outcome: "success" | "failure" | "partial";
     summary: string;
-  }): Promise<{
+  }) {
+    return this.completeAgentGoalWithStatePolicy(params, false);
+  }
+
+  /** Complete an exact durable goal without consulting ordinary state caches. */
+  async completeAgentGoalForRecovery(params: {
+    agentName: string;
+    goalId: string;
+    outcome: "success" | "failure" | "partial";
+    summary: string;
+  }) {
+    return this.completeAgentGoalWithStatePolicy(params, true);
+  }
+
+  private async completeAgentGoalWithStatePolicy(params: {
+    agentName: string;
+    goalId?: string;
+    outcome: "success" | "failure" | "partial";
+    summary: string;
+  }, strictStateErrors: boolean): Promise<{
     success: boolean;
     message: string;
     goal: {
@@ -2962,7 +2992,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }> {
     // 1. Load agent by name
-    const agent = await this.read(params.agentName);
+    const agent = strictStateErrors
+      ? await this.readWithStatePolicy(params.agentName, true)
+      : await this.read(params.agentName);
     if (!agent) {
       // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
       throw new ElementNotFoundError('Agent', params.agentName);
@@ -2988,6 +3020,11 @@ export class AgentManager extends BaseElementManager<Agent> {
           : `No in-progress goal found for agent '${params.agentName}'`
       );
     }
+    if (strictStateErrors && goal.status !== 'in_progress') {
+      throw new Error(
+        `Goal '${goal.id}' changed while aborting agent '${params.agentName}'`
+      );
+    }
 
     // 3. Record final decision with summary
     agent.recordDecision({
@@ -3006,7 +3043,17 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 6. Save agent state
     const completeSanitizedName = sanitizeInput(params.agentName, 100);
-    await this.save(agent, this.getFilename(completeSanitizedName));
+    if (strictStateErrors) {
+      const newVersion = await this.saveAgentState(
+        completeSanitizedName,
+        agent.getState(),
+        true,
+      );
+      agent[COMMIT_PERSISTED_VERSION](newVersion);
+      agent.markStatePersisted();
+    } else {
+      await this.save(agent, this.getFilename(completeSanitizedName));
+    }
 
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();

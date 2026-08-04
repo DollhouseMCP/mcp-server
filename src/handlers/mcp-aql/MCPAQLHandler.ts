@@ -4104,16 +4104,15 @@ export class MCPAQLHandler {
           this.abortedGoals.add(goalId);
         }
 
-        // Complete the agent goal with 'failure' outcome to persist the aborted state
-        try {
-          await manager.completeAgentGoal({
+        // Complete each exact goal from the strict snapshot before dropping policy.
+        // Any storage or version conflict fails closed and preserves the sandbox.
+        for (const goalId of activeGoalIds) {
+          await manager.completeAgentGoalForRecovery({
             agentName: elementName,
+            goalId,
             outcome: 'failure',
             summary: `Execution aborted: ${reason}`,
           });
-        } catch {
-          // Non-fatal: goal may already be completed or agent state may be inconsistent
-          logger.warn('Failed to mark aborted agent goal as failed', { agentName: elementName });
         }
 
         // Issue #526: Track resilience outcome (abort = failure after resilience)

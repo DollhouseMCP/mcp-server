@@ -86,6 +86,7 @@ describe('MCPAQLHandler', () => {
         getAgentState: jest.fn().mockResolvedValue({ status: 'idle', steps: [] }),
         recordAgentStep: jest.fn().mockResolvedValue({ recorded: true }),
         completeAgentGoal: jest.fn().mockResolvedValue({ completed: true }),
+        completeAgentGoalForRecovery: jest.fn().mockResolvedValue({ completed: true }),
         continueAgentExecution: jest.fn().mockResolvedValue({ continued: true }),
       },
       templateRenderer: {
@@ -1652,6 +1653,7 @@ describe('MCPAQLHandler', () => {
           getAgentState: jest.fn().mockResolvedValue({ status: 'idle', steps: [] }),
           recordAgentStep: jest.fn().mockResolvedValue({ recorded: true }),
           completeAgentGoal: jest.fn().mockResolvedValue({ completed: true }),
+          completeAgentGoalForRecovery: jest.fn().mockResolvedValue({ completed: true }),
           continueAgentExecution: jest.fn().mockResolvedValue({ continued: true }),
         },
         templateRenderer: {

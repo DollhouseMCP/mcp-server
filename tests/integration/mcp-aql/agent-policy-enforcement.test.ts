@@ -691,6 +691,59 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
         dangerZoneEnforcer.unblock('danger-zone-active-agent');
       }
     });
+
+    it('should complete the durable goal when the ordinary state cache is stale', async () => {
+      await createAgent('stale-cache-abort-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      const preExecutionAgent = await agentManager.read('stale-cache-abort-agent');
+      expect(preExecutionAgent).not.toBeNull();
+      const emptyState = preExecutionAgent!.getState();
+
+      expect((await executeAgent('stale-cache-abort-agent')).success).toBe(true);
+      const stateCache = (
+        agentManager as unknown as {
+          stateCache: { set: (key: string, value: unknown) => unknown };
+        }
+      ).stateCache;
+      stateCache.set('stale-cache-abort-agent', emptyState);
+
+      const abort = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'stale-cache-abort-agent', reason: 'Stop cached execution' },
+      });
+
+      expect(abort.success).toBe(true);
+      const durableState = await agentManager.getAgentStateForRecovery({
+        agentName: 'stale-cache-abort-agent',
+      });
+      expect(durableState.state.goals).toEqual([
+        expect.objectContaining({ status: 'failed' }),
+      ]);
+    });
+
+    it('should preserve policy when durable goal completion fails', async () => {
+      await createAgent('abort-save-conflict-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      expect((await executeAgent('abort-save-conflict-agent')).success).toBe(true);
+      const completionSpy = jest.spyOn(agentManager, 'completeAgentGoalForRecovery')
+        .mockRejectedValueOnce(new Error('State version conflict'));
+
+      const abort = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'abort-save-conflict-agent', reason: 'Conflicting abort' },
+      });
+      completionSpy.mockRestore();
+
+      expect(abort.success).toBe(false);
+      const deleteWhilePolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'abort-save-conflict-agent' },
+      });
+      expect(deleteWhilePolicyRemains.success).toBe(false);
+    });
   });
 
   describe('Agent without gatekeeper has no restrictions', () => {
