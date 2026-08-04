@@ -11,6 +11,7 @@
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
+import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import type { ElementIndexEntry } from './types.js';
 import { logger } from '../utils/logger.js';
 
@@ -172,7 +173,15 @@ export class MemoryMetadataExtractor {
    */
   private static tryParseYamlObject(content: string): { data?: Record<string, unknown>; errorMessage?: string } {
     try {
-      return { data: SecureYamlParser.parseRawYaml(content, MemoryMetadataExtractor.MAX_YAML_SIZE) };
+      const data = SecureYamlParser.parseRawYaml(
+        content,
+        MemoryMetadataExtractor.MAX_YAML_SIZE,
+        { detectContentPatterns: false },
+      );
+      if (!validateMemoryControlFields(data)) {
+        return { errorMessage: 'Malicious memory control content detected' };
+      }
+      return { data };
     } catch (error) {
       return {
         errorMessage: error instanceof Error ? error.message : String(error),
