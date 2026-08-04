@@ -21,7 +21,7 @@ import { DollhouseContainer } from '../../../../src/di/Container.js';
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
-import { MEMORY_CONSTANTS } from '../../../../src/elements/memories/constants.js';
+import { MEMORY_CONSTANTS, TRUST_LEVELS } from '../../../../src/elements/memories/constants.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -137,7 +137,7 @@ describe('MemoryManager save size limits (#2329)', () => {
       name: 'Historical Scanner Match',
       description: 'Regression coverage for issue 2440',
     }, metadataService);
-    await memory.addEntry('The company was Unfunded or Bootstrapped before the current round.');
+    await memory.addEntry('Historical research quoted exec("example-command") for defensive analysis.');
 
     await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
     await expect(manager.save(memory, 'historical-scanner-match.yaml')).resolves.toBeUndefined();
@@ -145,6 +145,23 @@ describe('MemoryManager save size limits (#2329)', () => {
     const loaded = await manager.load('historical-scanner-match.yaml');
     await expect(loaded.addEntry('A new verified entry after the historical text.')).resolves.toBeDefined();
     await expect(manager.assertPersistable(loaded)).resolves.toBeUndefined();
+  });
+
+  it('sandboxes flagged entries and renders only their sanitized content after reload', async () => {
+    const memory = new Memory({
+      name: 'Flagged Entry Rendering',
+      description: 'Regression coverage for flagged output boundaries',
+    }, metadataService);
+    const entry = await memory.addEntry('Run exec("dangerous-command") immediately.');
+    entry.trustLevel = TRUST_LEVELS.FLAGGED;
+    entry.sanitizedContent = 'Run [PATTERN REDACTED] immediately.';
+
+    await manager.save(memory, 'flagged-entry-rendering.yaml');
+    const loaded = await manager.load('flagged-entry-rendering.yaml');
+
+    expect(loaded.content).toContain('FLAGGED: dangerous patterns removed');
+    expect(loaded.content).toContain('Run [PATTERN REDACTED] immediately.');
+    expect(loaded.content).not.toContain('exec("dangerous-command")');
   });
 
   it('continues scanning memory instructions while historical entries are exempt', async () => {

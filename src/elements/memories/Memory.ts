@@ -112,6 +112,8 @@ export interface MemoryEntry {
   privacyLevel?: PrivacyLevel;
   // FIX #1269: Trust level for content security
   trustLevel?: TrustLevel;
+  sanitizedPatterns?: unknown[];
+  sanitizedContent?: string;
   // Source information for trust decisions
   source?: string;  // e.g., 'user', 'web-scrape', 'agent', 'api'
 }
@@ -627,6 +629,15 @@ export class Memory extends BaseElement implements IElement {
       if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
         // Clearly mark untrusted content
         displayContent = this.sandboxUntrustedContent(entry.content, entry.source || 'unknown');
+      } else if (trustLevel === TRUST_LEVELS.FLAGGED) {
+        const sanitizedContent = entry.sanitizedContent && entry.sanitizedContent !== entry.content
+          ? entry.sanitizedContent
+          : '[FLAGGED CONTENT REDACTED: sanitized representation unavailable]';
+        displayContent = this.sandboxUntrustedContent(
+          sanitizedContent,
+          entry.source || 'unknown',
+          'FLAGGED: dangerous patterns removed',
+        );
       } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
         // Don't display quarantined content at all
         displayContent = '[CONTENT QUARANTINED: Security threat detected]';
@@ -652,11 +663,15 @@ export class Memory extends BaseElement implements IElement {
    * Sandbox untrusted content with clear delimiters
    * FIX #1269: Prevents AI from interpreting user content as instructions
    */
-  private sandboxUntrustedContent(content: string, source: string): string {
+  private sandboxUntrustedContent(
+    content: string,
+    source: string,
+    status = 'NOT VALIDATED',
+  ): string {
     return [
       '┌─── UNTRUSTED CONTENT START ───┐',
       `│ Source: ${source}`,
-      `│ Status: NOT VALIDATED`,
+      `│ Status: ${status}`,
       '├────────────────────────────────┤',
       content.split('\n').map(line => `│ ${line}`).join('\n'),
       '└─── UNTRUSTED CONTENT END ─────┘'
