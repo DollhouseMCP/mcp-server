@@ -52,6 +52,11 @@ export function normalizeElementFilename(name: string): string {
     .replace(/^-+|-+$/g, '');
 }
 
+/** Canonical non-empty identity used for element files and related runtime maps. */
+export function normalizeElementStorageIdentity(name: string): string {
+  return normalizeElementFilename(name) || 'unnamed';
+}
+
 export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');

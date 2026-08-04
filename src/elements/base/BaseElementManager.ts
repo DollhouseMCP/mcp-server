@@ -49,7 +49,7 @@ import {
 } from '../../config/performance-constants.js';
 import type { CacheMemoryBudget } from '../../cache/CacheMemoryBudget.js';
 import type { BackupService } from '../../services/BackupService.js';
-import { normalizeElementFilename } from '../../utils/filesystem.js';
+import { normalizeElementFilename, normalizeElementStorageIdentity } from '../../utils/filesystem.js';
 
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
 const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
@@ -1259,7 +1259,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * getElementFilename("fix-persona-helper")  // → "fix-persona-helper.md" (no mangling)
    */
   protected getElementFilename(name: string): string {
-    const normalizedName = this.normalizeFilename(name) || 'unnamed';
+    const normalizedName = normalizeElementStorageIdentity(name);
     const extension = this.getFileExtension();
     return `${normalizedName}${extension}`;
   }

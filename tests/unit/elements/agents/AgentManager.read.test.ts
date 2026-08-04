@@ -210,7 +210,40 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(agent?.metadata.name).toBe('Legacy-Poster');
     });
 
-    it('should hydrate flexible matches from the requested state identity', async () => {
+    it('should preserve candidate-file state for ordinary flexible reads', async () => {
+      const stateReads: string[] = [];
+      const candidateState = ACTIVE_REQUESTED_STATE.replace(
+        'goal_requested_active',
+        'goal_candidate_active',
+      );
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-poster.md') {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (filename === 'legacy-poster-agent.md') {
+          return AGENT_CONTENT_LEGACY;
+        }
+        if (filename.endsWith('.state.yaml')) {
+          stateReads.push(filename);
+          if (filename === 'legacy-poster-agent.state.yaml') {
+            return candidateState;
+          }
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['legacy-poster-agent.md']);
+
+      const result = await agentManager.getAgentState({ agentName: 'legacy-poster' });
+
+      expect(result.state.goals).toEqual([
+        expect.objectContaining({ id: 'goal_candidate_active', status: 'in_progress' })
+      ]);
+      expect(stateReads).toEqual(['legacy-poster-agent.state.yaml']);
+    });
+
+    it('should hydrate strict recovery from the requested state identity', async () => {
       const stateReads: string[] = [];
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
@@ -231,7 +264,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       });
       mockPortfolioManager.listElements.mockResolvedValue(['legacy-poster-agent.md']);
 
-      const result = await agentManager.getAgentState({ agentName: 'legacy-poster' });
+      const result = await agentManager.getAgentStateForRecovery({ agentName: 'legacy-poster' });
 
       expect(result.state.goals).toEqual([
         expect.objectContaining({ id: 'goal_requested_active', status: 'in_progress' })

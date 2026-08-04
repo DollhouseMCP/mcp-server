@@ -317,6 +317,29 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       expect(deleteAfterRecovery.success).toBe(true);
     });
 
+    it('should use the storage fallback identity for separator-only agent names', async () => {
+      await createAgent('---', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('---')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'unnamed',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'unnamed', reason: 'Recover fallback identity policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+    });
+
     it('should recover a stale policy after the executing agent is deleted', async () => {
       await createAgent('deleted-executing-agent', {
         gatekeeper: { deny: ['list_elements'] },

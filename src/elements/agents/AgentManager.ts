@@ -64,6 +64,7 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { normalizeElementStorageIdentity } from '../../utils/filesystem.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 
@@ -87,8 +88,13 @@ interface ParsedAgentFile {
   content: string;
 }
 
+interface FlexibleReadCandidate {
+  agent: Agent;
+  filePath: string;
+}
+
 interface FlexibleReadCandidates {
-  agents: Agent[];
+  candidates: FlexibleReadCandidate[];
   loadFailures: unknown[];
 }
 
@@ -451,39 +457,43 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async readFlexibly(name: string, strictStateErrors = false): Promise<Agent | null> {
     try {
-      const { agents, loadFailures } = await this.listForFlexibleRead();
+      const { candidates, loadFailures } = await this.listForFlexibleRead();
 
       const searchLower = name.toLowerCase();
       const searchSlug = this.normalizeFilename(name);
 
       // Pass 1: exact case-insensitive match on metadata name
-      let match = agents.find(
-        (a) => a.metadata.name.toLowerCase() === searchLower
+      let match = candidates.find(
+        ({ agent }) => agent.metadata.name.toLowerCase() === searchLower
       );
 
       // Pass 2: slug match (handles dashes, underscores, casing differences)
       if (!match) {
-        match = agents.find((a) => {
-          const slug = this.normalizeFilename(a.metadata.name);
+        match = candidates.find(({ agent }) => {
+          const slug = this.normalizeFilename(agent.metadata.name);
           return slug === searchSlug || slug === searchLower;
         });
       }
 
       if (match) {
-        // Candidate filenames are only definition-discovery aids. Durable state
-        // belongs to the logical name the caller requested, not whichever legacy
-        // filename happened to match its metadata.
-        const requestedStateFound = await this.hydrateAgentState(match, name, strictStateErrors);
+        // Strict recovery verifies the caller-requested identity. Ordinary legacy
+        // reads preserve the state identity associated with the matched file.
+        const stateIdentity = strictStateErrors ? name : this.stripExtension(match.filePath);
+        const requestedStateFound = await this.hydrateAgentState(
+          match.agent,
+          stateIdentity,
+          strictStateErrors,
+        );
         if (strictStateErrors && !requestedStateFound) {
           throw new Error(
             `Cannot verify durable state for flexibly matched agent "${name}" under its requested identity`
           );
         }
         logger.warn(
-          `Agent "${name}" resolved via flexible matching to file with metadata name "${match.metadata.name}". ` +
+          `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
           `Consider renaming the file to match the expected convention (#607).`
         );
-        return match;
+        return match.agent;
       }
 
       if (loadFailures.length > 0) {
@@ -512,13 +522,13 @@ export class AgentManager extends BaseElementManager<Agent> {
       files.map(file => this.loadAgentFile(file, false, false, false))
     );
     const candidates: FlexibleReadCandidates = {
-      agents: [],
+      candidates: [],
       loadFailures: []
     };
 
-    for (const result of results) {
+    for (const [index, result] of results.entries()) {
       if (result.status === 'fulfilled') {
-        candidates.agents.push(result.value);
+        candidates.candidates.push({ agent: result.value, filePath: files[index] });
       } else {
         candidates.loadFailures.push(result.reason);
       }
@@ -1254,7 +1264,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   /** Hold a bounded observation lease while stale-policy recovery is in flight. */
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
-    const key = this.normalizeFilename(name);
+    const key = normalizeElementStorageIdentity(name);
     const entry = this.getOrCreateExecutionGeneration(key);
     entry.observers += 1;
     let released = false;
@@ -1271,19 +1281,19 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   hasExecutionGenerationChanged(name: string, observedToken: object): boolean {
-    const entry = this.executionGenerations.get(this.normalizeFilename(name));
+    const entry = this.executionGenerations.get(normalizeElementStorageIdentity(name));
     return !entry || entry.activeExecutions > 0 || entry.token !== observedToken;
   }
 
   private beginExecutionAttempt(name: string): void {
-    const key = this.normalizeFilename(name);
+    const key = normalizeElementStorageIdentity(name);
     const entry = this.getOrCreateExecutionGeneration(key);
     entry.token = {};
     entry.activeExecutions += 1;
   }
 
   private endExecutionAttempt(name: string): void {
-    const key = this.normalizeFilename(name);
+    const key = normalizeElementStorageIdentity(name);
     const entry = this.executionGenerations.get(key);
     if (!entry) return;
     entry.activeExecutions = Math.max(0, entry.activeExecutions - 1);
