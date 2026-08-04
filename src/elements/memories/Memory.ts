@@ -32,6 +32,7 @@ import { logger } from '../../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import { LRUCache } from '../../cache/LRUCache.js';
+import { ContentValidator } from '../../security/contentValidator.js';
 
 /**
  * Maximum length for individual trigger words used in Enhanced Index
@@ -624,9 +625,31 @@ export class Memory extends BaseElement implements IElement {
 
       // FIX #1269: Sandbox untrusted content
       const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
+      let effectiveTrustLevel = trustLevel;
       let displayContent = entry.content;
 
-      if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
+      if (trustLevel === TRUST_LEVELS.VALIDATED || trustLevel === TRUST_LEVELS.TRUSTED) {
+        // Trust decisions can outlive the scanner rules that produced them. Revalidate
+        // before direct rendering so stale or manually assigned trust cannot bypass
+        // the current output boundary. This intentionally does not mutate history or
+        // block later appends; unsafe legacy content is sandboxed when it is consumed.
+        const currentValidation = ContentValidator.validateAndSanitize(entry.content, {
+          skipSizeCheck: true,
+        });
+        if (!currentValidation.isValid) {
+          const sanitizedContent = typeof currentValidation.sanitizedContent === 'string' &&
+            currentValidation.sanitizedContent.trim().length > 0 &&
+            currentValidation.sanitizedContent !== entry.content
+            ? currentValidation.sanitizedContent
+            : '[TRUSTED CONTENT REDACTED: current validation failed]';
+          displayContent = this.sandboxUntrustedContent(
+            sanitizedContent,
+            entry.source || 'unknown',
+            'REVALIDATION FAILED: current scanner rules rejected trusted content',
+          );
+          effectiveTrustLevel = TRUST_LEVELS.FLAGGED;
+        }
+      } else if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
         // Clearly mark untrusted content
         displayContent = this.sandboxUntrustedContent(entry.content, entry.source || 'unknown');
       } else if (trustLevel === TRUST_LEVELS.FLAGGED) {
@@ -647,11 +670,11 @@ export class Memory extends BaseElement implements IElement {
 
       // FIX: Extract nested ternary to improve readability (SonarCloud S3358)
       let trustIndicator: string;
-      if (trustLevel === TRUST_LEVELS.VALIDATED) {
+      if (effectiveTrustLevel === TRUST_LEVELS.VALIDATED) {
         trustIndicator = '✓';
-      } else if (trustLevel === TRUST_LEVELS.TRUSTED) {
+      } else if (effectiveTrustLevel === TRUST_LEVELS.TRUSTED) {
         trustIndicator = '✓✓';
-      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
+      } else if (effectiveTrustLevel === TRUST_LEVELS.QUARANTINED) {
         trustIndicator = '⚠️';
       } else {
         trustIndicator = '⚠';

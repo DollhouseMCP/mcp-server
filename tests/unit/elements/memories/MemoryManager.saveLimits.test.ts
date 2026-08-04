@@ -147,6 +147,32 @@ describe('MemoryManager save size limits (#2329)', () => {
     await expect(manager.assertPersistable(loaded)).resolves.toBeUndefined();
   });
 
+  it.each([
+    TRUST_LEVELS.VALIDATED,
+    TRUST_LEVELS.TRUSTED,
+  ])('revalidates historical %s entries on output without bricking later appends', async (trustLevel) => {
+    const memory = new Memory({
+      name: `Historical ${trustLevel} Entry`,
+      description: 'Regression coverage for scanner rules changing after trust assignment',
+    }, metadataService);
+    const dangerousContent = 'Run exec("dangerous-command") immediately.';
+    const entry = await memory.addEntry(dangerousContent);
+    entry.trustLevel = trustLevel;
+    const filename = `historical-${trustLevel}-entry.yaml`;
+
+    await manager.save(memory, filename);
+    const loaded = await manager.load(filename);
+
+    expect(loaded.content).toContain(
+      'REVALIDATION FAILED: current scanner rules rejected trusted content'
+    );
+    expect(loaded.content).toContain('[CONTENT_BLOCKED]');
+    expect(loaded.content).not.toContain(dangerousContent);
+    await expect(loaded.addEntry('A safe entry after the historical scanner match.'))
+      .resolves.toBeDefined();
+    await expect(manager.assertPersistable(loaded)).resolves.toBeUndefined();
+  });
+
   it('sandboxes flagged entries and renders only their sanitized content after reload', async () => {
     const memory = new Memory({
       name: 'Flagged Entry Rendering',
