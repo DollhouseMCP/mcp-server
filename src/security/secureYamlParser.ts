@@ -326,7 +326,11 @@ export class SecureYamlParser {
    * @returns Parsed object
    * @throws SecurityError if content is too large or contains threats
    */
-  static parseRawYaml(yamlContent: string, maxSize: number = 64 * 1024): Record<string, unknown> {
+  static parseRawYaml(
+    yamlContent: string,
+    maxSize: number = 64 * 1024,
+    options: { detectContentPatterns?: boolean } = {},
+  ): Record<string, unknown> {
     // Size validation
     if (yamlContent.length > maxSize) {
       throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
@@ -337,7 +341,7 @@ export class SecureYamlParser {
     // Issue #2329: pass maxSize through — validateYamlContent's own default cap is
     // 64KB (frontmatter-sized), which rejected larger pure-YAML documents even
     // when the caller allowed them.
-    if (!ContentValidator.validateYamlContent(yamlContent, maxSize)) {
+    if (!ContentValidator.validateYamlContent(yamlContent, maxSize, options)) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'CRITICAL',

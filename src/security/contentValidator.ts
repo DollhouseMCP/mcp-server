@@ -571,7 +571,11 @@ export class ContentValidator {
    *   MALICIOUS_YAML_PATTERNS scan below is bounded by MAX_CONTENT_LENGTH, so
    *   larger content is rejected here rather than scanned or thrown on.
    */
-  static validateYamlContent(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
+  static validateYamlContent(
+    yamlContent: string,
+    maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH,
+    options: { detectContentPatterns?: boolean } = {},
+  ): boolean {
     const effectiveMaxLength = Math.min(maxLength, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
     // Length validation before pattern matching
     if (yamlContent.length > effectiveMaxLength) {
@@ -609,7 +613,8 @@ export class ContentValidator {
       return false;
     }
 
-    return !this.hasMaliciousYamlPattern(unicodeResult.normalizedContent);
+    return options.detectContentPatterns === false ||
+      !this.hasMaliciousYamlPattern(unicodeResult.normalizedContent);
   }
 
   /**

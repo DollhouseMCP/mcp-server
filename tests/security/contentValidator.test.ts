@@ -186,6 +186,11 @@ list2: [*ref1, *ref1, *ref1]
         `;
 
         expect(ContentValidator.validateYamlContent(yamlBomb)).toBe(false);
+        expect(ContentValidator.validateYamlContent(
+          yamlBomb,
+          undefined,
+          { detectContentPatterns: false },
+        )).toBe(false);
       });
 
       it('should block YAML with 10× amplification (well over threshold)', () => {

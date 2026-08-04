@@ -131,4 +131,19 @@ describe('MemoryManager save size limits (#2329)', () => {
     await expect(manager.assertPersistable(memory))
       .rejects.toThrow('maximum serialized size');
   });
+
+  it('does not brick a memory when historical prose matches a content rule', async () => {
+    const memory = new Memory({
+      name: 'Historical Scanner Match',
+      description: 'Regression coverage for issue 2440',
+    }, metadataService);
+    await memory.addEntry('The company was Unfunded or Bootstrapped before the current round.');
+
+    await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
+    await expect(manager.save(memory, 'historical-scanner-match.yaml')).resolves.toBeUndefined();
+
+    const loaded = await manager.load('historical-scanner-match.yaml');
+    await expect(loaded.addEntry('A new verified entry after the historical text.')).resolves.toBeDefined();
+    await expect(manager.assertPersistable(loaded)).resolves.toBeUndefined();
+  });
 });
