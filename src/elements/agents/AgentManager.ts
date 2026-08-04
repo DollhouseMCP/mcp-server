@@ -1931,6 +1931,9 @@ export class AgentManager extends BaseElementManager<Agent> {
       return state;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (strictStateErrors) {
+          await this.assertStateDirectoryAvailable();
+        }
         return null;
       }
       logger.error(`Failed to load agent state: ${name}`, error);
@@ -1938,6 +1941,22 @@ export class AgentManager extends BaseElementManager<Agent> {
         throw error;
       }
       return null;
+    }
+  }
+
+  /**
+   * Distinguish a legitimately absent per-agent state file from unavailable
+   * state storage. Strict recovery may treat only the former as empty state.
+   */
+  private async assertStateDirectoryAvailable(): Promise<void> {
+    try {
+      const stats = await this.fileOperations.stat(this.stateDir);
+      if (!stats.isDirectory()) {
+        throw new Error('Agent state storage path is not a directory');
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Agent state directory unavailable: ${reason}`);
     }
   }
 

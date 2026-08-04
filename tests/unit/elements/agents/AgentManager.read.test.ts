@@ -112,6 +112,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       writeFile: jest.fn().mockResolvedValue(undefined),
       deleteFile: jest.fn().mockResolvedValue(undefined),
       listDirectory: jest.fn().mockResolvedValue([]),
+      stat: jest.fn().mockResolvedValue({ isDirectory: () => true }),
       resolvePath: jest.fn((p: string) => path.resolve(portfolioPath, p)),
       validatePath: jest.fn().mockReturnValue(true),
       createFileExclusive: jest.fn().mockResolvedValue(true)
@@ -302,6 +303,20 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
       await expect(agentManager.getAgentState({ agentName: 'my-agent' }))
         .rejects.toThrow('State storage unavailable');
+    });
+
+    it('should fail closed when the state directory is unavailable', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'my-agent.md') return AGENT_CONTENT_STANDARD;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      fileOperationsService.stat.mockRejectedValueOnce(
+        Object.assign(new Error('State mount unavailable'), { code: 'ENOENT' })
+      );
+
+      await expect(agentManager.getAgentState({ agentName: 'my-agent' }))
+        .rejects.toThrow('Agent state directory unavailable: State mount unavailable');
     });
 
     it('should bypass cached state during strict getAgentState() reads', async () => {
