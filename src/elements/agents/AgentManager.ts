@@ -467,12 +467,11 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Enumerate fallback candidates without converting storage failures into an
-   * empty list. Flexible lookup can report "not found" only after every
-   * candidate was listed and loaded successfully.
+   * Enumerate fallback candidates without creating missing storage or
+   * converting storage failures into an empty list. Flexible lookup can report
+   * "not found" only after every candidate was listed and loaded successfully.
    */
   private async listForFlexibleRead(): Promise<FlexibleReadCandidates> {
-    await this.fileOperations.createDirectory(this.elementDir);
     const files = await this.portfolioManager.listElements(ElementType.AGENT, {
       throwOnFilesystemError: true
     });

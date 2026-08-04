@@ -247,6 +247,20 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       );
     });
 
+    it('should preserve a missing agents directory as a storage failure', async () => {
+      fileOperationsService.createDirectory.mockClear();
+      fileOperationsService.readFile.mockRejectedValue(
+        Object.assign(new Error('Direct file missing'), { code: 'ENOENT' })
+      );
+      mockPortfolioManager.listElements.mockRejectedValue(
+        Object.assign(new Error('Agents directory unavailable'), { code: 'ENOENT' })
+      );
+
+      await expect(agentManager.getAgentState({ agentName: 'offline-agent' }))
+        .rejects.toThrow('Agents directory unavailable');
+      expect(fileOperationsService.createDirectory).not.toHaveBeenCalled();
+    });
+
     it('should propagate candidate load failures through getAgentState()', async () => {
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (path.basename(filePath) === 'failing-agent.md') {
