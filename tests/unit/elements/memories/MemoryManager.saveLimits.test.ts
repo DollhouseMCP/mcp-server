@@ -173,6 +173,27 @@ describe('MemoryManager save size limits (#2329)', () => {
     await expect(manager.assertPersistable(loaded)).resolves.toBeUndefined();
   });
 
+  it.each([
+    "require('child_process')",
+    '!!python/object',
+  ])('revalidates trusted entry prose with the YAML scanner: %s', async (dangerousContent) => {
+    const memory = new Memory({
+      name: 'Historical YAML Scanner Match',
+      description: 'Regression coverage for YAML-only content patterns',
+    }, metadataService);
+    const entry = await memory.addEntry(dangerousContent);
+    entry.trustLevel = TRUST_LEVELS.TRUSTED;
+
+    await manager.save(memory, 'historical-yaml-scanner-match.yaml');
+    const loaded = await manager.load('historical-yaml-scanner-match.yaml');
+
+    expect(loaded.content).toContain(
+      'REVALIDATION FAILED: current scanner rules rejected trusted content'
+    );
+    expect(loaded.content).toContain('[CONTENT_BLOCKED]');
+    expect(loaded.content).not.toContain(dangerousContent);
+  });
+
   it('sandboxes flagged entries and renders only their sanitized content after reload', async () => {
     const memory = new Memory({
       name: 'Flagged Entry Rendering',

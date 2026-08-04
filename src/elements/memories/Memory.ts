@@ -673,7 +673,7 @@ export class Memory extends BaseElement implements IElement {
     // before direct rendering so stale or manually assigned trust cannot bypass
     // the current output boundary. This intentionally does not mutate history or
     // block later appends; unsafe legacy content is sandboxed when it is consumed.
-    const currentValidation = ContentValidator.validateAndSanitize(entry.content, {
+    const currentValidation = ContentValidator.validateAndSanitizeYamlAware(entry.content, {
       skipSizeCheck: true,
     });
     if (currentValidation.isValid) {
