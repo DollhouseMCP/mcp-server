@@ -59,6 +59,23 @@ specializations:
 
 Post things`;
 
+const ACTIVE_REQUESTED_STATE = `---
+goals:
+  - id: goal_requested_active
+    description: Requested identity goal
+    priority: high
+    status: in_progress
+    importance: 8
+    urgency: 7
+    createdAt: 2026-08-04T12:00:00Z
+    updatedAt: 2026-08-04T12:01:00Z
+decisions: []
+context: {}
+lastActive: 2026-08-04T12:01:00Z
+sessionCount: 1
+stateVersion: 2
+---`;
+
 describe('AgentManager.read() flexible fallback (#607)', () => {
   let agentManager: TestableAgentManager;
   let testDir: string;
@@ -191,6 +208,35 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(agent).not.toBeNull();
       expect(agent?.metadata.name).toBe('Legacy-Poster');
     });
+
+    it('should hydrate flexible matches from the requested state identity', async () => {
+      const stateReads: string[] = [];
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-poster.md') {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (filename === 'legacy-poster-agent.md') {
+          return AGENT_CONTENT_LEGACY;
+        }
+        if (filename.endsWith('.state.yaml')) {
+          stateReads.push(filename);
+          if (filename === 'legacy-poster.state.yaml') {
+            return ACTIVE_REQUESTED_STATE;
+          }
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['legacy-poster-agent.md']);
+
+      const result = await agentManager.getAgentState({ agentName: 'legacy-poster' });
+
+      expect(result.state.goals).toEqual([
+        expect.objectContaining({ id: 'goal_requested_active', status: 'in_progress' })
+      ]);
+      expect(stateReads).toEqual(['legacy-poster.state.yaml']);
+    });
   });
 
   describe('direct lookup ENOENT + no flexible match', () => {
@@ -227,6 +273,20 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       fileOperationsService.readFile.mockRejectedValue(new Error('EACCES: permission denied'));
 
       await expect(agentManager.read('some-agent')).rejects.toThrow('EACCES');
+    });
+
+    it('should propagate requested state failures through getAgentState()', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'my-agent.md') return AGENT_CONTENT_STANDARD;
+        if (filename === 'my-agent.state.yaml') {
+          throw Object.assign(new Error('State storage unavailable'), { code: 'EACCES' });
+        }
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      await expect(agentManager.getAgentState({ agentName: 'my-agent' }))
+        .rejects.toThrow('State storage unavailable');
     });
   });
 

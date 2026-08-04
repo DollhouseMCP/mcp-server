@@ -402,14 +402,23 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @returns Agent instance or null if not found
    */
   async read(name: string): Promise<Agent | null> {
+    return this.readWithStatePolicy(name, false);
+  }
+
+  /**
+   * Read an agent while selecting whether state-storage failures are fatal.
+   * Security-sensitive callers use strict state reads so unavailable durable
+   * state cannot be mistaken for an agent with no active goals.
+   */
+  private async readWithStatePolicy(name: string, strictStateErrors: boolean): Promise<Agent | null> {
     try {
       const sanitizedName = sanitizeInput(name, 100);
       const filename = this.getFilename(sanitizedName);
-      return await this.load(filename);
+      return await this.loadAgentFile(filename, true, strictStateErrors);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         // Fallback: flexible matching via list scan (#607)
-        return this.readFlexibly(name);
+        return this.readFlexibly(name, strictStateErrors);
       }
       throw error;
     }
@@ -427,7 +436,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * // Flexible fallback matches via metadata name:
    * const agent = await read("legacy-poster"); // resolves via fallback
    */
-  private async readFlexibly(name: string): Promise<Agent | null> {
+  private async readFlexibly(name: string, strictStateErrors = false): Promise<Agent | null> {
     try {
       const { agents, loadFailures } = await this.listForFlexibleRead();
 
@@ -448,6 +457,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       }
 
       if (match) {
+        // Candidate filenames are only definition-discovery aids. Durable state
+        // belongs to the logical name the caller requested, not whichever legacy
+        // filename happened to match its metadata.
+        await this.hydrateAgentState(match, name, strictStateErrors);
         logger.warn(
           `Agent "${name}" resolved via flexible matching to file with metadata name "${match.metadata.name}". ` +
           `Consider renaming the file to match the expected convention (#607).`
@@ -475,7 +488,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     const files = await this.portfolioManager.listElements(ElementType.AGENT, {
       throwOnFilesystemError: true
     });
-    const results = await Promise.allSettled(files.map(file => this.load(file)));
+    // Load definitions without candidate-filename state. Once a match is known,
+    // readFlexibly() hydrates it using the requested logical identity.
+    const results = await Promise.allSettled(
+      files.map(file => this.loadAgentFile(file, false, false))
+    );
     const candidates: FlexibleReadCandidates = {
       agents: [],
       loadFailures: []
@@ -650,6 +667,14 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Load an agent file, enforcing size and format checks.
    */
   override async load(filePath: string): Promise<Agent> {
+    return this.loadAgentFile(filePath, true, false);
+  }
+
+  private async loadAgentFile(
+    filePath: string,
+    hydrateState: boolean,
+    strictStateErrors: boolean,
+  ): Promise<Agent> {
     const sanitizedInput = sanitizeInput(filePath, 255);
     const relativePath = sanitizedInput.endsWith(AGENT_FILE_EXTENSION)
       ? sanitizedInput
@@ -676,7 +701,13 @@ export class AgentManager extends BaseElementManager<Agent> {
       const agent = this.createElement(metadata, parsed.content);
 
       this.cacheElement(agent, relativePath);
-      await this.hydrateAgentState(agent, this.stripExtension(relativePath));
+      if (hydrateState) {
+        await this.hydrateAgentState(
+          agent,
+          this.stripExtension(relativePath),
+          strictStateErrors,
+        );
+      }
 
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_LOADED',
@@ -1847,8 +1878,12 @@ export class AgentManager extends BaseElementManager<Agent> {
       : filePath;
   }
 
-  private async hydrateAgentState(agent: Agent, name: string): Promise<void> {
-    const state = await this.loadAgentState(name);
+  private async hydrateAgentState(
+    agent: Agent,
+    name: string,
+    strictStateErrors = false,
+  ): Promise<void> {
+    const state = await this.loadAgentState(name, strictStateErrors);
     if (!state) {
       return;
     }
@@ -1859,7 +1894,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent.markStatePersisted();
   }
 
-  private async loadAgentState(name: string): Promise<AgentState | null> {
+  private async loadAgentState(name: string, strictStateErrors = false): Promise<AgentState | null> {
     // FIX: Normalize name for consistent state file lookups
     const normalizedName = this.normalizeFilename(name);
 
@@ -1891,6 +1926,9 @@ export class AgentManager extends BaseElementManager<Agent> {
         return null;
       }
       logger.error(`Failed to load agent state: ${name}`, error);
+      if (strictStateErrors) {
+        throw error;
+      }
       return null;
     }
   }
@@ -2943,7 +2981,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }> {
     // 1. Load agent by name
-    const agent = await this.read(params.agentName);
+    const agent = await this.readWithStatePolicy(params.agentName, true);
     if (!agent) {
       // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
       throw new ElementNotFoundError('Agent', params.agentName);
