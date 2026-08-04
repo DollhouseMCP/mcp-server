@@ -98,6 +98,7 @@ import { prepareHandoffState, parseHandoffBlock, generateHandoffBlock } from '..
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
 import type { AutonomyMetricsSnapshot } from '../../elements/agents/autonomyEvaluator.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { normalizeElementFilename } from '../../utils/filesystem.js';
 
 // ============================================================================
 // Parameter Validation Utilities (Issue #323)
@@ -3822,7 +3823,7 @@ export class MCPAQLHandler {
     // Issue #323: Validate element_name parameter (was incorrectly using 'name')
     // All execute operations require element_name to identify the target
     const elementName = validateExecutionElementName(method, params);
-    const executionKey = manager.getExecutionIdentity(elementName);
+    const executionKey = normalizeElementFilename(elementName);
 
     // Issue #110: Programmatic enforcement for DANGER_ZONE tier
     // Issue #402: Use DI-injected enforcer instead of singleton

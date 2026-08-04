@@ -35,6 +35,23 @@ export function generateAnonymousId(): string {
 // Pre-compiled regex for better performance (avoids creating regex on each character)
 const ALPHANUMERIC_REGEX = /[a-z0-9]/;
 
+/**
+ * Normalize an element name to the canonical filename identity used by managers.
+ */
+export function normalizeElementFilename(name: string): string {
+  if (!name || name.trim().length === 0) {
+    return 'unnamed';
+  }
+
+  return name
+    .replace(/([a-z])([A-Z])/g, '$1-$2')
+    .replace(/[\s_]+/g, '-')
+    .toLowerCase()
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
 export function generateUniqueId(personaName: string, author?: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(0, 10).replaceAll('-', '');

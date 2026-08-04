@@ -49,6 +49,7 @@ import {
 } from '../../config/performance-constants.js';
 import type { CacheMemoryBudget } from '../../cache/CacheMemoryBudget.js';
 import type { BackupService } from '../../services/BackupService.js';
+import { normalizeElementFilename } from '../../utils/filesystem.js';
 
 const DEFAULT_ELEMENT_CACHE_TTL_MS = getValidatedElementCacheTTL();
 const DEFAULT_PATH_CACHE_TTL_MS = getValidatedPathCacheTTL();
@@ -1238,23 +1239,7 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * @returns Normalized kebab-case filename (without extension)
    */
   protected normalizeFilename(name: string): string {
-    if (!name || name.trim().length === 0) {
-      return 'unnamed';
-    }
-
-    return name
-      // Step 1: Insert hyphens between camelCase boundaries (lowercase followed by uppercase)
-      .replace(/([a-z])([A-Z])/g, '$1-$2')
-      // Step 2: Replace spaces and underscores with hyphens
-      .replace(/[\s_]+/g, '-')
-      // Step 3: Convert to lowercase
-      .toLowerCase()
-      // Step 4: Strip invalid characters (keep only alphanumeric and hyphens)
-      .replace(/[^a-z0-9-]/g, '-')
-      // Step 5: Collapse multiple consecutive hyphens
-      .replace(/-+/g, '-')
-      // Step 6: Trim leading and trailing hyphens
-      .replace(/^-+|-+$/g, '');
+    return normalizeElementFilename(name);
   }
 
   /**
