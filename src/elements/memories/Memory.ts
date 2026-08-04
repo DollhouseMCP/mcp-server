@@ -618,70 +618,100 @@ export class Memory extends BaseElement implements IElement {
         return bTime - aTime;
       });
 
-    return sortedEntries.map(entry => {
-      // FIX #1069: Ensure timestamp is Date object before calling toISOString
-      const timestamp = this.ensureDateObject(entry.timestamp).toISOString();
-      const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
+    return sortedEntries.map(entry => this.formatEntryForDisplay(entry)).join('\n\n');
+  }
 
-      // FIX #1269: Sandbox untrusted content
-      const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
-      let effectiveTrustLevel = trustLevel;
-      let displayContent = entry.content;
+  private formatEntryForDisplay(entry: MemoryEntry): string {
+    // FIX #1069: Ensure timestamp is a Date object before calling toISOString.
+    const timestamp = this.ensureDateObject(entry.timestamp).toISOString();
+    const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
+    const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
+    const display = this.prepareEntryForDisplay(entry, trustLevel);
+    const trustIndicator = this.getTrustIndicator(display.effectiveTrustLevel);
 
-      if (trustLevel === TRUST_LEVELS.VALIDATED || trustLevel === TRUST_LEVELS.TRUSTED) {
-        // Trust decisions can outlive the scanner rules that produced them. Revalidate
-        // before direct rendering so stale or manually assigned trust cannot bypass
-        // the current output boundary. This intentionally does not mutate history or
-        // block later appends; unsafe legacy content is sandboxed when it is consumed.
-        const currentValidation = ContentValidator.validateAndSanitize(entry.content, {
-          skipSizeCheck: true,
-        });
-        if (!currentValidation.isValid) {
-          const sanitizedContent = typeof currentValidation.sanitizedContent === 'string' &&
-            currentValidation.sanitizedContent.trim().length > 0 &&
-            currentValidation.sanitizedContent !== entry.content
-            ? currentValidation.sanitizedContent
-            : '[TRUSTED CONTENT REDACTED: current validation failed]';
-          displayContent = this.sandboxUntrustedContent(
-            sanitizedContent,
-            entry.source || 'unknown',
-            'REVALIDATION FAILED: current scanner rules rejected trusted content',
-          );
-          effectiveTrustLevel = TRUST_LEVELS.FLAGGED;
-        }
-      } else if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
-        // Clearly mark untrusted content
-        displayContent = this.sandboxUntrustedContent(entry.content, entry.source || 'unknown');
-      } else if (trustLevel === TRUST_LEVELS.FLAGGED) {
-        const sanitizedContent = typeof entry.sanitizedContent === 'string' &&
-          entry.sanitizedContent.trim().length > 0 &&
-          entry.sanitizedContent !== entry.content
-          ? entry.sanitizedContent
-          : '[FLAGGED CONTENT REDACTED: sanitized representation unavailable]';
-        displayContent = this.sandboxUntrustedContent(
-          sanitizedContent,
+    return `[${timestamp}]${tags} ${trustIndicator}: ${display.content}`;
+  }
+
+  private prepareEntryForDisplay(
+    entry: MemoryEntry,
+    trustLevel: TrustLevel,
+  ): { content: string; effectiveTrustLevel: TrustLevel } {
+    if (trustLevel === TRUST_LEVELS.VALIDATED || trustLevel === TRUST_LEVELS.TRUSTED) {
+      return this.revalidateTrustedEntry(entry, trustLevel);
+    }
+    if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
+      return {
+        content: this.sandboxUntrustedContent(entry.content, entry.source || 'unknown'),
+        effectiveTrustLevel: trustLevel,
+      };
+    }
+    if (trustLevel === TRUST_LEVELS.FLAGGED) {
+      return {
+        content: this.sandboxUntrustedContent(
+          this.getSafeSanitizedContent(
+            entry.sanitizedContent,
+            entry.content,
+            '[FLAGGED CONTENT REDACTED: sanitized representation unavailable]',
+          ),
           entry.source || 'unknown',
           'FLAGGED: dangerous patterns removed',
-        );
-      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
-        // Don't display quarantined content at all
-        displayContent = '[CONTENT QUARANTINED: Security threat detected]';
-      }
+        ),
+        effectiveTrustLevel: trustLevel,
+      };
+    }
+    return {
+      content: '[CONTENT QUARANTINED: Security threat detected]',
+      effectiveTrustLevel: trustLevel,
+    };
+  }
 
-      // FIX: Extract nested ternary to improve readability (SonarCloud S3358)
-      let trustIndicator: string;
-      if (effectiveTrustLevel === TRUST_LEVELS.VALIDATED) {
-        trustIndicator = '✓';
-      } else if (effectiveTrustLevel === TRUST_LEVELS.TRUSTED) {
-        trustIndicator = '✓✓';
-      } else if (effectiveTrustLevel === TRUST_LEVELS.QUARANTINED) {
-        trustIndicator = '⚠️';
-      } else {
-        trustIndicator = '⚠';
-      }
+  private revalidateTrustedEntry(
+    entry: MemoryEntry,
+    trustLevel: TrustLevel,
+  ): { content: string; effectiveTrustLevel: TrustLevel } {
+    // Trust decisions can outlive the scanner rules that produced them. Revalidate
+    // before direct rendering so stale or manually assigned trust cannot bypass
+    // the current output boundary. This intentionally does not mutate history or
+    // block later appends; unsafe legacy content is sandboxed when it is consumed.
+    const currentValidation = ContentValidator.validateAndSanitize(entry.content, {
+      skipSizeCheck: true,
+    });
+    if (currentValidation.isValid) {
+      return { content: entry.content, effectiveTrustLevel: trustLevel };
+    }
 
-      return `[${timestamp}]${tags} ${trustIndicator}: ${displayContent}`;
-    }).join('\n\n');
+    const sanitizedContent = this.getSafeSanitizedContent(
+      currentValidation.sanitizedContent,
+      entry.content,
+      '[TRUSTED CONTENT REDACTED: current validation failed]',
+    );
+    return {
+      content: this.sandboxUntrustedContent(
+        sanitizedContent,
+        entry.source || 'unknown',
+        'REVALIDATION FAILED: current scanner rules rejected trusted content',
+      ),
+      effectiveTrustLevel: TRUST_LEVELS.FLAGGED,
+    };
+  }
+
+  private getSafeSanitizedContent(
+    sanitizedContent: unknown,
+    originalContent: string,
+    fallback: string,
+  ): string {
+    return typeof sanitizedContent === 'string' &&
+      sanitizedContent.trim().length > 0 &&
+      sanitizedContent !== originalContent
+      ? sanitizedContent
+      : fallback;
+  }
+
+  private getTrustIndicator(trustLevel: TrustLevel): string {
+    if (trustLevel === TRUST_LEVELS.VALIDATED) return '✓';
+    if (trustLevel === TRUST_LEVELS.TRUSTED) return '✓✓';
+    if (trustLevel === TRUST_LEVELS.QUARANTINED) return '⚠️';
+    return '⚠';
   }
 
   /**
