@@ -377,7 +377,13 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         .rejects.toThrow('Agent state directory unavailable: State mount unavailable');
     });
 
-    it('should bypass cached state during strict getAgentState() reads', async () => {
+    it('should bypass cached state without replacing shared caches during strict recovery reads', async () => {
+      const cacheSpy = jest.spyOn(
+        agentManager as unknown as {
+          cacheElement: (agent: unknown, filename: string) => void;
+        },
+        'cacheElement'
+      );
       let requestedState = ACTIVE_REQUESTED_STATE.replace('in_progress', 'completed');
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
@@ -390,8 +396,13 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       expect(firstRead?.getState().goals[0]?.status).toBe('completed');
 
       requestedState = ACTIVE_REQUESTED_STATE;
+      cacheSpy.mockClear();
       const strictRead = await agentManager.getAgentStateForRecovery({ agentName: 'my-agent' });
       expect(strictRead.state.goals[0]?.status).toBe('in_progress');
+      expect(cacheSpy).not.toHaveBeenCalled();
+
+      const ordinaryRead = await agentManager.getAgentState({ agentName: 'my-agent' });
+      expect(ordinaryRead.state.goals[0]?.status).toBe('completed');
     });
   });
 

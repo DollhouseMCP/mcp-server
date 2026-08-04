@@ -438,7 +438,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     try {
       const sanitizedName = sanitizeInput(name, 100);
       const filename = this.getFilename(sanitizedName);
-      return await this.loadAgentFile(filename, true, strictStateErrors);
+      return await this.loadAgentFile(filename, true, strictStateErrors, !strictStateErrors);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         // Fallback: flexible matching via list scan (#607)
@@ -2016,7 +2016,9 @@ export class AgentManager extends BaseElementManager<Agent> {
       const state = result.data as AgentState;
       this.normalizeLoadedState(state);
       // FIX: Use normalized name as cache key for consistent lookups
-      this.stateCache.set(normalizedName, state);
+      if (!strictStateErrors) {
+        this.stateCache.set(normalizedName, state);
+      }
       return state;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
