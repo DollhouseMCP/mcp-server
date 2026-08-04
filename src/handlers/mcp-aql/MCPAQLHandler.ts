@@ -97,6 +97,7 @@ import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { prepareHandoffState, parseHandoffBlock, generateHandoffBlock } from '../../elements/agents/handoff.js';
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
 import type { AutonomyMetricsSnapshot } from '../../elements/agents/autonomyEvaluator.js';
+import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 
 // ============================================================================
 // Parameter Validation Utilities (Issue #323)
@@ -4554,6 +4555,11 @@ export class MCPAQLHandler {
           .map((g: { id: string }) => g.id);
       }
     } catch (error) {
+      // A deleted agent is definitive stale state. Other lookup failures may be
+      // transient and must still fail closed when suppression is disabled.
+      if (error instanceof ElementNotFoundError) {
+        return [];
+      }
       if (!suppressLookupErrors) {
         throw error;
       }

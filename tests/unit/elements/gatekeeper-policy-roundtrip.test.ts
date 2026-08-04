@@ -167,6 +167,24 @@ describe('Gatekeeper policy round-trip (Issue #524)', () => {
       expect(result!.allow).toEqual(['list_elements']);
     });
 
+    it('should strip abort_execution from every policy list', () => {
+      const result = sanitizeGatekeeperPolicy(
+        {
+          allow: ['abort_execution', 'list_elements'],
+          confirm: ['abort_execution', 'edit_element'],
+          deny: ['abort_execution', 'delete_element'],
+        },
+        'test-agent',
+        'agent',
+      );
+
+      expect(result).toEqual({
+        allow: ['list_elements'],
+        confirm: ['edit_element'],
+        deny: ['delete_element'],
+      });
+    });
+
     it('should return undefined for falsy input', () => {
       expect(sanitizeGatekeeperPolicy(undefined, 'x', 'persona')).toBeUndefined();
       expect(sanitizeGatekeeperPolicy(null, 'x', 'persona')).toBeUndefined();

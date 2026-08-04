@@ -43,8 +43,6 @@ const EXEMPT_OPERATIONS = new Set([
   'confirm_operation',
   'verify_challenge',
   'release_deadlock',
-  // Read-only recovery introspection cannot weaken the active policy.
-  'get_active_elements',
   'permission_prompt', // Issue #625: CLI-level permission delegation
   'approve_cli_permission', // Issue #625 Phase 3: CLI approval workflow
   'get_pending_cli_approvals', // Issue #625 Phase 3: CLI approval visibility

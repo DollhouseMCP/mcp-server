@@ -619,8 +619,9 @@ function checkToolPrefix(
  * Gatekeeper infrastructure operations — two related sets with distinct purposes.
  *
  * UNGATABLE_OPERATIONS: Operations that must NEVER appear in element policy lists.
- * These are pure internal plumbing — gating them serves no security purpose and
- * breaks critical flows (verification, CLI approval, permission evaluation).
+ * These are internal plumbing or critical lifecycle/recovery operations — gating
+ * them breaks verification, deadlock recovery, execution abort, CLI approval, or
+ * permission evaluation flows.
  * Stripped from ALL policy lists (allow, confirm, deny) during sanitization.
  *
  * GATEKEEPER_INFRA_OPERATIONS: Operations that skip Layer 2 (element policy
@@ -636,6 +637,7 @@ function checkToolPrefix(
 const UNGATABLE_OPERATIONS = new Set([
   'verify_challenge',
   'release_deadlock',
+  'abort_execution',
   'approve_cli_permission',
   'permission_prompt',
 ]);

@@ -185,6 +185,47 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
   });
 
   describe('Stale execution policy recovery', () => {
+    it('should preserve READ restrictions on get_active_elements', async () => {
+      await createAgent('read-restricted-agent', {
+        tools: {
+          allowed: ['mcp_aql_create', 'mcp_aql_update', 'mcp_aql_delete', 'mcp_aql_execute'],
+          denied: ['mcp_aql_read'],
+        },
+      });
+
+      expect((await executeAgent('read-restricted-agent')).success).toBe(true);
+
+      const activeElements = await mcpAqlHandler.handleRead({
+        operation: 'get_active_elements',
+        params: {},
+      });
+
+      expect(activeElements.success).toBe(false);
+    });
+
+    it('should keep abort_execution reachable despite an explicit deny', async () => {
+      await createAgent('abort-denying-agent', {
+        gatekeeper: { deny: ['abort_execution', 'delete_element'] },
+      });
+
+      expect((await executeAgent('abort-denying-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'abort-denying-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'abort-denying-agent', reason: 'Recover stale policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+    });
+
     it('should preserve the policy when durable state lookup fails', async () => {
       await createAgent('lookup-failure-agent', {
         gatekeeper: { deny: ['delete_element'] },
@@ -244,6 +285,32 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
         params: { element_name: 'stale-policy-agent' },
       });
       expect(deleteAfterRecovery.success).toBe(true);
+    });
+
+    it('should recover a stale policy after the executing agent is deleted', async () => {
+      await createAgent('deleted-executing-agent', {
+        gatekeeper: { deny: ['list_elements'] },
+      });
+
+      expect((await executeAgent('deleted-executing-agent')).success).toBe(true);
+      const deletion = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'deleted-executing-agent' },
+      });
+      expect(deletion.success).toBe(true);
+      expect((await attemptList()).success).toBe(false);
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'deleted-executing-agent', reason: 'Recover deleted agent policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({ recoveredStalePolicy: true }));
+      }
+      expect((await attemptList()).success).toBe(true);
     });
   });
 
