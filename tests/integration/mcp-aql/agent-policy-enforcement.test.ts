@@ -312,6 +312,63 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       }
       expect((await attemptList()).success).toBe(true);
     });
+
+    it('should preserve a newer policy when execution restarts during stale lookup', async () => {
+      await createAgent('restarted-during-recovery-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('restarted-during-recovery-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'restarted-during-recovery-agent',
+        outcome: 'failure',
+        summary: 'First execution context disappeared',
+      });
+
+      const staleState = await agentManager.getAgentState({
+        agentName: 'restarted-during-recovery-agent',
+      });
+      const emptyStateSnapshot = {
+        ...staleState,
+        state: { ...staleState.state, goals: [] },
+      };
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+        .mockImplementationOnce(async () => {
+          markLookupStarted();
+          await lookupBlocked;
+          return emptyStateSnapshot;
+        });
+
+      const recoveryPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restarted-during-recovery-agent',
+          reason: 'Recover stale policy',
+        },
+      });
+      await lookupStarted;
+      expect((await executeAgent('restarted-during-recovery-agent')).success).toBe(true);
+      releaseLookup();
+
+      const recovery = await recoveryPromise;
+      stateSpy.mockRestore();
+      expect(recovery.success).toBe(false);
+      if (!recovery.success) {
+        expect(recovery.error).toContain('Execution state changed');
+        expect(recovery.error).toContain('newer execution policy was preserved');
+      }
+
+      const deleteWhileNewPolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restarted-during-recovery-agent' },
+      });
+      expect(deleteWhileNewPolicyRemains.success).toBe(false);
+    });
   });
 
   describe('Agent without gatekeeper has no restrictions', () => {

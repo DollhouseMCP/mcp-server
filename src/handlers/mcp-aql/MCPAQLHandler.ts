@@ -4043,12 +4043,20 @@ export class MCPAQLHandler {
         const reason = (params.reason as string) || 'Aborted by user';
 
         // Find the active goal for this agent
+        const executionPolicyAtLookupStart = this.executingAgents.get(elementName);
         const activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
         if (activeGoalIds.length === 0) {
           // Issue #2427: the durable goal may already be gone while the in-memory
           // execution policy remains. Explicit abort is safer and narrower than
           // clearing every active element through release_deadlock.
-          if (this.executingAgents.has(elementName)) {
+          const currentExecutionPolicy = this.executingAgents.get(elementName);
+          if (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart) {
+            throw new Error(
+              `Execution state changed while recovering agent '${elementName}'. ` +
+              `The newer execution policy was preserved; retry abort_execution to abort it.`
+            );
+          }
+          if (executionPolicyAtLookupStart && currentExecutionPolicy === executionPolicyAtLookupStart) {
             this.executingAgents.delete(elementName);
             if (this.handlers.dangerZoneEnforcer) {
               try {
