@@ -103,6 +103,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
+  /** Bounded token replaced synchronously at every executeAgent entry point. */
+  private executionGeneration: object = {};
   // Track active agents by name (stable identifier)
   private readonly activeAgentNames: Set<string> = new Set();
 
@@ -990,6 +992,9 @@ export class AgentManager extends BaseElementManager<Agent> {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
   ): Promise<ExecuteAgentResult> {
+    // Must happen before any await so recovery sees starts from MCP-AQL, legacy
+    // tools, and any future caller that uses the shared manager entry point.
+    this.executionGeneration = {};
     try {
       // 1. Load agent by name
       const agent = await this.read(name);
@@ -1232,6 +1237,11 @@ export class AgentManager extends BaseElementManager<Agent> {
       logger.error(`Failed to execute agent '${name}':`, error);
       throw error;
     }
+  }
+
+  /** Return the opaque execution-attempt token used by stale-policy recovery. */
+  getExecutionGeneration(): object {
+    return this.executionGeneration;
   }
 
   /**

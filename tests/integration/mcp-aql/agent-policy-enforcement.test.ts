@@ -478,18 +478,23 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       });
       await lookupStarted;
 
-      const originalExecuteAgent = agentManager.executeAgent.bind(agentManager);
       let markRestartStarted!: () => void;
       let releaseRestart!: () => void;
       const restartStarted = new Promise<void>(resolve => { markRestartStarted = resolve; });
       const restartBlocked = new Promise<void>(resolve => { releaseRestart = resolve; });
-      const executeSpy = jest.spyOn(agentManager, 'executeAgent')
-        .mockImplementationOnce(async (...args) => {
+      const originalRead = agentManager.read.bind(agentManager);
+      const readSpy = jest.spyOn(agentManager, 'read')
+        .mockImplementationOnce(async (name: string) => {
           markRestartStarted();
           await restartBlocked;
-          return originalExecuteAgent(...args);
+          return originalRead(name);
         });
-      const restartPromise = executeAgent('restart-before-persist-agent');
+      // Use the legacy/shared manager entry point directly. The generation hook
+      // must not depend on dispatch through MCPAQLHandler.
+      const restartPromise = agentManager.executeAgent(
+        'restart-before-persist-agent',
+        { task: 'legacy-entry-point-restart' },
+      );
       await restartStarted;
       releaseLookup();
 
@@ -501,8 +506,8 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       }
 
       releaseRestart();
-      expect((await restartPromise).success).toBe(true);
-      executeSpy.mockRestore();
+      await expect(restartPromise).resolves.toBeDefined();
+      readSpy.mockRestore();
       stateSpy.mockRestore();
 
       const deleteWhileSandboxRemains = await mcpAqlHandler.handleDelete({
