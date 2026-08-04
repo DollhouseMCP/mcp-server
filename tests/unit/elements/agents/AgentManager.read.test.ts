@@ -259,5 +259,26 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       await expect(agentManager.getAgentState({ agentName: 'failing-agent' }))
         .rejects.toThrow('Candidate storage unavailable');
     });
+
+    it('should return a matching candidate despite an unrelated load failure', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-poster.md') {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (filename === 'legacy-poster-agent.md') {
+          return AGENT_CONTENT_LEGACY;
+        }
+        throw new Error('Unrelated candidate is malformed');
+      });
+      mockPortfolioManager.listElements.mockResolvedValue([
+        'broken-agent.md',
+        'legacy-poster-agent.md'
+      ]);
+
+      await expect(agentManager.read('legacy-poster')).resolves.toMatchObject({
+        metadata: { name: 'legacy-poster' }
+      });
+    });
   });
 });

@@ -87,6 +87,11 @@ interface ParsedAgentFile {
   content: string;
 }
 
+interface FlexibleReadCandidates {
+  agents: Agent[];
+  loadFailures: unknown[];
+}
+
 type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & {
   content?: string;
 };
@@ -424,8 +429,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async readFlexibly(name: string): Promise<Agent | null> {
     try {
-      const agents = await this.listForFlexibleRead();
-      if (agents.length === 0) return null;
+      const { agents, loadFailures } = await this.listForFlexibleRead();
 
       const searchLower = name.toLowerCase();
       const searchSlug = this.normalizeFilename(name);
@@ -448,12 +452,17 @@ export class AgentManager extends BaseElementManager<Agent> {
           `Agent "${name}" resolved via flexible matching to file with metadata name "${match.metadata.name}". ` +
           `Consider renaming the file to match the expected convention (#607).`
         );
+        return match;
       }
 
-      return match ?? null;
-    } catch (listError) {
-      logger.debug(`Flexible agent lookup failed for "${name}": ${listError}`);
-      throw listError;
+      if (loadFailures.length > 0) {
+        throw loadFailures[0];
+      }
+
+      return null;
+    } catch (lookupError) {
+      logger.debug(`Flexible agent lookup failed for "${name}": ${lookupError}`);
+      throw lookupError;
     }
   }
 
@@ -462,12 +471,26 @@ export class AgentManager extends BaseElementManager<Agent> {
    * empty list. Flexible lookup can report "not found" only after every
    * candidate was listed and loaded successfully.
    */
-  private async listForFlexibleRead(): Promise<Agent[]> {
+  private async listForFlexibleRead(): Promise<FlexibleReadCandidates> {
     await this.fileOperations.createDirectory(this.elementDir);
     const files = await this.portfolioManager.listElements(ElementType.AGENT, {
       throwOnFilesystemError: true
     });
-    return Promise.all(files.map(file => this.load(file)));
+    const results = await Promise.allSettled(files.map(file => this.load(file)));
+    const candidates: FlexibleReadCandidates = {
+      agents: [],
+      loadFailures: []
+    };
+
+    for (const result of results) {
+      if (result.status === 'fulfilled') {
+        candidates.agents.push(result.value);
+      } else {
+        candidates.loadFailures.push(result.reason);
+      }
+    }
+
+    return candidates;
   }
 
   /**
