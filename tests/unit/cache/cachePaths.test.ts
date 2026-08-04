@@ -53,4 +53,14 @@ describe('resolveCollectionCacheDir', () => {
       path.join(process.cwd(), '.dollhouse', 'cache')
     );
   });
+
+  it('treats empty cache and home overrides as unset', () => {
+    process.env.DOLLHOUSE_CACHE_DIR = '';
+    process.env.DOLLHOUSE_HOME_DIR = '';
+
+    expect(resolveCollectionCacheDir('')).toBe(
+      path.join(os.homedir(), '.dollhouse', 'cache')
+    );
+    expect(path.isAbsolute(resolveCollectionCacheDir(''))).toBe(true);
+  });
 });
