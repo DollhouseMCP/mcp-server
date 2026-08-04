@@ -38,7 +38,11 @@ describe('UnifiedEndpoint', () => {
       memoryManager: {
         find: jest.fn().mockResolvedValue({
           metadata: { name: 'test-memory' },
-          addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
+          addEntry: jest.fn().mockResolvedValue({
+            id: 'entry-1',
+            timestamp: new Date('2026-01-01T00:00:00.000Z'),
+            trustLevel: 'untrusted',
+          }),
           removeEntry: jest.fn().mockReturnValue(true),
           getEntries: jest.fn().mockReturnValue(new Map()),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),

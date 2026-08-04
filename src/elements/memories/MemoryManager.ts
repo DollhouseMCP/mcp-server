@@ -28,10 +28,10 @@ import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
-import { ContentValidator } from '../../security/contentValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
+import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
@@ -95,28 +95,6 @@ function isCorruptedBackupName(name: string): boolean {
 function extractOriginalName(corruptedName: string): string {
   // Remove .backup-YYYY-MM-DD-HH-mm-ss-SSS and any -vN suffix
   return corruptedName.replace(/\.backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-\d{3}(-v\d+)?$/, '');
-}
-
-const MEMORY_ENTRY_PROSE_FIELDS = new Set([
-  'content',
-  'sanitizedContent',
-  'sanitizedPatterns',
-]);
-
-/**
- * Keep append-only prose and its sanitizer artifacts out of the blocking save
- * scan while retaining every auxiliary entry field (tags, source, metadata,
- * trust state, and timestamps) for validation.
- */
-function getMemoryEntryControlFields(entries: unknown): unknown {
-  if (!Array.isArray(entries)) return entries;
-
-  return entries.map(entry => {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
-    return Object.fromEntries(
-      Object.entries(entry).filter(([fieldName]) => !MEMORY_ENTRY_PROSE_FIELDS.has(fieldName))
-    );
-  });
 }
 
 // Internal interface for parsed YAML structure
@@ -713,20 +691,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
       MEMORY_CONSTANTS.MAX_YAML_SIZE,
       { detectContentPatterns: false },
     );
-    const controlFields = Object.fromEntries(
-      Object.entries(parsedYaml).filter(([fieldName]) => fieldName !== 'entries')
-    );
-    const fieldsRequiringContentValidation = {
-      ...controlFields,
-      entries: getMemoryEntryControlFields(parsedYaml.entries),
-    };
-    const controlYaml = this.serializationService.dumpYaml(fieldsRequiringContentValidation, {
-      schema: 'json',
-      noRefs: true,
-      skipInvalid: true,
-      sortKeys: true,
-    });
-    if (!ContentValidator.validateYamlContent(controlYaml, MEMORY_CONSTANTS.MAX_YAML_SIZE)) {
+    if (!validateMemoryControlFields(parsedYaml)) {
       throw new Error(
         'Malicious YAML content detected in memory metadata, instructions, or auxiliary entry fields'
       );
