@@ -117,6 +117,7 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       expect(deleteResult.success).toBe(false);
       if (!deleteResult.success) {
         expect(deleteResult.error).toContain('deny-agent');
+        expect(deleteResult.error).toContain('abort_execution');
       }
 
       // list_elements should still work (not in deny list)
@@ -180,6 +181,41 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       // list_elements should still work after completion
       const listAfter = await attemptList();
       expect(listAfter.success).toBe(true);
+    });
+  });
+
+  describe('Stale execution policy recovery', () => {
+    it('should let abort_execution remove a policy whose durable goal is already gone', async () => {
+      await createAgent('stale-policy-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('stale-policy-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'stale-policy-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared',
+      });
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'stale-policy-agent', reason: 'Recover stale policy' },
+      });
+
+      expect(recovery.success).toBe(true);
+      if (recovery.success) {
+        expect(recovery.data).toEqual(expect.objectContaining({
+          _type: 'AbortResult',
+          recoveredStalePolicy: true,
+        }));
+      }
+
+      const deleteAfterRecovery = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'stale-policy-agent' },
+      });
+      expect(deleteAfterRecovery.success).toBe(true);
     });
   });
 

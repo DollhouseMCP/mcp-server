@@ -1024,7 +1024,10 @@ export class MCPAQLHandler {
           } else {
             // Hard deny — operation is blocked by policy, no confirmation can help
             this.recordGatekeeperBlockForAgents(operation, elementType, decision.reason ?? 'Operation blocked by policy', decision.permissionLevel);
-            throw new Error(`[Gatekeeper] ${decision.reason}`);
+            const suggestion = decision.suggestion
+              ? ` Suggestion: ${decision.suggestion}`
+              : '';
+            throw new Error(`[Gatekeeper] ${decision.reason}${suggestion}`);
           }
         }
 
@@ -4041,6 +4044,28 @@ export class MCPAQLHandler {
         // Find the active goal for this agent
         const activeGoalIds = await this.getActiveGoalIds(manager, elementName);
         if (activeGoalIds.length === 0) {
+          // Issue #2427: the durable goal may already be gone while the in-memory
+          // execution policy remains. Explicit abort is safer and narrower than
+          // clearing every active element through release_deadlock.
+          if (this.executingAgents.has(elementName)) {
+            this.executingAgents.delete(elementName);
+            SecurityMonitor.logSecurityEvent({
+              type: 'AGENT_EXECUTED',
+              severity: 'MEDIUM',
+              source: 'MCPAQLHandler.dispatchExecute.abort',
+              details: `Recovered stale execution policy for agent: ${elementName}`,
+              additionalData: { agentName: elementName, reason: 'stale_execution_policy' },
+            });
+            return {
+              _type: 'AbortResult',
+              success: true,
+              agentName: elementName,
+              abortedGoalIds: [],
+              recoveredStalePolicy: true,
+              reason,
+              message: `Removed stale execution policy for agent '${elementName}'. No active goal remained.`,
+            };
+          }
           throw new Error(
             `No active execution found for agent '${elementName}'. ` +
             `Nothing to abort.`

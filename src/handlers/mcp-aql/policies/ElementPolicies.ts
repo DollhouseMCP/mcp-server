@@ -206,7 +206,7 @@ export function createDecisionFromPolicy(
         permissionLevel,
         errorCode: GatekeeperErrorCode.SCOPE_RESTRICTION,
         reason: `Operation "${operation}" is not allowed on element type "${targetElementType}" due to scope restrictions in active element "${sourceElement}"`,
-        suggestion: `Deactivate the element "${sourceElement}" or use a different element type`,
+        suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element or use a different element type`,
         policySource: 'element_policy',
       };
     }
@@ -216,7 +216,7 @@ export function createDecisionFromPolicy(
       permissionLevel,
       errorCode: GatekeeperErrorCode.ELEMENT_POLICY_VIOLATION,
       reason: `Operation "${operation}" is blocked by active element "${sourceElement}"'s deny policy`,
-      suggestion: `Deactivate the element "${sourceElement}" to proceed with this operation`,
+      suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element to proceed`,
       policySource: 'element_policy',
     };
   }
