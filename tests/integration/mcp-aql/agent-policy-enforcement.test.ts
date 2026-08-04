@@ -12,7 +12,7 @@
  * then tests the MCP-AQL execute + gatekeeper enforcement integration.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -185,6 +185,34 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
   });
 
   describe('Stale execution policy recovery', () => {
+    it('should preserve the policy when durable state lookup fails', async () => {
+      await createAgent('lookup-failure-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('lookup-failure-agent')).success).toBe(true);
+      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+        .mockRejectedValueOnce(new Error('Agent state storage unavailable'));
+
+      const recovery = await mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: { element_name: 'lookup-failure-agent', reason: 'Recover stale policy' },
+      });
+
+      expect(recovery.success).toBe(false);
+      if (!recovery.success) {
+        expect(recovery.error).toContain('Agent state storage unavailable');
+      }
+      stateSpy.mockRestore();
+
+      const deleteWhilePolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'lookup-failure-agent' },
+      });
+      expect(deleteWhilePolicyRemains.success).toBe(false);
+    });
+
     it('should let abort_execution remove a policy whose durable goal is already gone', async () => {
       await createAgent('stale-policy-agent', {
         gatekeeper: { deny: ['delete_element'] },

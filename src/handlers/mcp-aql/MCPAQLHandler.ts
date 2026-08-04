@@ -4042,7 +4042,7 @@ export class MCPAQLHandler {
         const reason = (params.reason as string) || 'Aborted by user';
 
         // Find the active goal for this agent
-        const activeGoalIds = await this.getActiveGoalIds(manager, elementName);
+        const activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
         if (activeGoalIds.length === 0) {
           // Issue #2427: the durable goal may already be gone while the in-memory
           // execution policy remains. Explicit abort is safer and narrower than
@@ -4536,7 +4536,8 @@ export class MCPAQLHandler {
    */
   private async getActiveGoalIds(
     manager: AgentManager,
-    agentName: string
+    agentName: string,
+    suppressLookupErrors = true,
   ): Promise<string[]> {
     try {
       const stateResult = await manager.getAgentState({ agentName });
@@ -4545,7 +4546,10 @@ export class MCPAQLHandler {
           .filter((g: { status: string }) => g.status === 'in_progress')
           .map((g: { id: string }) => g.id);
       }
-    } catch {
+    } catch (error) {
+      if (!suppressLookupErrors) {
+        throw error;
+      }
       // Agent may not have state yet
     }
     return [];
