@@ -28,6 +28,7 @@ import { FileLockManager } from '../../security/fileLockManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
+import { ContentValidator } from '../../security/contentValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
@@ -690,6 +691,18 @@ export class MemoryManager extends BaseElementManager<Memory> {
       MEMORY_CONSTANTS.MAX_YAML_SIZE,
       { detectContentPatterns: false },
     );
+    const controlFields = Object.fromEntries(
+      Object.entries(parsedYaml).filter(([fieldName]) => fieldName !== 'entries')
+    );
+    const controlYaml = this.serializationService.dumpYaml(controlFields, {
+      schema: 'json',
+      noRefs: true,
+      skipInvalid: true,
+      sortKeys: true,
+    });
+    if (!ContentValidator.validateYamlContent(controlYaml, MEMORY_CONSTANTS.MAX_YAML_SIZE)) {
+      throw new Error('Malicious YAML content detected in memory metadata or instructions');
+    }
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
       logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
