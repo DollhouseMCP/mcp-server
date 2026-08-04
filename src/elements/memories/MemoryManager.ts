@@ -97,6 +97,28 @@ function extractOriginalName(corruptedName: string): string {
   return corruptedName.replace(/\.backup-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}-\d{2}-\d{3}(-v\d+)?$/, '');
 }
 
+const MEMORY_ENTRY_PROSE_FIELDS = new Set([
+  'content',
+  'sanitizedContent',
+  'sanitizedPatterns',
+]);
+
+/**
+ * Keep append-only prose and its sanitizer artifacts out of the blocking save
+ * scan while retaining every auxiliary entry field (tags, source, metadata,
+ * trust state, and timestamps) for validation.
+ */
+function getMemoryEntryControlFields(entries: unknown): unknown {
+  if (!Array.isArray(entries)) return entries;
+
+  return entries.map(entry => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return entry;
+    return Object.fromEntries(
+      Object.entries(entry).filter(([fieldName]) => !MEMORY_ENTRY_PROSE_FIELDS.has(fieldName))
+    );
+  });
+}
+
 // Internal interface for parsed YAML structure
 interface ParsedMemoryData {
   data: Record<string, any>;
@@ -694,14 +716,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
     const controlFields = Object.fromEntries(
       Object.entries(parsedYaml).filter(([fieldName]) => fieldName !== 'entries')
     );
-    const controlYaml = this.serializationService.dumpYaml(controlFields, {
+    const fieldsRequiringContentValidation = {
+      ...controlFields,
+      entries: getMemoryEntryControlFields(parsedYaml.entries),
+    };
+    const controlYaml = this.serializationService.dumpYaml(fieldsRequiringContentValidation, {
       schema: 'json',
       noRefs: true,
       skipInvalid: true,
       sortKeys: true,
     });
     if (!ContentValidator.validateYamlContent(controlYaml, MEMORY_CONSTANTS.MAX_YAML_SIZE)) {
-      throw new Error('Malicious YAML content detected in memory metadata or instructions');
+      throw new Error(
+        'Malicious YAML content detected in memory metadata, instructions, or auxiliary entry fields'
+      );
     }
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
