@@ -74,6 +74,11 @@ const STATE_FILE_EXTENSION = '.state.yaml';
 const MAX_YAML_SIZE = 64 * 1024;
 const MAX_FILE_SIZE = 100 * 1024;
 
+/** Match the sanitized storage identity used by agent definition lookup. */
+export function normalizeAgentExecutionIdentity(name: string): string {
+  return normalizeElementStorageIdentity(sanitizeInput(name, 100));
+}
+
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
 
@@ -1264,7 +1269,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   /** Hold a bounded observation lease while stale-policy recovery is in flight. */
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
-    const key = normalizeElementStorageIdentity(name);
+    const key = normalizeAgentExecutionIdentity(name);
     const entry = this.getOrCreateExecutionGeneration(key);
     entry.observers += 1;
     let released = false;
@@ -1281,19 +1286,19 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   hasExecutionGenerationChanged(name: string, observedToken: object): boolean {
-    const entry = this.executionGenerations.get(normalizeElementStorageIdentity(name));
+    const entry = this.executionGenerations.get(normalizeAgentExecutionIdentity(name));
     return !entry || entry.activeExecutions > 0 || entry.token !== observedToken;
   }
 
   private beginExecutionAttempt(name: string): void {
-    const key = normalizeElementStorageIdentity(name);
+    const key = normalizeAgentExecutionIdentity(name);
     const entry = this.getOrCreateExecutionGeneration(key);
     entry.token = {};
     entry.activeExecutions += 1;
   }
 
   private endExecutionAttempt(name: string): void {
-    const key = normalizeElementStorageIdentity(name);
+    const key = normalizeAgentExecutionIdentity(name);
     const entry = this.executionGenerations.get(key);
     if (!entry) return;
     entry.activeExecutions = Math.max(0, entry.activeExecutions - 1);

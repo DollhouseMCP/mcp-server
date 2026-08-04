@@ -732,6 +732,26 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
   });
 
   describe('Concurrent agent execution with different policies', () => {
+    it('should not collide sanitized and hyphenated agent identities', async () => {
+      await createAgent('foo-bar', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      await createAgent('foobar', {
+        gatekeeper: { deny: ['list_elements'] },
+      });
+
+      expect((await executeAgent('foo-bar')).success).toBe(true);
+      expect((await executeAgent('foo&bar')).success).toBe(true);
+      expect((await completeAgent('foo&bar')).success).toBe(true);
+
+      const deleteWhileHyphenatedPolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'foo-bar' },
+      });
+      expect(deleteWhileHyphenatedPolicyRemains.success).toBe(false);
+    });
+
     it('should enforce independent policies for multiple executing agents', async () => {
       // Create two agents with different restrictions
       await createAgent('agent-no-delete', {

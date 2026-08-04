@@ -65,7 +65,7 @@ import { generateDisplayCode } from '@dollhousemcp/safety';
 import { randomUUID } from 'node:crypto';
 import type { ElementCRUDHandler } from '../ElementCRUDHandler.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
-import type { AgentManager } from '../../elements/agents/AgentManager.js';
+import { normalizeAgentExecutionIdentity, type AgentManager } from '../../elements/agents/AgentManager.js';
 import type { AgentMetadataV2, AgentResiliencePolicy, AgentNotification } from '../../elements/agents/types.js';
 import { evaluateResiliencePolicy, circuitBreaker, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
 import { resilienceMetrics } from '../../elements/agents/resilienceMetrics.js';
@@ -98,7 +98,6 @@ import { prepareHandoffState, parseHandoffBlock, generateHandoffBlock } from '..
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
 import type { AutonomyMetricsSnapshot } from '../../elements/agents/autonomyEvaluator.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
-import { normalizeElementStorageIdentity } from '../../utils/filesystem.js';
 
 // ============================================================================
 // Parameter Validation Utilities (Issue #323)
@@ -3823,7 +3822,7 @@ export class MCPAQLHandler {
     // Issue #323: Validate element_name parameter (was incorrectly using 'name')
     // All execute operations require element_name to identify the target
     const elementName = validateExecutionElementName(method, params);
-    const executionKey = normalizeElementStorageIdentity(elementName);
+    const executionKey = normalizeAgentExecutionIdentity(elementName);
 
     // Issue #110: Programmatic enforcement for DANGER_ZONE tier
     // Issue #402: Use DI-injected enforcer instead of singleton
