@@ -147,7 +147,6 @@ CI pipelines usually set these via workflow files (GitHub Actions, etc.).
 | Variable | Purpose |
 |----------|---------|
 | `PERSONAS_DIR` (legacy) | Used by `PathValidator` fallbacks; prefer `DOLLHOUSE_PORTFOLIO_DIR`. |
-| `DOLLHOUSE_CACHE_DIR` | Shared cache location for collection/index data. |
 | `DOLLHOUSE_MEMORY_*` | (When implemented) memory-system storage options. |
 
 ---
