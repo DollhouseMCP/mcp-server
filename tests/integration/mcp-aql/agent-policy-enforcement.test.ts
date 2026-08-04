@@ -370,6 +370,75 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       expect(deleteWhileNewPolicyRemains.success).toBe(false);
     });
 
+    it('should preserve the sandbox when a restart persists but policy tracking fails', async () => {
+      await createAgent('restart-with-tracking-failure-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('restart-with-tracking-failure-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'restart-with-tracking-failure-agent',
+        outcome: 'failure',
+        summary: 'First execution context disappeared',
+      });
+
+      const staleState = await agentManager.getAgentState({
+        agentName: 'restart-with-tracking-failure-agent',
+      });
+      const emptyStateSnapshot = {
+        ...staleState,
+        state: { ...staleState.state, goals: [] },
+      };
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+        .mockImplementationOnce(async () => {
+          markLookupStarted();
+          await lookupBlocked;
+          return emptyStateSnapshot;
+        });
+
+      const recoveryPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restart-with-tracking-failure-agent',
+          reason: 'Recover stale policy',
+        },
+      });
+      await lookupStarted;
+
+      const originalRead = agentManager.read.bind(agentManager);
+      let readCount = 0;
+      const readSpy = jest.spyOn(agentManager, 'read')
+        .mockImplementation(async (name: string) => {
+          readCount += 1;
+          if (readCount === 2) {
+            throw new Error('Policy tracking storage failure');
+          }
+          return originalRead(name);
+        });
+      expect((await executeAgent('restart-with-tracking-failure-agent')).success).toBe(true);
+      readSpy.mockRestore();
+      releaseLookup();
+
+      const recovery = await recoveryPromise;
+      stateSpy.mockRestore();
+      expect(recovery.success).toBe(false);
+      if (!recovery.success) {
+        expect(recovery.error).toContain('Execution state changed');
+        expect(recovery.error).toContain('newer execution policy was preserved');
+      }
+
+      const deleteWhileSandboxRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restart-with-tracking-failure-agent' },
+      });
+      expect(deleteWhileSandboxRemains.success).toBe(false);
+    });
+
     it('should recover a stale policy without clearing a DangerZone block', async () => {
       const dangerZoneEnforcer = container.resolve<
         import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer

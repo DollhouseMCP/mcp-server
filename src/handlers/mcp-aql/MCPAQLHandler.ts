@@ -4050,8 +4050,16 @@ export class MCPAQLHandler {
           // Issue #2427: the durable goal may already be gone while the in-memory
           // execution policy remains. Explicit abort is safer and narrower than
           // clearing every active element through release_deadlock.
+          // Re-read durable state immediately before cleanup. A concurrent
+          // execute_agent can persist a new goal while policy tracking fails,
+          // leaving the old map object unchanged and defeating identity checks
+          // by themselves.
+          const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, false);
           const currentExecutionPolicy = this.executingAgents.get(elementName);
-          if (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart) {
+          if (
+            revalidatedGoalIds.length > 0 ||
+            (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart)
+          ) {
             throw new Error(
               `Execution state changed while recovering agent '${elementName}'. ` +
               `The newer execution policy was preserved; retry abort_execution to abort it.`
