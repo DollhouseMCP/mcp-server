@@ -55,7 +55,7 @@ Security considerations:
 
 - TTL (default 15 minutes) is hard-coded in the class but could be made configurable via `IndexConfigManager` in future.  
 - `CacheFactory.createAPICache()` sets memory cache size (max 50 entries, ~10 MB).  
-- Base directory defaults to `process.cwd()`; DI can override in tests.
+- Cache directory resolution uses `DOLLHOUSE_CACHE_DIR` when set. Otherwise it stores data under `.dollhouse/cache` beneath an explicit DI base directory, `DOLLHOUSE_HOME_DIR`, or the operating-system home directory, in that order.
 
 ---
 
