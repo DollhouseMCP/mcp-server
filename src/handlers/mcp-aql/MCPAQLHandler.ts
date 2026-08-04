@@ -3825,9 +3825,10 @@ export class MCPAQLHandler {
 
     // Issue #110: Programmatic enforcement for DANGER_ZONE tier
     // Issue #402: Use DI-injected enforcer instead of singleton
-    // Check if the agent is blocked due to danger zone trigger
-    // Only allow 'getState' operation for blocked agents (read-only, needed for diagnostics)
-    if (method !== 'getState' && this.handlers.dangerZoneEnforcer) {
+    // Check if the agent is blocked due to danger zone trigger. State reads and
+    // abort remain available for diagnostics and safe execution shutdown. Abort
+    // deliberately preserves the independent DangerZone block below.
+    if (method !== 'getState' && method !== 'abort' && this.handlers.dangerZoneEnforcer) {
       const blockCheck = this.handlers.dangerZoneEnforcer.check(elementName);
       if (blockCheck.blocked) {
         logger.warn(
@@ -4058,13 +4059,6 @@ export class MCPAQLHandler {
           }
           if (executionPolicyAtLookupStart && currentExecutionPolicy === executionPolicyAtLookupStart) {
             this.executingAgents.delete(elementName);
-            if (this.handlers.dangerZoneEnforcer) {
-              try {
-                this.handlers.dangerZoneEnforcer.unblock(elementName);
-              } catch {
-                // Non-fatal: the stale agent may not have been blocked.
-              }
-            }
             SecurityMonitor.logSecurityEvent({
               type: 'AGENT_POLICY_RECOVERED',
               severity: 'MEDIUM',
@@ -4113,15 +4107,6 @@ export class MCPAQLHandler {
 
         // Clean up executingAgents Map (stop Gatekeeper policy enforcement)
         this.executingAgents.delete(elementName);
-
-        // Clean up DangerZoneEnforcer blocks for this agent
-        if (this.handlers.dangerZoneEnforcer) {
-          try {
-            this.handlers.dangerZoneEnforcer.unblock(elementName);
-          } catch {
-            // Non-fatal: agent may not have been blocked
-          }
-        }
 
         SecurityMonitor.logSecurityEvent({
           type: 'AGENT_EXECUTED',

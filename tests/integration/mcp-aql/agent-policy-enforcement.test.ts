@@ -369,6 +369,74 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       });
       expect(deleteWhileNewPolicyRemains.success).toBe(false);
     });
+
+    it('should recover a stale policy without clearing a DangerZone block', async () => {
+      const dangerZoneEnforcer = container.resolve<
+        import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer
+      >('DangerZoneEnforcer');
+      await createAgent('danger-zone-stale-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('danger-zone-stale-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'danger-zone-stale-agent',
+        outcome: 'failure',
+        summary: 'Execution context disappeared after a dangerous action',
+      });
+      dangerZoneEnforcer.block(
+        'danger-zone-stale-agent',
+        'Dangerous action requires verification',
+        ['test-pattern'],
+        'test-verification-id',
+      );
+
+      try {
+        const recovery = await mcpAqlHandler.handleExecute({
+          operation: 'abort_execution',
+          params: { element_name: 'danger-zone-stale-agent', reason: 'Recover stale policy' },
+        });
+
+        expect(recovery.success).toBe(true);
+        expect(dangerZoneEnforcer.check('danger-zone-stale-agent').blocked).toBe(true);
+
+        const deleteAfterRecovery = await mcpAqlHandler.handleDelete({
+          operation: 'delete_element',
+          element_type: 'agent',
+          params: { element_name: 'danger-zone-stale-agent' },
+        });
+        expect(deleteAfterRecovery.success).toBe(true);
+      } finally {
+        dangerZoneEnforcer.unblock('danger-zone-stale-agent');
+      }
+    });
+
+    it('should abort an active goal without clearing a DangerZone block', async () => {
+      const dangerZoneEnforcer = container.resolve<
+        import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer
+      >('DangerZoneEnforcer');
+      await createAgent('danger-zone-active-agent');
+
+      expect((await executeAgent('danger-zone-active-agent')).success).toBe(true);
+      dangerZoneEnforcer.block(
+        'danger-zone-active-agent',
+        'Dangerous action requires verification',
+        ['test-pattern'],
+        'test-verification-id',
+      );
+
+      try {
+        const abort = await mcpAqlHandler.handleExecute({
+          operation: 'abort_execution',
+          params: { element_name: 'danger-zone-active-agent', reason: 'Stop dangerous execution' },
+        });
+
+        expect(abort.success).toBe(true);
+        expect(dangerZoneEnforcer.check('danger-zone-active-agent').blocked).toBe(true);
+      } finally {
+        dangerZoneEnforcer.unblock('danger-zone-active-agent');
+      }
+    });
   });
 
   describe('Agent without gatekeeper has no restrictions', () => {
