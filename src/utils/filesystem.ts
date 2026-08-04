@@ -43,13 +43,16 @@ export function normalizeElementFilename(name: string): string {
     return 'unnamed';
   }
 
-  return name
+  const normalized = name
     .replace(/([a-z])([A-Z])/g, '$1-$2')
     .replace(/[\s_]+/g, '-')
     .toLowerCase()
     .replace(/[^a-z0-9-]/g, '-')
-    .replace(/-+/g, '-')
-    .replace(/^-+|-+$/g, '');
+    .replace(/-+/g, '-');
+
+  const start = normalized.startsWith('-') ? 1 : 0;
+  const end = normalized.endsWith('-') ? -1 : undefined;
+  return normalized.slice(start, end);
 }
 
 /** Canonical non-empty identity used for element files and related runtime maps. */
