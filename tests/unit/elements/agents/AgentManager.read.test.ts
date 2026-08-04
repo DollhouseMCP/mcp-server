@@ -241,6 +241,10 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
       await expect(agentManager.getAgentState({ agentName: 'failing-agent' }))
         .rejects.toThrow('Storage unavailable');
+      expect(mockPortfolioManager.listElements).toHaveBeenCalledWith(
+        ElementType.AGENT,
+        { throwOnFilesystemError: true }
+      );
     });
 
     it('should propagate candidate load failures through getAgentState()', async () => {

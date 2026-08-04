@@ -464,7 +464,9 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async listForFlexibleRead(): Promise<Agent[]> {
     await this.fileOperations.createDirectory(this.elementDir);
-    const files = await this.portfolioManager.listElements(ElementType.AGENT);
+    const files = await this.portfolioManager.listElements(ElementType.AGENT, {
+      throwOnFilesystemError: true
+    });
     return Promise.all(files.map(file => this.load(file)));
   }
 
