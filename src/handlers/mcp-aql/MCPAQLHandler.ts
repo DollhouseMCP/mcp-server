@@ -4049,8 +4049,15 @@ export class MCPAQLHandler {
           // clearing every active element through release_deadlock.
           if (this.executingAgents.has(elementName)) {
             this.executingAgents.delete(elementName);
+            if (this.handlers.dangerZoneEnforcer) {
+              try {
+                this.handlers.dangerZoneEnforcer.unblock(elementName);
+              } catch {
+                // Non-fatal: the stale agent may not have been blocked.
+              }
+            }
             SecurityMonitor.logSecurityEvent({
-              type: 'AGENT_EXECUTED',
+              type: 'AGENT_POLICY_RECOVERED',
               severity: 'MEDIUM',
               source: 'MCPAQLHandler.dispatchExecute.abort',
               details: `Recovered stale execution policy for agent: ${elementName}`,
