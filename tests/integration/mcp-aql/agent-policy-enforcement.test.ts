@@ -744,6 +744,53 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       });
       expect(deleteWhilePolicyRemains.success).toBe(false);
     });
+
+    it('should preserve a new policy when execution restarts during active abort', async () => {
+      await createAgent('restart-during-active-abort-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      expect((await executeAgent('restart-during-active-abort-agent')).success).toBe(true);
+
+      let markOldGoalCompleted!: () => void;
+      let releaseCompletion!: () => void;
+      const oldGoalCompleted = new Promise<void>(resolve => { markOldGoalCompleted = resolve; });
+      const completionBlocked = new Promise<void>(resolve => { releaseCompletion = resolve; });
+      const originalCompletion = agentManager.completeAgentGoalForRecovery.bind(agentManager);
+      const completionSpy = jest.spyOn(agentManager, 'completeAgentGoalForRecovery')
+        .mockImplementationOnce(async params => {
+          const result = await originalCompletion(params);
+          markOldGoalCompleted();
+          await completionBlocked;
+          return result;
+        });
+
+      const abortPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restart-during-active-abort-agent',
+          reason: 'Abort the original execution',
+        },
+      });
+      await oldGoalCompleted;
+
+      expect((await executeAgent('restart-during-active-abort-agent')).success).toBe(true);
+      releaseCompletion();
+
+      const abort = await abortPromise;
+      completionSpy.mockRestore();
+      expect(abort.success).toBe(false);
+      if (!abort.success) {
+        expect(abort.error).toContain('Execution state changed');
+        expect(abort.error).toContain('newer execution policy was preserved');
+      }
+
+      const deleteWhileNewPolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restart-during-active-abort-agent' },
+      });
+      expect(deleteWhileNewPolicyRemains.success).toBe(false);
+    });
   });
 
   describe('Agent without gatekeeper has no restrictions', () => {

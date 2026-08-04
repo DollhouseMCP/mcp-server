@@ -4048,9 +4048,8 @@ export class MCPAQLHandler {
         // Find the active goal for this agent
         const executionPolicyAtLookupStart = this.executingAgents.get(executionKey);
         const generationObservation = manager.observeExecutionGeneration(elementName);
-        let activeGoalIds: string[];
         try {
-          activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
+          const activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
           if (activeGoalIds.length === 0) {
             // Issue #2427: the durable goal may already be gone while the in-memory
             // execution policy remains. Explicit abort is safer and narrower than
@@ -4095,56 +4094,74 @@ export class MCPAQLHandler {
               `Nothing to abort.`
             );
           }
-        } finally {
-          generationObservation.release();
-        }
 
-        // Mark all active goals as aborted
-        for (const goalId of activeGoalIds) {
-          this.abortedGoals.add(goalId);
-        }
+          // Mark all active goals as aborted
+          for (const goalId of activeGoalIds) {
+            this.abortedGoals.add(goalId);
+          }
 
-        // Complete each exact goal from the strict snapshot before dropping policy.
-        // Any storage or version conflict fails closed and preserves the sandbox.
-        for (const goalId of activeGoalIds) {
-          await manager.completeAgentGoalForRecovery({
-            agentName: elementName,
-            goalId,
-            outcome: 'failure',
-            summary: `Execution aborted: ${reason}`,
+          // Complete each exact goal from the strict snapshot before dropping policy.
+          // Any storage or version conflict fails closed and preserves the sandbox.
+          for (const goalId of activeGoalIds) {
+            await manager.completeAgentGoalForRecovery({
+              agentName: elementName,
+              goalId,
+              outcome: 'failure',
+              summary: `Execution aborted: ${reason}`,
+            });
+          }
+
+          // A new execution may begin after the active-goal snapshot or after the
+          // old goals are completed. Preserve its policy unless durable state,
+          // generation, and map identity still describe the original execution.
+          const remainingActiveGoalIds = await this.getActiveGoalIds(manager, elementName, false);
+          const currentExecutionPolicy = this.executingAgents.get(executionKey);
+          if (
+            remainingActiveGoalIds.length > 0 ||
+            manager.hasExecutionGenerationChanged(elementName, generationObservation.token) ||
+            (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart)
+          ) {
+            throw new Error(
+              `Execution state changed while aborting agent '${elementName}'. ` +
+              `The newer execution policy was preserved; retry abort_execution to abort it.`
+            );
+          }
+
+          // Issue #526: Track resilience outcome (abort = failure after resilience)
+          const abortedAgent = executionPolicyAtLookupStart;
+          if (abortedAgent?.resiliencePolicy && (abortedAgent.continuationCount > 0 || abortedAgent.retryCount > 0)) {
+            resilienceMetrics.recordCompletionAfterResilience(false);
+          }
+
+          // Delete only the policy that was present when this abort began.
+          if (currentExecutionPolicy === executionPolicyAtLookupStart) {
+            this.executingAgents.delete(executionKey);
+          }
+
+          SecurityMonitor.logSecurityEvent({
+            type: 'AGENT_EXECUTED',
+            severity: 'MEDIUM',
+            source: 'MCPAQLHandler.dispatchExecute.abort',
+            details: `Agent execution aborted: ${elementName} — ${reason}`,
+            additionalData: {
+              agentName: elementName,
+              abortedGoalIds: activeGoalIds,
+              reason,
+            },
           });
-        }
 
-        // Issue #526: Track resilience outcome (abort = failure after resilience)
-        const abortedAgent = this.executingAgents.get(executionKey);
-        if (abortedAgent?.resiliencePolicy && (abortedAgent.continuationCount > 0 || abortedAgent.retryCount > 0)) {
-          resilienceMetrics.recordCompletionAfterResilience(false);
-        }
-
-        // Clean up executingAgents Map (stop Gatekeeper policy enforcement)
-        this.executingAgents.delete(executionKey);
-
-        SecurityMonitor.logSecurityEvent({
-          type: 'AGENT_EXECUTED',
-          severity: 'MEDIUM',
-          source: 'MCPAQLHandler.dispatchExecute.abort',
-          details: `Agent execution aborted: ${elementName} — ${reason}`,
-          additionalData: {
+          // Issue #125: Return structured JSON with type discriminator
+          return {
+            _type: 'AbortResult',
+            success: true,
             agentName: elementName,
             abortedGoalIds: activeGoalIds,
             reason,
-          },
-        });
-
-        // Issue #125: Return structured JSON with type discriminator
-        return {
-          _type: 'AbortResult',
-          success: true,
-          agentName: elementName,
-          abortedGoalIds: activeGoalIds,
-          reason,
-          message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
-        };
+            message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
+          };
+        } finally {
+          generationObservation.release();
+        }
       }
 
       case 'getGatheredData': {
