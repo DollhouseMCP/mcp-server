@@ -706,15 +706,15 @@ export class AgentManager extends BaseElementManager<Agent> {
       const metadata = await this.parseMetadata(parsed.metadata);
       const agent = this.createElement(metadata, parsed.content);
 
-      if (cacheLoadedElement) {
-        this.cacheElement(agent, relativePath);
-      }
       if (hydrateState) {
         await this.hydrateAgentState(
           agent,
           this.stripExtension(relativePath),
           strictStateErrors,
         );
+      }
+      if (cacheLoadedElement) {
+        this.cacheElement(agent, relativePath);
       }
 
       SecurityMonitor.logSecurityEvent({

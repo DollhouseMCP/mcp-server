@@ -292,6 +292,12 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
     });
 
     it('should propagate requested state failures through getAgentState()', async () => {
+      const cacheSpy = jest.spyOn(
+        agentManager as unknown as {
+          cacheElement: (agent: unknown, filename: string) => void;
+        },
+        'cacheElement'
+      );
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
         if (filename === 'my-agent.md') return AGENT_CONTENT_STANDARD;
@@ -303,6 +309,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
       await expect(agentManager.getAgentState({ agentName: 'my-agent' }))
         .rejects.toThrow('State storage unavailable');
+      expect(cacheSpy).not.toHaveBeenCalled();
     });
 
     it('should fail closed when the state directory is unavailable', async () => {
