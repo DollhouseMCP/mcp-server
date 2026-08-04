@@ -439,6 +439,80 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       expect(deleteWhileSandboxRemains.success).toBe(false);
     });
 
+    it('should preserve the sandbox when a restart begins before its goal is persisted', async () => {
+      await createAgent('restart-before-persist-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+
+      expect((await executeAgent('restart-before-persist-agent')).success).toBe(true);
+      await agentManager.completeAgentGoal({
+        agentName: 'restart-before-persist-agent',
+        outcome: 'failure',
+        summary: 'First execution context disappeared',
+      });
+
+      const staleState = await agentManager.getAgentState({
+        agentName: 'restart-before-persist-agent',
+      });
+      const emptyStateSnapshot = {
+        ...staleState,
+        state: { ...staleState.state, goals: [] },
+      };
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const stateSpy = jest.spyOn(agentManager, 'getAgentState')
+        .mockImplementationOnce(async () => {
+          markLookupStarted();
+          await lookupBlocked;
+          return emptyStateSnapshot;
+        });
+
+      const recoveryPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restart-before-persist-agent',
+          reason: 'Recover stale policy',
+        },
+      });
+      await lookupStarted;
+
+      const originalExecuteAgent = agentManager.executeAgent.bind(agentManager);
+      let markRestartStarted!: () => void;
+      let releaseRestart!: () => void;
+      const restartStarted = new Promise<void>(resolve => { markRestartStarted = resolve; });
+      const restartBlocked = new Promise<void>(resolve => { releaseRestart = resolve; });
+      const executeSpy = jest.spyOn(agentManager, 'executeAgent')
+        .mockImplementationOnce(async (...args) => {
+          markRestartStarted();
+          await restartBlocked;
+          return originalExecuteAgent(...args);
+        });
+      const restartPromise = executeAgent('restart-before-persist-agent');
+      await restartStarted;
+      releaseLookup();
+
+      const recovery = await recoveryPromise;
+      expect(recovery.success).toBe(false);
+      if (!recovery.success) {
+        expect(recovery.error).toContain('Execution state changed');
+        expect(recovery.error).toContain('newer execution policy was preserved');
+      }
+
+      releaseRestart();
+      expect((await restartPromise).success).toBe(true);
+      executeSpy.mockRestore();
+      stateSpy.mockRestore();
+
+      const deleteWhileSandboxRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restart-before-persist-agent' },
+      });
+      expect(deleteWhileSandboxRemains.success).toBe(false);
+    });
+
     it('should recover a stale policy without clearing a DangerZone block', async () => {
       const dangerZoneEnforcer = container.resolve<
         import('../../../src/security/DangerZoneEnforcer.js').DangerZoneEnforcer

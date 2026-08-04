@@ -678,6 +678,14 @@ export class MCPAQLHandler {
   }>();
 
   /**
+   * Monotonic execution-attempt generation per agent. Incremented before the
+   * first asynchronous work in execute_agent so stale-policy recovery can see
+   * a concurrent restart even when its durable goal and replacement policy
+   * have not been persisted yet.
+   */
+  private readonly executionGenerations = new Map<string, number>();
+
+  /**
    * Set of aborted goalIds. Once a goalId is aborted, all further execution
    * operations (record_execution_step, complete_execution, continue_execution)
    * for that goalId are rejected at the dispatch layer.
@@ -3868,6 +3876,8 @@ export class MCPAQLHandler {
     switch (method) {
       case 'execute': {
         // Start execution of an agent or executable element
+        const executionGeneration = (this.executionGenerations.get(elementName) ?? 0) + 1;
+        this.executionGenerations.set(elementName, executionGeneration);
         const executeResult = await manager.executeAgent(
           elementName,
           params.parameters as Record<string, unknown>
@@ -4045,6 +4055,7 @@ export class MCPAQLHandler {
 
         // Find the active goal for this agent
         const executionPolicyAtLookupStart = this.executingAgents.get(elementName);
+        const executionGenerationAtLookupStart = this.executionGenerations.get(elementName) ?? 0;
         const activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
         if (activeGoalIds.length === 0) {
           // Issue #2427: the durable goal may already be gone while the in-memory
@@ -4058,6 +4069,7 @@ export class MCPAQLHandler {
           const currentExecutionPolicy = this.executingAgents.get(elementName);
           if (
             revalidatedGoalIds.length > 0 ||
+            (this.executionGenerations.get(elementName) ?? 0) !== executionGenerationAtLookupStart ||
             (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart)
           ) {
             throw new Error(
