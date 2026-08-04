@@ -237,6 +237,21 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       ]);
       expect(stateReads).toEqual(['legacy-poster.state.yaml']);
     });
+
+    it('should fail closed when a flexible match has no requested state identity', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'legacy-poster.md' || filename.endsWith('.state.yaml')) {
+          throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+        }
+        if (filename === 'legacy-poster-agent.md') return AGENT_CONTENT_LEGACY;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+      mockPortfolioManager.listElements.mockResolvedValue(['legacy-poster-agent.md']);
+
+      await expect(agentManager.getAgentState({ agentName: 'legacy-poster' }))
+        .rejects.toThrow('Cannot verify durable state');
+    });
   });
 
   describe('direct lookup ENOENT + no flexible match', () => {
@@ -287,6 +302,23 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
 
       await expect(agentManager.getAgentState({ agentName: 'my-agent' }))
         .rejects.toThrow('State storage unavailable');
+    });
+
+    it('should bypass cached state during strict getAgentState() reads', async () => {
+      let requestedState = ACTIVE_REQUESTED_STATE.replace('in_progress', 'completed');
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        const filename = path.basename(filePath);
+        if (filename === 'my-agent.md') return AGENT_CONTENT_STANDARD;
+        if (filename === 'my-agent.state.yaml') return requestedState;
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      });
+
+      const firstRead = await agentManager.read('my-agent');
+      expect(firstRead?.getState().goals[0]?.status).toBe('completed');
+
+      requestedState = ACTIVE_REQUESTED_STATE;
+      const strictRead = await agentManager.getAgentState({ agentName: 'my-agent' });
+      expect(strictRead.state.goals[0]?.status).toBe('in_progress');
     });
   });
 

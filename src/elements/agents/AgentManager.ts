@@ -460,7 +460,12 @@ export class AgentManager extends BaseElementManager<Agent> {
         // Candidate filenames are only definition-discovery aids. Durable state
         // belongs to the logical name the caller requested, not whichever legacy
         // filename happened to match its metadata.
-        await this.hydrateAgentState(match, name, strictStateErrors);
+        const requestedStateFound = await this.hydrateAgentState(match, name, strictStateErrors);
+        if (strictStateErrors && !requestedStateFound) {
+          throw new Error(
+            `Cannot verify durable state for flexibly matched agent "${name}" under its requested identity`
+          );
+        }
         logger.warn(
           `Agent "${name}" resolved via flexible matching to file with metadata name "${match.metadata.name}". ` +
           `Consider renaming the file to match the expected convention (#607).`
@@ -1882,23 +1887,26 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent: Agent,
     name: string,
     strictStateErrors = false,
-  ): Promise<void> {
+  ): Promise<boolean> {
     const state = await this.loadAgentState(name, strictStateErrors);
     if (!state) {
-      return;
+      return false;
     }
 
     const serialized = JSON.parse(agent.serializeToJSON());
     serialized.state = state;
     agent.deserialize(JSON.stringify(serialized));
     agent.markStatePersisted();
+    return true;
   }
 
   private async loadAgentState(name: string, strictStateErrors = false): Promise<AgentState | null> {
     // FIX: Normalize name for consistent state file lookups
     const normalizedName = this.normalizeFilename(name);
 
-    if (this.stateCache.has(normalizedName)) {
+    // Security-sensitive state checks must re-read durable storage rather than
+    // trusting a possibly stale process cache.
+    if (!strictStateErrors && this.stateCache.has(normalizedName)) {
       return this.stateCache.get(normalizedName)!;
     }
 
