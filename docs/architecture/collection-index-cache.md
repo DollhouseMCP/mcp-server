@@ -22,7 +22,7 @@ It supplies data to `UnifiedIndexManager` and `CollectionSearch` so `search_all`
 
 1. **In-memory LRU (`memoryCache`)** – fastest path; TTL default 5 minutes.  
 2. **In-process snapshot (`this.cache`)** – retains last loaded index with fetched-at timestamp.  
-3. **Persistent disk cache** – stored under `~/.dollhousemcp/cache/collection-index-cache.json`. Used when network fetch fails.
+3. **Persistent disk cache** – stored under `~/.dollhouse/cache/collection-index-cache.json`. Used when network fetch fails.
 
 ---
 

@@ -10,6 +10,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { LRUCache, CacheFactory } from './LRUCache.js';
 import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { resolveCollectionCacheDir } from './cachePaths.js';
 
 export class CollectionIndexCache {
   private cache: CachedIndex | null = null;
@@ -27,12 +28,12 @@ export class CollectionIndexCache {
 
   constructor(
     githubClient: GitHubClient,
-    baseDir: string,
+    baseDir: string | undefined,
     performanceMonitor: PerformanceMonitor,
     fileOperations: IFileOperationsService
   ) {
     this.githubClient = githubClient;
-    this.cacheDir = path.join(baseDir, '.dollhousemcp', 'cache');
+    this.cacheDir = resolveCollectionCacheDir(baseDir);
     this.cacheFile = path.join(this.cacheDir, 'collection-index-cache.json');
     this.performanceMonitor = performanceMonitor;
     this.fileOperations = fileOperations;
