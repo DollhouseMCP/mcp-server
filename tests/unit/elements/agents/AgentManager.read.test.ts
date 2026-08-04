@@ -407,7 +407,17 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
   });
 
   describe('flexible fallback resilience', () => {
-    it('should propagate list failures through getAgentState()', async () => {
+    it('should preserve ordinary not-found behavior for an empty portfolio', async () => {
+      fileOperationsService.readFile.mockRejectedValue(
+        Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      );
+      mockPortfolioManager.listElements.mockResolvedValue([]);
+
+      await expect(agentManager.read('missing-agent')).resolves.toBeNull();
+      expect(mockPortfolioManager.listElements).toHaveBeenCalledWith(ElementType.AGENT);
+    });
+
+    it('should propagate list failures through strict recovery reads', async () => {
       // Direct lookup: ENOENT
       fileOperationsService.readFile.mockRejectedValue(
         Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
@@ -415,7 +425,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       // list() itself throws
       mockPortfolioManager.listElements.mockRejectedValue(new Error('Storage unavailable'));
 
-      await expect(agentManager.getAgentState({ agentName: 'failing-agent' }))
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'failing-agent' }))
         .rejects.toThrow('Storage unavailable');
       expect(mockPortfolioManager.listElements).toHaveBeenCalledWith(
         ElementType.AGENT,
@@ -432,7 +442,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
         Object.assign(new Error('Agents directory unavailable'), { code: 'ENOENT' })
       );
 
-      await expect(agentManager.getAgentState({ agentName: 'offline-agent' }))
+      await expect(agentManager.getAgentStateForRecovery({ agentName: 'offline-agent' }))
         .rejects.toThrow('Agents directory unavailable');
       expect(fileOperationsService.createDirectory).not.toHaveBeenCalled();
     });

@@ -462,7 +462,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async readFlexibly(name: string, strictStateErrors = false): Promise<Agent | null> {
     try {
-      const { candidates, loadFailures } = await this.listForFlexibleRead();
+      const { candidates, loadFailures } = await this.listForFlexibleRead(strictStateErrors);
 
       const searchLower = name.toLowerCase();
       const searchSlug = this.normalizeFilename(name);
@@ -513,14 +513,14 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
-   * Enumerate fallback candidates without creating missing storage or
-   * converting storage failures into an empty list. Flexible lookup can report
-   * "not found" only after every candidate was listed and loaded successfully.
+   * Enumerate fallback candidates without creating missing storage. Strict
+   * recovery propagates listing failures; ordinary reads retain the portfolio
+   * API's empty-directory and unavailable-directory compatibility behavior.
    */
-  private async listForFlexibleRead(): Promise<FlexibleReadCandidates> {
-    const files = await this.portfolioManager.listElements(ElementType.AGENT, {
-      throwOnFilesystemError: true
-    });
+  private async listForFlexibleRead(strictStateErrors: boolean): Promise<FlexibleReadCandidates> {
+    const files = strictStateErrors
+      ? await this.portfolioManager.listElements(ElementType.AGENT, { throwOnFilesystemError: true })
+      : await this.portfolioManager.listElements(ElementType.AGENT);
     // Load definitions without candidate-filename state. Once a match is known,
     // readFlexibly() hydrates it using the requested logical identity.
     const results = await Promise.allSettled(
