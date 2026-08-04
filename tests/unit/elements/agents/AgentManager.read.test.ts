@@ -382,6 +382,12 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
     });
 
     it('should return a matching candidate despite an unrelated load failure', async () => {
+      const cacheSpy = jest.spyOn(
+        agentManager as unknown as {
+          cacheElement: (agent: unknown, filename: string) => void;
+        },
+        'cacheElement'
+      );
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         const filename = path.basename(filePath);
         if (filename === 'legacy-poster.md') {
@@ -400,6 +406,7 @@ describe('AgentManager.read() flexible fallback (#607)', () => {
       await expect(agentManager.read('legacy-poster')).resolves.toMatchObject({
         metadata: { name: 'legacy-poster' }
       });
+      expect(cacheSpy).not.toHaveBeenCalled();
     });
   });
 });

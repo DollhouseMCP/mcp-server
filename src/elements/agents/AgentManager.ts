@@ -496,7 +496,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     // Load definitions without candidate-filename state. Once a match is known,
     // readFlexibly() hydrates it using the requested logical identity.
     const results = await Promise.allSettled(
-      files.map(file => this.loadAgentFile(file, false, false))
+      files.map(file => this.loadAgentFile(file, false, false, false))
     );
     const candidates: FlexibleReadCandidates = {
       agents: [],
@@ -679,6 +679,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     filePath: string,
     hydrateState: boolean,
     strictStateErrors: boolean,
+    cacheLoadedElement = true,
   ): Promise<Agent> {
     const sanitizedInput = sanitizeInput(filePath, 255);
     const relativePath = sanitizedInput.endsWith(AGENT_FILE_EXTENSION)
@@ -705,7 +706,9 @@ export class AgentManager extends BaseElementManager<Agent> {
       const metadata = await this.parseMetadata(parsed.metadata);
       const agent = this.createElement(metadata, parsed.content);
 
-      this.cacheElement(agent, relativePath);
+      if (cacheLoadedElement) {
+        this.cacheElement(agent, relativePath);
+      }
       if (hydrateState) {
         await this.hydrateAgentState(
           agent,
