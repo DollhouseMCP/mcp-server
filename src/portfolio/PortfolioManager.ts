@@ -26,6 +26,11 @@ const ELEMENT_FILE_EXTENSIONS: Record<ElementType, string> = {
 // Default extension for backward compatibility
 const DEFAULT_ELEMENT_FILE_EXTENSION = '.md';
 
+interface ListElementsOptions {
+  /** Preserve filesystem failures instead of representing them as an empty portfolio. */
+  throwOnFilesystemError?: boolean;
+}
+
 /**
  * Get the file extension for an element type without requiring a PortfolioManager instance.
  * Issue #815: Shared by PortfolioRepoManager and submitToPortfolioTool to avoid
@@ -262,7 +267,10 @@ export class PortfolioManager {
   /**
    * List all elements of a specific type
    */
-  public async listElements(type: ElementType): Promise<string[]> {
+  public async listElements(
+    type: ElementType,
+    options: ListElementsOptions = {}
+  ): Promise<string[]> {
     const elementDir = this.getElementDir(type);
     const fileExtension = ELEMENT_FILE_EXTENSIONS[type] || DEFAULT_ELEMENT_FILE_EXTENSION;
 
@@ -291,14 +299,20 @@ export class PortfolioManager {
       const err = error as NodeJS.ErrnoException;
       
       if (err.code === 'ENOENT') {
+        if (options.throwOnFilesystemError) {
+          throw error;
+        }
         // Directory doesn't exist yet - this is expected for new installations
         logger.debug(`[PortfolioManager] Element directory doesn't exist yet: ${elementDir}`);
         return [];
       }
       
       if (err.code === 'EACCES' || err.code === 'EPERM') {
-        // Permission denied - log but return empty array
         ErrorHandler.logError('PortfolioManager.listElements', error, { elementDir });
+        if (options.throwOnFilesystemError) {
+          throw error;
+        }
+        // Permission denied - preserve the legacy best-effort listing behavior
         return [];
       }
       

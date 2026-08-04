@@ -64,6 +64,7 @@ import { MetadataService } from '../../services/MetadataService.js';
 import { FileWatchService } from '../../services/FileWatchService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { normalizeElementStorageIdentity } from '../../utils/filesystem.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 
@@ -72,6 +73,11 @@ const STATE_DIRECTORY = '.state';
 const STATE_FILE_EXTENSION = '.state.yaml';
 const MAX_YAML_SIZE = 64 * 1024;
 const MAX_FILE_SIZE = 100 * 1024;
+
+/** Match the sanitized storage identity used by agent definition lookup. */
+export function normalizeAgentExecutionIdentity(name: string): string {
+  return normalizeElementStorageIdentity(sanitizeInput(name, 100));
+}
 
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
@@ -87,6 +93,27 @@ interface ParsedAgentFile {
   content: string;
 }
 
+interface FlexibleReadCandidate {
+  agent: Agent;
+  filePath: string;
+}
+
+interface FlexibleReadCandidates {
+  candidates: FlexibleReadCandidate[];
+  loadFailures: unknown[];
+}
+
+interface ExecutionGenerationEntry {
+  token: object;
+  activeExecutions: number;
+  observers: number;
+}
+
+export interface ExecutionGenerationObservation {
+  token: object;
+  release: () => void;
+}
+
 type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) & {
   content?: string;
 };
@@ -98,6 +125,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
+  /** Per-agent tokens retained only while execution or recovery is in flight. */
+  private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   // Track active agents by name (stable identifier)
   private readonly activeAgentNames: Set<string> = new Set();
 
@@ -397,14 +426,23 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @returns Agent instance or null if not found
    */
   async read(name: string): Promise<Agent | null> {
+    return this.readWithStatePolicy(name, false);
+  }
+
+  /**
+   * Read an agent while selecting whether state-storage failures are fatal.
+   * Security-sensitive callers use strict state reads so unavailable durable
+   * state cannot be mistaken for an agent with no active goals.
+   */
+  private async readWithStatePolicy(name: string, strictStateErrors: boolean): Promise<Agent | null> {
     try {
       const sanitizedName = sanitizeInput(name, 100);
       const filename = this.getFilename(sanitizedName);
-      return await this.load(filename);
+      return await this.loadAgentFile(filename, true, strictStateErrors, !strictStateErrors);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         // Fallback: flexible matching via list scan (#607)
-        return this.readFlexibly(name);
+        return this.readFlexibly(name, strictStateErrors);
       }
       throw error;
     }
@@ -422,39 +460,86 @@ export class AgentManager extends BaseElementManager<Agent> {
    * // Flexible fallback matches via metadata name:
    * const agent = await read("legacy-poster"); // resolves via fallback
    */
-  private async readFlexibly(name: string): Promise<Agent | null> {
+  private async readFlexibly(name: string, strictStateErrors = false): Promise<Agent | null> {
     try {
-      const agents = await this.list();
-      if (agents.length === 0) return null;
+      const { candidates, loadFailures } = await this.listForFlexibleRead(strictStateErrors);
 
       const searchLower = name.toLowerCase();
       const searchSlug = this.normalizeFilename(name);
 
       // Pass 1: exact case-insensitive match on metadata name
-      let match = agents.find(
-        (a) => a.metadata.name.toLowerCase() === searchLower
+      let match = candidates.find(
+        ({ agent }) => agent.metadata.name.toLowerCase() === searchLower
       );
 
       // Pass 2: slug match (handles dashes, underscores, casing differences)
       if (!match) {
-        match = agents.find((a) => {
-          const slug = this.normalizeFilename(a.metadata.name);
+        match = candidates.find(({ agent }) => {
+          const slug = this.normalizeFilename(agent.metadata.name);
           return slug === searchSlug || slug === searchLower;
         });
       }
 
       if (match) {
+        // Strict recovery verifies the caller-requested identity. Ordinary legacy
+        // reads preserve the state identity associated with the matched file.
+        const stateIdentity = strictStateErrors ? name : this.stripExtension(match.filePath);
+        const requestedStateFound = await this.hydrateAgentState(
+          match.agent,
+          stateIdentity,
+          strictStateErrors,
+        );
+        if (strictStateErrors && !requestedStateFound) {
+          throw new Error(
+            `Cannot verify durable state for flexibly matched agent "${name}" under its requested identity`
+          );
+        }
         logger.warn(
-          `Agent "${name}" resolved via flexible matching to file with metadata name "${match.metadata.name}". ` +
+          `Agent "${name}" resolved via flexible matching to file with metadata name "${match.agent.metadata.name}". ` +
           `Consider renaming the file to match the expected convention (#607).`
         );
+        return match.agent;
       }
 
-      return match ?? null;
-    } catch (listError) {
-      logger.debug(`Flexible agent lookup failed for "${name}": ${listError}`);
+      if (loadFailures.length > 0) {
+        throw loadFailures[0];
+      }
+
       return null;
+    } catch (lookupError) {
+      logger.debug(`Flexible agent lookup failed for "${name}": ${lookupError}`);
+      throw lookupError;
     }
+  }
+
+  /**
+   * Enumerate fallback candidates without creating missing storage. Strict
+   * recovery propagates listing failures; ordinary reads retain the portfolio
+   * API's empty-directory and unavailable-directory compatibility behavior.
+   */
+  private async listForFlexibleRead(strictStateErrors: boolean): Promise<FlexibleReadCandidates> {
+    const files = strictStateErrors
+      ? await this.portfolioManager.listElements(ElementType.AGENT, { throwOnFilesystemError: true })
+      : await this.portfolioManager.listElements(ElementType.AGENT);
+    // Load definitions without candidate-filename state. Once a match is known,
+    // readFlexibly() hydrates it using the requested logical identity.
+    const results = await Promise.allSettled(
+      files.map(file => this.loadAgentFile(file, false, false, false))
+    );
+    const candidates: FlexibleReadCandidates = {
+      candidates: [],
+      loadFailures: []
+    };
+
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled') {
+        candidates.candidates.push({ agent: result.value, filePath: files[index] });
+      } else {
+        candidates.loadFailures.push(result.reason);
+      }
+    }
+
+    return candidates;
   }
 
   /**
@@ -615,6 +700,15 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Load an agent file, enforcing size and format checks.
    */
   override async load(filePath: string): Promise<Agent> {
+    return this.loadAgentFile(filePath, true, false);
+  }
+
+  private async loadAgentFile(
+    filePath: string,
+    hydrateState: boolean,
+    strictStateErrors: boolean,
+    cacheLoadedElement = true,
+  ): Promise<Agent> {
     const sanitizedInput = sanitizeInput(filePath, 255);
     const relativePath = sanitizedInput.endsWith(AGENT_FILE_EXTENSION)
       ? sanitizedInput
@@ -640,8 +734,16 @@ export class AgentManager extends BaseElementManager<Agent> {
       const metadata = await this.parseMetadata(parsed.metadata);
       const agent = this.createElement(metadata, parsed.content);
 
-      this.cacheElement(agent, relativePath);
-      await this.hydrateAgentState(agent, this.stripExtension(relativePath));
+      if (hydrateState) {
+        await this.hydrateAgentState(
+          agent,
+          this.stripExtension(relativePath),
+          strictStateErrors,
+        );
+      }
+      if (cacheLoadedElement) {
+        this.cacheElement(agent, relativePath);
+      }
 
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_LOADED',
@@ -916,6 +1018,9 @@ export class AgentManager extends BaseElementManager<Agent> {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
   ): Promise<ExecuteAgentResult> {
+    // Must happen before any await so recovery sees starts from MCP-AQL, legacy
+    // tools, and any future caller that uses the shared manager entry point.
+    this.beginExecutionAttempt(name);
     try {
       // 1. Load agent by name
       const agent = await this.read(name);
@@ -1157,6 +1262,61 @@ export class AgentManager extends BaseElementManager<Agent> {
     } catch (error) {
       logger.error(`Failed to execute agent '${name}':`, error);
       throw error;
+    } finally {
+      this.endExecutionAttempt(name);
+    }
+  }
+
+  /** Hold a bounded observation lease while stale-policy recovery is in flight. */
+  observeExecutionGeneration(name: string): ExecutionGenerationObservation {
+    const key = normalizeAgentExecutionIdentity(name);
+    const entry = this.getOrCreateExecutionGeneration(key);
+    entry.observers += 1;
+    let released = false;
+
+    return {
+      token: entry.token,
+      release: () => {
+        if (released) return;
+        released = true;
+        entry.observers -= 1;
+        this.cleanupExecutionGeneration(key, entry);
+      },
+    };
+  }
+
+  hasExecutionGenerationChanged(name: string, observedToken: object): boolean {
+    const entry = this.executionGenerations.get(normalizeAgentExecutionIdentity(name));
+    return !entry || entry.activeExecutions > 0 || entry.token !== observedToken;
+  }
+
+  private beginExecutionAttempt(name: string): void {
+    const key = normalizeAgentExecutionIdentity(name);
+    const entry = this.getOrCreateExecutionGeneration(key);
+    entry.token = {};
+    entry.activeExecutions += 1;
+  }
+
+  private endExecutionAttempt(name: string): void {
+    const key = normalizeAgentExecutionIdentity(name);
+    const entry = this.executionGenerations.get(key);
+    if (!entry) return;
+    entry.activeExecutions = Math.max(0, entry.activeExecutions - 1);
+    this.cleanupExecutionGeneration(key, entry);
+  }
+
+  private getOrCreateExecutionGeneration(key: string): ExecutionGenerationEntry {
+    let entry = this.executionGenerations.get(key);
+    if (!entry) {
+      entry = { token: {}, activeExecutions: 0, observers: 0 };
+      this.executionGenerations.set(key, entry);
+    }
+    return entry;
+  }
+
+  private cleanupExecutionGeneration(key: string, entry: ExecutionGenerationEntry): void {
+    if (entry.activeExecutions === 0 && entry.observers === 0) {
+      this.executionGenerations.delete(key);
     }
   }
 
@@ -1729,11 +1889,19 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @returns The new state version after successful save
    * @protected Only accessible by subclasses (e.g., TestableAgentManager for testing)
    */
-  protected async saveAgentState(name: string, state: AgentState): Promise<number> {
-    await this.ensureStateDirectory();
+  protected async saveAgentState(
+    name: string,
+    state: AgentState,
+    strictExistingStateErrors = false,
+  ): Promise<number> {
+    if (strictExistingStateErrors) {
+      await this.assertStateDirectoryAvailable();
+    } else {
+      await this.ensureStateDirectory();
+    }
 
     // FIX: Normalize name for consistent state file naming
-    const normalizedName = this.normalizeFilename(name);
+    const normalizedName = normalizeElementStorageIdentity(name);
     const filePath = path.join(this.stateDir, `${normalizedName}${STATE_FILE_EXTENSION}`);
 
     // FIX (Issue #107 - CRIT-2): Acquire file lock to prevent TOCTOU race condition
@@ -1741,7 +1909,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     await this.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
       // FIX: Optimistic locking check (Issue #24)
       // Load existing state to compare versions before overwriting
-      const existingState = await this.loadAgentState(name);
+      const existingState = await this.loadAgentState(name, strictExistingStateErrors);
+      if (strictExistingStateErrors && !existingState) {
+        throw new Error(`Agent state disappeared while completing goal for '${name}'`);
+      }
       if (existingState && existingState.stateVersion !== undefined && state.stateVersion !== undefined) {
         // Check if our state is based on the current version
         // If versions don't match, it means another process updated the state
@@ -1812,23 +1983,30 @@ export class AgentManager extends BaseElementManager<Agent> {
       : filePath;
   }
 
-  private async hydrateAgentState(agent: Agent, name: string): Promise<void> {
-    const state = await this.loadAgentState(name);
+  private async hydrateAgentState(
+    agent: Agent,
+    name: string,
+    strictStateErrors = false,
+  ): Promise<boolean> {
+    const state = await this.loadAgentState(name, strictStateErrors);
     if (!state) {
-      return;
+      return false;
     }
 
     const serialized = JSON.parse(agent.serializeToJSON());
     serialized.state = state;
     agent.deserialize(JSON.stringify(serialized));
     agent.markStatePersisted();
+    return true;
   }
 
-  private async loadAgentState(name: string): Promise<AgentState | null> {
+  private async loadAgentState(name: string, strictStateErrors = false): Promise<AgentState | null> {
     // FIX: Normalize name for consistent state file lookups
-    const normalizedName = this.normalizeFilename(name);
+    const normalizedName = normalizeElementStorageIdentity(name);
 
-    if (this.stateCache.has(normalizedName)) {
+    // Security-sensitive state checks must re-read durable storage rather than
+    // trusting a possibly stale process cache.
+    if (!strictStateErrors && this.stateCache.has(normalizedName)) {
       return this.stateCache.get(normalizedName)!;
     }
 
@@ -1849,14 +2027,38 @@ export class AgentManager extends BaseElementManager<Agent> {
       const state = result.data as AgentState;
       this.normalizeLoadedState(state);
       // FIX: Use normalized name as cache key for consistent lookups
-      this.stateCache.set(normalizedName, state);
+      if (!strictStateErrors) {
+        this.stateCache.set(normalizedName, state);
+      }
       return state;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (strictStateErrors) {
+          await this.assertStateDirectoryAvailable();
+        }
         return null;
       }
       logger.error(`Failed to load agent state: ${name}`, error);
+      if (strictStateErrors) {
+        throw error;
+      }
       return null;
+    }
+  }
+
+  /**
+   * Distinguish a legitimately absent per-agent state file from unavailable
+   * state storage. Strict recovery may treat only the former as empty state.
+   */
+  private async assertStateDirectoryAvailable(): Promise<void> {
+    try {
+      const stats = await this.fileOperations.stat(this.stateDir);
+      if (!stats.isDirectory()) {
+        throw new Error('Agent state storage path is not a directory');
+      }
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Agent state directory unavailable: ${reason}`);
     }
   }
 
@@ -2744,7 +2946,26 @@ export class AgentManager extends BaseElementManager<Agent> {
     goalId?: string;
     outcome: "success" | "failure" | "partial";
     summary: string;
-  }): Promise<{
+  }) {
+    return this.completeAgentGoalWithStatePolicy(params, false);
+  }
+
+  /** Complete an exact durable goal without consulting ordinary state caches. */
+  async completeAgentGoalForRecovery(params: {
+    agentName: string;
+    goalId: string;
+    outcome: "success" | "failure" | "partial";
+    summary: string;
+  }) {
+    return this.completeAgentGoalWithStatePolicy(params, true);
+  }
+
+  private async completeAgentGoalWithStatePolicy(params: {
+    agentName: string;
+    goalId?: string;
+    outcome: "success" | "failure" | "partial";
+    summary: string;
+  }, strictStateErrors: boolean): Promise<{
     success: boolean;
     message: string;
     goal: {
@@ -2771,7 +2992,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }> {
     // 1. Load agent by name
-    const agent = await this.read(params.agentName);
+    const agent = strictStateErrors
+      ? await this.readWithStatePolicy(params.agentName, true)
+      : await this.read(params.agentName);
     if (!agent) {
       // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
       throw new ElementNotFoundError('Agent', params.agentName);
@@ -2797,6 +3020,11 @@ export class AgentManager extends BaseElementManager<Agent> {
           : `No in-progress goal found for agent '${params.agentName}'`
       );
     }
+    if (strictStateErrors && goal.status !== 'in_progress') {
+      throw new Error(
+        `Goal '${goal.id}' changed while aborting agent '${params.agentName}'`
+      );
+    }
 
     // 3. Record final decision with summary
     agent.recordDecision({
@@ -2815,7 +3043,17 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 6. Save agent state
     const completeSanitizedName = sanitizeInput(params.agentName, 100);
-    await this.save(agent, this.getFilename(completeSanitizedName));
+    if (strictStateErrors) {
+      const newVersion = await this.saveAgentState(
+        completeSanitizedName,
+        agent.getState(),
+        true,
+      );
+      agent[COMMIT_PERSISTED_VERSION](newVersion);
+      agent.markStatePersisted();
+    } else {
+      await this.save(agent, this.getFilename(completeSanitizedName));
+    }
 
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();
@@ -2859,7 +3097,24 @@ export class AgentManager extends BaseElementManager<Agent> {
     agentName: string;
     includeDecisionHistory?: boolean;
     includeContext?: boolean;
-  }): Promise<{
+  }) {
+    return this.getAgentStateWithPolicy(params, false);
+  }
+
+  /** Strict durable-state variant reserved for stale-policy recovery. */
+  async getAgentStateForRecovery(params: {
+    agentName: string;
+    includeDecisionHistory?: boolean;
+    includeContext?: boolean;
+  }) {
+    return this.getAgentStateWithPolicy(params, true);
+  }
+
+  private async getAgentStateWithPolicy(params: {
+    agentName: string;
+    includeDecisionHistory?: boolean;
+    includeContext?: boolean;
+  }, strictStateErrors: boolean): Promise<{
     success: boolean;
     agentName: string;
     state: {
@@ -2908,7 +3163,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }> {
     // 1. Load agent by name
-    const agent = await this.read(params.agentName);
+    const agent = await this.readWithStatePolicy(params.agentName, strictStateErrors);
     if (!agent) {
       // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
       throw new ElementNotFoundError('Agent', params.agentName);

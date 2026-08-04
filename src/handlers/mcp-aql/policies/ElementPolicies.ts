@@ -206,7 +206,7 @@ export function createDecisionFromPolicy(
         permissionLevel,
         errorCode: GatekeeperErrorCode.SCOPE_RESTRICTION,
         reason: `Operation "${operation}" is not allowed on element type "${targetElementType}" due to scope restrictions in active element "${sourceElement}"`,
-        suggestion: `Deactivate the element "${sourceElement}" or use a different element type`,
+        suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element or use a different element type`,
         policySource: 'element_policy',
       };
     }
@@ -216,7 +216,7 @@ export function createDecisionFromPolicy(
       permissionLevel,
       errorCode: GatekeeperErrorCode.ELEMENT_POLICY_VIOLATION,
       reason: `Operation "${operation}" is blocked by active element "${sourceElement}"'s deny policy`,
-      suggestion: `Deactivate the element "${sourceElement}" to proceed with this operation`,
+      suggestion: `If "${sourceElement}" is an executing agent, call abort_execution for it. Otherwise, deactivate the element to proceed`,
       policySource: 'element_policy',
     };
   }
@@ -619,8 +619,9 @@ function checkToolPrefix(
  * Gatekeeper infrastructure operations — two related sets with distinct purposes.
  *
  * UNGATABLE_OPERATIONS: Operations that must NEVER appear in element policy lists.
- * These are pure internal plumbing — gating them serves no security purpose and
- * breaks critical flows (verification, CLI approval, permission evaluation).
+ * These are internal plumbing or critical lifecycle/recovery operations — gating
+ * them breaks verification, deadlock recovery, execution abort, CLI approval, or
+ * permission evaluation flows.
  * Stripped from ALL policy lists (allow, confirm, deny) during sanitization.
  *
  * GATEKEEPER_INFRA_OPERATIONS: Operations that skip Layer 2 (element policy
@@ -636,6 +637,7 @@ function checkToolPrefix(
 const UNGATABLE_OPERATIONS = new Set([
   'verify_challenge',
   'release_deadlock',
+  'abort_execution',
   'approve_cli_permission',
   'permission_prompt',
 ]);
