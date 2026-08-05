@@ -122,10 +122,19 @@ describe('supply-chain install policy', () => {
     expect(setup).toContain('npm ci --ignore-scripts');
     expect(npmSetup).toContain('@dollhousemcp/mcp-server@${PACKAGE_VERSION}');
     expect(npmSetup).toContain('npm install -g --ignore-scripts');
+    expect(npmSetup).toContain('"command": "dollhousemcp"');
+    expect(npmSetup).not.toMatch(/\bnpx\b/);
     expect(bundle).not.toMatch(/\bnpx\b/);
     expect(bundle).toContain('npm ci --omit=dev --ignore-scripts');
     expect(bundle).not.toContain('npm install --omit=dev');
     expect(calibration).not.toMatch(/\bnpx\b/);
+  });
+
+  it('uses lockfile-installed tools in package scripts', () => {
+    const scripts = JSON.parse(read('package.json')).scripts as Record<string, string>;
+
+    expect(Object.values(scripts).some(script => /\bnpx\b/.test(script))).toBe(false);
+    expect(scripts.setup).toContain('npm ci --ignore-scripts');
   });
 
   it('uses HTTPS in the permission-policy test payload', () => {

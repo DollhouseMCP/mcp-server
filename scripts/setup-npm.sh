@@ -71,8 +71,7 @@ if 'mcpServers' not in config:
 
 # Add or update dollhousemcp server for NPM installation
 config['mcpServers']['dollhousemcp'] = {
-    "command": "npx",
-    "args": ["@dollhousemcp/mcp-server"]
+    "command": "dollhousemcp"
 }
 
 # Pretty print the result
@@ -93,8 +92,7 @@ EOF
 {
   "mcpServers": {
     "dollhousemcp": {
-      "command": "npx",
-      "args": ["@dollhousemcp/mcp-server"]
+      "command": "dollhousemcp"
     }
   }
 }
@@ -107,8 +105,7 @@ else
 {
   "mcpServers": {
     "dollhousemcp": {
-      "command": "npx",
-      "args": ["@dollhousemcp/mcp-server"]
+      "command": "dollhousemcp"
     }
   }
 }

@@ -17,8 +17,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 STAGING_DIR="$PROJECT_DIR/.mcpb-staging"
-VERSION=$(node -e "console.log(require('$PROJECT_DIR/package.json').version)")
-MANIFEST_VERSION=$(node -e "console.log(require('$PROJECT_DIR/manifest.json').version)")
+VERSION=$(node -p "require(process.argv[1]).version" "$PROJECT_DIR/package.json")
+MANIFEST_VERSION=$(node -p "require(process.argv[1]).version" "$PROJECT_DIR/manifest.json")
 
 cd "$PROJECT_DIR"
 
