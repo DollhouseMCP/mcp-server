@@ -88,7 +88,7 @@ jobs:
       #       typescript-build-${{ runner.os }}-
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build project
         run: npm run build
@@ -130,7 +130,7 @@ jobs:
             jest-cache-${{ runner.os }}-
 
       - name: Clear Jest cache
-        run: npx jest --clearCache
+        run: node node_modules/jest/bin/jest.js --clearCache
 
       - name: Run test suite (original method)
         id: original_tests
