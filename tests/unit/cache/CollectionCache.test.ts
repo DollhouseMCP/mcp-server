@@ -1,7 +1,8 @@
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as path from 'path';
 import * as os from 'os';
 import { CollectionCache } from '../../../src/cache/CollectionCache.js';
+import type { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
 
 /**
  * Unit tests for CollectionCache - pure logic tests
@@ -18,22 +19,62 @@ import { CollectionCache } from '../../../src/cache/CollectionCache.js';
 describe('CollectionCache', () => {
   let cache: CollectionCache;
   let testBaseDir: string;
+  let originalCacheDir: string | undefined;
+  let originalHomeDir: string | undefined;
+  const fileOperations = {} as IFileOperationsService;
 
   beforeEach(() => {
+    originalCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
+    originalHomeDir = process.env.DOLLHOUSE_HOME_DIR;
+    delete process.env.DOLLHOUSE_CACHE_DIR;
+    delete process.env.DOLLHOUSE_HOME_DIR;
+
     // Setup test directory path (not created on filesystem)
     testBaseDir = path.join(os.tmpdir(), 'test-collection-cache-' + Date.now());
-    cache = new CollectionCache(testBaseDir);
+    cache = new CollectionCache(fileOperations, testBaseDir);
+  });
+
+  afterEach(() => {
+    if (originalCacheDir === undefined) {
+      delete process.env.DOLLHOUSE_CACHE_DIR;
+    } else {
+      process.env.DOLLHOUSE_CACHE_DIR = originalCacheDir;
+    }
+
+    if (originalHomeDir === undefined) {
+      delete process.env.DOLLHOUSE_HOME_DIR;
+    } else {
+      process.env.DOLLHOUSE_HOME_DIR = originalHomeDir;
+    }
   });
 
   describe('constructor', () => {
-    it('should initialize with default base directory', () => {
-      const defaultCache = new CollectionCache();
-      expect(defaultCache).toBeInstanceOf(CollectionCache);
+    it('should use the configured Dollhouse home instead of the process CWD', () => {
+      process.env.DOLLHOUSE_HOME_DIR = '/configured/home';
+
+      const defaultCache = new CollectionCache(fileOperations);
+
+      expect(defaultCache.getCacheFilePath()).toBe(
+        path.join('/configured/home', '.dollhouse', 'cache', 'collection-cache.json')
+      );
     });
 
-    it('should initialize with custom base directory', () => {
-      const customCache = new CollectionCache('/custom/path');
-      expect(customCache).toBeInstanceOf(CollectionCache);
+    it('should use an explicit base directory when provided', () => {
+      const customCache = new CollectionCache(fileOperations, '/custom/path');
+
+      expect(customCache.getCacheFilePath()).toBe(
+        path.join('/custom/path', '.dollhouse', 'cache', 'collection-cache.json')
+      );
+    });
+
+    it('should honor the exact cache directory override', () => {
+      process.env.DOLLHOUSE_CACHE_DIR = '/configured/cache';
+
+      const configuredCache = new CollectionCache(fileOperations, '/ignored/base');
+
+      expect(configuredCache.getCacheFilePath()).toBe(
+        path.join('/configured/cache', 'collection-cache.json')
+      );
     });
   });
 

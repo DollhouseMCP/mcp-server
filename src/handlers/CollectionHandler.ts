@@ -608,12 +608,11 @@ export class CollectionHandler {
           const searchStats = await this.collectionSearch.getCacheStats();
           
           // Check if cache directory exists
-          const cacheDir = path.join(process.cwd(), '.dollhousemcp', 'cache');
+          const cacheFile = this.collectionCache.getCacheFilePath();
           let cacheFileExists = false;
           let cacheFileSize = 0;
           
           try {
-            const cacheFile = path.join(cacheDir, 'collection-cache.json');
             const fileStats = await this.fileOperations.stat(cacheFile);
             cacheFileExists = true;
             cacheFileSize = fileStats.size;
