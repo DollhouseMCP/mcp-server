@@ -12,7 +12,10 @@ runs:
       run: |
         if ! command -v yamllint &> /dev/null; then
           echo "Installing yamllint..."
-          pip3 install yamllint || {
+          python3 -m pip install --only-binary=:all: --no-deps \
+            yamllint==1.37.1 \
+            pathspec==0.12.1 \
+            PyYAML==6.0.3 || {
             echo "⚠️ Could not install yamllint, falling back to basic YAML validation"
             export YAMLLINT_AVAILABLE=false
           }
