@@ -6,6 +6,7 @@
 - Preserve append-only memory writes when historical entries trip newer content-scanner rules. Structural YAML protections and control-field validation remain enforced, while unsafe historical output is sanitized or redacted instead of permanently blocking future appends. (#2440, #2442)
 - Keep collection and collection-index caches under Dollhouse home by default, honor explicit cache and home overrides safely, and prevent cache files from appearing in the process working repository. (#2426, #2443)
 - Restore the SonarCloud security rating by hardening CI, container, and setup dependency installation; pinning external tooling; enforcing HTTPS-only downloads; removing on-demand package execution; and adding regression coverage without removing DollhouseMCP capabilities. (#2446, #2447)
+- Update the existing exact `giget` override to `tar` 7.5.22, removing the critical runtime archive-processing advisory without changing any other dependency. (#2449, #2450)
 
 ## [2.0.39] - 2026-07-31
 
