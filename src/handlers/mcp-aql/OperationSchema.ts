@@ -1169,10 +1169,10 @@ export const MEMORY_SCHEMAS: OperationSchemaMap = {
       tags: { type: 'string[]', description: 'Tags for categorizing this entry (e.g. ["important", "source:user"])' },
       metadata: { type: 'object', description: 'Structured metadata for correlation and tracking (e.g. { source: "api", correlationId: "req-123" })' },
     },
-    returns: { name: 'MemoryEntry', kind: 'object', description: 'Created entry: { id, content, tags, metadata, timestamp, trustLevel, source }. All new entries start as "untrusted". Trust levels: untrusted → validated → trusted (or flagged/quarantined). Background validation promotes trust asynchronously.' },
+    returns: { name: 'MemoryEntryReceipt', kind: 'object', description: 'Created entry receipt: { id, timestamp, trustLevel }. Entry prose is not echoed because all new entries start as "untrusted" and background validation runs asynchronously.' },
     examples: [
       '{ operation: "addEntry", params: { element_name: "my-memory", content: "Remember this fact", tags: ["important"] } }',
-      // Response: { _type: "MemoryEntry", id: "mem_...", content: "Remember this fact", tags: ["important"], timestamp: "2026-...", trustLevel: "untrusted", source: "unknown" }
+      // Response: { id: "mem_...", timestamp: "2026-...Z", trustLevel: "untrusted" }
       '{ operation: "addEntry", params: { element_name: "audit-log", content: "User performed action", tags: ["audit", "source:api"], metadata: { correlationId: "req-123" } } }',
       '{ operation: "addEntry", params: { element_name: "session-notes", content: "Key decision made" } }',
     ],
@@ -1310,7 +1310,7 @@ export const EXECUTION_SCHEMAS: OperationSchemaMap = {
       element_name: { type: 'string', required: true, description: 'Agent or executable element name to abort' },
       reason: { type: 'string', description: 'Reason for aborting the execution' },
     },
-    returns: { name: 'AbortResult', kind: 'object', description: 'Abort confirmation: { _type, success, agentName, abortedGoalIds, reason, message }' },
+    returns: { name: 'AbortResult', kind: 'object', description: 'Abort confirmation: { _type, success, agentName, abortedGoalIds, recoveredStalePolicy?, reason, message }' },
     examples: [
       '{ operation: "abort_execution", params: { element_name: "code-reviewer", reason: "User requested cancellation" } }',
       // Response: { _type: "AbortResult", success: true, agentName: "code-reviewer", abortedGoalIds: ["goal_abc123"], reason: "User requested cancellation" }
