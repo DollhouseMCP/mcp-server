@@ -41,8 +41,8 @@ function executableLines(content: string): string[] {
 }
 
 describe('supply-chain install policy', () => {
-  it.each(workflowFiles)('%s disables lifecycle scripts for lockfile installs', file => {
-    const installLines = executableLines(read(file)).filter(line => line.includes('npm ci'));
+  it.each(workflowFiles)('%s disables lifecycle scripts for npm installs', file => {
+    const installLines = executableLines(read(file)).filter(line => /npm (ci|install)\b/.test(line));
 
     expect(installLines.length).toBeGreaterThan(0);
     for (const line of installLines) {
@@ -94,8 +94,23 @@ describe('supply-chain install policy', () => {
     const content = read(file);
 
     expect(content).toMatch(/FROM node:22/);
-    expect(content).toMatch(/@anthropic-ai\/claude-code@\d+\.\d+\.\d+/);
+    expect(content).toContain(
+      'npm install -g --ignore-scripts @anthropic-ai/claude-code@2.1.222'
+    );
+    expect(content).toContain(
+      'node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs"'
+    );
+    expect(content).toMatch(/^RUN claude --version$/m);
+    expect(content).not.toMatch(/^RUN claude --version.*\|\|/m);
+    expect(content).not.toContain('claude --version 2>/dev/null ||');
     expect(content).not.toMatch(/^COPY.*(?:\|\||2>)/m);
+  });
+
+  it('uses the installed Claude Code command as the default test-image command', () => {
+    const content = read('docker/test-configs/Dockerfile.claude-testing');
+
+    expect(content).toContain('CMD ["claude"]');
+    expect(content).not.toContain('CMD ["claude-code"]');
   });
 
   it('copies the built safety package into the optimized Claude runtime image', () => {
