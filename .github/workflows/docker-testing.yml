@@ -679,7 +679,7 @@ jobs:
           echo "⏳ Running MCP server via Docker Compose with initialize command..."
           # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
           # Use timeout since MCP server runs indefinitely
-          docker_output=$(timeout 5 sh -c 'echo '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm -T dollhousemcp 2>&1' || true)
+          docker_output=$(timeout 10 sh -c 'printf "%s\n" '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm --interactive -T dollhousemcp 2>&1' || true)
           exit_code=$?
 
           echo "Docker Compose run completed with exit code: $exit_code"
