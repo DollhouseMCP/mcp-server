@@ -433,8 +433,9 @@ jobs:
               echo "✅ Correct serverInfo found - MCP server is working properly"
               echo "\n🎉 TEST PASSED FOR ${{ matrix.platform }}!"
             else
-              echo "⚠️ JSON-RPC response found but missing expected serverInfo"
+              echo "❌ FAILED: MCP initialize response is missing expected serverInfo"
               echo "Response may be incomplete or malformed"
+              exit 1
             fi
           else
             echo "❌ FAILED: No valid JSON-RPC response found"
@@ -584,8 +585,9 @@ jobs:
               echo "✅ Response contains result field - server is fully functional"
               echo "\n🎉 TOOLS/LIST TEST PASSED FOR ${{ matrix.platform }}!"
             else
-              echo "⚠️ JSON-RPC response found but missing result field"
+              echo "❌ FAILED: tools/list response is missing result field"
               echo "Response may be incomplete"
+              exit 1
             fi
           else
             echo "❌ FAILED: No valid JSON-RPC response found for tools/list"
@@ -691,6 +693,9 @@ jobs:
             echo "✅ Docker Compose MCP server returned valid JSON-RPC response"
             if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
               echo "✅ Response contains correct serverInfo - server is working"
+            else
+              echo "❌ FAILED: Docker Compose initialize response is missing expected serverInfo"
+              exit 1
             fi
           else
             echo "❌ FAILED: Docker Compose MCP server did not return a JSON-RPC response"

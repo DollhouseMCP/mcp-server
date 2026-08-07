@@ -188,6 +188,25 @@ describe('GitHub Workflow Validation', () => {
       expect(operatingSystems).toEqual(expect.stringContaining(hostedBranch));
       expect(operatingSystems).toEqual(expect.stringContaining('["ubuntu-latest"]'));
     });
+
+    it('should require successful MCP payloads from every Docker gate', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'docker-testing.yml'),
+        'utf8'
+      );
+      const failureMessages = [
+        'MCP initialize response is missing expected serverInfo',
+        'tools/list response is missing result field',
+        'Docker Compose initialize response is missing expected serverInfo',
+      ];
+
+      for (const message of failureMessages) {
+        const marker = content.indexOf(message);
+
+        expect(marker).toBeGreaterThanOrEqual(0);
+        expect(content.slice(marker, marker + 200)).toContain('exit 1');
+      }
+    });
   });
 
   describe('Shell Command Patterns', () => {
