@@ -3,7 +3,7 @@ name: Safety Package Version Check
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
     paths:
       - 'packages/safety/src/**'
       - 'packages/safety/package.json'

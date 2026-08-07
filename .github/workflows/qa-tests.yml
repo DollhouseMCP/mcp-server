@@ -3,7 +3,7 @@ name: QA Tests
 
 on:
   pull_request:
-    branches: [develop]
+    branches: [develop, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions:

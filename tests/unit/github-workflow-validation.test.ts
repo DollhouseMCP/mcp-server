@@ -103,6 +103,30 @@ describe('GitHub Workflow Validation', () => {
     });
   });
 
+  describe('Hosted HTTP integration branch coverage', () => {
+    const hostedBranch = 'codex/hosted-http-integration';
+    const requiredPullRequestWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+      'extended-node-compatibility.yml',
+      'qa-tests.yml',
+      'safety-package-check.yml',
+      'security-audit.yml',
+    ];
+
+    it.each(requiredPullRequestWorkflows)(
+      'should run %s for pull requests targeting the hosted branch',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.pull_request?.branches).toContain(hostedBranch);
+      }
+    );
+  });
+
   describe('Shell Command Patterns', () => {
     const problematicPatterns = [
       { pattern: /\$\(pwd\)/, description: 'command substitution without shell directive' },
