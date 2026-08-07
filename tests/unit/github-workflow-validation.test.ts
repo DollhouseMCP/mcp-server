@@ -196,7 +196,7 @@ describe('GitHub Workflow Validation', () => {
       );
       const failureMessages = [
         'MCP initialize response is missing expected serverInfo',
-        'tools/list response is missing result field',
+        'tools/list response does not contain a non-empty result.tools array',
         'Docker Compose initialize response is missing expected serverInfo',
       ];
 
@@ -206,6 +206,9 @@ describe('GitHub Workflow Validation', () => {
         expect(marker).toBeGreaterThanOrEqual(0);
         expect(content.slice(marker, marker + 200)).toContain('exit 1');
       }
+
+      expect(content).toContain('notifications/initialized');
+      expect(content).toContain(".result.tools | type == \"array\" and length > 0");
     });
   });
 
