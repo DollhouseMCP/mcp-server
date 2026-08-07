@@ -103,25 +103,25 @@ describe('GitHub Workflow Validation', () => {
     });
   });
 
-  describe('Hosted HTTP integration branch coverage', () => {
+  describe('Hosted HTTP integration branch gate', () => {
     const hostedBranch = 'codex/hosted-http-integration';
     const requiredPushWorkflows = [
       'build-artifacts.yml',
       'codeql.yml',
       'core-build-test.yml',
       'docker-testing.yml',
-      'extended-node-compatibility.yml',
-      'security-audit.yml',
     ];
     const requiredPullRequestWorkflows = [
       'build-artifacts.yml',
       'codeql.yml',
       'core-build-test.yml',
       'docker-testing.yml',
-      'extended-node-compatibility.yml',
-      'qa-tests.yml',
-      'safety-package-check.yml',
-      'security-audit.yml',
+    ];
+    const deferredWorkflows = [
+      { file: 'extended-node-compatibility.yml', events: ['push', 'pull_request'] },
+      { file: 'qa-tests.yml', events: ['pull_request'] },
+      { file: 'safety-package-check.yml', events: ['pull_request'] },
+      { file: 'security-audit.yml', events: ['push', 'pull_request'] },
     ];
 
     it.each(requiredPushWorkflows)(
@@ -141,6 +141,18 @@ describe('GitHub Workflow Validation', () => {
         const workflow = yaml.load(content) as Workflow;
 
         expect(workflow.on?.pull_request?.branches).toContain(hostedBranch);
+      }
+    );
+
+    it.each(deferredWorkflows)(
+      'should defer $file from the hosted integration gate',
+      ({ file, events }) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        for (const event of events) {
+          expect(workflow.on?.[event]?.branches).not.toContain(hostedBranch);
+        }
       }
     );
   });
