@@ -13,6 +13,8 @@ import * as yaml from 'js-yaml';
 
 interface WorkflowStep {
   name?: string;
+  id?: string;
+  if?: string;
   run?: string;
   shell?: string;
   uses?: string;
@@ -24,6 +26,11 @@ interface WorkflowJob {
   name?: string;
   'runs-on': string | string[];
   steps: WorkflowStep[];
+  strategy?: {
+    matrix?: {
+      os?: string | string[];
+    };
+  };
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
 }
@@ -100,6 +107,108 @@ describe('GitHub Workflow Validation', () => {
           }
         });
       });
+    });
+  });
+
+  describe('Hosted HTTP integration branch gate', () => {
+    const hostedBranch = 'codex/hosted-http-integration';
+    const requiredPushWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+    ];
+    const requiredPullRequestWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+    ];
+    const deferredWorkflows = [
+      { file: 'extended-node-compatibility.yml', events: ['push', 'pull_request'] },
+      { file: 'qa-tests.yml', events: ['pull_request'] },
+      { file: 'safety-package-check.yml', events: ['pull_request'] },
+      { file: 'security-audit.yml', events: ['push', 'pull_request'] },
+    ];
+
+    it.each(requiredPushWorkflows)(
+      'should run %s for pushes to the hosted branch',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.push?.branches).toContain(hostedBranch);
+      }
+    );
+
+    it.each(requiredPullRequestWorkflows)(
+      'should run %s for pull requests targeting the hosted branch',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.pull_request?.branches).toContain(hostedBranch);
+      }
+    );
+
+    it.each(deferredWorkflows)(
+      'should defer $file from the hosted integration gate',
+      ({ file, events }) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        for (const event of events) {
+          expect(workflow.on?.[event]?.branches).not.toContain(hostedBranch);
+        }
+      }
+    );
+
+    it('should enforce unit tests and defer performance tests at the hosted stage', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'core-build-test.yml'),
+        'utf8'
+      );
+      const workflow = yaml.load(content) as Workflow;
+      const steps = workflow.jobs['hosted-test'].steps;
+      const operatingSystems = workflow.jobs['hosted-test'].strategy?.matrix?.os;
+      const unitTestGate = steps.find(
+        (step) => step.name === 'Enforce hosted integration unit tests'
+      );
+      const performanceTests = steps.find(
+        (step) => step.id === 'performance_tests'
+      );
+
+      expect(unitTestGate?.if).toContain('always()');
+      expect(unitTestGate?.if).toContain(hostedBranch);
+      expect(unitTestGate?.env?.TEST_OUTCOME).toBe(
+        '${{ steps.original_tests.outcome }}'
+      );
+      expect(unitTestGate?.run).toContain('exit 1');
+      expect(performanceTests?.if).toContain(hostedBranch);
+      expect(operatingSystems).toEqual(expect.stringContaining(hostedBranch));
+      expect(operatingSystems).toEqual(expect.stringContaining('["ubuntu-latest"]'));
+    });
+
+    it('should require successful MCP payloads from every Docker gate', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'docker-testing.yml'),
+        'utf8'
+      );
+      const failureMessages = [
+        'MCP initialize response is missing expected serverInfo',
+        'tools/list response does not contain a non-empty result.tools array',
+        'Docker Compose initialize response is missing expected serverInfo',
+      ];
+
+      for (const message of failureMessages) {
+        const marker = content.indexOf(message);
+
+        expect(marker).toBeGreaterThanOrEqual(0);
+        expect(content.slice(marker, marker + 200)).toContain('exit 1');
+      }
+
+      expect(content).toContain('notifications/initialized');
+      expect(content).toContain(".result.tools | type == \"array\" and length > 0");
     });
   });
 

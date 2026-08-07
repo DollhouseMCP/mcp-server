@@ -3,9 +3,9 @@ name: Core Build & Test
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: >-
+          ${{ fromJSON((github.base_ref == 'codex/hosted-http-integration' ||
+          github.ref == 'refs/heads/codex/hosted-http-integration') &&
+          '["ubuntu-latest"]' ||
+          '["ubuntu-latest","windows-latest","macos-latest"]') }}
         node-version: ['20.x']
 
     steps:
@@ -139,6 +143,9 @@ jobs:
 
       - name: Run performance tests (separate process)
         id: performance_tests
+        if: >-
+          github.base_ref != 'codex/hosted-http-integration' &&
+          github.ref != 'refs/heads/codex/hosted-http-integration'
         run: npm run test:performance
         continue-on-error: true
 
@@ -157,6 +164,20 @@ jobs:
             head -5 package.json
           else
             echo "✗ package.json NOT FOUND"
+          fi
+
+      - name: Enforce hosted integration unit tests
+        if: >-
+          always() &&
+          (github.base_ref == 'codex/hosted-http-integration' ||
+          github.ref == 'refs/heads/codex/hosted-http-integration')
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Unit tests failed for the hosted integration gate."
+            exit 1
           fi
 
       - name: Run compiled tests approach
