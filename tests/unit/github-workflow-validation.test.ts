@@ -105,6 +105,14 @@ describe('GitHub Workflow Validation', () => {
 
   describe('Hosted HTTP integration branch coverage', () => {
     const hostedBranch = 'codex/hosted-http-integration';
+    const requiredPushWorkflows = [
+      'build-artifacts.yml',
+      'codeql.yml',
+      'core-build-test.yml',
+      'docker-testing.yml',
+      'extended-node-compatibility.yml',
+      'security-audit.yml',
+    ];
     const requiredPullRequestWorkflows = [
       'build-artifacts.yml',
       'codeql.yml',
@@ -115,6 +123,16 @@ describe('GitHub Workflow Validation', () => {
       'safety-package-check.yml',
       'security-audit.yml',
     ];
+
+    it.each(requiredPushWorkflows)(
+      'should run %s for pushes to the hosted branch',
+      (file) => {
+        const content = fs.readFileSync(path.join(workflowDir, file), 'utf8');
+        const workflow = yaml.load(content) as Workflow;
+
+        expect(workflow.on?.push?.branches).toContain(hostedBranch);
+      }
+    );
 
     it.each(requiredPullRequestWorkflows)(
       'should run %s for pull requests targeting the hosted branch',
