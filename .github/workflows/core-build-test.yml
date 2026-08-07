@@ -139,6 +139,9 @@ jobs:
 
       - name: Run performance tests (separate process)
         id: performance_tests
+        if: >-
+          github.base_ref != 'codex/hosted-http-integration' &&
+          github.ref != 'refs/heads/codex/hosted-http-integration'
         run: npm run test:performance
         continue-on-error: true
 
@@ -157,6 +160,20 @@ jobs:
             head -5 package.json
           else
             echo "✗ package.json NOT FOUND"
+          fi
+
+      - name: Enforce hosted integration unit tests
+        if: >-
+          always() &&
+          (github.base_ref == 'codex/hosted-http-integration' ||
+          github.ref == 'refs/heads/codex/hosted-http-integration')
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
+        run: |
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Unit tests failed for the hosted integration gate."
+            exit 1
           fi
 
       - name: Run compiled tests approach

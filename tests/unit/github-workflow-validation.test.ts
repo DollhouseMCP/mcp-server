@@ -13,6 +13,8 @@ import * as yaml from 'js-yaml';
 
 interface WorkflowStep {
   name?: string;
+  id?: string;
+  if?: string;
   run?: string;
   shell?: string;
   uses?: string;
@@ -155,6 +157,29 @@ describe('GitHub Workflow Validation', () => {
         }
       }
     );
+
+    it('should enforce unit tests and defer performance tests at the hosted stage', () => {
+      const content = fs.readFileSync(
+        path.join(workflowDir, 'core-build-test.yml'),
+        'utf8'
+      );
+      const workflow = yaml.load(content) as Workflow;
+      const steps = workflow.jobs['hosted-test'].steps;
+      const unitTestGate = steps.find(
+        (step) => step.name === 'Enforce hosted integration unit tests'
+      );
+      const performanceTests = steps.find(
+        (step) => step.id === 'performance_tests'
+      );
+
+      expect(unitTestGate?.if).toContain('always()');
+      expect(unitTestGate?.if).toContain(hostedBranch);
+      expect(unitTestGate?.env?.TEST_OUTCOME).toBe(
+        '${{ steps.original_tests.outcome }}'
+      );
+      expect(unitTestGate?.run).toContain('exit 1');
+      expect(performanceTests?.if).toContain(hostedBranch);
+    });
   });
 
   describe('Shell Command Patterns', () => {
