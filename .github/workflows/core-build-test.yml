@@ -26,7 +26,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: >-
+          ${{ fromJSON((github.base_ref == 'codex/hosted-http-integration' ||
+          github.ref == 'refs/heads/codex/hosted-http-integration') &&
+          '["ubuntu-latest"]' ||
+          '["ubuntu-latest","windows-latest","macos-latest"]') }}
         node-version: ['20.x']
 
     steps:

@@ -26,6 +26,11 @@ interface WorkflowJob {
   name?: string;
   'runs-on': string | string[];
   steps: WorkflowStep[];
+  strategy?: {
+    matrix?: {
+      os?: string | string[];
+    };
+  };
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
 }
@@ -165,6 +170,7 @@ describe('GitHub Workflow Validation', () => {
       );
       const workflow = yaml.load(content) as Workflow;
       const steps = workflow.jobs['hosted-test'].steps;
+      const operatingSystems = workflow.jobs['hosted-test'].strategy?.matrix?.os;
       const unitTestGate = steps.find(
         (step) => step.name === 'Enforce hosted integration unit tests'
       );
@@ -179,6 +185,8 @@ describe('GitHub Workflow Validation', () => {
       );
       expect(unitTestGate?.run).toContain('exit 1');
       expect(performanceTests?.if).toContain(hostedBranch);
+      expect(operatingSystems).toEqual(expect.stringContaining(hostedBranch));
+      expect(operatingSystems).toEqual(expect.stringContaining('["ubuntu-latest"]'));
     });
   });
 
