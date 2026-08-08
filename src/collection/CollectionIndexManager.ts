@@ -11,10 +11,10 @@
  */
 
 import * as path from 'path';
-import * as os from 'os';
 import { CollectionIndex } from '../types/collection';
 import { logger } from '../utils/logger.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { resolveCollectionCacheDir } from '../cache/cachePaths.js';
 
 export interface CollectionIndexCacheEntry {
   data: CollectionIndex;
@@ -79,8 +79,9 @@ export class CollectionIndexManager {
     // Initialize file operations service
     this.fileOperations = config.fileOperations;
 
-    // Cache directory - use ~/.dollhouse/cache/collection-index.json as specified
-    const cacheDir = config.cacheDir || path.join(os.homedir(), '.dollhouse', 'cache');
+    // Keep the browser/index manager on the same cache root as the collection
+    // caches, including container and test isolation overrides.
+    const cacheDir = config.cacheDir || resolveCollectionCacheDir();
     this.CACHE_FILE = path.join(cacheDir, 'collection-index.json');
 
     logger.debug('CollectionIndexManager initialized', {
