@@ -301,6 +301,45 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(executingAgents.has('session-b:test-agent')).toBe(false);
   });
 
+  it('preserves a same-session execution created while orphan reclaim is pending', async () => {
+    const mocks = createManager();
+    let markReclaimStarted: (() => void) | undefined;
+    const reclaimStarted = new Promise<void>((resolve) => {
+      markReclaimStarted = resolve;
+    });
+    let resolveReclaim: ((state: ReturnType<typeof stateWithGoals>['state']) => void) | undefined;
+    mocks.reclaimOrphanedAgentState.mockImplementation(() => new Promise((resolve) => {
+      markReclaimStarted?.();
+      resolveReclaim = resolve;
+    }));
+    mocks.executeAgent.mockResolvedValue({
+      agentName: 'test-agent',
+      goal: 'New same-session goal',
+      goalId: 'goal-new',
+    });
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    const update = handler.dispatch('updateState', {
+      element_name: 'test-agent',
+      stepDescription: 'Continue current work',
+      outcome: 'success',
+      confidence: 0.9,
+    });
+    await reclaimStarted;
+    await handler.dispatch('execute', {
+      element_name: 'test-agent',
+      parameters: {},
+    });
+    resolveReclaim?.(stateWithGoals([{ id: 'goal-orphan', status: 'in_progress' }]).state);
+    await update;
+
+    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual(['goal-new']);
+    expect(mocks.recordAgentStep).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-new',
+    }));
+  });
+
   it('does not reclaim a durable goal still owned by a live session', async () => {
     const mocks = createManager();
     mocks.getAgentStateForRecovery.mockResolvedValue(

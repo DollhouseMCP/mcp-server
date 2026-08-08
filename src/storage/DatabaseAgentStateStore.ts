@@ -196,7 +196,7 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     const rows = await this.loadAgentRows(userId, agentElementId);
 
     const current = rows.find(row => row.sessionId === sessionId);
-    if (current) {
+    if (current && this.hasClaimableGoals(current.goals, excludedGoalIds)) {
       return this.rowToStateData(current);
     }
     if (!this.resolveSessionActivity) {
@@ -205,6 +205,9 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     }
 
     for (const candidate of rows) {
+      if (candidate.sessionId === sessionId) {
+        continue;
+      }
       if (!this.hasClaimableGoals(candidate.goals, excludedGoalIds)) {
         continue;
       }
@@ -256,7 +259,8 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     excludedGoalIds: ReadonlySet<string>;
   }): Promise<AgentStateRow | null> {
     return withUserContext(this.db, input.userId, async (tx) => {
-      if (await this.hasCurrentSessionRow(tx, input)) {
+      const lockedCurrent = await this.lockCurrentSessionRow(tx, input);
+      if (lockedCurrent && this.getActiveGoalIds(lockedCurrent.goals).length > 0) {
         return null;
       }
 
@@ -269,6 +273,10 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
         await this.resolveSessionActivity(input.candidate.sessionId, input.userId) !== 'inactive'
       ) {
         return null;
+      }
+
+      if (lockedCurrent) {
+        return this.mergeCandidateIntoCurrent(tx, input, lockedCurrent, locked);
       }
 
       const transferred = await tx
@@ -285,20 +293,25 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     });
   }
 
-  private async hasCurrentSessionRow(
+  private async lockCurrentSessionRow(
     tx: DrizzleTx,
-    input: { userId: string; agentElementId: string; targetSessionId: string },
-  ): Promise<boolean> {
+    input: {
+      userId: string;
+      agentElementId: string;
+      targetSessionId: string;
+    },
+  ): Promise<AgentStateRow | null> {
     const rows = await tx
-      .select({ id: agentStates.id })
+      .select(AGENT_STATE_ROW_COLUMNS)
       .from(agentStates)
       .where(and(
         eq(agentStates.userId, input.userId),
         eq(agentStates.agentId, input.agentElementId),
         eq(agentStates.sessionId, input.targetSessionId),
       ))
+      .for('update')
       .limit(1);
-    return rows.length > 0;
+    return rows[0] ?? null;
   }
 
   private async lockCandidateRow(
@@ -317,6 +330,107 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
       .for('update')
       .limit(1);
     return rows[0] ?? null;
+  }
+
+  private async mergeCandidateIntoCurrent(
+    tx: DrizzleTx,
+    input: {
+      candidate: AgentStateRow;
+      userId: string;
+      agentElementId: string;
+      targetSessionId: string;
+    },
+    current: AgentStateRow,
+    candidate: AgentStateRow,
+  ): Promise<AgentStateRow> {
+    const merged = this.mergeStateRows(current, candidate);
+    const updated = await tx
+      .update(agentStates)
+      .set({
+        goals: merged.goals,
+        decisions: merged.decisions,
+        context: merged.context,
+        lastActive: merged.lastActive,
+        stateVersion: merged.stateVersion,
+        sessionCount: merged.sessionCount,
+      })
+      .where(and(
+        eq(agentStates.id, current.id),
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.targetSessionId),
+      ))
+      .returning(AGENT_STATE_ROW_COLUMNS);
+    if (!updated[0]) {
+      throw new Error('Current agent state disappeared while reclaiming orphaned execution');
+    }
+
+    const deleted = await tx
+      .delete(agentStates)
+      .where(and(
+        eq(agentStates.id, candidate.id),
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.candidate.sessionId),
+      ))
+      .returning({ id: agentStates.id });
+    if (!deleted[0]) {
+      throw new Error('Orphaned agent state disappeared while merging execution ownership');
+    }
+    return updated[0];
+  }
+
+  private mergeStateRows(current: AgentStateRow, candidate: AgentStateRow): AgentStateRow {
+    return {
+      ...current,
+      goals: this.mergeStateArrays(current.goals, candidate.goals),
+      decisions: this.mergeStateArrays(current.decisions, candidate.decisions),
+      context: {
+        ...this.toRecord(current.context),
+        ...this.toRecord(candidate.context),
+      },
+      lastActive: this.latestDate(current.lastActive, candidate.lastActive),
+      stateVersion: Math.max(current.stateVersion, candidate.stateVersion) + 1,
+      sessionCount: Math.max(current.sessionCount, candidate.sessionCount),
+    };
+  }
+
+  private mergeStateArrays(current: unknown, candidate: unknown): unknown[] {
+    const merged = Array.isArray(current) ? [...current] : [];
+    const positions = new Map<string, number>();
+    merged.forEach((value, index) => {
+      const id = this.getRecordId(value);
+      if (id) positions.set(id, index);
+    });
+    for (const value of Array.isArray(candidate) ? candidate : []) {
+      const id = this.getRecordId(value);
+      const existingIndex = id ? positions.get(id) : undefined;
+      if (existingIndex === undefined) {
+        if (id) positions.set(id, merged.length);
+        merged.push(value);
+      } else {
+        merged[existingIndex] = value;
+      }
+    }
+    return merged;
+  }
+
+  private getRecordId(value: unknown): string | undefined {
+    return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string'
+      ? value.id
+      : undefined;
+  }
+
+  private toRecord(value: unknown): Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  private latestDate(left: Date | null, right: Date | null): Date | null {
+    if (!left) return right;
+    if (!right) return left;
+    return left > right ? left : right;
   }
 
   private hasClaimableGoals(goals: unknown, excludedGoalIds: ReadonlySet<string>): boolean {

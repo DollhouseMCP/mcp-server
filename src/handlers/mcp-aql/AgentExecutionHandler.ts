@@ -236,6 +236,10 @@ export class AgentExecutionHandler {
       agentName: elementName,
       excludedGoalIds,
     });
+    const concurrentEntry = this.executingAgents.get(executionKey);
+    if (concurrentEntry) {
+      return concurrentEntry;
+    }
     const activeGoalIds = reclaimedState?.goals
       .filter(goal => goal.status === 'in_progress')
       .map(goal => goal.id) ?? [];

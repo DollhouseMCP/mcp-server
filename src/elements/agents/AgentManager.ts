@@ -3175,18 +3175,23 @@ export class AgentManager extends BaseElementManager<Agent> {
       throw new ElementNotFoundError('Agent', params.agentName);
     }
 
-    const state = await this.stateStore.reclaimOrphaned({
-      name: params.agentName,
-      agentElementId: this.getAgentElementId(agent, params.agentName),
-    }, {
-      excludedGoalIds: params.excludedGoalIds,
-    });
-    if (!state) {
-      return null;
-    }
+    const generation = this.observeExecutionGeneration(params.agentName);
+    try {
+      const state = await this.stateStore.reclaimOrphaned({
+        name: params.agentName,
+        agentElementId: this.getAgentElementId(agent, params.agentName),
+      }, {
+        excludedGoalIds: params.excludedGoalIds,
+      });
+      if (!state || this.hasExecutionGenerationChanged(params.agentName, generation.token)) {
+        return null;
+      }
 
-    this.applyPersistedAgentState(agent, state);
-    return agent.getState();
+      this.applyPersistedAgentState(agent, state);
+      return agent.getState();
+    } finally {
+      generation.release();
+    }
   }
 
   private async getAgentStateWithPolicy(params: {

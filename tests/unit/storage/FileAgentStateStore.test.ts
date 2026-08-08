@@ -92,6 +92,28 @@ stateVersion:
     expect(loaded).toMatchObject({ sessionCount: 0, stateVersion: 1 });
   });
 
+  it.each([
+    ['12oops', 1],
+    ['3.5', 1],
+    ['1e3', 1],
+    [-1, 1],
+    [Number.MAX_SAFE_INTEGER + 1, 1],
+  ])('defaults a non-integer stateVersion value (%p)', async (stateVersion, expected) => {
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), `
+goals: []
+decisions: []
+context: {}
+lastActive: 2025-01-01T00:00:00Z
+sessionCount: 0
+stateVersion: ${stateVersion}
+`);
+
+    const loaded = await store.load(key);
+
+    expect(loaded?.stateVersion).toBe(expected);
+  });
+
   it('surfaces malformed durable state instead of returning no state', async () => {
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), ': invalid: yaml: [');

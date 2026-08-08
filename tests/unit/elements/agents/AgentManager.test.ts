@@ -122,6 +122,56 @@ describe('AgentManager', () => {
   });
 
   describe('Recovery state synchronization', () => {
+    it('does not hydrate reclaimed state over an execution started during the read', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('.state.yaml')) {
+          throw Object.assign(new Error('missing state'), { code: 'ENOENT' });
+        }
+        return `---
+name: test-agent
+---
+Content`;
+      });
+      const agent = await agentManager.read('test-agent');
+      expect(agent).not.toBeNull();
+
+      let markReadStarted: (() => void) | undefined;
+      const readStarted = new Promise<void>((resolve) => {
+        markReadStarted = resolve;
+      });
+      let resolveState: ((state: any) => void) | undefined;
+      jest.spyOn((agentManager as any).stateStore, 'reclaimOrphaned')
+        .mockImplementation(() => new Promise((resolve) => {
+          markReadStarted?.();
+          resolveState = resolve;
+        }));
+
+      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: 'test-agent' });
+      await readStarted;
+      (agentManager as any).beginExecutionAttempt('test-agent');
+      resolveState?.({
+        goals: [{
+          id: 'goal-orphan',
+          description: 'Orphaned execution',
+          priority: 'medium',
+          status: 'in_progress',
+          importance: 5,
+          urgency: 5,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }],
+        decisions: [],
+        context: {},
+        lastActive: new Date(),
+        sessionCount: 1,
+        stateVersion: 1,
+      });
+      (agentManager as any).endExecutionAttempt('test-agent');
+
+      await expect(reclaim).resolves.toBeNull();
+      expect(agent?.getState().goals).toEqual([]);
+    });
+
     it('preserves a concurrently-created goal while applying a recovery completion', () => {
       const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
       const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });

@@ -171,6 +171,51 @@ describe('DatabaseAgentStateStore', () => {
     expect(await store.loadState(agentId)).toBeNull();
   });
 
+  it('should merge an orphaned execution into a dormant current-session row', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let sessionId = 'session-a';
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async candidateSessionId => candidateSessionId === 'session-a' ? 'inactive' : 'active',
+    );
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-orphan', status: 'in_progress' }],
+      decisions: [{ id: 'decision-orphan', goalId: 'goal-orphan' }],
+      context: { orphan: true },
+      stateVersion: 0,
+    }, 0);
+    sessionId = 'session-b';
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-finished', status: 'completed' }],
+      decisions: [{ id: 'decision-finished', goalId: 'goal-finished' }],
+      context: { current: true },
+      stateVersion: 0,
+    }, 0);
+
+    const reclaimed = await store.reclaimOrphaned(key);
+
+    expect(reclaimed).toMatchObject({
+      goals: expect.arrayContaining([
+        expect.objectContaining({ id: 'goal-finished', status: 'completed' }),
+        expect.objectContaining({ id: 'goal-orphan', status: 'in_progress' }),
+      ]),
+      decisions: expect.arrayContaining([
+        expect.objectContaining({ id: 'decision-finished' }),
+        expect.objectContaining({ id: 'decision-orphan' }),
+      ]),
+      context: { current: true, orphan: true },
+      stateVersion: 2,
+    });
+    sessionId = 'session-a';
+    await expect(store.loadState(agentId)).resolves.toBeNull();
+  });
+
   it('should not transfer state owned by an active session', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();

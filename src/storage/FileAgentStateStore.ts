@@ -274,7 +274,11 @@ export class FileAgentStateStore implements IAgentStateStore {
     if (typeof value !== 'number' && typeof value !== 'string') {
       return fallback;
     }
-    const parsed = Number.parseInt(String(value), 10);
-    return Number.isFinite(parsed) ? parsed : fallback;
+    const normalized = typeof value === 'string' ? value.trim() : value;
+    if (normalized === '' || (typeof normalized === 'string' && !/^\d+$/u.test(normalized))) {
+      return fallback;
+    }
+    const parsed = Number(normalized);
+    return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : fallback;
   }
 }
