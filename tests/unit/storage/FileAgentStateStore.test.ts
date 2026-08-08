@@ -86,4 +86,13 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     await expect(store.save(key, state(0), 0, { requireExisting: true }))
       .rejects.toThrow('State version conflict');
   });
+
+  it('uses expectedVersion for ordinary optimistic-lock checks', async () => {
+    await store.save(key, state(), 0);
+    const misleadingState = state(99);
+
+    await expect(store.save(key, misleadingState, 0))
+      .rejects.toThrow('State version conflict');
+    expect(misleadingState.stateVersion).toBe(99);
+  });
 });

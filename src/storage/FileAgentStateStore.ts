@@ -99,10 +99,12 @@ export class FileAgentStateStore implements IAgentStateStore {
         throw new Error(`Agent state disappeared while updating '${key.name}'`);
       }
       const existingVersion = existingState?.stateVersion ?? 0;
-      const hasVersionConflict = options.requireExisting
+      const incomingVersionConflict = state.stateVersion !== undefined
+        && state.stateVersion !== expectedVersion;
+      const durableVersionConflict = options.requireExisting
         ? existingVersion !== expectedVersion
-        : existingState?.stateVersion !== undefined && state.stateVersion !== undefined
-          && existingState.stateVersion > state.stateVersion;
+        : existingState?.stateVersion !== undefined && existingVersion > expectedVersion;
+      const hasVersionConflict = incomingVersionConflict || durableVersionConflict;
       if (hasVersionConflict) {
         logger.warn(`State version conflict detected for agent ${key.name}`, {
           existingVersion,

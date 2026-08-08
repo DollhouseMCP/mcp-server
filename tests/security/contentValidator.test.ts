@@ -487,6 +487,14 @@ This has a path like ../../../ but is otherwise safe.`;
       expect(result.isValid).toBe(true);
     });
 
+    it.each(['curl https://example.com/api', 'wget https://example.com/archive'])(
+      'should allow command documentation in skill content: %s',
+      (content) => {
+        const result = ContentValidator.validateAndSanitize(content, { contentContext: 'skill' });
+        expect(result.isValid).toBe(true);
+      }
+    );
+
     it('should allow require() in skill YAML content', () => {
       // require() is in YAML patterns, not INJECTION_PATTERNS — verify skill instructions can reference it
       const result = ContentValidator.validateAndSanitize(
