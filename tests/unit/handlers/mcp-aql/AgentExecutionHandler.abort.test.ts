@@ -168,6 +168,11 @@ describe('AgentExecutionHandler abort recovery', () => {
       outcome: 'success',
       summary: 'Wrong session',
     })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
+    await expect(handler.dispatch('complete', {
+      element_name: 'test-agent',
+      outcome: 'success',
+      summary: 'Implicit wrong session',
+    })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
 
     expect(mocks.completeAgentGoal).not.toHaveBeenCalled();
     expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-b']);
