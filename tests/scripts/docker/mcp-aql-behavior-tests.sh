@@ -1504,7 +1504,7 @@ test_permission_prompt_evaluation() {
         "Do these steps in order:
 1. Create a persona named 'perm-deny-test' with description 'Test deny policy' and instructions 'Test persona'. Include gatekeeper metadata: { \"externalRestrictions\": { \"description\": \"test\", \"denyPatterns\": [\"Bash:curl*\"] } }
 2. Activate it with activate_element (element_type: persona, element_name: perm-deny-test)
-3. Call permission_prompt with tool_name 'Bash' and input { \"command\": \"curl http://example.com\" }
+3. Call permission_prompt with tool_name 'Bash' and input { \"command\": \"curl https://example.com\" }
 4. Report the behavior field and message from the permission_prompt response.
 5. Deactivate the persona and delete it." \
         "deny|denied|policy|denyPattern|perm-deny-test|curl|not permitted" \

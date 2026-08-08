@@ -31,6 +31,7 @@ import { sanitizeInput } from '../../security/InputValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
+import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
@@ -681,7 +682,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // same cap internally (Fix #908/#918), so bomb detection covers every size —
     // the previous `<= MAX_YAML_LENGTH` guard skipped it for content over 64KB.
     const validationStart = Date.now();
-    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, MEMORY_CONSTANTS.MAX_YAML_SIZE);
+    // Entries are stored as UNTRUSTED and scanned asynchronously (#1315).
+    // Blocking every append on all historical prose lets scanner-rule changes
+    // permanently brick an append-only memory (#2440). Keep structural YAML,
+    // Unicode, bomb, safe-schema, size, and Gatekeeper validation enabled.
+    const parsedYaml = SecureYamlParser.parseRawYaml(
+      yamlContent,
+      MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      { detectContentPatterns: false },
+    );
+    if (!validateMemoryControlFields(parsedYaml)) {
+      throw new Error(
+        'Malicious YAML content detected in memory metadata, instructions, or auxiliary entry fields'
+      );
+    }
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
       logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);

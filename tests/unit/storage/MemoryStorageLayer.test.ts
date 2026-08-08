@@ -391,6 +391,32 @@ describe('MemoryStorageLayer', () => {
       expect(autoLoaded[1].priority).toBe(10);
     });
 
+    it('should preserve auto-load metadata when entry prose matches scanner patterns', async () => {
+      (backend.listFiles as jest.Mock<any>).mockResolvedValue(['scanner-research.yaml']);
+      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+        ['scanner-research.yaml', makeMeta('scanner-research.yaml', 1000)],
+      ]));
+      (backend.readFile as jest.Mock<any>).mockResolvedValue(`
+name: Scanner Research
+description: Historical security examples
+autoLoad: true
+priority: 2
+entries:
+  - content: "Example using require('child_process') for analysis"
+    trustLevel: untrusted
+`);
+
+      await layer.scan();
+
+      expect(layer.getAutoLoadEntries()).toEqual([
+        expect.objectContaining({
+          name: 'Scanner Research',
+          autoLoad: true,
+          priority: 2,
+        }),
+      ]);
+    });
+
     it('should return empty array when no entries have autoLoad === true', async () => {
       (backend.listFiles as jest.Mock<any>).mockResolvedValue(['regular.yaml']);
       (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([

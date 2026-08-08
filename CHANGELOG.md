@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.40] - 2026-08-05
+
+- Recover stale agent execution policies through a narrow, durable-state-verified path while preserving active restarts, DangerZone requirements, read restrictions, and independent agent executions. This resolves the documented abort-path failure and mitigates the broader interrupted-execution incident while automatic cleanup remains tracked separately. (#2427, #2428, #2441)
+- Preserve append-only memory writes when historical entries trip newer content-scanner rules. Structural YAML protections and control-field validation remain enforced, while unsafe historical output is sanitized or redacted instead of permanently blocking future appends. (#2440, #2442)
+- Keep collection and collection-index caches under Dollhouse home by default, honor explicit cache and home overrides safely, and prevent cache files from appearing in the process working repository. (#2426, #2443)
+- Restore the SonarCloud security rating by hardening CI, container, and setup dependency installation; pinning external tooling; enforcing HTTPS-only downloads; removing on-demand package execution; and adding regression coverage without removing DollhouseMCP capabilities. (#2446, #2447)
+- Update the existing exact `giget` override to `tar` 7.5.22, removing the critical runtime archive-processing advisory without changing any other dependency. (#2449, #2450)
+
 ## [2.0.39] - 2026-07-31
 
 - Fix agent sub-element activation: `activates:` references (canonical filename slugs like `security-analyst`) never resolved elements whose metadata carries display names (`Security Analyst`), so agents silently ran without their declared personas and skills — while their tool sandbox still fully applied. Lookup now matches exact names first, then falls back to the same filename normalization used when saving elements; degenerate references (empty or separator-only) warn instead of resolving. (#2432, #2433)

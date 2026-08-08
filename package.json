@@ -1,6 +1,6 @@
 {
   "name": "@dollhousemcp/mcp-server",
-  "version": "2.0.39",
+  "version": "2.0.40",
   "description": "DollhouseMCP - A Model Context Protocol (MCP) server that enables dynamic AI persona management from markdown files, allowing Claude and other compatible AI assistants to activate and switch between different behavioral personas.",
   "type": "module",
   "main": "dist/index.js",
@@ -11,17 +11,17 @@
   },
   "scripts": {
     "prebuild": "npm run build:safety && node scripts/generate-version.js && node scripts/generate-hashes.mjs",
-    "build:safety": "cd packages/safety && npm install && npm run build",
+    "build:safety": "cd packages/safety && npm ci --ignore-scripts --workspaces=false && npm run build",
     "build": "tsc",
     "postbuild": "node -e \"const fs=require('fs'),p=require('path');function rm(d){if(fs.existsSync(d)){for(const e of fs.readdirSync(d)){const f=p.join(d,e);fs.statSync(f).isDirectory()?rm(f):fs.unlinkSync(f)}fs.rmdirSync(d)}}function cpR(s,d){fs.mkdirSync(d,{recursive:true});for(const e of fs.readdirSync(s)){const sp=p.join(s,e),dp=p.join(d,e);fs.statSync(sp).isDirectory()?cpR(sp,dp):fs.copyFileSync(sp,dp)}}cpR('src/seed-elements','dist/seed-elements');rm('dist/web/public');cpR('src/web/public','dist/web/public')\"",
     "web": "node dist/index.js --web",
     "start": "node dist/index.js",
     "dev": "tsx watch src/index.ts",
-    "inspector": "npx @modelcontextprotocol/inspector node dist/index.js",
-    "inspector:dev": "npx @modelcontextprotocol/inspector tsx src/index.ts",
+    "inspector": "mcp-inspector node dist/index.js",
+    "inspector:dev": "mcp-inspector tsx src/index.ts",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
-    "setup": "npm install && npm run build",
+    "setup": "npm ci --ignore-scripts && npm run build",
     "prepublishOnly": "node scripts/verify-publish-channel.mjs && { cp README.md README.md.backup 2>/dev/null || true; } && cp README.npm.md README.md && BUILD_TYPE=npm npm run build",
     "postpublish": "if [ -f README.md.backup ]; then mv README.md.backup README.md; else echo 'No backup found, README.md unchanged'; fi",
     "test": "cross-env \"NODE_OPTIONS=$NODE_OPTIONS --experimental-vm-modules --no-warnings\" jest --config tests/jest.config.cjs",
@@ -57,9 +57,9 @@
     "security:audit:verbose": "tsx scripts/run-security-audit.ts --verbose",
     "typecheck:scripts": "tsc --noEmit --project tsconfig.scripts.json",
     "pre-commit": "npm run security:rapid && npm run typecheck:scripts && npm audit --audit-level=high",
-    "test:playwright": "npx playwright test",
-    "test:playwright:headed": "npx playwright test --headed",
-    "test:playwright:ui": "npx playwright test --ui",
+    "test:playwright": "playwright test",
+    "test:playwright:headed": "playwright test --headed",
+    "test:playwright:ui": "playwright test --ui",
     "test:e2e": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.e2e.config.cjs",
     "test:e2e:watch": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.e2e.config.cjs --watch",
     "test:e2e:verbose": "cross-env \"NODE_OPTIONS=--experimental-vm-modules --no-warnings\" jest --config tests/jest.e2e.config.cjs --verbose",
@@ -252,7 +252,7 @@
       "path-to-regexp": "8.4.2"
     },
     "giget": {
-      "tar": "7.5.16"
+      "tar": "7.5.22"
     },
     "form-data": "4.0.6",
     "qs": "6.15.2",

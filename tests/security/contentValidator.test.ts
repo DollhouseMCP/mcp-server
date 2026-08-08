@@ -99,6 +99,24 @@ describe('ContentValidator', () => {
     });
   });
 
+  describe('validateAndSanitizeYamlAware', () => {
+    it.each([
+      "require('child_process')",
+      '!!python/object',
+    ])('blocks YAML-only content pattern %s', (content) => {
+      const ordinaryResult = ContentValidator.validateAndSanitize(content);
+      const yamlAwareResult = ContentValidator.validateAndSanitizeYamlAware(content);
+
+      expect(ordinaryResult.isValid).toBe(true);
+      expect(yamlAwareResult).toEqual(expect.objectContaining({
+        isValid: false,
+        severity: 'critical',
+        sanitizedContent: '[CONTENT_BLOCKED]',
+      }));
+      expect(yamlAwareResult.detectedPatterns).toContain('Malicious YAML content pattern');
+    });
+  });
+
   describe('validateYamlContent', () => {
     it('should allow safe YAML', () => {
       const safeYaml = `
@@ -186,6 +204,11 @@ list2: [*ref1, *ref1, *ref1]
         `;
 
         expect(ContentValidator.validateYamlContent(yamlBomb)).toBe(false);
+        expect(ContentValidator.validateYamlContent(
+          yamlBomb,
+          undefined,
+          { detectContentPatterns: false },
+        )).toBe(false);
       });
 
       it('should block YAML with 10× amplification (well over threshold)', () => {
