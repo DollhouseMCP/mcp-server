@@ -1140,9 +1140,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
   }
 
+  /** Canonical identity shared by agent lookup and execution lifecycle state. */
+  public canonicalizeExecutionName(name: string): string {
+    return this.normalizeFilename(name) || 'unnamed';
+  }
+
   private getExecutionGenerationKey(name: string): string {
     const sessionId = this.contextTracker?.getSessionContext()?.sessionId ?? 'default';
-    return `${sessionId}:${this.normalizeFilename(name) || 'unnamed'}`;
+    return `${sessionId}:${this.canonicalizeExecutionName(name)}`;
   }
 
   private async loadExecutableAgent(name: string): Promise<Agent> {

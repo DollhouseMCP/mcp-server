@@ -9,6 +9,7 @@ interface ManagerMocks {
   manager: AgentManager;
   executeAgent: jest.Mock;
   read: jest.Mock;
+  continueAgentExecution: jest.Mock;
   completeAgentGoal: jest.Mock;
   getAgentStateForRecovery: jest.Mock;
   completeAgentGoalForRecovery: jest.Mock;
@@ -39,6 +40,11 @@ function createManager(): ManagerMocks {
     goalId: 'goal-1',
   });
   const read = jest.fn().mockResolvedValue({ metadata: {} });
+  const continueAgentExecution = jest.fn().mockResolvedValue({
+    agentName: 'test-agent',
+    goal: 'Continued goal',
+    goalId: 'goal-2',
+  });
   const completeAgentGoal = jest.fn().mockImplementation(({ goalId }) => Promise.resolve({
     success: true,
     goal: { id: goalId },
@@ -50,17 +56,27 @@ function createManager(): ManagerMocks {
   const manager = {
     executeAgent,
     read,
+    continueAgentExecution,
     completeAgentGoal,
     getAgentStateForRecovery,
     completeAgentGoalForRecovery,
     hasExecutionGenerationChanged,
     observeExecutionGeneration: jest.fn().mockReturnValue({ token: {}, release }),
+    canonicalizeExecutionName: jest.fn((name: string) => name
+      .replaceAll(/([a-z])([A-Z])/g, '$1-$2')
+      .replaceAll(/[\s_]+/g, '-')
+      .toLowerCase()
+      .replaceAll(/[^a-z0-9-]/g, '-')
+      .replaceAll(/-+/g, '-')
+      .replaceAll(/^-/g, '')
+      .replaceAll(/-$/g, '')),
   } as unknown as AgentManager;
 
   return {
     manager,
     executeAgent,
     read,
+    continueAgentExecution,
     completeAgentGoal,
     getAgentStateForRecovery,
     completeAgentGoalForRecovery,
@@ -114,6 +130,75 @@ describe('AgentExecutionHandler abort recovery', () => {
     await handler.dispatch('execute', { element_name: 'test-agent', parameters: {} });
 
     expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual(['goal-1', 'goal-2']);
+  });
+
+  it('tracks a continuation goal without resetting the existing execution state', async () => {
+    const mocks = createManager();
+    const executionEntry = policy('test-agent', 'goal-1');
+    executionEntry.continuationCount = 2;
+    const executingAgents = new Map([
+      ['session-a:test-agent', executionEntry],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await handler.dispatch('continue', {
+      element_name: 'test-agent',
+      previousStepResult: 'Paused after review',
+      parameters: { task: 'Resume review' },
+    });
+
+    expect(executingAgents.get('session-a:test-agent')).toBe(executionEntry);
+    expect(executionEntry.goalIds).toEqual(['goal-1', 'goal-2']);
+    expect(executionEntry.continuationCount).toBe(2);
+
+    await handler.dispatch('complete', {
+      element_name: 'test-agent',
+      outcome: 'success',
+      summary: 'Continuation complete',
+    });
+
+    expect(mocks.completeAgentGoal).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-2',
+    }));
+    expect(executionEntry.goalIds).toEqual(['goal-1']);
+  });
+
+  it('uses the canonical agent identity across lifecycle aliases', async () => {
+    const mocks = createManager();
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await handler.dispatch('execute', { element_name: 'MyAgent', parameters: {} });
+    await handler.dispatch('complete', {
+      element_name: 'my-agent',
+      outcome: 'success',
+      summary: 'Completed through canonical alias',
+    });
+
+    expect(mocks.completeAgentGoal).toHaveBeenCalledWith(expect.objectContaining({
+      agentName: 'my-agent',
+      goalId: 'goal-1',
+    }));
+    expect(executingAgents.has('session-a:my-agent')).toBe(false);
+  });
+
+  it('uses the canonical agent identity when aborting through an alias', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery
+      .mockResolvedValueOnce(stateWithGoals([{ id: 'goal-1', status: 'in_progress' }]))
+      .mockResolvedValueOnce(stateWithGoals([{ id: 'goal-1', status: 'failed' }]));
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await handler.dispatch('execute', { element_name: 'MyAgent', parameters: {} });
+    const result = await handler.dispatch('abort', { element_name: 'my-agent' });
+
+    expect(result).toEqual(expect.objectContaining({ abortedGoalIds: ['goal-1'] }));
+    expect(mocks.completeAgentGoalForRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      agentName: 'my-agent',
+      goalId: 'goal-1',
+    }));
+    expect(executingAgents.has('session-a:my-agent')).toBe(false);
   });
 
   it('completes the newest session-owned goal and retains older ownership', async () => {

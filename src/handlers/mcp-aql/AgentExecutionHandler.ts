@@ -164,12 +164,17 @@ export class AgentExecutionHandler {
     params: Record<string, unknown>,
     runtimeMaxSteps: number | undefined,
     goalId: string | undefined,
+    preserveExistingState = false,
   ): Promise<void> {
-    const executionKey = this.sessionKey(elementName);
+    const executionKey = this.executionKey(manager, elementName);
     const previousEntry = this.executingAgents.get(executionKey);
     const goalIds = [...(previousEntry?.goalIds ?? [])];
     if (goalId && !goalIds.includes(goalId)) {
       goalIds.push(goalId);
+    }
+    if (preserveExistingState && previousEntry) {
+      previousEntry.goalIds = goalIds;
+      return;
     }
     const executionEntry: ExecutingAgentEntry = {
       name: elementName,
@@ -201,6 +206,10 @@ export class AgentExecutionHandler {
     }
   }
 
+  private executionKey(manager: AgentManager, elementName: string): string {
+    return this.sessionKey(manager.canonicalizeExecutionName(elementName));
+  }
+
   private async getState(
     manager: AgentManager,
     elementName: string,
@@ -221,7 +230,7 @@ export class AgentExecutionHandler {
   ): Promise<unknown> {
     const nextActionHint = this.validateNextActionHint(params.nextActionHint);
     const riskScore = this.validateRiskScore(params.riskScore);
-    const executingAgent = this.executingAgents.get(this.sessionKey(elementName));
+    const executingAgent = this.executingAgents.get(this.executionKey(manager, elementName));
 
     const updateResult = await manager.recordAgentStep({
       agentName: elementName,
@@ -275,7 +284,7 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
-    const executionKey = this.sessionKey(elementName);
+    const executionKey = this.executionKey(manager, elementName);
     const completedAgent = this.executingAgents.get(executionKey);
     const requestedGoalId = params.goalId as string | undefined;
     if (!completedAgent?.goalIds?.length) {
@@ -335,6 +344,14 @@ export class AgentExecutionHandler {
       previousStepResult: params.previousStepResult as string | undefined,
       parameters: params.parameters as Record<string, unknown> | undefined,
     });
+    await this.trackExecutingAgent(
+      manager,
+      elementName,
+      params,
+      undefined,
+      continueResult.goalId,
+      true,
+    );
     return { _type: 'ContinueResult', ...continueResult };
   }
 
@@ -344,7 +361,7 @@ export class AgentExecutionHandler {
     params: Record<string, unknown>
   ): Promise<unknown> {
     const reason = (params.reason as string) || 'Aborted by user';
-    const executionKey = this.sessionKey(elementName);
+    const executionKey = this.executionKey(manager, elementName);
     const executionPolicyAtStart = this.executingAgents.get(executionKey);
     const generation = manager.observeExecutionGeneration(elementName);
     try {
@@ -583,7 +600,10 @@ export class AgentExecutionHandler {
     }
 
     const restoredState = parseHandoffBlock(handoffBlockParam);
-    if (restoredState.agentName !== elementName) {
+    if (
+      manager.canonicalizeExecutionName(restoredState.agentName) !==
+      manager.canonicalizeExecutionName(elementName)
+    ) {
       logger.warn('Handoff agent mismatch detected', {
         expectedAgent: elementName,
         blockAgent: restoredState.agentName,
@@ -601,6 +621,14 @@ export class AgentExecutionHandler {
         originalGoalId: restoredState.goalId,
       },
     });
+    await this.trackExecutingAgent(
+      manager,
+      elementName,
+      params,
+      undefined,
+      continueResult.goalId,
+      true,
+    );
 
     return {
       _type: 'ResumeResult',
@@ -624,7 +652,9 @@ export class AgentExecutionHandler {
   }
 
   private collectGatekeeperNotifications(agentName: string): AgentNotification[] {
-    const executingAgent = this.executingAgents.get(this.sessionKey(agentName));
+    const executingAgent = this.executingAgents.get(
+      this.executionKey(this.handlers.agentManager, agentName),
+    );
     return executingAgent?.recentBlocks.flatMap(block => this.gatekeeperNotification(block)) ?? [];
   }
 
@@ -686,7 +716,9 @@ export class AgentExecutionHandler {
     stepOutcome: string
   ): Record<string, unknown> | null {
     const autonomy = updateResult.autonomy as { continue: boolean; reason?: string; factors?: string[] } | undefined;
-    const executingAgent = this.executingAgents.get(this.sessionKey(agentName));
+    const executingAgent = this.executingAgents.get(
+      this.executionKey(this.handlers.agentManager, agentName),
+    );
     const context = this.buildResilienceContext(agentName, stepOutcome, autonomy, executingAgent);
     if (!context || !executingAgent?.resiliencePolicy) {
       return null;

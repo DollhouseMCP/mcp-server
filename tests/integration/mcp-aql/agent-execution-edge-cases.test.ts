@@ -147,7 +147,8 @@ describe('Agent execution lifecycle edge cases', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('edge-noexec-2');
-        expect(result.error).toContain('No in-progress goal found');
+        expect(result.error).toContain('No active execution found');
+        expect(result.error).toContain('in this session');
       }
     });
 
@@ -217,7 +218,8 @@ describe('Agent execution lifecycle edge cases', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('edge-postcomplete-2');
-        expect(result.error).toContain('No in-progress goal found');
+        expect(result.error).toContain('No active execution found');
+        expect(result.error).toContain('in this session');
       }
     });
 
@@ -485,7 +487,8 @@ describe('Agent execution lifecycle edge cases', () => {
       expect(result.success).toBe(false);
       if (!result.success) {
         expect(result.error).toContain('edge-nonexistent-3');
-        expect(result.error).toContain('not found');
+        expect(result.error).toContain('No active execution found');
+        expect(result.error).toContain('in this session');
       }
     });
   });
