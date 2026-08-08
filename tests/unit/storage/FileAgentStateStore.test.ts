@@ -75,6 +75,22 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     expect(reclaimed?.context).toEqual({});
   });
 
+  it('defaults malformed integer fields when loading durable state', async () => {
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), `
+goals: []
+decisions: []
+context: {}
+lastActive: 2025-01-01T00:00:00Z
+sessionCount: invalid
+stateVersion: not-a-number
+`);
+
+    const loaded = await store.load(key);
+
+    expect(loaded).toMatchObject({ sessionCount: 0, stateVersion: 1 });
+  });
+
   it('surfaces malformed durable state instead of returning no state', async () => {
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), ': invalid: yaml: [');

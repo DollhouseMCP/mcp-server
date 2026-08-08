@@ -249,14 +249,8 @@ export class FileAgentStateStore implements IAgentStateStore {
     state.decisions ??= [];
     state.context ??= {};
 
-    if (state.sessionCount !== undefined) {
-      state.sessionCount = Number.parseInt(String(state.sessionCount), 10);
-    }
-    if (state.stateVersion === undefined) {
-      state.stateVersion = 1;
-    } else {
-      state.stateVersion = Number.parseInt(String(state.stateVersion), 10);
-    }
+    state.sessionCount = this.parseIntegerOrDefault(state.sessionCount, 0);
+    state.stateVersion = this.parseIntegerOrDefault(state.stateVersion, 1);
     if (state.lastActive) {
       state.lastActive = new Date(state.lastActive);
     }
@@ -274,5 +268,13 @@ export class FileAgentStateStore implements IAgentStateStore {
       if (decision.confidence !== undefined) decision.confidence = Number.parseFloat(String(decision.confidence));
       if (decision.timestamp) decision.timestamp = new Date(decision.timestamp);
     });
+  }
+
+  private parseIntegerOrDefault(value: unknown, fallback: number): number {
+    if (value === undefined) {
+      return fallback;
+    }
+    const parsed = Number.parseInt(String(value), 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
   }
 }
