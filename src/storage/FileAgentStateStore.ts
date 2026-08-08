@@ -94,8 +94,9 @@ export class FileAgentStateStore implements IAgentStateStore {
     const filePath = path.join(this.stateDir, `${normalizedName}${AGENT_STATE_FILE_EXTENSION}`);
 
     await this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
-      // FileOperationsService reads under `file:<absolute path>`, a distinct
-      // lock namespace from this read-compare-write transaction.
+      // load() does not acquire an `agent-state:*` lock. Its disk read uses
+      // FileOperationsService's distinct `file:<absolute path>` namespace, so
+      // this is not a reentrant acquisition of the transaction lock.
       const existingState = await this.load(key, { strict: options.requireExisting });
       if (options.requireExisting && !existingState) {
         throw new Error(`Agent state disappeared while updating '${key.name}'`);

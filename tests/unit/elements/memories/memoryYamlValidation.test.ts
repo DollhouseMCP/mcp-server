@@ -1,11 +1,14 @@
 import { validateMemoryControlFields } from '../../../../src/elements/memories/memoryYamlValidation.js';
 
 describe('validateMemoryControlFields', () => {
-  it('leaves historical entry prose to the trust-level scanner', () => {
+  it.each([
+    "Historical example using require('child_process')",
+    'Historical example containing !!python/object',
+  ])('leaves historical entry prose to the trust-level scanner: %s', (content) => {
     expect(validateMemoryControlFields({
       name: 'Security research',
       entries: [{
-        content: "Historical example using require('child_process')",
+        content,
         sanitizedContent: 'Historical example using [REDACTED]',
         sanitizedPatterns: ['Subprocess execution'],
         trustLevel: 'flagged',
