@@ -174,6 +174,8 @@ export interface RecentGatekeeperBlock {
 
 export interface ExecutingAgentEntry {
   name: string;
+  /** Persisted goal owned by this MCP session's current execution. */
+  goalId?: string;
   metadata: Record<string, unknown>;
   startedAt: number;
   continuationCount: number;

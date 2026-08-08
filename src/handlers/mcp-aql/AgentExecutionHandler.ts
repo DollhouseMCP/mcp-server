@@ -133,12 +133,18 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
+    const runtimeMaxSteps = this.validateRuntimeMaxSteps(params.maxAutonomousSteps);
     const executeResult = await manager.executeAgent(
       elementName,
       params.parameters as Record<string, unknown>
     );
-    const runtimeMaxSteps = this.validateRuntimeMaxSteps(params.maxAutonomousSteps);
-    await this.trackExecutingAgent(manager, elementName, params, runtimeMaxSteps);
+    await this.trackExecutingAgent(
+      manager,
+      elementName,
+      params,
+      runtimeMaxSteps,
+      executeResult.goalId,
+    );
     return { _type: 'ExecuteAgentResult', ...executeResult };
   }
 
@@ -156,8 +162,21 @@ export class AgentExecutionHandler {
     manager: AgentManager,
     elementName: string,
     params: Record<string, unknown>,
-    runtimeMaxSteps: number | undefined
+    runtimeMaxSteps: number | undefined,
+    goalId: string | undefined,
   ): Promise<void> {
+    const executionEntry: ExecutingAgentEntry = {
+      name: elementName,
+      goalId,
+      metadata: runtimeMaxSteps === undefined ? {} : { maxAutonomousSteps: runtimeMaxSteps },
+      startedAt: Date.now(),
+      continuationCount: 0,
+      retryCount: 0,
+      originalParameters: params.parameters as Record<string, unknown> | undefined,
+      recentBlocks: [],
+    };
+    this.executingAgents.set(this.sessionKey(elementName), executionEntry);
+
     try {
       const agentElement = await manager.read(elementName);
       const agentMeta = agentElement?.metadata as AgentMetadataV2 | undefined;
@@ -165,23 +184,14 @@ export class AgentExecutionHandler {
         (agentMeta?.tools ? translateToolConfigToPolicy(agentMeta.tools) ?? undefined : undefined);
       const resiliencePolicy = agentMeta?.resilience;
 
-      if (gatekeeperPolicy || runtimeMaxSteps !== undefined || resiliencePolicy) {
-        this.executingAgents.set(this.sessionKey(elementName), {
-          name: elementName,
-          metadata: {
-            ...(gatekeeperPolicy ? { gatekeeper: gatekeeperPolicy } : {}),
-            ...(runtimeMaxSteps === undefined ? {} : { maxAutonomousSteps: runtimeMaxSteps }),
-          },
-          startedAt: Date.now(),
-          continuationCount: 0,
-          retryCount: 0,
-          originalParameters: params.parameters as Record<string, unknown> | undefined,
-          resiliencePolicy,
-          recentBlocks: [],
-        });
+      if (gatekeeperPolicy) {
+        executionEntry.metadata.gatekeeper = gatekeeperPolicy;
       }
+      executionEntry.resiliencePolicy = resiliencePolicy;
     } catch {
-      logger.warn('Failed to track executing agent for Gatekeeper policy', { agentName: elementName });
+      logger.warn('Failed to load optional execution policies while tracking agent', {
+        agentName: elementName,
+      });
     }
   }
 
@@ -310,7 +320,8 @@ export class AgentExecutionHandler {
     const generation = manager.observeExecutionGeneration(elementName);
     try {
       const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
-      if (activeGoalIds.length === 0) {
+      const ownedGoalIds = this.getOwnedActiveGoalIds(activeGoalIds, executionPolicyAtStart);
+      if (ownedGoalIds.length === 0) {
         return this.recoverStalePolicy(
           manager,
           elementName,
@@ -323,7 +334,7 @@ export class AgentExecutionHandler {
 
       this.assertExecutionUnchanged(manager, elementName, executionKey, executionPolicyAtStart, generation.token);
 
-      for (const goalId of activeGoalIds) {
+      for (const goalId of ownedGoalIds) {
         await manager.completeAgentGoalForRecovery({
           agentName: elementName,
           goalId,
@@ -334,13 +345,17 @@ export class AgentExecutionHandler {
       }
 
       const remainingGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+      const remainingOwnedGoalIds = this.getOwnedActiveGoalIds(
+        remainingGoalIds,
+        executionPolicyAtStart,
+      );
       this.assertExecutionUnchanged(
         manager,
         elementName,
         executionKey,
         executionPolicyAtStart,
         generation.token,
-        remainingGoalIds,
+        remainingOwnedGoalIds,
       );
 
       this.recordResilienceCompletion(executionPolicyAtStart, false, elementName);
@@ -348,15 +363,15 @@ export class AgentExecutionHandler {
         this.executingAgents.delete(executionKey);
       }
       this.unblockDangerZone(elementName);
-      this.logAbort(elementName, activeGoalIds, reason);
+      this.logAbort(elementName, ownedGoalIds, reason);
 
       return {
         _type: 'AbortResult',
         success: true,
         agentName: elementName,
-        abortedGoalIds: activeGoalIds,
+        abortedGoalIds: ownedGoalIds,
         reason,
-        message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
+        message: `Agent '${elementName}' execution aborted. ${ownedGoalIds.length} goal(s) terminated.`,
       };
     } finally {
       generation.release();
@@ -371,12 +386,13 @@ export class AgentExecutionHandler {
     generation: { token: object },
     reason: string,
   ): Promise<unknown> {
-    const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, true);
     if (!executionPolicyAtStart) {
       // There is no stale in-memory policy to mutate. A concurrent execution
       // remains untouched, so preserve the established no-active-execution
       // result instead of treating unrelated generation history as a race.
-      throw new Error(`No active execution found for agent '${elementName}'. Nothing to abort.`);
+      throw new Error(
+        `No active execution found for agent '${elementName}' in this session. Nothing to abort.`,
+      );
     }
     this.assertExecutionUnchanged(
       manager,
@@ -384,7 +400,20 @@ export class AgentExecutionHandler {
       executionKey,
       executionPolicyAtStart,
       generation.token,
+    );
+
+    const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    const revalidatedOwnedGoalIds = this.getOwnedActiveGoalIds(
       revalidatedGoalIds,
+      executionPolicyAtStart,
+    );
+    this.assertExecutionUnchanged(
+      manager,
+      elementName,
+      executionKey,
+      executionPolicyAtStart,
+      generation.token,
+      revalidatedOwnedGoalIds,
     );
 
     if (this.executingAgents.get(executionKey) === executionPolicyAtStart) {
@@ -404,11 +433,24 @@ export class AgentExecutionHandler {
         abortedGoalIds: [],
         recoveredStalePolicy: true,
         reason,
-        message: `Removed stale execution policy for agent '${elementName}'. No active goal remained.`,
+        message: `Removed stale execution policy for agent '${elementName}'. ` +
+          'No active goal owned by this session remained.',
       };
     }
 
-    throw new Error(`No active execution found for agent '${elementName}'. Nothing to abort.`);
+    throw new Error(
+      `No active execution found for agent '${elementName}' in this session. Nothing to abort.`,
+    );
+  }
+
+  private getOwnedActiveGoalIds(
+    activeGoalIds: string[],
+    executionEntry: ExecutingAgentEntry | undefined,
+  ): string[] {
+    if (!executionEntry?.goalId) {
+      return [];
+    }
+    return activeGoalIds.includes(executionEntry.goalId) ? [executionEntry.goalId] : [];
   }
 
   private assertExecutionUnchanged(
