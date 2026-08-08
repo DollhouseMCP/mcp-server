@@ -2,11 +2,7 @@
  * Git-related utility functions
  */
 
-import * as child_process from 'child_process';
-import { promisify } from 'util';
 import { CommandValidator } from '../security/commandValidator.js';
-
-const exec = promisify(child_process.exec);
 
 /**
  * Execute a command safely using CommandValidator

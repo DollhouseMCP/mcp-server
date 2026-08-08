@@ -18,7 +18,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, extname, resolve } from 'node:path';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { logger } from '../utils/logger.js';
-import { validateElementContent, type PipelineResult, type ElementDisplayMetadata } from './contentPipeline.js';
+import { validateElementContent, type PipelineResult } from './contentPipeline.js';
 import type { MCPAQLHandler } from '../handlers/mcp-aql/MCPAQLHandler.js';
 
 /** Normalize user input to NFC form to prevent Unicode homograph attacks */
@@ -213,43 +213,6 @@ async function loadMemoriesFromIndex(portfolioDir: string): Promise<unknown[]> {
 
 /** Rate limiter for /api/install: max 10 installs per 60 seconds */
 const installRateLimiter = new SlidingWindowRateLimiter(10, 60_000);
-
-/** Sanitize text content to prevent XSS in rendered HTML */
-function sanitizeForHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
-
-/** Parse YAML front matter from a markdown file */
-function parseFrontMatter(content: string): { metadata: ElementDisplayMetadata; body: string } {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/);
-  if (!match) {
-    return { metadata: {}, body: content };
-  }
-
-  try {
-    const parsed = SecureYamlParser.parseRawYaml(match[1]);
-    const metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as ElementDisplayMetadata : {};
-    return { metadata, body: match[2] };
-  } catch {
-    return { metadata: {}, body: match[2] || content };
-  }
-}
-
-/** Parse a YAML-only file (memories) */
-function parseYamlFile(content: string): { metadata: ElementDisplayMetadata; body: string } {
-  try {
-    const parsed = SecureYamlParser.parseRawYaml(content);
-    const metadata = (typeof parsed === 'object' && parsed !== null) ? parsed as ElementDisplayMetadata : {};
-    return { metadata, body: '' };
-  } catch {
-    return { metadata: {}, body: content };
-  }
-}
 
 /**
  * Register portfolio routes shared between simple and gateway modes.
