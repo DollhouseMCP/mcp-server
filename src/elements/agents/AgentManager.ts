@@ -84,6 +84,7 @@ import { ContentValidator } from '../../security/contentValidator.js';
 import { InputNormalizer } from '../../security/InputNormalizer.js';
 import { SafeRegex } from '../../security/dosProtection.js';
 import { logger } from '../../utils/logger.js';
+import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
 import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
@@ -144,6 +145,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly hydratedAgents = new WeakSet<Agent>();
   private readonly recoverySourceAgents = new WeakMap<Agent, Agent>();
   private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
+  // Covers direct/legacy manager entry points that bypass AgentExecutionHandler.
+  private readonly stateOperationLock = new AsyncKeyedLock();
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
@@ -1030,12 +1033,13 @@ export class AgentManager extends BaseElementManager<Agent> {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
   ): Promise<ExecuteAgentResult> {
-    // Register before the first await so abort recovery can detect every caller,
-    // including continue_execution and legacy entry points.
-    this.beginExecutionAttempt(name);
-    try {
-      const agent = await this.loadExecutableAgent(name);
-      const metadata = agent.metadata as AgentMetadataV2;
+    return this.runSerializedAgentStateOperation(name, async () => {
+      // Register before the first await so abort recovery can detect every caller,
+      // including continue_execution and legacy entry points.
+      this.beginExecutionAttempt(name);
+      try {
+        const agent = await this.loadExecutableAgent(name);
+        const metadata = agent.metadata as AgentMetadataV2;
 
       // 2. Clone parameters to prevent mutation of caller's object (Issue #118)
       const clonedParameters = structuredClone(parameters);
@@ -1079,13 +1083,22 @@ export class AgentManager extends BaseElementManager<Agent> {
         }
       });
 
-      return result;
-    } catch (error) {
-      logger.error(`Failed to execute agent '${name}':`, error);
-      throw error;
-    } finally {
-      this.endExecutionAttempt(name);
-    }
+        return result;
+      } catch (error) {
+        logger.error(`Failed to execute agent '${name}':`, error);
+        throw error;
+      } finally {
+        this.endExecutionAttempt(name);
+      }
+    });
+  }
+
+  private async runSerializedAgentStateOperation<T>(
+    name: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const operationKey = this.getExecutionGenerationKey(name);
+    return this.stateOperationLock.runExclusive(operationKey, operation);
   }
 
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
@@ -2898,6 +2911,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     /** Autonomy directive indicating whether to continue or pause */
     autonomy: AutonomyDirective;
   }> {
+    return this.runSerializedAgentStateOperation(params.agentName, async () => {
     // 1. Load agent by name
     const agent = await this.read(params.agentName);
     if (!agent) {
@@ -2973,7 +2987,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     });
 
     // 9. Return decision, state summary, and autonomy directive
-    return {
+      return {
       success: true,
       message: `Step recorded for agent '${params.agentName}'`,
       decision: {
@@ -2993,7 +3007,8 @@ export class AgentManager extends BaseElementManager<Agent> {
         stateVersion: updatedState.stateVersion || 1
       },
       autonomy: autonomyDirective
-    };
+      };
+    });
   }
 
   /**
@@ -3008,7 +3023,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     outcome: "success" | "failure" | "partial";
     summary: string;
   }) {
-    return this.completeAgentGoalWithStatePolicy(params, false);
+    return this.runSerializedAgentStateOperation(
+      params.agentName,
+      () => this.completeAgentGoalWithStatePolicy(params, false),
+    );
   }
 
   async completeAgentGoalForRecovery(params: {
@@ -3017,7 +3035,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     outcome: "success" | "failure" | "partial";
     summary: string;
   }) {
-    return this.completeAgentGoalWithStatePolicy(params, true);
+    return this.runSerializedAgentStateOperation(
+      params.agentName,
+      () => this.completeAgentGoalWithStatePolicy(params, true),
+    );
   }
 
   private async completeAgentGoalWithStatePolicy(params: {
@@ -3170,28 +3191,30 @@ export class AgentManager extends BaseElementManager<Agent> {
     agentName: string;
     excludedGoalIds?: readonly string[];
   }): Promise<Readonly<AgentState> | null> {
-    const agent = await this.read(params.agentName);
-    if (!agent) {
-      throw new ElementNotFoundError('Agent', params.agentName);
-    }
-
-    const generation = this.observeExecutionGeneration(params.agentName);
-    try {
-      const state = await this.stateStore.reclaimOrphaned({
-        name: params.agentName,
-        agentElementId: this.getAgentElementId(agent, params.agentName),
-      }, {
-        excludedGoalIds: params.excludedGoalIds,
-      });
-      if (!state || this.hasExecutionGenerationChanged(params.agentName, generation.token)) {
-        return null;
+    return this.runSerializedAgentStateOperation(params.agentName, async () => {
+      const agent = await this.read(params.agentName);
+      if (!agent) {
+        throw new ElementNotFoundError('Agent', params.agentName);
       }
 
-      this.applyPersistedAgentState(agent, state);
-      return agent.getState();
-    } finally {
-      generation.release();
-    }
+      const generation = this.observeExecutionGeneration(params.agentName);
+      try {
+        const state = await this.stateStore.reclaimOrphaned({
+          name: params.agentName,
+          agentElementId: this.getAgentElementId(agent, params.agentName),
+        }, {
+          excludedGoalIds: params.excludedGoalIds,
+        });
+        if (!state || this.hasExecutionGenerationChanged(params.agentName, generation.token)) {
+          return null;
+        }
+
+        this.applyPersistedAgentState(agent, state);
+        return agent.getState();
+      } finally {
+        generation.release();
+      }
+    });
   }
 
   private async getAgentStateWithPolicy(params: {

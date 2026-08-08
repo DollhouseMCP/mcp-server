@@ -122,6 +122,44 @@ describe('AgentManager', () => {
   });
 
   describe('Recovery state synchronization', () => {
+    it('serializes execute_agent behind an in-flight orphan reclaim', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('.state.yaml')) {
+          throw Object.assign(new Error('missing state'), { code: 'ENOENT' });
+        }
+        return `---
+name: test-agent
+---
+Content`;
+      });
+      const agent = await agentManager.read('test-agent');
+      expect(agent).not.toBeNull();
+
+      let markReclaimStarted: (() => void) | undefined;
+      const reclaimStarted = new Promise<void>((resolve) => {
+        markReclaimStarted = resolve;
+      });
+      let resolveReclaim: ((state: null) => void) | undefined;
+      jest.spyOn((agentManager as any).stateStore, 'reclaimOrphaned')
+        .mockImplementation(() => new Promise((resolve) => {
+          markReclaimStarted?.();
+          resolveReclaim = resolve;
+        }));
+      const loadExecutable = jest.spyOn(agentManager as any, 'loadExecutableAgent')
+        .mockRejectedValue(new Error('execution reached serialized boundary'));
+
+      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: 'test-agent' });
+      await reclaimStarted;
+      const execute = agentManager.executeAgent('test-agent', {});
+      await Promise.resolve();
+      expect(loadExecutable).not.toHaveBeenCalled();
+
+      resolveReclaim?.(null);
+      await expect(reclaim).resolves.toBeNull();
+      await expect(execute).rejects.toThrow('execution reached serialized boundary');
+      expect(loadExecutable).toHaveBeenCalledTimes(1);
+    });
+
     it('does not hydrate reclaimed state over an execution started during the read', async () => {
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('.state.yaml')) {

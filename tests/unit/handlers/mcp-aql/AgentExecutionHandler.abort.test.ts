@@ -301,7 +301,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(executingAgents.has('session-b:test-agent')).toBe(false);
   });
 
-  it('preserves a same-session execution created while orphan reclaim is pending', async () => {
+  it('serializes a same-session execution behind pending orphan reclaim', async () => {
     const mocks = createManager();
     let markReclaimStarted: (() => void) | undefined;
     const reclaimStarted = new Promise<void>((resolve) => {
@@ -327,16 +327,23 @@ describe('AgentExecutionHandler abort recovery', () => {
       confidence: 0.9,
     });
     await reclaimStarted;
-    await handler.dispatch('execute', {
+    const execute = handler.dispatch('execute', {
       element_name: 'test-agent',
       parameters: {},
     });
+    await Promise.resolve();
+    expect(mocks.executeAgent).not.toHaveBeenCalled();
+
     resolveReclaim?.(stateWithGoals([{ id: 'goal-orphan', status: 'in_progress' }]).state);
     await update;
+    await execute;
 
-    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual(['goal-new']);
+    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual([
+      'goal-orphan',
+      'goal-new',
+    ]);
     expect(mocks.recordAgentStep).toHaveBeenCalledWith(expect.objectContaining({
-      goalId: 'goal-new',
+      goalId: 'goal-orphan',
     }));
   });
 
@@ -545,9 +552,14 @@ describe('AgentExecutionHandler abort recovery', () => {
 
   it('preserves a newer policy when execution restarts during goal lookup', async () => {
     const mocks = createManager();
+    let markLookupStarted: (() => void) | undefined;
+    const lookupStarted = new Promise<void>((resolve) => {
+      markLookupStarted = resolve;
+    });
     let resolveLookup: ((value: ReturnType<typeof stateWithGoals>) => void) | undefined;
     mocks.getAgentStateForRecovery.mockImplementation(() => new Promise((resolve) => {
       resolveLookup = resolve;
+      markLookupStarted?.();
     }));
     const originalPolicy = policy();
     const newerPolicy = policy();
@@ -556,7 +568,7 @@ describe('AgentExecutionHandler abort recovery', () => {
     const { handler } = createHandler(mocks.manager, executingAgents);
 
     const abortPromise = handler.dispatch('abort', { element_name: 'test-agent' });
-    await Promise.resolve();
+    await lookupStarted;
     executingAgents.set('session-a:test-agent', newerPolicy);
     mocks.hasExecutionGenerationChanged.mockReturnValue(true);
     resolveLookup?.(stateWithGoals([{ id: 'new-goal', status: 'in_progress' }]));

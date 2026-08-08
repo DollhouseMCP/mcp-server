@@ -1,6 +1,7 @@
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
 import type { AgentManager } from '../../elements/agents/AgentManager.js';
 import type { AgentMetadataV2, AgentNotification } from '../../elements/agents/types.js';
 import { evaluateResiliencePolicy, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
@@ -16,6 +17,8 @@ type StepOutcome = 'success' | 'failure' | 'partial';
 
 export class AgentExecutionHandler {
   private static readonly MAX_RECENT_BLOCKS = 50;
+  // Keep policy ownership and its durable state mutation in one lifecycle operation.
+  private readonly executionOperationLock = new AsyncKeyedLock();
 
   constructor(
     private readonly handlers: HandlerRegistry,
@@ -28,24 +31,28 @@ export class AgentExecutionHandler {
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
     const manager = this.handlers.agentManager;
     const elementName = validateExecutionElementName(method, params);
-    await this.ensureAgentCanExecute(method, manager, elementName);
+    const executionKey = this.executionKey(manager, elementName);
 
-    const handlers: Record<string, () => Promise<unknown>> = {
-      execute: () => this.executeAgent(manager, elementName, params),
-      getState: () => this.getState(manager, elementName, params),
-      updateState: () => this.updateState(manager, elementName, params),
-      complete: () => this.complete(manager, elementName, params),
-      continue: () => this.continueExecution(manager, elementName, params),
-      abort: () => this.abort(manager, elementName, params),
-      getGatheredData: () => this.getGatheredData(manager, elementName, params),
-      prepareHandoff: () => this.prepareHandoff(manager, elementName, params),
-      resumeFromHandoff: () => this.resumeFromHandoff(manager, elementName, params),
-    };
-    const handler = handlers[method];
-    if (!handler) {
-      throw new Error(`Unknown Execute method: ${method}`);
-    }
-    return handler();
+    return this.executionOperationLock.runExclusive(executionKey, async () => {
+      await this.ensureAgentCanExecute(method, manager, elementName);
+
+      const handlers: Record<string, () => Promise<unknown>> = {
+        execute: () => this.executeAgent(manager, elementName, params),
+        getState: () => this.getState(manager, elementName, params),
+        updateState: () => this.updateState(manager, elementName, params),
+        complete: () => this.complete(manager, elementName, params),
+        continue: () => this.continueExecution(manager, elementName, params),
+        abort: () => this.abort(manager, elementName, params),
+        getGatheredData: () => this.getGatheredData(manager, elementName, params),
+        prepareHandoff: () => this.prepareHandoff(manager, elementName, params),
+        resumeFromHandoff: () => this.resumeFromHandoff(manager, elementName, params),
+      };
+      const handler = handlers[method];
+      if (!handler) {
+        throw new Error(`Unknown Execute method: ${method}`);
+      }
+      return handler();
+    });
   }
 
   recordGatekeeperBlock(
