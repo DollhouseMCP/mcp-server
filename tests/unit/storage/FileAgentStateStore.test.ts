@@ -95,4 +95,13 @@ describe('FileAgentStateStore strict recovery I/O', () => {
       .rejects.toThrow('State version conflict');
     expect(misleadingState.stateVersion).toBe(99);
   });
+
+  it('rejects an ordinary save when durable state is newer than expected', async () => {
+    await store.save(key, state(), 0);
+    const staleState = state(0);
+
+    await expect(store.save(key, staleState, 0))
+      .rejects.toThrow('State version conflict');
+    expect(staleState.stateVersion).toBe(0);
+  });
 });
