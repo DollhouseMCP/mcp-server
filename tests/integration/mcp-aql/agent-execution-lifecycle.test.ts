@@ -323,7 +323,12 @@ describe('Agent Execution Lifecycle (Issues #106, #122)', () => {
       expect(resumeData.restoredFrom.goalId).toBe(goalId);
 
       // Clean up: complete the resumed execution
-      await completeAgent('resume-agent');
+      const completionResult = await completeAgent('resume-agent');
+      expect(completionResult.success).toBe(true);
+      if (completionResult.success) {
+        const completionData = completionResult.data as { goal: { id: string } };
+        expect(completionData.goal.id).toBe(resumeData.goalId);
+      }
     });
 
     it('should reject handoff block with mismatched agent name', async () => {
