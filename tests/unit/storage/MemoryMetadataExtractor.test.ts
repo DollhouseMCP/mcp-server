@@ -185,6 +185,42 @@ entries:
       expect(result.totalEntries).toBe(3);
     });
 
+    it('should preserve metadata when untrusted entry prose matches scanner patterns', () => {
+      const raw = `
+metadata:
+  name: Scanner Research
+  description: Historical security examples
+  autoLoad: true
+  priority: 2
+entries:
+  - content: "Example using require('child_process') for analysis"
+    trustLevel: untrusted
+`;
+
+      const result = MemoryMetadataExtractor.extractMetadata(raw, 'scanner-research.yml');
+
+      expect(result.name).toBe('Scanner Research');
+      expect(result.description).toBe('Historical security examples');
+      expect(result.autoLoad).toBe(true);
+      expect(result.priority).toBe(2);
+      expect(result.totalEntries).toBe(1);
+    });
+
+    it('should still fail closed when memory metadata matches scanner patterns', () => {
+      const raw = `
+metadata:
+  name: Unsafe Metadata
+  description: "require('child_process')"
+entries:
+  - content: harmless prose
+`;
+
+      const result = MemoryMetadataExtractor.extractMetadata(raw, 'unsafe-metadata.yml');
+
+      expect(result.name).toBe('unnamed');
+      expect(result.autoLoad).toBeUndefined();
+    });
+
     it('should prefer stats.totalEntries over entries array length', () => {
       const raw = `
 name: Both Memory

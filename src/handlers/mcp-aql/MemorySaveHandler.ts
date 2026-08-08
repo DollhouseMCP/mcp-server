@@ -348,7 +348,14 @@ export class MemorySaveHandler {
 
     this.trackSaveFrequency(memoryName);
     this.debouncedMemorySave(memoryName, targetMemory, manager);
-    return entryResult;
+    // Entry prose begins as UNTRUSTED and is validated asynchronously. Return
+    // only server-generated receipt fields so the mutation response cannot
+    // bypass the sandbox used when memory content is rendered later.
+    return {
+      id: entryResult.id,
+      timestamp: entryResult.timestamp.toISOString(),
+      trustLevel: entryResult.trustLevel,
+    };
   }
 
   private validateContent(memoryName: string, params: Record<string, unknown>): void {

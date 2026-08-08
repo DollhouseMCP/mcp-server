@@ -81,7 +81,14 @@ describe('MCPAQLHandler', () => {
       memoryManager: {
         find: jest.fn().mockResolvedValue({
           metadata: { name: TEST_MEMORY_NAME },
-          addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
+          addEntry: jest.fn().mockResolvedValue({
+            id: 'entry-1',
+            timestamp: new Date('2026-01-01T00:00:00.000Z'),
+            content: 'Test entry content',
+            tags: ['tag1', 'tag2'],
+            metadata: { key: 'value' },
+            trustLevel: 'untrusted',
+          }),
           removeEntry: jest.fn().mockReturnValue(true),
           getEntries: jest.fn().mockReturnValue(new Map()),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
@@ -230,7 +237,13 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(true);
         if (result.success) {
-          expect(result.data).toEqual({ entryId: 'entry-1' });
+          expect(result.data).toEqual({
+            id: 'entry-1',
+            timestamp: '2026-01-01T00:00:00.000Z',
+            trustLevel: 'untrusted',
+          });
+          expect(result.data).not.toHaveProperty('content');
+          expect(result.data).not.toHaveProperty('metadata');
         }
         expect(mockRegistry.memoryManager.find).toHaveBeenCalled();
       });
@@ -1647,7 +1660,11 @@ describe('MCPAQLHandler', () => {
         memoryManager: {
           find: jest.fn().mockResolvedValue({
             metadata: { name: TEST_MEMORY_NAME },
-            addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
+            addEntry: jest.fn().mockResolvedValue({
+              id: 'entry-1',
+              timestamp: new Date('2026-01-01T00:00:00.000Z'),
+              trustLevel: 'untrusted',
+            }),
             removeEntry: jest.fn().mockReturnValue(true),
             getEntries: jest.fn().mockReturnValue(new Map()),
             clearAll: jest.fn().mockResolvedValue({ cleared: true }),
