@@ -91,6 +91,7 @@ import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
+import { slugify } from '../../utils/filesystem.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
@@ -126,10 +127,27 @@ interface ActivationResult {
   activationWarnings: Array<{ elementType: string; elementName: string; error: string }>;
 }
 
+interface ExecutionGenerationEntry {
+  token: object;
+  activeExecutions: number;
+  observers: number;
+}
+
+export interface ExecutionGenerationObservation {
+  token: object;
+  release: () => void;
+}
+
+function normalizeAgentExecutionIdentity(name: string): string {
+  return slugify(sanitizeInput(name, 100)) || 'unnamed';
+}
+
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateCache: Map<string, AgentState> = new Map();
   private readonly stateStore: IAgentStateStore;
   private readonly hydratedAgents = new WeakSet<Agent>();
+  private readonly recoverySourceAgents = new WeakMap<Agent, Agent>();
+  private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   private triggerValidationService: TriggerValidationService;
   private validationService: ValidationService;
   private serializationService: SerializationService;
@@ -1016,6 +1034,9 @@ export class AgentManager extends BaseElementManager<Agent> {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
   ): Promise<ExecuteAgentResult> {
+    // Register before the first await so abort recovery can detect every caller,
+    // including continue_execution and legacy entry points.
+    this.beginExecutionAttempt(name);
     try {
       const agent = await this.loadExecutableAgent(name);
       const metadata = agent.metadata as AgentMetadataV2;
@@ -1066,7 +1087,66 @@ export class AgentManager extends BaseElementManager<Agent> {
     } catch (error) {
       logger.error(`Failed to execute agent '${name}':`, error);
       throw error;
+    } finally {
+      this.endExecutionAttempt(name);
     }
+  }
+
+  observeExecutionGeneration(name: string): ExecutionGenerationObservation {
+    const key = this.getExecutionGenerationKey(name);
+    const entry = this.getOrCreateExecutionGeneration(key);
+    entry.observers += 1;
+    let released = false;
+
+    return {
+      token: entry.token,
+      release: () => {
+        if (released) return;
+        released = true;
+        entry.observers -= 1;
+        this.cleanupExecutionGeneration(key, entry);
+      },
+    };
+  }
+
+  hasExecutionGenerationChanged(name: string, observedToken: object): boolean {
+    const entry = this.executionGenerations.get(this.getExecutionGenerationKey(name));
+    return !entry || entry.activeExecutions > 0 || entry.token !== observedToken;
+  }
+
+  private beginExecutionAttempt(name: string): void {
+    const key = this.getExecutionGenerationKey(name);
+    const entry = this.getOrCreateExecutionGeneration(key);
+    entry.token = {};
+    entry.activeExecutions += 1;
+  }
+
+  private endExecutionAttempt(name: string): void {
+    const key = this.getExecutionGenerationKey(name);
+    const entry = this.executionGenerations.get(key);
+    if (!entry) return;
+    entry.activeExecutions = Math.max(0, entry.activeExecutions - 1);
+    this.cleanupExecutionGeneration(key, entry);
+  }
+
+  private getOrCreateExecutionGeneration(key: string): ExecutionGenerationEntry {
+    let entry = this.executionGenerations.get(key);
+    if (!entry) {
+      entry = { token: {}, activeExecutions: 0, observers: 0 };
+      this.executionGenerations.set(key, entry);
+    }
+    return entry;
+  }
+
+  private cleanupExecutionGeneration(key: string, entry: ExecutionGenerationEntry): void {
+    if (entry.activeExecutions === 0 && entry.observers === 0) {
+      this.executionGenerations.delete(key);
+    }
+  }
+
+  private getExecutionGenerationKey(name: string): string {
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId ?? 'default';
+    return `${sessionId}:${normalizeAgentExecutionIdentity(name)}`;
   }
 
   private async loadExecutableAgent(name: string): Promise<Agent> {
@@ -1954,6 +2034,16 @@ export class AgentManager extends BaseElementManager<Agent> {
     );
   }
 
+  private async saveAgentStateForRecovery(agent: Agent, name: string): Promise<number> {
+    const state = agent.getState();
+    return this.stateStore.save(
+      { name, agentElementId: this.getAgentElementId(agent, name) },
+      state,
+      state.stateVersion ?? 0,
+      { requireExisting: true },
+    );
+  }
+
   /**
    * Utility: ensure `.md` extension on requested path.
    */
@@ -1981,6 +2071,48 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent.deserialize(JSON.stringify(serialized));
     agent.markStatePersisted();
     this.hydratedAgents.add(agent);
+  }
+
+  private async readWithStatePolicy(name: string, strict: boolean): Promise<Agent | null> {
+    const agent = await this.read(name);
+    if (!strict || !agent) {
+      return agent;
+    }
+
+    const state = await this.stateStore.load({
+      name,
+      agentElementId: this.getAgentElementId(agent, name),
+    }, { strict: true });
+    const recoveryAgent = new Agent(agent.metadata, this.metadataService);
+    const serialized = JSON.parse(agent.serializeToJSON());
+    serialized.state = state ?? {
+      goals: [],
+      decisions: [],
+      context: {},
+      lastActive: new Date(),
+      sessionCount: 0,
+      stateVersion: 0,
+    };
+    recoveryAgent.deserialize(JSON.stringify(serialized));
+    recoveryAgent[COMMIT_PERSISTED_VERSION](state?.stateVersion ?? 0);
+    recoveryAgent.markStatePersisted();
+    this.recoverySourceAgents.set(recoveryAgent, agent);
+    return recoveryAgent;
+  }
+
+  private synchronizeRecoveryState(agent: Agent, persistedVersion: number): void {
+    const sourceAgent = this.recoverySourceAgents.get(agent);
+    if (!sourceAgent) {
+      return;
+    }
+
+    const serialized = JSON.parse(sourceAgent.serializeToJSON());
+    serialized.state = agent.getState();
+    sourceAgent.deserialize(JSON.stringify(serialized));
+    sourceAgent[COMMIT_PERSISTED_VERSION](persistedVersion);
+    sourceAgent.markStatePersisted();
+    this.hydratedAgents.add(sourceAgent);
+    this.recoverySourceAgents.delete(agent);
   }
 
   private getAgentElementId(agent: Agent, name: string): string {
@@ -2804,7 +2936,25 @@ export class AgentManager extends BaseElementManager<Agent> {
     goalId?: string;
     outcome: "success" | "failure" | "partial";
     summary: string;
-  }): Promise<{
+  }) {
+    return this.completeAgentGoalWithStatePolicy(params, false);
+  }
+
+  async completeAgentGoalForRecovery(params: {
+    agentName: string;
+    goalId: string;
+    outcome: "success" | "failure" | "partial";
+    summary: string;
+  }) {
+    return this.completeAgentGoalWithStatePolicy(params, true);
+  }
+
+  private async completeAgentGoalWithStatePolicy(params: {
+    agentName: string;
+    goalId?: string;
+    outcome: "success" | "failure" | "partial";
+    summary: string;
+  }, strictState: boolean): Promise<{
     success: boolean;
     message: string;
     goal: {
@@ -2831,7 +2981,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }> {
     // 1. Load agent by name
-    const agent = await this.read(params.agentName);
+    const agent = await this.readWithStatePolicy(params.agentName, strictState);
     if (!agent) {
       // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
       throw new ElementNotFoundError('Agent', params.agentName);
@@ -2857,6 +3007,9 @@ export class AgentManager extends BaseElementManager<Agent> {
           : `No in-progress goal found for agent '${params.agentName}'`
       );
     }
+    if (strictState && goal.status !== 'in_progress') {
+      throw new Error(`Goal '${goal.id}' changed while aborting agent '${params.agentName}'`);
+    }
 
     // 3. Record final decision with summary
     agent.recordDecision({
@@ -2875,7 +3028,14 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 6. Save agent state
     const completeSanitizedName = sanitizeInput(params.agentName, 100);
-    await this.save(agent, this.getFilename(completeSanitizedName));
+    if (strictState) {
+      const newVersion = await this.saveAgentStateForRecovery(agent, completeSanitizedName);
+      agent[COMMIT_PERSISTED_VERSION](newVersion);
+      agent.markStatePersisted();
+      this.synchronizeRecoveryState(agent, newVersion);
+    } else {
+      await this.save(agent, this.getFilename(completeSanitizedName));
+    }
 
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();
@@ -2919,7 +3079,23 @@ export class AgentManager extends BaseElementManager<Agent> {
     agentName: string;
     includeDecisionHistory?: boolean;
     includeContext?: boolean;
-  }): Promise<{
+  }) {
+    return this.getAgentStateWithPolicy(params, false);
+  }
+
+  async getAgentStateForRecovery(params: {
+    agentName: string;
+    includeDecisionHistory?: boolean;
+    includeContext?: boolean;
+  }) {
+    return this.getAgentStateWithPolicy(params, true);
+  }
+
+  private async getAgentStateWithPolicy(params: {
+    agentName: string;
+    includeDecisionHistory?: boolean;
+    includeContext?: boolean;
+  }, strictState: boolean): Promise<{
     success: boolean;
     agentName: string;
     state: {
@@ -2968,7 +3144,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     };
   }> {
     // 1. Load agent by name
-    const agent = await this.read(params.agentName);
+    const agent = await this.readWithStatePolicy(params.agentName, strictState);
     if (!agent) {
       // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
       throw new ElementNotFoundError('Agent', params.agentName);

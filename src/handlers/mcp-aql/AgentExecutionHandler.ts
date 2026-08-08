@@ -1,5 +1,6 @@
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
+import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import type { AgentManager } from '../../elements/agents/AgentManager.js';
 import type { AgentMetadataV2, AgentNotification } from '../../elements/agents/types.js';
 import { evaluateResiliencePolicy, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
@@ -304,37 +305,130 @@ export class AgentExecutionHandler {
     params: Record<string, unknown>
   ): Promise<unknown> {
     const reason = (params.reason as string) || 'Aborted by user';
-    const activeGoalIds = await this.getActiveGoalIds(manager, elementName);
-    if (activeGoalIds.length === 0) {
-      throw new Error(`No active execution found for agent '${elementName}'. Nothing to abort.`);
+    const executionKey = this.sessionKey(elementName);
+    const executionPolicyAtStart = this.executingAgents.get(executionKey);
+    const generation = manager.observeExecutionGeneration(elementName);
+    try {
+      const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+      if (activeGoalIds.length === 0) {
+        return this.recoverStalePolicy(
+          manager,
+          elementName,
+          executionKey,
+          executionPolicyAtStart,
+          generation,
+          reason,
+        );
+      }
+
+      this.assertExecutionUnchanged(manager, elementName, executionKey, executionPolicyAtStart, generation.token);
+
+      for (const goalId of activeGoalIds) {
+        await manager.completeAgentGoalForRecovery({
+          agentName: elementName,
+          goalId,
+          outcome: 'failure',
+          summary: `Execution aborted: ${reason}`,
+        });
+        this.abortedGoals.add(this.sessionKey(goalId));
+      }
+
+      const remainingGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+      this.assertExecutionUnchanged(
+        manager,
+        elementName,
+        executionKey,
+        executionPolicyAtStart,
+        generation.token,
+        remainingGoalIds,
+      );
+
+      this.recordResilienceCompletion(executionPolicyAtStart, false, elementName);
+      if (this.executingAgents.get(executionKey) === executionPolicyAtStart) {
+        this.executingAgents.delete(executionKey);
+      }
+      this.unblockDangerZone(elementName);
+      this.logAbort(elementName, activeGoalIds, reason);
+
+      return {
+        _type: 'AbortResult',
+        success: true,
+        agentName: elementName,
+        abortedGoalIds: activeGoalIds,
+        reason,
+        message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
+      };
+    } finally {
+      generation.release();
     }
-
-    activeGoalIds.forEach(goalId => this.abortedGoals.add(this.sessionKey(goalId)));
-    await this.markAbortAsFailed(manager, elementName, reason);
-    this.recordResilienceCompletion(this.executingAgents.get(this.sessionKey(elementName)), false, elementName);
-    this.executingAgents.delete(this.sessionKey(elementName));
-    this.unblockDangerZone(elementName);
-    this.logAbort(elementName, activeGoalIds, reason);
-
-    return {
-      _type: 'AbortResult',
-      success: true,
-      agentName: elementName,
-      abortedGoalIds: activeGoalIds,
-      reason,
-      message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
-    };
   }
 
-  private async markAbortAsFailed(manager: AgentManager, elementName: string, reason: string): Promise<void> {
-    try {
-      await manager.completeAgentGoal({
-        agentName: elementName,
-        outcome: 'failure',
-        summary: `Execution aborted: ${reason}`,
+  private async recoverStalePolicy(
+    manager: AgentManager,
+    elementName: string,
+    executionKey: string,
+    executionPolicyAtStart: ExecutingAgentEntry | undefined,
+    generation: { token: object },
+    reason: string,
+  ): Promise<unknown> {
+    const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    if (!executionPolicyAtStart) {
+      // There is no stale in-memory policy to mutate. A concurrent execution
+      // remains untouched, so preserve the established no-active-execution
+      // result instead of treating unrelated generation history as a race.
+      throw new Error(`No active execution found for agent '${elementName}'. Nothing to abort.`);
+    }
+    this.assertExecutionUnchanged(
+      manager,
+      elementName,
+      executionKey,
+      executionPolicyAtStart,
+      generation.token,
+      revalidatedGoalIds,
+    );
+
+    if (this.executingAgents.get(executionKey) === executionPolicyAtStart) {
+      this.executingAgents.delete(executionKey);
+      this.unblockDangerZone(elementName);
+      SecurityMonitor.logSecurityEvent({
+        type: 'AGENT_POLICY_RECOVERED',
+        severity: 'MEDIUM',
+        source: 'AgentExecutionHandler.abort',
+        details: `Recovered stale execution policy for agent: ${elementName}`,
+        additionalData: { agentName: elementName, reason: 'stale_execution_policy' },
       });
-    } catch {
-      logger.warn('Failed to mark aborted agent goal as failed', { agentName: elementName });
+      return {
+        _type: 'AbortResult',
+        success: true,
+        agentName: elementName,
+        abortedGoalIds: [],
+        recoveredStalePolicy: true,
+        reason,
+        message: `Removed stale execution policy for agent '${elementName}'. No active goal remained.`,
+      };
+    }
+
+    throw new Error(`No active execution found for agent '${elementName}'. Nothing to abort.`);
+  }
+
+  private assertExecutionUnchanged(
+    manager: AgentManager,
+    elementName: string,
+    executionKey: string,
+    executionPolicyAtStart: ExecutingAgentEntry | undefined,
+    generationToken: object,
+    activeGoalIds: string[] = [],
+  ): void {
+    const currentPolicy = this.executingAgents.get(executionKey);
+    if (
+      activeGoalIds.length > 0 ||
+      manager.hasExecutionGenerationChanged(elementName, generationToken) ||
+      (currentPolicy !== undefined && currentPolicy !== executionPolicyAtStart)
+    ) {
+      throw new Error(
+        `Execution state changed while aborting agent '${elementName}'. ` +
+        'The newer execution policy was preserved; retry abort_execution to abort it.'
+      );
     }
   }
 
@@ -663,13 +757,22 @@ export class AgentExecutionHandler {
     };
   }
 
-  private async getActiveGoalIds(manager: AgentManager, agentName: string): Promise<string[]> {
+  private async getActiveGoalIds(
+    manager: AgentManager,
+    agentName: string,
+    strict = false,
+  ): Promise<string[]> {
     try {
-      const stateResult = await manager.getAgentState({ agentName });
+      const stateResult = strict
+        ? await manager.getAgentStateForRecovery({ agentName })
+        : await manager.getAgentState({ agentName });
       return stateResult?.state?.goals
         ?.filter((g: { status: string }) => g.status === 'in_progress')
         .map((g: { id: string }) => g.id) ?? [];
-    } catch {
+    } catch (error) {
+      if (strict && !(error instanceof ElementNotFoundError)) {
+        throw error;
+      }
       return [];
     }
   }

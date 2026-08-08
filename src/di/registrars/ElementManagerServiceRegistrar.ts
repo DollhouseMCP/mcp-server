@@ -112,9 +112,9 @@ export class ElementManagerServiceRegistrar {
       block: (...args) => resolveActiveOrRoot<DangerZoneBlocker>('DangerZoneEnforcer').block(...args),
     };
     const agentStateStoreProxy: IAgentStateStore = {
-      load: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').load(key),
-      save: (key, state, expectedVersion) =>
-        resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').save(key, state, expectedVersion),
+      load: (key, options) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').load(key, options),
+      save: (key, state, expectedVersion, options) =>
+        resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').save(key, state, expectedVersion, options),
       delete: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').delete(key),
     };
     const verificationStoreProxy = {

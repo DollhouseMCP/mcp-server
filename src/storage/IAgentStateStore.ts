@@ -9,9 +9,19 @@ export interface AgentStateKey {
   readonly agentElementId: string;
 }
 
+export interface AgentStateLoadOptions {
+  /** Bypass process-local caches and surface storage failures. */
+  strict?: boolean;
+}
+
+export interface AgentStateSaveOptions {
+  /** Require an existing durable state at exactly expectedVersion. */
+  requireExisting?: boolean;
+}
+
 export interface IAgentStateStore {
   /** Returns null when no persisted runtime state exists for this agent. */
-  load(key: AgentStateKey): Promise<AgentState | null>;
+  load(key: AgentStateKey, options?: AgentStateLoadOptions): Promise<AgentState | null>;
 
   /**
    * Save with optimistic locking.
@@ -19,7 +29,12 @@ export interface IAgentStateStore {
    * @param expectedVersion version the caller believes is current (0 = first save)
    * @returns the new version after a successful save
    */
-  save(key: AgentStateKey, state: AgentState, expectedVersion: number): Promise<number>;
+  save(
+    key: AgentStateKey,
+    state: AgentState,
+    expectedVersion: number,
+    options?: AgentStateSaveOptions,
+  ): Promise<number>;
 
   delete(key: AgentStateKey): Promise<void>;
 }

@@ -7,7 +7,12 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { SerializationService } from '../services/SerializationService.js';
 import { logger } from '../utils/logger.js';
-import type { AgentStateKey, IAgentStateStore } from './IAgentStateStore.js';
+import type {
+  AgentStateKey,
+  AgentStateLoadOptions,
+  AgentStateSaveOptions,
+  IAgentStateStore,
+} from './IAgentStateStore.js';
 
 export const AGENT_STATE_FILE_EXTENSION = '.state.yaml';
 export const AGENT_STATE_MAX_YAML_SIZE = 64 * 1024;
@@ -33,10 +38,10 @@ export class FileAgentStateStore implements IAgentStateStore {
     this.maxYamlSize = deps.maxYamlSize ?? AGENT_STATE_MAX_YAML_SIZE;
   }
 
-  async load(key: AgentStateKey): Promise<AgentState | null> {
+  async load(key: AgentStateKey, options: AgentStateLoadOptions = {}): Promise<AgentState | null> {
     const normalizedName = this.normalizeFilename(key.name);
 
-    if (this.deps.stateCache.has(normalizedName)) {
+    if (!options.strict && this.deps.stateCache.has(normalizedName)) {
       return this.deps.stateCache.get(normalizedName)!;
     }
 
@@ -52,30 +57,56 @@ export class FileAgentStateStore implements IAgentStateStore {
 
       const state = result.data as AgentState;
       this.normalizeLoadedState(state);
-      this.deps.stateCache.set(normalizedName, state);
+      if (!options.strict) {
+        this.deps.stateCache.set(normalizedName, state);
+      }
       return state;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (options.strict) {
+          // A missing state file is valid only when its parent directory is
+          // reachable. Otherwise ENOENT may describe a failed/unmounted store.
+          await this.deps.fileOperations.stat(this.stateDir);
+        }
         return null;
       }
       logger.error(`Failed to load agent state: ${key.name}`, error);
+      if (options.strict) {
+        throw error;
+      }
       return null;
     }
   }
 
-  async save(key: AgentStateKey, state: AgentState, _expectedVersion: number): Promise<number> {
-    await this.ensureStateDirectory();
+  async save(
+    key: AgentStateKey,
+    state: AgentState,
+    expectedVersion: number,
+    options: AgentStateSaveOptions = {},
+  ): Promise<number> {
+    if (options.requireExisting) {
+      await this.deps.fileOperations.stat(this.stateDir);
+    } else {
+      await this.ensureStateDirectory();
+    }
 
     const normalizedName = this.normalizeFilename(key.name);
     const filePath = path.join(this.stateDir, `${normalizedName}${AGENT_STATE_FILE_EXTENSION}`);
 
     await this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
-      const existingState = await this.load(key);
-      if (existingState?.stateVersion !== undefined && state.stateVersion !== undefined
-          && existingState.stateVersion > state.stateVersion) {
+      const existingState = await this.load(key, { strict: options.requireExisting });
+      if (options.requireExisting && !existingState) {
+        throw new Error(`Agent state disappeared while updating '${key.name}'`);
+      }
+      const existingVersion = existingState?.stateVersion ?? 0;
+      const hasVersionConflict = options.requireExisting
+        ? existingVersion !== expectedVersion
+        : existingState?.stateVersion !== undefined && state.stateVersion !== undefined
+          && existingState.stateVersion > state.stateVersion;
+      if (hasVersionConflict) {
         logger.warn(`State version conflict detected for agent ${key.name}`, {
-          existingVersion: existingState.stateVersion,
-          attemptedVersion: state.stateVersion,
+          existingVersion,
+          attemptedVersion: expectedVersion,
         });
 
         SecurityMonitor.logSecurityEvent({
@@ -85,19 +116,19 @@ export class FileAgentStateStore implements IAgentStateStore {
           details: 'State version conflict: attempted to save stale state',
           additionalData: {
             agentName: key.name,
-            existingVersion: existingState.stateVersion,
-            attemptedVersion: state.stateVersion,
+            existingVersion,
+            attemptedVersion: expectedVersion,
           },
         });
 
         throw new Error(
-          `State version conflict: current version is ${existingState.stateVersion}, ` +
-          `but attempted to save version ${state.stateVersion}. ` +
+          `State version conflict: current version is ${existingVersion}, ` +
+          `but expected version ${expectedVersion}. ` +
           `State may have been modified concurrently.`,
         );
       }
 
-      state.stateVersion = (state.stateVersion || 0) + 1;
+      state.stateVersion = expectedVersion + 1;
       const serializedState = this.prepareStateForSerialization(state);
       const yamlContent = this.deps.serializationService.dumpYaml(serializedState, {
         schema: 'json',
