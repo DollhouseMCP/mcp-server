@@ -4102,6 +4102,20 @@ export class MCPAQLHandler {
             );
           }
 
+          // The lookup above is asynchronous. A restart can complete while it is
+          // in flight, causing the returned snapshot to include the new goal.
+          // Detect that before mutating any goal from the snapshot.
+          const executionPolicyBeforeCompletion = this.executingAgents.get(executionKey);
+          if (
+            manager.hasExecutionGenerationChanged(elementName, generationObservation.token) ||
+            (executionPolicyBeforeCompletion && executionPolicyBeforeCompletion !== executionPolicyAtLookupStart)
+          ) {
+            throw new Error(
+              `Execution state changed while aborting agent '${elementName}'. ` +
+              `The newer execution policy was preserved; retry abort_execution to abort it.`
+            );
+          }
+
           // Complete each exact goal from the strict snapshot before dropping policy.
           // Any storage or version conflict fails closed and preserves the sandbox.
           for (const goalId of activeGoalIds) {

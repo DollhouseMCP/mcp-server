@@ -757,6 +757,61 @@ describe('Agent Gatekeeper Policy Enforcement (Issue #449)', () => {
       expect(deleteWhilePolicyRemains.success).toBe(false);
     });
 
+    it('should not complete goals when execution restarts during the active-goal lookup', async () => {
+      await createAgent('restart-during-active-lookup-agent', {
+        gatekeeper: { deny: ['delete_element'] },
+      });
+      expect((await executeAgent('restart-during-active-lookup-agent')).success).toBe(true);
+
+      let markLookupStarted!: () => void;
+      let releaseLookup!: () => void;
+      const lookupStarted = new Promise<void>(resolve => { markLookupStarted = resolve; });
+      const lookupBlocked = new Promise<void>(resolve => { releaseLookup = resolve; });
+      const originalStateLookup = agentManager.getAgentStateForRecovery.bind(agentManager);
+      const stateSpy = jest.spyOn(agentManager, 'getAgentStateForRecovery')
+        .mockImplementationOnce(async params => {
+          markLookupStarted();
+          await lookupBlocked;
+          return originalStateLookup(params);
+        });
+      const completionSpy = jest.spyOn(agentManager, 'completeAgentGoalForRecovery');
+
+      const abortPromise = mcpAqlHandler.handleExecute({
+        operation: 'abort_execution',
+        params: {
+          element_name: 'restart-during-active-lookup-agent',
+          reason: 'Abort the original execution',
+        },
+      });
+      await lookupStarted;
+
+      expect((await executeAgent('restart-during-active-lookup-agent')).success).toBe(true);
+      releaseLookup();
+
+      const abort = await abortPromise;
+      stateSpy.mockRestore();
+
+      expect(abort.success).toBe(false);
+      if (!abort.success) {
+        expect(abort.error).toContain('Execution state changed');
+        expect(abort.error).toContain('newer execution policy was preserved');
+      }
+      expect(completionSpy).not.toHaveBeenCalled();
+      completionSpy.mockRestore();
+
+      const durableState = await agentManager.getAgentStateForRecovery({
+        agentName: 'restart-during-active-lookup-agent',
+      });
+      expect(durableState.state.goals.filter(goal => goal.status === 'in_progress')).toHaveLength(2);
+
+      const deleteWhileNewPolicyRemains = await mcpAqlHandler.handleDelete({
+        operation: 'delete_element',
+        element_type: 'agent',
+        params: { element_name: 'restart-during-active-lookup-agent' },
+      });
+      expect(deleteWhileNewPolicyRemains.success).toBe(false);
+    });
+
     it('should preserve a new policy when execution restarts during active abort', async () => {
       await createAgent('restart-during-active-abort-agent', {
         gatekeeper: { deny: ['delete_element'] },
