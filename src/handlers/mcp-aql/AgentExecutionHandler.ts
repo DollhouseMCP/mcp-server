@@ -188,6 +188,15 @@ export class AgentExecutionHandler {
     };
     this.executingAgents.set(executionKey, executionEntry);
 
+    await this.hydrateExecutionPolicies(manager, elementName, executionEntry);
+  }
+
+  private async hydrateExecutionPolicies(
+    manager: AgentManager,
+    elementName: string,
+    executionEntry: ExecutingAgentEntry,
+  ): Promise<void> {
+
     try {
       const agentElement = await manager.read(elementName);
       const agentMeta = agentElement?.metadata as AgentMetadataV2 | undefined;
@@ -204,6 +213,69 @@ export class AgentExecutionHandler {
         agentName: elementName,
       });
     }
+  }
+
+  /**
+   * Reclaim durable goals whose transport session was disposed before the
+   * lifecycle completed. The manager's state lookup is already scoped to the
+   * authenticated user's portfolio; the live-session scan prevents one active
+   * session from taking work that is still owned by another.
+   */
+  private async reclaimOrphanedExecution(
+    manager: AgentManager,
+    elementName: string,
+  ): Promise<ExecutingAgentEntry | undefined> {
+    const executionKey = this.executionKey(manager, elementName);
+    const existingEntry = this.executingAgents.get(executionKey);
+    if (existingEntry) {
+      return existingEntry;
+    }
+
+    const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    const orphanedGoalIds = activeGoalIds.filter(goalId =>
+      !this.isGoalTrackedByAnotherSession(manager, elementName, executionKey, goalId)
+    );
+    if (orphanedGoalIds.length === 0) {
+      return undefined;
+    }
+
+    const reclaimedEntry: ExecutingAgentEntry = {
+      name: elementName,
+      goalIds: orphanedGoalIds,
+      metadata: {},
+      startedAt: Date.now(),
+      continuationCount: 0,
+      retryCount: 0,
+      recentBlocks: [],
+    };
+    // Claim every orphan synchronously before policy hydration yields. This
+    // prevents two reconnecting sessions from adopting the same durable goal.
+    this.executingAgents.set(executionKey, reclaimedEntry);
+    await this.hydrateExecutionPolicies(manager, elementName, reclaimedEntry);
+    logger.info('Reclaimed orphaned agent execution for replacement session', {
+      agentName: elementName,
+      goalIds: orphanedGoalIds,
+    });
+    return reclaimedEntry;
+  }
+
+  private isGoalTrackedByAnotherSession(
+    manager: AgentManager,
+    elementName: string,
+    currentExecutionKey: string,
+    goalId: string,
+  ): boolean {
+    const canonicalName = manager.canonicalizeExecutionName(elementName);
+    for (const [executionKey, entry] of this.executingAgents) {
+      if (
+        executionKey !== currentExecutionKey &&
+        manager.canonicalizeExecutionName(entry.name) === canonicalName &&
+        entry.goalIds?.includes(goalId)
+      ) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private executionKey(manager: AgentManager, elementName: string): string {
@@ -230,7 +302,9 @@ export class AgentExecutionHandler {
   ): Promise<unknown> {
     const nextActionHint = this.validateNextActionHint(params.nextActionHint);
     const riskScore = this.validateRiskScore(params.riskScore);
-    const executingAgent = this.executingAgents.get(this.executionKey(manager, elementName));
+    const executionKey = this.executionKey(manager, elementName);
+    const executingAgent = this.executingAgents.get(executionKey)
+      ?? await this.reclaimOrphanedExecution(manager, elementName);
 
     const updateResult = await manager.recordAgentStep({
       agentName: elementName,
@@ -285,7 +359,8 @@ export class AgentExecutionHandler {
     params: Record<string, unknown>
   ): Promise<unknown> {
     const executionKey = this.executionKey(manager, elementName);
-    const completedAgent = this.executingAgents.get(executionKey);
+    const completedAgent = this.executingAgents.get(executionKey)
+      ?? await this.reclaimOrphanedExecution(manager, elementName);
     const requestedGoalId = params.goalId as string | undefined;
     if (!completedAgent?.goalIds?.length) {
       throw new Error(
@@ -339,6 +414,10 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
+    const executionKey = this.executionKey(manager, elementName);
+    if (!this.executingAgents.has(executionKey)) {
+      await this.reclaimOrphanedExecution(manager, elementName);
+    }
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,
       previousStepResult: params.previousStepResult as string | undefined,
@@ -362,7 +441,8 @@ export class AgentExecutionHandler {
   ): Promise<unknown> {
     const reason = (params.reason as string) || 'Aborted by user';
     const executionKey = this.executionKey(manager, elementName);
-    const executionPolicyAtStart = this.executingAgents.get(executionKey);
+    const executionPolicyAtStart = this.executingAgents.get(executionKey)
+      ?? await this.reclaimOrphanedExecution(manager, elementName);
     const generation = manager.observeExecutionGeneration(elementName);
     try {
       const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
@@ -611,6 +691,10 @@ export class AgentExecutionHandler {
       throw new Error('Handoff agent mismatch: the handoff block was not prepared for this agent');
     }
 
+    const executionKey = this.executionKey(manager, elementName);
+    if (!this.executingAgents.has(executionKey)) {
+      await this.reclaimOrphanedExecution(manager, elementName);
+    }
     const callerParams = (params.parameters as Record<string, unknown>) || {};
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,

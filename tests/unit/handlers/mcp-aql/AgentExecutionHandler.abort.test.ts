@@ -263,6 +263,99 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-b']);
   });
 
+  it('reclaims an orphaned durable goal after HTTP session cleanup', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-1', status: 'in_progress' }]),
+    );
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await handler.dispatch('complete', {
+      element_name: 'test-agent',
+      outcome: 'success',
+      summary: 'Completed after reconnect',
+    });
+
+    expect(mocks.completeAgentGoal).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-1',
+    }));
+    expect(executingAgents.has('session-b:test-agent')).toBe(false);
+  });
+
+  it('does not reclaim a durable goal still owned by a live session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-a', status: 'in_progress' }]),
+    );
+    const liveEntry = policy('test-agent', 'goal-a');
+    const executingAgents = new Map([
+      ['session-a:test-agent', liveEntry],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await expect(handler.dispatch('complete', {
+      element_name: 'test-agent',
+      goalId: 'goal-a',
+      outcome: 'success',
+      summary: 'Wrong live session',
+    })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
+
+    expect(mocks.completeAgentGoal).not.toHaveBeenCalled();
+    expect(executingAgents.get('session-a:test-agent')).toBe(liveEntry);
+  });
+
+  it('allows only one replacement session to claim the same orphaned goal', async () => {
+    const mocks = createManager();
+    const lookupResolvers: Array<(value: ReturnType<typeof stateWithGoals>) => void> = [];
+    mocks.getAgentStateForRecovery.mockImplementation(() => new Promise((resolve) => {
+      lookupResolvers.push(resolve);
+    }));
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const sessionB = createHandler(mocks.manager, executingAgents, undefined, 'session-b').handler;
+    const sessionC = createHandler(mocks.manager, executingAgents, undefined, 'session-c').handler;
+
+    const completionB = sessionB.dispatch('complete', {
+      element_name: 'test-agent',
+      outcome: 'success',
+      summary: 'Replacement B',
+    });
+    const completionC = sessionC.dispatch('complete', {
+      element_name: 'test-agent',
+      outcome: 'success',
+      summary: 'Replacement C',
+    });
+    while (lookupResolvers.length < 2) {
+      await Promise.resolve();
+    }
+    for (const resolve of lookupResolvers) {
+      resolve(stateWithGoals([{ id: 'goal-1', status: 'in_progress' }]));
+    }
+
+    const results = await Promise.allSettled([completionB, completionC]);
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+    expect(mocks.completeAgentGoal).toHaveBeenCalledTimes(1);
+  });
+
+  it('reclaims the original goal before continuing after reconnect', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-1', status: 'in_progress' }]),
+    );
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await handler.dispatch('continue', {
+      element_name: 'test-agent',
+      previousStepResult: 'Resume after reconnect',
+      parameters: {},
+    });
+
+    expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-1', 'goal-2']);
+  });
+
   it('preserves a newer same-session execution while completion is pending', async () => {
     const mocks = createManager();
     let markCompletionStarted: (() => void) | undefined;
@@ -491,5 +584,26 @@ describe('AgentExecutionHandler abort recovery', () => {
 
     expect(mocks.completeAgentGoalForRecovery).not.toHaveBeenCalled();
     expect(executingAgents.has('session-b:test-agent')).toBe(true);
+  });
+
+  it('aborts an orphaned durable goal after HTTP session cleanup', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery
+      .mockResolvedValueOnce(stateWithGoals([{ id: 'goal-1', status: 'in_progress' }]))
+      .mockResolvedValueOnce(stateWithGoals([{ id: 'goal-1', status: 'in_progress' }]))
+      .mockResolvedValueOnce(stateWithGoals([{ id: 'goal-1', status: 'failed' }]));
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    const result = await handler.dispatch('abort', {
+      element_name: 'test-agent',
+      reason: 'Reconnect cleanup',
+    });
+
+    expect(result).toEqual(expect.objectContaining({ abortedGoalIds: ['goal-1'] }));
+    expect(mocks.completeAgentGoalForRecovery).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-1',
+    }));
+    expect(executingAgents.has('session-b:test-agent')).toBe(false);
   });
 });
