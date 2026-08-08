@@ -5,7 +5,7 @@ FROM node:24-slim
 
 # Install dependencies
 # FIX (SonarCloud S7018): Sort packages alphabetically for maintainability
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     g++ \
     jq \
@@ -22,7 +22,7 @@ COPY tsconfig.json ./
 COPY packages/ ./packages/
 
 # Install all dependencies (including dev for testing, and local @dollhousemcp/safety)
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 # Copy source code
 COPY src/ ./src/
