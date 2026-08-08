@@ -155,6 +155,59 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(mocks.completeAgentGoal).not.toHaveBeenCalled();
   });
 
+  it('rejects completion when the calling session owns no goal', async () => {
+    const mocks = createManager();
+    const executingAgents = new Map([
+      ['session-b:test-agent', policy('test-agent', 'goal-b')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await expect(handler.dispatch('complete', {
+      element_name: 'test-agent',
+      goalId: 'goal-b',
+      outcome: 'success',
+      summary: 'Wrong session',
+    })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
+
+    expect(mocks.completeAgentGoal).not.toHaveBeenCalled();
+    expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-b']);
+  });
+
+  it('preserves a newer same-session execution while completion is pending', async () => {
+    const mocks = createManager();
+    let markCompletionStarted: (() => void) | undefined;
+    const completionStarted = new Promise<void>((resolve) => {
+      markCompletionStarted = resolve;
+    });
+    let resolveCompletion: ((value: { success: boolean; goal: { id: string } }) => void) | undefined;
+    mocks.completeAgentGoal.mockImplementation(() => new Promise((resolve) => {
+      markCompletionStarted?.();
+      resolveCompletion = resolve;
+    }));
+    const originalEntry = policy('test-agent', 'goal-1');
+    const executingAgents = new Map([
+      ['session-a:test-agent', originalEntry],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    const completion = handler.dispatch('complete', {
+      element_name: 'test-agent',
+      outcome: 'success',
+      summary: 'First execution complete',
+    });
+    await completionStarted;
+
+    const newerEntry = policy('test-agent', 'goal-2');
+    newerEntry.goalIds = ['goal-1', 'goal-2'];
+    executingAgents.set('session-a:test-agent', newerEntry);
+    resolveCompletion?.({ success: true, goal: { id: 'goal-1' } });
+
+    await completion;
+
+    expect(executingAgents.get('session-a:test-agent')).toBe(newerEntry);
+    expect(newerEntry.goalIds).toEqual(['goal-2']);
+  });
+
   it('rejects invalid runtime limits before creating an untracked goal', async () => {
     const mocks = createManager();
     const executingAgents = new Map<string, ExecutingAgentEntry>();

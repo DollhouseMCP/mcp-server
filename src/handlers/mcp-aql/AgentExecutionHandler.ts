@@ -278,16 +278,18 @@ export class AgentExecutionHandler {
     const executionKey = this.sessionKey(elementName);
     const completedAgent = this.executingAgents.get(executionKey);
     const requestedGoalId = params.goalId as string | undefined;
-    if (
-      requestedGoalId &&
-      completedAgent?.goalIds?.length &&
-      !completedAgent.goalIds.includes(requestedGoalId)
-    ) {
+    if (!completedAgent?.goalIds?.length) {
+      throw new Error(
+        `No active execution found for agent '${elementName}' in this session. ` +
+        'Nothing to complete.',
+      );
+    }
+    if (requestedGoalId && !completedAgent.goalIds.includes(requestedGoalId)) {
       throw new Error(
         `Goal '${requestedGoalId}' is not owned by this session's execution of '${elementName}'.`,
       );
     }
-    const ownedGoalId = requestedGoalId ?? completedAgent?.goalIds?.at(-1);
+    const ownedGoalId = requestedGoalId ?? completedAgent.goalIds[completedAgent.goalIds.length - 1];
     const completeResult = await manager.completeAgentGoal({
       agentName: elementName,
       outcome: params.outcome as StepOutcome,
@@ -296,10 +298,11 @@ export class AgentExecutionHandler {
     });
 
     this.recordResilienceCompletion(completedAgent, params.outcome === 'success', elementName);
-    if (completedAgent?.goalIds && ownedGoalId) {
-      completedAgent.goalIds = completedAgent.goalIds.filter(id => id !== ownedGoalId);
+    const currentAgent = this.executingAgents.get(executionKey);
+    if (currentAgent?.goalIds?.includes(ownedGoalId)) {
+      currentAgent.goalIds = currentAgent.goalIds.filter(id => id !== ownedGoalId);
     }
-    if (!completedAgent?.goalIds?.length) {
+    if (currentAgent && currentAgent.goalIds?.length === 0) {
       this.executingAgents.delete(executionKey);
     }
     return { _type: 'CompletionResult', ...completeResult };
