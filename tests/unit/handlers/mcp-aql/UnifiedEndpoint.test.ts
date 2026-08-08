@@ -52,6 +52,7 @@ describe('UnifiedEndpoint', () => {
         assertPersistable: jest.fn().mockResolvedValue(undefined),
       },
       agentManager: {
+        canonicalizeExecutionName: jest.fn((name: string) => name),
         executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
       },
       templateRenderer: {
