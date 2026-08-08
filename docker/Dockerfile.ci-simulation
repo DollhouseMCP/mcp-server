@@ -21,7 +21,7 @@ COPY tsconfig.json ./
 COPY packages/ ./packages/
 
 # Install dependencies (matching CI environment, includes local @dollhousemcp/safety)
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 # Copy source code
 COPY src/ ./src/
@@ -49,7 +49,7 @@ ENV CI=true \
 # --cpus="2.0" --memory="7g"
 
 # Default command runs calibration benchmarks
-CMD ["npx", "tsx", "tests/calibration/run-docker.ts"]
+CMD ["./node_modules/.bin/tsx", "tests/calibration/run-docker.ts"]
 
 # ============================================================================
 # UNCONSTRAINED STAGE: Full local resources for baseline comparison
@@ -61,19 +61,16 @@ ENV DOLLHOUSE_CALIBRATION_MODE=local \
 
 # No resource constraints - uses full host capabilities
 
-CMD ["npx", "tsx", "tests/calibration/run-local.ts"]
+CMD ["./node_modules/.bin/tsx", "tests/calibration/run-local.ts"]
 
 # ============================================================================
 # CALIBRATION COMPARISON STAGE: Runs both and compares
 # ============================================================================
 FROM ci-base AS calibration-runner
 
-# Install additional tools for comparison and reporting
-RUN npm install -g json
-
 ENV DOLLHOUSE_CALIBRATION_MODE=comparison \
     NODE_ENV=test
 
 # This stage expects to be run with scripts that coordinate
 # multiple containers and compare results
-CMD ["npx", "tsx", "tests/calibration/compare-results.ts"]
+CMD ["./node_modules/.bin/tsx", "tests/calibration/compare-results.ts"]

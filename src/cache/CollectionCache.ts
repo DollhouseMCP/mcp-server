@@ -6,6 +6,7 @@ import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { resolveCollectionCacheDir } from './cachePaths.js';
 
 export interface CollectionItem {
   name: string;
@@ -36,17 +37,13 @@ export class CollectionCache {
     // Initialize file operations service
     this.fileOperations = fileOperations;
 
-    // Use environment variable if set, otherwise fall back to parameter or default
-    const envCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
-    if (envCacheDir) {
-      this.cacheDir = envCacheDir;
-      logger.debug(`CollectionCache: Using environment cache directory: ${this.cacheDir}`);
-    } else {
-      const defaultBaseDir = baseDir || process.cwd();
-      this.cacheDir = path.join(defaultBaseDir, '.dollhousemcp', 'cache');
-      logger.debug(`CollectionCache: Using default cache directory: ${this.cacheDir}`);
-    }
+    this.cacheDir = resolveCollectionCacheDir(baseDir);
+    logger.debug(`CollectionCache: Using cache directory: ${this.cacheDir}`);
     this.cacheFile = path.join(this.cacheDir, 'collection-cache.json');
+  }
+
+  getCacheFilePath(): string {
+    return this.cacheFile;
   }
   
   /**
@@ -121,12 +118,6 @@ export class CollectionCache {
       });
 
       logger.debug(`Saved ${items.length} items to collection cache`);
-
-      // SECURITY FIX: Add audit logging for cache write operations
-      logger.debug('Security audit: Cache write operation completed successfully');
-
-      // Log operation completed successfully
-      logger.debug(`Cache file operation completed with ${items.length} items`);
     } catch (error) {
       logger.error(`Failed to save collection cache: ${error}`);
       // Don't throw - caching failures shouldn't break functionality

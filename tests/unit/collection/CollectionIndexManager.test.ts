@@ -10,6 +10,7 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import { describe, expect, test, beforeEach, afterEach, jest } from '@jest/globals';
 import { getMocks, resetAllMocks } from '../../__mocks__/fs/promises.js';
 import { createMockFileOperationsService } from '../../helpers/di-mocks.js';
+import { join } from 'node:path';
 
 // Mock the logger
 jest.mock('../../../src/utils/logger.js', () => ({
@@ -160,7 +161,60 @@ describe('CollectionIndexManager - Essential Tests', () => {
     test('should use custom cache directory', () => {
       container.register('CustomCollectionIndexManager', () => new CollectionIndexManager({ cacheDir: '/custom', fileOperations: mockFileOperationsService }));
       const customManager: InstanceType<typeof CollectionIndexManager> = container.resolve('CustomCollectionIndexManager');
-      expect(customManager).toBeInstanceOf(CollectionIndexManager);
+      const cacheFile = (customManager as unknown as { CACHE_FILE: string }).CACHE_FILE;
+      expect(cacheFile).toBe(join('/custom', 'collection-index.json'));
+    });
+
+    test('should use the shared exact cache-directory override', () => {
+      const originalCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
+      const originalHomeDir = process.env.DOLLHOUSE_HOME_DIR;
+      process.env.DOLLHOUSE_CACHE_DIR = '/isolated/cache';
+      process.env.DOLLHOUSE_HOME_DIR = '/ignored/home';
+
+      try {
+        const isolatedManager = new CollectionIndexManager({ fileOperations: mockFileOperationsService });
+        const cacheFile = (isolatedManager as unknown as { CACHE_FILE: string }).CACHE_FILE;
+        expect(cacheFile).toBe(join('/isolated/cache', 'collection-index.json'));
+      } finally {
+        if (originalCacheDir === undefined) delete process.env.DOLLHOUSE_CACHE_DIR;
+        else process.env.DOLLHOUSE_CACHE_DIR = originalCacheDir;
+        if (originalHomeDir === undefined) delete process.env.DOLLHOUSE_HOME_DIR;
+        else process.env.DOLLHOUSE_HOME_DIR = originalHomeDir;
+      }
+    });
+
+    test('should use the shared Dollhouse home override', () => {
+      const originalCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
+      const originalHomeDir = process.env.DOLLHOUSE_HOME_DIR;
+      delete process.env.DOLLHOUSE_CACHE_DIR;
+      process.env.DOLLHOUSE_HOME_DIR = '/isolated/home';
+
+      try {
+        const isolatedManager = new CollectionIndexManager({ fileOperations: mockFileOperationsService });
+        const cacheFile = (isolatedManager as unknown as { CACHE_FILE: string }).CACHE_FILE;
+        expect(cacheFile).toBe(join('/isolated/home', '.dollhouse', 'cache', 'collection-index.json'));
+      } finally {
+        if (originalCacheDir === undefined) delete process.env.DOLLHOUSE_CACHE_DIR;
+        else process.env.DOLLHOUSE_CACHE_DIR = originalCacheDir;
+        if (originalHomeDir === undefined) delete process.env.DOLLHOUSE_HOME_DIR;
+        else process.env.DOLLHOUSE_HOME_DIR = originalHomeDir;
+      }
+    });
+
+    test('should apply the shared cache override through the production container', async () => {
+      const originalCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
+      process.env.DOLLHOUSE_CACHE_DIR = '/container/cache';
+      const productionContainer = new DollhouseContainer();
+
+      try {
+        const containerManager = productionContainer.resolve<CollectionIndexManager>('CollectionIndexManager');
+        const cacheFile = (containerManager as unknown as { CACHE_FILE: string }).CACHE_FILE;
+        expect(cacheFile).toBe(join('/container/cache', 'collection-index.json'));
+      } finally {
+        await productionContainer.dispose();
+        if (originalCacheDir === undefined) delete process.env.DOLLHOUSE_CACHE_DIR;
+        else process.env.DOLLHOUSE_CACHE_DIR = originalCacheDir;
+      }
     });
   });
 

@@ -658,7 +658,7 @@ export class DollhouseContainer {
     ));
     this.register('CollectionIndexCache', () => new CollectionIndexCache(
         this.resolve('GitHubClient'),
-        process.cwd(),
+        undefined,
         this.resolve('PerformanceMonitor'),
         this.resolve('FileOperationsService')
     ));

@@ -65,7 +65,7 @@ import { generateDisplayCode } from '@dollhousemcp/safety';
 import { randomUUID } from 'node:crypto';
 import type { ElementCRUDHandler } from '../ElementCRUDHandler.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
-import type { AgentManager } from '../../elements/agents/AgentManager.js';
+import { normalizeAgentExecutionIdentity, type AgentManager } from '../../elements/agents/AgentManager.js';
 import type { AgentMetadataV2, AgentResiliencePolicy, AgentNotification } from '../../elements/agents/types.js';
 import { evaluateResiliencePolicy, circuitBreaker, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
 import { resilienceMetrics } from '../../elements/agents/resilienceMetrics.js';
@@ -97,6 +97,7 @@ import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { prepareHandoffState, parseHandoffBlock, generateHandoffBlock } from '../../elements/agents/handoff.js';
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
 import type { AutonomyMetricsSnapshot } from '../../elements/agents/autonomyEvaluator.js';
+import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 
 // ============================================================================
 // Parameter Validation Utilities (Issue #323)
@@ -649,7 +650,7 @@ export class MCPAQLHandler {
    * Issue #449
    */
   private readonly executingAgents = new Map<string, {
-    /** Agent element name (matches the Map key) */
+    /** Agent element name as supplied when execution began (Map key is canonical) */
     name: string;
     /** Metadata containing the resolved gatekeeper policy */
     metadata: Record<string, unknown>;
@@ -1024,7 +1025,10 @@ export class MCPAQLHandler {
           } else {
             // Hard deny — operation is blocked by policy, no confirmation can help
             this.recordGatekeeperBlockForAgents(operation, elementType, decision.reason ?? 'Operation blocked by policy', decision.permissionLevel);
-            throw new Error(`[Gatekeeper] ${decision.reason}`);
+            const suggestion = decision.suggestion
+              ? ` Suggestion: ${decision.suggestion}`
+              : '';
+            throw new Error(`[Gatekeeper] ${decision.reason}${suggestion}`);
           }
         }
 
@@ -1979,7 +1983,14 @@ export class MCPAQLHandler {
     // Issue #656: Debounce saves to prevent FD exhaustion from rapid addEntry calls.
     // The entry is already in memory — disk write is deferred and coalesced.
     this.debouncedMemorySave(memoryName, targetMemory, manager);
-    return entryResult;
+    // Entry prose begins as UNTRUSTED and is validated asynchronously. Return
+    // only server-generated receipt fields so the mutation response cannot
+    // bypass the sandbox used when memory content is rendered later.
+    return {
+      id: entryResult.id,
+      timestamp: entryResult.timestamp.toISOString(),
+      trustLevel: entryResult.trustLevel,
+    };
   }
 
   /**
@@ -3818,12 +3829,14 @@ export class MCPAQLHandler {
     // Issue #323: Validate element_name parameter (was incorrectly using 'name')
     // All execute operations require element_name to identify the target
     const elementName = validateExecutionElementName(method, params);
+    const executionKey = normalizeAgentExecutionIdentity(elementName);
 
     // Issue #110: Programmatic enforcement for DANGER_ZONE tier
     // Issue #402: Use DI-injected enforcer instead of singleton
-    // Check if the agent is blocked due to danger zone trigger
-    // Only allow 'getState' operation for blocked agents (read-only, needed for diagnostics)
-    if (method !== 'getState' && this.handlers.dangerZoneEnforcer) {
+    // Check if the agent is blocked due to danger zone trigger. State reads and
+    // abort remain available for diagnostics and safe execution shutdown. Abort
+    // deliberately preserves the independent DangerZone block below.
+    if (method !== 'getState' && method !== 'abort' && this.handlers.dangerZoneEnforcer) {
       const blockCheck = this.handlers.dangerZoneEnforcer.check(elementName);
       if (blockCheck.blocked) {
         logger.warn(
@@ -3895,7 +3908,7 @@ export class MCPAQLHandler {
 
             // Always track if there's a gatekeeper policy, runtime override, or resilience policy
             if (gatekeeperPolicy || runtimeMaxSteps !== undefined || resiliencePolicy) {
-              this.executingAgents.set(elementName, {
+              this.executingAgents.set(executionKey, {
                 name: elementName,
                 metadata: {
                   ...(gatekeeperPolicy ? { gatekeeper: gatekeeperPolicy } : {}),
@@ -3911,7 +3924,7 @@ export class MCPAQLHandler {
             }
           } else if (runtimeMaxSteps !== undefined) {
             // No agent element to read, but we still need to store the override
-            this.executingAgents.set(elementName, {
+            this.executingAgents.set(executionKey, {
               name: elementName,
               metadata: { maxAutonomousSteps: runtimeMaxSteps },
               startedAt: Date.now(),
@@ -3962,7 +3975,7 @@ export class MCPAQLHandler {
         }
 
         // Issue #447: Apply runtime maxAutonomousSteps override if stored for this agent
-        const executingAgent = this.executingAgents.get(elementName);
+        const executingAgent = this.executingAgents.get(executionKey);
         const maxStepsOverride = executingAgent?.metadata?.maxAutonomousSteps as number | undefined;
 
         const updateResult = await manager.recordAgentStep({
@@ -3979,6 +3992,7 @@ export class MCPAQLHandler {
         // Issue #526: Evaluate resilience policy when autonomy says pause
         const resilienceResult = this.evaluateResilience(
           elementName,
+          executionKey,
           updateResult,
           params.outcome as string
         );
@@ -3987,7 +4001,7 @@ export class MCPAQLHandler {
         const finalResult = resilienceResult ?? updateResult;
         const autonomy = finalResult.autonomy as Record<string, unknown> | undefined;
         if (autonomy) {
-          const notifications = this.collectNotifications(elementName, autonomy);
+          const notifications = this.collectNotifications(executionKey, autonomy);
           if (notifications.length > 0) {
             autonomy.notifications = notifications;
           }
@@ -4007,7 +4021,7 @@ export class MCPAQLHandler {
         });
 
         // Issue #526: Track resilience outcome and reset circuit breaker on success
-        const completedAgent = this.executingAgents.get(elementName);
+        const completedAgent = this.executingAgents.get(executionKey);
         if (completedAgent?.resiliencePolicy && (completedAgent.continuationCount > 0 || completedAgent.retryCount > 0)) {
           const isSuccess = params.outcome === 'success';
           resilienceMetrics.recordCompletionAfterResilience(isSuccess);
@@ -4017,7 +4031,7 @@ export class MCPAQLHandler {
         }
 
         // Issue #449: Remove agent from executing set so its policies stop applying
-        this.executingAgents.delete(elementName);
+        this.executingAgents.delete(executionKey);
 
         // Issue #125: Return structured JSON with type discriminator
         return { _type: 'CompletionResult', ...completeResult };
@@ -4039,70 +4053,132 @@ export class MCPAQLHandler {
         const reason = (params.reason as string) || 'Aborted by user';
 
         // Find the active goal for this agent
-        const activeGoalIds = await this.getActiveGoalIds(manager, elementName);
-        if (activeGoalIds.length === 0) {
-          throw new Error(
-            `No active execution found for agent '${elementName}'. ` +
-            `Nothing to abort.`
-          );
-        }
-
-        // Mark all active goals as aborted
-        for (const goalId of activeGoalIds) {
-          this.abortedGoals.add(goalId);
-        }
-
-        // Complete the agent goal with 'failure' outcome to persist the aborted state
+        const executionPolicyAtLookupStart = this.executingAgents.get(executionKey);
+        const generationObservation = manager.observeExecutionGeneration(elementName);
         try {
-          await manager.completeAgentGoal({
-            agentName: elementName,
-            outcome: 'failure',
-            summary: `Execution aborted: ${reason}`,
-          });
-        } catch {
-          // Non-fatal: goal may already be completed or agent state may be inconsistent
-          logger.warn('Failed to mark aborted agent goal as failed', { agentName: elementName });
-        }
-
-        // Issue #526: Track resilience outcome (abort = failure after resilience)
-        const abortedAgent = this.executingAgents.get(elementName);
-        if (abortedAgent?.resiliencePolicy && (abortedAgent.continuationCount > 0 || abortedAgent.retryCount > 0)) {
-          resilienceMetrics.recordCompletionAfterResilience(false);
-        }
-
-        // Clean up executingAgents Map (stop Gatekeeper policy enforcement)
-        this.executingAgents.delete(elementName);
-
-        // Clean up DangerZoneEnforcer blocks for this agent
-        if (this.handlers.dangerZoneEnforcer) {
-          try {
-            this.handlers.dangerZoneEnforcer.unblock(elementName);
-          } catch {
-            // Non-fatal: agent may not have been blocked
+          const activeGoalIds = await this.getActiveGoalIds(manager, elementName, false);
+          if (activeGoalIds.length === 0) {
+            // Issue #2427: the durable goal may already be gone while the in-memory
+            // execution policy remains. Explicit abort is safer and narrower than
+            // clearing every active element through release_deadlock.
+            // Re-read durable state immediately before cleanup. A concurrent
+            // execute_agent can persist a new goal while policy tracking fails,
+            // leaving the old map object unchanged and defeating identity checks
+            // by themselves.
+            const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, false);
+            const currentExecutionPolicy = this.executingAgents.get(executionKey);
+            if (
+              revalidatedGoalIds.length > 0 ||
+              manager.hasExecutionGenerationChanged(elementName, generationObservation.token) ||
+              (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart)
+            ) {
+              throw new Error(
+                `Execution state changed while recovering agent '${elementName}'. ` +
+                `The newer execution policy was preserved; retry abort_execution to abort it.`
+              );
+            }
+            if (executionPolicyAtLookupStart && currentExecutionPolicy === executionPolicyAtLookupStart) {
+              this.executingAgents.delete(executionKey);
+              SecurityMonitor.logSecurityEvent({
+                type: 'AGENT_POLICY_RECOVERED',
+                severity: 'MEDIUM',
+                source: 'MCPAQLHandler.dispatchExecute.abort',
+                details: `Recovered stale execution policy for agent: ${elementName}`,
+                additionalData: { agentName: elementName, reason: 'stale_execution_policy' },
+              });
+              return {
+                _type: 'AbortResult',
+                success: true,
+                agentName: elementName,
+                abortedGoalIds: [],
+                recoveredStalePolicy: true,
+                reason,
+                message: `Removed stale execution policy for agent '${elementName}'. No active goal remained.`,
+              };
+            }
+            throw new Error(
+              `No active execution found for agent '${elementName}'. ` +
+              `Nothing to abort.`
+            );
           }
-        }
 
-        SecurityMonitor.logSecurityEvent({
-          type: 'AGENT_EXECUTED',
-          severity: 'MEDIUM',
-          source: 'MCPAQLHandler.dispatchExecute.abort',
-          details: `Agent execution aborted: ${elementName} — ${reason}`,
-          additionalData: {
+          // The lookup above is asynchronous. A restart can complete while it is
+          // in flight, causing the returned snapshot to include the new goal.
+          // Detect that before mutating any goal from the snapshot.
+          const executionPolicyBeforeCompletion = this.executingAgents.get(executionKey);
+          if (
+            manager.hasExecutionGenerationChanged(elementName, generationObservation.token) ||
+            (executionPolicyBeforeCompletion && executionPolicyBeforeCompletion !== executionPolicyAtLookupStart)
+          ) {
+            throw new Error(
+              `Execution state changed while aborting agent '${elementName}'. ` +
+              `The newer execution policy was preserved; retry abort_execution to abort it.`
+            );
+          }
+
+          // Complete each exact goal from the strict snapshot before dropping policy.
+          // Any storage or version conflict fails closed and preserves the sandbox.
+          for (const goalId of activeGoalIds) {
+            await manager.completeAgentGoalForRecovery({
+              agentName: elementName,
+              goalId,
+              outcome: 'failure',
+              summary: `Execution aborted: ${reason}`,
+            });
+            this.abortedGoals.add(goalId);
+          }
+
+          // A new execution may begin after the active-goal snapshot or after the
+          // old goals are completed. Preserve its policy unless durable state,
+          // generation, and map identity still describe the original execution.
+          const remainingActiveGoalIds = await this.getActiveGoalIds(manager, elementName, false);
+          const currentExecutionPolicy = this.executingAgents.get(executionKey);
+          if (
+            remainingActiveGoalIds.length > 0 ||
+            manager.hasExecutionGenerationChanged(elementName, generationObservation.token) ||
+            (currentExecutionPolicy && currentExecutionPolicy !== executionPolicyAtLookupStart)
+          ) {
+            throw new Error(
+              `Execution state changed while aborting agent '${elementName}'. ` +
+              `The newer execution policy was preserved; retry abort_execution to abort it.`
+            );
+          }
+
+          // Issue #526: Track resilience outcome (abort = failure after resilience)
+          const abortedAgent = executionPolicyAtLookupStart;
+          if (abortedAgent?.resiliencePolicy && (abortedAgent.continuationCount > 0 || abortedAgent.retryCount > 0)) {
+            resilienceMetrics.recordCompletionAfterResilience(false);
+          }
+
+          // Delete only the policy that was present when this abort began.
+          if (currentExecutionPolicy === executionPolicyAtLookupStart) {
+            this.executingAgents.delete(executionKey);
+          }
+
+          SecurityMonitor.logSecurityEvent({
+            type: 'AGENT_EXECUTED',
+            severity: 'MEDIUM',
+            source: 'MCPAQLHandler.dispatchExecute.abort',
+            details: `Agent execution aborted: ${elementName} — ${reason}`,
+            additionalData: {
+              agentName: elementName,
+              abortedGoalIds: activeGoalIds,
+              reason,
+            },
+          });
+
+          // Issue #125: Return structured JSON with type discriminator
+          return {
+            _type: 'AbortResult',
+            success: true,
             agentName: elementName,
             abortedGoalIds: activeGoalIds,
             reason,
-          },
-        });
-
-        // Issue #125: Return structured JSON with type discriminator
-        return {
-          _type: 'AbortResult',
-          success: true,
-          agentName: elementName,
-          abortedGoalIds: activeGoalIds,
-          reason,
-          message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
-        };
+            message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
+          };
+        } finally {
+          generationObservation.release();
+        }
       }
 
       case 'getGatheredData': {
@@ -4288,11 +4364,11 @@ export class MCPAQLHandler {
    * @private
    */
   private collectNotifications(
-    agentName: string,
+    executionKey: string,
     autonomy: Record<string, unknown>
   ): AgentNotification[] {
     const notifications: AgentNotification[] = [];
-    const executingAgent = this.executingAgents.get(agentName);
+    const executingAgent = this.executingAgents.get(executionKey);
 
     // Source 1: Unreported gatekeeper blocks
     if (executingAgent?.recentBlocks) {
@@ -4368,6 +4444,7 @@ export class MCPAQLHandler {
    */
   private evaluateResilience(
     agentName: string,
+    executionKey: string,
     updateResult: Record<string, unknown>,
     stepOutcome: string
   ): Record<string, unknown> | null {
@@ -4376,7 +4453,7 @@ export class MCPAQLHandler {
     if (!autonomy || autonomy.continue === true) return null;
 
     // Look up the executing agent's resilience tracking state
-    const executingAgent = this.executingAgents.get(agentName);
+    const executingAgent = this.executingAgents.get(executionKey);
     if (!executingAgent?.resiliencePolicy) return null;
 
     // Determine what triggered the pause
@@ -4511,16 +4588,27 @@ export class MCPAQLHandler {
    */
   private async getActiveGoalIds(
     manager: AgentManager,
-    agentName: string
+    agentName: string,
+    suppressLookupErrors = true,
   ): Promise<string[]> {
     try {
-      const stateResult = await manager.getAgentState({ agentName });
+      const stateResult = suppressLookupErrors
+        ? await manager.getAgentState({ agentName })
+        : await manager.getAgentStateForRecovery({ agentName });
       if (stateResult?.state?.goals) {
         return stateResult.state.goals
           .filter((g: { status: string }) => g.status === 'in_progress')
           .map((g: { id: string }) => g.id);
       }
-    } catch {
+    } catch (error) {
+      // A deleted agent is definitive stale state. Other lookup failures may be
+      // transient and must still fail closed when suppression is disabled.
+      if (error instanceof ElementNotFoundError) {
+        return [];
+      }
+      if (!suppressLookupErrors) {
+        throw error;
+      }
       // Agent may not have state yet
     }
     return [];

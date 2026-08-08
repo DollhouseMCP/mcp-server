@@ -46,6 +46,8 @@ export interface ContentValidatorOptions {
   contentContext?: 'persona' | 'skill' | 'template' | 'agent' | 'memory';
 }
 
+export const MALICIOUS_YAML_CONTENT_PATTERN = 'Malicious YAML content pattern';
+
 export class ContentValidator {
   /**
    * SHA-256 hashes of bundled data/ elements verified against HASHES.json at seed time.
@@ -559,6 +561,30 @@ export class ContentValidator {
   }
 
   /**
+   * Apply the prompt-injection scanner and the complete YAML content-pattern
+   * scanner to prose that may later cross a trusted output boundary.
+   */
+  static validateAndSanitizeYamlAware(
+    content: string,
+    options: ContentValidatorOptions = {},
+  ): ContentValidationResult {
+    const validation = this.validateAndSanitize(content, options);
+    const maxLength = options.maxLength ?? SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+    if (this.validateYamlContent(content, maxLength)) {
+      return validation;
+    }
+
+    return {
+      isValid: false,
+      sanitizedContent: '[CONTENT_BLOCKED]',
+      detectedPatterns: [
+        ...new Set([...(validation.detectedPatterns ?? []), MALICIOUS_YAML_CONTENT_PATTERN]),
+      ],
+      severity: 'critical',
+    };
+  }
+
+  /**
    * Validates YAML frontmatter for malicious content
    * SECURITY FIX #364: Added YAML bomb detection to prevent denial of service
    *
@@ -571,7 +597,11 @@ export class ContentValidator {
    *   MALICIOUS_YAML_PATTERNS scan below is bounded by MAX_CONTENT_LENGTH, so
    *   larger content is rejected here rather than scanned or thrown on.
    */
-  static validateYamlContent(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
+  static validateYamlContent(
+    yamlContent: string,
+    maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH,
+    options: { detectContentPatterns?: boolean } = {},
+  ): boolean {
     const effectiveMaxLength = Math.min(maxLength, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
     // Length validation before pattern matching
     if (yamlContent.length > effectiveMaxLength) {
@@ -609,7 +639,8 @@ export class ContentValidator {
       return false;
     }
 
-    return !this.hasMaliciousYamlPattern(unicodeResult.normalizedContent);
+    return options.detectContentPatterns === false ||
+      !this.hasMaliciousYamlPattern(unicodeResult.normalizedContent);
   }
 
   /**

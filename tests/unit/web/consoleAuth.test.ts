@@ -13,6 +13,7 @@ import { join } from 'node:path';
 
 /** Load consoleAuth.js source once for all tests. */
 let consoleAuthSource: string;
+type EventSourceListener = (event: Event) => void;
 
 async function loadSource(): Promise<string> {
   if (!consoleAuthSource) {
@@ -60,9 +61,9 @@ async function createBrowserEnv(token: string = ''): Promise<{
       static readonly CLOSED = 2;
       url: string;
       readyState = 1;
-      private readonly listeners: Record<string, Function[]> = {};
+      private readonly listeners: Record<string, EventSourceListener[]> = {};
       constructor(url: string) { this.url = url; }
-      addEventListener(type: string, fn: Function) {
+      addEventListener(type: string, fn: EventSourceListener) {
         if (!this.listeners[type]) { this.listeners[type] = []; }
         this.listeners[type].push(fn);
       }

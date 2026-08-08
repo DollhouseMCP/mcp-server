@@ -860,7 +860,7 @@ describe('IntrospectionResolver', () => {
         expect(paramNames).toContain('tags');
         expect(paramNames).toContain('metadata');
 
-        expect(result.operation!.returns.name).toBe('MemoryEntry');
+        expect(result.operation!.returns.name).toBe('MemoryEntryReceipt');
         expect(result.operation!.examples.length).toBeGreaterThanOrEqual(3);
       });
     });

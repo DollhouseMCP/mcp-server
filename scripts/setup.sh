@@ -19,7 +19,7 @@ echo
 
 # Install dependencies and build
 echo "📦 Installing dependencies..."
-npm install --silent
+npm ci --ignore-scripts --silent
 
 echo "🔨 Building TypeScript..."
 npm run build

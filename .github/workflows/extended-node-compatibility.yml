@@ -83,7 +83,7 @@ jobs:
           # This ensures we always rebuild when source files change
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build project
         run: npm run build

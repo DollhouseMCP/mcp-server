@@ -318,13 +318,9 @@ describe('console token CLI operations', () => {
       const store = new ConsoleTokenStore(tokenFilePath);
       await store.ensureInitialized('Kermit');
 
-      try {
-        await store.rotatePrimary('123456');
-        fail('Expected TotpError');
-      } catch (err) {
-        expect(err).toBeInstanceOf(TotpError);
-        expect((err as TotpError).code).toBe('TOTP_REQUIRED');
-      }
+      const operation = store.rotatePrimary('123456');
+      await expect(operation).rejects.toBeInstanceOf(TotpError);
+      await expect(operation).rejects.toMatchObject({ code: 'TOTP_REQUIRED' });
     });
 
     it('INVALID_TOTP_CODE has the correct error code', async () => {
@@ -332,13 +328,9 @@ describe('console token CLI operations', () => {
       await store.ensureInitialized('Kermit');
       await enrollTotp(store);
 
-      try {
-        await store.rotatePrimary('000000');
-        fail('Expected TotpError');
-      } catch (err) {
-        expect(err).toBeInstanceOf(TotpError);
-        expect((err as TotpError).code).toBe('INVALID_TOTP_CODE');
-      }
+      const operation = store.rotatePrimary('000000');
+      await expect(operation).rejects.toBeInstanceOf(TotpError);
+      await expect(operation).rejects.toMatchObject({ code: 'INVALID_TOTP_CODE' });
     });
   });
 });

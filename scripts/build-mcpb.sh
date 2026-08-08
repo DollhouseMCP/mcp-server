@@ -4,7 +4,7 @@
 # Usage: ./scripts/build-mcpb.sh
 #
 # Prerequisites:
-#   npm install -g @anthropic-ai/mcpb
+#   npm install -g --ignore-scripts @anthropic-ai/mcpb@2.1.2
 #
 # Output: dollhousemcp-<version>.mcpb in the project root
 #
@@ -17,8 +17,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 STAGING_DIR="$PROJECT_DIR/.mcpb-staging"
-VERSION=$(node -e "console.log(require('$PROJECT_DIR/package.json').version)")
-MANIFEST_VERSION=$(node -e "console.log(require('$PROJECT_DIR/manifest.json').version)")
+VERSION=$(node -p "require(process.argv[1]).version" "$PROJECT_DIR/package.json")
+MANIFEST_VERSION=$(node -p "require(process.argv[1]).version" "$PROJECT_DIR/manifest.json")
 
 cd "$PROJECT_DIR"
 
@@ -28,9 +28,13 @@ if [[ "$VERSION" != "$MANIFEST_VERSION" ]]; then
     exit 1
 fi
 
-# Verify mcpb is installed
-if ! command -v mcpb > /dev/null 2>&1 && ! npx --yes @anthropic-ai/mcpb --version > /dev/null 2>&1; then
-    echo "Error: mcpb CLI not found. Install with: npm install -g @anthropic-ai/mcpb" >&2
+# Use only the lockfile-pinned local CLI or an explicitly installed global CLI.
+if [[ -x "$PROJECT_DIR/node_modules/.bin/mcpb" ]]; then
+    MCPB_BIN="$PROJECT_DIR/node_modules/.bin/mcpb"
+elif command -v mcpb > /dev/null 2>&1; then
+    MCPB_BIN="$(command -v mcpb)"
+else
+    echo "Error: mcpb CLI not found. Run npm ci or install @anthropic-ai/mcpb explicitly." >&2
     exit 1
 fi
 
@@ -60,7 +64,7 @@ cp "$PROJECT_DIR/docs/assets/dollhouse-logo.png" "$STAGING_DIR/docs/assets/"
 # Install production-only dependencies
 echo "Installing production dependencies..."
 cd "$STAGING_DIR"
-npm ci --omit=dev 2>/dev/null || npm install --omit=dev
+npm ci --omit=dev --ignore-scripts
 npm cache clean --force 2>/dev/null || true
 
 # Remove test files from dist
@@ -68,7 +72,7 @@ rm -rf dist/test dist/__tests__ dist/**/*.test.js dist/**/*.spec.js 2>/dev/null 
 
 # Pack the bundle
 echo "Packing .mcpb bundle..."
-npx @anthropic-ai/mcpb pack "$STAGING_DIR" "$PROJECT_DIR/dollhousemcp-${VERSION}.mcpb"
+"$MCPB_BIN" pack "$STAGING_DIR" "$PROJECT_DIR/dollhousemcp-${VERSION}.mcpb"
 
 # Clean up
 rm -rf "$STAGING_DIR"

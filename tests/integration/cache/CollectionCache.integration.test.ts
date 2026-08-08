@@ -63,7 +63,7 @@ describe('CollectionCache Integration Tests', () => {
   beforeEach(async () => {
     // Create a real temporary directory for each test
     testBaseDir = await fs.mkdtemp(path.join(os.tmpdir(), 'test-collection-cache-'));
-    testCacheDir = path.join(testBaseDir, '.dollhousemcp', 'cache');
+    testCacheDir = path.join(testBaseDir, '.dollhouse', 'cache');
     testCacheFile = path.join(testCacheDir, 'collection-cache.json');
 
     // Create real file operations service for integration tests
@@ -190,6 +190,36 @@ describe('CollectionCache Integration Tests', () => {
   });
 
   describe('saveCache', () => {
+    it('should write the default cache under Dollhouse home without touching the CWD', async () => {
+      const originalCwd = process.cwd();
+      const originalHomeDir = process.env.DOLLHOUSE_HOME_DIR;
+      const scratchCwd = path.join(testBaseDir, 'project');
+      const testHome = path.join(testBaseDir, 'home');
+      const expectedCacheFile = path.join(testHome, '.dollhouse', 'cache', 'collection-cache.json');
+
+      await fs.mkdir(scratchCwd, { recursive: true });
+      process.chdir(scratchCwd);
+      process.env.DOLLHOUSE_HOME_DIR = testHome;
+
+      try {
+        const fileOperations = new FileOperationsService(new FileLockManager());
+        const defaultCache = new CollectionCache(fileOperations);
+        await defaultCache.saveCache(mockItems, 'test-etag');
+
+        await expect(fs.access(expectedCacheFile)).resolves.toBeUndefined();
+        await expect(fs.access(path.join(scratchCwd, '.dollhousemcp'))).rejects.toMatchObject({
+          code: 'ENOENT',
+        });
+      } finally {
+        process.chdir(originalCwd);
+        if (originalHomeDir === undefined) {
+          delete process.env.DOLLHOUSE_HOME_DIR;
+        } else {
+          process.env.DOLLHOUSE_HOME_DIR = originalHomeDir;
+        }
+      }
+    });
+
     it('should save cache successfully', async () => {
       await cache.saveCache(mockItems, 'test-etag');
 
