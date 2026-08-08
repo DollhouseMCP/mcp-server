@@ -123,7 +123,7 @@ export class FileAgentStateStore implements IAgentStateStore {
 
         throw new Error(
           `State version conflict: current version is ${existingVersion}, ` +
-          `but expected version ${expectedVersion}. ` +
+          `but attempted to save version ${expectedVersion}. ` +
           `State may have been modified concurrently.`,
         );
       }
