@@ -9,6 +9,7 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import { PerformanceMonitor } from '../../../src/utils/PerformanceMonitor.js';
 import { createTestFileOperationsService } from '../../helpers/di-mocks.js';
 import * as os from 'os';
+import * as path from 'node:path';
 
 describe('CollectionIndexCache', () => {
   let indexCache: InstanceType<typeof CollectionIndexCache>;
@@ -56,6 +57,20 @@ describe('CollectionIndexCache', () => {
       expect(stats.hasCache).toBe(false);
       expect(stats.elements).toBe(0);
       expect(stats.isValid).toBe(false);
+    });
+  });
+
+  describe('cache path resolution', () => {
+    it('uses an exact canonical cache directory without nesting it again', () => {
+      const canonicalCache = new CollectionIndexCache({
+        githubClient: mockGithubClient,
+        cacheDir: '/canonical/cache',
+        performanceMonitor: container.resolve('PerformanceMonitor'),
+        fileOperations: container.resolve('FileOperationsService'),
+      });
+
+      const cacheFile = (canonicalCache as unknown as { cacheFile: string }).cacheFile;
+      expect(cacheFile).toBe(path.join('/canonical/cache', 'collection-index-cache.json'));
     });
   });
 

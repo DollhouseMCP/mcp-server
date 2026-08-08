@@ -63,6 +63,9 @@ export class CollectionServiceRegistrar {
     container.register('CollectionIndexManager', () => new CollectionIndexManager({
       fileOperations: container.resolve('FileOperationsService'),
       indexUrl: env.DOLLHOUSE_COLLECTION_URL,
+      cacheDir: container.hasRegistration('PathService')
+        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('cache')
+        : undefined,
       cache: container.hasRegistration('SharedCacheStore')
         ? container.resolve<import('../../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore>('SharedCacheStore')
         : undefined,
@@ -83,12 +86,12 @@ export class CollectionServiceRegistrar {
       container.resolve('CollectionIndexCache')
     ));
 
-    container.register('CollectionCache', () => new CollectionCache(
-      container.resolve('FileOperationsService'),
-      container.hasRegistration('PathService')
+    container.register('CollectionCache', () => new CollectionCache({
+      fileOperations: container.resolve('FileOperationsService'),
+      cacheDir: container.hasRegistration('PathService')
         ? container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('cache')
         : undefined,
-    ));
+    }));
 
     container.register('PersonaDetails', () => new PersonaDetails(container.resolve('GitHubClient')));
 

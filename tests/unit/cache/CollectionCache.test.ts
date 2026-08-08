@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from '@jest/globals';
 import * as path from 'path';
 import * as os from 'os';
 import { CollectionCache } from '../../../src/cache/CollectionCache.js';
+import { createMockFileOperationsService } from '../../helpers/di-mocks.js';
 
 /**
  * Unit tests for CollectionCache - pure logic tests
@@ -22,18 +23,31 @@ describe('CollectionCache', () => {
   beforeEach(() => {
     // Setup test directory path (not created on filesystem)
     testBaseDir = path.join(os.tmpdir(), 'test-collection-cache-' + Date.now());
-    cache = new CollectionCache(testBaseDir);
+    cache = new CollectionCache(createMockFileOperationsService(), testBaseDir);
   });
 
   describe('constructor', () => {
     it('should initialize with default base directory', () => {
-      const defaultCache = new CollectionCache();
+      const defaultCache = new CollectionCache(createMockFileOperationsService());
       expect(defaultCache).toBeInstanceOf(CollectionCache);
     });
 
     it('should initialize with custom base directory', () => {
-      const customCache = new CollectionCache('/custom/path');
-      expect(customCache).toBeInstanceOf(CollectionCache);
+      const customCache = new CollectionCache(createMockFileOperationsService(), '/custom/path');
+      expect(customCache.getCacheFilePath()).toBe(
+        path.join('/custom/path', '.dollhousemcp', 'cache', 'collection-cache.json')
+      );
+    });
+
+    it('should use an exact canonical cache directory without nesting it again', () => {
+      const canonicalCache = new CollectionCache({
+        fileOperations: createMockFileOperationsService(),
+        cacheDir: '/canonical/cache',
+      });
+
+      expect(canonicalCache.getCacheFilePath()).toBe(
+        path.join('/canonical/cache', 'collection-cache.json')
+      );
     });
   });
 

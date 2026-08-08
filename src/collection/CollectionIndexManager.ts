@@ -11,10 +11,10 @@
  */
 
 import * as path from 'path';
-import * as os from 'os';
 import { CollectionIndex } from '../types/collection';
 import { logger } from '../utils/logger.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
+import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
 
 export interface CollectionIndexCacheEntry {
   data: CollectionIndex;
@@ -106,9 +106,9 @@ export class CollectionIndexManager {
     // Phase 4.5: store-backed cache when injected; otherwise legacy file path.
     this.sharedCache = config.cache ?? null;
 
-    // Cache directory - use ~/.dollhouse/cache/collection-index.json as specified
-    // (legacy path; only used when sharedCache is null).
-    const cacheDir = config.cacheDir || path.join(os.homedir(), '.dollhouse', 'cache');
+    // Legacy filesystem fallback still uses the same canonical cache root as
+    // PathService and the sibling collection caches.
+    const cacheDir = config.cacheDir ?? resolveDataDirectory('cache');
     this.CACHE_FILE = path.join(cacheDir, 'collection-index.json');
 
     logger.debug('CollectionIndexManager initialized', {
