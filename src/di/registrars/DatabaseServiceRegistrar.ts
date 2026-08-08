@@ -150,8 +150,16 @@ export class DatabaseServiceRegistrar {
         userIdResolver,
         sessionIdResolver,
         async (sessionId, userId) => {
-          const presence = await runtimeSessionStore.findPresence(sessionId);
-          return presence?.userId === userId;
+          if (!env.DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED) {
+            return 'unknown';
+          }
+          const presence = await runtimeSessionStore.findRecordedPresence(sessionId);
+          if (!presence || presence.userId !== userId) {
+            return 'unknown';
+          }
+          return presence.status === 'active' && presence.leaseUntil > new Date()
+            ? 'active'
+            : 'inactive';
         },
       )
     );

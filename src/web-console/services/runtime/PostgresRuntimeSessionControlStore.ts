@@ -72,6 +72,21 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
     return rows[0] ? fromPresenceRow(rows[0]) : null;
   }
 
+  /**
+   * Read the durable presence record without applying visibility filters.
+   * Callers use this to distinguish a known closed/expired session from a
+   * session whose presence was never recorded.
+   */
+  async findRecordedPresence(sessionId: string): Promise<RuntimeSessionPresence | null> {
+    validateSessionId(sessionId);
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(runtimeSessionPresence)
+        .where(eq(runtimeSessionPresence.sessionId, sessionId))
+        .limit(1),
+    );
+    return rows[0] ? fromPresenceRow(rows[0]) : null;
+  }
+
   async listPresenceByUser(
     userId: string,
     query: RuntimeSessionListQuery = {},

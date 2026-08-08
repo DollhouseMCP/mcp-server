@@ -148,7 +148,7 @@ describe('DatabaseAgentStateStore', () => {
       getTestDb(),
       fixedUserId(userId),
       () => sessionId,
-      async candidateSessionId => activeSessions.has(candidateSessionId),
+      async candidateSessionId => activeSessions.has(candidateSessionId) ? 'active' : 'inactive',
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -179,7 +179,7 @@ describe('DatabaseAgentStateStore', () => {
       getTestDb(),
       fixedUserId(userId),
       () => sessionId,
-      async candidateSessionId => candidateSessionId === 'session-a',
+      async candidateSessionId => candidateSessionId === 'session-a' ? 'active' : 'inactive',
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -203,7 +203,7 @@ describe('DatabaseAgentStateStore', () => {
       getTestDb(),
       fixedUserId(userId),
       () => sessionId,
-      async () => false,
+      async () => 'inactive',
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -225,16 +225,16 @@ describe('DatabaseAgentStateStore', () => {
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
     const activeSessions = new Set(['session-b', 'session-c']);
-    const isSessionActive = async (candidateSessionId: string) =>
-      activeSessions.has(candidateSessionId);
+    const resolveSessionActivity = async (candidateSessionId: string) =>
+      activeSessions.has(candidateSessionId) ? 'active' as const : 'inactive' as const;
     const sourceStore = new DatabaseAgentStateStore(
-      getTestDb(), fixedUserId(userId), () => 'session-a', isSessionActive,
+      getTestDb(), fixedUserId(userId), () => 'session-a', resolveSessionActivity,
     );
     const sessionBStore = new DatabaseAgentStateStore(
-      getTestDb(), fixedUserId(userId), () => 'session-b', isSessionActive,
+      getTestDb(), fixedUserId(userId), () => 'session-b', resolveSessionActivity,
     );
     const sessionCStore = new DatabaseAgentStateStore(
-      getTestDb(), fixedUserId(userId), () => 'session-c', isSessionActive,
+      getTestDb(), fixedUserId(userId), () => 'session-c', resolveSessionActivity,
     );
 
     await sourceStore.saveState(agentId, {
@@ -253,5 +253,29 @@ describe('DatabaseAgentStateStore', () => {
       sessionCStore.loadState(agentId),
     ]);
     expect(owners.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('should fail closed when source-session presence is unknown', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let sessionId = 'session-a';
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async () => 'unknown',
+    );
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-unknown-owner', status: 'in_progress' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+    sessionId = 'session-b';
+
+    await expect(store.reclaimOrphaned(key)).resolves.toBeNull();
+    sessionId = 'session-a';
+    await expect(store.loadState(agentId)).resolves.not.toBeNull();
   });
 });

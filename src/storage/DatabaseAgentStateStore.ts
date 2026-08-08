@@ -57,10 +57,12 @@ const AGENT_STATE_ROW_COLUMNS = {
   sessionCount: agentStates.sessionCount,
 } as const;
 
+export type AgentSessionActivity = 'active' | 'inactive' | 'unknown';
+
 export type AgentSessionActivityResolver = (
   sessionId: string,
   userId: string,
-) => Promise<boolean>;
+) => Promise<AgentSessionActivity>;
 
 // ── Implementation ──────────────────────────────────────────────────
 
@@ -73,7 +75,7 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     db: DatabaseInstance,
     getCurrentUserId: UserIdResolver,
     getCurrentSessionId: SessionIdResolver = () => 'default',
-    private readonly isSessionActive?: AgentSessionActivityResolver,
+    private readonly resolveSessionActivity?: AgentSessionActivityResolver,
   ) {
     this.db = db;
     this.getCurrentUserId = getCurrentUserId;
@@ -197,7 +199,7 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     if (current) {
       return this.rowToStateData(current);
     }
-    if (!this.isSessionActive) {
+    if (!this.resolveSessionActivity) {
       logger.warn('[DatabaseAgentStateStore] Orphan reclaim unavailable without runtime presence');
       return null;
     }
@@ -206,7 +208,7 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
       if (!this.hasClaimableGoals(candidate.goals, excludedGoalIds)) {
         continue;
       }
-      if (await this.isSessionActive(candidate.sessionId, userId)) {
+      if (await this.resolveSessionActivity(candidate.sessionId, userId) !== 'inactive') {
         continue;
       }
 
@@ -260,6 +262,12 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
 
       const locked = await this.lockCandidateRow(tx, input);
       if (!locked || !this.hasClaimableGoals(locked.goals, input.excludedGoalIds)) {
+        return null;
+      }
+      if (
+        !this.resolveSessionActivity ||
+        await this.resolveSessionActivity(input.candidate.sessionId, input.userId) !== 'inactive'
+      ) {
         return null;
       }
 
