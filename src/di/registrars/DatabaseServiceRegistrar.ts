@@ -154,7 +154,7 @@ export class DatabaseServiceRegistrar {
             return 'unknown';
           }
           const presence = await runtimeSessionStore.findRecordedPresence(sessionId);
-          if (!presence || presence.userId !== userId) {
+          if (presence?.userId !== userId) {
             return 'unknown';
           }
           return presence.status === 'active' && presence.leaseUntil > new Date()

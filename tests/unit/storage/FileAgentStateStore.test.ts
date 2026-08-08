@@ -83,7 +83,8 @@ decisions: []
 context: {}
 lastActive: 2025-01-01T00:00:00Z
 sessionCount: invalid
-stateVersion: not-a-number
+stateVersion:
+  unexpected: object
 `);
 
     const loaded = await store.load(key);

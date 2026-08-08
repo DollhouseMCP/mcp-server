@@ -2913,8 +2913,11 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     if (!activeGoal) {
       const goalStatuses = state.goals.map(g => `${g.id}: ${g.status}`).join(', ');
+      const missingGoalMessage = params.goalId
+        ? `Active goal '${params.goalId}' was not found`
+        : 'No active goal found';
       throw new Error(
-        `${params.goalId ? `Active goal '${params.goalId}' was not found` : 'No active goal found'} ` +
+        `${missingGoalMessage} ` +
         `for agent '${params.agentName}'. ` +
         `Available goals: ${goalStatuses || 'none'}. ` +
         `Use execute_agent to start a new goal first.`

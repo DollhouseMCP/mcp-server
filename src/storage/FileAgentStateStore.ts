@@ -271,7 +271,7 @@ export class FileAgentStateStore implements IAgentStateStore {
   }
 
   private parseIntegerOrDefault(value: unknown, fallback: number): number {
-    if (value === undefined) {
+    if (typeof value !== 'number' && typeof value !== 'string') {
       return fallback;
     }
     const parsed = Number.parseInt(String(value), 10);
