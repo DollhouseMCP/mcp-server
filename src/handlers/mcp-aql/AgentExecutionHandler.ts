@@ -289,7 +289,10 @@ export class AgentExecutionHandler {
         `Goal '${requestedGoalId}' is not owned by this session's execution of '${elementName}'.`,
       );
     }
-    const ownedGoalId = requestedGoalId ?? completedAgent.goalIds[completedAgent.goalIds.length - 1];
+    const ownedGoalId = requestedGoalId ?? completedAgent.goalIds.at(-1);
+    if (!ownedGoalId) {
+      throw new Error(`No owned goal found for agent '${elementName}' in this session.`);
+    }
     const completeResult = await manager.completeAgentGoal({
       agentName: elementName,
       outcome: params.outcome as StepOutcome,
