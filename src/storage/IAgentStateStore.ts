@@ -19,9 +19,24 @@ export interface AgentStateSaveOptions {
   requireExisting?: boolean;
 }
 
+export interface AgentStateReclaimOptions {
+  /** Goal IDs still owned by live transport sessions and therefore ineligible. */
+  readonly excludedGoalIds?: readonly string[];
+}
+
 export interface IAgentStateStore {
   /** Returns null when no persisted runtime state exists for this agent. */
   load(key: AgentStateKey, options?: AgentStateLoadOptions): Promise<AgentState | null>;
+
+  /**
+   * Claim durable state left by a disconnected transport session.
+   * Database stores transfer session ownership atomically; file stores perform
+   * a strict durable read because their state file is already session-neutral.
+   */
+  reclaimOrphaned(
+    key: AgentStateKey,
+    options?: AgentStateReclaimOptions,
+  ): Promise<AgentState | null>;
 
   /**
    * Save with optimistic locking.

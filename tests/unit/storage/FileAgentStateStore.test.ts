@@ -66,6 +66,15 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     expect(cache.get('recovery-agent')?.goals).toHaveLength(1);
   });
 
+  it('reclaims from durable state instead of the process-local cache', async () => {
+    await store.save(key, state(), 0);
+    cache.get('recovery-agent')!.context.cachedOnly = true;
+
+    const reclaimed = await store.reclaimOrphaned(key);
+
+    expect(reclaimed?.context).toEqual({});
+  });
+
   it('surfaces malformed durable state instead of returning no state', async () => {
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), ': invalid: yaml: [');

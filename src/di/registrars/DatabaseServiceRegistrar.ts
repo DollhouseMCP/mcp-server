@@ -102,6 +102,9 @@ export class DatabaseServiceRegistrar {
     const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
     const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
     const { DatabaseAgentStateStore } = await import('../../storage/DatabaseAgentStateStore.js');
+    const { PostgresRuntimeSessionControlStore } = await import(
+      '../../web-console/services/runtime/PostgresRuntimeSessionControlStore.js'
+    );
 
     container.register('DatabaseActivationStateStoreClass', () => DatabaseActivationStateStore);
     container.register('DatabaseConfirmationStoreClass', () => DatabaseConfirmationStore);
@@ -137,11 +140,20 @@ export class DatabaseServiceRegistrar {
     // the DB-specific resolver (not the PathsServiceRegistrar fallback).
     const userIdResolver = container.resolve<UserIdResolver>('UserIdResolver');
     const sessionIdResolver = container.resolve<SessionIdResolver>('SessionIdResolver');
+    const runtimeSessionStore = new PostgresRuntimeSessionControlStore(systemConnection.db);
     container.register('StorageLayerFactory', () =>
       new DatabaseStorageLayerFactory(result.db, userIdResolver)
     );
     container.register('AgentStateStore', () =>
-      new DatabaseAgentStateStore(result.db, userIdResolver, sessionIdResolver)
+      new DatabaseAgentStateStore(
+        result.db,
+        userIdResolver,
+        sessionIdResolver,
+        async (sessionId, userId) => {
+          const presence = await runtimeSessionStore.findPresence(sessionId);
+          return presence?.userId === userId;
+        },
+      )
     );
 
     // UserIdentityService — resolves usernames to DB UUIDs on demand.

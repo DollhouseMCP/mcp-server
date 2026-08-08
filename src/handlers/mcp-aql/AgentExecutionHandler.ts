@@ -231,7 +231,14 @@ export class AgentExecutionHandler {
       return existingEntry;
     }
 
-    const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    const excludedGoalIds = this.getTrackedGoalIds(manager, elementName, executionKey);
+    const reclaimedState = await manager.reclaimOrphanedAgentState({
+      agentName: elementName,
+      excludedGoalIds,
+    });
+    const activeGoalIds = reclaimedState?.goals
+      .filter(goal => goal.status === 'in_progress')
+      .map(goal => goal.id) ?? [];
     const orphanedGoalIds = activeGoalIds.filter(goalId =>
       !this.isGoalTrackedByAnotherSession(manager, elementName, executionKey, goalId)
     );
@@ -259,6 +266,20 @@ export class AgentExecutionHandler {
     return reclaimedEntry;
   }
 
+  private async reclaimExistingAgentExecution(
+    manager: AgentManager,
+    elementName: string,
+  ): Promise<ExecutingAgentEntry | undefined> {
+    try {
+      return await this.reclaimOrphanedExecution(manager, elementName);
+    } catch (error) {
+      if (error instanceof ElementNotFoundError) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
   private isGoalTrackedByAnotherSession(
     manager: AgentManager,
     elementName: string,
@@ -276,6 +297,26 @@ export class AgentExecutionHandler {
       }
     }
     return false;
+  }
+
+  private getTrackedGoalIds(
+    manager: AgentManager,
+    elementName: string,
+    currentExecutionKey: string,
+  ): string[] {
+    const canonicalName = manager.canonicalizeExecutionName(elementName);
+    const trackedGoalIds = new Set<string>();
+    for (const [executionKey, entry] of this.executingAgents) {
+      if (
+        executionKey !== currentExecutionKey &&
+        manager.canonicalizeExecutionName(entry.name) === canonicalName
+      ) {
+        for (const goalId of entry.goalIds ?? []) {
+          trackedGoalIds.add(goalId);
+        }
+      }
+    }
+    return [...trackedGoalIds];
   }
 
   private executionKey(manager: AgentManager, elementName: string): string {
@@ -305,9 +346,17 @@ export class AgentExecutionHandler {
     const executionKey = this.executionKey(manager, elementName);
     const executingAgent = this.executingAgents.get(executionKey)
       ?? await this.reclaimOrphanedExecution(manager, elementName);
+    const ownedGoalId = executingAgent?.goalIds?.at(-1);
+    if (!ownedGoalId) {
+      throw new Error(
+        `No active goal found for agent '${elementName}' in this session. ` +
+        'Use execute_agent to start a new goal first.',
+      );
+    }
 
     const updateResult = await manager.recordAgentStep({
       agentName: elementName,
+      goalId: ownedGoalId,
       stepDescription: params.stepDescription as string,
       outcome: params.outcome as StepOutcome,
       findings: params.findings as string,
@@ -360,7 +409,7 @@ export class AgentExecutionHandler {
   ): Promise<unknown> {
     const executionKey = this.executionKey(manager, elementName);
     const completedAgent = this.executingAgents.get(executionKey)
-      ?? await this.reclaimOrphanedExecution(manager, elementName);
+      ?? await this.reclaimExistingAgentExecution(manager, elementName);
     const requestedGoalId = params.goalId as string | undefined;
     if (!completedAgent?.goalIds?.length) {
       throw new Error(
@@ -442,7 +491,7 @@ export class AgentExecutionHandler {
     const reason = (params.reason as string) || 'Aborted by user';
     const executionKey = this.executionKey(manager, elementName);
     const executionPolicyAtStart = this.executingAgents.get(executionKey)
-      ?? await this.reclaimOrphanedExecution(manager, elementName);
+      ?? await this.reclaimExistingAgentExecution(manager, elementName);
     const generation = manager.observeExecutionGeneration(elementName);
     try {
       const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);

@@ -11,7 +11,10 @@ interface ManagerMocks {
   read: jest.Mock;
   continueAgentExecution: jest.Mock;
   completeAgentGoal: jest.Mock;
+  getAgentState: jest.Mock;
   getAgentStateForRecovery: jest.Mock;
+  reclaimOrphanedAgentState: jest.Mock;
+  recordAgentStep: jest.Mock;
   completeAgentGoalForRecovery: jest.Mock;
   hasExecutionGenerationChanged: jest.Mock;
   release: jest.Mock;
@@ -49,7 +52,16 @@ function createManager(): ManagerMocks {
     success: true,
     goal: { id: goalId },
   }));
+  const getAgentState = jest.fn();
   const getAgentStateForRecovery = jest.fn();
+  const reclaimOrphanedAgentState = jest.fn().mockImplementation(async () => {
+    const result = await getAgentStateForRecovery();
+    return result?.state ?? null;
+  });
+  const recordAgentStep = jest.fn().mockResolvedValue({
+    success: true,
+    autonomy: { continue: true },
+  });
   const completeAgentGoalForRecovery = jest.fn().mockResolvedValue({ success: true });
   const hasExecutionGenerationChanged = jest.fn().mockReturnValue(false);
   const release = jest.fn();
@@ -58,7 +70,10 @@ function createManager(): ManagerMocks {
     read,
     continueAgentExecution,
     completeAgentGoal,
+    getAgentState,
     getAgentStateForRecovery,
+    reclaimOrphanedAgentState,
+    recordAgentStep,
     completeAgentGoalForRecovery,
     hasExecutionGenerationChanged,
     observeExecutionGeneration: jest.fn().mockReturnValue({ token: {}, release }),
@@ -78,7 +93,10 @@ function createManager(): ManagerMocks {
     read,
     continueAgentExecution,
     completeAgentGoal,
+    getAgentState,
     getAgentStateForRecovery,
+    reclaimOrphanedAgentState,
+    recordAgentStep,
     completeAgentGoalForRecovery,
     hasExecutionGenerationChanged,
     release,
@@ -354,6 +372,36 @@ describe('AgentExecutionHandler abort recovery', () => {
     });
 
     expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-1', 'goal-2']);
+  });
+
+  it('records a reclaimed step against the goal owned by the replacement session', async () => {
+    const mocks = createManager();
+    const durableState = stateWithGoals([
+      { id: 'goal-live', status: 'in_progress' },
+      { id: 'goal-orphan', status: 'in_progress' },
+    ]);
+    mocks.getAgentState.mockResolvedValue(durableState);
+    mocks.getAgentStateForRecovery.mockResolvedValue(durableState);
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await handler.dispatch('updateState', {
+      element_name: 'test-agent',
+      stepDescription: 'Continue the reclaimed work',
+      outcome: 'success',
+      confidence: 0.9,
+    });
+
+    expect(mocks.reclaimOrphanedAgentState).toHaveBeenCalledWith({
+      agentName: 'test-agent',
+      excludedGoalIds: ['goal-live'],
+    });
+    expect(mocks.recordAgentStep).toHaveBeenCalledWith(expect.objectContaining({
+      agentName: 'test-agent',
+      goalId: 'goal-orphan',
+    }));
   });
 
   it('preserves a newer same-session execution while completion is pending', async () => {

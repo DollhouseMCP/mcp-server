@@ -113,6 +113,8 @@ export class ElementManagerServiceRegistrar {
     };
     const agentStateStoreProxy: IAgentStateStore = {
       load: (key, options) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').load(key, options),
+      reclaimOrphaned: (key, options) =>
+        resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').reclaimOrphaned(key, options),
       save: (key, state, expectedVersion, options) =>
         resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').save(key, state, expectedVersion, options),
       delete: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').delete(key),

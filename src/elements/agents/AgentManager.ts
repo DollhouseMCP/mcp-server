@@ -2067,9 +2067,14 @@ export class AgentManager extends BaseElementManager<Agent> {
       return;
     }
 
+    this.applyPersistedAgentState(agent, state);
+  }
+
+  private applyPersistedAgentState(agent: Agent, state: AgentState): void {
     const serialized = JSON.parse(agent.serializeToJSON());
     serialized.state = state;
     agent.deserialize(JSON.stringify(serialized));
+    agent[COMMIT_PERSISTED_VERSION](state.stateVersion ?? 0);
     agent.markStatePersisted();
     this.hydratedAgents.add(agent);
   }
@@ -2858,6 +2863,8 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   async recordAgentStep(params: {
     agentName: string;
+    /** Internal lifecycle owner selected by AgentExecutionHandler. */
+    goalId?: string;
     stepDescription: string;
     outcome: "success" | "failure" | "partial";
     /** Optional findings or results from this step */
@@ -2900,12 +2907,15 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 2. Get agent state to find active goals
     const state = agent.getState();
-    const activeGoal = state.goals.find(g => g.status === 'in_progress');
+    const activeGoal = params.goalId
+      ? state.goals.find(g => g.id === params.goalId && g.status === 'in_progress')
+      : state.goals.find(g => g.status === 'in_progress');
 
     if (!activeGoal) {
       const goalStatuses = state.goals.map(g => `${g.id}: ${g.status}`).join(', ');
       throw new Error(
-        `No active goal found for agent '${params.agentName}'. ` +
+        `${params.goalId ? `Active goal '${params.goalId}' was not found` : 'No active goal found'} ` +
+        `for agent '${params.agentName}'. ` +
         `Available goals: ${goalStatuses || 'none'}. ` +
         `Use execute_agent to start a new goal first.`
       );
@@ -3147,6 +3157,33 @@ export class AgentManager extends BaseElementManager<Agent> {
     includeContext?: boolean;
   }) {
     return this.getAgentStateWithPolicy(params, true);
+  }
+
+  /**
+   * Claim state abandoned by a disconnected transport session and hydrate the
+   * manager's live agent with that durable state for subsequent lifecycle calls.
+   */
+  async reclaimOrphanedAgentState(params: {
+    agentName: string;
+    excludedGoalIds?: readonly string[];
+  }): Promise<Readonly<AgentState> | null> {
+    const agent = await this.read(params.agentName);
+    if (!agent) {
+      throw new ElementNotFoundError('Agent', params.agentName);
+    }
+
+    const state = await this.stateStore.reclaimOrphaned({
+      name: params.agentName,
+      agentElementId: this.getAgentElementId(agent, params.agentName),
+    }, {
+      excludedGoalIds: params.excludedGoalIds,
+    });
+    if (!state) {
+      return null;
+    }
+
+    this.applyPersistedAgentState(agent, state);
+    return agent.getState();
   }
 
   private async getAgentStateWithPolicy(params: {

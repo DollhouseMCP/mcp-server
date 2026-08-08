@@ -10,6 +10,7 @@ import { logger } from '../utils/logger.js';
 import type {
   AgentStateKey,
   AgentStateLoadOptions,
+  AgentStateReclaimOptions,
   AgentStateSaveOptions,
   IAgentStateStore,
 } from './IAgentStateStore.js';
@@ -76,6 +77,13 @@ export class FileAgentStateStore implements IAgentStateStore {
       }
       return null;
     }
+  }
+
+  async reclaimOrphaned(
+    key: AgentStateKey,
+    _options: AgentStateReclaimOptions = {},
+  ): Promise<AgentState | null> {
+    return this.load(key, { strict: true });
   }
 
   async save(

@@ -10,14 +10,19 @@
  * @since v2.2.0 — Phase 4, Step 4.3
  */
 
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { DrizzleTx } from '../database/db-utils.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
 import { agentStates } from '../database/schema/agents.js';
 import type { SessionIdResolver, UserIdResolver } from '../database/UserContext.js';
 import type { AgentState } from '../elements/agents/types.js';
-import type { AgentStateKey, IAgentStateStore } from './IAgentStateStore.js';
+import type {
+  AgentStateKey,
+  AgentStateReclaimOptions,
+  IAgentStateStore,
+} from './IAgentStateStore.js';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -30,6 +35,33 @@ interface AgentStateData {
   lastActive?: Date | null;
 }
 
+interface AgentStateRow {
+  id: string;
+  sessionId: string;
+  goals: unknown;
+  decisions: unknown;
+  context: unknown;
+  lastActive: Date | null;
+  stateVersion: number;
+  sessionCount: number;
+}
+
+const AGENT_STATE_ROW_COLUMNS = {
+  id: agentStates.id,
+  sessionId: agentStates.sessionId,
+  goals: agentStates.goals,
+  decisions: agentStates.decisions,
+  context: agentStates.context,
+  lastActive: agentStates.lastActive,
+  stateVersion: agentStates.stateVersion,
+  sessionCount: agentStates.sessionCount,
+} as const;
+
+export type AgentSessionActivityResolver = (
+  sessionId: string,
+  userId: string,
+) => Promise<boolean>;
+
 // ── Implementation ──────────────────────────────────────────────────
 
 export class DatabaseAgentStateStore implements IAgentStateStore {
@@ -41,6 +73,7 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     db: DatabaseInstance,
     getCurrentUserId: UserIdResolver,
     getCurrentSessionId: SessionIdResolver = () => 'default',
+    private readonly isSessionActive?: AgentSessionActivityResolver,
   ) {
     this.db = db;
     this.getCurrentUserId = getCurrentUserId;
@@ -63,6 +96,17 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
    */
   async load(key: AgentStateKey): Promise<AgentState | null> {
     const state = await this.loadData(key.agentElementId);
+    return state ? this.toAgentState(state) : null;
+  }
+
+  async reclaimOrphaned(
+    key: AgentStateKey,
+    options: AgentStateReclaimOptions = {},
+  ): Promise<AgentState | null> {
+    const state = await this.reclaimOrphanedData(
+      key.agentElementId,
+      new Set(options.excludedGoalIds ?? []),
+    );
     return state ? this.toAgentState(state) : null;
   }
 
@@ -95,7 +139,9 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
   }
 
   private async loadData(agentElementId: string): Promise<AgentStateData | null> {
-    return withUserRead(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    const sessionId = this.sessionId;
+    return withUserRead(this.db, userId, async (tx) => {
       // Defense-in-depth: userId filter alongside RLS enforcement.
       const rows = await tx
         .select({
@@ -108,9 +154,9 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
         })
         .from(agentStates)
         .where(and(
-          eq(agentStates.userId, this.userId),
+          eq(agentStates.userId, userId),
           eq(agentStates.agentId, agentElementId),
-          eq(agentStates.sessionId, this.sessionId),
+          eq(agentStates.sessionId, sessionId),
         ))
         .limit(1);
 
@@ -128,6 +174,179 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
         sessionCount: row.sessionCount,
       };
     });
+  }
+
+  /**
+   * Transfer a disconnected session's state row to the calling session.
+   *
+   * The user filter and RLS preserve tenant isolation. Row locks serialize
+   * competing claims, while the runtime-presence resolver prevents a row that
+   * still belongs to a live session (including another replica) from moving.
+   * Without a presence resolver, cross-session claims fail closed.
+   */
+  private async reclaimOrphanedData(
+    agentElementId: string,
+    excludedGoalIds: ReadonlySet<string>,
+  ): Promise<AgentStateData | null> {
+    const userId = this.userId;
+    const sessionId = this.sessionId;
+
+    const rows = await this.loadAgentRows(userId, agentElementId);
+
+    const current = rows.find(row => row.sessionId === sessionId);
+    if (current) {
+      return this.rowToStateData(current);
+    }
+    if (!this.isSessionActive) {
+      logger.warn('[DatabaseAgentStateStore] Orphan reclaim unavailable without runtime presence');
+      return null;
+    }
+
+    for (const candidate of rows) {
+      if (!this.hasClaimableGoals(candidate.goals, excludedGoalIds)) {
+        continue;
+      }
+      if (await this.isSessionActive(candidate.sessionId, userId)) {
+        continue;
+      }
+
+      const transferredState = await this.tryTransferCandidate({
+        candidate,
+        userId,
+        agentElementId,
+        targetSessionId: sessionId,
+        excludedGoalIds,
+      });
+      if (!transferredState) {
+        continue;
+      }
+
+      logger.info('[DatabaseAgentStateStore] Transferred orphaned agent state', {
+        agentElementId,
+        fromSessionId: candidate.sessionId,
+        toSessionId: sessionId,
+        goalIds: this.getActiveGoalIds(transferredState.goals),
+      });
+      return this.rowToStateData(transferredState);
+    }
+
+    return null;
+  }
+
+  private async loadAgentRows(userId: string, agentElementId: string): Promise<AgentStateRow[]> {
+    return withUserRead(this.db, userId, async (tx) =>
+      tx
+        .select(AGENT_STATE_ROW_COLUMNS)
+        .from(agentStates)
+        .where(and(
+          eq(agentStates.userId, userId),
+          eq(agentStates.agentId, agentElementId),
+        ))
+        .orderBy(desc(agentStates.lastActive), agentStates.sessionId),
+    );
+  }
+
+  private async tryTransferCandidate(input: {
+    candidate: AgentStateRow;
+    userId: string;
+    agentElementId: string;
+    targetSessionId: string;
+    excludedGoalIds: ReadonlySet<string>;
+  }): Promise<AgentStateRow | null> {
+    return withUserContext(this.db, input.userId, async (tx) => {
+      if (await this.hasCurrentSessionRow(tx, input)) {
+        return null;
+      }
+
+      const locked = await this.lockCandidateRow(tx, input);
+      if (!locked || !this.hasClaimableGoals(locked.goals, input.excludedGoalIds)) {
+        return null;
+      }
+
+      const transferred = await tx
+        .update(agentStates)
+        .set({ sessionId: input.targetSessionId })
+        .where(and(
+          eq(agentStates.id, locked.id),
+          eq(agentStates.userId, input.userId),
+          eq(agentStates.agentId, input.agentElementId),
+          eq(agentStates.sessionId, input.candidate.sessionId),
+        ))
+        .returning({ id: agentStates.id });
+      return transferred.length > 0 ? locked : null;
+    });
+  }
+
+  private async hasCurrentSessionRow(
+    tx: DrizzleTx,
+    input: { userId: string; agentElementId: string; targetSessionId: string },
+  ): Promise<boolean> {
+    const rows = await tx
+      .select({ id: agentStates.id })
+      .from(agentStates)
+      .where(and(
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.targetSessionId),
+      ))
+      .limit(1);
+    return rows.length > 0;
+  }
+
+  private async lockCandidateRow(
+    tx: DrizzleTx,
+    input: { candidate: AgentStateRow; userId: string; agentElementId: string },
+  ): Promise<AgentStateRow | null> {
+    const rows = await tx
+      .select(AGENT_STATE_ROW_COLUMNS)
+      .from(agentStates)
+      .where(and(
+        eq(agentStates.id, input.candidate.id),
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.candidate.sessionId),
+      ))
+      .for('update')
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  private hasClaimableGoals(goals: unknown, excludedGoalIds: ReadonlySet<string>): boolean {
+    const activeGoalIds = this.getActiveGoalIds(goals);
+    return activeGoalIds.length > 0 &&
+      !activeGoalIds.some(goalId => excludedGoalIds.has(goalId));
+  }
+
+  private getActiveGoalIds(goals: unknown): string[] {
+    if (!Array.isArray(goals)) {
+      return [];
+    }
+    return goals.flatMap((goal) => {
+      if (
+        typeof goal === 'object' &&
+        goal !== null &&
+        'id' in goal &&
+        typeof goal.id === 'string' &&
+        'status' in goal &&
+        goal.status === 'in_progress'
+      ) {
+        return [goal.id];
+      }
+      return [];
+    });
+  }
+
+  private rowToStateData(row: Omit<AgentStateRow, 'id' | 'sessionId'>): AgentStateData {
+    return {
+      goals: Array.isArray(row.goals) ? row.goals : [],
+      decisions: Array.isArray(row.decisions) ? row.decisions : [],
+      context: row.context && typeof row.context === 'object' && !Array.isArray(row.context)
+        ? row.context as Record<string, unknown>
+        : {},
+      lastActive: row.lastActive,
+      stateVersion: row.stateVersion,
+      sessionCount: row.sessionCount,
+    };
   }
 
   /**
