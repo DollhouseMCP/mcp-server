@@ -121,6 +121,61 @@ describe('AgentManager', () => {
     });
   });
 
+  describe('Recovery state synchronization', () => {
+    it('preserves a concurrently-created goal while applying a recovery completion', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+
+      const concurrentGoal = sourceAgent.addGoal({ description: 'Concurrent execution' });
+      concurrentGoal.status = 'in_progress';
+      recoveryAgent.recordDecision({
+        goalId: originalGoal.id,
+        decision: 'goal_complete',
+        reasoning: 'Execution aborted during recovery',
+        confidence: 1,
+        outcome: 'failure',
+      });
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id);
+
+      const synchronizedState = sourceAgent.getState();
+      expect(synchronizedState.goals.find(goal => goal.id === originalGoal.id)?.status)
+        .toBe('failed');
+      expect(synchronizedState.goals.find(goal => goal.id === concurrentGoal.id)?.status)
+        .toBe('in_progress');
+      expect(synchronizedState.decisions.some(decision =>
+        decision.goalId === originalGoal.id && decision.decision === 'goal_complete'
+      )).toBe(true);
+      expect(synchronizedState.stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
+    it('marks a recovery-only synchronization as fully persisted', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id);
+
+      expect(sourceAgent.getState().goals[0]?.status).toBe('failed');
+      expect(sourceAgent.getState().stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(false);
+    });
+  });
+
   describe('Create', () => {
     it('should create a new agent', async () => {
       const result = await agentManager.create(

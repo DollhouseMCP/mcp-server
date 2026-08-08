@@ -165,9 +165,15 @@ export class AgentExecutionHandler {
     runtimeMaxSteps: number | undefined,
     goalId: string | undefined,
   ): Promise<void> {
+    const executionKey = this.sessionKey(elementName);
+    const previousEntry = this.executingAgents.get(executionKey);
+    const goalIds = [...(previousEntry?.goalIds ?? [])];
+    if (goalId && !goalIds.includes(goalId)) {
+      goalIds.push(goalId);
+    }
     const executionEntry: ExecutingAgentEntry = {
       name: elementName,
-      goalId,
+      goalIds,
       metadata: runtimeMaxSteps === undefined ? {} : { maxAutonomousSteps: runtimeMaxSteps },
       startedAt: Date.now(),
       continuationCount: 0,
@@ -175,7 +181,7 @@ export class AgentExecutionHandler {
       originalParameters: params.parameters as Record<string, unknown> | undefined,
       recentBlocks: [],
     };
-    this.executingAgents.set(this.sessionKey(elementName), executionEntry);
+    this.executingAgents.set(executionKey, executionEntry);
 
     try {
       const agentElement = await manager.read(elementName);
@@ -269,16 +275,33 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
+    const executionKey = this.sessionKey(elementName);
+    const completedAgent = this.executingAgents.get(executionKey);
+    const requestedGoalId = params.goalId as string | undefined;
+    if (
+      requestedGoalId &&
+      completedAgent?.goalIds?.length &&
+      !completedAgent.goalIds.includes(requestedGoalId)
+    ) {
+      throw new Error(
+        `Goal '${requestedGoalId}' is not owned by this session's execution of '${elementName}'.`,
+      );
+    }
+    const ownedGoalId = requestedGoalId ?? completedAgent?.goalIds?.at(-1);
     const completeResult = await manager.completeAgentGoal({
       agentName: elementName,
       outcome: params.outcome as StepOutcome,
       summary: params.summary as string,
-      goalId: params.goalId as string | undefined,
+      goalId: ownedGoalId,
     });
 
-    const completedAgent = this.executingAgents.get(this.sessionKey(elementName));
     this.recordResilienceCompletion(completedAgent, params.outcome === 'success', elementName);
-    this.executingAgents.delete(this.sessionKey(elementName));
+    if (completedAgent?.goalIds && ownedGoalId) {
+      completedAgent.goalIds = completedAgent.goalIds.filter(id => id !== ownedGoalId);
+    }
+    if (!completedAgent?.goalIds?.length) {
+      this.executingAgents.delete(executionKey);
+    }
     return { _type: 'CompletionResult', ...completeResult };
   }
 
@@ -447,10 +470,11 @@ export class AgentExecutionHandler {
     activeGoalIds: string[],
     executionEntry: ExecutingAgentEntry | undefined,
   ): string[] {
-    if (!executionEntry?.goalId) {
+    if (!executionEntry?.goalIds?.length) {
       return [];
     }
-    return activeGoalIds.includes(executionEntry.goalId) ? [executionEntry.goalId] : [];
+    const ownedGoalIds = new Set(executionEntry.goalIds);
+    return activeGoalIds.filter(goalId => ownedGoalIds.has(goalId));
   }
 
   private assertExecutionUnchanged(

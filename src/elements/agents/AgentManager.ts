@@ -8,6 +8,7 @@ import * as path from 'path';
 import { Agent } from './Agent.js';
 import {
   COMMIT_PERSISTED_VERSION,
+  MARK_STATE_FOR_PERSISTENCE,
   AGENT_LIMITS,
   RISK_TOLERANCE_LEVELS,
   STEP_LIMIT_ACTIONS,
@@ -2095,19 +2096,76 @@ export class AgentManager extends BaseElementManager<Agent> {
     return recoveryAgent;
   }
 
-  private synchronizeRecoveryState(agent: Agent, persistedVersion: number): void {
+  private synchronizeRecoveryState(
+    agent: Agent,
+    persistedVersion: number,
+    completedGoalId: string,
+  ): void {
     const sourceAgent = this.recoverySourceAgents.get(agent);
     if (!sourceAgent) {
       return;
     }
 
+    const sourceHadPendingState = sourceAgent.needsStatePersistence();
+    const synchronizedState = sourceHadPendingState
+      ? this.mergeRecoveryCompletion(
+          sourceAgent.getState(),
+          agent.getState(),
+          completedGoalId,
+          persistedVersion,
+        )
+      : agent.getState();
     const serialized = JSON.parse(sourceAgent.serializeToJSON());
-    serialized.state = agent.getState();
+    serialized.state = synchronizedState;
     sourceAgent.deserialize(JSON.stringify(serialized));
     sourceAgent[COMMIT_PERSISTED_VERSION](persistedVersion);
-    sourceAgent.markStatePersisted();
+    if (sourceHadPendingState) {
+      sourceAgent[MARK_STATE_FOR_PERSISTENCE]();
+    } else {
+      sourceAgent.markStatePersisted();
+    }
     this.hydratedAgents.add(sourceAgent);
     this.recoverySourceAgents.delete(agent);
+  }
+
+  private mergeRecoveryCompletion(
+    sourceState: Readonly<AgentState>,
+    recoveryState: Readonly<AgentState>,
+    completedGoalId: string,
+    persistedVersion: number,
+  ): AgentState {
+    const recoveredGoal = recoveryState.goals.find(goal => goal.id === completedGoalId);
+    const goals = sourceState.goals.map(goal =>
+      goal.id === completedGoalId && recoveredGoal ? recoveredGoal : goal
+    );
+    if (recoveredGoal && !goals.some(goal => goal.id === completedGoalId)) {
+      goals.push(recoveredGoal);
+    }
+
+    const recoveredDecisions = new Map(
+      recoveryState.decisions
+        .filter(decision => decision.goalId === completedGoalId)
+        .map(decision => [decision.id, decision]),
+    );
+    const sourceDecisionIds = new Set(sourceState.decisions.map(decision => decision.id));
+    const decisions = sourceState.decisions.map(decision =>
+      recoveredDecisions.get(decision.id) ?? decision
+    );
+    for (const decision of recoveredDecisions.values()) {
+      if (!sourceDecisionIds.has(decision.id)) {
+        decisions.push(decision);
+      }
+    }
+
+    return {
+      ...sourceState,
+      goals,
+      decisions: decisions.slice(-AGENT_LIMITS.MAX_DECISION_HISTORY),
+      lastActive: sourceState.lastActive > recoveryState.lastActive
+        ? sourceState.lastActive
+        : recoveryState.lastActive,
+      stateVersion: persistedVersion,
+    };
   }
 
   private getAgentElementId(agent: Agent, name: string): string {
@@ -3027,7 +3085,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       const newVersion = await this.saveAgentStateForRecovery(agent, completeSanitizedName);
       agent[COMMIT_PERSISTED_VERSION](newVersion);
       agent.markStatePersisted();
-      this.synchronizeRecoveryState(agent, newVersion);
+      this.synchronizeRecoveryState(agent, newVersion, goal.id);
     } else {
       await this.save(agent, this.getFilename(completeSanitizedName));
     }

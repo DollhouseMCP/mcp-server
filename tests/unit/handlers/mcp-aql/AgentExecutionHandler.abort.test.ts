@@ -9,6 +9,7 @@ interface ManagerMocks {
   manager: AgentManager;
   executeAgent: jest.Mock;
   read: jest.Mock;
+  completeAgentGoal: jest.Mock;
   getAgentStateForRecovery: jest.Mock;
   completeAgentGoalForRecovery: jest.Mock;
   hasExecutionGenerationChanged: jest.Mock;
@@ -18,7 +19,7 @@ interface ManagerMocks {
 function policy(name = 'test-agent', goalId = 'goal-1'): ExecutingAgentEntry {
   return {
     name,
-    goalId,
+    goalIds: [goalId],
     metadata: { gatekeeper: { default: 'ask' } },
     startedAt: Date.now(),
     continuationCount: 0,
@@ -38,6 +39,10 @@ function createManager(): ManagerMocks {
     goalId: 'goal-1',
   });
   const read = jest.fn().mockResolvedValue({ metadata: {} });
+  const completeAgentGoal = jest.fn().mockImplementation(({ goalId }) => Promise.resolve({
+    success: true,
+    goal: { id: goalId },
+  }));
   const getAgentStateForRecovery = jest.fn();
   const completeAgentGoalForRecovery = jest.fn().mockResolvedValue({ success: true });
   const hasExecutionGenerationChanged = jest.fn().mockReturnValue(false);
@@ -45,6 +50,7 @@ function createManager(): ManagerMocks {
   const manager = {
     executeAgent,
     read,
+    completeAgentGoal,
     getAgentStateForRecovery,
     completeAgentGoalForRecovery,
     hasExecutionGenerationChanged,
@@ -55,6 +61,7 @@ function createManager(): ManagerMocks {
     manager,
     executeAgent,
     read,
+    completeAgentGoal,
     getAgentStateForRecovery,
     completeAgentGoalForRecovery,
     hasExecutionGenerationChanged,
@@ -90,9 +97,62 @@ describe('AgentExecutionHandler abort recovery', () => {
 
     expect(executingAgents.get('session-a:test-agent')).toEqual(expect.objectContaining({
       name: 'test-agent',
-      goalId: 'goal-1',
+      goalIds: ['goal-1'],
       metadata: {},
     }));
+  });
+
+  it('retains every goal started by the same session', async () => {
+    const mocks = createManager();
+    mocks.executeAgent
+      .mockResolvedValueOnce({ agentName: 'test-agent', goal: 'First', goalId: 'goal-1' })
+      .mockResolvedValueOnce({ agentName: 'test-agent', goal: 'Second', goalId: 'goal-2' });
+    const executingAgents = new Map<string, ExecutingAgentEntry>();
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await handler.dispatch('execute', { element_name: 'test-agent', parameters: {} });
+    await handler.dispatch('execute', { element_name: 'test-agent', parameters: {} });
+
+    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual(['goal-1', 'goal-2']);
+  });
+
+  it('completes the newest session-owned goal and retains older ownership', async () => {
+    const mocks = createManager();
+    const executionEntry = policy('test-agent', 'goal-1');
+    executionEntry.goalIds = ['goal-1', 'goal-2'];
+    const executingAgents = new Map([
+      ['session-a:test-agent', executionEntry],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await handler.dispatch('complete', {
+      element_name: 'test-agent',
+      outcome: 'success',
+      summary: 'Second execution complete',
+    });
+
+    expect(mocks.completeAgentGoal).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-2',
+    }));
+    expect(executingAgents.get('session-a:test-agent')?.goalIds).toEqual(['goal-1']);
+  });
+
+  it('rejects completion of a goal owned by another session', async () => {
+    const mocks = createManager();
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-a')],
+      ['session-b:test-agent', policy('test-agent', 'goal-b')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await expect(handler.dispatch('complete', {
+      element_name: 'test-agent',
+      goalId: 'goal-b',
+      outcome: 'success',
+      summary: 'Wrong session',
+    })).rejects.toThrow("Goal 'goal-b' is not owned by this session");
+
+    expect(mocks.completeAgentGoal).not.toHaveBeenCalled();
   });
 
   it('rejects invalid runtime limits before creating an untracked goal', async () => {
@@ -234,6 +294,43 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(abortedGoals).toContain('session-a:goal-a');
     expect(abortedGoals).not.toContain('session-a:goal-b');
     expect(executingAgents.get('session-b:test-agent')).toBe(sessionBPolicy);
+  });
+
+  it('aborts every active goal owned by the same session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery
+      .mockResolvedValueOnce(stateWithGoals([
+        { id: 'goal-1', status: 'in_progress' },
+        { id: 'goal-2', status: 'in_progress' },
+        { id: 'goal-b', status: 'in_progress' },
+      ]))
+      .mockResolvedValueOnce(stateWithGoals([
+        { id: 'goal-1', status: 'failed' },
+        { id: 'goal-2', status: 'failed' },
+        { id: 'goal-b', status: 'in_progress' },
+      ]));
+    const sessionAEntry = policy('test-agent', 'goal-1');
+    sessionAEntry.goalIds = ['goal-1', 'goal-2'];
+    const executingAgents = new Map([
+      ['session-a:test-agent', sessionAEntry],
+      ['session-b:test-agent', policy('test-agent', 'goal-b')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-a');
+
+    const result = await handler.dispatch('abort', { element_name: 'test-agent' });
+
+    expect(mocks.completeAgentGoalForRecovery).toHaveBeenCalledTimes(2);
+    expect(mocks.completeAgentGoalForRecovery).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ goalId: 'goal-1' }),
+    );
+    expect(mocks.completeAgentGoalForRecovery).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ goalId: 'goal-2' }),
+    );
+    expect(result).toEqual(expect.objectContaining({
+      abortedGoalIds: ['goal-1', 'goal-2'],
+    }));
   });
 
   it('does not abort another session goal when the caller has no tracked execution', async () => {
