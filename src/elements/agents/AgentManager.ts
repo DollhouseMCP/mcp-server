@@ -91,7 +91,6 @@ import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
-import { slugify } from '../../utils/filesystem.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
@@ -136,10 +135,6 @@ interface ExecutionGenerationEntry {
 export interface ExecutionGenerationObservation {
   token: object;
   release: () => void;
-}
-
-function normalizeAgentExecutionIdentity(name: string): string {
-  return slugify(sanitizeInput(name, 100)) || 'unnamed';
 }
 
 export class AgentManager extends BaseElementManager<Agent> {
@@ -1146,7 +1141,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   private getExecutionGenerationKey(name: string): string {
     const sessionId = this.contextTracker?.getSessionContext()?.sessionId ?? 'default';
-    return `${sessionId}:${normalizeAgentExecutionIdentity(name)}`;
+    return `${sessionId}:${this.normalizeFilename(name) || 'unnamed'}`;
   }
 
   private async loadExecutableAgent(name: string): Promise<Agent> {

@@ -612,6 +612,20 @@ This is the agent content.`;
   });
 
   describe('State Management', () => {
+    it('tracks execution generations across equivalent agent-name aliases', () => {
+      const observation = agentManager.observeExecutionGeneration('MyAgent');
+      const internals = agentManager as unknown as {
+        beginExecutionAttempt(name: string): void;
+        endExecutionAttempt(name: string): void;
+      };
+
+      internals.beginExecutionAttempt('my-agent');
+      expect(agentManager.hasExecutionGenerationChanged('MyAgent', observation.token)).toBe(true);
+
+      internals.endExecutionAttempt('my-agent');
+      observation.release();
+    });
+
     it('should save agent state', async () => {
       const state = {
         goals: [],

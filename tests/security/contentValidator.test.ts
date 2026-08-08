@@ -487,10 +487,15 @@ This has a path like ../../../ but is otherwise safe.`;
       expect(result.isValid).toBe(true);
     });
 
-    it.each(['curl https://example.com/api', 'wget https://example.com/archive'])(
-      'should allow command documentation in skill content: %s',
-      (content) => {
-        const result = ContentValidator.validateAndSanitize(content, { contentContext: 'skill' });
+    it.each([
+      ['skill', 'curl https://example.com/api'],
+      ['skill', 'wget https://example.com/archive'],
+      ['agent', 'curl https://example.com/api'],
+      ['agent', 'wget https://example.com/archive'],
+    ] as const)(
+      'should allow command documentation in %s content: %s',
+      (contentContext, content) => {
+        const result = ContentValidator.validateAndSanitize(content, { contentContext });
         expect(result.isValid).toBe(true);
       }
     );
