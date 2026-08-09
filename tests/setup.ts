@@ -7,6 +7,9 @@
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { createRequire } from 'node:module';
+
+const require = createRequire(import.meta.url);
 
 // Test directories
 export const TEST_BASE_DIR = path.join(process.cwd(), '.test-tmp');
@@ -87,8 +90,8 @@ export default async function globalSetup() {
 
     // Run Drizzle migrations on the test database
     const { execFileSync } = await import('node:child_process');
-    const npxExecutable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    execFileSync(npxExecutable, ['drizzle-kit', 'migrate'], {
+    const drizzleKitEntry = path.join(path.dirname(require.resolve('drizzle-kit')), 'bin.cjs');
+    execFileSync(process.execPath, [drizzleKitEntry, 'migrate'], {
       stdio: 'pipe',
       cwd: process.cwd(),
       timeout: 30000,
