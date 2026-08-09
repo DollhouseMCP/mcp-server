@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, notExists, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
@@ -7,6 +7,7 @@ import {
   runtimeControlAcks,
   runtimeControlCommands,
   runtimeSessionPresence,
+  agentStates,
 } from '../../../database/schema/index.js';
 import type {
   IRuntimeSessionControlStore,
@@ -52,7 +53,26 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
   async sweepStalePresence(before: Date = new Date()): Promise<number> {
     const rows = await withSystemContext(this.db, tx =>
       tx.delete(runtimeSessionPresence)
-        .where(lt(runtimeSessionPresence.leaseUntil, before))
+        .where(and(
+          lt(runtimeSessionPresence.leaseUntil, before),
+          notExists(
+            tx.select({ id: agentStates.id })
+              .from(agentStates)
+              .where(and(
+                eq(agentStates.sessionId, runtimeSessionPresence.sessionId),
+                sql`EXISTS (
+                  SELECT 1
+                  FROM jsonb_array_elements(
+                    CASE
+                      WHEN jsonb_typeof(${agentStates.goals}) = 'array' THEN ${agentStates.goals}
+                      ELSE '[]'::jsonb
+                    END
+                  ) AS goal
+                  WHERE goal->>'status' = 'in_progress'
+                )`,
+              )),
+          ),
+        ))
         .returning({ sessionId: runtimeSessionPresence.sessionId }),
     );
     return rows.length;
@@ -214,6 +234,18 @@ export async function markRuntimePresenceClosingWithTx(
     status: 'closing',
     closedAt,
   }).where(eq(runtimeSessionPresence.sessionId, sessionId)).returning();
+  return rows[0] ? fromPresenceRow(rows[0]) : null;
+}
+
+export async function findRecordedRuntimePresenceWithTx(
+  tx: DrizzleTx,
+  sessionId: string,
+): Promise<RuntimeSessionPresence | null> {
+  validateSessionId(sessionId);
+  const rows = await tx.select().from(runtimeSessionPresence)
+    .where(eq(runtimeSessionPresence.sessionId, sessionId))
+    .for('update')
+    .limit(1);
   return rows[0] ? fromPresenceRow(rows[0]) : null;
 }
 

@@ -233,6 +233,7 @@ function selectingChain(rows: unknown[]) {
   chain.from = jest.fn(() => chain);
   chain.innerJoin = jest.fn(() => chain);
   chain.where = jest.fn(() => chain);
+  chain.for = jest.fn(() => chain);
   chain.orderBy = jest.fn(() => chain);
   chain.limit = jest.fn(() => Promise.resolve(rows));
   return chain;
@@ -1362,6 +1363,7 @@ describe('PostgresRuntimeSessionControlStore', () => {
 
   it('sweeps stale runtime presence rows', async () => {
     const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    transaction.select = jest.fn(() => selectingChain([]));
     transaction.delete = jest.fn(() => returningChain([{ sessionId: RUNTIME_SESSION_ID }]));
 
     await expect(store.sweepStalePresence(ONE_HOUR)).resolves.toBe(1);

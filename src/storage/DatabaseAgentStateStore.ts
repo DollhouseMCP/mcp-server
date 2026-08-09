@@ -12,6 +12,7 @@
 
 import { eq, and, desc } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
+import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { DrizzleTx } from '../database/db-utils.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
@@ -62,6 +63,7 @@ export type AgentSessionActivity = 'active' | 'inactive' | 'unknown';
 export type AgentSessionActivityResolver = (
   sessionId: string,
   userId: string,
+  tx: DrizzleTx,
 ) => Promise<AgentSessionActivity>;
 
 // ── Implementation ──────────────────────────────────────────────────
@@ -76,6 +78,7 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     getCurrentUserId: UserIdResolver,
     getCurrentSessionId: SessionIdResolver = () => 'default',
     private readonly resolveSessionActivity?: AgentSessionActivityResolver,
+    private readonly reclaimDb: DatabaseInstance = db,
   ) {
     this.db = db;
     this.getCurrentUserId = getCurrentUserId;
@@ -211,10 +214,6 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
       if (!this.hasClaimableGoals(candidate.goals, excludedGoalIds)) {
         continue;
       }
-      if (await this.resolveSessionActivity(candidate.sessionId, userId) !== 'inactive') {
-        continue;
-      }
-
       const transferredState = await this.tryTransferCandidate({
         candidate,
         userId,
@@ -258,7 +257,21 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     targetSessionId: string;
     excludedGoalIds: ReadonlySet<string>;
   }): Promise<AgentStateRow | null> {
-    return withUserContext(this.db, input.userId, async (tx) => {
+    // Reclaim is a control-plane operation. Use the system connection so the
+    // presence row and tenant-filtered agent rows are verified and locked in
+    // one transaction, without nesting another transaction on a pool of one.
+    return withSystemContext(this.reclaimDb, async (tx) => {
+      if (
+        !this.resolveSessionActivity ||
+        await this.resolveSessionActivity(
+          input.candidate.sessionId,
+          input.userId,
+          tx,
+        ) !== 'inactive'
+      ) {
+        return null;
+      }
+
       const lockedCurrent = await this.lockCurrentSessionRow(tx, input);
       if (lockedCurrent && this.getActiveGoalIds(lockedCurrent.goals).length > 0) {
         return null;
@@ -268,13 +281,6 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
       if (!locked || !this.hasClaimableGoals(locked.goals, input.excludedGoalIds)) {
         return null;
       }
-      if (
-        !this.resolveSessionActivity ||
-        await this.resolveSessionActivity(input.candidate.sessionId, input.userId) !== 'inactive'
-      ) {
-        return null;
-      }
-
       if (lockedCurrent) {
         return this.mergeCandidateIntoCurrent(tx, input, lockedCurrent, locked);
       }

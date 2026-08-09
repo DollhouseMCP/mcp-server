@@ -3,9 +3,16 @@
  * Tests agent state CRUD with optimistic locking against real Docker PostgreSQL.
  */
 
+import { randomUUID } from 'node:crypto';
+
+import { createDatabaseConnection } from '../../../src/database/connection.js';
 import { DatabaseAgentStateStore } from '../../../src/storage/DatabaseAgentStateStore.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
-import { buildAgentContent, cleanupAllTestData, cleanupTestAgentStates, closeTestDb, ensureTestUser, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+import {
+  findRecordedRuntimePresenceWithTx,
+  PostgresRuntimeSessionControlStore,
+} from '../../../src/web-console/services/runtime/PostgresRuntimeSessionControlStore.js';
+import { buildAgentContent, cleanupAllTestData, cleanupTestAgentStates, closeTestDb, ensureTestUser, fixedUserId, getTestAdminDb, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 let dbAvailable = false;
 
@@ -149,6 +156,7 @@ describe('DatabaseAgentStateStore', () => {
       fixedUserId(userId),
       () => sessionId,
       async candidateSessionId => activeSessions.has(candidateSessionId) ? 'active' : 'inactive',
+      getTestAdminDb(),
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -180,6 +188,7 @@ describe('DatabaseAgentStateStore', () => {
       fixedUserId(userId),
       () => sessionId,
       async candidateSessionId => candidateSessionId === 'session-a' ? 'inactive' : 'active',
+      getTestAdminDb(),
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -225,6 +234,7 @@ describe('DatabaseAgentStateStore', () => {
       fixedUserId(userId),
       () => sessionId,
       async candidateSessionId => candidateSessionId === 'session-a' ? 'active' : 'inactive',
+      getTestAdminDb(),
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -249,6 +259,7 @@ describe('DatabaseAgentStateStore', () => {
       fixedUserId(userId),
       () => sessionId,
       async () => 'inactive',
+      getTestAdminDb(),
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -273,13 +284,13 @@ describe('DatabaseAgentStateStore', () => {
     const resolveSessionActivity = async (candidateSessionId: string) =>
       activeSessions.has(candidateSessionId) ? 'active' as const : 'inactive' as const;
     const sourceStore = new DatabaseAgentStateStore(
-      getTestDb(), fixedUserId(userId), () => 'session-a', resolveSessionActivity,
+      getTestDb(), fixedUserId(userId), () => 'session-a', resolveSessionActivity, getTestAdminDb(),
     );
     const sessionBStore = new DatabaseAgentStateStore(
-      getTestDb(), fixedUserId(userId), () => 'session-b', resolveSessionActivity,
+      getTestDb(), fixedUserId(userId), () => 'session-b', resolveSessionActivity, getTestAdminDb(),
     );
     const sessionCStore = new DatabaseAgentStateStore(
-      getTestDb(), fixedUserId(userId), () => 'session-c', resolveSessionActivity,
+      getTestDb(), fixedUserId(userId), () => 'session-c', resolveSessionActivity, getTestAdminDb(),
     );
 
     await sourceStore.saveState(agentId, {
@@ -309,6 +320,7 @@ describe('DatabaseAgentStateStore', () => {
       fixedUserId(userId),
       () => sessionId,
       async () => 'unknown',
+      getTestAdminDb(),
     );
     const agentId = await createTestAgent(userId);
     const key = { name: 'state-test-agent', agentElementId: agentId };
@@ -322,5 +334,100 @@ describe('DatabaseAgentStateStore', () => {
     await expect(store.reclaimOrphaned(key)).resolves.toBeNull();
     sessionId = 'session-a';
     await expect(store.loadState(agentId)).resolves.not.toBeNull();
+  });
+
+  it('retains inactive presence through reclaim on a shared single-connection pool', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const agentId = await createTestAgent(userId);
+    const connection = createDatabaseConnection({
+      connectionUrl: process.env.DOLLHOUSE_TEST_DATABASE_ADMIN_URL
+        ?? 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test',
+      poolSize: 1,
+      ssl: 'disable',
+    });
+    const presenceStore = new PostgresRuntimeSessionControlStore(connection.db);
+    let sessionId = 'session-a';
+    const now = new Date();
+    const lastActiveAt = new Date(now.getTime() - 120_000);
+    const leaseUntil = new Date(now.getTime() - 60_000);
+
+    try {
+      await presenceStore.registerPresence({
+        sessionId,
+        userId,
+        accountCorrelationId: randomUUID(),
+        replicaId: 'single-pool-test',
+        transport: 'streamable-http',
+        startedAt: lastActiveAt,
+        lastActiveAt,
+        leaseUntil,
+      });
+      const store = new DatabaseAgentStateStore(
+        connection.db,
+        fixedUserId(userId),
+        () => sessionId,
+        async (candidateSessionId, candidateUserId, tx) => {
+          const presence = await findRecordedRuntimePresenceWithTx(tx, candidateSessionId);
+          if (presence?.userId !== candidateUserId) return 'unknown';
+          return presence.status === 'active' && presence.leaseUntil > new Date()
+            ? 'active'
+            : 'inactive';
+        },
+        connection.db,
+      );
+      const key = { name: 'state-test-agent', agentElementId: agentId };
+
+      await store.saveState(agentId, {
+        goals: [{ id: 'goal-single-pool', status: 'in_progress' }],
+        decisions: [], context: {}, stateVersion: 0,
+      }, 0);
+
+      await expect(presenceStore.sweepStalePresence(now)).resolves.toBe(0);
+      await expect(presenceStore.findRecordedPresence('session-a')).resolves.not.toBeNull();
+
+      sessionId = 'session-b';
+      await expect(store.reclaimOrphaned(key)).resolves.toMatchObject({
+        goals: expect.arrayContaining([
+          expect.objectContaining({ id: 'goal-single-pool', status: 'in_progress' }),
+        ]),
+      });
+
+      await expect(presenceStore.sweepStalePresence(now)).resolves.toBe(1);
+      await expect(presenceStore.findRecordedPresence('session-a')).resolves.toBeNull();
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it('does not retain stale presence for completed-only agent state', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const agentId = await createTestAgent(userId);
+    const sessionId = 'session-completed';
+    const now = new Date();
+    const lastActiveAt = new Date(now.getTime() - 120_000);
+    const presenceStore = new PostgresRuntimeSessionControlStore(getTestAdminDb());
+    const store = new DatabaseAgentStateStore(
+      getTestDb(), fixedUserId(userId), () => sessionId,
+    );
+
+    await presenceStore.registerPresence({
+      sessionId,
+      userId,
+      accountCorrelationId: randomUUID(),
+      replicaId: 'completed-state-test',
+      transport: 'streamable-http',
+      startedAt: lastActiveAt,
+      lastActiveAt,
+      leaseUntil: new Date(now.getTime() - 60_000),
+    });
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-completed', status: 'completed' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+
+    await expect(presenceStore.sweepStalePresence(now)).resolves.toBe(1);
+    await expect(presenceStore.findRecordedPresence(sessionId)).resolves.toBeNull();
   });
 });

@@ -102,7 +102,7 @@ export class DatabaseServiceRegistrar {
     const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
     const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
     const { DatabaseAgentStateStore } = await import('../../storage/DatabaseAgentStateStore.js');
-    const { PostgresRuntimeSessionControlStore } = await import(
+    const { findRecordedRuntimePresenceWithTx } = await import(
       '../../web-console/services/runtime/PostgresRuntimeSessionControlStore.js'
     );
 
@@ -140,7 +140,6 @@ export class DatabaseServiceRegistrar {
     // the DB-specific resolver (not the PathsServiceRegistrar fallback).
     const userIdResolver = container.resolve<UserIdResolver>('UserIdResolver');
     const sessionIdResolver = container.resolve<SessionIdResolver>('SessionIdResolver');
-    const runtimeSessionStore = new PostgresRuntimeSessionControlStore(systemConnection.db);
     container.register('StorageLayerFactory', () =>
       new DatabaseStorageLayerFactory(result.db, userIdResolver)
     );
@@ -149,11 +148,11 @@ export class DatabaseServiceRegistrar {
         result.db,
         userIdResolver,
         sessionIdResolver,
-        async (sessionId, userId) => {
+        async (sessionId, userId, tx) => {
           if (!env.DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED) {
             return 'unknown';
           }
-          const presence = await runtimeSessionStore.findRecordedPresence(sessionId);
+          const presence = await findRecordedRuntimePresenceWithTx(tx, sessionId);
           if (presence?.userId !== userId) {
             return 'unknown';
           }
@@ -161,6 +160,7 @@ export class DatabaseServiceRegistrar {
             ? 'active'
             : 'inactive';
         },
+        systemConnection.db,
       )
     );
 
