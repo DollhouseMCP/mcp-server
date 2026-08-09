@@ -247,6 +247,7 @@ async function loadLegacyConfig(configYamlPath: string): Promise<Record<string, 
   const parsed = SecureYamlParser.parseRawYaml(raw, {
     maxSize: MAX_LEGACY_CONFIG_YAML_SIZE,
     schema: 'failsafe',
+    contentPolicy: 'structure-only',
   });
   if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
     throw new Error(`Legacy config at ${configYamlPath} is not a valid YAML object`);

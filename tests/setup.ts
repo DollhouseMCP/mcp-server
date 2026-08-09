@@ -87,7 +87,8 @@ export default async function globalSetup() {
 
     // Run Drizzle migrations on the test database
     const { execFileSync } = await import('node:child_process');
-    execFileSync('npx', ['drizzle-kit', 'migrate'], {
+    const npxExecutable = process.platform === 'win32' ? 'npx.cmd' : 'npx';
+    execFileSync(npxExecutable, ['drizzle-kit', 'migrate'], {
       stdio: 'pipe',
       cwd: process.cwd(),
       timeout: 30000,
