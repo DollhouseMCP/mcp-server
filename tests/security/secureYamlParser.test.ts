@@ -263,6 +263,12 @@ invalid_key: value
       expect(result).toEqual({ enabled: true, count: 3 });
     });
 
+    it('rejects arrays at the raw YAML object boundary', () => {
+      expect(() => SecureYamlParser.parseRawYaml('- first\n- second\n', {
+        schema: 'json',
+      })).toThrow('YAML content must parse to an object');
+    });
+
     it('rejects alias amplification before parsing', () => {
       const aliases = Array.from({ length: 6 }, () => '  - *value').join('\n');
       expect(() => SecureYamlParser.parseRawYaml(
