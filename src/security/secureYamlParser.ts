@@ -227,16 +227,13 @@ export class SecureYamlParser {
         throw new SecurityError(`Invalid value for field '${key}'`, 'medium');
       }
 
-      // Validate string fields for injection patterns
-      if (typeof value === 'string' && opts.validateContent) {
-        const validation = ContentValidator.validateAndSanitize(value, {
-          contentContext: opts.contentContext,
-        });
-        if (!validation.isValid && validation.severity === 'critical') {
-          throw new SecurityError(`Security threat detected in field '${key}'`, 'critical');
-        }
-        // Replace with sanitized content
-        data[key] = validation.sanitizedContent;
+      if (opts.validateContent) {
+        data[key] = this.validateAndSanitizeParsedValue(
+          value,
+          key,
+          opts.contentContext,
+          new WeakSet<object>(),
+        );
       }
     }
 
@@ -256,6 +253,49 @@ export class SecureYamlParser {
       data,
       content: finalContent
     };
+  }
+
+  private static validateAndSanitizeParsedValue(
+    value: unknown,
+    path: string,
+    contentContext: SecureParseOptions['contentContext'],
+    visited: WeakSet<object>,
+  ): unknown {
+    if (typeof value === 'string') {
+      const validation = ContentValidator.validateAndSanitize(value, { contentContext });
+      if (!validation.isValid && validation.severity === 'critical') {
+        throw new SecurityError(`Security threat detected in field '${path}'`, 'critical');
+      }
+      return validation.sanitizedContent ?? value;
+    }
+
+    if (typeof value !== 'object' || value === null || visited.has(value)) {
+      return value;
+    }
+    visited.add(value);
+
+    if (Array.isArray(value)) {
+      for (let index = 0; index < value.length; index += 1) {
+        value[index] = this.validateAndSanitizeParsedValue(
+          value[index],
+          `${path}[${index}]`,
+          contentContext,
+          visited,
+        );
+      }
+      return value;
+    }
+
+    const record = value as Record<string, unknown>;
+    for (const [key, child] of Object.entries(record)) {
+      record[key] = this.validateAndSanitizeParsedValue(
+        child,
+        `${path}.${key}`,
+        contentContext,
+        visited,
+      );
+    }
+    return record;
   }
 
   /**
