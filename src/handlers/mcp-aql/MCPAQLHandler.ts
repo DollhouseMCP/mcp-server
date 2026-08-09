@@ -61,7 +61,7 @@ import {
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
-import { RateLimiterFactory, type RateLimiter, type RateLimitStatus } from '../../utils/RateLimiter.js';
+import { RateLimiter, RateLimiterFactory, type RateLimitStatus } from '../../utils/RateLimiter.js';
 import { env } from '../../config/env.js';
 import type { DangerZoneEnforcer } from '../../security/DangerZoneEnforcer.js';
 import type { IChallengeStore } from '../../state/IChallengeStore.js';
@@ -202,6 +202,8 @@ function validateMetricQueryParams(params: Record<string, unknown>): MetricQuery
 
 const DEADLOCK_RELIEF_REASON = 'Deadlock relief requested';
 const DEADLOCK_RELIEF_TIMEOUT_MS = 5 * 60 * 1000;
+const DEADLOCK_RELIEF_MAX_CHALLENGES = 3;
+const DEADLOCK_RELIEF_CHALLENGE_WINDOW_MS = 5 * 60 * 1000;
 const DEADLOCK_RELIEF_DIALOG_REASON =
   'Deadlock relief requested.\n\nThis will deactivate all active elements for the current session and clear persisted activation state.';
 
@@ -260,7 +262,7 @@ class VerificationRateLimiter {
  * Tracks success/failure/expiry rates and time-to-verify.
  */
 export interface VerificationMetrics {
-  /** Total verify_challenge calls since startup */
+  /** Total verification completion calls since startup, including deadlock relief */
   totalAttempts: number;
   /** Successful verifications */
   totalSuccesses: number;
@@ -447,6 +449,8 @@ export class MCPAQLHandler {
 
   /** Issue #1947: Per-session verification rate limiters */
   private readonly verificationRateLimiters = new Map<string, VerificationRateLimiter>();
+  /** Human-verification escape hatch: bound challenge creation and dialog spam per session. */
+  private readonly deadlockReliefIssuanceLimiters = new Map<string, RateLimiter>();
   /** Issue #142: Metrics tracker for verification operations */
   private readonly verificationMetrics = new VerificationMetricsTracker();
   /**
@@ -546,6 +550,13 @@ export class MCPAQLHandler {
     return this.resolveSessionScoped(this.verificationRateLimiters, () => new VerificationRateLimiter());
   }
 
+  private resolveDeadlockReliefIssuanceLimiter(): RateLimiter {
+    return this.resolveSessionScoped(this.deadlockReliefIssuanceLimiters, () => new RateLimiter({
+      maxRequests: DEADLOCK_RELIEF_MAX_CHALLENGES,
+      windowMs: DEADLOCK_RELIEF_CHALLENGE_WINDOW_MS,
+    }));
+  }
+
   private resolvePermissionPromptLimiter(): RateLimiter {
     return this.resolveSessionScoped(this.permissionPromptLimiters, () =>
       RateLimiterFactory.createPermissionPromptLimiter(
@@ -591,6 +602,7 @@ export class MCPAQLHandler {
 
     // Issue #1947: Remove per-session rate limiters
     this.verificationRateLimiters.delete(sessionId);
+    this.deadlockReliefIssuanceLimiters.delete(sessionId);
     this.permissionPromptLimiters.delete(sessionId);
     this.cliApprovalLimiters.delete(sessionId);
   }
@@ -1690,6 +1702,33 @@ export class MCPAQLHandler {
       throw new Error('Verification system not available. Ensure the server is properly configured.');
     }
 
+    this.checkDeadlockReliefVerificationLimit(
+      'challenge issuance',
+      'MCPAQLHandler.issueDeadlockReliefChallenge',
+    );
+    const issuanceLimiter = this.resolveDeadlockReliefIssuanceLimiter();
+    const issuanceStatus = issuanceLimiter.checkLimit();
+    if (!issuanceStatus.allowed) {
+      this.verificationMetrics.recordRateLimited();
+      SecurityMonitor.logSecurityEvent({
+        type: 'RATE_LIMIT_EXCEEDED',
+        severity: 'HIGH',
+        source: 'MCPAQLHandler.issueDeadlockReliefChallenge',
+        details: 'Deadlock relief challenge issuance rate-limited',
+        additionalData: {
+          sessionId: this.gatekeeper.sessionId,
+          retryAfterMs: issuanceStatus.retryAfterMs,
+          remainingTokens: issuanceStatus.remainingTokens,
+          resetTime: issuanceStatus.resetTime.toISOString(),
+        },
+      });
+      throw new VerificationError(
+        GatekeeperErrorCode.VERIFICATION_FAILED,
+        'Too many deadlock relief challenges requested. Please wait before requesting another code.',
+      );
+    }
+    issuanceLimiter.consumeToken();
+
     const challengeId = randomUUID();
     const code = generateDisplayCode();
     store.set(challengeId, {
@@ -1734,6 +1773,13 @@ export class MCPAQLHandler {
     snapshotFile?: string;
     message: string;
   }> {
+    this.verificationMetrics.recordAttempt();
+    const attemptTimestamp = Date.now();
+    this.checkDeadlockReliefVerificationLimit(
+      'challenge completion',
+      'MCPAQLHandler.completeDeadlockRelief',
+    );
+
     const store = this.handlers.verificationStore;
     if (!store) {
       throw new VerificationError(
@@ -1742,10 +1788,18 @@ export class MCPAQLHandler {
       );
     }
 
-    validateChallengeIdFormat(challengeId);
+    try {
+      validateChallengeIdFormat(challengeId);
+    } catch (error) {
+      this.verificationMetrics.recordInvalidFormat();
+      this.recordDeadlockReliefVerificationFailure('invalid_format');
+      throw error;
+    }
 
     const challenge = store.get(challengeId);
     if (!challenge) {
+      this.verificationMetrics.recordExpired();
+      this.recordDeadlockReliefVerificationFailure('expired_or_not_found');
       throw new VerificationError(
         GatekeeperErrorCode.VERIFICATION_TIMEOUT,
         'Deadlock relief challenge not found. It may have expired or already been used. Retry release_deadlock to receive a new code.',
@@ -1753,6 +1807,7 @@ export class MCPAQLHandler {
     }
 
     if (!this.challengeIsForDeadlockRelief(challenge)) {
+      this.recordDeadlockReliefVerificationFailure('wrong_challenge_type');
       throw new VerificationError(
         GatekeeperErrorCode.VERIFICATION_FAILED,
         'This challenge is not for deadlock relief. Use the matching verification flow for the requested operation.',
@@ -1761,11 +1816,15 @@ export class MCPAQLHandler {
 
     const valid = store.verify(challengeId, code);
     if (!valid) {
+      this.recordDeadlockReliefVerificationFailure('wrong_code');
       throw new VerificationError(
         GatekeeperErrorCode.VERIFICATION_FAILED,
         'Verification failed: incorrect code. The code has been consumed (one-time use). Retry release_deadlock to receive a new code.',
       );
     }
+
+    const verifyDurationMs = attemptTimestamp - (challenge.expiresAt - DEADLOCK_RELIEF_TIMEOUT_MS);
+    this.verificationMetrics.recordSuccess(verifyDurationMs > 0 ? verifyDurationMs : undefined);
 
     const reset = await this.handlers.elementCRUD.releaseDeadlock();
 
@@ -1795,6 +1854,43 @@ export class MCPAQLHandler {
       ...reset,
       message,
     };
+  }
+
+  private checkDeadlockReliefVerificationLimit(context: string, source: string): void {
+    if (!this.resolveVerificationRateLimiter().isLimited()) {
+      return;
+    }
+    this.verificationMetrics.recordRateLimited();
+    SecurityMonitor.logSecurityEvent({
+      type: 'VERIFICATION_FAILED',
+      severity: 'HIGH',
+      source,
+      details: `Deadlock relief verification rate-limited (${context})`,
+      additionalData: {
+        sessionId: this.gatekeeper.sessionId,
+        reason: 'rate_limited',
+      },
+    });
+    throw new VerificationError(
+      GatekeeperErrorCode.VERIFICATION_FAILED,
+      'Too many failed verification attempts. Please wait before trying deadlock relief again.',
+    );
+  }
+
+  private recordDeadlockReliefVerificationFailure(reason: string): void {
+    this.verificationMetrics.recordFailure();
+    const rateLimitExceeded = this.resolveVerificationRateLimiter().recordFailure();
+    SecurityMonitor.logSecurityEvent({
+      type: 'VERIFICATION_FAILED',
+      severity: 'HIGH',
+      source: 'MCPAQLHandler.completeDeadlockRelief',
+      details: `Deadlock relief verification failed (${reason})`,
+      additionalData: {
+        sessionId: this.gatekeeper.sessionId,
+        reason,
+        rateLimitExceeded,
+      },
+    });
   }
 
   /**
