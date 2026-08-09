@@ -41,4 +41,20 @@ describe('browser YAML safety boundary', () => {
     expect(() => parseBrowserYaml('cycle: &cycle\n  self: *cycle\n', { schema: 'json' }))
       .toThrow('cyclic');
   });
+
+  it('allows non-object values only when the caller explicitly requests them', () => {
+    expect(() => parseBrowserYaml('- one\n- two\n', { schema: 'json' })).toThrow('must contain an object');
+    expect(parseBrowserYaml('- one\n- two\n', { schema: 'json', requireObject: false }))
+      .toEqual(['one', 'two']);
+  });
+
+  it('rejects structures deeper than the console safety limit', () => {
+    const deeplyNested = Array.from(
+      { length: 66 },
+      (_, depth) => `${'  '.repeat(depth)}level${depth}:`,
+    ).join('\n') + `\n${'  '.repeat(66)}value: end\n`;
+
+    expect(() => parseBrowserYaml(deeplyNested, { schema: 'json' }))
+      .toThrow('structure exceeds');
+  });
 });

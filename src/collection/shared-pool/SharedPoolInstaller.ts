@@ -197,6 +197,9 @@ export class FileSharedPoolWriteStrategy implements SharedPoolWriteStrategy {
     this.assertContainedPath(resolvedBase, resolvedTypeDir, request.elementType);
 
     const safeName = path.basename(request.name.replaceAll('\\', '/').replaceAll('\0', ''));
+    if (safeName === '' || safeName === '.' || safeName === '..') {
+      throw new Error('Shared-pool element name must contain a valid filename');
+    }
     const filename = safeName.endsWith('.md') ? safeName : `${safeName}.md`;
     const filePath = path.join(resolvedTypeDir, filename);
 
