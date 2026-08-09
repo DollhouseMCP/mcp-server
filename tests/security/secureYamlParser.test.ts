@@ -246,6 +246,32 @@ invalid_key: value
     });
   });
 
+  describe('parseRawYaml schema selection', () => {
+    it('preserves scalar strings for legacy FAILSAFE config migration', () => {
+      const result = SecureYamlParser.parseRawYaml('enabled: true\ncount: 3\n', {
+        schema: 'failsafe',
+      });
+
+      expect(result).toEqual({ enabled: 'true', count: '3' });
+    });
+
+    it('preserves JSON-compatible scalar types for element exports', () => {
+      const result = SecureYamlParser.parseRawYaml('enabled: true\ncount: 3\n', {
+        schema: 'json',
+      });
+
+      expect(result).toEqual({ enabled: true, count: 3 });
+    });
+
+    it('rejects alias amplification before parsing', () => {
+      const aliases = Array.from({ length: 6 }, () => '  - *value').join('\n');
+      expect(() => SecureYamlParser.parseRawYaml(
+        `value: &value\n  text: test\nitems:\n${aliases}\n`,
+        { schema: 'json' },
+      )).toThrow('Malicious YAML content detected');
+    });
+  });
+
   describe('safeMatter', () => {
     it('should provide gray-matter compatible output', () => {
       const content = `---

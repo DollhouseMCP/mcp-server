@@ -10,10 +10,8 @@
  * - Template files (e.g., meeting-notes.md)
  * - Any Markdown file with YAML frontmatter between --- markers
  * 
- * DO NOT USE THIS FOR:
- * - Pure YAML configuration files (use js-yaml directly with FAILSAFE_SCHEMA)
- * - JSON files
- * - Plain text files without frontmatter
+ * For bounded pure-YAML documents, use parseRawYaml() and select the schema
+ * required by the data contract. Do not call js-yaml directly at input boundaries.
  * 
  * FILE FORMAT EXPECTED:
  * ```
@@ -47,6 +45,11 @@ export interface SecureParseOptions {
   validateFields?: boolean; // Whether to apply field-specific validators (for persona metadata)
   /** Content context for ContentValidator — exempts legitimate patterns (e.g., <script> in templates) */
   contentContext?: 'persona' | 'skill' | 'template' | 'agent' | 'memory';
+}
+
+export interface SecureRawYamlParseOptions {
+  maxSize?: number;
+  schema?: 'core' | 'json' | 'failsafe';
 }
 
 export interface ParsedContent {
@@ -326,9 +329,16 @@ export class SecureYamlParser {
    * @returns Parsed object
    * @throws SecurityError if content is too large or contains threats
    */
-  static parseRawYaml(yamlContent: string, maxSize: number = 64 * 1024): Record<string, unknown> {
+  static parseRawYaml(
+    yamlContent: string,
+    maxSizeOrOptions: number | SecureRawYamlParseOptions = 64 * 1024,
+  ): Record<string, unknown> {
+    const options = typeof maxSizeOrOptions === 'number'
+      ? { maxSize: maxSizeOrOptions, schema: 'core' as const }
+      : { maxSize: 64 * 1024, schema: 'core' as const, ...maxSizeOrOptions };
+
     // Size validation
-    if (yamlContent.length > maxSize) {
+    if (yamlContent.length > options.maxSize) {
       throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
     }
 
@@ -337,7 +347,7 @@ export class SecureYamlParser {
     // Issue #2329: pass maxSize through — validateYamlContent's own default cap is
     // 64KB (frontmatter-sized), which rejected larger pure-YAML documents even
     // when the caller allowed them.
-    if (!ContentValidator.validateYamlContent(yamlContent, maxSize)) {
+    if (!ContentValidator.validateYamlContent(yamlContent, options.maxSize)) {
       SecurityMonitor.logSecurityEvent({
         type: 'YAML_INJECTION_ATTEMPT',
         severity: 'CRITICAL',
@@ -349,7 +359,7 @@ export class SecureYamlParser {
 
     // Parse with safe schema
     const parsed = yaml.load(yamlContent, {
-      schema: this.SAFE_SCHEMA,  // CORE_SCHEMA - safe basic types only
+      schema: this.rawYamlSchema(options.schema),
       json: false
     });
 
@@ -359,5 +369,17 @@ export class SecureYamlParser {
     }
 
     return parsed as Record<string, unknown>;
+  }
+
+  private static rawYamlSchema(schema: SecureRawYamlParseOptions['schema']): yaml.Schema {
+    switch (schema) {
+      case 'failsafe':
+        return yaml.FAILSAFE_SCHEMA;
+      case 'json':
+        return yaml.JSON_SCHEMA;
+      case 'core':
+      default:
+        return this.SAFE_SCHEMA;
+    }
   }
 }

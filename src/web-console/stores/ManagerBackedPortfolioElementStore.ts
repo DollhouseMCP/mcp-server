@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import yaml from 'js-yaml';
-
 import type { IElement } from '../../types/elements/IElement.js';
 import type { BaseElementManager } from '../../elements/base/BaseElementManager.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
@@ -10,6 +9,7 @@ import {
   clonePortfolioElementDetailRecord,
   clonePortfolioElementSummaryRecord,
   CONSOLE_PORTFOLIO_ELEMENT_TYPES,
+  PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
   PortfolioElementAlreadyExistsError,
   PortfolioElementVersionConflictError,
   type ConsolePortfolioElementCreateInput,
@@ -348,7 +348,10 @@ function coerceEntryContent(value: unknown): string {
 
 function safeYamlLoad(value: string): unknown {
   try {
-    return yaml.load(value, { schema: yaml.JSON_SCHEMA });
+    return SecureYamlParser.parseRawYaml(value, {
+      maxSize: PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
+      schema: 'json',
+    });
   } catch {
     return undefined;
   }
@@ -369,7 +372,10 @@ function parsePureYamlExport(
   type: ConsolePortfolioElementType,
   rawContent: string,
 ): { readonly metadata: Readonly<Record<string, unknown>>; readonly content: string } {
-  const parsed = yaml.load(rawContent, { schema: yaml.JSON_SCHEMA });
+  const parsed = SecureYamlParser.parseRawYaml(rawContent, {
+    maxSize: PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
+    schema: 'json',
+  });
   const record = isRecord(parsed) ? parsed : {};
   const metadata = isRecord(record.metadata) ? record.metadata : record;
   if (type === 'memories') {

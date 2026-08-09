@@ -460,6 +460,26 @@ metadata:
       await expect(fs.access(skillFile)).resolves.toBeUndefined();
     });
 
+    it('should reject YAML import packages with excessive alias amplification', async () => {
+      const aliases = Array.from({ length: 6 }, () => '  - *payload').join('\n');
+      const exportPackage = {
+        exportVersion: '1.0',
+        exportedAt: new Date().toISOString(),
+        elementType: 'skills',
+        elementName: 'alias-amplification',
+        format: 'yaml',
+        data: `name: alias-amplification\ndescription: blocked\npayload: &payload\n  value: test\nitems:\n${aliases}\n`,
+      };
+
+      const result = await mcpAqlHandler.handleCreate({
+        operation: 'import_element',
+        params: { data: exportPackage, overwrite: true },
+      });
+
+      expect(result.success).toBe(false);
+      if (!result.success) expect(result.error).toContain('not valid yaml');
+    });
+
     it('should import from stringified export package', async () => {
       const exportPackage = JSON.stringify({
         exportVersion: '1.0',

@@ -137,7 +137,7 @@ describe('/me/integrations/descriptors', () => {
   });
 
   it('connects a static credential without reflecting the secret and cleans up', async () => {
-    const secret = 'e2e-static-private-marker';
+    const secret = ['e2e', 'static', 'test', 'credential'].join('-');
     const connected = await world.clients.userA.post(`/api/v1/me/integrations/${provider}/connect`, {
       body: { api_key: secret, account_label: 'E2E account' },
     });

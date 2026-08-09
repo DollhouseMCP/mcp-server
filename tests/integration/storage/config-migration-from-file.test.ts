@@ -261,6 +261,36 @@ describe('configToDatabase migration', () => {
       ).rejects.toThrow();
     });
 
+    it('rejects alias-amplification payloads before parsing legacy config', async () => {
+      const aliases = Array.from({ length: 6 }, () => '  - *defaults').join('\n');
+      await fs.writeFile(
+        path.join(configRoot, 'config.yml'),
+        `defaults: &defaults\n  enabled: true\nuser:\n${aliases}\n`,
+      );
+
+      await expect(
+        runConfigToDatabaseMigration({
+          operatorStore, userStore, signingKeyStore,
+          userId: TEST_USER_ID,
+          legacyConfigRoot: configRoot,
+          legacyRunRoot: runRoot,
+        }),
+      ).rejects.toThrow('Malicious YAML content detected');
+    });
+
+    it('rejects legacy config larger than the bounded migration input', async () => {
+      await fs.writeFile(path.join(configRoot, 'config.yml'), `user:\n  value: ${'x'.repeat(64 * 1024)}\n`);
+
+      await expect(
+        runConfigToDatabaseMigration({
+          operatorStore, userStore, signingKeyStore,
+          userId: TEST_USER_ID,
+          legacyConfigRoot: configRoot,
+          legacyRunRoot: runRoot,
+        }),
+      ).rejects.toThrow('exceeds maximum allowed size');
+    });
+
     it('throws on malformed JWKS keyfile rather than silently skipping', async () => {
       await fs.writeFile(path.join(runRoot, 'oauth-signing-key.json'), '{"not": "a-keypair"}');
       await expect(

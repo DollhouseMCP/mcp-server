@@ -193,9 +193,11 @@ export class SecurityRules {
         category: 'custom',
         check: (content, _context) => {
           const findings: SecurityFinding[] = [];
-          // Check for user input processing without Unicode validation
-          const inputPattern = /(?:req\.|request\.|params|query|body|content)/;
-          const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode/i.test(content);
+          // Restrict this heuristic to direct HTTP request-boundary access. Generic
+          // names such as `content`, `body`, or `params` appear throughout models,
+          // stores, and browser rendering code and do not establish user input.
+          const inputPattern = /\b(?:req|request)\s*\.\s*(?:body|query|params)\b/;
+          const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode|\.normalize\(\s*['"]NFC['"]\s*\)/i.test(content);
           
           if (inputPattern.test(content) && !hasUnicodeCheck) {
             findings.push({

@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "assets": [
+    {
+      "file": "purify.min.js",
+      "package": "dompurify",
+      "packageVersion": "3.2.4",
+      "license": "Apache-2.0 OR MPL-2.0",
+      "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.2.4.tgz",
+      "sha256": "8eb41b658831fab175fad9bcd00fcb2d84e0ed3a25a55053d4ecd4444b8b43a0"
+    },
+    {
+      "file": "marked.min.js",
+      "package": "marked",
+      "packageVersion": "11.1.1",
+      "license": "MIT",
+      "source": "https://registry.npmjs.org/marked/-/marked-11.1.1.tgz",
+      "sha256": "f33a2d78362bde001670e3a29b01fd0dc16a7f9194d042a775af89270ab38b74"
+    },
+    {
+      "file": "js-yaml.min.js",
+      "package": "js-yaml",
+      "packageVersion": "4.1.0",
+      "license": "MIT",
+      "source": "https://registry.npmjs.org/js-yaml/-/js-yaml-4.1.0.tgz",
+      "sha256": "45dc3dd03dc07a06705a2c2989b8c7f709013f04bd5386e3279d4e447f07ebd7"
+    }
+  ]
+}

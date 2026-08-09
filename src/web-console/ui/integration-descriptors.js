@@ -7,8 +7,10 @@
 
 import { del, get, patch, post, put } from './api.js';
 import { confirmDialog, escapeHtml } from './ui-utils.js';
+import { assertTextWithinByteLimit, parseBrowserYaml } from './yaml-safety.js';
 
 const DESCRIPTORS_PATH = '/me/integrations/descriptors';
+const OPENAPI_SPEC_MAX_BYTES = 1024 * 1024;
 
 export function createIntegrationDescriptorManager(options) {
   const manager = {
@@ -665,15 +667,13 @@ async function saveSpec(manager, form) {
 
 function parseSpec(text) {
   if (!text) throw new Error('Choose a file or paste an OpenAPI definition.');
+  assertTextWithinByteLimit(text, OPENAPI_SPEC_MAX_BYTES);
   let value;
   try {
     value = JSON.parse(text);
   } catch {
-    // Without this the optional call yields undefined rather than throwing, and a missing YAML
-    // parser is reported as malformed content.
-    if (!globalThis.jsyaml) throw new Error('YAML support did not load. Paste the definition as JSON instead.');
     try {
-      value = globalThis.jsyaml.load(text);
+      value = parseBrowserYaml(text, { maxBytes: OPENAPI_SPEC_MAX_BYTES, schema: 'json' });
     } catch {
       throw new Error('The API definition is not valid JSON or YAML.');
     }
