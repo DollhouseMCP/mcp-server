@@ -152,6 +152,9 @@ describe('AgentExecutionHandler abort recovery', () => {
 
   it('tracks a continuation goal without resetting the existing execution state', async () => {
     const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-1', status: 'in_progress' }]),
+    );
     const executionEntry = policy('test-agent', 'goal-1');
     executionEntry.continuationCount = 2;
     const executingAgents = new Map([
@@ -168,6 +171,9 @@ describe('AgentExecutionHandler abort recovery', () => {
     expect(executingAgents.get('session-a:test-agent')).toBe(executionEntry);
     expect(executionEntry.goalIds).toEqual(['goal-1', 'goal-2']);
     expect(executionEntry.continuationCount).toBe(2);
+    expect(mocks.continueAgentExecution).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-1',
+    }));
 
     await handler.dispatch('complete', {
       element_name: 'test-agent',
@@ -418,6 +424,71 @@ describe('AgentExecutionHandler abort recovery', () => {
     });
 
     expect(executingAgents.get('session-b:test-agent')?.goalIds).toEqual(['goal-1', 'goal-2']);
+    expect(mocks.continueAgentExecution).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-1',
+    }));
+  });
+
+  it('rejects continuing a goal still owned by another live session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
+    );
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await expect(handler.dispatch('continue', {
+      element_name: 'test-agent',
+      previousStepResult: 'Attempt cross-session continuation',
+      parameters: {},
+    })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
+
+    expect(mocks.continueAgentExecution).not.toHaveBeenCalled();
+  });
+
+  it('routes continuation to the active goal owned by the calling session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(stateWithGoals([
+      { id: 'goal-live', status: 'in_progress' },
+      { id: 'goal-owned', status: 'in_progress' },
+    ]));
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+      ['session-b:test-agent', policy('test-agent', 'goal-owned')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await handler.dispatch('continue', {
+      element_name: 'test-agent',
+      previousStepResult: 'Resume owned work',
+      parameters: {},
+    });
+
+    expect(mocks.continueAgentExecution).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-owned',
+    }));
+  });
+
+  it('rejects continuation when the calling session policy is stale', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
+    );
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-stale')],
+      ['session-b:test-agent', policy('test-agent', 'goal-live')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-a');
+
+    await expect(handler.dispatch('continue', {
+      element_name: 'test-agent',
+      previousStepResult: 'Resume stale work',
+      parameters: {},
+    })).rejects.toThrow("No active goal found for agent 'test-agent' in this session");
+
+    expect(mocks.continueAgentExecution).not.toHaveBeenCalled();
   });
 
   it('records a reclaimed step against the goal owned by the replacement session', async () => {

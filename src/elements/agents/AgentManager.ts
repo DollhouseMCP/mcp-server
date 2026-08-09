@@ -3382,6 +3382,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   async continueAgentExecution(params: {
     agentName: string;
+    goalId?: string;
     parameters?: Record<string, unknown>;
     previousStepResult?: string;
   }): Promise<ExecuteAgentResult & {
@@ -3417,9 +3418,17 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 2. Get current state
     const state = agent.getState();
-    const activeGoal = state.goals.find(goal => goal.status === 'in_progress');
+    const activeGoal = params.goalId
+      ? state.goals.find(goal => goal.id === params.goalId && goal.status === 'in_progress')
+      : state.goals.find(goal => goal.status === 'in_progress');
 
     if (!activeGoal) {
+      if (params.goalId) {
+        throw new Error(
+          `Goal '${params.goalId}' is not an in-progress goal for agent '${params.agentName}'. ` +
+          'Use execute_agent to start a new goal.'
+        );
+      }
       throw new Error(
         `continue_execution requires an in-progress goal for agent '${params.agentName}'. ` +
         `Use execute_agent to start a new goal. If you are reporting progress for ` +

@@ -475,11 +475,29 @@ export class AgentExecutionHandler {
     params: Record<string, unknown>
   ): Promise<unknown> {
     const executionKey = this.executionKey(manager, elementName);
-    if (!this.executingAgents.has(executionKey)) {
-      await this.reclaimOrphanedExecution(manager, elementName);
+    const executionEntry = this.executingAgents.get(executionKey)
+      ?? await this.reclaimOrphanedExecution(manager, elementName);
+    if (!executionEntry) {
+      throw new Error(
+        `No active execution found for agent '${elementName}' in this session. ` +
+        'Use execute_agent to start a new goal. If you are reporting progress for ' +
+        'the current goal, use mcp_aql_create record_execution_step.',
+      );
     }
+
+    const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    const ownedGoalId = this.getOwnedActiveGoalIds(activeGoalIds, executionEntry).at(-1);
+    if (!ownedGoalId) {
+      throw new Error(
+        `No active goal found for agent '${elementName}' in this session. ` +
+        'Use execute_agent to start a new goal. If you are reporting progress for ' +
+        'the current goal, use mcp_aql_create record_execution_step.',
+      );
+    }
+
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,
+      goalId: ownedGoalId,
       previousStepResult: params.previousStepResult as string | undefined,
       parameters: params.parameters as Record<string, unknown> | undefined,
     });

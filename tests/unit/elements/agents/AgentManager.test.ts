@@ -122,6 +122,63 @@ describe('AgentManager', () => {
   });
 
   describe('Recovery state synchronization', () => {
+    it('continues the requested in-progress goal instead of another session goal', async () => {
+      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const otherGoal = agent.addGoal({ description: 'Other session execution' });
+      otherGoal.status = 'in_progress';
+      const ownedGoal = agent.addGoal({ description: 'Calling session execution' });
+      ownedGoal.status = 'in_progress';
+      agent.recordDecision({
+        goalId: ownedGoal.id,
+        decision: 'pause',
+        reasoning: 'Paused for an external dependency',
+        confidence: 1,
+        outcome: 'partial',
+      });
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      const executeSpy = jest.spyOn(agentManager, 'executeAgent').mockResolvedValue({
+        agentName: 'test-agent',
+        goal: 'Continued execution',
+        goalId: 'goal-continuation',
+        activeElements: {},
+        availableTools: [],
+        successCriteria: [],
+        safetyTier: 'advisory',
+      });
+
+      await expect(agentManager.continueAgentExecution({
+        agentName: 'test-agent',
+        goalId: ownedGoal.id,
+      })).resolves.toEqual(expect.objectContaining({
+        previousState: expect.objectContaining({
+          goals: expect.arrayContaining([
+            expect.objectContaining({ id: ownedGoal.id }),
+          ]),
+        }),
+      }));
+
+      expect(executeSpy).toHaveBeenCalledWith(
+        'test-agent',
+        {},
+        { operationName: 'continue_execution' },
+      );
+    });
+
+    it('rejects a requested goal that is not in progress', async () => {
+      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const activeGoal = agent.addGoal({ description: 'Another active execution' });
+      activeGoal.status = 'in_progress';
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      const executeSpy = jest.spyOn(agentManager, 'executeAgent');
+
+      await expect(agentManager.continueAgentExecution({
+        agentName: 'test-agent',
+        goalId: 'goal-not-owned',
+      })).rejects.toThrow("Goal 'goal-not-owned' is not an in-progress goal");
+
+      expect(executeSpy).not.toHaveBeenCalled();
+    });
+
     it('serializes execute_agent behind an in-flight orphan reclaim', async () => {
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('.state.yaml')) {
