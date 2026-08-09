@@ -54,7 +54,7 @@ export interface SecureRawYamlParseOptions {
   /** Strict scans scalar text; structure-only leaves element content policy to its owner. */
   contentPolicy?: 'strict' | 'structure-only';
   /** When provided, recursively validates parsed scalar values using the element's content policy. */
-  contentContext?: SecureParseOptions['contentContext'];
+  contentContext?: NonNullable<SecureParseOptions['contentContext']>;
 }
 
 export interface ParsedContent {
