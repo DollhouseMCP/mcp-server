@@ -3099,8 +3099,12 @@ export class AgentManager extends BaseElementManager<Agent> {
           : `No in-progress goal found for agent '${params.agentName}'`
       );
     }
-    if (strictState && goal.status !== 'in_progress') {
-      throw new Error(`Goal '${goal.id}' changed while aborting agent '${params.agentName}'`);
+    if (goal.status !== 'in_progress') {
+      throw new Error(
+        strictState
+          ? `Goal '${goal.id}' changed while aborting agent '${params.agentName}'`
+          : `Goal '${goal.id}' is not in progress for agent '${params.agentName}'`
+      );
     }
 
     // 3. Record final decision with summary

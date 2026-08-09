@@ -179,6 +179,26 @@ describe('AgentManager', () => {
       expect(executeSpy).not.toHaveBeenCalled();
     });
 
+    it('rejects a second completion of an explicitly identified finalized goal', async () => {
+      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const completedGoal = agent.addGoal({ description: 'Already completed execution' });
+      completedGoal.status = 'in_progress';
+      agent.completeGoal(completedGoal.id, 'success');
+      const originalDecisionCount = agent.getState().decisions.length;
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+
+      await expect(agentManager.completeAgentGoal({
+        agentName: 'test-agent',
+        goalId: completedGoal.id,
+        outcome: 'failure',
+        summary: 'Attempted duplicate completion',
+      })).rejects.toThrow(`Goal '${completedGoal.id}' is not in progress`);
+
+      const unchangedGoal = agent.getState().goals.find(goal => goal.id === completedGoal.id);
+      expect(unchangedGoal?.status).toBe('completed');
+      expect(agent.getState().decisions).toHaveLength(originalDecisionCount);
+    });
+
     it('serializes execute_agent behind an in-flight orphan reclaim', async () => {
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
         if (filePath.includes('.state.yaml')) {
