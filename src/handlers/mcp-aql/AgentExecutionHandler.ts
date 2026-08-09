@@ -474,26 +474,7 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
-    const executionKey = this.executionKey(manager, elementName);
-    const executionEntry = this.executingAgents.get(executionKey)
-      ?? await this.reclaimOrphanedExecution(manager, elementName);
-    if (!executionEntry) {
-      throw new Error(
-        `No active execution found for agent '${elementName}' in this session. ` +
-        'Use execute_agent to start a new goal. If you are reporting progress for ' +
-        'the current goal, use mcp_aql_create record_execution_step.',
-      );
-    }
-
-    const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
-    const ownedGoalId = this.getOwnedActiveGoalIds(activeGoalIds, executionEntry).at(-1);
-    if (!ownedGoalId) {
-      throw new Error(
-        `No active goal found for agent '${elementName}' in this session. ` +
-        'Use execute_agent to start a new goal. If you are reporting progress for ' +
-        'the current goal, use mcp_aql_create record_execution_step.',
-      );
-    }
+    const ownedGoalId = await this.requireOwnedActiveGoal(manager, elementName);
 
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,
@@ -510,6 +491,38 @@ export class AgentExecutionHandler {
       true,
     );
     return { _type: 'ContinueResult', ...continueResult };
+  }
+
+  private async requireOwnedActiveGoal(
+    manager: AgentManager,
+    elementName: string,
+    requiredGoalId?: string,
+  ): Promise<string> {
+    const executionKey = this.executionKey(manager, elementName);
+    const executionEntry = this.executingAgents.get(executionKey)
+      ?? await this.reclaimOrphanedExecution(manager, elementName);
+    if (!executionEntry) {
+      throw new Error(
+        `No active execution found for agent '${elementName}' in this session. ` +
+        'Use execute_agent to start a new goal. If you are reporting progress for ' +
+        'the current goal, use mcp_aql_create record_execution_step.',
+      );
+    }
+
+    const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    const ownedGoalIds = this.getOwnedActiveGoalIds(activeGoalIds, executionEntry);
+    const ownedGoalId = requiredGoalId
+      ? ownedGoalIds.find(goalId => goalId === requiredGoalId)
+      : ownedGoalIds.at(-1);
+    if (!ownedGoalId) {
+      const goalDetail = requiredGoalId ? ` Goal '${requiredGoalId}' is not owned here.` : '';
+      throw new Error(
+        `No active goal found for agent '${elementName}' in this session.${goalDetail} ` +
+        'Use execute_agent to start a new goal. If you are reporting progress for ' +
+        'the current goal, use mcp_aql_create record_execution_step.',
+      );
+    }
+    return ownedGoalId;
   }
 
   private async abort(
@@ -720,7 +733,11 @@ export class AgentExecutionHandler {
       throw new Error('goalId is required for prepare_handoff');
     }
 
-    const gatheredData = await manager.getGatheredData({ agentName: elementName, goalId });
+    const ownedGoalId = await this.requireOwnedActiveGoal(manager, elementName, goalId);
+    const gatheredData = await manager.getGatheredData({
+      agentName: elementName,
+      goalId: ownedGoalId,
+    });
     const { activeElements, successCriteria } = await this.getHandoffMetadata(manager, elementName);
     const handoffState = prepareHandoffState(elementName, gatheredData, activeElements, successCriteria);
 
@@ -769,13 +786,15 @@ export class AgentExecutionHandler {
       throw new Error('Handoff agent mismatch: the handoff block was not prepared for this agent');
     }
 
-    const executionKey = this.executionKey(manager, elementName);
-    if (!this.executingAgents.has(executionKey)) {
-      await this.reclaimOrphanedExecution(manager, elementName);
-    }
+    const ownedGoalId = await this.requireOwnedActiveGoal(
+      manager,
+      elementName,
+      restoredState.goalId,
+    );
     const callerParams = (params.parameters as Record<string, unknown>) || {};
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,
+      goalId: ownedGoalId,
       previousStepResult: `Resumed from handoff (goalId: ${restoredState.goalId}, ${restoredState.goalProgress.stepsCompleted} steps completed)`,
       parameters: {
         ...callerParams,

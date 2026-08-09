@@ -341,8 +341,6 @@ describe('Agent Execution Lifecycle (Issues #106, #122)', () => {
       if (!execResult.success) return;
       const goalId = (execResult.data as any).goalId;
 
-      await completeAgent('handoff-src');
-
       const handoffResult = await mcpAqlHandler.handleExecute({
         operation: 'prepare_handoff',
         params: { element_name: 'handoff-src', goalId },
@@ -350,6 +348,8 @@ describe('Agent Execution Lifecycle (Issues #106, #122)', () => {
       expect(handoffResult.success).toBe(true);
       if (!handoffResult.success) return;
       const handoffBlock = (handoffResult.data as any).handoffBlock;
+
+      await completeAgent('handoff-src');
 
       // Try to resume on a different agent — should fail
       const resumeResult = await mcpAqlHandler.handleExecute({

@@ -1,6 +1,7 @@
 import { jest } from '@jest/globals';
 
 import type { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
+import { generateHandoffBlock, prepareHandoffState } from '../../../../src/elements/agents/handoff.js';
 import { AgentExecutionHandler } from '../../../../src/handlers/mcp-aql/AgentExecutionHandler.js';
 import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 import type { ExecutingAgentEntry } from '../../../../src/handlers/mcp-aql/shared.js';
@@ -11,6 +12,7 @@ interface ManagerMocks {
   read: jest.Mock;
   continueAgentExecution: jest.Mock;
   completeAgentGoal: jest.Mock;
+  getGatheredData: jest.Mock;
   getAgentState: jest.Mock;
   getAgentStateForRecovery: jest.Mock;
   reclaimOrphanedAgentState: jest.Mock;
@@ -36,6 +38,28 @@ function stateWithGoals(goals: Array<{ id: string; status: string }>) {
   return { state: { goals } };
 }
 
+function handoffBlock(agentName: string, goalId: string): string {
+  return generateHandoffBlock(prepareHandoffState(agentName, {
+    goalId,
+    agentName,
+    gatheredAt: new Date().toISOString(),
+    entries: [],
+    summary: {
+      totalSteps: 1,
+      successfulSteps: 1,
+      failedSteps: 0,
+      partialSteps: 0,
+      averageConfidence: 1,
+      durationMs: 1,
+    },
+    goal: {
+      description: 'Handoff goal',
+      status: 'in_progress',
+      createdAt: new Date().toISOString(),
+    },
+  }, { agents: [agentName] }));
+}
+
 function createManager(): ManagerMocks {
   const executeAgent = jest.fn().mockResolvedValue({
     agentName: 'test-agent',
@@ -51,6 +75,25 @@ function createManager(): ManagerMocks {
   const completeAgentGoal = jest.fn().mockImplementation(({ goalId }) => Promise.resolve({
     success: true,
     goal: { id: goalId },
+  }));
+  const getGatheredData = jest.fn().mockImplementation(({ agentName, goalId }) => Promise.resolve({
+    goalId,
+    agentName,
+    gatheredAt: new Date().toISOString(),
+    entries: [],
+    summary: {
+      totalSteps: 1,
+      successfulSteps: 1,
+      failedSteps: 0,
+      partialSteps: 0,
+      averageConfidence: 1,
+      durationMs: 1,
+    },
+    goal: {
+      description: 'Handoff goal',
+      status: 'in_progress',
+      createdAt: new Date().toISOString(),
+    },
   }));
   const getAgentState = jest.fn();
   const getAgentStateForRecovery = jest.fn();
@@ -70,6 +113,7 @@ function createManager(): ManagerMocks {
     read,
     continueAgentExecution,
     completeAgentGoal,
+    getGatheredData,
     getAgentState,
     getAgentStateForRecovery,
     reclaimOrphanedAgentState,
@@ -93,6 +137,7 @@ function createManager(): ManagerMocks {
     read,
     continueAgentExecution,
     completeAgentGoal,
+    getGatheredData,
     getAgentState,
     getAgentStateForRecovery,
     reclaimOrphanedAgentState,
@@ -487,6 +532,109 @@ describe('AgentExecutionHandler abort recovery', () => {
       previousStepResult: 'Resume stale work',
       parameters: {},
     })).rejects.toThrow("No active goal found for agent 'test-agent' in this session");
+
+    expect(mocks.continueAgentExecution).not.toHaveBeenCalled();
+  });
+
+  it('rejects a handoff resume for a goal owned by another live session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
+    );
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await expect(handler.dispatch('resumeFromHandoff', {
+      element_name: 'test-agent',
+      handoffBlock: handoffBlock('test-agent', 'goal-live'),
+      parameters: {},
+    })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
+
+    expect(mocks.continueAgentExecution).not.toHaveBeenCalled();
+  });
+
+  it('rejects preparing a handoff for a goal owned by another live session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(
+      stateWithGoals([{ id: 'goal-live', status: 'in_progress' }]),
+    );
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-live')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await expect(handler.dispatch('prepareHandoff', {
+      element_name: 'test-agent',
+      goalId: 'goal-live',
+    })).rejects.toThrow("No active execution found for agent 'test-agent' in this session");
+
+    expect(mocks.getGatheredData).not.toHaveBeenCalled();
+  });
+
+  it('prepares a handoff only for the active goal owned by the calling session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(stateWithGoals([
+      { id: 'goal-other', status: 'in_progress' },
+      { id: 'goal-owned', status: 'in_progress' },
+    ]));
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-other')],
+      ['session-b:test-agent', policy('test-agent', 'goal-owned')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await handler.dispatch('prepareHandoff', {
+      element_name: 'test-agent',
+      goalId: 'goal-owned',
+    });
+
+    expect(mocks.getGatheredData).toHaveBeenCalledWith({
+      agentName: 'test-agent',
+      goalId: 'goal-owned',
+    });
+  });
+
+  it('resumes only the handoff goal owned by the calling session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(stateWithGoals([
+      { id: 'goal-other', status: 'in_progress' },
+      { id: 'goal-handoff', status: 'in_progress' },
+    ]));
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-other')],
+      ['session-b:test-agent', policy('test-agent', 'goal-handoff')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents, undefined, 'session-b');
+
+    await handler.dispatch('resumeFromHandoff', {
+      element_name: 'test-agent',
+      handoffBlock: handoffBlock('test-agent', 'goal-handoff'),
+      parameters: {},
+    });
+
+    expect(mocks.continueAgentExecution).toHaveBeenCalledWith(expect.objectContaining({
+      goalId: 'goal-handoff',
+    }));
+  });
+
+  it('rejects a handoff block for a different goal owned by the same session', async () => {
+    const mocks = createManager();
+    mocks.getAgentStateForRecovery.mockResolvedValue(stateWithGoals([
+      { id: 'goal-owned', status: 'in_progress' },
+      { id: 'goal-handoff', status: 'in_progress' },
+    ]));
+    const executingAgents = new Map([
+      ['session-a:test-agent', policy('test-agent', 'goal-owned')],
+    ]);
+    const { handler } = createHandler(mocks.manager, executingAgents);
+
+    await expect(handler.dispatch('resumeFromHandoff', {
+      element_name: 'test-agent',
+      handoffBlock: handoffBlock('test-agent', 'goal-handoff'),
+      parameters: {},
+    })).rejects.toThrow("Goal 'goal-handoff' is not owned here");
 
     expect(mocks.continueAgentExecution).not.toHaveBeenCalled();
   });
