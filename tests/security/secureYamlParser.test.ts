@@ -305,6 +305,16 @@ invalid_key: value
         contentPolicy: 'structure-only',
       })).toThrow(/YAML (aliases|structure)/);
     });
+
+    it('rejects scalar aliases that exceed the expanded text budget', () => {
+      const largeScalar = 'a'.repeat(10_000);
+      const aliases = Array.from({ length: 10 }, () => '  - *large').join('\n');
+
+      expect(() => SecureYamlParser.parseRawYaml(
+        `large: &large "${largeScalar}"\nreferences:\n${aliases}\n`,
+        { schema: 'json', contentPolicy: 'structure-only' },
+      )).toThrow('YAML content expansion exceeds safe limits');
+    });
   });
 
   describe('safeMatter', () => {

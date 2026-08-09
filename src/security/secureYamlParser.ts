@@ -67,6 +67,8 @@ export class SecureYamlParser {
   private static readonly RAW_YAML_MAX_DEPTH = 64;
   private static readonly RAW_YAML_MAX_EXPANDED_NODES = 100_000;
   private static readonly RAW_YAML_MAX_REFERENCE_REUSE = SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD;
+  private static readonly RAW_YAML_MAX_TEXT_EXPANSION_RATIO =
+    SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD + 1;
 
   private static readonly DEFAULT_OPTIONS: SecureParseOptions = {
     maxYamlSize: 64 * 1024,      // 64KB for YAML
@@ -204,7 +206,7 @@ export class SecureYamlParser {
       throw new SecurityError(`YAML parsing failed: ${error instanceof Error ? error.message : 'Unknown error'}`, 'high');
     }
 
-    this.assertBoundedRawYamlStructure(data);
+    this.assertBoundedRawYamlStructure(data, yamlContent.length);
 
     // 6. Ensure data is an object
     if (typeof data !== 'object' || data === null || Array.isArray(data)) {
@@ -435,7 +437,7 @@ export class SecureYamlParser {
     if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
       throw new SecurityError('YAML content must parse to an object', 'medium');
     }
-    this.assertBoundedRawYamlStructure(parsed);
+    this.assertBoundedRawYamlStructure(parsed, yamlContent.length);
     if (options.contentContext) {
       this.validateAndSanitizeParsedValue(
         parsed,
@@ -448,15 +450,24 @@ export class SecureYamlParser {
     return parsed as Record<string, unknown>;
   }
 
-  private static assertBoundedRawYamlStructure(root: unknown): void {
+  private static assertBoundedRawYamlStructure(root: unknown, sourceLength: number): void {
     const referenceVisits = new WeakMap<object, number>();
     const visiting = new WeakSet<object>();
+    const maxExpandedTextCharacters = Math.max(sourceLength, 1) * this.RAW_YAML_MAX_TEXT_EXPANSION_RATIO;
     let nodes = 0;
+    let expandedTextCharacters = 0;
 
     const visit = (value: unknown, depth: number): void => {
       nodes += 1;
       if (nodes > this.RAW_YAML_MAX_EXPANDED_NODES || depth > this.RAW_YAML_MAX_DEPTH) {
         throw new SecurityError('YAML structure exceeds safe complexity limits', 'high');
+      }
+      if (typeof value === 'string') {
+        expandedTextCharacters += value.length;
+        if (expandedTextCharacters > maxExpandedTextCharacters) {
+          throw new SecurityError('YAML content expansion exceeds safe limits', 'high');
+        }
+        return;
       }
       if (typeof value !== 'object' || value === null) return;
       const referenceVisitCount = (referenceVisits.get(value) ?? 0) + 1;
@@ -468,7 +479,13 @@ export class SecureYamlParser {
         throw new SecurityError('YAML aliases may not create cyclic data', 'high');
       }
       visiting.add(value);
-      for (const child of Object.values(value)) visit(child, depth + 1);
+      for (const [key, child] of Object.entries(value)) {
+        expandedTextCharacters += key.length;
+        if (expandedTextCharacters > maxExpandedTextCharacters) {
+          throw new SecurityError('YAML content expansion exceeds safe limits', 'high');
+        }
+        visit(child, depth + 1);
+      }
       visiting.delete(value);
     };
 

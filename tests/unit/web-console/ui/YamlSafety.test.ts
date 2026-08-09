@@ -29,7 +29,17 @@ describe('browser YAML safety boundary', () => {
 
   it('rejects excessive alias amplification', () => {
     expect(() => parseBrowserYaml(aliasExpansionDocument(7), { schema: 'json' }))
-      .toThrow('structure exceeds');
+      .toThrow(/(?:structure|content expansion) exceeds/);
+  });
+
+  it('rejects scalar aliases that exceed the expanded text budget', () => {
+    const largeScalar = 'a'.repeat(10_000);
+    const aliases = Array.from({ length: 10 }, () => '  - *large').join('\n');
+
+    expect(() => parseBrowserYaml(
+      `large: &large "${largeScalar}"\nreferences:\n${aliases}\n`,
+      { schema: 'json' },
+    )).toThrow('content expansion exceeds');
   });
 
   it('ignores anchor-like text inside YAML scalars and comments', () => {

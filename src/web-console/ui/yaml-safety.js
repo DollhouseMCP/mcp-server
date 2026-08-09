@@ -3,6 +3,7 @@
 const DEFAULT_MAX_BYTES = 512 * 1024;
 const MAX_STRUCTURE_DEPTH = 64;
 const MAX_STRUCTURE_NODES = 10_000;
+const MAX_TEXT_EXPANSION_RATIO = 6;
 
 export function assertTextWithinByteLimit(source, maxBytes = DEFAULT_MAX_BYTES) {
   if (typeof source !== 'string') throw new Error('YAML input must be text.');
@@ -23,7 +24,7 @@ export function parseBrowserYaml(source, options = {}) {
   if (requireObject && (!parsed || typeof parsed !== 'object' || Array.isArray(parsed))) {
     throw new Error('YAML input must contain an object.');
   }
-  assertBoundedStructure(parsed);
+  assertBoundedStructure(parsed, source.length);
   return parsed;
 }
 
@@ -40,19 +41,34 @@ function selectSchema(jsyaml, schema) {
   }
 }
 
-function assertBoundedStructure(root) {
+function assertBoundedStructure(root, sourceLength) {
   const visiting = new WeakSet();
+  const maxExpandedTextCharacters = Math.max(sourceLength, 1) * MAX_TEXT_EXPANSION_RATIO;
   let nodes = 0;
+  let expandedTextCharacters = 0;
 
   const visit = (value, depth) => {
     nodes += 1;
     if (nodes > MAX_STRUCTURE_NODES || depth > MAX_STRUCTURE_DEPTH) {
       throw new Error('YAML structure exceeds the console safety limit.');
     }
+    if (typeof value === 'string') {
+      expandedTextCharacters += value.length;
+      if (expandedTextCharacters > maxExpandedTextCharacters) {
+        throw new Error('YAML content expansion exceeds the console safety limit.');
+      }
+      return;
+    }
     if (!value || typeof value !== 'object') return;
     if (visiting.has(value)) throw new Error('YAML aliases may not create cyclic data.');
     visiting.add(value);
-    for (const child of Object.values(value)) visit(child, depth + 1);
+    for (const [key, child] of Object.entries(value)) {
+      expandedTextCharacters += key.length;
+      if (expandedTextCharacters > maxExpandedTextCharacters) {
+        throw new Error('YAML content expansion exceeds the console safety limit.');
+      }
+      visit(child, depth + 1);
+    }
     visiting.delete(value);
   };
 
