@@ -1033,13 +1033,25 @@ export class AgentManager extends BaseElementManager<Agent> {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
   ): Promise<ExecuteAgentResult> {
-    return this.runSerializedAgentStateOperation(name, async () => {
-      // Register before the first await so abort recovery can detect every caller,
-      // including continue_execution and legacy entry points.
-      this.beginExecutionAttempt(name);
-      try {
-        const agent = await this.loadExecutableAgent(name);
-        const metadata = agent.metadata as AgentMetadataV2;
+    return this.runSerializedAgentStateOperation(
+      name,
+      () => this.executeAgentWithinStateOperation(name, parameters, context),
+    );
+  }
+
+  private async executeAgentWithinStateOperation(
+    name: string,
+    parameters: Record<string, unknown>,
+    context: {
+      operationName?: 'execute_agent' | 'continue_execution';
+    },
+  ): Promise<ExecuteAgentResult> {
+    // Register before the first await so abort recovery can detect every caller,
+    // including continue_execution and legacy entry points.
+    this.beginExecutionAttempt(name);
+    try {
+      const agent = await this.loadExecutableAgent(name);
+      const metadata = agent.metadata as AgentMetadataV2;
 
       // 2. Clone parameters to prevent mutation of caller's object (Issue #118)
       const clonedParameters = structuredClone(parameters);
@@ -1083,22 +1095,26 @@ export class AgentManager extends BaseElementManager<Agent> {
         }
       });
 
-        return result;
-      } catch (error) {
-        logger.error(`Failed to execute agent '${name}':`, error);
-        throw error;
-      } finally {
-        this.endExecutionAttempt(name);
-      }
-    });
+      return result;
+    } catch (error) {
+      logger.error(`Failed to execute agent '${name}':`, error);
+      throw error;
+    } finally {
+      this.endExecutionAttempt(name);
+    }
   }
 
   private async runSerializedAgentStateOperation<T>(
     name: string,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const operationKey = this.getExecutionGenerationKey(name);
+    const operationKey = this.getAgentStateOperationKey(name);
     return this.stateOperationLock.runExclusive(operationKey, operation);
+  }
+
+  private getAgentStateOperationKey(name: string): string {
+    const userId = this.contextTracker?.getSessionContext()?.userId ?? 'local-user';
+    return `${userId}:${this.canonicalizeExecutionName(name)}`;
   }
 
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
@@ -3413,93 +3429,97 @@ export class AgentManager extends BaseElementManager<Agent> {
       suggestedNextSteps?: string[];
     };
   }> {
-    // 1. Load agent by name
-    const agent = await this.read(params.agentName);
-    if (!agent) {
-      // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
-      throw new ElementNotFoundError('Agent', params.agentName);
-    }
+    return this.runSerializedAgentStateOperation(params.agentName, async () => {
+      // 1. Load agent by name
+      const agent = await this.read(params.agentName);
+      if (!agent) {
+        // FIX: Issue #275 - Throw ElementNotFoundError for consistent error handling
+        throw new ElementNotFoundError('Agent', params.agentName);
+      }
 
-    // 2. Get current state
-    const state = agent.getState();
-    const activeGoal = params.goalId
-      ? state.goals.find(goal => goal.id === params.goalId && goal.status === 'in_progress')
-      : state.goals.find(goal => goal.status === 'in_progress');
+      // 2. Get current state
+      const state = agent.getState();
+      const activeGoal = params.goalId
+        ? state.goals.find(goal => goal.id === params.goalId && goal.status === 'in_progress')
+        : state.goals.find(goal => goal.status === 'in_progress');
 
-    if (!activeGoal) {
-      if (params.goalId) {
+      if (!activeGoal) {
+        if (params.goalId) {
+          throw new Error(
+            `Goal '${params.goalId}' is not an in-progress goal for agent '${params.agentName}'. ` +
+            'Use execute_agent to start a new goal.'
+          );
+        }
         throw new Error(
-          `Goal '${params.goalId}' is not an in-progress goal for agent '${params.agentName}'. ` +
-          'Use execute_agent to start a new goal.'
+          `continue_execution requires an in-progress goal for agent '${params.agentName}'. ` +
+          `Use execute_agent to start a new goal. If you are reporting progress for ` +
+          `the current goal, use mcp_aql_create record_execution_step.`
         );
       }
-      throw new Error(
-        `continue_execution requires an in-progress goal for agent '${params.agentName}'. ` +
-        `Use execute_agent to start a new goal. If you are reporting progress for ` +
-        `the current goal, use mcp_aql_create record_execution_step.`
+
+      const activeGoalDecisions = state.decisions.filter(
+        decision => decision.goalId === activeGoal.id,
       );
-    }
-
-    const activeGoalDecisions = state.decisions.filter(decision => decision.goalId === activeGoal.id);
-    if (activeGoalDecisions.length === 0) {
-      throw new Error(
-        `continue_execution is only for resuming a paused execution after at least ` +
-        `one recorded step for agent '${params.agentName}'. After execute_agent, the ` +
-        `next lifecycle call is mcp_aql_create record_execution_step.`
-      );
-    }
-
-    // 3. Check if agent has been executed before
-    const isResuming = state.sessionCount > 0 || state.decisions.length > 0;
-
-    // 4. Execute agent normally (this activates elements and gets context)
-    const executionParams = params.parameters || {};
-
-    const executionResult = await this.executeAgent(
-      params.agentName,
-      executionParams,
-      { operationName: 'continue_execution' }
-    );
-
-    // 5. Build previous state summary
-    const recentDecisions = state.decisions.slice(-5).map(d => ({
-      decision: d.decision,
-      reasoning: d.reasoning,
-      outcome: d.outcome,
-      timestamp: d.timestamp.toISOString()
-    }));
-
-    const goalSummary = state.goals.map(g => ({
-      id: g.id,
-      description: g.description,
-      status: g.status,
-      progress: undefined // Could add progress tracking in future
-    }));
-
-    // 6. Generate suggested next steps based on state
-    const suggestedNextSteps = this.generateNextSteps(state);
-
-    // 7. Merge execution result with continuation context
-    return {
-      // Include all fields from execute_agent result
-      ...executionResult,
-
-      // Add previous state information
-      previousState: {
-        goals: goalSummary,
-        recentDecisions,
-        sessionCount: state.sessionCount,
-        lastActive: state.lastActive.toISOString(),
-        stateVersion: state.stateVersion || 1
-      },
-
-      // Add continuation context
-      continuation: {
-        isResuming,
-        previousStepResult: params.previousStepResult,
-        suggestedNextSteps
+      if (activeGoalDecisions.length === 0) {
+        throw new Error(
+          `continue_execution is only for resuming a paused execution after at least ` +
+          `one recorded step for agent '${params.agentName}'. After execute_agent, the ` +
+          `next lifecycle call is mcp_aql_create record_execution_step.`
+        );
       }
-    };
+
+      // 3. Check if agent has been executed before
+      const isResuming = state.sessionCount > 0 || state.decisions.length > 0;
+
+      // 4. Execute agent normally (this activates elements and gets context)
+      const executionParams = params.parameters || {};
+
+      const executionResult = await this.executeAgentWithinStateOperation(
+        params.agentName,
+        executionParams,
+        { operationName: 'continue_execution' }
+      );
+
+      // 5. Build previous state summary
+      const recentDecisions = state.decisions.slice(-5).map(d => ({
+        decision: d.decision,
+        reasoning: d.reasoning,
+        outcome: d.outcome,
+        timestamp: d.timestamp.toISOString()
+      }));
+
+      const goalSummary = state.goals.map(g => ({
+        id: g.id,
+        description: g.description,
+        status: g.status,
+        progress: undefined // Could add progress tracking in future
+      }));
+
+      // 6. Generate suggested next steps based on state
+      const suggestedNextSteps = this.generateNextSteps(state);
+
+      // 7. Merge execution result with continuation context
+      return {
+        // Include all fields from execute_agent result
+        ...executionResult,
+
+        // Add previous state information
+        previousState: {
+          goals: goalSummary,
+          recentDecisions,
+          sessionCount: state.sessionCount,
+          lastActive: state.lastActive.toISOString(),
+          stateVersion: state.stateVersion || 1
+        },
+
+        // Add continuation context
+        continuation: {
+          isResuming,
+          previousStepResult: params.previousStepResult,
+          suggestedNextSteps
+        }
+      };
+    });
   }
 
   /**
