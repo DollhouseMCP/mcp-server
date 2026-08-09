@@ -2423,7 +2423,7 @@ describe('MCPAQLHandler', () => {
       expect(verificationNotifier.showCode).toHaveBeenCalled();
     });
 
-    it('should rate-limit challenge issuance before displaying a fourth code', async () => {
+    it('should enforce a three-challenge sliding window before displaying codes', async () => {
       const verificationStore = {
         set: jest.fn(),
         get: jest.fn(),
@@ -2442,19 +2442,32 @@ describe('MCPAQLHandler', () => {
         verificationStore,
         verificationNotifier,
       } as unknown as HandlerRegistry);
+      const startedAt = 1_800_000_000_000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(startedAt);
 
-      for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await expect(releaseHandler.handleCreate({ operation: 'release_deadlock' }))
+            .resolves.toEqual(expect.objectContaining({ success: true }));
+        }
+        nowSpy.mockReturnValue(startedAt + 100_000);
+        const blocked = await releaseHandler.handleCreate({ operation: 'release_deadlock' });
+
+        expect(blocked.success).toBe(false);
+        if (!blocked.success) {
+          expect(blocked.error).toContain('Too many deadlock relief challenges requested');
+        }
+        expect(verificationStore.set).toHaveBeenCalledTimes(3);
+        expect(verificationNotifier.showCode).toHaveBeenCalledTimes(3);
+
+        nowSpy.mockReturnValue(startedAt + 300_001);
         await expect(releaseHandler.handleCreate({ operation: 'release_deadlock' }))
           .resolves.toEqual(expect.objectContaining({ success: true }));
+        expect(verificationStore.set).toHaveBeenCalledTimes(4);
+        expect(verificationNotifier.showCode).toHaveBeenCalledTimes(4);
+      } finally {
+        nowSpy.mockRestore();
       }
-      const blocked = await releaseHandler.handleCreate({ operation: 'release_deadlock' });
-
-      expect(blocked.success).toBe(false);
-      if (!blocked.success) {
-        expect(blocked.error).toContain('Too many deadlock relief challenges requested');
-      }
-      expect(verificationStore.set).toHaveBeenCalledTimes(3);
-      expect(verificationNotifier.showCode).toHaveBeenCalledTimes(3);
     });
 
     it('should complete deadlock relief after successful verification', async () => {
@@ -2514,6 +2527,48 @@ describe('MCPAQLHandler', () => {
       }
       expect(verificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'RELIEF1');
       expect(elementCRUD.releaseDeadlock).toHaveBeenCalled();
+    });
+
+    it('should classify invalid, expired, and wrong-code metrics separately', async () => {
+      const verificationStore = {
+        set: jest.fn(),
+        get: jest.fn()
+          .mockReturnValueOnce(undefined)
+          .mockReturnValueOnce({
+            code: 'RELIEF1',
+            expiresAt: Date.now() + 300000,
+            reason: 'Deadlock relief requested',
+          }),
+        verify: jest.fn().mockReturnValue(false),
+        clear: jest.fn(),
+        size: jest.fn().mockReturnValue(1),
+        cleanup: jest.fn(),
+        destroy: jest.fn(),
+      };
+      const releaseHandler = new MCPAQLHandler({
+        ...mockRegistry,
+        verificationStore,
+      } as unknown as HandlerRegistry);
+
+      await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: 'invalid', code: 'WRONG1' },
+      });
+      await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: VALID_CHALLENGE_ID, code: 'WRONG1' },
+      });
+      await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: VALID_CHALLENGE_ID, code: 'WRONG1' },
+      });
+
+      expect(releaseHandler.getVerificationMetrics()).toEqual(expect.objectContaining({
+        totalAttempts: 3,
+        totalInvalidFormat: 1,
+        totalExpired: 1,
+        totalFailures: 1,
+      }));
     });
 
     it('should share failed-attempt rate limiting with danger-zone verification', async () => {

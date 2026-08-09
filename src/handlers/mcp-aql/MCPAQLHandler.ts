@@ -61,7 +61,7 @@ import {
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
-import { RateLimiter, RateLimiterFactory, type RateLimitStatus } from '../../utils/RateLimiter.js';
+import { RateLimiterFactory, type RateLimiter, type RateLimitStatus } from '../../utils/RateLimiter.js';
 import { env } from '../../config/env.js';
 import type { DangerZoneEnforcer } from '../../security/DangerZoneEnforcer.js';
 import type { IChallengeStore } from '../../state/IChallengeStore.js';
@@ -206,6 +206,40 @@ const DEADLOCK_RELIEF_MAX_CHALLENGES = 3;
 const DEADLOCK_RELIEF_CHALLENGE_WINDOW_MS = 5 * 60 * 1000;
 const DEADLOCK_RELIEF_DIALOG_REASON =
   'Deadlock relief requested.\n\nThis will deactivate all active elements for the current session and clear persisted activation state.';
+
+class SlidingWindowRateLimiter {
+  private readonly requestTimestamps: number[] = [];
+
+  constructor(
+    private readonly maxRequests: number,
+    private readonly windowMs: number,
+  ) {}
+
+  tryConsume(): RateLimitStatus {
+    const now = Date.now();
+    const cutoff = now - this.windowMs;
+    while (this.requestTimestamps.length > 0 && this.requestTimestamps[0] <= cutoff) {
+      this.requestTimestamps.shift();
+    }
+
+    if (this.requestTimestamps.length >= this.maxRequests) {
+      const retryAfterMs = Math.max(1, this.requestTimestamps[0] + this.windowMs - now);
+      return {
+        allowed: false,
+        retryAfterMs,
+        remainingTokens: 0,
+        resetTime: new Date(now + retryAfterMs),
+      };
+    }
+
+    this.requestTimestamps.push(now);
+    return {
+      allowed: true,
+      remainingTokens: this.maxRequests - this.requestTimestamps.length,
+      resetTime: new Date(this.requestTimestamps[0] + this.windowMs),
+    };
+  }
+}
 
 /**
  * Global rate limiter for verification attempts.
@@ -450,7 +484,7 @@ export class MCPAQLHandler {
   /** Issue #1947: Per-session verification rate limiters */
   private readonly verificationRateLimiters = new Map<string, VerificationRateLimiter>();
   /** Human-verification escape hatch: bound challenge creation and dialog spam per session. */
-  private readonly deadlockReliefIssuanceLimiters = new Map<string, RateLimiter>();
+  private readonly deadlockReliefIssuanceLimiters = new Map<string, SlidingWindowRateLimiter>();
   /** Issue #142: Metrics tracker for verification operations */
   private readonly verificationMetrics = new VerificationMetricsTracker();
   /**
@@ -550,11 +584,12 @@ export class MCPAQLHandler {
     return this.resolveSessionScoped(this.verificationRateLimiters, () => new VerificationRateLimiter());
   }
 
-  private resolveDeadlockReliefIssuanceLimiter(): RateLimiter {
-    return this.resolveSessionScoped(this.deadlockReliefIssuanceLimiters, () => new RateLimiter({
-      maxRequests: DEADLOCK_RELIEF_MAX_CHALLENGES,
-      windowMs: DEADLOCK_RELIEF_CHALLENGE_WINDOW_MS,
-    }));
+  private resolveDeadlockReliefIssuanceLimiter(): SlidingWindowRateLimiter {
+    return this.resolveSessionScoped(this.deadlockReliefIssuanceLimiters, () =>
+      new SlidingWindowRateLimiter(
+        DEADLOCK_RELIEF_MAX_CHALLENGES,
+        DEADLOCK_RELIEF_CHALLENGE_WINDOW_MS,
+      ));
   }
 
   private resolvePermissionPromptLimiter(): RateLimiter {
@@ -1707,7 +1742,7 @@ export class MCPAQLHandler {
       'MCPAQLHandler.issueDeadlockReliefChallenge',
     );
     const issuanceLimiter = this.resolveDeadlockReliefIssuanceLimiter();
-    const issuanceStatus = issuanceLimiter.checkLimit();
+    const issuanceStatus = issuanceLimiter.tryConsume();
     if (!issuanceStatus.allowed) {
       this.verificationMetrics.recordRateLimited();
       SecurityMonitor.logSecurityEvent({
@@ -1727,8 +1762,6 @@ export class MCPAQLHandler {
         'Too many deadlock relief challenges requested. Please wait before requesting another code.',
       );
     }
-    issuanceLimiter.consumeToken();
-
     const challengeId = randomUUID();
     const code = generateDisplayCode();
     store.set(challengeId, {
@@ -1792,14 +1825,14 @@ export class MCPAQLHandler {
       validateChallengeIdFormat(challengeId);
     } catch (error) {
       this.verificationMetrics.recordInvalidFormat();
-      this.recordDeadlockReliefVerificationFailure('invalid_format');
+      this.recordDeadlockReliefRejectedAttempt('invalid_format');
       throw error;
     }
 
     const challenge = store.get(challengeId);
     if (!challenge) {
       this.verificationMetrics.recordExpired();
-      this.recordDeadlockReliefVerificationFailure('expired_or_not_found');
+      this.recordDeadlockReliefRejectedAttempt('expired_or_not_found');
       throw new VerificationError(
         GatekeeperErrorCode.VERIFICATION_TIMEOUT,
         'Deadlock relief challenge not found. It may have expired or already been used. Retry release_deadlock to receive a new code.',
@@ -1807,7 +1840,7 @@ export class MCPAQLHandler {
     }
 
     if (!this.challengeIsForDeadlockRelief(challenge)) {
-      this.recordDeadlockReliefVerificationFailure('wrong_challenge_type');
+      this.recordDeadlockReliefRejectedAttempt('wrong_challenge_type');
       throw new VerificationError(
         GatekeeperErrorCode.VERIFICATION_FAILED,
         'This challenge is not for deadlock relief. Use the matching verification flow for the requested operation.',
@@ -1816,7 +1849,8 @@ export class MCPAQLHandler {
 
     const valid = store.verify(challengeId, code);
     if (!valid) {
-      this.recordDeadlockReliefVerificationFailure('wrong_code');
+      this.verificationMetrics.recordFailure();
+      this.recordDeadlockReliefRejectedAttempt('wrong_code');
       throw new VerificationError(
         GatekeeperErrorCode.VERIFICATION_FAILED,
         'Verification failed: incorrect code. The code has been consumed (one-time use). Retry release_deadlock to receive a new code.',
@@ -1877,8 +1911,7 @@ export class MCPAQLHandler {
     );
   }
 
-  private recordDeadlockReliefVerificationFailure(reason: string): void {
-    this.verificationMetrics.recordFailure();
+  private recordDeadlockReliefRejectedAttempt(reason: string): void {
     const rateLimitExceeded = this.resolveVerificationRateLimiter().recordFailure();
     SecurityMonitor.logSecurityEvent({
       type: 'VERIFICATION_FAILED',
