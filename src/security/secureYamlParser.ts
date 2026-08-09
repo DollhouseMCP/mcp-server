@@ -53,6 +53,8 @@ export interface SecureRawYamlParseOptions {
   schema?: 'core' | 'json' | 'failsafe';
   /** Strict scans scalar text; structure-only leaves element content policy to its owner. */
   contentPolicy?: 'strict' | 'structure-only';
+  /** When provided, recursively validates parsed scalar values using the element's content policy. */
+  contentContext?: SecureParseOptions['contentContext'];
 }
 
 export interface ParsedContent {
@@ -218,6 +220,7 @@ export class SecureYamlParser {
     }
 
     // 8. Validate field types and content
+    const visitedValues = new WeakSet<object>();
     for (const [key, value] of Object.entries(data)) {
       const hasFieldValidator = Object.prototype.hasOwnProperty.call(this.FIELD_VALIDATORS, key);
       const fieldValidator = hasFieldValidator ? this.FIELD_VALIDATORS[key] : undefined;
@@ -232,7 +235,7 @@ export class SecureYamlParser {
           value,
           key,
           opts.contentContext,
-          new WeakSet<object>(),
+          visitedValues,
         );
       }
     }
@@ -433,6 +436,14 @@ export class SecureYamlParser {
       throw new SecurityError('YAML content must parse to an object', 'medium');
     }
     this.assertBoundedRawYamlStructure(parsed);
+    if (options.contentContext) {
+      this.validateAndSanitizeParsedValue(
+        parsed,
+        'frontmatter',
+        options.contentContext,
+        new WeakSet<object>(),
+      );
+    }
 
     return parsed as Record<string, unknown>;
   }

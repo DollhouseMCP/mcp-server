@@ -358,6 +358,7 @@ export class ElementPersister<T extends IElement> {
           maxSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
           schema: 'core',
           contentPolicy,
+          contentContext,
         });
       } catch {
         SecurityMonitor.logSecurityEvent({

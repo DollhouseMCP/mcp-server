@@ -126,6 +126,13 @@ name: !!python/object/apply:subprocess.call
       expect(ContentValidator.validateYamlStructure(codeBearingYaml)).toBe(true);
     });
 
+    it('honors an explicit structure-only size limit above the regex scan cap', () => {
+      const largeYaml = `content: ${'a'.repeat(500_001)}\n`;
+
+      expect(ContentValidator.validateYamlStructure(largeYaml, 1024 * 1024)).toBe(true);
+      expect(ContentValidator.validateYamlStructure(largeYaml, 500_000)).toBe(false);
+    });
+
     it('should block exec/eval patterns', () => {
       const dangerous = [
         '!!exec',

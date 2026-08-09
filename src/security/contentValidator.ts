@@ -599,8 +599,7 @@ export class ContentValidator {
    * elements, then enforce their element policy after parsing.
    */
   static validateYamlStructure(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
-    const effectiveMaxLength = Math.min(maxLength, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-    return this.hasValidYamlLength(yamlContent, effectiveMaxLength)
+    return this.hasValidYamlLength(yamlContent, maxLength)
       && this.normalizeYamlForValidation(yamlContent) !== null;
   }
 
