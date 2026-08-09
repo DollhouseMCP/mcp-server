@@ -348,6 +348,10 @@ export class ElementPersister<T extends IElement> {
         ? 'structure-only'
         : 'strict';
 
+      if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+        throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
+      }
+
       let frontmatterData: Record<string, unknown>;
       try {
         frontmatterData = SecureYamlParser.parseRawYaml(yamlContent, {
