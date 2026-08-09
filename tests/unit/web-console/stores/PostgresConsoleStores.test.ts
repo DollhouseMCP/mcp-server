@@ -233,6 +233,7 @@ function selectingChain(rows: unknown[]) {
   chain.from = jest.fn(() => chain);
   chain.innerJoin = jest.fn(() => chain);
   chain.where = jest.fn(() => chain);
+  chain.for = jest.fn(() => chain);
   chain.orderBy = jest.fn(() => chain);
   chain.limit = jest.fn(() => Promise.resolve(rows));
   return chain;
@@ -1341,8 +1342,28 @@ describe('PostgresRuntimeSessionControlStore', () => {
     await expect(store.listOperationalPresence({ now: NOW })).resolves.toHaveLength(1);
   });
 
+  it('reads recorded presence without hiding closed or expired ownership evidence', async () => {
+    const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([{
+        ...presenceRow,
+        status: 'closing',
+        closedAt: THIRTY_MINUTES,
+        leaseUntil: BEFORE_NOW,
+      }]))
+      .mockReturnValueOnce(selectingChain([]));
+
+    await expect(store.findRecordedPresence(RUNTIME_SESSION_ID)).resolves.toMatchObject({
+      sessionId: RUNTIME_SESSION_ID,
+      status: 'closing',
+      leaseUntil: BEFORE_NOW,
+    });
+    await expect(store.findRecordedPresence('mcp-session-missing')).resolves.toBeNull();
+  });
+
   it('sweeps stale runtime presence rows', async () => {
     const store = new PostgresRuntimeSessionControlStore({} as DatabaseInstance);
+    transaction.select = jest.fn(() => selectingChain([]));
     transaction.delete = jest.fn(() => returningChain([{ sessionId: RUNTIME_SESSION_ID }]));
 
     await expect(store.sweepStalePresence(ONE_HOUR)).resolves.toBe(1);

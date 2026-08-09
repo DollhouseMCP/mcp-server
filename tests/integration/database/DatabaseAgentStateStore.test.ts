@@ -3,9 +3,16 @@
  * Tests agent state CRUD with optimistic locking against real Docker PostgreSQL.
  */
 
+import { randomUUID } from 'node:crypto';
+
+import { createDatabaseConnection } from '../../../src/database/connection.js';
 import { DatabaseAgentStateStore } from '../../../src/storage/DatabaseAgentStateStore.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
-import { buildAgentContent, cleanupAllTestData, cleanupTestAgentStates, closeTestDb, ensureTestUser, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+import {
+  findRecordedRuntimePresenceWithTx,
+  PostgresRuntimeSessionControlStore,
+} from '../../../src/web-console/services/runtime/PostgresRuntimeSessionControlStore.js';
+import { buildAgentContent, cleanupAllTestData, cleanupTestAgentStates, closeTestDb, ensureTestUser, fixedUserId, getTestAdminDb, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 let dbAvailable = false;
 
@@ -137,5 +144,290 @@ describe('DatabaseAgentStateStore', () => {
 
     const loaded = await store.loadState(agentId);
     expect(loaded).toBeNull();
+  });
+
+  it('should transfer orphaned state to a replacement session', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let sessionId = 'session-a';
+    const activeSessions = new Set<string>();
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async candidateSessionId => activeSessions.has(candidateSessionId) ? 'active' : 'inactive',
+      getTestAdminDb(),
+    );
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-orphan', status: 'in_progress' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+
+    sessionId = 'session-b';
+    expect(await store.loadState(agentId)).toBeNull();
+
+    const reclaimed = await store.reclaimOrphaned(key);
+
+    expect(reclaimed?.goals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'goal-orphan', status: 'in_progress' }),
+    ]));
+    expect(await store.loadState(agentId)).not.toBeNull();
+    sessionId = 'session-a';
+    expect(await store.loadState(agentId)).toBeNull();
+  });
+
+  it('should merge an orphaned execution into a dormant current-session row', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let sessionId = 'session-a';
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async candidateSessionId => candidateSessionId === 'session-a' ? 'inactive' : 'active',
+      getTestAdminDb(),
+    );
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-orphan', status: 'in_progress' }],
+      decisions: [{ id: 'decision-orphan', goalId: 'goal-orphan' }],
+      context: { orphan: true },
+      stateVersion: 0,
+    }, 0);
+    sessionId = 'session-b';
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-finished', status: 'completed' }],
+      decisions: [{ id: 'decision-finished', goalId: 'goal-finished' }],
+      context: { current: true },
+      stateVersion: 0,
+    }, 0);
+
+    const reclaimed = await store.reclaimOrphaned(key);
+
+    expect(reclaimed).toMatchObject({
+      goals: expect.arrayContaining([
+        expect.objectContaining({ id: 'goal-finished', status: 'completed' }),
+        expect.objectContaining({ id: 'goal-orphan', status: 'in_progress' }),
+      ]),
+      decisions: expect.arrayContaining([
+        expect.objectContaining({ id: 'decision-finished' }),
+        expect.objectContaining({ id: 'decision-orphan' }),
+      ]),
+      context: { current: true, orphan: true },
+      stateVersion: 2,
+    });
+    sessionId = 'session-a';
+    await expect(store.loadState(agentId)).resolves.toBeNull();
+  });
+
+  it('should not transfer state owned by an active session', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let sessionId = 'session-a';
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async candidateSessionId => candidateSessionId === 'session-a' ? 'active' : 'inactive',
+      getTestAdminDb(),
+    );
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-live', status: 'in_progress' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+    sessionId = 'session-b';
+
+    expect(await store.reclaimOrphaned(key)).toBeNull();
+    sessionId = 'session-a';
+    expect(await store.loadState(agentId)).not.toBeNull();
+  });
+
+  it('should not transfer state containing a locally tracked goal', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let sessionId = 'session-a';
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async () => 'inactive',
+      getTestAdminDb(),
+    );
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-live', status: 'in_progress' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+    sessionId = 'session-b';
+
+    expect(await store.reclaimOrphaned(key, {
+      excludedGoalIds: ['goal-live'],
+    })).toBeNull();
+  });
+
+  it('should allow only one replacement session to transfer an orphaned row', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+    const activeSessions = new Set(['session-b', 'session-c']);
+    const resolveSessionActivity = async (candidateSessionId: string) =>
+      activeSessions.has(candidateSessionId) ? 'active' as const : 'inactive' as const;
+    const sourceStore = new DatabaseAgentStateStore(
+      getTestDb(), fixedUserId(userId), () => 'session-a', resolveSessionActivity, getTestAdminDb(),
+    );
+    const sessionBStore = new DatabaseAgentStateStore(
+      getTestDb(), fixedUserId(userId), () => 'session-b', resolveSessionActivity, getTestAdminDb(),
+    );
+    const sessionCStore = new DatabaseAgentStateStore(
+      getTestDb(), fixedUserId(userId), () => 'session-c', resolveSessionActivity, getTestAdminDb(),
+    );
+
+    await sourceStore.saveState(agentId, {
+      goals: [{ id: 'goal-orphan', status: 'in_progress' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+
+    const claims = await Promise.all([
+      sessionBStore.reclaimOrphaned(key),
+      sessionCStore.reclaimOrphaned(key),
+    ]);
+
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    const owners = await Promise.all([
+      sessionBStore.loadState(agentId),
+      sessionCStore.loadState(agentId),
+    ]);
+    expect(owners.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('should fail closed when source-session presence is unknown', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let sessionId = 'session-a';
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async () => 'unknown',
+      getTestAdminDb(),
+    );
+    const agentId = await createTestAgent(userId);
+    const key = { name: 'state-test-agent', agentElementId: agentId };
+
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-unknown-owner', status: 'in_progress' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+    sessionId = 'session-b';
+
+    await expect(store.reclaimOrphaned(key)).resolves.toBeNull();
+    sessionId = 'session-a';
+    await expect(store.loadState(agentId)).resolves.not.toBeNull();
+  });
+
+  it('retains inactive presence through reclaim on a shared single-connection pool', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const agentId = await createTestAgent(userId);
+    const connection = createDatabaseConnection({
+      connectionUrl: process.env.DOLLHOUSE_TEST_DATABASE_ADMIN_URL
+        ?? 'postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test',
+      poolSize: 1,
+      ssl: 'disable',
+    });
+    const presenceStore = new PostgresRuntimeSessionControlStore(connection.db);
+    let sessionId = 'session-a';
+    const now = new Date();
+    const lastActiveAt = new Date(now.getTime() - 120_000);
+    const leaseUntil = new Date(now.getTime() - 60_000);
+
+    try {
+      await presenceStore.registerPresence({
+        sessionId,
+        userId,
+        accountCorrelationId: randomUUID(),
+        replicaId: 'single-pool-test',
+        transport: 'streamable-http',
+        startedAt: lastActiveAt,
+        lastActiveAt,
+        leaseUntil,
+      });
+      const store = new DatabaseAgentStateStore(
+        connection.db,
+        fixedUserId(userId),
+        () => sessionId,
+        async (candidateSessionId, candidateUserId, tx) => {
+          const presence = await findRecordedRuntimePresenceWithTx(tx, candidateSessionId);
+          if (presence?.userId !== candidateUserId) return 'unknown';
+          return presence.status === 'active' && presence.leaseUntil > new Date()
+            ? 'active'
+            : 'inactive';
+        },
+        connection.db,
+      );
+      const key = { name: 'state-test-agent', agentElementId: agentId };
+
+      await store.saveState(agentId, {
+        goals: [{ id: 'goal-single-pool', status: 'in_progress' }],
+        decisions: [], context: {}, stateVersion: 0,
+      }, 0);
+
+      await expect(presenceStore.sweepStalePresence(now)).resolves.toBe(0);
+      await expect(presenceStore.findRecordedPresence('session-a')).resolves.not.toBeNull();
+
+      sessionId = 'session-b';
+      await expect(store.reclaimOrphaned(key)).resolves.toMatchObject({
+        goals: expect.arrayContaining([
+          expect.objectContaining({ id: 'goal-single-pool', status: 'in_progress' }),
+        ]),
+      });
+
+      await expect(presenceStore.sweepStalePresence(now)).resolves.toBe(1);
+      await expect(presenceStore.findRecordedPresence('session-a')).resolves.toBeNull();
+    } finally {
+      await connection.close();
+    }
+  });
+
+  it('does not retain stale presence for completed-only agent state', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const agentId = await createTestAgent(userId);
+    const sessionId = 'session-completed';
+    const now = new Date();
+    const lastActiveAt = new Date(now.getTime() - 120_000);
+    const presenceStore = new PostgresRuntimeSessionControlStore(getTestAdminDb());
+    const store = new DatabaseAgentStateStore(
+      getTestDb(), fixedUserId(userId), () => sessionId,
+    );
+
+    await presenceStore.registerPresence({
+      sessionId,
+      userId,
+      accountCorrelationId: randomUUID(),
+      replicaId: 'completed-state-test',
+      transport: 'streamable-http',
+      startedAt: lastActiveAt,
+      lastActiveAt,
+      leaseUntil: new Date(now.getTime() - 60_000),
+    });
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-completed', status: 'completed' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+
+    await expect(presenceStore.sweepStalePresence(now)).resolves.toBe(1);
+    await expect(presenceStore.findRecordedPresence(sessionId)).resolves.toBeNull();
   });
 });

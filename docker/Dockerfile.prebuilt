@@ -31,7 +31,7 @@ COPY package*.json ./
 COPY packages/ ./packages/
 
 # Install only production dependencies (includes local @dollhousemcp/safety)
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 
 # Copy pre-built application (dist/ must exist locally)
 COPY dist ./dist

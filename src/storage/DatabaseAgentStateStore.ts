@@ -10,14 +10,20 @@
  * @since v2.2.0 — Phase 4, Step 4.3
  */
 
-import { eq, and } from 'drizzle-orm';
+import { eq, and, desc } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
+import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import type { DrizzleTx } from '../database/db-utils.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
 import { agentStates } from '../database/schema/agents.js';
 import type { SessionIdResolver, UserIdResolver } from '../database/UserContext.js';
 import type { AgentState } from '../elements/agents/types.js';
-import type { AgentStateKey, IAgentStateStore } from './IAgentStateStore.js';
+import type {
+  AgentStateKey,
+  AgentStateReclaimOptions,
+  IAgentStateStore,
+} from './IAgentStateStore.js';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -30,6 +36,36 @@ interface AgentStateData {
   lastActive?: Date | null;
 }
 
+interface AgentStateRow {
+  id: string;
+  sessionId: string;
+  goals: unknown;
+  decisions: unknown;
+  context: unknown;
+  lastActive: Date | null;
+  stateVersion: number;
+  sessionCount: number;
+}
+
+const AGENT_STATE_ROW_COLUMNS = {
+  id: agentStates.id,
+  sessionId: agentStates.sessionId,
+  goals: agentStates.goals,
+  decisions: agentStates.decisions,
+  context: agentStates.context,
+  lastActive: agentStates.lastActive,
+  stateVersion: agentStates.stateVersion,
+  sessionCount: agentStates.sessionCount,
+} as const;
+
+export type AgentSessionActivity = 'active' | 'inactive' | 'unknown';
+
+export type AgentSessionActivityResolver = (
+  sessionId: string,
+  userId: string,
+  tx: DrizzleTx,
+) => Promise<AgentSessionActivity>;
+
 // ── Implementation ──────────────────────────────────────────────────
 
 export class DatabaseAgentStateStore implements IAgentStateStore {
@@ -41,6 +77,8 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     db: DatabaseInstance,
     getCurrentUserId: UserIdResolver,
     getCurrentSessionId: SessionIdResolver = () => 'default',
+    private readonly resolveSessionActivity?: AgentSessionActivityResolver,
+    private readonly reclaimDb: DatabaseInstance = db,
   ) {
     this.db = db;
     this.getCurrentUserId = getCurrentUserId;
@@ -63,6 +101,17 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
    */
   async load(key: AgentStateKey): Promise<AgentState | null> {
     const state = await this.loadData(key.agentElementId);
+    return state ? this.toAgentState(state) : null;
+  }
+
+  async reclaimOrphaned(
+    key: AgentStateKey,
+    options: AgentStateReclaimOptions = {},
+  ): Promise<AgentState | null> {
+    const state = await this.reclaimOrphanedData(
+      key.agentElementId,
+      new Set(options.excludedGoalIds ?? []),
+    );
     return state ? this.toAgentState(state) : null;
   }
 
@@ -95,7 +144,9 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
   }
 
   private async loadData(agentElementId: string): Promise<AgentStateData | null> {
-    return withUserRead(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    const sessionId = this.sessionId;
+    return withUserRead(this.db, userId, async (tx) => {
       // Defense-in-depth: userId filter alongside RLS enforcement.
       const rows = await tx
         .select({
@@ -108,9 +159,9 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
         })
         .from(agentStates)
         .where(and(
-          eq(agentStates.userId, this.userId),
+          eq(agentStates.userId, userId),
           eq(agentStates.agentId, agentElementId),
-          eq(agentStates.sessionId, this.sessionId),
+          eq(agentStates.sessionId, sessionId),
         ))
         .limit(1);
 
@@ -128,6 +179,302 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
         sessionCount: row.sessionCount,
       };
     });
+  }
+
+  /**
+   * Transfer a disconnected session's state row to the calling session.
+   *
+   * The user filter and RLS preserve tenant isolation. Row locks serialize
+   * competing claims, while the runtime-presence resolver prevents a row that
+   * still belongs to a live session (including another replica) from moving.
+   * Without a presence resolver, cross-session claims fail closed.
+   */
+  private async reclaimOrphanedData(
+    agentElementId: string,
+    excludedGoalIds: ReadonlySet<string>,
+  ): Promise<AgentStateData | null> {
+    const userId = this.userId;
+    const sessionId = this.sessionId;
+
+    const rows = await this.loadAgentRows(userId, agentElementId);
+
+    const current = rows.find(row => row.sessionId === sessionId);
+    if (current && this.hasClaimableGoals(current.goals, excludedGoalIds)) {
+      return this.rowToStateData(current);
+    }
+    if (!this.resolveSessionActivity) {
+      logger.warn('[DatabaseAgentStateStore] Orphan reclaim unavailable without runtime presence');
+      return null;
+    }
+
+    for (const candidate of rows) {
+      if (candidate.sessionId === sessionId) {
+        continue;
+      }
+      if (!this.hasClaimableGoals(candidate.goals, excludedGoalIds)) {
+        continue;
+      }
+      const transferredState = await this.tryTransferCandidate({
+        candidate,
+        userId,
+        agentElementId,
+        targetSessionId: sessionId,
+        excludedGoalIds,
+      });
+      if (!transferredState) {
+        continue;
+      }
+
+      logger.info('[DatabaseAgentStateStore] Transferred orphaned agent state', {
+        agentElementId,
+        fromSessionId: candidate.sessionId,
+        toSessionId: sessionId,
+        goalIds: this.getActiveGoalIds(transferredState.goals),
+      });
+      return this.rowToStateData(transferredState);
+    }
+
+    return null;
+  }
+
+  private async loadAgentRows(userId: string, agentElementId: string): Promise<AgentStateRow[]> {
+    return withUserRead(this.db, userId, async (tx) =>
+      tx
+        .select(AGENT_STATE_ROW_COLUMNS)
+        .from(agentStates)
+        .where(and(
+          eq(agentStates.userId, userId),
+          eq(agentStates.agentId, agentElementId),
+        ))
+        .orderBy(desc(agentStates.lastActive), agentStates.sessionId),
+    );
+  }
+
+  private async tryTransferCandidate(input: {
+    candidate: AgentStateRow;
+    userId: string;
+    agentElementId: string;
+    targetSessionId: string;
+    excludedGoalIds: ReadonlySet<string>;
+  }): Promise<AgentStateRow | null> {
+    // Reclaim is a control-plane operation. Use the system connection so the
+    // presence row and tenant-filtered agent rows are verified and locked in
+    // one transaction, without nesting another transaction on a pool of one.
+    return withSystemContext(this.reclaimDb, async (tx) => {
+      if (
+        !this.resolveSessionActivity ||
+        await this.resolveSessionActivity(
+          input.candidate.sessionId,
+          input.userId,
+          tx,
+        ) !== 'inactive'
+      ) {
+        return null;
+      }
+
+      const lockedCurrent = await this.lockCurrentSessionRow(tx, input);
+      if (lockedCurrent && this.getActiveGoalIds(lockedCurrent.goals).length > 0) {
+        return null;
+      }
+
+      const locked = await this.lockCandidateRow(tx, input);
+      if (!locked || !this.hasClaimableGoals(locked.goals, input.excludedGoalIds)) {
+        return null;
+      }
+      if (lockedCurrent) {
+        return this.mergeCandidateIntoCurrent(tx, input, lockedCurrent, locked);
+      }
+
+      const transferred = await tx
+        .update(agentStates)
+        .set({ sessionId: input.targetSessionId })
+        .where(and(
+          eq(agentStates.id, locked.id),
+          eq(agentStates.userId, input.userId),
+          eq(agentStates.agentId, input.agentElementId),
+          eq(agentStates.sessionId, input.candidate.sessionId),
+        ))
+        .returning({ id: agentStates.id });
+      return transferred.length > 0 ? locked : null;
+    });
+  }
+
+  private async lockCurrentSessionRow(
+    tx: DrizzleTx,
+    input: {
+      userId: string;
+      agentElementId: string;
+      targetSessionId: string;
+    },
+  ): Promise<AgentStateRow | null> {
+    const rows = await tx
+      .select(AGENT_STATE_ROW_COLUMNS)
+      .from(agentStates)
+      .where(and(
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.targetSessionId),
+      ))
+      .for('update')
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  private async lockCandidateRow(
+    tx: DrizzleTx,
+    input: { candidate: AgentStateRow; userId: string; agentElementId: string },
+  ): Promise<AgentStateRow | null> {
+    const rows = await tx
+      .select(AGENT_STATE_ROW_COLUMNS)
+      .from(agentStates)
+      .where(and(
+        eq(agentStates.id, input.candidate.id),
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.candidate.sessionId),
+      ))
+      .for('update')
+      .limit(1);
+    return rows[0] ?? null;
+  }
+
+  private async mergeCandidateIntoCurrent(
+    tx: DrizzleTx,
+    input: {
+      candidate: AgentStateRow;
+      userId: string;
+      agentElementId: string;
+      targetSessionId: string;
+    },
+    current: AgentStateRow,
+    candidate: AgentStateRow,
+  ): Promise<AgentStateRow> {
+    const merged = this.mergeStateRows(current, candidate);
+    const updated = await tx
+      .update(agentStates)
+      .set({
+        goals: merged.goals,
+        decisions: merged.decisions,
+        context: merged.context,
+        lastActive: merged.lastActive,
+        stateVersion: merged.stateVersion,
+        sessionCount: merged.sessionCount,
+      })
+      .where(and(
+        eq(agentStates.id, current.id),
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.targetSessionId),
+      ))
+      .returning(AGENT_STATE_ROW_COLUMNS);
+    if (!updated[0]) {
+      throw new Error('Current agent state disappeared while reclaiming orphaned execution');
+    }
+
+    const deleted = await tx
+      .delete(agentStates)
+      .where(and(
+        eq(agentStates.id, candidate.id),
+        eq(agentStates.userId, input.userId),
+        eq(agentStates.agentId, input.agentElementId),
+        eq(agentStates.sessionId, input.candidate.sessionId),
+      ))
+      .returning({ id: agentStates.id });
+    if (!deleted[0]) {
+      throw new Error('Orphaned agent state disappeared while merging execution ownership');
+    }
+    return updated[0];
+  }
+
+  private mergeStateRows(current: AgentStateRow, candidate: AgentStateRow): AgentStateRow {
+    return {
+      ...current,
+      goals: this.mergeStateArrays(current.goals, candidate.goals),
+      decisions: this.mergeStateArrays(current.decisions, candidate.decisions),
+      context: {
+        ...this.toRecord(current.context),
+        ...this.toRecord(candidate.context),
+      },
+      lastActive: this.latestDate(current.lastActive, candidate.lastActive),
+      stateVersion: Math.max(current.stateVersion, candidate.stateVersion) + 1,
+      sessionCount: Math.max(current.sessionCount, candidate.sessionCount),
+    };
+  }
+
+  private mergeStateArrays(current: unknown, candidate: unknown): unknown[] {
+    const merged = Array.isArray(current) ? [...current] : [];
+    const positions = new Map<string, number>();
+    merged.forEach((value, index) => {
+      const id = this.getRecordId(value);
+      if (id) positions.set(id, index);
+    });
+    for (const value of Array.isArray(candidate) ? candidate : []) {
+      const id = this.getRecordId(value);
+      const existingIndex = id ? positions.get(id) : undefined;
+      if (existingIndex === undefined) {
+        if (id) positions.set(id, merged.length);
+        merged.push(value);
+      } else {
+        merged[existingIndex] = value;
+      }
+    }
+    return merged;
+  }
+
+  private getRecordId(value: unknown): string | undefined {
+    return typeof value === 'object' && value !== null && 'id' in value && typeof value.id === 'string'
+      ? value.id
+      : undefined;
+  }
+
+  private toRecord(value: unknown): Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  private latestDate(left: Date | null, right: Date | null): Date | null {
+    if (!left) return right;
+    if (!right) return left;
+    return left > right ? left : right;
+  }
+
+  private hasClaimableGoals(goals: unknown, excludedGoalIds: ReadonlySet<string>): boolean {
+    const activeGoalIds = this.getActiveGoalIds(goals);
+    return activeGoalIds.length > 0 &&
+      !activeGoalIds.some(goalId => excludedGoalIds.has(goalId));
+  }
+
+  private getActiveGoalIds(goals: unknown): string[] {
+    if (!Array.isArray(goals)) {
+      return [];
+    }
+    return goals.flatMap((goal) => {
+      if (
+        typeof goal === 'object' &&
+        goal !== null &&
+        'id' in goal &&
+        typeof goal.id === 'string' &&
+        'status' in goal &&
+        goal.status === 'in_progress'
+      ) {
+        return [goal.id];
+      }
+      return [];
+    });
+  }
+
+  private rowToStateData(row: Omit<AgentStateRow, 'id' | 'sessionId'>): AgentStateData {
+    return {
+      goals: Array.isArray(row.goals) ? row.goals : [],
+      decisions: Array.isArray(row.decisions) ? row.decisions : [],
+      context: row.context && typeof row.context === 'object' && !Array.isArray(row.context)
+        ? row.context as Record<string, unknown>
+        : {},
+      lastActive: row.lastActive,
+      stateVersion: row.stateVersion,
+      sessionCount: row.sessionCount,
+    };
   }
 
   /**

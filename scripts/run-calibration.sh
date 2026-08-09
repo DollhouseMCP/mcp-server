@@ -61,7 +61,7 @@ run_local() {
     mkdir -p "${RESULTS_DIR}"
 
     # Run directly using tsx for TypeScript execution
-    npx tsx tests/calibration/run-local.ts
+    ./node_modules/.bin/tsx tests/calibration/run-local.ts
 
     log_success "Local calibration complete"
     log_info "Results saved to: ${RESULTS_DIR}/local-results.json"
@@ -103,7 +103,7 @@ run_comparison() {
     fi
 
     # Run comparison using tsx
-    npx tsx tests/calibration/compare-results.ts
+    ./node_modules/.bin/tsx tests/calibration/compare-results.ts
 
     log_success "Comparison complete"
     log_info "Report: ${RESULTS_DIR}/comparison.json"

@@ -60,7 +60,7 @@ jobs:
           echo "✅ QA environment validation passed"
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build project
         run: npm run build
@@ -112,7 +112,7 @@ jobs:
           # 2. Inspector CLI tests (CRITICAL: external client validation for protocol compliance)
           echo ""
           echo "📌 Running Inspector CLI Tests (EXTERNAL validation - protocol compliance)..."
-          timeout 270 npx @modelcontextprotocol/inspector --version && \
+          timeout 270 ./node_modules/.bin/mcp-inspector --version && \
           node scripts/qa-inspector-cli-test.js || {
             exit_code=$?
             if [ $exit_code -eq 124 ]; then

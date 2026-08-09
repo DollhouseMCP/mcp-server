@@ -23,7 +23,11 @@
  */
 
 import { logger } from '../../utils/logger.js';
-import { ContentValidator, type ContentValidationResult } from '../contentValidator.js';
+import {
+  ContentValidator,
+  MALICIOUS_YAML_CONTENT_PATTERN,
+  type ContentValidationResult,
+} from '../contentValidator.js';
 import { TRUST_LEVELS } from '../../elements/memories/constants.js';
 import { PatternExtractor } from './PatternExtractor.js';
 import type { Memory } from '../../elements/memories/Memory.js';
@@ -310,7 +314,7 @@ export class BackgroundValidator {
     logger.debug('Validating entry', { entryId: entry.id });
 
     // Validate content using ContentValidator
-    const validationResult = ContentValidator.validateAndSanitize(entry.content, {
+    const validationResult = ContentValidator.validateAndSanitizeYamlAware(entry.content, {
       skipSizeCheck: true,
     });
 
@@ -351,7 +355,9 @@ export class BackgroundValidator {
       // Store sanitized patterns and content in entry metadata
       // Phase 2 will add encryption to these patterns
       entry.sanitizedPatterns = extractionResult.patterns;
-      entry.sanitizedContent = extractionResult.sanitizedContent;
+      entry.sanitizedContent = validationResult.detectedPatterns?.includes(MALICIOUS_YAML_CONTENT_PATTERN)
+        ? validationResult.sanitizedContent
+        : extractionResult.sanitizedContent;
 
       logger.info('Patterns extracted from entry', {
         entryId: entry.id,

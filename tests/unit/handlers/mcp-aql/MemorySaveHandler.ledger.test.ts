@@ -21,7 +21,11 @@ import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHan
 function makeMemory(name: string) {
   return {
     metadata: { name },
-    addEntry: jest.fn(async () => ({ id: 'entry-1' })),
+    addEntry: jest.fn(async () => ({
+      id: 'entry-1',
+      timestamp: new Date('2026-01-01T00:00:00.000Z'),
+      trustLevel: 'untrusted',
+    })),
     removeEntry: jest.fn(() => true),
     getEntries: jest.fn(() => new Map()),
     clearAll: jest.fn(async () => undefined),

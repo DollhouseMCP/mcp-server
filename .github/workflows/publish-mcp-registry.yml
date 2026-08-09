@@ -86,7 +86,7 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build package
         run: npm run build
@@ -118,8 +118,8 @@ jobs:
           EXPECTED_ISSUER="https://token.actions.githubusercontent.com"
 
           # Download archive and signature material.
-          curl --retry 3 --retry-delay 5 -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}" -o "$ARCHIVE_FILE"
-          curl --retry 3 --retry-delay 5 -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}.sigstore.json" -o "$BUNDLE_FILE"
+          curl --proto '=https' --proto-redir '=https' --retry 3 --retry-delay 5 -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}" -o "$ARCHIVE_FILE"
+          curl --proto '=https' --proto-redir '=https' --retry 3 --retry-delay 5 -fsSL "https://github.com/modelcontextprotocol/registry/releases/download/${VERSION}/${ARCHIVE}.sigstore.json" -o "$BUNDLE_FILE"
 
           # Verify the pinned archive digest first for deterministic release inputs.
           if ! echo "${EXPECTED_SHA256}  ${ARCHIVE_FILE}" | sha256sum --check --status; then

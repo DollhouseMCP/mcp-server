@@ -40,7 +40,8 @@ import {
   AGENT_THRESHOLDS,
   DECISION_FRAMEWORKS,
   RISK_TOLERANCE_LEVELS,
-  COMMIT_PERSISTED_VERSION
+  COMMIT_PERSISTED_VERSION,
+  MARK_STATE_FOR_PERSISTENCE,
 } from './constants.js';
 import {
   RuleEngineConfig,
@@ -564,6 +565,11 @@ export class Agent extends BaseElement implements IElement {
    */
   public [COMMIT_PERSISTED_VERSION](version: number): void {
     this.state.stateVersion = version;
+  }
+
+  /** @internal Used by AgentManager after merging recovery and live state. */
+  public [MARK_STATE_FOR_PERSISTENCE](): void {
+    this.isDirtyState = true;
   }
 
   /**

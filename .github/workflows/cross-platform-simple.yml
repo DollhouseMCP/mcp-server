@@ -71,7 +71,7 @@ jobs:
             typescript-build-${{ runner.os }}-
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
       - name: Build
         run: npm run build
       # Cache Jest test results and coverage

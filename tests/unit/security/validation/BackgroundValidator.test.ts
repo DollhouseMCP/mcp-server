@@ -22,6 +22,8 @@ describe('BackgroundValidator', () => {
     mockMemoryManager = {
       findMemoriesWithUntrustedEntries: () => [],
       updateMemory: () => Promise.resolve(),
+      list: () => Promise.resolve([]),
+      save: () => Promise.resolve(),
     };
 
     // Create dependencies
@@ -125,6 +127,27 @@ describe('BackgroundValidator', () => {
 
       // Should complete without errors
       expect(true).toBe(true);
+    });
+
+    it.each([
+      "require('child_process')",
+      '!!python/object',
+    ])('should flag YAML-only content pattern %s instead of promoting it', async (content) => {
+      const entry = {
+        id: 'yaml-pattern-entry',
+        content,
+        trustLevel: TRUST_LEVELS.UNTRUSTED,
+      };
+      const memory = {
+        id: 'yaml-pattern-memory',
+        getEntriesByTrustLevel: () => [entry],
+      };
+      mockMemoryManager.list = () => Promise.resolve([memory]);
+
+      await validator.processUntrustedMemories();
+
+      expect(entry.trustLevel).toBe(TRUST_LEVELS.FLAGGED);
+      expect(entry.sanitizedContent).toBe('[CONTENT_BLOCKED]');
     });
   });
 

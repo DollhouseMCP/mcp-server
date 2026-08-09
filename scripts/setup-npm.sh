@@ -5,6 +5,9 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PACKAGE_VERSION="$(node -p "require(process.argv[1]).version" "$SCRIPT_DIR/../package.json")"
+
 echo "🎭 DollhouseMCP NPM Setup Script"
 echo "================================"
 echo
@@ -12,7 +15,7 @@ echo
 # Check if DollhouseMCP is installed globally
 if ! command -v dollhousemcp &> /dev/null && ! npm list -g @dollhousemcp/mcp-server &> /dev/null; then
     echo "📦 Installing DollhouseMCP globally..."
-    npm install -g @dollhousemcp/mcp-server
+    npm install -g --ignore-scripts "@dollhousemcp/mcp-server@${PACKAGE_VERSION}"
 else
     echo "✅ DollhouseMCP is already installed"
 fi
@@ -68,8 +71,7 @@ if 'mcpServers' not in config:
 
 # Add or update dollhousemcp server for NPM installation
 config['mcpServers']['dollhousemcp'] = {
-    "command": "npx",
-    "args": ["@dollhousemcp/mcp-server"]
+    "command": "dollhousemcp"
 }
 
 # Pretty print the result
@@ -90,8 +92,7 @@ EOF
 {
   "mcpServers": {
     "dollhousemcp": {
-      "command": "npx",
-      "args": ["@dollhousemcp/mcp-server"]
+      "command": "dollhousemcp"
     }
   }
 }
@@ -104,8 +105,7 @@ else
 {
   "mcpServers": {
     "dollhousemcp": {
-      "command": "npx",
-      "args": ["@dollhousemcp/mcp-server"]
+      "command": "dollhousemcp"
     }
   }
 }
