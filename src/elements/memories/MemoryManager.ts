@@ -729,11 +729,14 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // limit), so every save of a memory whose serialized YAML exceeded 64KB threw
     // here, and the deferred save path swallowed the error while addEntry kept
     // reporting success. The cap now matches the memory size limit enforced above
-    // and on load. parseRawYaml runs ContentValidator.validateYamlContent with the
-    // same cap internally (Fix #908/#918), so bomb detection covers every size —
-    // the previous `<= MAX_YAML_LENGTH` guard skipped it for content over 64KB.
+    // and on load. parseRawYaml applies safe-schema parsing plus expanded-graph
+    // complexity limits with the same cap internally. Scalar entry text is
+    // governed by memory policy, not interpreted as YAML syntax or executable code.
     const validationStart = Date.now();
-    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, MEMORY_CONSTANTS.MAX_YAML_SIZE);
+    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, {
+      maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      contentPolicy: 'structure-only',
+    });
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
       logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);

@@ -351,6 +351,7 @@ function safeYamlLoad(value: string): unknown {
     return SecureYamlParser.parseRawYaml(value, {
       maxSize: PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
       schema: 'json',
+      contentPolicy: 'structure-only',
     });
   } catch {
     return undefined;
@@ -375,6 +376,7 @@ function parsePureYamlExport(
   const parsed = SecureYamlParser.parseRawYaml(rawContent, {
     maxSize: PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
     schema: 'json',
+    contentPolicy: 'structure-only',
   });
   const record = isRecord(parsed) ? parsed : {};
   const metadata = isRecord(record.metadata) ? record.metadata : record;

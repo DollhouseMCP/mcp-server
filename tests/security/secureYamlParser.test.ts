@@ -270,6 +270,22 @@ invalid_key: value
         { schema: 'json' },
       )).toThrow('Malicious YAML content detected');
     });
+
+    it('allows code-like scalar text in structure-only mode', () => {
+      const result = SecureYamlParser.parseRawYaml(
+        "content: use require('./module'), eval(example), and file:// references\n",
+        { schema: 'json', contentPolicy: 'structure-only' },
+      );
+
+      expect(result.content).toContain("require('./module')");
+    });
+
+    it('still rejects expanded alias bombs in structure-only mode', () => {
+      expect(() => SecureYamlParser.parseRawYaml(aliasExpansionDocument(8), {
+        schema: 'json',
+        contentPolicy: 'structure-only',
+      })).toThrow(/YAML (aliases|structure)/);
+    });
   });
 
   describe('safeMatter', () => {
@@ -298,6 +314,25 @@ name: !!python/object/apply:os.system
       expect(() => {
         SecureYamlParser.safeMatter(maliciousContent);
       }).toThrow('Malicious YAML content detected');
+    });
+
+    it('allows code-like frontmatter in code-bearing element contexts', () => {
+      const content = `---
+name: Code guide
+instructions: "Explain require('./module'), eval(example), and file:// references."
+---
+Content`;
+
+      const result = SecureYamlParser.safeMatter(content, undefined, { contentContext: 'skill' });
+
+      expect(result.data.instructions).toContain("require('./module')");
+    });
+
+    it('rejects expanded alias bombs in code-bearing element contexts', () => {
+      const content = `---\n${aliasExpansionDocument(8)}---\nContent`;
+
+      expect(() => SecureYamlParser.safeMatter(content, undefined, { contentContext: 'skill' }))
+        .toThrow(/YAML (aliases|structure)/);
     });
   });
 
@@ -438,3 +473,13 @@ ${Object.entries(largeMetadata).map(([k, v]) =>
     });
   });
 });
+
+function aliasExpansionDocument(levels: number): string {
+  const references = (name: string) => Array.from({ length: 5 }, () => `*${name}`).join(', ');
+  const lines = ['level0: &level0 { value: test }'];
+  for (let level = 1; level <= levels; level += 1) {
+    lines.push(`level${level}: &level${level} [${references(`level${level - 1}`)}]`);
+  }
+  lines.push(`root: *level${levels}`);
+  return `${lines.join('\n')}\n`;
+}

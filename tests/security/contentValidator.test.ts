@@ -119,6 +119,13 @@ name: !!python/object/apply:subprocess.call
       expect(ContentValidator.validateYamlContent(maliciousYaml)).toBe(false);
     });
 
+    it('separates YAML structure safety from scalar content policy', () => {
+      const codeBearingYaml = "content: use require('./module'), eval(example), and file:// references\n";
+
+      expect(ContentValidator.validateYamlContent(codeBearingYaml)).toBe(false);
+      expect(ContentValidator.validateYamlStructure(codeBearingYaml)).toBe(true);
+    });
+
     it('should block exec/eval patterns', () => {
       const dangerous = [
         '!!exec',

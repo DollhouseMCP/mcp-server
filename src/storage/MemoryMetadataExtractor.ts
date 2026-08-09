@@ -172,7 +172,12 @@ export class MemoryMetadataExtractor {
    */
   private static tryParseYamlObject(content: string): { data?: Record<string, unknown>; errorMessage?: string } {
     try {
-      return { data: SecureYamlParser.parseRawYaml(content, MemoryMetadataExtractor.MAX_YAML_SIZE) };
+      return {
+        data: SecureYamlParser.parseRawYaml(content, {
+          maxSize: MemoryMetadataExtractor.MAX_YAML_SIZE,
+          contentPolicy: 'structure-only',
+        }),
+      };
     } catch (error) {
       return {
         errorMessage: error instanceof Error ? error.message : String(error),

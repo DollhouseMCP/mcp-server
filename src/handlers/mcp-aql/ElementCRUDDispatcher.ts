@@ -141,6 +141,7 @@ export class ElementCRUDDispatcher {
     return SecureYamlParser.parseRawYaml(data, {
       maxSize: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
       schema: 'json',
+      contentPolicy: 'structure-only',
     });
   }
 

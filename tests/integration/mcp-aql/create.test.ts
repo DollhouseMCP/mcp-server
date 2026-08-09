@@ -14,6 +14,7 @@ import { userInfo } from 'node:os';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
+import { SecureYamlParser } from '../../../src/security/secureYamlParser.js';
 import { createPortfolioTestEnvironment, preConfirmAllOperations, waitForCacheSettle, type PortfolioTestEnvironment } from '../../helpers/portfolioTestHelper.js';
 import path from 'path';
 import fs from 'fs/promises';
@@ -461,14 +462,13 @@ metadata:
     });
 
     it('should reject YAML import packages with excessive alias amplification', async () => {
-      const aliases = Array.from({ length: 6 }, () => '  - *payload').join('\n');
       const exportPackage = {
         exportVersion: '1.0',
         exportedAt: new Date().toISOString(),
         elementType: 'skills',
         elementName: 'alias-amplification',
         format: 'yaml',
-        data: `name: alias-amplification\ndescription: blocked\npayload: &payload\n  value: test\nitems:\n${aliases}\n`,
+        data: `name: alias-amplification\ndescription: blocked\n${aliasExpansionDocument(8)}`,
       };
 
       const result = await mcpAqlHandler.handleCreate({
@@ -478,6 +478,30 @@ metadata:
 
       expect(result.success).toBe(false);
       if (!result.success) expect(result.error).toContain('not valid yaml');
+    });
+
+    it('should preserve code-like scalar text in YAML element imports', async () => {
+      const content = "Explain require('./module'), eval(example), and file:// references.";
+      const exportPackage = {
+        exportVersion: '1.0',
+        exportedAt: new Date().toISOString(),
+        elementType: 'skills',
+        elementName: 'code-guide',
+        format: 'yaml',
+        data: `name: code-guide\ndescription: Code guide\ncontent: ${JSON.stringify(content)}\n`,
+      };
+
+      const result = await mcpAqlHandler.handleCreate({
+        operation: 'import_element',
+        params: { data: exportPackage, overwrite: true },
+      });
+
+      if (!result.success) throw new Error(result.error);
+      expect(result.success).toBe(true);
+      expect(JSON.stringify(result)).not.toContain('Failed to create');
+      const serialized = await fs.readFile(path.join(env.testDir, 'skills', 'code-guide.md'), 'utf8');
+      const parsed = SecureYamlParser.safeMatter(serialized, undefined, { contentContext: 'skill' });
+      expect(parsed.data.instructions).toBe(content);
     });
 
     it('should import from stringified export package', async () => {
@@ -885,3 +909,13 @@ metadata:
     });
   });
 });
+
+function aliasExpansionDocument(levels: number): string {
+  const references = (name: string) => Array.from({ length: 5 }, () => `*${name}`).join(', ');
+  const lines = ['level0: &level0 { value: test }'];
+  for (let level = 1; level <= levels; level += 1) {
+    lines.push(`level${level}: &level${level} [${references(`level${level - 1}`)}]`);
+  }
+  lines.push(`root: *level${levels}`);
+  return `${lines.join('\n')}\n`;
+}

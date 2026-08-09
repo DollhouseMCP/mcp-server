@@ -374,7 +374,10 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
   ): Promise<void> {
     let parsed: Record<string, unknown>;
     try {
-      parsed = SecureYamlParser.parseRawYaml(yamlContent, 64 * 1024);
+      parsed = SecureYamlParser.parseRawYaml(yamlContent, {
+        maxSize: 64 * 1024,
+        contentPolicy: 'structure-only',
+      });
     } catch (err) {
       // Parse failure drops entries silently — element row still persists.
       // Log so operators see skipped entry sync and can investigate corrupted YAML.
@@ -454,7 +457,10 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
 
   private extractMemoryMetadata(content: string): Record<string, unknown> {
     try {
-      const parsed = SecureYamlParser.parseRawYaml(content, 64 * 1024);
+      const parsed = SecureYamlParser.parseRawYaml(content, {
+        maxSize: 64 * 1024,
+        contentPolicy: 'structure-only',
+      });
       const { name, description, version, author, tags, entries, stats, ...rest } = parsed;
       const metadataObj = (rest.metadata && typeof rest.metadata === 'object' && !Array.isArray(rest.metadata))
         ? rest.metadata as Record<string, unknown>

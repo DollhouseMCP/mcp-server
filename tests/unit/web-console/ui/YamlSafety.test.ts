@@ -28,11 +28,16 @@ describe('browser YAML safety boundary', () => {
   });
 
   it('rejects excessive alias amplification', () => {
-    const aliases = Array.from({ length: 6 }, () => '  - *value').join('\n');
-    expect(() => parseBrowserYaml(
-      `value: &value\n  text: test\nitems:\n${aliases}\n`,
+    expect(() => parseBrowserYaml(aliasExpansionDocument(7), { schema: 'json' }))
+      .toThrow('structure exceeds');
+  });
+
+  it('ignores anchor-like text inside YAML scalars and comments', () => {
+    const aliasesInText = Array.from({ length: 600 }, () => '*example').join(' ');
+    expect(parseBrowserYaml(
+      `# &comment ${aliasesInText}\ndescription: "literal &name and ${aliasesInText}"\n`,
       { schema: 'json' },
-    )).toThrow('aliases exceed');
+    )).toEqual({ description: `literal &name and ${aliasesInText}` });
   });
 
   it('allows bounded reuse but rejects cyclic YAML output', () => {
@@ -58,3 +63,13 @@ describe('browser YAML safety boundary', () => {
       .toThrow('structure exceeds');
   });
 });
+
+function aliasExpansionDocument(levels: number): string {
+  const references = (name: string) => Array.from({ length: 5 }, () => `*${name}`).join(', ');
+  const lines = ['level0: &level0 { value: test }'];
+  for (let level = 1; level <= levels; level += 1) {
+    lines.push(`level${level}: &level${level} [${references(`level${level - 1}`)}]`);
+  }
+  lines.push(`root: *level${levels}`);
+  return `${lines.join('\n')}\n`;
+}
