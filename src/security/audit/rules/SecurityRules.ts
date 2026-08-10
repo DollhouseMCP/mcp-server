@@ -193,13 +193,14 @@ export class SecurityRules {
         category: 'custom',
         check: (content, _context) => {
           const findings: SecurityFinding[] = [];
-          // Restrict this heuristic to direct HTTP request-boundary access. Generic
-          // names such as `content`, `body`, or `params` appear throughout models,
-          // stores, and browser rendering code and do not establish user input.
-          const inputPattern = /\b(?:req|request)\s*\.\s*(?:body|query|params)\b/;
+          // Restrict this heuristic to HTTP request-boundary access. Generic names
+          // such as `content`, `body`, or `params` do not establish user input.
+          const directInputPattern = /\b(?:req|request)\s*(?:(?:\?\s*)?\.\s*(?:body|query|params)\b|(?:\?\s*\.)?\s*\[\s*(['"])(?:body|query|params)\1\s*\])/;
+          const destructuredInputPattern = /\b(?:const|let|var)\s*\{[^{};]*\b(?:body|query|params)\b[^{};]*\}\s*(?::[^=;\n]+)?=\s*(?:req|request)\b/;
+          const accessesHttpInput = directInputPattern.test(content) || destructuredInputPattern.test(content);
           const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode|\.normalize\(\s*['"]NFC['"]\s*\)/i.test(content);
           
-          if (inputPattern.test(content) && !hasUnicodeCheck) {
+          if (accessesHttpInput && !hasUnicodeCheck) {
             findings.push({
               ruleId: 'DMCP-SEC-004',
               severity: 'medium' as const,

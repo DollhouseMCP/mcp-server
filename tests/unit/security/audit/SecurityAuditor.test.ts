@@ -5,6 +5,7 @@
 import { describe, expect, beforeEach, afterEach, jest, test } from '@jest/globals';
 import { SecurityAuditor } from '../../../../src/security/audit/SecurityAuditor.js';
 import { CodeScanner } from '../../../../src/security/audit/scanners/CodeScanner.js';
+import { SecurityRules } from '../../../../src/security/audit/rules/SecurityRules.js';
 import type { SecurityAuditConfig } from '../../../../src/security/audit/types.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import * as fs from 'fs/promises';
@@ -282,6 +283,33 @@ describe('SecurityAuditor', () => {
       const result = await detectAuditor.audit(tempDir);
 
       expect(result.findings.some(f => f.ruleId === 'DMCP-SEC-004')).toBe(false);
+    });
+
+    test.each([
+      ['dot access', 'const value = req.body;'],
+      ['optional dot access', 'const value = request?.query;'],
+      ['bracket access', "const value = req['params'];"],
+      ['optional bracket access', 'const value = request?.["body"];'],
+      ['destructuring', 'const { body } = req;'],
+      ['aliased destructuring', 'const { query: rawQuery, params } = request;'],
+    ])('should detect missing Unicode validation for %s', (_name, code) => {
+      const unicodeRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === 'DMCP-SEC-004');
+
+      expect(unicodeRule?.check?.(code).some(finding => finding.ruleId === 'DMCP-SEC-004')).toBe(true);
+    });
+
+    test.each([
+      ['response destructuring', 'const { body } = response;'],
+      ['similarly named object', 'const value = databaseRequest.query;'],
+      ['generic body model', 'const value = record.body;'],
+    ])('should not treat %s as an HTTP user-input boundary', (_name, code) => {
+      const unicodeRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === 'DMCP-SEC-004');
+
+      expect(unicodeRule?.check?.(code)).toEqual([]);
     });
 
     test('should detect security calls in template literals with expressions', async () => {
