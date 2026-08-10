@@ -3,6 +3,8 @@
  */
 
 const MAX_YAML_LENGTH = 64 * 1024;
+// Real serialization with maximum identity fields and 20 representative tags
+// uses about 2.6 KiB; 4 KiB leaves additional headroom for format metadata.
 const FRONTMATTER_METADATA_RESERVE = 4 * 1024;
 
 // Security and performance limits
