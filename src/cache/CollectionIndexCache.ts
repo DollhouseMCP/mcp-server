@@ -11,10 +11,13 @@ import { LRUCache, CacheFactory } from './LRUCache.js';
 import { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { ISharedCacheStore } from '../storage/sharedCache/ISharedCacheStore.js';
+import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
 
 export interface CollectionIndexCacheConfig {
   githubClient: GitHubClient;
-  baseDir: string;
+  baseDir?: string;
+  /** Exact canonical cache directory, normally supplied by PathService. */
+  cacheDir?: string;
   performanceMonitor: PerformanceMonitor;
   fileOperations: IFileOperationsService;
   /**
@@ -77,7 +80,10 @@ export class CollectionIndexCache {
   ) {
     if (arg0 && typeof arg0 === 'object' && 'githubClient' in arg0) {
       this.githubClient = arg0.githubClient;
-      this.cacheDir = path.join(arg0.baseDir, '.dollhousemcp', 'cache');
+      this.cacheDir = arg0.cacheDir
+        ?? (arg0.baseDir
+          ? path.join(arg0.baseDir, '.dollhousemcp', 'cache')
+          : resolveDataDirectory('cache'));
       this.cacheFile = path.join(this.cacheDir, 'collection-index-cache.json');
       this.performanceMonitor = arg0.performanceMonitor;
       this.fileOperations = arg0.fileOperations;

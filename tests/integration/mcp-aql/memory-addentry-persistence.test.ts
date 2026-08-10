@@ -104,6 +104,27 @@ describe('Memory addEntry persistence (#2329)', () => {
     expect(raw).toContain('entry-5');
   });
 
+  it('stores blocked-pattern prose without echoing it in the mutation response', async () => {
+    await createMemory('untrusted-receipt-2440');
+    const untrustedProse = 'Historical example: exec("dangerous command")';
+
+    const result = await addEntry('untrusted-receipt-2440', untrustedProse);
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toEqual(expect.objectContaining({
+        id: expect.any(String),
+        trustLevel: 'untrusted',
+      }));
+      expect(JSON.stringify(result.data)).not.toContain(untrustedProse);
+      expect(result.data).not.toHaveProperty('content');
+    }
+
+    await mcpAqlHandler.flushPendingSaves();
+    const raw = await fs.readFile(await findMemoryFile('untrusted-receipt-2440'), 'utf-8');
+    expect(raw).toContain('exec');
+  });
+
   it('returns an error and rolls back the entry when the memory cannot be persisted', async () => {
     await createMemory('overflow-2329');
 

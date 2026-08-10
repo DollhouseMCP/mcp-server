@@ -27,6 +27,7 @@ import {
   formatUnknownPropertyWarnings,
   formatElementResolutionWarnings,
   collectGatekeeperAuthoringErrors,
+  findOversizedDescriptionFields,
   formatGatekeeperValidationMessage,
 } from './helpers.js';
 import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.js';
@@ -34,6 +35,22 @@ import type { ResolveElementTypesResult } from '../../utils/elementTypeResolver.
 type ElementManagerWithPersistence<T> = ElementManagerOperations<T> & {
   save(element: T, filePath: string): Promise<void>;
   delete?(filePath: string): Promise<void>;
+};
+
+type EditableElementRecord = Record<string, unknown> & {
+  metadata: Record<string, unknown> & {
+    name?: string;
+    description?: string;
+    tags?: unknown[];
+    modified?: string;
+  };
+  instructions?: string;
+  content?: string;
+  entries?: unknown;
+  extensions?: Record<string, unknown>;
+  getFilePath?: () => string;
+  filePath?: string;
+  filename?: string;
 };
 
 /**
@@ -82,7 +99,7 @@ function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
     case 'name':
       return SECURITY_LIMITS.MAX_NAME_LENGTH;
     case 'description':
-      return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
+      return SECURITY_LIMITS.MAX_YAML_LENGTH;
     case 'content':
       return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
     case 'filename':
@@ -246,79 +263,6 @@ function validateFieldValue(
   }
 
   return null; // Valid
-}
-
-interface OversizedDescriptionField {
-  path: string;
-  length: number;
-  maxLength: number;
-}
-
-type TraversalEntry = readonly [string, unknown];
-
-function appendTraversalKey(path: string, key: string): string {
-  return key.length > 0 ? `${path}.${key}` : `${path}[""]`;
-}
-
-function getTraversalEntries(value: object, path: string): TraversalEntry[] {
-  if (Array.isArray(value)) {
-    return value.map((item, index) => [`${path}[${index}]`, item] as const);
-  }
-
-  return Object.entries(value as Record<string, unknown>).map(([key, item]) => [appendTraversalKey(path, key), item] as const);
-}
-
-function getDescriptionMaxLengthForPath(fieldPath: string): number {
-  if (fieldPath === 'input.description' || fieldPath === 'input.metadata.description') {
-    return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
-  }
-
-  return SECURITY_LIMITS.MAX_DOCUMENTATION_FIELD_LENGTH;
-}
-
-function isOversizedDescriptionField(fieldPath: string, value: unknown): value is string {
-  const maxLength = getDescriptionMaxLengthForPath(fieldPath);
-  return (
-    fieldPath.endsWith('.description') &&
-    typeof value === 'string' &&
-    value.length > maxLength
-  );
-}
-
-function formatOversizedDescriptionField(field: OversizedDescriptionField): string {
-  return (
-    `  • ${field.path} exceeds maximum length of ` +
-    `${field.maxLength} characters (${field.length})`
-  );
-}
-
-function findOversizedDescriptionFields(
-  value: unknown,
-  path = 'input',
-  seen = new WeakSet<object>(),
-): OversizedDescriptionField[] {
-  if (value === null || typeof value !== 'object') {
-    return [];
-  }
-
-  if (seen.has(value)) {
-    return [];
-  }
-  seen.add(value);
-
-  const oversized: OversizedDescriptionField[] = [];
-  for (const [fieldPath, item] of getTraversalEntries(value, path)) {
-    if (isOversizedDescriptionField(fieldPath, item)) {
-      oversized.push({
-        path: fieldPath,
-        length: item.length,
-        maxLength: getDescriptionMaxLengthForPath(fieldPath),
-      });
-    }
-    oversized.push(...findOversizedDescriptionFields(item, fieldPath, seen));
-  }
-
-  return oversized;
 }
 
 /**
@@ -652,11 +596,6 @@ export async function editElement(
     const label = getElementTypeLabel(normalizedType);
     throw new ElementNotFoundError(label, name);
   }
-  const editableElement = element as typeof element & {
-    instructions: string;
-    content: string;
-    extensions?: Record<string, unknown>;
-  };
 
   // Step 4.6: Fork-on-edit — if the element is from the shared pool,
   // materialize a private copy in the user's portfolio before editing.
@@ -674,6 +613,8 @@ export async function editElement(
       }
     }
   }
+
+  const editableElement = element as typeof element & EditableElementRecord;
 
   // Check for unknown properties and generate warnings
   const unknownPropertyWarnings = detectUnknownMetadataProperties(
@@ -729,10 +670,9 @@ export async function editElement(
 
   const oversizedDescriptionFields = findOversizedDescriptionFields(input);
   if (oversizedDescriptionFields.length > 0) {
+    const formattedErrors = oversizedDescriptionFields.map(descriptionError => `  • ${descriptionError}`).join('\n');
     return error(
-      `Description length validation failed:\n${oversizedDescriptionFields.map(field =>
-        formatOversizedDescriptionField(field)
-      ).join('\n')}`
+      `Description length validation failed:\n${formattedErrors}`
     );
   }
 
@@ -868,19 +808,22 @@ export async function editElement(
   }
 
   // Deep merge the update into the element with security options
-  const elementData = element as unknown as Record<string, unknown>;
-  const mergedData = deepMerge(elementData, updateObj, MERGE_OPTIONS);
+  const mergedData = deepMerge(editableElement, updateObj, MERGE_OPTIONS);
 
   // Apply merged data back to element
   for (const [key, value] of Object.entries(mergedData)) {
     if (key !== 'metadata') {
-      (element as any)[key] = value;
+      editableElement[key] = value;
     }
   }
 
-  // Handle metadata separately to preserve element structure
+  // Handle metadata separately to preserve nested siblings after partial edits.
   if (mergedData.metadata && element.metadata) {
-    Object.assign(element.metadata, mergedData.metadata);
+    editableElement.metadata = deepMerge(
+      editableElement.metadata,
+      mergedData.metadata as Record<string, unknown>,
+      MERGE_OPTIONS
+    );
   }
 
   // Handle memory entries specially (extracted for clarity)
@@ -889,7 +832,7 @@ export async function editElement(
     if (!memoryResult.success) {
       return error(`Memory entry validation errors:\n${memoryResult.message}\n\nValid entries were saved.`);
     }
-    (element as any).entries = memoryResult.entriesMap;
+    editableElement.entries = memoryResult.entriesMap;
   }
 
   // Sync ensemble elements from metadata (extracted for clarity)
@@ -923,9 +866,9 @@ export async function editElement(
   }
 
   // Determine file path for saving
-  const filePathCandidate = typeof (element as any).getFilePath === 'function'
-    ? (element as any).getFilePath()
-    : ((element as any).filePath || (element as any).filename);
+  const filePathCandidate = typeof editableElement.getFilePath === 'function'
+    ? editableElement.getFilePath()
+    : (editableElement.filePath || editableElement.filename);
   const filename = typeof filePathCandidate === 'string' && filePathCandidate.length > 0
     ? filePathCandidate
     : getElementFilename(normalizedType, element.metadata?.name || name);

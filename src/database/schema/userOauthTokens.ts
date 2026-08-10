@@ -26,4 +26,3 @@ export const userOauthTokens = pgTable('user_oauth_tokens', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 });
-

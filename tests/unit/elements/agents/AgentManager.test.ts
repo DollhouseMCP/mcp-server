@@ -15,6 +15,7 @@ jest.mock('../../../../src/services/FileOperationsService.js');
 
 // Import after mocking
 import { Agent } from '../../../../src/elements/agents/Agent.js';
+import type { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
@@ -30,6 +31,7 @@ import { SerializationService } from '../../../../src/services/SerializationServ
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
+import type { SessionContext } from '../../../../src/context/SessionContext.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 const TEST_AGENT_NAME = 'test-agent';
@@ -46,6 +48,19 @@ function requireLoadedAgent(agent: Agent | null): Agent {
     throw new Error('Expected agent to load');
   }
   return agent;
+}
+
+interface AgentManagerExecutionInternals {
+  executeAgentWithinStateOperation(
+    name: string,
+    parameters: Record<string, unknown>,
+    context: { operationName?: 'execute_agent' | 'continue_execution' },
+  ): ReturnType<AgentManager['executeAgent']>;
+  contextTracker?: { getSessionContext: () => SessionContext | undefined };
+}
+
+function getExecutionInternals(manager: AgentManager): AgentManagerExecutionInternals {
+  return manager as unknown as AgentManagerExecutionInternals;
 }
 
 describe('AgentManager', () => {
@@ -133,6 +148,303 @@ describe('AgentManager', () => {
   describe('Initialization', () => {
     it('should create agents directory structure', () => {
       expect(fileOperationsService.createDirectory).toHaveBeenCalledTimes(2); // agents dir + state dir
+    });
+  });
+
+  describe('Recovery state synchronization', () => {
+    it('continues the requested in-progress goal instead of another session goal', async () => {
+      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const otherGoal = agent.addGoal({ description: 'Other session execution' });
+      otherGoal.status = 'in_progress';
+      const ownedGoal = agent.addGoal({ description: 'Calling session execution' });
+      ownedGoal.status = 'in_progress';
+      agent.recordDecision({
+        goalId: ownedGoal.id,
+        decision: 'pause',
+        reasoning: 'Paused for an external dependency',
+        confidence: 1,
+        outcome: 'partial',
+      });
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      const executeSpy = jest.spyOn(
+        getExecutionInternals(agentManager),
+        'executeAgentWithinStateOperation',
+      ).mockResolvedValue({
+        agentName: 'test-agent',
+        goal: 'Continued execution',
+        goalId: 'goal-continuation',
+        activeElements: {},
+        availableTools: [],
+        successCriteria: [],
+        safetyTier: 'advisory',
+      });
+
+      await expect(agentManager.continueAgentExecution({
+        agentName: 'test-agent',
+        goalId: ownedGoal.id,
+      })).resolves.toEqual(expect.objectContaining({
+        previousState: expect.objectContaining({
+          goals: expect.arrayContaining([
+            expect.objectContaining({ id: ownedGoal.id }),
+          ]),
+        }),
+      }));
+
+      expect(executeSpy).toHaveBeenCalledWith(
+        'test-agent',
+        {},
+        { operationName: 'continue_execution' },
+      );
+    });
+
+    it('rejects a requested goal that is not in progress', async () => {
+      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const activeGoal = agent.addGoal({ description: 'Another active execution' });
+      activeGoal.status = 'in_progress';
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      const executeSpy = jest.spyOn(
+        getExecutionInternals(agentManager),
+        'executeAgentWithinStateOperation',
+      );
+
+      await expect(agentManager.continueAgentExecution({
+        agentName: 'test-agent',
+        goalId: 'goal-not-owned',
+      })).rejects.toThrow("Goal 'goal-not-owned' is not an in-progress goal");
+
+      expect(executeSpy).not.toHaveBeenCalled();
+    });
+
+    it('rejects a second completion of an explicitly identified finalized goal', async () => {
+      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const completedGoal = agent.addGoal({ description: 'Already completed execution' });
+      completedGoal.status = 'in_progress';
+      agent.completeGoal(completedGoal.id, 'success');
+      const originalDecisionCount = agent.getState().decisions.length;
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+
+      await expect(agentManager.completeAgentGoal({
+        agentName: 'test-agent',
+        goalId: completedGoal.id,
+        outcome: 'failure',
+        summary: 'Attempted duplicate completion',
+      })).rejects.toThrow(`Goal '${completedGoal.id}' is not in progress`);
+
+      const unchangedGoal = agent.getState().goals.find(goal => goal.id === completedGoal.id);
+      expect(unchangedGoal?.status).toBe('completed');
+      expect(agent.getState().decisions).toHaveLength(originalDecisionCount);
+    });
+
+    it('serializes continuation and completion across sessions for the same user', async () => {
+      let currentSession = {
+        userId: 'shared-user',
+        sessionId: 'session-a',
+        tenantId: null,
+        transport: 'http' as const,
+        createdAt: Date.now(),
+      };
+      getExecutionInternals(agentManager).contextTracker = {
+        getSessionContext: () => currentSession,
+      };
+
+      const agent = new Agent({ name: 'test-agent' }, metadataService);
+      const sourceGoal = agent.addGoal({ description: 'Paused execution' });
+      sourceGoal.status = 'in_progress';
+      agent.recordDecision({
+        goalId: sourceGoal.id,
+        decision: 'pause',
+        reasoning: 'Waiting for continuation',
+        confidence: 1,
+        outcome: 'partial',
+      });
+      const readSpy = jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+
+      let markContinuationStarted: (() => void) | undefined;
+      const continuationStarted = new Promise<void>((resolve) => {
+        markContinuationStarted = resolve;
+      });
+      let releaseContinuation: (() => void) | undefined;
+      const continuationRelease = new Promise<void>((resolve) => {
+        releaseContinuation = resolve;
+      });
+      jest.spyOn(getExecutionInternals(agentManager), 'executeAgentWithinStateOperation')
+        .mockImplementation(async () => {
+          markContinuationStarted?.();
+          await continuationRelease;
+          return {
+            agentName: 'test-agent',
+            goal: 'Continued execution',
+            goalId: 'goal-continuation',
+            activeElements: {},
+            availableTools: [],
+            successCriteria: [],
+            safetyTier: 'advisory',
+          };
+        });
+
+      const continuation = agentManager.continueAgentExecution({
+        agentName: 'test-agent',
+        goalId: sourceGoal.id,
+      });
+      await continuationStarted;
+
+      currentSession = { ...currentSession, sessionId: 'session-b' };
+      const completion = agentManager.completeAgentGoal({
+        agentName: 'test-agent',
+        goalId: sourceGoal.id,
+        outcome: 'success',
+        summary: 'Completed from another session',
+      });
+      await Promise.resolve();
+      expect(readSpy).toHaveBeenCalledTimes(1);
+
+      releaseContinuation?.();
+      await expect(continuation).resolves.toEqual(expect.objectContaining({
+        goalId: 'goal-continuation',
+      }));
+      await expect(completion).resolves.toEqual(expect.objectContaining({ success: true }));
+      expect(readSpy).toHaveBeenCalledTimes(2);
+    });
+
+    it('serializes execute_agent behind an in-flight orphan reclaim', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('.state.yaml')) {
+          throw Object.assign(new Error('missing state'), { code: 'ENOENT' });
+        }
+        return `---
+name: test-agent
+---
+Content`;
+      });
+      const agent = await agentManager.read('test-agent');
+      expect(agent).not.toBeNull();
+
+      let markReclaimStarted: (() => void) | undefined;
+      const reclaimStarted = new Promise<void>((resolve) => {
+        markReclaimStarted = resolve;
+      });
+      let resolveReclaim: ((state: null) => void) | undefined;
+      jest.spyOn((agentManager as any).stateStore, 'reclaimOrphaned')
+        .mockImplementation(() => new Promise((resolve) => {
+          markReclaimStarted?.();
+          resolveReclaim = resolve;
+        }));
+      const loadExecutable = jest.spyOn(agentManager as any, 'loadExecutableAgent')
+        .mockRejectedValue(new Error('execution reached serialized boundary'));
+
+      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: 'test-agent' });
+      await reclaimStarted;
+      const execute = agentManager.executeAgent('test-agent', {});
+      await Promise.resolve();
+      expect(loadExecutable).not.toHaveBeenCalled();
+
+      resolveReclaim?.(null);
+      await expect(reclaim).resolves.toBeNull();
+      await expect(execute).rejects.toThrow('execution reached serialized boundary');
+      expect(loadExecutable).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not hydrate reclaimed state over an execution started during the read', async () => {
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('.state.yaml')) {
+          throw Object.assign(new Error('missing state'), { code: 'ENOENT' });
+        }
+        return `---
+name: test-agent
+---
+Content`;
+      });
+      const agent = await agentManager.read('test-agent');
+      expect(agent).not.toBeNull();
+
+      let markReadStarted: (() => void) | undefined;
+      const readStarted = new Promise<void>((resolve) => {
+        markReadStarted = resolve;
+      });
+      let resolveState: ((state: any) => void) | undefined;
+      jest.spyOn((agentManager as any).stateStore, 'reclaimOrphaned')
+        .mockImplementation(() => new Promise((resolve) => {
+          markReadStarted?.();
+          resolveState = resolve;
+        }));
+
+      const reclaim = agentManager.reclaimOrphanedAgentState({ agentName: 'test-agent' });
+      await readStarted;
+      (agentManager as any).beginExecutionAttempt('test-agent');
+      resolveState?.({
+        goals: [{
+          id: 'goal-orphan',
+          description: 'Orphaned execution',
+          priority: 'medium',
+          status: 'in_progress',
+          importance: 5,
+          urgency: 5,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        }],
+        decisions: [],
+        context: {},
+        lastActive: new Date(),
+        sessionCount: 1,
+        stateVersion: 1,
+      });
+      (agentManager as any).endExecutionAttempt('test-agent');
+
+      await expect(reclaim).resolves.toBeNull();
+      expect(agent?.getState().goals).toEqual([]);
+    });
+
+    it('preserves a concurrently-created goal while applying a recovery completion', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+
+      const concurrentGoal = sourceAgent.addGoal({ description: 'Concurrent execution' });
+      concurrentGoal.status = 'in_progress';
+      recoveryAgent.recordDecision({
+        goalId: originalGoal.id,
+        decision: 'goal_complete',
+        reasoning: 'Execution aborted during recovery',
+        confidence: 1,
+        outcome: 'failure',
+      });
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id);
+
+      const synchronizedState = sourceAgent.getState();
+      expect(synchronizedState.goals.find(goal => goal.id === originalGoal.id)?.status)
+        .toBe('failed');
+      expect(synchronizedState.goals.find(goal => goal.id === concurrentGoal.id)?.status)
+        .toBe('in_progress');
+      expect(synchronizedState.decisions.some(decision =>
+        decision.goalId === originalGoal.id && decision.decision === 'goal_complete'
+      )).toBe(true);
+      expect(synchronizedState.stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
+    it('marks a recovery-only synchronization as fully persisted', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id);
+
+      expect(sourceAgent.getState().goals[0]?.status).toBe('failed');
+      expect(sourceAgent.getState().stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(false);
     });
   });
 
@@ -629,6 +941,20 @@ This is the agent content.`;
   });
 
   describe('State Management', () => {
+    it('tracks execution generations across equivalent agent-name aliases', () => {
+      const observation = agentManager.observeExecutionGeneration('MyAgent');
+      const internals = agentManager as unknown as {
+        beginExecutionAttempt(name: string): void;
+        endExecutionAttempt(name: string): void;
+      };
+
+      internals.beginExecutionAttempt('my-agent');
+      expect(agentManager.hasExecutionGenerationChanged('MyAgent', observation.token)).toBe(true);
+
+      internals.endExecutionAttempt('my-agent');
+      observation.release();
+    });
+
     it('should save agent state', async () => {
       const state = {
         goals: [],

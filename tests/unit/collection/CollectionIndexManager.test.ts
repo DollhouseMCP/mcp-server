@@ -10,6 +10,7 @@ import { DollhouseContainer } from '../../../src/di/Container.js';
 import { describe, expect, test, beforeEach, afterEach, jest } from '@jest/globals';
 import { getMocks, resetAllMocks } from '../../__mocks__/fs/promises.js';
 import { createMockFileOperationsService } from '../../helpers/di-mocks.js';
+import { join } from 'node:path';
 
 // Mock the logger
 jest.mock('../../../src/utils/logger.js', () => ({
@@ -160,7 +161,8 @@ describe('CollectionIndexManager - Essential Tests', () => {
     test('should use custom cache directory', () => {
       container.register('CustomCollectionIndexManager', () => new CollectionIndexManager({ cacheDir: '/custom', fileOperations: mockFileOperationsService }));
       const customManager: InstanceType<typeof CollectionIndexManager> = container.resolve('CustomCollectionIndexManager');
-      expect(customManager).toBeInstanceOf(CollectionIndexManager);
+      const cacheFile = (customManager as unknown as { CACHE_FILE: string }).CACHE_FILE;
+      expect(cacheFile).toBe(join('/custom', 'collection-index.json'));
     });
   });
 

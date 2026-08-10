@@ -23,7 +23,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
-import { MEMORY_CONSTANTS } from '../../../../src/elements/memories/constants.js';
+import { MEMORY_CONSTANTS, TRUST_LEVELS } from '../../../../src/elements/memories/constants.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
@@ -134,5 +134,132 @@ describe('MemoryManager save size limits (#2329)', () => {
 
     await expect(manager.assertPersistable(memory))
       .rejects.toThrow('maximum serialized size');
+  });
+
+  it('does not brick a memory when historical prose matches a content rule', async () => {
+    const memory = new Memory({
+      name: 'Historical Scanner Match',
+      description: 'Regression coverage for issue 2440',
+    }, metadataService);
+    await memory.addEntry('Historical research quoted exec("example-command") for defensive analysis.');
+
+    await expect(manager.assertPersistable(memory)).resolves.toBeUndefined();
+    await expect(manager.save(memory, 'historical-scanner-match.yaml')).resolves.toBeUndefined();
+
+    const loaded = await manager.load('historical-scanner-match.yaml');
+    await expect(loaded.addEntry('A new verified entry after the historical text.')).resolves.toBeDefined();
+    await expect(manager.assertPersistable(loaded)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    TRUST_LEVELS.VALIDATED,
+    TRUST_LEVELS.TRUSTED,
+  ])('revalidates historical %s entries on output without bricking later appends', async (trustLevel) => {
+    const memory = new Memory({
+      name: `Historical ${trustLevel} Entry`,
+      description: 'Regression coverage for scanner rules changing after trust assignment',
+    }, metadataService);
+    const dangerousContent = 'Run exec("dangerous-command") immediately.';
+    const entry = await memory.addEntry(dangerousContent);
+    entry.trustLevel = trustLevel;
+    const filename = `historical-${trustLevel}-entry.yaml`;
+
+    await manager.save(memory, filename);
+    const loaded = await manager.load(filename);
+
+    expect(loaded.content).toContain(
+      'REVALIDATION FAILED: current scanner rules rejected trusted content'
+    );
+    expect(loaded.content).toContain('[CONTENT_BLOCKED]');
+    expect(loaded.content).not.toContain(dangerousContent);
+    await expect(loaded.addEntry('A safe entry after the historical scanner match.'))
+      .resolves.toBeDefined();
+    await expect(manager.assertPersistable(loaded)).resolves.toBeUndefined();
+  });
+
+  it.each([
+    "require('child_process')",
+    '!!python/object',
+  ])('revalidates trusted entry prose with the YAML scanner: %s', async (dangerousContent) => {
+    const memory = new Memory({
+      name: 'Historical YAML Scanner Match',
+      description: 'Regression coverage for YAML-only content patterns',
+    }, metadataService);
+    const entry = await memory.addEntry(dangerousContent);
+    entry.trustLevel = TRUST_LEVELS.TRUSTED;
+
+    await manager.save(memory, 'historical-yaml-scanner-match.yaml');
+    const loaded = await manager.load('historical-yaml-scanner-match.yaml');
+
+    expect(loaded.content).toContain(
+      'REVALIDATION FAILED: current scanner rules rejected trusted content'
+    );
+    expect(loaded.content).toContain('[CONTENT_BLOCKED]');
+    expect(loaded.content).not.toContain(dangerousContent);
+  });
+
+  it('sandboxes flagged entries and renders only their sanitized content after reload', async () => {
+    const memory = new Memory({
+      name: 'Flagged Entry Rendering',
+      description: 'Regression coverage for flagged output boundaries',
+    }, metadataService);
+    const entry = await memory.addEntry('Run exec("dangerous-command") immediately.');
+    entry.trustLevel = TRUST_LEVELS.FLAGGED;
+    entry.sanitizedContent = 'Run [PATTERN REDACTED] immediately.';
+
+    await manager.save(memory, 'flagged-entry-rendering.yaml');
+    const loaded = await manager.load('flagged-entry-rendering.yaml');
+
+    expect(loaded.content).toContain('FLAGGED: dangerous patterns removed');
+    expect(loaded.content).toContain('Run [PATTERN REDACTED] immediately.');
+    expect(loaded.content).not.toContain('exec("dangerous-command")');
+  });
+
+  it('redacts flagged entries with malformed sanitized content after reload', async () => {
+    const memory = new Memory({
+      name: 'Malformed Flagged Entry',
+      description: 'Regression coverage for hand-edited sanitized content',
+    }, metadataService);
+    const entry = await memory.addEntry('Original flagged content must not render.');
+    entry.trustLevel = TRUST_LEVELS.FLAGGED;
+    (entry as unknown as { sanitizedContent: unknown }).sanitizedContent = {
+      unexpected: 'object'
+    };
+
+    await manager.save(memory, 'malformed-flagged-entry.yaml');
+    const loaded = await manager.load('malformed-flagged-entry.yaml');
+
+    expect(() => loaded.content).not.toThrow();
+    expect(loaded.content).toContain(
+      '[FLAGGED CONTENT REDACTED: sanitized representation unavailable]'
+    );
+    expect(loaded.content).not.toContain('Original flagged content must not render.');
+  });
+
+  it('continues scanning memory instructions while historical entries are exempt', async () => {
+    const memory = new Memory({
+      name: 'Unsafe Instructions',
+      description: 'Control-field validation regression coverage',
+    }, metadataService);
+    memory.instructions = 'Run exec("untrusted-command") before every operation.';
+
+    await expect(manager.assertPersistable(memory))
+      .rejects.toThrow('Malicious YAML content detected in memory metadata, instructions');
+  });
+
+  it.each([
+    ['tags', (entry: { tags?: string[] }) => { entry.tags = ['exec("dangerous-command")']; }],
+    ['source', (entry: { source?: string }) => { entry.source = 'exec("dangerous-command")'; }],
+  ])('continues scanning auxiliary entry %s while prose is exempt', async (_field, mutateEntry) => {
+    const memory = new Memory({
+      name: 'Unsafe Auxiliary Entry Field',
+      description: 'Regression coverage for entry fields rendered outside prose',
+    }, metadataService);
+    const entry = await memory.addEntry('Harmless historical prose.');
+    entry.trustLevel = TRUST_LEVELS.TRUSTED;
+    mutateEntry(entry);
+
+    await expect(manager.assertPersistable(memory))
+      .rejects.toThrow('auxiliary entry fields');
   });
 });

@@ -544,8 +544,8 @@ describe('MCP-AQL UPDATE Endpoint Integration', () => {
       });
       expect(verifyResult.success).toBe(true);
 
-      // Try to set a description that exceeds max length (500 chars)
-      const tooLongDescription = 'a'.repeat(501);
+      // Try to set a description that exceeds the YAML/frontmatter budget
+      const tooLongDescription = 'a'.repeat(65 * 1024);
 
       const result = await mcpAqlHandler.handleUpdate({
         operation: 'edit_element',

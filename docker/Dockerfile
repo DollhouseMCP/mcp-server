@@ -4,7 +4,7 @@ FROM node:24-slim AS builder
 
 # Install build dependencies for better cross-platform compatibility
 # These are especially important for ARM64 builds
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     make \
     g++ \
@@ -21,7 +21,7 @@ COPY packages/ ./packages/
 
 # Install dependencies (includes local @dollhousemcp/safety package)
 # Retry transient npm registry failures that occasionally show up in CI builders.
-RUN npm ci \
+RUN npm ci --ignore-scripts \
     --fetch-retries=5 \
     --fetch-retry-factor=2 \
     --fetch-retry-mintimeout=20000 \
@@ -65,7 +65,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Install only production dependencies
-RUN npm ci --omit=dev \
+RUN npm ci --omit=dev --ignore-scripts \
     --fetch-retries=5 \
     --fetch-retry-factor=2 \
     --fetch-retry-mintimeout=20000 \

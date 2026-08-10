@@ -323,7 +323,12 @@ describe('Agent Execution Lifecycle (Issues #106, #122)', () => {
       expect(resumeData.restoredFrom.goalId).toBe(goalId);
 
       // Clean up: complete the resumed execution
-      await completeAgent('resume-agent');
+      const completionResult = await completeAgent('resume-agent');
+      expect(completionResult.success).toBe(true);
+      if (completionResult.success) {
+        const completionData = completionResult.data as { goal: { id: string } };
+        expect(completionData.goal.id).toBe(resumeData.goalId);
+      }
     });
 
     it('should reject handoff block with mismatched agent name', async () => {
@@ -336,8 +341,6 @@ describe('Agent Execution Lifecycle (Issues #106, #122)', () => {
       if (!execResult.success) return;
       const goalId = (execResult.data as any).goalId;
 
-      await completeAgent('handoff-src');
-
       const handoffResult = await mcpAqlHandler.handleExecute({
         operation: 'prepare_handoff',
         params: { element_name: 'handoff-src', goalId },
@@ -345,6 +348,8 @@ describe('Agent Execution Lifecycle (Issues #106, #122)', () => {
       expect(handoffResult.success).toBe(true);
       if (!handoffResult.success) return;
       const handoffBlock = (handoffResult.data as any).handoffBlock;
+
+      await completeAgent('handoff-src');
 
       // Try to resume on a different agent — should fail
       const resumeResult = await mcpAqlHandler.handleExecute({

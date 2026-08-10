@@ -6,9 +6,9 @@ name: Docker Testing
 
 on:
   push:
-    branches: [main, develop, codex/hosted-http-integration]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop, codex/hosted-http-integration]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions: {}

@@ -5,9 +5,15 @@
  * Issue #449: Direct unit tests for the CommandValidator class.
  */
 
-import { describe, it, expect, jest } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach } from '@jest/globals';
+import { EventEmitter } from 'node:events';
 
 // ESM mocking: mock child_process and logger
+const mockSpawn = jest.fn();
+jest.unstable_mockModule('child_process', () => ({
+  spawn: mockSpawn,
+}));
+
 jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
   logger: {
     debug: jest.fn(),
@@ -20,6 +26,10 @@ jest.unstable_mockModule('../../../src/utils/logger.js', () => ({
 const { CommandValidator } = await import('../../../src/security/commandValidator.js');
 
 describe('CommandValidator', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
   describe('sanitizeCommand()', () => {
     it('should allow git with permitted subcommands', () => {
       expect(() => CommandValidator.sanitizeCommand('git', ['status'])).not.toThrow();
@@ -74,19 +84,52 @@ describe('CommandValidator', () => {
     it('should reject disallowed commands before execution', async () => {
       await expect(CommandValidator.secureExec('rm', ['-rf', '/']))
         .rejects.toThrow('Command not allowed: rm');
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
 
     it('should execute allowed command and return output', async () => {
-      // CommandValidator restricts PATH to Unix-only paths (/usr/bin:/bin:/usr/local/bin).
-      // On Windows, git is not on that restricted PATH, so skip this test.
-      if (process.platform === 'win32') return;
-      const result = await CommandValidator.secureExec('git', ['status']);
-      expect(typeof result).toBe('string');
+      const proc = createMockProcess();
+      mockSpawn.mockReturnValue(proc);
+
+      const result = CommandValidator.secureExec('git', ['status']);
+      proc.stdout.emit('data', 'working tree clean\n');
+      proc.emit('exit', 0);
+
+      await expect(result).resolves.toBe('working tree clean');
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'git',
+        ['status'],
+        expect.objectContaining({
+          cwd: process.cwd(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+          timeout: 30000,
+          env: expect.objectContaining({
+            PATH: '/usr/bin:/bin:/usr/local/bin',
+          }),
+        })
+      );
     });
 
     it('should reject shell metacharacters before execution', async () => {
       await expect(CommandValidator.secureExec('git', ['status; rm -rf /']))
         .rejects.toThrow('Argument not allowed');
+      expect(mockSpawn).not.toHaveBeenCalled();
     });
   });
 });
+
+function createMockProcess(): EventEmitter & {
+  stdout: EventEmitter;
+  stderr: EventEmitter;
+  kill: jest.Mock;
+} {
+  const proc = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter;
+    stderr: EventEmitter;
+    kill: jest.Mock;
+  };
+  proc.stdout = new EventEmitter();
+  proc.stderr = new EventEmitter();
+  proc.kill = jest.fn();
+  return proc;
+}

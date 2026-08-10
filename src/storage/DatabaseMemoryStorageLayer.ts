@@ -21,6 +21,8 @@ import type { UserIdResolver } from '../database/UserContext.js';
 import { isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
+import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js';
 import { logger } from '../utils/logger.js';
 import type { ElementIndexEntry } from './types.js';
@@ -375,9 +377,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
     let parsed: Record<string, unknown>;
     try {
       parsed = SecureYamlParser.parseRawYaml(yamlContent, {
-        maxSize: 64 * 1024,
+        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
         contentPolicy: 'structure-only',
       });
+      if (!validateMemoryControlFields(parsed)) {
+        throw new Error('Malicious memory control content detected');
+      }
     } catch (err) {
       // Parse failure drops entries silently — element row still persists.
       // Log so operators see skipped entry sync and can investigate corrupted YAML.
@@ -458,9 +463,12 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
   private extractMemoryMetadata(content: string): Record<string, unknown> {
     try {
       const parsed = SecureYamlParser.parseRawYaml(content, {
-        maxSize: 64 * 1024,
+        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
         contentPolicy: 'structure-only',
       });
+      if (!validateMemoryControlFields(parsed)) {
+        return {};
+      }
       const { name, description, version, author, tags, entries, stats, ...rest } = parsed;
       const metadataObj = (rest.metadata && typeof rest.metadata === 'object' && !Array.isArray(rest.metadata))
         ? rest.metadata as Record<string, unknown>

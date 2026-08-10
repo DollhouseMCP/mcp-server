@@ -13,6 +13,12 @@
  */
 export const COMMIT_PERSISTED_VERSION = Symbol('commitPersistedVersion');
 
+/**
+ * Symbol for retaining pending in-memory state after a recovery merge.
+ * @internal
+ */
+export const MARK_STATE_FOR_PERSISTENCE = Symbol('markStateForPersistence');
+
 // Security limits
 export const AGENT_LIMITS = {
   MAX_GOALS: 50,

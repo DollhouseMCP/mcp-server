@@ -60,6 +60,20 @@ describe('CollectionCache', () => {
     it('should initialize with custom base directory', () => {
       const customCache = new CollectionCache(fileOperations, '/custom/path');
       expect(customCache).toBeInstanceOf(CollectionCache);
+      expect(customCache.getCacheFilePath()).toBe(
+        path.join('/custom/path', '.dollhousemcp', 'cache', 'collection-cache.json')
+      );
+    });
+
+    it('should use an exact canonical cache directory without nesting it again', () => {
+      const canonicalCache = new CollectionCache({
+        fileOperations,
+        cacheDir: '/canonical/cache',
+      });
+
+      expect(canonicalCache.getCacheFilePath()).toBe(
+        path.join('/canonical/cache', 'collection-cache.json')
+      );
     });
   });
 

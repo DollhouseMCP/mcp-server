@@ -16,6 +16,7 @@ import { ElementType } from '../../portfolio/types.js';
 import { randomBytes } from 'node:crypto';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import { ErrorHandler, ErrorCategory } from '../../utils/ErrorHandler.js';
@@ -39,7 +40,8 @@ import {
   AGENT_THRESHOLDS,
   DECISION_FRAMEWORKS,
   RISK_TOLERANCE_LEVELS,
-  COMMIT_PERSISTED_VERSION
+  COMMIT_PERSISTED_VERSION,
+  MARK_STATE_FOR_PERSISTENCE,
 } from './constants.js';
 import {
   RuleEngineConfig,
@@ -65,7 +67,7 @@ export class Agent extends BaseElement implements IElement {
     const sanitizedMetadata: Partial<AgentMetadata> = {
       ...metadata,
       name: metadata.name ? sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) : undefined,
-      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) : undefined,
+      description: metadata.description ? sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH) : undefined,
       specializations: metadata.specializations?.map(s => sanitizeInput(s, 50)),
       decisionFramework: metadata.decisionFramework || AGENT_DEFAULTS.DECISION_FRAMEWORK,
       riskTolerance: metadata.riskTolerance || AGENT_DEFAULTS.RISK_TOLERANCE,
@@ -563,6 +565,11 @@ export class Agent extends BaseElement implements IElement {
    */
   public [COMMIT_PERSISTED_VERSION](version: number): void {
     this.state.stateVersion = version;
+  }
+
+  /** @internal Used by AgentManager after merging recovery and live state. */
+  public [MARK_STATE_FOR_PERSISTENCE](): void {
+    this.isDirtyState = true;
   }
 
   /**

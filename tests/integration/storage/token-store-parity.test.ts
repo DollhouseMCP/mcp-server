@@ -113,4 +113,3 @@ describePg('DatabaseTokenStore', () => {
     await expect(store.retrieveToken(userB)).resolves.toBe('ghp_BOBDELETE00000000000000000000000000002');
   });
 });
-

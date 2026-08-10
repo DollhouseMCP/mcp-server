@@ -197,6 +197,203 @@ describe('console platform HTTP foundations', () => {
     expect(registry.createRouteManifest().routes.map(route => route.moduleId)).toEqual(['profile', 'settings']);
   });
 
+  it('normalizes route params, query values, and JSON body keys while preserving body strings', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'unicode',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'POST',
+        path: '/api/v1/me/unicode/:name',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        handler: req => ({
+          status: 200,
+          body: {
+            param: req.params.name,
+            paramPrototype: Object.getPrototypeOf(req.params) === null,
+            query: req.query.q,
+            keyed: (req.body as Record<string, unknown>)['café'],
+            nested: (req.body as { nested: { label: string } }).nested.label,
+            content: (req.body as { content: string }).content,
+          },
+        }),
+      }],
+    });
+    const app = express();
+    app.use(express.json());
+    app.use(assembleConsoleRouter(registry));
+
+    const decomposedCafe = 'cafe\u0301';
+    const familyEmoji = 'family: 👨‍👩‍👧‍👦';
+    const response = await request(app)
+      .post(`/api/v1/me/unicode/${encodeURIComponent(decomposedCafe)}?q=${encodeURIComponent(decomposedCafe)}`)
+      .send({
+        [decomposedCafe]: 'body-key-normalized',
+        nested: { label: decomposedCafe },
+        content: familyEmoji,
+      });
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      param: 'café',
+      paramPrototype: true,
+      query: 'café',
+      keyed: 'body-key-normalized',
+      nested: decomposedCafe,
+      content: familyEmoji,
+    });
+  });
+
+  it('preserves free-form route param confusables while applying canonical NFC', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'freeform-param',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'GET',
+        path: '/api/v1/me/freeform/:name',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        pathParamValueNormalization: { name: 'nfc' },
+        handler: req => ({
+          status: 200,
+          body: {
+            name: req.params.name,
+          },
+        }),
+      }],
+    });
+    const app = express();
+    app.use(assembleConsoleRouter(registry));
+
+    const response = await request(app)
+      .get(`/api/v1/me/freeform/${encodeURIComponent('α-cafe\u0301')}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ name: 'α-café' });
+  });
+
+  it('preserves free-form query value confusables while applying canonical NFC', async () => {
+    const registry = new ConsoleModuleRegistry();
+    registry.register({
+      id: 'freeform-query',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'GET',
+        path: '/api/v1/me/freeform-query',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        queryParamValueNormalization: { tag: 'nfc' },
+        handler: req => ({
+          status: 200,
+          body: {
+            tag: req.query.tag,
+            q: req.query.q,
+          },
+        }),
+      }],
+    });
+    const app = express();
+    app.use(assembleConsoleRouter(registry));
+
+    const freeformTag = 'α-cafe\u0301';
+    const response = await request(app)
+      .get(`/api/v1/me/freeform-query?tag=${encodeURIComponent(freeformTag)}&q=${encodeURIComponent(freeformTag)}`);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({
+      tag: 'α-café',
+      q: 'a-café',
+    });
+  });
+
+  it.each(['__proto__', 'constructor'])(
+    'rejects reserved route param key %s before it can shadow object internals',
+    async paramName => {
+      const registry = new ConsoleModuleRegistry();
+      const handler = jest.fn(() => ({ status: 200, body: {} }));
+      registry.register({
+        id: 'prototype-param',
+        apiVersion: 'v1',
+        capabilities: [SELF_CAPABILITY],
+        routes: [{
+          method: 'GET',
+          path: `/api/v1/me/prototype-param/:${paramName}`,
+          audience: 'self',
+          requiredCapability: SELF_CAPABILITY,
+          ownership: 'authenticated_user',
+          elevation: 'none',
+          privacyClass: 'self_private',
+          idempotency: 'not_applicable',
+          handler,
+        }],
+      });
+      const app = express();
+      app.use(assembleConsoleRouter(registry));
+
+      const response = await request(app).get('/api/v1/me/prototype-param/not-admin');
+
+      expect(response.status).toBe(400);
+      expect(response.body).toMatchObject({
+        code: 'invalid_request',
+        detail: 'Request contains a reserved Unicode-normalized field',
+      });
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects reserved JSON body keys before they can invoke prototype setters', async () => {
+    const registry = new ConsoleModuleRegistry();
+    const handler = jest.fn(() => ({ status: 200, body: {} }));
+    registry.register({
+      id: 'prototype-guard',
+      apiVersion: 'v1',
+      capabilities: [SELF_CAPABILITY],
+      routes: [{
+        method: 'POST',
+        path: '/api/v1/me/prototype-guard',
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        handler,
+      }],
+    });
+    const app = express();
+    app.use(express.json());
+    app.use(assembleConsoleRouter(registry));
+
+    const response = await request(app)
+      .post('/api/v1/me/prototype-guard')
+      .set('Content-Type', 'application/json')
+      .send('{"__proto__":{"role":"admin"},"nested":{"label":"cafe\\u0301","__proto__":{"role":"nested-admin"}}}');
+
+    expect(response.status).toBe(400);
+    expect(response.body).toMatchObject({
+      code: 'invalid_request',
+      detail: 'Request contains a reserved Unicode-normalized field',
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
   it('sends allowlisted handler headers', async () => {
     const registry = new ConsoleModuleRegistry();
     registry.register({

@@ -36,4 +36,3 @@ export class EnvVarMasterKeyProvider implements MasterKeyProvider {
     return this.getCurrentKey();
   }
 }
-

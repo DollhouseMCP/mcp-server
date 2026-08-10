@@ -231,6 +231,10 @@ mcp_aql_create {
 }
 ```
 
+The response is a receipt containing `id`, `timestamp`, and `trustLevel`. Entry
+content is not echoed because new entries begin as untrusted and are validated
+asynchronously before their trust level can be promoted.
+
 ---
 
 ## Templates

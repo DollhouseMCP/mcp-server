@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { RequestHandler } from 'express';
 import type { ConsoleRequest, ConsoleRequestContext } from './ConsolePlatformTypes.js';
+import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 
 // The API contract accepts client UUIDs as opaque correlation values; only
 // server-generated values are constrained by randomUUID() to UUIDv4.
@@ -11,7 +12,8 @@ function incomingCorrelationId(value: string | string[] | undefined): string | u
   if (typeof value !== 'string') {
     return undefined;
   }
-  return UUID_PATTERN.test(value) ? value : undefined;
+  const normalized = UnicodeValidator.normalize(value).normalizedContent;
+  return UUID_PATTERN.test(normalized) ? normalized : undefined;
 }
 
 export function createConsoleRequestContextMiddleware(): RequestHandler {

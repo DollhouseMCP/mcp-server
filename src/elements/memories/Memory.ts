@@ -22,6 +22,7 @@ import crypto from 'crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { sanitizeInput } from '../../security/InputValidator.js';
 import { MetadataService } from '../../services/MetadataService.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 // FIX #1315: ContentValidator no longer used in addEntry (moved to background validation)
 // Import removed to clean up unused dependencies
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS, PrivacyLevel, StorageBackend, TRUST_LEVELS, TrustLevel } from './constants.js';
@@ -32,6 +33,7 @@ import { logger } from '../../utils/logger.js';
 import DOMPurify from 'dompurify';
 import { JSDOM } from 'jsdom';
 import { LRUCache } from '../../cache/LRUCache.js';
+import { ContentValidator } from '../../security/contentValidator.js';
 
 /**
  * Maximum length for individual trigger words used in Enhanced Index
@@ -112,6 +114,8 @@ export interface MemoryEntry {
   privacyLevel?: PrivacyLevel;
   // FIX #1269: Trust level for content security
   trustLevel?: TrustLevel;
+  sanitizedPatterns?: unknown[];
+  sanitizedContent?: string;
   // Source information for trust decisions
   source?: string;  // e.g., 'user', 'web-scrape', 'agent', 'api'
 }
@@ -256,7 +260,7 @@ export class Memory extends BaseElement implements IElement {
         sanitizeInput(UnicodeValidator.normalize(metadata.name).normalizedContent, 100) :
         'Unnamed Memory',
       description: metadata.description ?
-        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, 500) :
+        sanitizeInput(UnicodeValidator.normalize(metadata.description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH) :
         undefined,
       // FIX #1124: Preserve triggers for Enhanced Index
       // SECURITY: Validate BEFORE sanitization to reject invalid characters
@@ -626,48 +630,115 @@ export class Memory extends BaseElement implements IElement {
         return bTime - aTime;
       });
 
-    return sortedEntries.map(entry => {
-      // FIX #1069: Ensure timestamp is Date object before calling toISOString
-      const timestamp = this.ensureDateObject(entry.timestamp).toISOString();
-      const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
+    return sortedEntries.map(entry => this.formatEntryForDisplay(entry)).join('\n\n');
+  }
 
-      // FIX #1269: Sandbox untrusted content
-      const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
-      let displayContent = entry.content;
+  private formatEntryForDisplay(entry: MemoryEntry): string {
+    // FIX #1069: Ensure timestamp is a Date object before calling toISOString.
+    const timestamp = this.ensureDateObject(entry.timestamp).toISOString();
+    const tags = entry.tags && entry.tags.length > 0 ? ` [${entry.tags.join(', ')}]` : '';
+    const trustLevel = entry.trustLevel || TRUST_LEVELS.UNTRUSTED;
+    const display = this.prepareEntryForDisplay(entry, trustLevel);
+    const trustIndicator = this.getTrustIndicator(display.effectiveTrustLevel);
 
-      if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
-        // Clearly mark untrusted content
-        displayContent = this.sandboxUntrustedContent(entry.content, entry.source || 'unknown');
-      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
-        // Don't display quarantined content at all
-        displayContent = '[CONTENT QUARANTINED: Security threat detected]';
-      }
+    return `[${timestamp}]${tags} ${trustIndicator}: ${display.content}`;
+  }
 
-      // FIX: Extract nested ternary to improve readability (SonarCloud S3358)
-      let trustIndicator: string;
-      if (trustLevel === TRUST_LEVELS.VALIDATED) {
-        trustIndicator = '✓';
-      } else if (trustLevel === TRUST_LEVELS.TRUSTED) {
-        trustIndicator = '✓✓';
-      } else if (trustLevel === TRUST_LEVELS.QUARANTINED) {
-        trustIndicator = '⚠️';
-      } else {
-        trustIndicator = '⚠';
-      }
+  private prepareEntryForDisplay(
+    entry: MemoryEntry,
+    trustLevel: TrustLevel,
+  ): { content: string; effectiveTrustLevel: TrustLevel } {
+    if (trustLevel === TRUST_LEVELS.VALIDATED || trustLevel === TRUST_LEVELS.TRUSTED) {
+      return this.revalidateTrustedEntry(entry, trustLevel);
+    }
+    if (trustLevel === TRUST_LEVELS.UNTRUSTED) {
+      return {
+        content: this.sandboxUntrustedContent(entry.content, entry.source || 'unknown'),
+        effectiveTrustLevel: trustLevel,
+      };
+    }
+    if (trustLevel === TRUST_LEVELS.FLAGGED) {
+      return {
+        content: this.sandboxUntrustedContent(
+          this.getSafeSanitizedContent(
+            entry.sanitizedContent,
+            entry.content,
+            '[FLAGGED CONTENT REDACTED: sanitized representation unavailable]',
+          ),
+          entry.source || 'unknown',
+          'FLAGGED: dangerous patterns removed',
+        ),
+        effectiveTrustLevel: trustLevel,
+      };
+    }
+    return {
+      content: '[CONTENT QUARANTINED: Security threat detected]',
+      effectiveTrustLevel: trustLevel,
+    };
+  }
 
-      return `[${timestamp}]${tags} ${trustIndicator}: ${displayContent}`;
-    }).join('\n\n');
+  private revalidateTrustedEntry(
+    entry: MemoryEntry,
+    trustLevel: TrustLevel,
+  ): { content: string; effectiveTrustLevel: TrustLevel } {
+    // Trust decisions can outlive the scanner rules that produced them. Revalidate
+    // before direct rendering so stale or manually assigned trust cannot bypass
+    // the current output boundary. This intentionally does not mutate history or
+    // block later appends; unsafe legacy content is sandboxed when it is consumed.
+    const currentValidation = ContentValidator.validateAndSanitizeYamlAware(entry.content, {
+      skipSizeCheck: true,
+    });
+    if (currentValidation.isValid) {
+      return { content: entry.content, effectiveTrustLevel: trustLevel };
+    }
+
+    const sanitizedContent = this.getSafeSanitizedContent(
+      currentValidation.sanitizedContent,
+      entry.content,
+      '[TRUSTED CONTENT REDACTED: current validation failed]',
+    );
+    return {
+      content: this.sandboxUntrustedContent(
+        sanitizedContent,
+        entry.source || 'unknown',
+        'REVALIDATION FAILED: current scanner rules rejected trusted content',
+      ),
+      effectiveTrustLevel: TRUST_LEVELS.FLAGGED,
+    };
+  }
+
+  private getSafeSanitizedContent(
+    sanitizedContent: unknown,
+    originalContent: string,
+    fallback: string,
+  ): string {
+    return typeof sanitizedContent === 'string' &&
+      sanitizedContent.trim().length > 0 &&
+      sanitizedContent !== originalContent
+      ? sanitizedContent
+      : fallback;
+  }
+
+  private getTrustIndicator(trustLevel: TrustLevel): string {
+    if (trustLevel === TRUST_LEVELS.VALIDATED) return '✓';
+    if (trustLevel === TRUST_LEVELS.TRUSTED) return '✓✓';
+    if (trustLevel === TRUST_LEVELS.QUARANTINED) return '⚠️';
+    return '⚠';
   }
 
   /**
    * Sandbox untrusted content with clear delimiters
    * FIX #1269: Prevents AI from interpreting user content as instructions
    */
-  private sandboxUntrustedContent(content: string, source: string): string {
+  private sandboxUntrustedContent(
+    content: string,
+    source: string,
+    status = 'NOT VALIDATED',
+  ): string {
     return [
       '┌─── UNTRUSTED CONTENT START ───┐',
       `│ Source: ${source}`,
-      `│ Status: NOT VALIDATED`,
+      `│ Status: ${status}`,
       '├────────────────────────────────┤',
       content.split('\n').map(line => `│ ${line}`).join('\n'),
       '└─── UNTRUSTED CONTENT END ─────┘'

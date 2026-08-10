@@ -19,6 +19,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService = createTestMetadataService();
@@ -228,8 +229,8 @@ Hello {{name}}!`;
       expect(template.metadata.tags).toEqual(['complex', 'advanced', 'features']);
     });
 
-    it('should preserve example descriptions longer than 500 characters when importing', async () => {
-      const longDescription = 'Detailed example documentation '.repeat(25).trim();
+    it('should preserve example descriptions beyond the generic metadata field limit when importing', async () => {
+      const longDescription = 'Detailed example documentation '.repeat(40).trim();
       const importData = JSON.stringify({
         metadata: {
           name: 'Long Example Description',
@@ -248,8 +249,25 @@ Hello {{name}}!`;
 
       const template = await manager.importElement(importData, 'json');
 
-      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
       expect(template.metadata.examples?.[0].description).toBe(longDescription);
+    });
+
+    it('should preserve top-level descriptions up to the 2.1 YAML/frontmatter limit when importing', async () => {
+      const longDescription = 'Detailed imported template purpose and usage guidance '.repeat(25).trim();
+      const importData = JSON.stringify({
+        metadata: {
+          name: 'Long Imported Template Description',
+          description: longDescription
+        },
+        content: 'Write about {{topic}}.'
+      });
+
+      const template = await manager.importElement(importData, 'json');
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeLessThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(template.metadata.description).toBe(longDescription);
     });
 
     it('should sanitize metadata fields', async () => {

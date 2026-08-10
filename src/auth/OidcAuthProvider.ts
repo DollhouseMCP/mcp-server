@@ -19,6 +19,7 @@ import { jwtVerify, createRemoteJWKSet, errors as joseErrors } from 'jose';
 import type { JWTVerifyGetKey } from 'jose';
 import { logger } from '../utils/logger.js';
 import type { IAuthProvider, AuthResult, AuthClaims } from './IAuthProvider.js';
+import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface OidcAuthProviderOptions {
   /** OIDC issuer URL (e.g. "https://tenant.auth0.com/"). */
@@ -128,10 +129,26 @@ export class OidcAuthProvider implements IAuthProvider {
         algorithms: [...this.algorithms],
         ...(this.requireAccessTokenTyp ? { typ: 'at+jwt' } : {}),
       });
-      return buildOidcAuthResult(payload);
+      const result = buildOidcAuthResult(payload);
+      if (!result.ok) {
+        this.logTokenValidationFailure(result.reason);
+      }
+      return result;
     } catch (error) {
-      return { ok: false, reason: mapOidcVerifyError(error) };
+      const reason = mapOidcVerifyError(error);
+      this.logTokenValidationFailure(reason);
+      return { ok: false, reason };
     }
+  }
+
+  private logTokenValidationFailure(reason: string): void {
+    SecurityMonitor.logSecurityEvent({
+      type: 'TOKEN_VALIDATION_FAILURE',
+      severity: 'MEDIUM',
+      source: 'OidcAuthProvider.validate',
+      details: `OIDC access token validation failed: ${reason} [provider:${this.name}]`,
+      additionalData: { provider: this.name, issuer: this.issuer, reason },
+    });
   }
 }
 

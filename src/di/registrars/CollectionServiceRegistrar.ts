@@ -92,15 +92,15 @@ export class CollectionServiceRegistrar {
     // the filesystem — mirrors the CollectionIndexManager wiring above. Falls
     // back to the filesystem path when the store isn't registered (e.g. unit-test
     // containers that skip the full bootstrap).
-    container.register('CollectionCache', () => new CollectionCache(
-      container.resolve('FileOperationsService'),
-      container.hasRegistration('PathService')
+    container.register('CollectionCache', () => new CollectionCache({
+      fileOperations: container.resolve('FileOperationsService'),
+      cacheDir: container.hasRegistration('PathService')
         ? container.resolve<PathService>('PathService').resolveDataDir('cache')
         : undefined,
-      container.hasRegistration('SharedCacheStore')
+      sharedCache: container.hasRegistration('SharedCacheStore')
         ? container.resolve<ISharedCacheStore>('SharedCacheStore')
         : undefined,
-    ));
+    }));
 
     container.register('PersonaDetails', () => new PersonaDetails(container.resolve('GitHubClient')));
 

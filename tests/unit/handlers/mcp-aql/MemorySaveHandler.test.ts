@@ -39,7 +39,11 @@ function makeMemory(name: string): MockMemory {
     addEntry: jest.fn((content: string) => {
       const id = `entry-${entries.size + 1}`;
       entries.set(id, { content });
-      return Promise.resolve({ id });
+      return Promise.resolve({
+        id,
+        timestamp: new Date('2026-01-01T00:00:00.000Z'),
+        trustLevel: 'untrusted',
+      });
     }),
     getEntries: () => entries,
     removeEntry: jest.fn((id: string) => entries.delete(id)),
@@ -52,6 +56,8 @@ function makeHandler(memory: MockMemory, sessionId = 'sessA', contextScope?: Han
     find: jest.fn(() => Promise.resolve(memory)),
     save: jest.fn(() => Promise.resolve()),
     assertPersistable: jest.fn(() => Promise.resolve()),
+    getMemoryProbeToken: jest.fn(() => 'test-memory-probe'),
+    isMemoryDeletedAt: jest.fn(() => Promise.resolve(false)),
   };
   const handlers = { memoryManager: manager } as unknown as HandlerCtorArgs[0];
   // Session-scoped key, matching MCPAQLHandler.sessionKey('name') => `${sessionId}:${name}`
@@ -94,20 +100,24 @@ describe('MemorySaveHandler', () => {
       expect(manager.save).toHaveBeenCalledWith(memory);
     });
 
-    it('reports and drops an unrecovered failed save on session cleanup', async () => {
+    it('retries and reports an unrecovered failed save on session cleanup', async () => {
       const memory = makeMemory('doomed');
       const { handler, manager } = makeHandler(memory, 'sessA');
       const errorSpy = jest.spyOn(logger, 'error');
 
       // Force the debounced save to fail so the key enters the failure ledger.
-      manager.save.mockReturnValueOnce(Promise.reject(new Error('EIO disk failure')));
+      manager.save.mockRejectedValue(new Error('EIO disk failure'));
       await handler.dispatch('addEntry', { element_name: 'doomed', content: 'x' });
       jest.advanceTimersByTime(STORAGE_LAYER_CONFIG.MEMORY_SAVE_DEBOUNCE_MS + 5);
       await Promise.resolve();
       await Promise.resolve();
 
       handler.cleanupSession('sessA');
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('unrecovered memory save'));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(manager.save).toHaveBeenCalledTimes(2);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Session cleanup retry failed'));
     });
   });
 

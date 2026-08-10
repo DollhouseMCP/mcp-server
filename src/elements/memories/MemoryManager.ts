@@ -34,12 +34,14 @@ import { sanitizeInput } from '../../security/InputValidator.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 import { MEMORY_CONSTANTS, MEMORY_SECURITY_EVENTS } from './constants.js';
+import { validateMemoryControlFields } from './memoryYamlValidation.js';
 import { MemoryType } from './types.js';
 import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
 import * as path from 'path';
+import * as fs from 'node:fs/promises';
 import * as crypto from 'crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -673,6 +675,68 @@ export class MemoryManager extends BaseElementManager<Memory> {
   }
 
   /**
+   * Issue #2329: Serialize and run the full save-path validation without writing to disk.
+   * Lets callers reject a mutation immediately (e.g. addEntry) when the memory can no
+   * longer be persisted, instead of the failure surfacing only in a deferred save
+   * where it cannot be reported back to the caller.
+   */
+  async assertPersistable(element: Memory): Promise<void> {
+    const yamlContent = await this.serializeElement(element);
+    this.validateSerializedContent(yamlContent);
+  }
+
+  /**
+   * Issue #2329 (Codex P1s, PR #2337): resolve a context-independent probe
+   * token for later deletion checks. MUST be called while the owning session's
+   * context is still live: `memoriesDir` is a dynamic getter that routes to the
+   * per-user portfolio only when a session context is active, so a path
+   * resolved at probe time (e.g. during dispose/cleanup) could point at the
+   * wrong portfolio and produce a false "deleted" verdict.
+   *
+   * Returns the element UUID in DB mode, the absolute file path in file mode,
+   * or null for a memory that was never persisted.
+   */
+  getMemoryProbeToken(element: Memory): string | null {
+    const persistedPath = element.getFilePath();
+    if (!persistedPath) return null;
+    if (isWritableStorageLayer(this.storageLayer)) return persistedPath;
+    return path.join(this.memoriesDir, persistedPath);
+  }
+
+  /**
+   * Issue #2329 (Codex P1, PR #2337): positive deletion check for failure-ledger
+   * retries. Returns true ONLY when the storage layer confirms absence (ENOENT);
+   * transient lookup failures THROW so callers can fail closed — retry the save —
+   * instead of dropping the last in-RAM copy of unpersisted entries. This is
+   * deliberately not find(): find() swallows storage errors into an empty list,
+   * which conflates "deleted" with "lookup failed".
+   *
+   * A null token means the memory was never persisted and returns false — the
+   * retry IS its first persist.
+   */
+  async isMemoryDeletedAt(probeToken: string | null): Promise<boolean> {
+    if (!probeToken) return false;
+
+    try {
+      if (isWritableStorageLayer(this.storageLayer)) {
+        // DB mode: the token is the element UUID. readContent throws
+        // code='ENOENT' for a missing row; query/connection failures throw
+        // other errors and propagate.
+        await this.storageLayer.readContent(probeToken);
+      } else {
+        // File mode: the token is an absolute path captured under the owning
+        // session's context. fs.stat throws code='ENOENT' for a missing file;
+        // other I/O errors propagate.
+        await fs.stat(probeToken);
+      }
+      return false;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return true;
+      throw err;
+    }
+  }
+
+  /**
    * Memory-specific content validation.
    * Memories are pure YAML (no frontmatter delimiters), so they need different
    * validation than frontmatter-based elements. The base class validateSerializedContent
@@ -684,18 +748,6 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   protected override validateSerializedContent(content: string): void {
     this.validateSerializedMemoryYaml(content);
-  }
-
-  /**
-   * Issue #2329: Serialize and run the full save-path validation without writing to disk.
-   * Lets callers reject a mutation immediately (e.g. addEntry) when the memory can no
-   * longer be persisted, instead of the failure surfacing only in a deferred save
-   * where it cannot be reported back to the caller. File and DB modes return the same
-   * validation result because both run the identical serialized-YAML checks below.
-   */
-  async assertPersistable(element: Memory): Promise<void> {
-    const yamlContent = await this.serializeElement(element);
-    this.validateSerializedMemoryYaml(yamlContent);
   }
 
   /**
@@ -731,12 +783,18 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // reporting success. The cap now matches the memory size limit enforced above
     // and on load. parseRawYaml applies safe-schema parsing plus expanded-graph
     // complexity limits with the same cap internally. Scalar entry text is
-    // governed by memory policy, not interpreted as YAML syntax or executable code.
+    // governed by memory policy, while control fields remain subject to the
+    // content scanner below.
     const validationStart = Date.now();
     const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, {
       maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
       contentPolicy: 'structure-only',
     });
+    if (!validateMemoryControlFields(parsedYaml)) {
+      throw new Error(
+        'Malicious YAML content detected in memory metadata, instructions, or auxiliary entry fields'
+      );
+    }
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
       logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
@@ -2037,7 +2095,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     let sanitizedDescription = '';
     if (metadataSource.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadataSource.description, {
-        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });

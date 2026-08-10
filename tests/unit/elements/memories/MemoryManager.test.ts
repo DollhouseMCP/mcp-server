@@ -192,7 +192,7 @@ describe('MemoryManager', () => {
       // Simulates addEntry debounce path: manager.save(memory) without explicit filePath
       await manager.save(loaded);
 
-      expect(loaded.getFilePath()).toBe(existingRelativePath);
+      expect(loaded.getFilePath().replaceAll('\\', '/')).toBe(existingRelativePath);
 
       const dateFolders = (await fs.readdir(memoriesDir, { withFileTypes: true }))
         .filter(entry => entry.isDirectory() && /^\d{4}-\d{2}-\d{2}$/.test(entry.name))

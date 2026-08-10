@@ -1,6 +1,7 @@
 import { jest, describe, it, expect, beforeEach } from '@jest/globals';
 import { SecureYamlParser, SecureParseOptions } from '../../src/security/secureYamlParser.js';
 import { SecurityMonitor } from '../../src/security/securityMonitor.js';
+import { SECURITY_LIMITS } from '../../src/security/constants.js';
 
 describe('SecureYamlParser', () => {
   beforeEach(() => {
@@ -192,7 +193,7 @@ count: 42
       });
     });
 
-    it('should accept substantive descriptions longer than 500 characters', () => {
+    it('should accept substantive descriptions beyond the generic metadata field limit', () => {
       const longDescription = 'Long-form element description. '.repeat(40).trim();
       const yaml = `---
 name: Test
@@ -202,7 +203,7 @@ description: ${longDescription}
       const result = SecureYamlParser.parse(yaml);
 
       expect(result.data.description).toBe(longDescription);
-      expect(result.data.description.length).toBeGreaterThan(500);
+      expect(result.data.description.length).toBeGreaterThan(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
     });
 
     it('should sanitize content with security threats', () => {

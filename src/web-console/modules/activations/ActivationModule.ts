@@ -69,6 +69,7 @@ export function createActivationModule(options: ActivationModuleOptions): Consol
         privacyClass: 'self_private',
         idempotency: 'required',
         privacyProjector: projectSessionDeactivation,
+        pathParamValueNormalization: { name: 'nfc' },
         handler: req => withActivationParams(
           req,
           (sessionId, type, name) => service.deactivate(req, sessionId, type, name),

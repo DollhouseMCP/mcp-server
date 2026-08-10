@@ -148,6 +148,28 @@ describe('AgentManager DB-backed runtime state', () => {
             expect.objectContaining({ description: 'remember me' }),
           ]),
         );
+
+        const recoveryState = await reloadedManager.getAgentStateForRecovery({
+          agentName: 'db-state-agent',
+        });
+        const activeGoal = recoveryState.state.goals.find((goal) => goal.status === 'in_progress');
+        expect(activeGoal).toBeDefined();
+
+        await reloadedManager.completeAgentGoalForRecovery({
+          agentName: 'db-state-agent',
+          goalId: activeGoal!.id,
+          outcome: 'failure',
+          summary: 'Recovery-path integration test',
+        });
+
+        const completedState = await reloadedManager.getAgentStateForRecovery({
+          agentName: 'db-state-agent',
+        });
+        expect(completedState.state.goals).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: activeGoal!.id, status: 'failed' }),
+          ]),
+        );
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

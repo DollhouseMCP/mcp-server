@@ -3,9 +3,9 @@ name: Extended Node Compatibility
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, develop, beta]
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, beta]
   schedule:
     - cron: '0 6 * * 1'  # Weekly on Monday 6 AM UTC
   workflow_dispatch:
@@ -83,7 +83,7 @@ jobs:
           # This ensures we always rebuild when source files change
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Build project
         run: npm run build

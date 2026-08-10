@@ -7,6 +7,7 @@ import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { ISharedCacheStore } from '../storage/sharedCache/ISharedCacheStore.js';
+import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
 
 export interface CollectionItem {
   name: string;
@@ -20,6 +21,15 @@ export interface CollectionCacheEntry {
   items: CollectionItem[];
   timestamp: number;
   etag?: string;
+}
+
+export interface CollectionCacheConfig {
+  fileOperations: IFileOperationsService;
+  /** Exact canonical cache directory, normally supplied by PathService. */
+  cacheDir?: string;
+  /** Legacy home/base directory whose cache subdirectory should be derived. */
+  baseDir?: string;
+  sharedCache?: ISharedCacheStore;
 }
 
 /**
@@ -44,22 +54,46 @@ export class CollectionCache {
   // the legacy filesystem path below is used unchanged.
   private readonly sharedCache: ISharedCacheStore | null;
 
-  constructor(fileOperations: IFileOperationsService, baseDir?: string, sharedCache?: ISharedCacheStore) {
-    // Initialize file operations service
-    this.fileOperations = fileOperations;
-    this.sharedCache = sharedCache ?? null;
-
-    // Use environment variable if set, otherwise fall back to parameter or default
-    const envCacheDir = process.env.DOLLHOUSE_CACHE_DIR;
-    if (envCacheDir) {
-      this.cacheDir = envCacheDir;
-      logger.debug(`CollectionCache: Using environment cache directory: ${this.cacheDir}`);
-    } else {
-      const defaultBaseDir = baseDir || process.cwd();
-      this.cacheDir = path.join(defaultBaseDir, '.dollhousemcp', 'cache');
-      logger.debug(`CollectionCache: Using default cache directory: ${this.cacheDir}`);
-    }
+  constructor(config: CollectionCacheConfig);
+  constructor(fileOperations: IFileOperationsService, baseDir?: string, sharedCache?: ISharedCacheStore);
+  constructor(
+    configOrFileOperations: CollectionCacheConfig | IFileOperationsService,
+    legacyBaseDir?: string,
+    legacySharedCache?: ISharedCacheStore,
+  ) {
+    const config: CollectionCacheConfig = 'fileOperations' in configOrFileOperations
+      ? configOrFileOperations
+      : {
+          fileOperations: configOrFileOperations,
+          baseDir: legacyBaseDir,
+          sharedCache: legacySharedCache,
+        };
+    this.fileOperations = config.fileOperations;
+    this.sharedCache = config.sharedCache ?? null;
+    this.cacheDir = this.resolveCacheDir(config.cacheDir, config.baseDir);
     this.cacheFile = path.join(this.cacheDir, 'collection-cache.json');
+
+    logger.debug('CollectionCache initialized', {
+      cacheFile: this.cacheFile,
+      backend: this.sharedCache ? 'shared' : 'filesystem',
+    });
+  }
+
+  private resolveCacheDir(exactCacheDir?: string, legacyBaseDir?: string): string {
+    if (exactCacheDir) {
+      return exactCacheDir;
+    }
+    if (process.env.DOLLHOUSE_CACHE_DIR?.trim()) {
+      return resolveDataDirectory('cache');
+    }
+    return legacyBaseDir
+      ? path.join(legacyBaseDir, '.dollhousemcp', 'cache')
+      : resolveDataDirectory('cache');
+  }
+
+  /** Cache-health reporting must inspect the same canonical file this instance uses. */
+  getCacheFilePath(): string {
+    return this.cacheFile;
   }
   
   /**
