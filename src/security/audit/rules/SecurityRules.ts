@@ -5,6 +5,159 @@
 
 import type { SecurityRule, SecurityFinding } from '../types.js';
 
+type QuoteCharacter = '"' | "'" | '`';
+type LexicalMode = QuoteCharacter | 'line-comment' | 'block-comment';
+
+interface LexicalState {
+  mode?: LexicalMode;
+  escaped: boolean;
+}
+
+const HTTP_INPUT_PROPERTY = /^(?:(?:body|query|params)\b|(['"])(?:body|query|params)\1|\[\s*(['"])(?:body|query|params)\2\s*\])/;
+const LEADING_TRIVIA = /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$))*/;
+
+function isQuoteCharacter(character: string | undefined): character is QuoteCharacter {
+  return character === '"' || character === "'" || character === '`';
+}
+
+function consumeNonCode(
+  state: LexicalState,
+  character: string | undefined,
+  nextCharacter: string | undefined
+): number | undefined {
+  if (state.mode === 'line-comment') {
+    if (character === '\n') {
+      state.mode = undefined;
+    }
+    return 0;
+  }
+
+  if (state.mode === 'block-comment') {
+    if (character === '*' && nextCharacter === '/') {
+      state.mode = undefined;
+      return 1;
+    }
+    return 0;
+  }
+
+  if (isQuoteCharacter(state.mode)) {
+    if (state.escaped) {
+      state.escaped = false;
+    } else if (character === '\\') {
+      state.escaped = true;
+    } else if (character === state.mode) {
+      state.mode = undefined;
+    }
+    return 0;
+  }
+
+  if (isQuoteCharacter(character)) {
+    state.mode = character;
+    return 0;
+  }
+
+  if (character === '/' && nextCharacter === '/') {
+    state.mode = 'line-comment';
+    return 1;
+  }
+
+  if (character === '/' && nextCharacter === '*') {
+    state.mode = 'block-comment';
+    return 1;
+  }
+
+  return undefined;
+}
+
+function findClosingBrace(content: string, openingBrace: number): number {
+  let depth = 0;
+  const lexicalState: LexicalState = { escaped: false };
+
+  for (let index = openingBrace; index < content.length; index += 1) {
+    const character = content[index];
+    const skippedCharacters = consumeNonCode(lexicalState, character, content[index + 1]);
+
+    if (skippedCharacters !== undefined) {
+      index += skippedCharacters;
+      continue;
+    }
+
+    if (character === '{') {
+      depth += 1;
+    } else if (character === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return -1;
+}
+
+function segmentReadsHttpInput(segment: string): boolean {
+  const trimmed = segment.replace(LEADING_TRIVIA, '');
+  const propertyMatch = HTTP_INPUT_PROPERTY.exec(trimmed);
+  if (!propertyMatch) {
+    return false;
+  }
+
+  const remainder = trimmed.slice(propertyMatch[0].length).trimStart();
+  return remainder === '' || remainder.startsWith(':') || remainder.startsWith('=');
+}
+
+function bindingReadsHttpInput(binding: string): boolean {
+  let depth = 0;
+  let segmentStart = 0;
+  const lexicalState: LexicalState = { escaped: false };
+
+  for (let index = 0; index <= binding.length; index += 1) {
+    const character = binding[index];
+    const skippedCharacters = consumeNonCode(lexicalState, character, binding[index + 1]);
+
+    if (skippedCharacters !== undefined) {
+      index += skippedCharacters;
+      continue;
+    }
+
+    if (character === '{' || character === '[' || character === '(') {
+      depth += 1;
+    } else if (character === '}' || character === ']' || character === ')') {
+      depth -= 1;
+    } else if ((character === ',' && depth === 0) || index === binding.length) {
+      if (segmentReadsHttpInput(binding.slice(segmentStart, index))) {
+        return true;
+      }
+      segmentStart = index + 1;
+    }
+  }
+
+  return false;
+}
+
+function hasDestructuredHttpInputAccess(content: string): boolean {
+  const declarationPattern = /\b(?:const|let|var)\s*\{/g;
+  let declaration: RegExpExecArray | null;
+
+  while ((declaration = declarationPattern.exec(content)) !== null) {
+    const openingBrace = content.indexOf('{', declaration.index);
+    const closingBrace = findClosingBrace(content, openingBrace);
+    if (closingBrace < 0) {
+      return false;
+    }
+
+    const assignment = content.slice(closingBrace + 1);
+    if (/^\s*(?::[^=;\n]+)?=\s*(?:req|request)\b/.test(assignment)
+      && bindingReadsHttpInput(content.slice(openingBrace + 1, closingBrace))) {
+      return true;
+    }
+
+    declarationPattern.lastIndex = closingBrace + 1;
+  }
+
+  return false;
+}
+
 export class SecurityRules {
   /**
    * OWASP Top 10 security rules
@@ -196,8 +349,7 @@ export class SecurityRules {
           // Restrict this heuristic to HTTP request-boundary access. Generic names
           // such as `content`, `body`, or `params` do not establish user input.
           const directInputPattern = /\b(?:req|request)\s*(?:(?:\?\s*)?\.\s*(?:body|query|params)\b|(?:\?\s*\.)?\s*\[\s*(['"])(?:body|query|params)\1\s*\])/;
-          const destructuredInputPattern = /\b(?:const|let|var)\s*\{[^{};]*\b(?:body|query|params)\b[^{};]*\}\s*(?::[^=;\n]+)?=\s*(?:req|request)\b/;
-          const accessesHttpInput = directInputPattern.test(content) || destructuredInputPattern.test(content);
+          const accessesHttpInput = directInputPattern.test(content) || hasDestructuredHttpInputAccess(content);
           const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode|\.normalize\(\s*['"]NFC['"]\s*\)/i.test(content);
           
           if (accessesHttpInput && !hasUnicodeCheck) {

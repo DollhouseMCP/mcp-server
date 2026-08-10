@@ -292,6 +292,12 @@ describe('SecurityAuditor', () => {
       ['optional bracket access', 'const value = request?.["body"];'],
       ['destructuring', 'const { body } = req;'],
       ['aliased destructuring', 'const { query: rawQuery, params } = request;'],
+      ['nested destructuring', 'const { body: { content } } = req;'],
+      ['nested destructuring after another property', 'const { app: { name }, query: { search } } = request;'],
+      ['quoted property destructuring', 'const { "body": rawBody } = req;'],
+      ['computed property destructuring', "const { ['params']: rawParams } = request;"],
+      ['commented destructuring', 'const { /* request payload */ body } = req;'],
+      ['destructuring after braces in comments', 'const { app /* } */, query } = request;'],
     ])('should detect missing Unicode validation for %s', (_name, code) => {
       const unicodeRule = new SecurityRules()
         .getDollhouseMCPRules()
@@ -304,6 +310,8 @@ describe('SecurityAuditor', () => {
       ['response destructuring', 'const { body } = response;'],
       ['similarly named object', 'const value = databaseRequest.query;'],
       ['generic body model', 'const value = record.body;'],
+      ['unrelated property aliased to params', 'const { app: params } = req;'],
+      ['nested unrelated property named body', 'const { app: { body } } = request;'],
     ])('should not treat %s as an HTTP user-input boundary', (_name, code) => {
       const unicodeRule = new SecurityRules()
         .getDollhouseMCPRules()
