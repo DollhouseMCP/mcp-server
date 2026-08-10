@@ -69,6 +69,36 @@ function consumeNonCode(
   return undefined;
 }
 
+function buildCodePositionMask(content: string): boolean[] {
+  const codePositions = Array.from<boolean>({ length: content.length }).fill(true);
+  const lexicalState: LexicalState = { escaped: false };
+
+  for (let index = 0; index < content.length; index += 1) {
+    const skippedCharacters = consumeNonCode(lexicalState, content[index], content[index + 1]);
+    if (skippedCharacters === undefined) {
+      continue;
+    }
+
+    codePositions[index] = false;
+    if (skippedCharacters === 1) {
+      codePositions[index + 1] = false;
+      index += 1;
+    }
+  }
+
+  return codePositions;
+}
+
+function patternMatchesCode(content: string, pattern: RegExp, codePositions: boolean[]): boolean {
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) {
+    if (codePositions[match.index]) {
+      return true;
+    }
+  }
+  return false;
+}
+
 function findClosingBrace(content: string, openingBrace: number): number {
   let depth = 0;
   const lexicalState: LexicalState = { escaped: false };
@@ -135,15 +165,20 @@ function bindingReadsHttpInput(binding: string): boolean {
   return false;
 }
 
-function hasDestructuredHttpInputAccess(content: string): boolean {
-  const declarationPattern = /\b(?:const|let|var)\s*\{/g;
-  let declaration: RegExpExecArray | null;
+function hasDestructuredHttpInputAccess(content: string, codePositions: boolean[]): boolean {
+  const bindingPattern = /\b(?:const|let|var)\s*\{|\(\s*\{/g;
+  let binding: RegExpExecArray | null;
 
-  while ((declaration = declarationPattern.exec(content)) !== null) {
-    const openingBrace = content.indexOf('{', declaration.index);
+  while ((binding = bindingPattern.exec(content)) !== null) {
+    const openingBrace = content.indexOf('{', binding.index);
+    bindingPattern.lastIndex = openingBrace + 1;
+    if (!codePositions[binding.index]) {
+      continue;
+    }
+
     const closingBrace = findClosingBrace(content, openingBrace);
     if (closingBrace < 0) {
-      return false;
+      continue;
     }
 
     const assignment = content.slice(closingBrace + 1);
@@ -152,7 +187,6 @@ function hasDestructuredHttpInputAccess(content: string): boolean {
       return true;
     }
 
-    declarationPattern.lastIndex = closingBrace + 1;
   }
 
   return false;
@@ -348,8 +382,10 @@ export class SecurityRules {
           const findings: SecurityFinding[] = [];
           // Restrict this heuristic to HTTP request-boundary access. Generic names
           // such as `content`, `body`, or `params` do not establish user input.
-          const directInputPattern = /\b(?:req|request)\s*(?:(?:\?\s*)?\.\s*(?:body|query|params)\b|(?:\?\s*\.)?\s*\[\s*(['"])(?:body|query|params)\1\s*\])/;
-          const accessesHttpInput = directInputPattern.test(content) || hasDestructuredHttpInputAccess(content);
+          const directInputPattern = /\b(?:req|request)\s*(?:(?:\?\s*)?\.\s*(?:body|query|params)\b|(?:\?\s*\.)?\s*\[\s*(['"])(?:body|query|params)\1\s*\])/g;
+          const codePositions = buildCodePositionMask(content);
+          const accessesHttpInput = patternMatchesCode(content, directInputPattern, codePositions)
+            || hasDestructuredHttpInputAccess(content, codePositions);
           const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode|\.normalize\(\s*['"]NFC['"]\s*\)/i.test(content);
           
           if (accessesHttpInput && !hasUnicodeCheck) {
