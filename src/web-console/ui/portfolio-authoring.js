@@ -1,6 +1,7 @@
 /** Portfolio create/edit/delete and GitHub sync controls. */
 
 import { del, get, patch, post } from './api.js';
+import { parseBrowserYaml } from './yaml-safety.js';
 
 const TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
 const TYPE_GUIDANCE = Object.freeze({
@@ -1163,11 +1164,8 @@ function parseMarkdownImport(source) {
 }
 
 function loadYaml(source) {
-  // index.html loads the vendored js-yaml bundle before app.js. Keep the guard
-  // so direct module use fails with an actionable message instead of a TypeError.
-  if (!globalThis.jsyaml) throw new Error('YAML support is not available in this browser session.');
   try {
-    return globalThis.jsyaml.load(source, { schema: globalThis.jsyaml.JSON_SCHEMA });
+    return parseBrowserYaml(source, { maxBytes: IMPORT_FILE_LIMIT_BYTES, schema: 'json' });
   } catch {
     throw new Error('This YAML file is not valid.');
   }

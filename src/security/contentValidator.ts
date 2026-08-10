@@ -573,16 +573,7 @@ export class ContentValidator {
    */
   static validateYamlContent(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
     const effectiveMaxLength = Math.min(maxLength, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-    // Length validation before pattern matching
-    if (yamlContent.length > effectiveMaxLength) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_INJECTION_ATTEMPT',
-        severity: 'HIGH',
-        source: 'yaml_validation',
-        details: `YAML content exceeds maximum length: ${yamlContent.length} > ${effectiveMaxLength}`
-      });
-      return false;
-    }
+    if (!this.hasValidYamlLength(yamlContent, effectiveMaxLength)) return false;
 
     if (this.hasYamlBombPattern(yamlContent, effectiveMaxLength)) {
       return false;
@@ -596,20 +587,45 @@ export class ContentValidator {
       return false;
     }
 
-    // Unicode normalization preprocessing for YAML content
+    const normalizedContent = this.normalizeYamlForValidation(yamlContent);
+    if (normalizedContent === null) return false;
+
+    return !this.hasMaliciousYamlPattern(normalizedContent);
+  }
+
+  /**
+   * Validate transport-level YAML safety without interpreting scalar text as a
+   * content-policy violation. Safe-schema callers use this for code-bearing
+   * elements, then enforce their element policy after parsing.
+   */
+  static validateYamlStructure(yamlContent: string, maxLength: number = SECURITY_LIMITS.MAX_YAML_LENGTH): boolean {
+    return this.hasValidYamlLength(yamlContent, maxLength)
+      && this.normalizeYamlForValidation(yamlContent) !== null;
+  }
+
+  private static hasValidYamlLength(yamlContent: string, effectiveMaxLength: number): boolean {
+    if (yamlContent.length <= effectiveMaxLength) return true;
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_INJECTION_ATTEMPT',
+      severity: 'HIGH',
+      source: 'yaml_validation',
+      details: `YAML content exceeds maximum length: ${yamlContent.length} > ${effectiveMaxLength}`
+    });
+    return false;
+  }
+
+  private static normalizeYamlForValidation(yamlContent: string): string | null {
     const unicodeResult = UnicodeValidator.normalize(yamlContent);
-
-    if (!unicodeResult.isValid && unicodeResult.detectedIssues) {
-      SecurityMonitor.logSecurityEvent({
-        type: 'YAML_UNICODE_ATTACK',
-        severity: (unicodeResult.severity?.toUpperCase() || 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
-        source: 'yaml_validation',
-        details: `Unicode attack detected in YAML: ${unicodeResult.detectedIssues.join(', ')}`
-      });
-      return false;
+    if (unicodeResult.isValid || !unicodeResult.detectedIssues) {
+      return unicodeResult.normalizedContent;
     }
-
-    return !this.hasMaliciousYamlPattern(unicodeResult.normalizedContent);
+    SecurityMonitor.logSecurityEvent({
+      type: 'YAML_UNICODE_ATTACK',
+      severity: (unicodeResult.severity?.toUpperCase() || 'MEDIUM') as 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL',
+      source: 'yaml_validation',
+      details: `Unicode attack detected in YAML: ${unicodeResult.detectedIssues.join(', ')}`
+    });
+    return null;
   }
 
   /**

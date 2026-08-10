@@ -1,5 +1,7 @@
 import * as yaml from 'js-yaml';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
+import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import type { OperationInput } from './types.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 import { type ExportPackage, resolveInputElementType } from './shared.js';
@@ -136,11 +138,11 @@ export class ElementCRUDDispatcher {
   }
 
   private parseYamlElementData(data: string): Record<string, unknown> {
-    const parsed = yaml.load(data, { schema: yaml.JSON_SCHEMA });
-    if (typeof parsed !== 'object' || parsed === null) {
-      throw new Error('Invalid YAML data: expected object');
-    }
-    return parsed as Record<string, unknown>;
+    return SecureYamlParser.parseRawYaml(data, {
+      maxSize: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+      schema: 'json',
+      contentPolicy: 'structure-only',
+    });
   }
 
   private async ensureCanImport(name: string, type: string, overwrite: boolean): Promise<void> {

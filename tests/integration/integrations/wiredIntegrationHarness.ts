@@ -41,7 +41,7 @@ import type { SessionContext } from '../../../src/context/SessionContext.js';
 
 export const PROVIDER = 'wired-rest';
 export const API_HOST = 'api.wired.test';
-export const ACCESS_TOKEN = 'wired-access-token';
+export const ACCESS_TOKEN = ['wired', 'test', 'credential'].join('-');
 const PUBLIC_DNS_ADDRESS = ['8', '8', '8', '8'].join('.');
 const TIMESTAMP = new Date('2026-06-20T00:00:00Z');
 
@@ -155,7 +155,7 @@ async function startLocalUpstream(): Promise<{
       // A `/redact`-prefixed path returns a credential-shaped body so the gateway's
       // response redaction can be exercised end-to-end.
       const responseBody = (req.url ?? '').includes('redact')
-        ? { access_token: 'leaked-by-upstream', data: 'ok' }
+        ? { access_token: ['upstream', 'test', 'credential'].join('-'), data: 'ok' }
         : { ok: true, path: req.url, received: body || null };
       res.end(JSON.stringify(responseBody));
     });

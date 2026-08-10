@@ -81,4 +81,36 @@ describe('FileSharedPoolWriteStrategy', () => {
       expect(elementId).toBe(`${type}/${type}-test.md`);
     }
   });
+
+  it('rejects element types outside the canonical allowlist', async () => {
+    await expect(strategy.writeElement(
+      makeRequest({ elementType: '../outside' }),
+      'a'.repeat(64),
+    )).rejects.toThrow('Invalid element type');
+
+    await expect(fs.access(path.join(tmpDir, '..', 'outside'))).rejects.toThrow();
+  });
+
+  it('rejects names that become empty after sanitization', async () => {
+    await expect(strategy.writeElement(
+      makeRequest({ name: '\0' }),
+      'a'.repeat(64),
+    )).rejects.toThrow('must contain a valid filename');
+
+    await expect(fs.readdir(path.join(tmpDir, 'personas'))).resolves.toEqual([]);
+  });
+
+  it('rejects a type directory symlink that escapes the shared-pool root', async () => {
+    if (process.platform === 'win32') return;
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'shared-pool-outside-'));
+    try {
+      await fs.symlink(outsideDir, path.join(tmpDir, 'personas'), 'dir');
+
+      await expect(strategy.writeElement(makeRequest(), 'a'.repeat(64)))
+        .rejects.toThrow('Path traversal detected');
+      await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
 });

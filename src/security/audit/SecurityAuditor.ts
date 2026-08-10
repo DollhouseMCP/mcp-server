@@ -180,7 +180,7 @@ export class SecurityAuditor {
 
           if (finding.file) {
             const fileSuppressions = this.suppressions.get(finding.file);
-            if (fileSuppressions?.has(finding.ruleId)) {
+            if (fileSuppressions?.has(finding.ruleId) || this.matchesConfiguredSuppression(finding)) {
               if (this.config.reporting?.verbose) {
                 suppressedFindings.push({
                   rule: finding.ruleId,
@@ -213,6 +213,17 @@ export class SecurityAuditor {
     }
     
     return filtered;
+  }
+
+  private matchesConfiguredSuppression(finding: SecurityFinding): boolean {
+    if (!finding.file || !this.config.suppressions?.length) return false;
+    const findingFile = finding.file;
+
+    return this.config.suppressions.some(suppression => {
+      if (suppression.rule !== '*' && suppression.rule !== finding.ruleId) return false;
+      if (!suppression.file) return true;
+      return configuredSuppressionFileMatches(suppression.file, findingFile);
+    });
   }
 
   /**
@@ -354,7 +365,14 @@ export class SecurityAuditor {
         code: {
           enabled: true,
           rules: ['OWASP-Top-10', 'CWE-Top-25', 'DollhouseMCP-Security'],
-          exclude: ['**/node_modules/**', '**/dist/**', '**/coverage/**']
+          exclude: [
+            '**/node_modules/**',
+            '**/dist/**',
+            '**/coverage/**',
+            'src/web-console/ui/vendor/purify.min.js',
+            'src/web-console/ui/vendor/marked.min.js',
+            'src/web-console/ui/vendor/js-yaml.min.js'
+          ]
         },
         dependencies: {
           enabled: true,
@@ -383,4 +401,26 @@ export class SecurityAuditor {
       ]
     };
   }
+}
+
+function configuredSuppressionFileMatches(pattern: string, filePath: string): boolean {
+  const normalizedPattern = normalizeAuditPath(pattern);
+  const normalizedFile = normalizeAuditPath(filePath);
+  if (normalizedPattern === normalizedFile) return true;
+  if (!normalizedPattern.includes('*')) return false;
+  return globPatternToRegex(normalizedPattern).test(normalizedFile);
+}
+
+function normalizeAuditPath(value: string): string {
+  return value.replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/\/$/, '');
+}
+
+function globPatternToRegex(pattern: string): RegExp {
+  const escaped = pattern
+    .replaceAll(/[\\^$.()+?{}[\]|]/g, String.raw`\$&`)
+    .replaceAll('**', '\0')
+    .replaceAll('*', '[^/]*')
+    .replaceAll('\0/', '(?:.*/)?')
+    .replaceAll('\0', '.*');
+  return new RegExp(`^${escaped}$`);
 }

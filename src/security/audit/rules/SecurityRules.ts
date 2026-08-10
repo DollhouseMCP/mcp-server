@@ -3,7 +3,133 @@
  * Based on OWASP Top 10, CWE Top 25, and DollhouseMCP-specific security requirements
  */
 
+import { createRequire } from 'node:module';
 import type { SecurityRule, SecurityFinding } from '../types.js';
+
+type TypeScriptApi = typeof import('typescript');
+type TsExpression = import('typescript').Expression;
+type TsNode = import('typescript').Node;
+type TsPropertyName = import('typescript').PropertyName;
+
+const require = createRequire(import.meta.url);
+const HTTP_INPUT_PROPERTIES = new Set(['body', 'query', 'params']);
+let cachedTypeScript: TypeScriptApi | null | undefined;
+
+function loadTypeScript(): TypeScriptApi | undefined {
+  if (cachedTypeScript === undefined) {
+    try {
+      cachedTypeScript = require('typescript') as TypeScriptApi;
+    } catch {
+      cachedTypeScript = null;
+    }
+  }
+  return cachedTypeScript ?? undefined;
+}
+
+function unwrapExpression(ts: TypeScriptApi, expression: TsExpression): TsExpression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current)
+    || ts.isAsExpression(current)
+    || ts.isTypeAssertionExpression(current)
+    || ts.isNonNullExpression(current)
+    || ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+function isRequestIdentifier(ts: TypeScriptApi, expression: TsExpression): boolean {
+  const candidate = unwrapExpression(ts, expression);
+  return ts.isIdentifier(candidate) && (candidate.text === 'req' || candidate.text === 'request');
+}
+
+function propertyNameText(ts: TypeScriptApi, name: TsPropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) {
+    return name.text;
+  }
+  if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) {
+    return name.expression.text;
+  }
+  return undefined;
+}
+
+function bindingPatternReadsHttpInput(
+  ts: TypeScriptApi,
+  pattern: import('typescript').ObjectBindingPattern
+): boolean {
+  return pattern.elements.some(element => {
+    if (element.dotDotDotToken) {
+      return false;
+    }
+    const propertyName = element.propertyName
+      ? propertyNameText(ts, element.propertyName)
+      : ts.isIdentifier(element.name) ? element.name.text : undefined;
+    return propertyName !== undefined && HTTP_INPUT_PROPERTIES.has(propertyName);
+  });
+}
+
+function assignmentPatternReadsHttpInput(
+  ts: TypeScriptApi,
+  expression: import('typescript').ObjectLiteralExpression
+): boolean {
+  return expression.properties.some(property => {
+    if (ts.isShorthandPropertyAssignment(property)) {
+      return HTTP_INPUT_PROPERTIES.has(property.name.text);
+    }
+    if (ts.isPropertyAssignment(property)) {
+      const propertyName = propertyNameText(ts, property.name);
+      return propertyName !== undefined && HTTP_INPUT_PROPERTIES.has(propertyName);
+    }
+    return false;
+  });
+}
+
+function nodeReadsHttpInput(ts: TypeScriptApi, node: TsNode): boolean {
+  if (ts.isPropertyAccessExpression(node)) {
+    return isRequestIdentifier(ts, node.expression) && HTTP_INPUT_PROPERTIES.has(node.name.text);
+  }
+
+  if (ts.isElementAccessExpression(node) && isRequestIdentifier(ts, node.expression)) {
+    const argument = node.argumentExpression;
+    return argument !== undefined && ts.isStringLiteralLike(argument)
+      && HTTP_INPUT_PROPERTIES.has(argument.text);
+  }
+
+  if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer) {
+    return isRequestIdentifier(ts, node.initializer) && bindingPatternReadsHttpInput(ts, node.name);
+  }
+
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    && isRequestIdentifier(ts, node.right)) {
+    const left = unwrapExpression(ts, node.left);
+    return ts.isObjectLiteralExpression(left) && assignmentPatternReadsHttpInput(ts, left);
+  }
+
+  return false;
+}
+
+function hasHttpInputAccess(content: string): boolean {
+  const ts = loadTypeScript();
+  if (!ts) {
+    return /\b(?:req|request)\s*(?:\??\.\s*(?:body|query|params)\b|\??\.\s*\[\s*(['"])(?:body|query|params)\1\s*\])/.test(content);
+  }
+
+  const source = ts.createSourceFile('security-audit-input.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
+  let found = false;
+  const visit = (node: TsNode): void => {
+    if (found) {
+      return;
+    }
+    found = nodeReadsHttpInput(ts, node);
+    if (!found) {
+      ts.forEachChild(node, visit);
+    }
+  };
+  visit(source);
+  return found;
+}
 
 export class SecurityRules {
   /**
@@ -193,11 +319,12 @@ export class SecurityRules {
         category: 'custom',
         check: (content, _context) => {
           const findings: SecurityFinding[] = [];
-          // Check for user input processing without Unicode validation
-          const inputPattern = /(?:req\.|request\.|params|query|body|content)/;
-          const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode/i.test(content);
+          // Parse JavaScript/TypeScript syntax so comments, regex literals, template
+          // expressions, and destructuring aliases are classified accurately.
+          const accessesHttpInput = hasHttpInputAccess(content);
+          const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode|\.normalize\(\s*['"]NFC['"]\s*\)/i.test(content);
           
-          if (inputPattern.test(content) && !hasUnicodeCheck) {
+          if (accessesHttpInput && !hasUnicodeCheck) {
             findings.push({
               ruleId: 'DMCP-SEC-004',
               severity: 'medium' as const,

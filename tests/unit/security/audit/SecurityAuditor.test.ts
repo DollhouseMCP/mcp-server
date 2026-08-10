@@ -4,6 +4,8 @@
 
 import { describe, expect, beforeEach, afterEach, jest, test } from '@jest/globals';
 import { SecurityAuditor } from '../../../../src/security/audit/SecurityAuditor.js';
+import { CodeScanner } from '../../../../src/security/audit/scanners/CodeScanner.js';
+import { SecurityRules } from '../../../../src/security/audit/rules/SecurityRules.js';
 import type { SecurityAuditConfig } from '../../../../src/security/audit/types.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import * as fs from 'fs/promises';
@@ -94,6 +96,22 @@ describe('SecurityAuditor', () => {
       expect(defaultConfig.enabled).toBe(true);
       expect(defaultConfig.scanners.code.enabled).toBe(true);
       expect(defaultConfig.scanners.dependencies.enabled).toBe(true);
+    });
+
+    test('default scan excludes only the recorded vendored bundles, not first-party console code', async () => {
+      const defaultConfig = await SecurityAuditor.getDefaultConfig(mockFileOperations);
+      const vendorDir = path.join(tempDir, 'src', 'web-console', 'ui', 'vendor');
+      const uiDir = path.dirname(vendorDir);
+      await fs.mkdir(vendorDir, { recursive: true });
+      const credentialPattern = 'const api_key = "not-a-real-but-secret-shaped-value";';
+      await fs.writeFile(path.join(vendorDir, 'purify.min.js'), credentialPattern);
+      await fs.writeFile(path.join(uiDir, 'app.js'), credentialPattern);
+
+      const scanner = new CodeScanner(defaultConfig.scanners.code);
+      const findings = await scanner.scan({ projectRoot: tempDir });
+
+      expect(findings.some(finding => finding.file?.endsWith('/ui/app.js'))).toBe(true);
+      expect(findings.some(finding => finding.file?.endsWith('/vendor/purify.min.js'))).toBe(false);
     });
 
     test('should run audit on empty directory', async () => {
@@ -255,6 +273,64 @@ describe('SecurityAuditor', () => {
       )).toBe(true);
     });
 
+    test('should not treat generic content-shaped models as HTTP user-input boundaries', async () => {
+      const code = `
+        export interface RecordShape { content: string; params: string[] }
+        export function serialize(record: RecordShape) { return record.content; }
+      `;
+      await fs.writeFile(path.join(tempDir, 'content-model.ts'), code);
+
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f => f.ruleId === 'DMCP-SEC-004')).toBe(false);
+    });
+
+    test.each([
+      ['dot access', 'const value = req.body;'],
+      ['optional dot access', 'const value = request?.query;'],
+      ['bracket access', "const value = req['params'];"],
+      ['optional bracket access', 'const value = request?.["body"];'],
+      ['destructuring', 'const { body } = req;'],
+      ['aliased destructuring', 'const { query: rawQuery, params } = request;'],
+      ['nested destructuring', 'const { body: { content } } = req;'],
+      ['nested destructuring after another property', 'const { app: { name }, query: { search } } = request;'],
+      ['quoted property destructuring', 'const { "body": rawBody } = req;'],
+      ['computed property destructuring', "const { ['params']: rawParams } = request;"],
+      ['commented destructuring', 'const { /* request payload */ body } = req;'],
+      ['destructuring after braces in comments', 'const { app /* } */, query } = request;'],
+      ['destructuring assignment', 'let body; ({ body } = req);'],
+      ['nested destructuring assignment', '({ query: { search } } = request);'],
+      ['real destructuring after malformed commented example', '// example: const {\nconst { params } = req;'],
+      ['template expression access', 'const value = `${req.body}`;'],
+      ['typed destructuring', 'const { body }: { body: string; query: string } = req;'],
+    ])('should detect missing Unicode validation for %s', (_name, code) => {
+      const unicodeRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === 'DMCP-SEC-004');
+
+      expect(unicodeRule?.check?.(code).some(finding => finding.ruleId === 'DMCP-SEC-004')).toBe(true);
+    });
+
+    test.each([
+      ['response destructuring', 'const { body } = response;'],
+      ['similarly named object', 'const value = databaseRequest.query;'],
+      ['generic body model', 'const value = record.body;'],
+      ['unrelated property aliased to params', 'const { app: params } = req;'],
+      ['nested unrelated property named body', 'const { app: { body } } = request;'],
+      ['commented direct access', '// const value = req.body;'],
+      ['quoted direct access', 'const example = "request.query";'],
+      ['commented destructuring assignment', '// ({ body } = req);'],
+      ['quoted destructuring assignment', 'const example = "({ params } = request)";'],
+      ['regular expression literal', 'const matcher = /req.body/;'],
+      ['quoted token in regex before real code', 'const matcher = /"request.query/; const value = record.body;'],
+    ])('should not treat %s as an HTTP user-input boundary', (_name, code) => {
+      const unicodeRule = new SecurityRules()
+        .getDollhouseMCPRules()
+        .find(rule => rule.id === 'DMCP-SEC-004');
+
+      expect(unicodeRule?.check?.(code)).toEqual([]);
+    });
+
     test('should detect security calls in template literals with expressions', async () => {
       // Test that authenticate() calls inside template literals are detected
       // even when they contain ${} expressions
@@ -321,6 +397,34 @@ describe('SecurityAuditor', () => {
       const result = await auditorWithSuppression.audit(tempDir);
 
       expect(result.findings.some(f => f.ruleId === 'OWASP-A01-001')).toBe(false);
+    });
+
+    test('should suppress configured glob patterns against absolute scanner paths', async () => {
+      const defaultConfig = await SecurityAuditor.getDefaultConfig(mockFileOperations);
+      const configWithSuppression: SecurityAuditConfig = {
+        ...defaultConfig,
+        scanners: {
+          ...defaultConfig.scanners,
+          dependencies: { ...defaultConfig.scanners.dependencies, enabled: false },
+          configuration: { ...defaultConfig.scanners.configuration, enabled: false },
+        },
+        reporting: { ...defaultConfig.reporting, formats: [], failOnSeverity: 'critical' },
+        suppressions: [{
+          rule: 'DMCP-SEC-004',
+          file: '**/src/feature/suppressed.ts',
+          reason: 'Test glob suppression for an absolute scanner path',
+        }],
+      };
+      const sourceDir = path.join(tempDir, 'src', 'feature');
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sourceDir, 'suppressed.ts'),
+        'export function handler(req: { body: string }) { return req.body; }',
+      );
+
+      const result = await new SecurityAuditor(configWithSuppression, mockFileOperations).audit(tempDir);
+
+      expect(result.findings.some(f => f.ruleId === 'DMCP-SEC-004')).toBe(false);
     });
   });
 

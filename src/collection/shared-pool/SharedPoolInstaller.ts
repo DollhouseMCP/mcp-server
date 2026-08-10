@@ -15,7 +15,7 @@
  * @module collection/shared-pool/SharedPoolInstaller
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { logger } from '../../utils/logger.js';
@@ -187,30 +187,50 @@ export class FileSharedPoolWriteStrategy implements SharedPoolWriteStrategy {
   ]);
 
   async writeElement(request: SharedPoolInstallRequest, _contentHash: string): Promise<string> {
-    if (!FileSharedPoolWriteStrategy.VALID_ELEMENT_TYPES.has(request.elementType)) {
-      throw new Error(`Invalid element type for shared pool: ${request.elementType}`);
-    }
+    const elementType = this.requireElementType(request.elementType);
 
-    const typeDir = path.join(this.sharedPoolDir, request.elementType);
+    await fs.mkdir(this.sharedPoolDir, { recursive: true });
+    const resolvedBase = await fs.realpath(this.sharedPoolDir);
+    const typeDir = path.join(resolvedBase, elementType);
     await fs.mkdir(typeDir, { recursive: true });
+    const resolvedTypeDir = await fs.realpath(typeDir);
+    this.assertContainedPath(resolvedBase, resolvedTypeDir, request.elementType);
 
     const safeName = path.basename(request.name.replaceAll('\\', '/').replaceAll('\0', ''));
+    if (safeName === '' || safeName === '.' || safeName === '..') {
+      throw new Error('Shared-pool element name must contain a valid filename');
+    }
     const filename = safeName.endsWith('.md') ? safeName : `${safeName}.md`;
-    const filePath = path.join(typeDir, filename);
+    const filePath = path.join(resolvedTypeDir, filename);
 
     const resolvedPath = path.resolve(filePath);
-    const resolvedBase = path.resolve(this.sharedPoolDir);
-    if (!resolvedPath.startsWith(resolvedBase + path.sep)) {
-      throw new Error(`Path traversal detected in element name: ${request.name}`);
+    this.assertContainedPath(resolvedTypeDir, resolvedPath, request.name);
+
+    const relativePath = `${elementType}/${filename}`;
+
+    const tmpPath = path.join(resolvedTypeDir, `.${filename}.${randomUUID()}.tmp`);
+    try {
+      await fs.writeFile(tmpPath, request.content, { encoding: 'utf-8', flag: 'wx' });
+      await fs.rename(tmpPath, filePath);
+    } finally {
+      await fs.rm(tmpPath, { force: true });
     }
 
-    const relativePath = `${request.elementType}/${filename}`;
-
-    const tmpPath = `${filePath}.tmp`;
-    await fs.writeFile(tmpPath, request.content, 'utf-8');
-    await fs.rename(tmpPath, filePath);
-
     return relativePath;
+  }
+
+  private requireElementType(elementType: string): string {
+    if (!FileSharedPoolWriteStrategy.VALID_ELEMENT_TYPES.has(elementType)) {
+      throw new Error(`Invalid element type for shared pool: ${elementType}`);
+    }
+    return elementType;
+  }
+
+  private assertContainedPath(base: string, candidate: string, input: string): void {
+    const relative = path.relative(base, candidate);
+    if (relative === '' || relative.startsWith(`..${path.sep}`) || relative === '..' || path.isAbsolute(relative)) {
+      throw new Error(`Path traversal detected in shared-pool input: ${input}`);
+    }
   }
 }
 
