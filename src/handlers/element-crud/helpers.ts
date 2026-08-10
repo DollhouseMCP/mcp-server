@@ -96,17 +96,18 @@ function sanitizeMetadataObject(metadata: Record<string, any>, removedKeys: stri
 }
 
 /**
- * Find description fields that would exceed the YAML/frontmatter parser limit.
+ * Find description fields that would leave insufficient YAML/frontmatter space.
  *
  * Element descriptions are metadata and are serialized into YAML frontmatter, so
- * the real upper bound is the YAML safety limit rather than the legacy short
- * description display limit. This walks nested metadata too because templates,
- * agents, and skills all have description-like nested fields.
+ * The field limit deliberately reserves space for required structural metadata;
+ * the serialized-content validator remains the authoritative aggregate check.
+ * This walks nested metadata too because templates, agents, and skills all have
+ * description-like nested fields.
  */
 export function findOversizedDescriptionFields(
   value: unknown,
   path = 'input',
-  maxLength = SECURITY_LIMITS.MAX_YAML_LENGTH,
+  maxLength = SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
   seen = new WeakSet<object>()
 ): string[] {
   if (!value || typeof value !== 'object') {
@@ -134,7 +135,7 @@ export function findOversizedDescriptionFields(
     }
 
     if (key === 'description' && typeof child === 'string' && child.length > maxLength) {
-      errors.push(`${childPath} exceeds maximum YAML/frontmatter length of ${maxLength} characters`);
+      errors.push(`${childPath} exceeds maximum description length of ${maxLength} characters (frontmatter overhead reserved)`);
       continue;
     }
 

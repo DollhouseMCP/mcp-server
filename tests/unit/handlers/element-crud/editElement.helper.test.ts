@@ -1227,11 +1227,11 @@ describe('editElement helper', () => {
       expect(saved.metadata.description).toBe(substantiveDescription);
     });
 
-    it('should reject top-level metadata descriptions exceeding the YAML frontmatter limit', async () => {
+    it('should reject top-level metadata descriptions that consume reserved frontmatter overhead', async () => {
       const element = createMockElement('test-skill');
       mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
 
-      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
+      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
       const result = await editElement(mockContext, {
         name: 'test-skill',
         type: ElementType.SKILL,

@@ -99,7 +99,7 @@ function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
     case 'name':
       return SECURITY_LIMITS.MAX_NAME_LENGTH;
     case 'description':
-      return SECURITY_LIMITS.MAX_YAML_LENGTH;
+      return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
     case 'content':
       return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
     case 'filename':
