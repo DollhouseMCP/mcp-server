@@ -40,7 +40,7 @@ import { TriggerValidationService } from '../../services/validation/TriggerValid
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
-import * as path from 'path';
+import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as crypto from 'crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';

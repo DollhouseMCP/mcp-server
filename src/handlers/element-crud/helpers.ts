@@ -59,25 +59,34 @@ export function sanitizeMetadata(metadata: Record<string, any> | undefined): Rec
     return {};
   }
 
-  // FIX: DMCP-SEC-006 - Add security audit logging for sanitization
-  SecurityMonitor.logSecurityEvent({
-    type: 'ELEMENT_VALIDATED',
-    severity: 'LOW',
-    source: 'helpers.sanitizeMetadata',
-    details: 'Metadata sanitized for element creation/update',
-    additionalData: { fieldCount: Object.keys(metadata).length }
-  });
+  const removedKeys: string[] = [];
+  const sanitized = sanitizeMetadataObject(metadata, removedKeys);
 
+  if (removedKeys.length > 0) {
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_VALIDATED',
+      severity: 'LOW',
+      source: 'helpers.sanitizeMetadata',
+      details: 'Dangerous metadata properties removed during sanitization',
+      additionalData: { removedKeys: [...new Set(removedKeys)] }
+    });
+  }
+
+  return sanitized;
+}
+
+function sanitizeMetadataObject(metadata: Record<string, any>, removedKeys: string[]): Record<string, any> {
   const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
   const sanitized: Record<string, any> = {};
 
   for (const [key, value] of Object.entries(metadata)) {
     if (dangerousProperties.includes(key)) {
+      removedKeys.push(key);
       continue;
     }
 
     if (value && typeof value === 'object' && !Array.isArray(value)) {
-      sanitized[key] = sanitizeMetadata(value as Record<string, any>);
+      sanitized[key] = sanitizeMetadataObject(value as Record<string, any>, removedKeys);
     } else {
       sanitized[key] = value;
     }

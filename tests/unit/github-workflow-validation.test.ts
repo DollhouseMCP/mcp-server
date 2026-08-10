@@ -332,6 +332,17 @@ describe('GitHub Workflow Validation', () => {
       expect(betaPublishWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
       expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
     });
+
+    it('should explicitly dispatch every beta artifact publisher at the release tag', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('actions: write');
+      expect(betaPublishWorkflow).toContain('gh workflow run publish-npm.yml');
+      expect(betaPublishWorkflow).toContain('gh workflow run publish-github-packages.yml');
+      expect(betaPublishWorkflow).toContain('gh workflow run publish-mcpb.yml');
+      expect(betaPublishWorkflow.match(/--ref "\$\{TAG_NAME\}"/g)).toHaveLength(3);
+      expect(betaPublishWorkflow).toContain('--field tag_name="${TAG_NAME}"');
+    });
   });
 });
 

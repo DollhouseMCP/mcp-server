@@ -116,9 +116,10 @@ export class MemorySaveHandler {
       if (!key.startsWith(prefix)) continue;
       void this.runInSaveContext(entry.context, () =>
         this.retryLedgerEntryIfAlive(key, entry, 'Session cleanup')
-      ).finally(() => {
-        this.failedMemorySaves.delete(key);
-        this.memorySaveAttempts.delete(key);
+      ).catch((error) => {
+        // The retry helper handles storage failures itself, but retain the ledger
+        // if context restoration fails before the retry can run.
+        logger.error(`[MCPAQLHandler] Session cleanup could not retry memory '${key}': ${error}`);
       });
     }
 

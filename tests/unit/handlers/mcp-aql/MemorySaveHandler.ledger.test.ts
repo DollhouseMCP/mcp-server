@@ -122,4 +122,23 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(manager.save).not.toHaveBeenCalled();
   });
+
+  it('retains a failed cleanup retry for the shutdown flush', async () => {
+    await seedFailedSave();
+    manager.save.mockClear();
+    manager.save.mockRejectedValueOnce(new Error('cleanup retry still unavailable'));
+
+    handler.cleanupSession('session-a');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(manager.save).toHaveBeenCalledTimes(1);
+
+    manager.save.mockClear();
+    await handler.flushPendingSaves();
+    expect(manager.save).toHaveBeenCalledTimes(1);
+    expect(manager.save).toHaveBeenCalledWith(memory);
+
+    manager.save.mockClear();
+    await handler.flushPendingSaves();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
 });

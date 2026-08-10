@@ -310,7 +310,7 @@ mcp_aql_execute { "operation": "continue_execution", "params": { "element_name":
 ### Reviewing Gathered Data
 
 ```json
-mcp_aql_read { "operation": "get_gathered_data", "params": { "element_name": "my-agent" } }
+mcp_aql_read { "operation": "get_gathered_data", "params": { "element_name": "my-agent", "goalId": "goal_abc123" } }
 ```
 
 ### Exporting and Importing Elements

@@ -22,6 +22,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
@@ -172,6 +173,26 @@ jobs:
             --notes-file beta-release-notes.md \
             --prerelease
 
+      # Releases created with GITHUB_TOKEN do not emit workflow runs. Dispatch
+      # each publisher explicitly at the immutable release tag so every artifact
+      # is built from the same commit as the GitHub prerelease.
+      - name: Dispatch beta artifact publishers
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+        run: |
+          gh workflow run publish-npm.yml \
+            --ref "${TAG_NAME}" \
+            --field dry_run=false
+          gh workflow run publish-github-packages.yml \
+            --ref "${TAG_NAME}" \
+            --field dry_run=false
+          gh workflow run publish-mcpb.yml \
+            --ref "${TAG_NAME}" \
+            --field tag_name="${TAG_NAME}"
+
       - name: Publish summary
         if: always()
         shell: bash
@@ -183,5 +204,5 @@ jobs:
             echo "- Tag: \`${{ steps.release.outputs.tag_name }}\`"
             echo "- Dry run: \`${{ inputs.dry_run }}\`"
             echo ""
-            echo "A non-dry-run publish creates the beta tag and GitHub prerelease. Existing release/tag workflows then publish npm/GitHub Packages with the beta dist-tag and attach the .mcpb bundle."
+            echo "A non-dry-run publish creates the beta tag and GitHub prerelease, then explicitly dispatches npm/GitHub Packages publication with the beta dist-tag and the .mcpb bundle build at that tag."
           } >> "$GITHUB_STEP_SUMMARY"
