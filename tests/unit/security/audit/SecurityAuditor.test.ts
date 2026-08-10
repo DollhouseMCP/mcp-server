@@ -301,6 +301,8 @@ describe('SecurityAuditor', () => {
       ['destructuring assignment', 'let body; ({ body } = req);'],
       ['nested destructuring assignment', '({ query: { search } } = request);'],
       ['real destructuring after malformed commented example', '// example: const {\nconst { params } = req;'],
+      ['template expression access', 'const value = `${req.body}`;'],
+      ['typed destructuring', 'const { body }: { body: string; query: string } = req;'],
     ])('should detect missing Unicode validation for %s', (_name, code) => {
       const unicodeRule = new SecurityRules()
         .getDollhouseMCPRules()
@@ -319,6 +321,8 @@ describe('SecurityAuditor', () => {
       ['quoted direct access', 'const example = "request.query";'],
       ['commented destructuring assignment', '// ({ body } = req);'],
       ['quoted destructuring assignment', 'const example = "({ params } = request)";'],
+      ['regular expression literal', 'const matcher = /req.body/;'],
+      ['quoted token in regex before real code', 'const matcher = /"request.query/; const value = record.body;'],
     ])('should not treat %s as an HTTP user-input boundary', (_name, code) => {
       const unicodeRule = new SecurityRules()
         .getDollhouseMCPRules()

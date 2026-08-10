@@ -3,193 +3,132 @@
  * Based on OWASP Top 10, CWE Top 25, and DollhouseMCP-specific security requirements
  */
 
+import { createRequire } from 'node:module';
 import type { SecurityRule, SecurityFinding } from '../types.js';
 
-type QuoteCharacter = '"' | "'" | '`';
-type LexicalMode = QuoteCharacter | 'line-comment' | 'block-comment';
+type TypeScriptApi = typeof import('typescript');
+type TsExpression = import('typescript').Expression;
+type TsNode = import('typescript').Node;
+type TsPropertyName = import('typescript').PropertyName;
 
-interface LexicalState {
-  mode?: LexicalMode;
-  escaped: boolean;
+const require = createRequire(import.meta.url);
+const HTTP_INPUT_PROPERTIES = new Set(['body', 'query', 'params']);
+let cachedTypeScript: TypeScriptApi | null | undefined;
+
+function loadTypeScript(): TypeScriptApi | undefined {
+  if (cachedTypeScript === undefined) {
+    try {
+      cachedTypeScript = require('typescript') as TypeScriptApi;
+    } catch {
+      cachedTypeScript = null;
+    }
+  }
+  return cachedTypeScript ?? undefined;
 }
 
-const HTTP_INPUT_PROPERTY = /^(?:(?:body|query|params)\b|(['"])(?:body|query|params)\1|\[\s*(['"])(?:body|query|params)\2\s*\])/;
-const LEADING_TRIVIA = /^(?:\s|\/\*[\s\S]*?\*\/|\/\/[^\n]*(?:\n|$))*/;
-
-function isQuoteCharacter(character: string | undefined): character is QuoteCharacter {
-  return character === '"' || character === "'" || character === '`';
+function unwrapExpression(ts: TypeScriptApi, expression: TsExpression): TsExpression {
+  let current = expression;
+  while (
+    ts.isParenthesizedExpression(current)
+    || ts.isAsExpression(current)
+    || ts.isTypeAssertionExpression(current)
+    || ts.isNonNullExpression(current)
+    || ts.isSatisfiesExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
 }
 
-function consumeNonCode(
-  state: LexicalState,
-  character: string | undefined,
-  nextCharacter: string | undefined
-): number | undefined {
-  if (state.mode === 'line-comment') {
-    if (character === '\n') {
-      state.mode = undefined;
-    }
-    return 0;
-  }
+function isRequestIdentifier(ts: TypeScriptApi, expression: TsExpression): boolean {
+  const candidate = unwrapExpression(ts, expression);
+  return ts.isIdentifier(candidate) && (candidate.text === 'req' || candidate.text === 'request');
+}
 
-  if (state.mode === 'block-comment') {
-    if (character === '*' && nextCharacter === '/') {
-      state.mode = undefined;
-      return 1;
-    }
-    return 0;
+function propertyNameText(ts: TypeScriptApi, name: TsPropertyName): string | undefined {
+  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name)) {
+    return name.text;
   }
-
-  if (isQuoteCharacter(state.mode)) {
-    if (state.escaped) {
-      state.escaped = false;
-    } else if (character === '\\') {
-      state.escaped = true;
-    } else if (character === state.mode) {
-      state.mode = undefined;
-    }
-    return 0;
+  if (ts.isComputedPropertyName(name) && ts.isStringLiteralLike(name.expression)) {
+    return name.expression.text;
   }
-
-  if (isQuoteCharacter(character)) {
-    state.mode = character;
-    return 0;
-  }
-
-  if (character === '/' && nextCharacter === '/') {
-    state.mode = 'line-comment';
-    return 1;
-  }
-
-  if (character === '/' && nextCharacter === '*') {
-    state.mode = 'block-comment';
-    return 1;
-  }
-
   return undefined;
 }
 
-function buildCodePositionMask(content: string): boolean[] {
-  const codePositions = Array.from<boolean>({ length: content.length }).fill(true);
-  const lexicalState: LexicalState = { escaped: false };
-
-  for (let index = 0; index < content.length; index += 1) {
-    const skippedCharacters = consumeNonCode(lexicalState, content[index], content[index + 1]);
-    if (skippedCharacters === undefined) {
-      continue;
+function bindingPatternReadsHttpInput(
+  ts: TypeScriptApi,
+  pattern: import('typescript').ObjectBindingPattern
+): boolean {
+  return pattern.elements.some(element => {
+    if (element.dotDotDotToken) {
+      return false;
     }
-
-    codePositions[index] = false;
-    if (skippedCharacters === 1) {
-      codePositions[index + 1] = false;
-      index += 1;
-    }
-  }
-
-  return codePositions;
+    const propertyName = element.propertyName
+      ? propertyNameText(ts, element.propertyName)
+      : ts.isIdentifier(element.name) ? element.name.text : undefined;
+    return propertyName !== undefined && HTTP_INPUT_PROPERTIES.has(propertyName);
+  });
 }
 
-function patternMatchesCode(content: string, pattern: RegExp, codePositions: boolean[]): boolean {
-  let match: RegExpExecArray | null;
-  while ((match = pattern.exec(content)) !== null) {
-    if (codePositions[match.index]) {
-      return true;
+function assignmentPatternReadsHttpInput(
+  ts: TypeScriptApi,
+  expression: import('typescript').ObjectLiteralExpression
+): boolean {
+  return expression.properties.some(property => {
+    if (ts.isShorthandPropertyAssignment(property)) {
+      return HTTP_INPUT_PROPERTIES.has(property.name.text);
     }
-  }
-  return false;
-}
-
-function findClosingBrace(content: string, openingBrace: number): number {
-  let depth = 0;
-  const lexicalState: LexicalState = { escaped: false };
-
-  for (let index = openingBrace; index < content.length; index += 1) {
-    const character = content[index];
-    const skippedCharacters = consumeNonCode(lexicalState, character, content[index + 1]);
-
-    if (skippedCharacters !== undefined) {
-      index += skippedCharacters;
-      continue;
+    if (ts.isPropertyAssignment(property)) {
+      const propertyName = propertyNameText(ts, property.name);
+      return propertyName !== undefined && HTTP_INPUT_PROPERTIES.has(propertyName);
     }
-
-    if (character === '{') {
-      depth += 1;
-    } else if (character === '}') {
-      depth -= 1;
-      if (depth === 0) {
-        return index;
-      }
-    }
-  }
-
-  return -1;
-}
-
-function segmentReadsHttpInput(segment: string): boolean {
-  const trimmed = segment.replace(LEADING_TRIVIA, '');
-  const propertyMatch = HTTP_INPUT_PROPERTY.exec(trimmed);
-  if (!propertyMatch) {
     return false;
-  }
-
-  const remainder = trimmed.slice(propertyMatch[0].length).trimStart();
-  return remainder === '' || remainder.startsWith(':') || remainder.startsWith('=');
+  });
 }
 
-function bindingReadsHttpInput(binding: string): boolean {
-  let depth = 0;
-  let segmentStart = 0;
-  const lexicalState: LexicalState = { escaped: false };
+function nodeReadsHttpInput(ts: TypeScriptApi, node: TsNode): boolean {
+  if (ts.isPropertyAccessExpression(node)) {
+    return isRequestIdentifier(ts, node.expression) && HTTP_INPUT_PROPERTIES.has(node.name.text);
+  }
 
-  for (let index = 0; index <= binding.length; index += 1) {
-    const character = binding[index];
-    const skippedCharacters = consumeNonCode(lexicalState, character, binding[index + 1]);
+  if (ts.isElementAccessExpression(node) && isRequestIdentifier(ts, node.expression)) {
+    const argument = node.argumentExpression;
+    return argument !== undefined && ts.isStringLiteralLike(argument)
+      && HTTP_INPUT_PROPERTIES.has(argument.text);
+  }
 
-    if (skippedCharacters !== undefined) {
-      index += skippedCharacters;
-      continue;
-    }
+  if (ts.isVariableDeclaration(node) && ts.isObjectBindingPattern(node.name) && node.initializer) {
+    return isRequestIdentifier(ts, node.initializer) && bindingPatternReadsHttpInput(ts, node.name);
+  }
 
-    if (character === '{' || character === '[' || character === '(') {
-      depth += 1;
-    } else if (character === '}' || character === ']' || character === ')') {
-      depth -= 1;
-    } else if ((character === ',' && depth === 0) || index === binding.length) {
-      if (segmentReadsHttpInput(binding.slice(segmentStart, index))) {
-        return true;
-      }
-      segmentStart = index + 1;
-    }
+  if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken
+    && isRequestIdentifier(ts, node.right)) {
+    const left = unwrapExpression(ts, node.left);
+    return ts.isObjectLiteralExpression(left) && assignmentPatternReadsHttpInput(ts, left);
   }
 
   return false;
 }
 
-function hasDestructuredHttpInputAccess(content: string, codePositions: boolean[]): boolean {
-  const bindingPattern = /\b(?:const|let|var)\s*\{|\(\s*\{/g;
-  let binding: RegExpExecArray | null;
-
-  while ((binding = bindingPattern.exec(content)) !== null) {
-    const openingBrace = content.indexOf('{', binding.index);
-    bindingPattern.lastIndex = openingBrace + 1;
-    if (!codePositions[binding.index]) {
-      continue;
-    }
-
-    const closingBrace = findClosingBrace(content, openingBrace);
-    if (closingBrace < 0) {
-      continue;
-    }
-
-    const assignment = content.slice(closingBrace + 1);
-    if (/^\s*(?::[^=;\n]+)?=\s*(?:req|request)\b/.test(assignment)
-      && bindingReadsHttpInput(content.slice(openingBrace + 1, closingBrace))) {
-      return true;
-    }
-
+function hasHttpInputAccess(content: string): boolean {
+  const ts = loadTypeScript();
+  if (!ts) {
+    return /\b(?:req|request)\s*(?:\??\.\s*(?:body|query|params)\b|\??\.\s*\[\s*(['"])(?:body|query|params)\1\s*\])/.test(content);
   }
 
-  return false;
+  const source = ts.createSourceFile('security-audit-input.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
+  let found = false;
+  const visit = (node: TsNode): void => {
+    if (found) {
+      return;
+    }
+    found = nodeReadsHttpInput(ts, node);
+    if (!found) {
+      ts.forEachChild(node, visit);
+    }
+  };
+  visit(source);
+  return found;
 }
 
 export class SecurityRules {
@@ -380,12 +319,9 @@ export class SecurityRules {
         category: 'custom',
         check: (content, _context) => {
           const findings: SecurityFinding[] = [];
-          // Restrict this heuristic to HTTP request-boundary access. Generic names
-          // such as `content`, `body`, or `params` do not establish user input.
-          const directInputPattern = /\b(?:req|request)\s*(?:(?:\?\s*)?\.\s*(?:body|query|params)\b|(?:\?\s*\.)?\s*\[\s*(['"])(?:body|query|params)\1\s*\])/g;
-          const codePositions = buildCodePositionMask(content);
-          const accessesHttpInput = patternMatchesCode(content, directInputPattern, codePositions)
-            || hasDestructuredHttpInputAccess(content, codePositions);
+          // Parse JavaScript/TypeScript syntax so comments, regex literals, template
+          // expressions, and destructuring aliases are classified accurately.
+          const accessesHttpInput = hasHttpInputAccess(content);
           const hasUnicodeCheck = /UnicodeValidator|normalizeUnicode|\.normalize\(\s*['"]NFC['"]\s*\)/i.test(content);
           
           if (accessesHttpInput && !hasUnicodeCheck) {
