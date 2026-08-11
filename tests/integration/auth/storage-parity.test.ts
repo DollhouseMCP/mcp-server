@@ -913,6 +913,34 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
       kind: 'email',
       value: 'jos\u00e9@example.com',
     })).rejects.toThrow('already exists');
+
+    await storage.allowlistUpdate('legacy-nfd', { note: 'canonicalized' });
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(dir, 'allowlist.json'), 'utf8'),
+    ) as Array<{ value: string }>;
+    expect(persisted[0].value).toBe('jos\u00e9@example.com');
+  });
+
+  it('fails closed when legacy file entries collide after canonicalization', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([
+      {
+        id: 'legacy-nfd',
+        kind: 'email',
+        value: 'jose\u0301@example.com',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'canonical-nfc',
+        kind: 'email',
+        value: 'jos\u00e9@example.com',
+        createdAt: new Date().toISOString(),
+      },
+    ]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: 'jos\u00e9@example.com',
+    })).rejects.toThrow('allowlist normalization collision');
   });
 
   it('cycle-16: bootstrap state survives across instances', async () => {

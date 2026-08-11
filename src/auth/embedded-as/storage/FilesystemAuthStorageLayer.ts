@@ -777,7 +777,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
         });
         return [];
       }
-      return parsed
+      const entries = parsed
         .filter((e): e is AuthAllowlistEntry & { createdAt: string | Date } =>
           typeof e === 'object' && e !== null
           && typeof (e as { id?: unknown }).id === 'string'
@@ -792,6 +792,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
           createdBy: typeof e.createdBy === 'string' ? e.createdBy : null,
           createdAt: typeof e.createdAt === 'string' ? new Date(e.createdAt) : e.createdAt,
         }));
+      return canonicalizePersistedAllowlist(entries, this.allowlistPath);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') return [];
@@ -805,6 +806,26 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       throw err;
     }
   }
+}
+
+function canonicalizePersistedAllowlist(
+  entries: AuthAllowlistEntry[],
+  allowlistPath: string,
+): AuthAllowlistEntry[] {
+  const canonicalKeys = new Map<string, string>();
+  return entries.map(entry => {
+    const value = normalizeAuthAllowlistValue(entry.kind, entry.value);
+    const key = `${entry.kind}\u0000${value}`;
+    const existingId = canonicalKeys.get(key);
+    if (existingId !== undefined && existingId !== entry.id) {
+      throw new Error(
+        `allowlist normalization collision in ${allowlistPath}: entries ` +
+        `${existingId} and ${entry.id} resolve to the same ${entry.kind} identity`,
+      );
+    }
+    canonicalKeys.set(key, entry.id);
+    return { ...entry, value };
+  });
 }
 
 function serializeAllowlist(entries: AuthAllowlistEntry[]): string {
