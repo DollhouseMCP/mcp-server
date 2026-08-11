@@ -90,6 +90,22 @@ export function normalizeAllowlistDisplayValue(value: string): string {
   return value.normalize('NFC').trim();
 }
 
+/**
+ * Match using the preserved display identity as the source of truth.
+ *
+ * Legacy rows may carry a normalizedValue produced by broader Unicode
+ * lowercasing. Recomputing from displayValue preserves the intended account
+ * while retaining the current cross-script and non-ASCII identity boundaries.
+ */
+export function storedConsoleAllowlistValueMatches(
+  kind: ConsoleAccountAllowlistKind,
+  displayValue: string,
+  presentedValue: string,
+): boolean {
+  return normalizeAllowlistValue(kind, displayValue)
+    === normalizeAllowlistValue(kind, presentedValue);
+}
+
 export function validateAllowlistValue(kind: ConsoleAccountAllowlistKind, value: string, name: string): void {
   const normalized = normalizeAllowlistDisplayValue(value);
   if (normalized === '' || normalized.length > 320) {

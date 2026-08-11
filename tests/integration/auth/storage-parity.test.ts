@@ -851,6 +851,7 @@ describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
       if (pgAvailable) await reset();
     },
   );
+
 });
 
 // ── Filesystem-only durability tests ───────────────────────────────────
@@ -892,6 +893,26 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
 
     const b = new FilesystemAuthStorageLayer({ rootDir: dir });
     expect(await b.genericGet('Grant', 'g-persist')).toEqual({ accountId: 'github_42' });
+  });
+
+  it('matches and deduplicates a decomposed Unicode value from a legacy file', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([{
+      id: 'legacy-nfd',
+      kind: 'email',
+      value: 'jose\u0301@example.com',
+      note: null,
+      createdBy: null,
+      createdAt: new Date().toISOString(),
+    }]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: 'jos\u00e9@example.com',
+    })).resolves.toBe(true);
+    await expect(storage.allowlistAdd({
+      kind: 'email',
+      value: 'jos\u00e9@example.com',
+    })).rejects.toThrow('already exists');
   });
 
   it('cycle-16: bootstrap state survives across instances', async () => {
