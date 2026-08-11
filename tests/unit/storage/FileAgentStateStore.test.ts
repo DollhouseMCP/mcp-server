@@ -66,13 +66,14 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     expect(cache.get('recovery-agent')?.goals).toHaveLength(1);
   });
 
-  it('reclaims from durable state instead of the process-local cache', async () => {
+  it('fails closed when asked to reclaim session-neutral file state', async () => {
     await store.save(key, state(), 0);
     cache.get('recovery-agent')!.context.cachedOnly = true;
 
     const reclaimed = await store.reclaimOrphaned(key);
 
-    expect(reclaimed?.context).toEqual({});
+    expect(reclaimed).toBeNull();
+    expect(cache.get('recovery-agent')?.context).toEqual({ cachedOnly: true });
   });
 
   it('defaults malformed integer fields when loading durable state', async () => {

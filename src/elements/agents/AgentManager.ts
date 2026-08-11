@@ -1140,6 +1140,20 @@ export class AgentManager extends BaseElementManager<Agent> {
     return `${userId}:${this.canonicalizeExecutionName(name)}`;
   }
 
+  /**
+   * Agent definitions are user-scoped, but DB-backed runtime state is scoped
+   * to an individual transport session. Keep each session's hydrated Agent
+   * instance separate while preserving the existing shared cache in file mode.
+   */
+  protected override getCacheNamespace(): string {
+    const userNamespace = super.getCacheNamespace();
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return userNamespace;
+    }
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId ?? 'no-session';
+    return `${userNamespace}:agent-session:${sessionId}`;
+  }
+
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
     const key = this.getExecutionGenerationKey(name);
     const entry = this.getOrCreateExecutionGeneration(key);

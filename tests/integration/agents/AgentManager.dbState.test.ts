@@ -257,8 +257,10 @@ describe('AgentManager DB-backed runtime state', () => {
     };
 
     try {
+      // Production HTTP sessions share the root AgentManager. Reuse one here
+      // so this test catches session state leaking through its element cache.
+      const manager = createDbAgentManager(tempDir, tracker);
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createDbAgentManager(tempDir, tracker);
         const created = await manager.create(
           'shared-state-agent',
           'Persists isolated runtime state in Postgres',
@@ -275,7 +277,6 @@ describe('AgentManager DB-backed runtime state', () => {
       });
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionBeta }, async () => {
-        const manager = createDbAgentManager(tempDir, tracker);
         await manager.executeAgent('shared-state-agent', { objective: 'goal from beta' });
       });
 
@@ -302,7 +303,6 @@ describe('AgentManager DB-backed runtime state', () => {
       );
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createDbAgentManager(tempDir, tracker);
         const state = await manager.getAgentState({ agentName: 'shared-state-agent' });
         expect(state.state.goals).toEqual(
           expect.arrayContaining([expect.objectContaining({ description: 'goal from alpha' })]),

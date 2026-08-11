@@ -29,7 +29,7 @@ jobs:
   publish-beta:
     name: Publish beta release
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     environment:
       name: beta-publish
       url: https://github.com/DollhouseMCP/mcp-server/releases
@@ -174,24 +174,56 @@ jobs:
             --prerelease
 
       # Releases created with GITHUB_TOKEN do not emit workflow runs. Dispatch
-      # each publisher explicitly at the immutable release tag so every artifact
-      # is built from the same commit as the GitHub prerelease.
-      - name: Dispatch beta artifact publishers
+      # each publisher explicitly at the immutable release tag, capture the new
+      # run IDs, and wait so this orchestrator cannot succeed before they do.
+      - name: Dispatch and verify beta artifact publishers
         if: ${{ inputs.dry_run != true }}
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
         run: |
-          gh workflow run publish-npm.yml \
-            --ref "${TAG_NAME}" \
-            --field dry_run=false
-          gh workflow run publish-github-packages.yml \
-            --ref "${TAG_NAME}" \
-            --field dry_run=false
-          gh workflow run publish-mcpb.yml \
-            --ref "${TAG_NAME}" \
-            --field tag_name="${TAG_NAME}"
+          dispatch_and_capture() {
+            local workflow="$1"
+            shift
+            local previous_run_id
+            previous_run_id=$(latest_run_id "${workflow}")
+
+            gh workflow run "${workflow}" --ref "${TAG_NAME}" "$@" >&2
+
+            local run_id=""
+            for _ in {1..30}; do
+              run_id=$(latest_run_id "${workflow}")
+              if [[ -n "${run_id}" && "${run_id}" != "${previous_run_id}" ]]; then
+                printf '%s\n' "${run_id}"
+                return 0
+              fi
+              sleep 2
+            done
+
+            echo "::error::Timed out locating the dispatched ${workflow} run for ${GITHUB_SHA}" >&2
+            return 1
+          }
+
+          latest_run_id() {
+            local workflow="$1"
+            gh run list \
+              --workflow "${workflow}" \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,headSha \
+              --jq ".[] | select(.headSha == \"${GITHUB_SHA}\") | .databaseId" \
+              | head -n 1
+          }
+
+          npm_run_id=$(dispatch_and_capture publish-npm.yml --field dry_run=false)
+          packages_run_id=$(dispatch_and_capture publish-github-packages.yml --field dry_run=false)
+          mcpb_run_id=$(dispatch_and_capture publish-mcpb.yml --field tag_name="${TAG_NAME}")
+
+          publisher_run_ids=("${npm_run_id}" "${packages_run_id}" "${mcpb_run_id}")
+          for run_id in "${publisher_run_ids[@]}"; do
+            gh run watch "${run_id}" --exit-status
+          done
 
       - name: Publish summary
         if: always()

@@ -30,8 +30,8 @@ export interface IAgentStateStore {
 
   /**
    * Claim durable state left by a disconnected transport session.
-   * Database stores transfer session ownership atomically; file stores perform
-   * a strict durable read because their state file is already session-neutral.
+   * Database stores transfer session ownership atomically after checking
+   * durable presence. Stores without trustworthy ownership data fail closed.
    */
   reclaimOrphaned(
     key: AgentStateKey,

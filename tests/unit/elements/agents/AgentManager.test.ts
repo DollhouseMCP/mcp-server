@@ -149,6 +149,31 @@ describe('AgentManager', () => {
     it('should create agents directory structure', () => {
       expect(fileOperationsService.createDirectory).toHaveBeenCalledTimes(2); // agents dir + state dir
     });
+
+    it('uses separate cache namespaces for DB-backed transport sessions', () => {
+      let currentSession: SessionContext = {
+        userId: 'shared-user',
+        sessionId: 'session-a',
+        tenantId: null,
+        transport: 'http',
+        createdAt: Date.now(),
+      };
+      const internals = agentManager as unknown as {
+        contextTracker?: { getSessionContext: () => SessionContext | undefined };
+        storageLayer: { writeContent?: () => Promise<string> };
+        getCacheNamespace: () => string;
+      };
+      internals.contextTracker = { getSessionContext: () => currentSession };
+      internals.storageLayer.writeContent = async () => 'unused-test-id';
+
+      const sessionANamespace = internals.getCacheNamespace();
+      currentSession = { ...currentSession, sessionId: 'session-b' };
+      const sessionBNamespace = internals.getCacheNamespace();
+
+      expect(sessionANamespace).toBe('shared-user:agent-session:session-a');
+      expect(sessionBNamespace).toBe('shared-user:agent-session:session-b');
+      expect(sessionANamespace).not.toBe(sessionBNamespace);
+    });
   });
 
   describe('Recovery state synchronization', () => {

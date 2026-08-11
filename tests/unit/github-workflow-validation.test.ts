@@ -333,15 +333,18 @@ describe('GitHub Workflow Validation', () => {
       expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
     });
 
-    it('should explicitly dispatch every beta artifact publisher at the release tag', () => {
+    it('should dispatch and await every beta artifact publisher at the release tag', () => {
       const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
 
       expect(betaPublishWorkflow).toContain('actions: write');
-      expect(betaPublishWorkflow).toContain('gh workflow run publish-npm.yml');
-      expect(betaPublishWorkflow).toContain('gh workflow run publish-github-packages.yml');
-      expect(betaPublishWorkflow).toContain('gh workflow run publish-mcpb.yml');
-      expect(betaPublishWorkflow.match(/--ref "\$\{TAG_NAME\}"/g)).toHaveLength(3);
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-npm.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-github-packages.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-mcpb.yml');
+      expect(betaPublishWorkflow).toContain('gh workflow run "${workflow}" --ref "${TAG_NAME}"');
       expect(betaPublishWorkflow).toContain('--field tag_name="${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('gh run list');
+      expect(betaPublishWorkflow).toContain('gh run watch "${run_id}" --exit-status');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids=("${npm_run_id}" "${packages_run_id}" "${mcpb_run_id}")');
     });
   });
 });
