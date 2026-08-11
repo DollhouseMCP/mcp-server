@@ -146,7 +146,9 @@ docker compose run --rm dollhousemcp \
 
 For **filesystem mode** (no DB), the same CLI works, OR you can edit `~/.dollhouse/auth/allowlist.json` directly — the server picks up changes within ~1 second via fsnotify, no restart needed.
 
-**Match rules:** the gate ORs across all configured kinds. An entry matches if **any** of the verified identity values (email, GitHub username, GitHub numeric ID) is on the list. Values are lowercased on insert; matching is case-insensitive for emails and usernames.
+**Match rules:** the gate ORs across all configured kinds. An entry matches if **any** of the verified identity values (email, GitHub username, GitHub numeric ID) is on the list. Values use NFC canonicalization without rewriting cross-script look-alikes. Email and GitHub username comparison remains case-insensitive without mapping look-alikes across scripts; numeric IDs remain exact.
+
+**Unicode normalization upgrades:** database migration `0045_normalize_allowlist_identities` rebuilds persisted lookup keys from the preserved identity and keeps indexed sign-in checks intact. Back up PostgreSQL before upgrading. The migration aborts before changing data if two active entries would become the same canonical identity; remove or revoke the duplicate identified by an allowlist inventory, then rerun the migration. Do not start the new application version against an older schema. Rolling back the application after the migration is safe because NFC-normalized values remain compatible with the older lookup behavior; restore the pre-upgrade database backup only if the original byte representation itself must be recovered. Filesystem deployments canonicalize legacy values while matching and persist the canonical form on the next allowlist write.
 
 **Denial behavior:** a denied user sees an "Access denied" HTML page (not a raw JSON error), and an `auth.allowlist_denied` event lands in `auth_identity_events` with their identity values for operator diagnosis. The audit log is queryable via `psql` or the future web console.
 
