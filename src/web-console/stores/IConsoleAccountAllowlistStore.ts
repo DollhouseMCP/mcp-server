@@ -1,6 +1,5 @@
 import type { AuthAllowlistKind } from '../../database/schema/index.js';
 import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
-import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import {
   assertUuid,
   cloneDate,
@@ -80,11 +79,15 @@ export function assertAllowlistKind(value: string, name: string): asserts value 
 
 export function normalizeAllowlistValue(kind: ConsoleAccountAllowlistKind, value: string): string {
   const normalized = normalizeAllowlistDisplayValue(value);
-  return kind === 'github_id' ? normalized : normalized.toLowerCase();
+  if (kind === 'github_id') return normalized;
+  if (kind === 'github_username') return normalized.toLowerCase();
+  return normalized.replace(/[A-Z]/g, character => character.toLowerCase());
 }
 
 export function normalizeAllowlistDisplayValue(value: string): string {
-  return UnicodeValidator.normalize(value).normalizedContent.trim();
+  // Security principals must retain their identity. NFC collapses canonically
+  // equivalent encodings without rewriting look-alike characters into ASCII.
+  return value.normalize('NFC').trim();
 }
 
 export function validateAllowlistValue(kind: ConsoleAccountAllowlistKind, value: string, name: string): void {

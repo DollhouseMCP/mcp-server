@@ -346,6 +346,18 @@ describe('GitHub Workflow Validation', () => {
       expect(betaPublishWorkflow).toContain('gh run watch "${run_id}" --exit-status');
       expect(betaPublishWorkflow).toContain('publisher_run_ids=("${npm_run_id}" "${packages_run_id}" "${mcpb_run_id}")');
     });
+
+    it('should recover release creation only when an existing tag points at the same commit', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('refs/tags/${tag_name}^{}');
+      expect(betaPublishWorkflow).toContain('[[ "${remote_tag_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('echo "tag_exists=${tag_exists}"');
+      expect(betaPublishWorkflow).toContain('} >> "$GITHUB_OUTPUT"');
+      expect(betaPublishWorkflow).toContain('TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${TAG_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('gh release create "${TAG_NAME}"');
+    });
   });
 });
 

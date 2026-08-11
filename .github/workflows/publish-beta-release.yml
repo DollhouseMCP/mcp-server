@@ -71,9 +71,16 @@ jobs:
           fi
 
           tag_name="v${package_version}"
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag_name}" >/dev/null 2>&1; then
-            echo "::error::Tag ${tag_name} already exists"
-            exit 1
+          tag_exists=false
+          remote_tag_object=$(git ls-remote --tags origin "refs/tags/${tag_name}" | awk 'NR == 1 { print $1 }')
+          if [[ -n "${remote_tag_object}" ]]; then
+            tag_exists=true
+            remote_tag_target=$(git ls-remote --tags origin "refs/tags/${tag_name}^{}" | awk 'NR == 1 { print $1 }')
+            remote_tag_target="${remote_tag_target:-${remote_tag_object}}"
+            if [[ "${remote_tag_target}" != "${GITHUB_SHA}" ]]; then
+              echo "::error::Tag ${tag_name} already exists at ${remote_tag_target}, not ${GITHUB_SHA}"
+              exit 1
+            fi
           fi
 
           if gh release view "${tag_name}" >/dev/null 2>&1; then
@@ -86,8 +93,11 @@ jobs:
             exit 1
           fi
 
-          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
-          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${package_version}"
+            echo "tag_name=${tag_name}"
+            echo "tag_exists=${tag_exists}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify default-branch release workflows are prerelease-safe
         shell: bash
@@ -160,12 +170,17 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git tag -a "${TAG_NAME}" -m "DollhouseMCP ${TAG_NAME}"
-          git push origin "refs/tags/${TAG_NAME}"
+          if [[ "${TAG_EXISTS}" != "true" ]]; then
+            git tag -a "${TAG_NAME}" -m "DollhouseMCP ${TAG_NAME}"
+            git push origin "refs/tags/${TAG_NAME}"
+          else
+            echo "Reusing ${TAG_NAME}, which already points to ${GITHUB_SHA}"
+          fi
 
           gh release create "${TAG_NAME}" \
             --target "${GITHUB_SHA}" \
