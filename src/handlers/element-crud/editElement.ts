@@ -814,8 +814,11 @@ export async function editElement(
     'element.metadata'
   );
   if (mergedDescriptionErrors.length > 0) {
+    const formattedDescriptionErrors = mergedDescriptionErrors
+      .map(descriptionError => `  • ${descriptionError}`)
+      .join('\n');
     return error(
-      `Description length validation failed:\n${mergedDescriptionErrors.map(descriptionError => `  • ${descriptionError}`).join('\n')}`
+      `Description length validation failed:\n${formattedDescriptionErrors}`
     );
   }
 

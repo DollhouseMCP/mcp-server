@@ -46,6 +46,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { logger } from '../../../utils/logger.js';
 import { FileLockManager } from '../../../security/fileLockManager.js';
+import { normalizeAuthAllowlistValue } from '../allowlistIdentity.js';
 import type {
   AllowlistAddInput,
   AllowlistMatchValues,
@@ -696,7 +697,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
     return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
       const entries = await this.readAllowlistRaw();
-      const value = input.value.toLowerCase();
+      const value = normalizeAuthAllowlistValue(input.kind, input.value);
       const duplicate = entries.find(e => e.kind === input.kind && e.value === value);
       if (duplicate) {
         throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
@@ -744,9 +745,9 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
     const entries = await this.readAllowlist();
     if (entries.length === 0) return false;
-    const email = values.email?.toLowerCase();
-    const githubUsername = values.githubUsername?.toLowerCase();
-    const githubId = values.githubId;
+    const email = values.email && normalizeAuthAllowlistValue('email', values.email);
+    const githubUsername = values.githubUsername && normalizeAuthAllowlistValue('github_username', values.githubUsername);
+    const githubId = values.githubId && normalizeAuthAllowlistValue('github_id', values.githubId);
     for (const e of entries) {
       if (e.kind === 'email' && email && e.value === email) return true;
       if (e.kind === 'github_username' && githubUsername && e.value === githubUsername) return true;

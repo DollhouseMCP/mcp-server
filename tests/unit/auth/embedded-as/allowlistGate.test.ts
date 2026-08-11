@@ -105,6 +105,20 @@ describe('checkAllowlistGate — decision matrix', () => {
       expect(result.allowed).toBe(true);
     });
 
+    it('keeps look-alike Unicode email principals distinct', async () => {
+      const cyrillicAlice = '\u0430lice@example.com';
+      await storage.allowlistAdd({ kind: 'email', value: cyrillicAlice });
+
+      await expect(storage.allowlistMatchesIdentity({ email: cyrillicAlice })).resolves.toBe(true);
+      await expect(storage.allowlistMatchesIdentity({ email: ALICE_EMAIL })).resolves.toBe(false);
+    });
+
+    it('matches canonically equivalent Unicode email encodings', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'jose\u0301@example.com' });
+
+      await expect(storage.allowlistMatchesIdentity({ email: 'jos\u00e9@example.com' })).resolves.toBe(true);
+    });
+
     it('uses an injected sign-in authority instead of the legacy storage allowlist', async () => {
       const authority = fixedAuthority({
         entries: 1,
