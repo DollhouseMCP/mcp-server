@@ -110,7 +110,7 @@ jobs:
             fi
           fi
 
-          npm_exists=false
+          npm_publish_complete=false
           if npm view "@dollhousemcp/mcp-server@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
             if [[ "${release_exists}" != "true" ]]; then
               echo "::error::npm version ${package_version} exists without a matching reusable GitHub prerelease"
@@ -124,7 +124,7 @@ jobs:
             if [[ "${npm_beta_version}" != "${package_version}" ]]; then
               echo "::warning::npm dist-tags.beta points to ${npm_beta_version}; leaving that valid beta channel unchanged while repairing ${package_version} artifacts"
             fi
-            npm_exists=true
+            npm_publish_complete=true
           fi
 
           {
@@ -132,7 +132,7 @@ jobs:
             echo "tag_name=${tag_name}"
             echo "tag_exists=${tag_exists}"
             echo "release_exists=${release_exists}"
-            echo "npm_exists=${npm_exists}"
+            echo "npm_publish_complete=${npm_publish_complete}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify default-branch release workflows are prerelease-safe
@@ -245,7 +245,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
-          NPM_EXISTS: ${{ steps.release.outputs.npm_exists }}
+          NPM_PUBLISH_COMPLETE: ${{ steps.release.outputs.npm_publish_complete }}
         run: |
           dispatch_and_capture() {
             local workflow="$1"
@@ -281,7 +281,7 @@ jobs:
           }
 
           publisher_run_ids=()
-          if [[ "${NPM_EXISTS}" != "true" ]]; then
+          if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]; then
             npm_run_id=$(dispatch_and_capture publish-npm.yml --field dry_run=false)
             publisher_run_ids+=("${npm_run_id}")
           else

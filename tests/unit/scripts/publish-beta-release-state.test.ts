@@ -55,7 +55,7 @@ describe('Publish Beta Release state validation', () => {
     expect(result.outputs).toMatchObject({
       tag_exists: 'false',
       release_exists: 'false',
-      npm_exists: 'false',
+      npm_publish_complete: 'false',
     });
   });
 
@@ -69,8 +69,29 @@ describe('Publish Beta Release state validation', () => {
     expect(result.outputs).toMatchObject({
       tag_exists: 'true',
       release_exists: 'true',
-      npm_exists: 'false',
+      npm_publish_complete: 'false',
     });
+  });
+
+  it('accepts a matching tag when release creation has not completed yet', () => {
+    const result = runScenario({ tagTarget: expectedSha });
+
+    expect(result.status).toBe(0);
+    expect(result.outputs).toMatchObject({
+      tag_exists: 'true',
+      release_exists: 'false',
+      npm_publish_complete: 'false',
+    });
+  });
+
+  it('rejects release metadata that names a different tag', () => {
+    const result = runScenario({
+      tagTarget: expectedSha,
+      release: matchingRelease({ tagName: 'v2.1.0-beta.wrong' }),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('Release lookup returned tag v2.1.0-beta.wrong');
   });
 
   it('rejects an existing release that targets another commit', () => {
@@ -108,7 +129,7 @@ describe('Publish Beta Release state validation', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.outputs.npm_exists).toBe('true');
+    expect(result.outputs.npm_publish_complete).toBe('true');
   });
 
   it('preserves a different valid beta dist-tag while repairing older artifacts', () => {
@@ -120,7 +141,7 @@ describe('Publish Beta Release state validation', () => {
     });
 
     expect(result.status).toBe(0);
-    expect(result.outputs.npm_exists).toBe('true');
+    expect(result.outputs.npm_publish_complete).toBe('true');
     expect(result.stdout).toContain('leaving that valid beta channel unchanged');
   });
 
@@ -134,6 +155,16 @@ describe('Publish Beta Release state validation', () => {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('dist-tags.beta is invalid or unset (2.0.40)');
+  });
+
+  it('rejects an npm publication that has no matching reusable release', () => {
+    const result = runScenario({
+      npmExists: true,
+      npmBetaVersion: packageVersion,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('exists without a matching reusable GitHub prerelease');
   });
 });
 

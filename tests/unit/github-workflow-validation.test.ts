@@ -359,15 +359,15 @@ describe('GitHub Workflow Validation', () => {
       expect(betaPublishWorkflow).toContain('[[ "${release_prerelease}" != "true" || "${release_draft}" != "false" ]]');
       expect(betaPublishWorkflow).toContain('[[ "${release_target}" != "${GITHUB_SHA}" ]]');
       expect(betaPublishWorkflow).toContain('echo "release_exists=${release_exists}"');
-      expect(betaPublishWorkflow).toContain('echo "npm_exists=${npm_exists}"');
+      expect(betaPublishWorkflow).toContain('echo "npm_publish_complete=${npm_publish_complete}"');
       expect(betaPublishWorkflow).toContain('} >> "$GITHUB_OUTPUT"');
       expect(betaPublishWorkflow).toContain('TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}');
       expect(betaPublishWorkflow).toContain('RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}');
       expect(betaPublishWorkflow).toContain('if [[ "${TAG_EXISTS}" != "true" ]]');
       expect(betaPublishWorkflow).toContain('if [[ "${RELEASE_EXISTS}" != "true" ]]');
       expect(betaPublishWorkflow).toContain('gh release create "${TAG_NAME}"');
-      expect(betaPublishWorkflow).toContain('NPM_EXISTS: ${{ steps.release.outputs.npm_exists }}');
-      expect(betaPublishWorkflow).toContain('if [[ "${NPM_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('NPM_PUBLISH_COMPLETE: ${{ steps.release.outputs.npm_publish_complete }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]');
       expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")');
     });
   });
