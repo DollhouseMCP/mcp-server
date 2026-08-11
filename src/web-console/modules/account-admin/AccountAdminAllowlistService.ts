@@ -11,7 +11,11 @@ import type {
   ConsoleAccountAllowlistKind,
   IConsoleAccountAllowlistStore,
 } from '../../stores/IConsoleAccountAllowlistStore.js';
-import { assertAllowlistKind , validateAllowlistValue } from '../../stores/IConsoleAccountAllowlistStore.js';
+import {
+  assertAllowlistKind,
+  normalizeAllowlistDisplayValue,
+  validateAllowlistValue,
+} from '../../stores/IConsoleAccountAllowlistStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import {
   serializeAccountAllowlistEntry,
@@ -152,7 +156,8 @@ function parseAddBody(body: unknown): { readonly kind: 'valid'; readonly value: 
     if (typeof record.kind !== 'string') throw new ConsoleStoreValidationError('kind must be a string.');
     assertAllowlistKind(record.kind, 'kind');
     if (typeof record.value !== 'string') throw new ConsoleStoreValidationError('value must be a string.');
-    validateAllowlistValue(record.kind, record.value, 'value');
+    const value = normalizeAllowlistDisplayValue(record.value);
+    validateAllowlistValue(record.kind, value, 'value');
     if (record.note !== undefined && record.note !== null && typeof record.note !== 'string') {
       throw new ConsoleStoreValidationError('note must be a string or null.');
     }
@@ -161,7 +166,7 @@ function parseAddBody(body: unknown): { readonly kind: 'valid'; readonly value: 
     }
     return {
       kind: 'valid',
-      value: { kind: record.kind, value: record.value, note: record.note },
+      value: { kind: record.kind, value, note: record.note },
     };
   } catch (error) {
     return {

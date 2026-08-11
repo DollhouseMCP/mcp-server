@@ -2,9 +2,9 @@ name: "CodeQL Analysis"
 
 on:
   push:
-    branches: [main, develop, codex/hosted-http-integration]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop, codex/hosted-http-integration]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   schedule:
     # Run at 2:30 AM UTC every day
     - cron: '30 2 * * *'
@@ -46,7 +46,7 @@ jobs:
         cache: 'npm'
 
     - name: Install dependencies
-      run: npm ci
+      run: npm ci --ignore-scripts
 
     - name: Build project
       run: npm run build

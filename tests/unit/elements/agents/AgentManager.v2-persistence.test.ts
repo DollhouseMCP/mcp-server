@@ -33,6 +33,7 @@ import { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js'
 import { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../../src/services/MetadataService.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { ValidationRegistry } from '../../../../src/services/validation/ValidationRegistry.js';
 import { TriggerValidationService } from '../../../../src/services/validation/TriggerValidationService.js';
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
@@ -818,9 +819,9 @@ describe('AgentManager v2 Metadata Persistence', () => {
       expect(result.parameters[0].description).not.toContain('</script>');
     });
 
-    it('should preserve parameter descriptions longer than 500 characters', () => {
+    it('should preserve parameter descriptions beyond the generic metadata field limit', () => {
       const normalizeGoal = (agentManager as any).normalizeGoalInput.bind(agentManager);
-      const longDescription = 'Detailed parameter guidance '.repeat(25).trim();
+      const longDescription = 'Detailed parameter guidance '.repeat(45).trim();
 
       const goalWithLongDescription = {
         template: 'Run {cmd}',
@@ -836,7 +837,7 @@ describe('AgentManager v2 Metadata Persistence', () => {
 
       const result = normalizeGoal(goalWithLongDescription);
 
-      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
       expect(result.parameters[0].description).toBe(longDescription);
     });
   });

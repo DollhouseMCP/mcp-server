@@ -16,7 +16,7 @@
  * provider is mounted.
  */
 
-import { describe, it, expect, beforeAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, jest } from '@jest/globals';
 import {
   SignJWT,
   exportJWK,
@@ -25,6 +25,8 @@ import {
   type JWTVerifyGetKey,
 } from 'jose';
 import { OidcAuthProvider } from '../../../src/auth/OidcAuthProvider.js';
+import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { logger } from '../../../src/utils/logger.js';
 
 const ISSUER = 'https://tenant.example.com/';
 const AUDIENCE = 'mcp-resource';
@@ -176,6 +178,52 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     }
   });
 
+  it('logs verified tokens rejected by provider authorization checks', async () => {
+    const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    try {
+      const token = await mintToken({ scope: 'openid profile' });
+      const result = await provider.validate(token);
+
+      expect(result.ok).toBe(false);
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'TOKEN_VALIDATION_FAILURE',
+        severity: 'MEDIUM',
+        source: 'OidcAuthProvider.validate',
+        additionalData: expect.objectContaining({
+          provider: 'oidc:tenant.example.com',
+          issuer: ISSUER,
+          reason: 'token missing mcp scope',
+        }),
+      }));
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  it('includes reason and provider in validation failure details for audit deduplication', async () => {
+    const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    try {
+      const missingScopeToken = await mintToken({ scope: 'openid profile' });
+      await provider.validate(missingScopeToken);
+
+      const wrongProvider = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: wrongJwks,
+      });
+      await wrongProvider.validate(await mintToken());
+
+      const details = logSpy.mock.calls.map(([event]) => event.details);
+      expect(details).toEqual([
+        'OIDC access token validation failed: token missing mcp scope [provider:oidc:tenant.example.com]',
+        'OIDC access token validation failed: invalid signature [provider:oidc:tenant.example.com]',
+      ]);
+      expect(new Set(details).size).toBe(details.length);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   // Cycle-12 fix (M12-1): algorithms allowlist parity with EmbeddedAS
   // and LocalDev. The default allowlist excludes `none` and HS-family
   // algorithms; jose rejects them at verify-time even if a token were
@@ -208,6 +256,35 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
   });
 
   describe('cycle 19 / security-#6: opt-in RFC 9068 typ enforcement', () => {
+    it('warns when typ enforcement is disabled for a non-local issuer', () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Access-token typ enforcement is disabled'),
+        { issuer: ISSUER }
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn for a loopback issuer', () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      new OidcAuthProvider({
+        issuer: 'http://127.0.0.1:8080/',
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
     it('default (option off): accepts a token with no typ header (compat with most IdPs)', async () => {
       // The cycle 19 fix is opt-in. Default behavior must preserve
       // compat with Auth0/Okta/Keycloak/Cognito, which typically don't

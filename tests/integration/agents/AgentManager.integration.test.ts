@@ -154,6 +154,27 @@ describe('AgentManager integration', () => {
    * step counting behavior, not just the evaluator in isolation.
    */
   describe('Step count integration (autonomy directive)', () => {
+    it('records a step against an explicitly selected active goal', async () => {
+      const agent = new Agent({
+        name: 'Owned Goal Agent',
+        description: 'Tests explicit lifecycle goal routing',
+      }, metadataService);
+      await manager.save(agent, 'owned-goal-agent.md');
+
+      const first = await manager.executeAgent('owned-goal-agent', { objective: 'First goal' });
+      const second = await manager.executeAgent('owned-goal-agent', { objective: 'Second goal' });
+
+      const step = await manager.recordAgentStep({
+        agentName: 'owned-goal-agent',
+        goalId: second.goalId,
+        stepDescription: 'Work only on the second goal',
+        outcome: 'success',
+      });
+
+      expect(step.decision.goalId).toBe(second.goalId);
+      expect(step.decision.goalId).not.toBe(first.goalId);
+    });
+
     it('should use default maxAutonomousSteps (10) and track steps correctly', async () => {
       // Create agent (V1 style - will be auto-converted to V2 with defaults)
       const agent = new Agent({

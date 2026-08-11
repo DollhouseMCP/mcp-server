@@ -3,6 +3,7 @@
  */
 
 import { describe, it, expect } from '@jest/globals';
+import path from 'node:path';
 
 import {
   resolveDataDirectory,
@@ -20,6 +21,14 @@ function opts(overrides: Partial<ResolveOptions>): ResolveOptions {
   return { env: {}, ...overrides };
 }
 
+function expectNativePath(actual: string, expected: string): void {
+  expect(normalize(actual)).toBe(normalize(path.normalize(expected)));
+}
+
+function expectResolvedPath(actual: string, expected: string): void {
+  expect(normalize(actual)).toBe(normalize(path.resolve(expected)));
+}
+
 describe('resolveDataDirectory', () => {
   describe('Linux (XDG) defaults', () => {
     const base = opts({ platform: 'linux', homeDir: LINUX_HOME });
@@ -33,7 +42,7 @@ describe('resolveDataDirectory', () => {
     ] as [DataDirKey, string][])(
       'resolves %s to %s',
       (key, expected) => {
-        expect(resolveDataDirectory(key, base)).toBe(expected);
+        expectNativePath(resolveDataDirectory(key, base), expected);
       }
     );
 
@@ -43,7 +52,7 @@ describe('resolveDataDirectory', () => {
         homeDir: LINUX_HOME,
         env: { XDG_CONFIG_HOME: '/custom/config' },
       }));
-      expect(result).toBe('/custom/config/dollhousemcp');
+      expectNativePath(result, '/custom/config/dollhousemcp');
     });
 
     it('honors XDG_CACHE_HOME when set', () => {
@@ -52,7 +61,7 @@ describe('resolveDataDirectory', () => {
         homeDir: LINUX_HOME,
         env: { XDG_CACHE_HOME: '/custom/cache' },
       }));
-      expect(result).toBe('/custom/cache/dollhousemcp');
+      expectNativePath(result, '/custom/cache/dollhousemcp');
     });
 
     it('honors XDG_STATE_HOME when set (state / logs / run share it)', () => {
@@ -61,9 +70,9 @@ describe('resolveDataDirectory', () => {
         homeDir: LINUX_HOME,
         env: { XDG_STATE_HOME: '/custom/state' },
       });
-      expect(resolveDataDirectory('state', withState)).toBe('/custom/state/dollhousemcp');
-      expect(resolveDataDirectory('logs', withState)).toBe('/custom/state/dollhousemcp/logs');
-      expect(resolveDataDirectory('run', withState)).toBe('/custom/state/dollhousemcp/run');
+      expectNativePath(resolveDataDirectory('state', withState), '/custom/state/dollhousemcp');
+      expectNativePath(resolveDataDirectory('logs', withState), '/custom/state/dollhousemcp/logs');
+      expectNativePath(resolveDataDirectory('run', withState), '/custom/state/dollhousemcp/run');
     });
   });
 
@@ -79,7 +88,7 @@ describe('resolveDataDirectory', () => {
     ] as [DataDirKey, string][])(
       'resolves %s to %s',
       (key, expected) => {
-        expect(resolveDataDirectory(key, base)).toBe(expected);
+        expectNativePath(resolveDataDirectory(key, base), expected);
       }
     );
   });
@@ -125,14 +134,14 @@ describe('resolveDataDirectory', () => {
       const result = resolveDataDirectory('portfolio-root', opts({
         platform: 'linux', homeDir: LINUX_HOME,
       }));
-      expect(result).toBe('/home/user/DollhouseMCP');
+      expectNativePath(result, '/home/user/DollhouseMCP');
     });
 
     it('returns ~/DollhouseMCP on macOS', () => {
       const result = resolveDataDirectory('portfolio-root', opts({
         platform: 'darwin', homeDir: MAC_HOME,
       }));
-      expect(result).toBe('/Users/user/DollhouseMCP');
+      expectNativePath(result, '/Users/user/DollhouseMCP');
     });
 
     it(String.raw`returns %USERPROFILE%\DollhouseMCP on Windows`, () => {
@@ -146,14 +155,14 @@ describe('resolveDataDirectory', () => {
       const result = resolveDataDirectory('shared-pool', opts({
         platform: 'linux', homeDir: LINUX_HOME,
       }));
-      expect(result).toBe('/home/user/DollhouseMCP/shared');
+      expectNativePath(result, '/home/user/DollhouseMCP/shared');
     });
 
     it('shared-provenance lives under shared-pool', () => {
       const result = resolveDataDirectory('shared-provenance', opts({
         platform: 'linux', homeDir: LINUX_HOME,
       }));
-      expect(result).toBe('/home/user/DollhouseMCP/shared/.provenance');
+      expectNativePath(result, '/home/user/DollhouseMCP/shared/.provenance');
     });
   });
 
@@ -175,7 +184,7 @@ describe('resolveDataDirectory', () => {
           homeDir: LINUX_HOME,
           env: { [envVar]: '/custom/override' },
         }));
-        expect(result).toBe('/custom/override');
+        expectResolvedPath(result, '/custom/override');
       }
     );
 
@@ -186,7 +195,7 @@ describe('resolveDataDirectory', () => {
         legacyRoot: '/legacy/root',
         env: { DOLLHOUSE_PORTFOLIO_DIR: '/wins' },
       }));
-      expect(result).toBe('/wins');
+      expectResolvedPath(result, '/wins');
     });
 
     it('empty env value is treated as unset', () => {
@@ -195,7 +204,7 @@ describe('resolveDataDirectory', () => {
         homeDir: LINUX_HOME,
         env: { DOLLHOUSE_CONFIG_DIR: '' },
       }));
-      expect(result).toBe('/home/user/.config/dollhousemcp');
+      expectNativePath(result, '/home/user/.config/dollhousemcp');
     });
 
     it('rejects relative env override (must be absolute)', () => {
@@ -228,7 +237,7 @@ describe('resolveDataDirectory', () => {
         homeDir: LINUX_HOME,
         env: { DOLLHOUSE_CONFIG_DIR: '   ' },
       }));
-      expect(result).toBe('/home/user/.config/dollhousemcp');
+      expectNativePath(result, '/home/user/.config/dollhousemcp');
     });
   });
 
@@ -252,7 +261,7 @@ describe('resolveDataDirectory', () => {
     ] as [DataDirKey, string][])(
       'resolves %s to %s',
       (key, expected) => {
-        expect(resolveDataDirectory(key, base)).toBe(expected);
+        expectResolvedPath(resolveDataDirectory(key, base), expected);
       }
     );
 
@@ -265,7 +274,7 @@ describe('resolveDataDirectory', () => {
         homeDir: MAC_HOME,
         legacyRoot,
       }));
-      expect(onDarwin).toBe('/home/user/.dollhouse/portfolio');
+      expectResolvedPath(onDarwin, '/home/user/.dollhouse/portfolio');
     });
   });
 
@@ -275,7 +284,7 @@ describe('resolveDataDirectory', () => {
         platform: 'linux',
         env: { DOLLHOUSE_HOME_DIR: '/custom/home' },
       });
-      expect(result).toBe('/custom/home/.config/dollhousemcp');
+      expectNativePath(result, '/custom/home/.config/dollhousemcp');
     });
 
     it('explicit homeDir option wins over DOLLHOUSE_HOME_DIR', () => {
@@ -284,7 +293,7 @@ describe('resolveDataDirectory', () => {
         homeDir: '/explicit/home',
         env: { DOLLHOUSE_HOME_DIR: '/ignored' },
       });
-      expect(result).toBe('/explicit/home/.config/dollhousemcp');
+      expectNativePath(result, '/explicit/home/.config/dollhousemcp');
     });
   });
 

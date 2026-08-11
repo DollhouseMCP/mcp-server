@@ -43,6 +43,8 @@ interface FailedSave {
   error: Error;
   memory: Memory;
   manager: MemoryManager;
+  /** Deletion-probe target captured while the owning user context is active. */
+  probeToken: string | null;
   /** Per-user execution context captured at the time the save failed (#2329). */
   context?: ExecutionContext;
 }
@@ -104,23 +106,25 @@ export class MemorySaveHandler {
    * the pending save until its timer completes and remove only non-durability
    * bookkeeping."
    *
-   * Failed saves cannot be safely retried from here (no session context, and the
-   * earlier in-context save already failed for a real reason). Surface the
-   * potential loss and drop the ledger entry.
+   * Failed saves are retried only after re-establishing their captured context
+   * and checking the probe token captured in that same context.
    */
   cleanupSession(sessionId: string): void {
     const prefix = `${sessionId}:`;
 
-    for (const [key, { error, memory }] of this.failedMemorySaves) {
+    for (const [key, entry] of this.failedMemorySaves) {
       if (!key.startsWith(prefix)) continue;
-      const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
-      logger.error(`[MCPAQLHandler] Session closed with an unrecovered memory save for '${key}' (entries: ${entryCount}) — ${error.message}. Any unpersisted entries are lost.`);
+      void this.runInSaveContext(entry.context, () =>
+        this.retryLedgerEntryIfAlive(key, entry, 'Session cleanup')
+      ).catch((error) => {
+        // The retry helper handles storage failures itself, but retain the ledger
+        // if context restoration fails before the retry can run.
+        logger.error(`[MCPAQLHandler] Session cleanup could not retry memory '${key}': ${error}`);
+      });
     }
-    this.deleteByPrefix(this.failedMemorySaves, prefix);
 
     // Non-durability bookkeeping only. Pending saves and their timers are left
     // intact so they fire — and persist — in their propagated per-user context.
-    this.deleteByPrefix(this.memorySaveAttempts, prefix);
     this.deleteByPrefix(this.saveFrequencyCounters, prefix);
   }
 
@@ -158,9 +162,14 @@ export class MemorySaveHandler {
     // Retry any failure-ledger entry not already attempted above. Direct Map
     // iteration is safe: saveMemoryTracked only deletes the current key on
     // success, which the iteration protocol tolerates.
-    for (const [key, { memory, manager, context }] of this.failedMemorySaves) {
+    for (const [key, entry] of this.failedMemorySaves) {
       if (flushedKeys.has(key)) continue;
-      await this.flushOne(key, memory, manager, 'shutdown-retry', context);
+      const recovered = await this.runInSaveContext(entry.context, () =>
+        this.retryLedgerEntryIfAlive(key, entry, 'Shutdown retry')
+      );
+      if (recovered) {
+        this.debounceMetrics.written++;
+      }
     }
   }
 
@@ -185,6 +194,44 @@ export class MemorySaveHandler {
       return this.contextScope.runAsync(context, fn);
     }
     return fn();
+  }
+
+  /**
+   * Retry an in-memory failed save unless its original storage target is
+   * positively confirmed deleted. Ambiguous probe failures retain the data and
+   * retry, because dropping the only in-memory copy would be irreversible.
+   */
+  private async retryLedgerEntryIfAlive(
+    key: string,
+    entry: FailedSave,
+    context: string,
+  ): Promise<boolean> {
+    let confirmedDeleted = false;
+    try {
+      confirmedDeleted = await entry.manager.isMemoryDeletedAt(entry.probeToken);
+    } catch (probeError) {
+      logger.warn(
+        `[MCPAQLHandler] ${context}: could not confirm whether memory '${key}' still exists ` +
+        `(${probeError instanceof Error ? probeError.message : probeError}); retrying the save`
+      );
+    }
+    if (confirmedDeleted) {
+      logger.info(
+        `[MCPAQLHandler] ${context}: memory '${key}' was deleted; dropping failed-save bookkeeping`
+      );
+      this.failedMemorySaves.delete(key);
+      this.memorySaveAttempts.delete(key);
+      return false;
+    }
+    try {
+      await this.saveMemoryTracked(key, entry.memory, entry.manager);
+      return true;
+    } catch (error) {
+      logger.error(
+        `[MCPAQLHandler] ${context} retry failed for memory '${key}': ${error}`
+      );
+      return false;
+    }
   }
 
   getSaveFrequencyCountersForTesting(): Map<string, SaveFrequencyCounter> {
@@ -279,7 +326,13 @@ export class MemorySaveHandler {
 
     this.trackSaveFrequency(memoryName);
     this.debouncedMemorySave(memoryName, targetMemory, manager);
-    return entryResult;
+    // Entry prose begins as untrusted. Return only server-generated receipt
+    // fields so the mutation response cannot bypass later rendering controls.
+    return {
+      id: entryResult.id,
+      timestamp: entryResult.timestamp.toISOString(),
+      trustLevel: entryResult.trustLevel,
+    };
   }
 
   private validateContent(memoryName: string, params: Record<string, unknown>): void {
@@ -305,7 +358,7 @@ export class MemorySaveHandler {
       clearTimeout(pendingClear.timer);
       this.pendingSaves.delete(clearKey);
     }
-    const clearResult = memory.clearAll(true);
+    const clearResult = await memory.clearAll(true);
     // Fix #438: persist so cleared state survives restart. Tracked so a success
     // clears any stale failure record for this memory.
     await this.saveMemoryTracked(clearKey, memory, manager);
@@ -370,6 +423,7 @@ export class MemorySaveHandler {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
           manager,
+          probeToken: manager.getMemoryProbeToken(memory),
           // getContext() here returns the ambient context on the normal debounced
           // path, and the re-established context when retried from the shutdown
           // flush (flushOne runs saveMemoryTracked inside runInSaveContext).

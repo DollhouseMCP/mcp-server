@@ -11,6 +11,7 @@ import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { ElementStatus } from '../../../../src/types/elements/index.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../../src/services/MetadataService.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/securityMonitor.js');
@@ -79,6 +80,19 @@ describe('Ensemble Element', () => {
       }, [], metadataService);
       expect(unicodeEnsemble.metadata.name).toBeDefined();
       expect(unicodeEnsemble.metadata.description).toBeDefined();
+    });
+
+    it('should preserve substantive descriptions up to the 2.1 YAML/frontmatter limit', () => {
+      const longDescription = 'Detailed ensemble coordination guidance '.repeat(25).trim();
+
+      const longEnsemble = new Ensemble({
+        name: 'Long Description Ensemble',
+        description: longDescription
+      }, [], metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeLessThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(longEnsemble.metadata.description).toBe(longDescription);
     });
 
     it('should load elements from constructor', () => {

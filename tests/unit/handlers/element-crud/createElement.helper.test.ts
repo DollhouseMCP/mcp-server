@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 const { createElement } = await import('../../../../src/handlers/element-crud/createElement.js');
 const { ElementType } = await import('../../../../src/portfolio/PortfolioManager.js');
 import type { ElementCrudContext } from '../../../../src/handlers/element-crud/types.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 describe('createElement helper', () => {
   let mockContext: ElementCrudContext;
@@ -149,8 +150,36 @@ describe('createElement helper', () => {
       expect(call.description).not.toContain('<script>');
     });
 
-    it('should reject persona descriptions above the description length limit', async () => {
-      const oversizedDescription = 'a'.repeat(501);
+    it('should allow persona descriptions beyond the generic metadata field limit', async () => {
+      const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1);
+
+      await createElement(mockContext, {
+        name: 'test-persona',
+        type: ElementType.PERSONA,
+        description: substantiveDescription,
+      });
+
+      expect(mockContext.personaManager.create).toHaveBeenCalledWith(
+        expect.objectContaining({ description: substantiveDescription })
+      );
+    });
+
+    it('should accept persona descriptions at the frontmatter-aware description limit', async () => {
+      const maximumDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+
+      await createElement(mockContext, {
+        name: 'test-persona',
+        type: ElementType.PERSONA,
+        description: maximumDescription,
+      });
+
+      expect(mockContext.personaManager.create).toHaveBeenCalledWith(
+        expect.objectContaining({ description: maximumDescription })
+      );
+    });
+
+    it('should reject persona descriptions that consume reserved frontmatter overhead', async () => {
+      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
 
       const result = await createElement(mockContext, {
         name: 'test-persona',
@@ -159,7 +188,26 @@ describe('createElement helper', () => {
       });
 
       expect(result.content[0].text).toContain('❌ Description too large');
+      expect(result.content[0].text).toContain('input.description');
+      expect(result.content[0].text).toContain('frontmatter overhead reserved');
       expect(mockContext.personaManager.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject nested descriptions that collectively exceed the frontmatter budget', async () => {
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+
+      const result = await createElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        description: descriptionPart,
+        metadata: {
+          variables: [{ name: 'topic', description: descriptionPart }],
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌ Description too large');
+      expect(result.content[0].text).toContain('aggregate frontmatter description budget');
+      expect(mockContext.templateManager.create).not.toHaveBeenCalled();
     });
 
     it('should sanitize metadata to remove dangerous properties', async () => {

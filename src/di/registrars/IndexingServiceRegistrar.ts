@@ -121,7 +121,9 @@ export class IndexingServiceRegistrar {
     // isn't registered (e.g. unit-test containers that skip the full bootstrap).
     container.register('CollectionIndexCache', () => new CollectionIndexCache({
       githubClient: container.resolve('GitHubClient'),
-      baseDir: process.cwd(),
+      cacheDir: container.hasRegistration('PathService')
+        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('cache')
+        : undefined,
       performanceMonitor: container.resolve('PerformanceMonitor'),
       fileOperations: container.resolve('FileOperationsService'),
       cache: container.hasRegistration('SharedCacheStore')

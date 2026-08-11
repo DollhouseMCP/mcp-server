@@ -102,6 +102,9 @@ export class DatabaseServiceRegistrar {
     const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
     const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
     const { DatabaseAgentStateStore } = await import('../../storage/DatabaseAgentStateStore.js');
+    const { findRecordedRuntimePresenceWithTx } = await import(
+      '../../web-console/services/runtime/PostgresRuntimeSessionControlStore.js'
+    );
 
     container.register('DatabaseActivationStateStoreClass', () => DatabaseActivationStateStore);
     container.register('DatabaseConfirmationStoreClass', () => DatabaseConfirmationStore);
@@ -141,7 +144,24 @@ export class DatabaseServiceRegistrar {
       new DatabaseStorageLayerFactory(result.db, userIdResolver)
     );
     container.register('AgentStateStore', () =>
-      new DatabaseAgentStateStore(result.db, userIdResolver, sessionIdResolver)
+      new DatabaseAgentStateStore(
+        result.db,
+        userIdResolver,
+        sessionIdResolver,
+        async (sessionId, userId, tx) => {
+          if (!env.DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED) {
+            return 'unknown';
+          }
+          const presence = await findRecordedRuntimePresenceWithTx(tx, sessionId);
+          if (presence?.userId !== userId) {
+            return 'unknown';
+          }
+          return presence.status === 'active' && presence.leaseUntil > new Date()
+            ? 'active'
+            : 'inactive';
+        },
+        systemConnection.db,
+      )
     );
 
     // UserIdentityService — resolves usernames to DB UUIDs on demand.

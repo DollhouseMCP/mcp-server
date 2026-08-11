@@ -46,6 +46,8 @@ export interface ContentValidatorOptions {
   contentContext?: 'persona' | 'skill' | 'template' | 'agent' | 'memory';
 }
 
+export const MALICIOUS_YAML_CONTENT_PATTERN = 'Malicious YAML content pattern';
+
 export class ContentValidator {
   /**
    * SHA-256 hashes of bundled data/ elements verified against HASHES.json at seed time.
@@ -555,6 +557,30 @@ export class ContentValidator {
       sanitizedContent: injectionCheck.sanitized,
       detectedPatterns,
       severity: finalSeverity
+    };
+  }
+
+  /**
+   * Apply the prompt-injection scanner and the complete YAML content-pattern
+   * scanner to prose that may later cross a trusted output boundary.
+   */
+  static validateAndSanitizeYamlAware(
+    content: string,
+    options: ContentValidatorOptions = {},
+  ): ContentValidationResult {
+    const validation = this.validateAndSanitize(content, options);
+    const maxLength = options.maxLength ?? SECURITY_LIMITS.MAX_CONTENT_LENGTH;
+    if (this.validateYamlContent(content, maxLength)) {
+      return validation;
+    }
+
+    return {
+      isValid: false,
+      sanitizedContent: '[CONTENT_BLOCKED]',
+      detectedPatterns: [
+        ...new Set([...(validation.detectedPatterns ?? []), MALICIOUS_YAML_CONTENT_PATTERN]),
+      ],
+      severity: 'critical',
     };
   }
 

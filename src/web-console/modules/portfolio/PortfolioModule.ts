@@ -73,6 +73,7 @@ export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleM
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
       privacyProjector: projectPortfolioElementList,
+      queryParamValueNormalization: { tag: 'nfc' },
       handler: req => service.listElements(req),
     },
     {
@@ -85,6 +86,7 @@ export function createPortfolioModule(options: PortfolioModuleOptions): ConsoleM
       privacyClass: 'self_private',
       idempotency: 'not_applicable',
       privacyProjector: projectPortfolioElementDetail,
+      pathParamValueNormalization: { name: 'nfc' },
       handler: req => withElementParams(req, (type, name) => service.getElement(req, type, name)),
     },
   ];
@@ -133,6 +135,7 @@ function writeRoutes(service: PortfolioService): ConsoleModuleDescriptor['routes
       privacyClass: 'self_private',
       idempotency: 'required',
       privacyProjector: projectPortfolioElementDetail,
+      pathParamValueNormalization: { name: 'nfc' },
       handler: req => withElementParams(req, (type, name) => service.updateElement(req, type, name)),
     },
     {
@@ -145,6 +148,7 @@ function writeRoutes(service: PortfolioService): ConsoleModuleDescriptor['routes
       privacyClass: 'self_private',
       idempotency: 'required',
       privacyProjector: projectPortfolioElementDelete,
+      pathParamValueNormalization: { name: 'nfc' },
       handler: req => withElementParams(req, (type, name) => service.deleteElement(req, type, name)),
     },
     {
@@ -158,6 +162,7 @@ function writeRoutes(service: PortfolioService): ConsoleModuleDescriptor['routes
       // The v1 checklist requires Idempotency-Key coverage for these side-effect-free POSTs.
       idempotency: 'required',
       privacyProjector: projectPortfolioElementValidation,
+      pathParamValueNormalization: { name: 'nfc' },
       handler: req => withElementParams(req, (type, name) => service.validateElement(req, type, name)),
     },
     {
@@ -171,6 +176,7 @@ function writeRoutes(service: PortfolioService): ConsoleModuleDescriptor['routes
       // The v1 checklist requires Idempotency-Key coverage for these side-effect-free POSTs.
       idempotency: 'required',
       privacyProjector: projectPortfolioElementRender,
+      pathParamValueNormalization: { name: 'nfc' },
       handler: req => withElementParams(req, (type, name) => service.renderElement(req, type, name)),
     },
   ];

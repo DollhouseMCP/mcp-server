@@ -109,6 +109,391 @@
       "rule": "DMCP-SEC-004",
       "file": "**/src/auto-dollhouse/index.ts",
       "reason": "Registration entry point only — resolves DI container references and wires deferred startup. No user input processing. All user input flows through MCPAQLHandler which normalizes at its boundary."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/WebConsoleRegistrar.ts",
+      "reason": "WEB-CONSOLE COMPOSITION: Registrar wires stores, modules, and the secured router. Runtime request input is normalized by ConsoleUnicodeNormalization before route handlers; deployment/configuration secrets and OAuth identifiers remain exact-match opaque values."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/auth/ConsoleBffAuthModule.ts",
+      "reason": "OPAQUE OAUTH FLOW VALUES: Login state, PKCE verifier, authorization code, session cookies, and JWT values are credentials/protocol values that must be exact-match validated. Return paths are normalized through ConsoleReturnPaths and route payloads pass through ConsoleUnicodeNormalization."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/auth/EmbeddedAsConsoleOAuthClient.ts",
+      "reason": "OPAQUE OAUTH CLIENT VALUES: Authorization codes, code verifiers, redirect URIs, and JWTs are protocol credentials and must not be Unicode-folded. JWT claims are validated after jose verification and are not free-form request payloads."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/identity/provisionConsoleAdmin.ts",
+      "reason": "OPERATOR BOOTSTRAP IDENTITY: Admin provisioning keys users by exact OAuth subject identifiers. Normalizing subject strings would break identity binding; display names are free-form and not used for authorization decisions."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleAdminAudit.ts",
+      "reason": "AUDIT CONTEXT ONLY: Admin audit events record authenticated session context, route metadata, normalized path/query/body-derived handler summaries, and opaque request headers for traceability. It does not authorize from raw user text."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleAuthentication.ts",
+      "reason": "OPAQUE SESSION VALUES: Session cookies and stored hashes are exact-match credentials and must not be Unicode-normalized. Request path/query/body values are normalized after authentication by the secured router."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleCsrfProtection.ts",
+      "reason": "OPAQUE CSRF VALUES: CSRF cookie/header values, Origin, Sec-Fetch-Site, and X-Console-Request are browser protocol values checked by exact comparison. They are not free-form user payloads."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleOwnership.ts",
+      "reason": "NORMALIZED ROUTE PARAM CONSUMER: Ownership checks run after ConsoleUnicodeNormalization and authentication. Runtime session ids are read from normalized route params and compared as exact stored identifiers."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/middleware/ConsoleRateLimit.ts",
+      "reason": "NORMALIZED ROUTE PARAM CONSUMER: Protected-correlation rate limits run after ConsoleUnicodeNormalization and authentication. Account correlation ids are normalized route params before limiter consumption."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminBootstrapService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminCredentialRevocationService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminDeletionService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminIdentityService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminInviteService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminLifecycleMutationService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminReadService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminRoleMutationService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/activations/ActivationModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/activations/ActivationService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/approvals/ApprovalModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/approvals/ApprovalService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/audit/AuditModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/audit/AuditQueries.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/audit/PostgresAdminAuditQuery.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/audit/PostgresProductionAuditQueries.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/executions/ExecutionModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/executions/ExecutionService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/health/HealthService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/integrations/GitHubAppIntegrationProvider.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/integrations/GitHubIntegrationProvider.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/integrations/IntegrationDtos.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/integrations/IntegrationPrivacyProjectors.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/integrations/IntegrationService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/me-logs/MeLogsModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/me-logs/MemoryConsoleLogSource.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/operations/OperationsConfig.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/operations/OperationsModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/operations/OperationsService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/operations/OperationsTelemetry.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/operations/SystemMetricsSource.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/portfolio/PortfolioDtos.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/portfolio/PortfolioModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/portfolio/PortfolioPrivacyProjectors.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/portfolio/PortfolioService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/runtime-sessions/RuntimeSessionModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/security-admin/SecurityAdminModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/security-admin/SecurityAdminService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/self-security/SelfSecurityModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/self-security/SelfSecurityService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/self-service/SelfServiceModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/self-service/SelfServiceProfileService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/self-service/SelfServiceSettingsService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/session-telemetry/OwnedActivityQuery.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/session-telemetry/OwnedMetricQuery.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/session-telemetry/SessionTelemetryModule.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/session-telemetry/SessionTelemetryService.ts",
+      "reason": "WEB-CONSOLE ROUTE MODULE: This existing route-served module is reached through ConsoleSecuredRouterAssembler, which normalizes route params, query values, and JSON body keys before handlers run. Security-sensitive body values must be normalized or strictly validated at their parser boundary; future module files are intentionally not covered by this exact-file suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/platform/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Platform routing owns ConsoleUnicodeNormalization and request canonicalization. New non-route middleware must be reviewed before relying on this suppression."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/services/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Web-console services are invoked from normalized console routes or trusted lifecycle jobs. New externally reachable service entry points require manual DMCP-SEC-004 review."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/stores/**/*.ts",
+      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Web-console stores are reached from normalized console route handlers or trusted server composition. New direct external-input store entry points require manual DMCP-SEC-004 review."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/ui/*.js",
+      "reason": "Browser console modules send requests through ui/api.js, which applies native NFC normalization to API paths and JSON payload keys before fetch. Server-side ConsoleUnicodeNormalization remains the authoritative boundary for all console route params, query values, and bodies."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/authMiddleware.ts",
+      "reason": "Bearer Authorization values are opaque credentials and must be exact-match validated, not Unicode-folded. MCP request payloads are normalized after authentication by StreamableHttpServer/ServerSetup before tool handlers see user content."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/IAuthProvider.ts",
+      "reason": "Interface contract only for auth providers. Concrete providers validate opaque token strings exactly; payload/user content normalization happens at HTTP/MCP request boundaries after authentication."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/instrumentAuthProvider.ts",
+      "reason": "Instrumentation decorator for IAuthProvider.validate(). It times provider validation outcomes but does not interpret user content; bearer tokens remain opaque exact-match credentials by design."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/auth/instrumentAuthProvider.ts",
+      "reason": "Performance-only instrumentation wrapper. Concrete auth providers own TOKEN_VALIDATION_FAILURE audit logging with issuer/key/provider context, and this wrapper intentionally avoids duplicate security events."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/**/*.ts",
+      "reason": "Embedded OAuth/OIDC authorization-server layer handles exact protocol artifacts (code, state, verifier, token, cookie bindings) where Unicode normalization would weaken comparisons. Human-visible fields are validated by method-specific policies; MCP/console payload content is normalized at its own ingress boundary."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/context/**/*.ts",
+      "reason": "Context policy/session context helpers receive normalized/validated identities from the auth and MCP ingress layers. They do not parse raw request bodies or free-form user text."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/database/**/*.ts",
+      "reason": "Database schema/RLS/user-context layer consumes typed IDs and records after validation at auth, console, or MCP boundaries. It does not accept raw request payloads directly."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/di/registrars/*.ts",
+      "reason": "DI registrar wiring only. Any strings here are service IDs/config keys; raw user input is normalized by the services/routes registered through the container."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/paths/**/*.ts",
+      "reason": "Path helpers validate strict ASCII identifier/path segments and reject unsafe Unicode rather than normalizing it into acceptable filesystem names. Upstream identity and request payload normalization happens before path resolution."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/server/sseTickets.ts",
+      "reason": "SSE tickets are random base64url opaque credentials bound to a stream name and must be exact-match redeemed once. Normalizing ticket values would weaken token comparison semantics."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/state/**/*.ts",
+      "reason": "State stores persist typed challenge/confirmation records after upstream validation. They do not parse raw request payload text; MCP/console ingress normalization happens before records reach this layer."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/storage/**/*.ts",
+      "reason": "Storage layers persist typed element/config/state records after MCP, web-console, or element-manager validation. They are not raw ingress points; Unicode normalization is enforced before persistence."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "eslint.config.js",
+      "reason": "Build-time ESLint configuration only. Contains rule metadata and file patterns, not production request handling or user-input processing."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/auth/embedded-as/EmbeddedAuthorizationServer.ts",
+      "reason": "validate() delegates token verification to EmbeddedASTokens, which now emits TOKEN_VALIDATION_FAILURE events via SecurityMonitor. This wrapper only composes the authorization-server routes and provider facade."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/elements/base/BaseElementManager.ts",
+      "reason": "BaseElementManager.validate() delegates to element-specific validators; load/save/delete audit events are emitted by composed element services and subtype hooks. This method is a pure validation facade, not an authorization decision point."
+    },
+    {
+      "rule": "DMCP-SEC-006",
+      "file": "src/web-console/stores/ManagerBackedPortfolioElementStore.ts",
+      "reason": "Read-side portfolio projection calls manager.validate() to compute validationStatus only. Console administrative mutations are audit-written by ConsoleSecuredRouterAssembler; element persistence operations retain their own element audit events."
     }
   ],
   "_comment": "Paths use glob patterns to match in both local and CI environments"

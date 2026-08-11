@@ -276,6 +276,39 @@ describe('editElement helper', () => {
       expect(saved.metadata.settings.verbose).toBe(false);  // Preserved
     });
 
+    it('should preserve nested metadata sibling objects during partial updates', async () => {
+      const element = createMockElement('test-skill', {
+        settings: {
+          display: { theme: 'light', density: 'comfortable' },
+          rules: { enabled: true, mode: 'strict' },
+        },
+      });
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            settings: {
+              display: { theme: 'dark' },
+            },
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
+      expect(saved.metadata.settings.display).toEqual({
+        theme: 'dark',
+        density: 'comfortable',
+      });
+      expect(saved.metadata.settings.rules).toEqual({
+        enabled: true,
+        mode: 'strict',
+      });
+    });
+
     it('should allow direct editing of ensemble.elements field (Issue #14)', async () => {
       const mockEnsemble = {
         metadata: {
@@ -1174,7 +1207,27 @@ describe('editElement helper', () => {
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
 
-    it('should reject oversized top-level metadata descriptions before merging', async () => {
+    it('should allow top-level metadata descriptions beyond the generic metadata field limit', async () => {
+      const element = createMockElement('test-skill');
+      mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
+
+      const substantiveDescription = 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1);
+      const result = await editElement(mockContext, {
+        name: 'test-skill',
+        type: ElementType.SKILL,
+        input: {
+          metadata: {
+            description: substantiveDescription,
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('✅');
+      const saved = (mockContext.skillManager.save as jest.Mock).mock.calls[0][0];
+      expect(saved.metadata.description).toBe(substantiveDescription);
+    });
+
+    it('should reject top-level metadata descriptions that consume reserved frontmatter overhead', async () => {
       const element = createMockElement('test-skill');
       mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
 
@@ -1193,6 +1246,47 @@ describe('editElement helper', () => {
       expect(result.content[0].text).toContain('Description length validation failed');
       expect(result.content[0].text).toContain('input.metadata.description');
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should reject nested descriptions that collectively exceed the frontmatter budget', async () => {
+      const element = createMockElement('test-template');
+      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+
+      const result = await editElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        input: {
+          description: descriptionPart,
+          metadata: {
+            variables: [{ name: 'topic', description: descriptionPart }],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('aggregate frontmatter description budget');
+      expect(mockContext.templateManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should include existing descriptions in the aggregate frontmatter budget', async () => {
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+      const element = createMockElement('test-template', { description: descriptionPart });
+      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        input: {
+          metadata: {
+            variables: [{ name: 'topic', description: descriptionPart }],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('element.metadata description fields total');
+      expect(mockContext.templateManager.save).not.toHaveBeenCalled();
     });
 
     it('should format empty metadata keys without doubled path separators', async () => {
@@ -1218,7 +1312,7 @@ describe('editElement helper', () => {
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
 
-    it('should allow nested documentation descriptions longer than 500 characters during edit', async () => {
+    it('should allow nested documentation descriptions beyond the generic metadata field limit during edit', async () => {
       const element = createMockElement('test-template', {
         variables: [
           {
@@ -1229,7 +1323,7 @@ describe('editElement helper', () => {
         ],
       });
       mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
-      const longDescription = 'Detailed variable documentation '.repeat(25).trim();
+      const longDescription = 'Detailed variable documentation '.repeat(40).trim();
 
       const result = await editElement(mockContext, {
         name: 'test-template',
@@ -1247,7 +1341,7 @@ describe('editElement helper', () => {
         },
       });
 
-      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(longDescription.length).toBeGreaterThan(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH);
       expect(result.content[0].text).toContain('✅');
       const saved = (mockContext.templateManager.save as jest.Mock).mock.calls[0][0];
       expect(saved.metadata.variables[0].description).toBe(longDescription);

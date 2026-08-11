@@ -9,6 +9,7 @@ import { slugify } from '../../utils/filesystem.js';
 import { ElementType } from '../../portfolio/PortfolioManager.js';
 import { logger } from '../../utils/logger.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import {
   ELEMENT_TYPE_MAP,
   ALL_ELEMENT_TYPES,
@@ -58,31 +59,99 @@ export function sanitizeMetadata(metadata: Record<string, any> | undefined): Rec
     return {};
   }
 
-  // FIX: DMCP-SEC-006 - Add security audit logging for sanitization
-  SecurityMonitor.logSecurityEvent({
-    type: 'ELEMENT_VALIDATED',
-    severity: 'LOW',
-    source: 'helpers.sanitizeMetadata',
-    details: 'Metadata sanitized for element creation/update',
-    additionalData: { fieldCount: Object.keys(metadata).length }
-  });
+  const removedKeys: string[] = [];
+  const sanitized = sanitizeMetadataObject(metadata, removedKeys);
 
+  if (removedKeys.length > 0) {
+    SecurityMonitor.logSecurityEvent({
+      type: 'ELEMENT_VALIDATED',
+      severity: 'LOW',
+      source: 'helpers.sanitizeMetadata',
+      details: 'Dangerous metadata properties removed during sanitization',
+      additionalData: { removedKeys: [...new Set(removedKeys)] }
+    });
+  }
+
+  return sanitized;
+}
+
+function sanitizeMetadataObject(metadata: Record<string, any>, removedKeys: string[]): Record<string, any> {
   const dangerousProperties = ['__proto__', 'constructor', 'prototype'];
   const sanitized: Record<string, any> = {};
 
   for (const [key, value] of Object.entries(metadata)) {
     if (dangerousProperties.includes(key)) {
+      removedKeys.push(key);
       continue;
     }
 
     if (value && typeof value === 'object' && !Array.isArray(value)) {
-      sanitized[key] = sanitizeMetadata(value as Record<string, any>);
+      sanitized[key] = sanitizeMetadataObject(value as Record<string, any>, removedKeys);
     } else {
       sanitized[key] = value;
     }
   }
 
   return sanitized;
+}
+
+/**
+ * Find description fields that would leave insufficient YAML/frontmatter space.
+ *
+ * Element descriptions are metadata and are serialized into YAML frontmatter, so
+ * the field limit deliberately reserves space for required structural metadata.
+ * The same budget applies across all nested description fields, preventing several
+ * individually valid fields from collectively exceeding the frontmatter limit.
+ */
+export function findOversizedDescriptionFields(
+  value: unknown,
+  path = 'input',
+  maxLength = SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
+): string[] {
+  const descriptions: Array<{ readonly path: string; readonly length: number }> = [];
+  const seen = new WeakSet<object>();
+
+  const collect = (candidate: unknown, candidatePath: string): void => {
+    if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) return;
+    seen.add(candidate);
+
+    const entries = Array.isArray(candidate)
+      ? candidate.map((item, index) => [String(index), item] as const)
+      : Object.entries(candidate);
+
+    for (const [key, child] of entries) {
+      let childPath: string;
+      if (Array.isArray(candidate)) {
+        childPath = `${candidatePath}[${key}]`;
+      } else if (key.length > 0) {
+        childPath = `${candidatePath}.${key}`;
+      } else {
+        childPath = `${candidatePath}[""]`;
+      }
+
+      if (key === 'description' && typeof child === 'string') {
+        descriptions.push({ path: childPath, length: child.length });
+      }
+      collect(child, childPath);
+    }
+  };
+
+  collect(value, path);
+
+  const errors = descriptions
+    .filter(description => description.length > maxLength)
+    .map(description =>
+      `${description.path} exceeds maximum description length of ${maxLength} characters (frontmatter overhead reserved)`
+    );
+  const aggregateLength = descriptions.reduce((total, description) => total + description.length, 0);
+  if (descriptions.length > 1 && aggregateLength > maxLength) {
+    errors.push(
+      `${path} description fields total ${aggregateLength} characters, exceeding the aggregate ` +
+      `frontmatter description budget of ${maxLength} characters`
+    );
+  }
+
+  return errors;
 }
 
 function asMetadataRecord(value: unknown): Record<string, unknown> | undefined {
@@ -166,6 +235,8 @@ export interface ElementManagerOperations<T> {
   find?: (predicate: (candidate: T) => boolean) => Promise<T | undefined>;
   load?: (filePath: string) => Promise<T>;
 }
+
+type ElementWithOptionalName = { metadata?: { name?: string } };
 
 /**
  * Known metadata properties for each element type.
@@ -508,7 +579,68 @@ export function formatElementResolutionWarnings(result: { ambiguous: Array<{ ele
   return lines.join('\n');
 }
 
-export async function resolveElementByName<T>(
+async function findElementFromList<T extends ElementWithOptionalName>(
+  manager: ElementManagerOperations<T>,
+  name: string
+): Promise<T | undefined> {
+  if (typeof manager.list !== 'function') {
+    return undefined;
+  }
+
+  const elements = await manager.list();
+  return Array.isArray(elements) && elements.length > 0
+    ? findElementFlexibly(name, elements)
+    : undefined;
+}
+
+function elementMatchesName<T extends ElementWithOptionalName>(
+  candidate: T,
+  loweredName: string,
+  nameSlug: string
+): boolean {
+  const candidateName = candidate?.metadata?.name;
+  if (typeof candidateName !== 'string') {
+    return false;
+  }
+
+  const candidateSlug = slugify(candidateName);
+  return candidateName.toLowerCase() === loweredName || candidateSlug === nameSlug;
+}
+
+async function findElementWithPredicate<T extends ElementWithOptionalName>(
+  manager: ElementManagerOperations<T>,
+  name: string
+): Promise<T | undefined> {
+  if (typeof manager.find !== 'function') {
+    return undefined;
+  }
+
+  const loweredName = name.toLowerCase();
+  const nameSlug = slugify(name);
+  return manager.find(candidate => elementMatchesName(candidate, loweredName, nameSlug));
+}
+
+async function loadElementByFilename<T extends ElementWithOptionalName>(
+  manager: ElementManagerOperations<T>,
+  type: ElementType,
+  name: string
+): Promise<T | undefined> {
+  if (typeof manager.load !== 'function') {
+    return undefined;
+  }
+
+  const candidateFilename = getElementFilename(type, name);
+  try {
+    return await manager.load(candidateFilename);
+  } catch (error) {
+    logger.debug(`[ElementCRUD] Direct load failed for ${type}:${name}`, {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return undefined;
+  }
+}
+
+export async function resolveElementByName<T extends ElementWithOptionalName>(
   manager: ElementManagerOperations<T> | null | undefined,
   type: ElementType,
   name: string
@@ -517,41 +649,19 @@ export async function resolveElementByName<T>(
     return undefined;
   }
 
-  if (typeof manager.list === 'function') {
-    const elements = await manager.list();
-    if (Array.isArray(elements) && elements.length > 0) {
-      const found = findElementFlexibly(name, elements as any[]);
-      if (found) {
-        return found as T;
-      }
-    }
+  const listedElement = await findElementFromList(manager, name);
+  if (listedElement) {
+    return listedElement;
   }
 
-  if (typeof manager.find === 'function') {
-    const lowered = name.toLowerCase();
-    const slug = slugify(name);
-    const found = await manager.find((candidate: any) => {
-      const candidateName = candidate?.metadata?.name;
-      if (typeof candidateName !== 'string') {
-        return false;
-      }
-      const candidateSlug = slugify(candidateName);
-      return candidateName.toLowerCase() === lowered || candidateSlug === slug;
-    });
-    if (found) {
-      return found;
-    }
+  const foundElement = await findElementWithPredicate(manager, name);
+  if (foundElement) {
+    return foundElement;
   }
 
-  if (typeof manager.load === 'function') {
-    const candidateFilename = getElementFilename(type, name);
-    try {
-      return await manager.load(candidateFilename);
-    } catch (error) {
-      logger.debug(`[ElementCRUD] Direct load failed for ${type}:${name}`, {
-        error: error instanceof Error ? error.message : String(error)
-      });
-    }
+  const loadedElement = await loadElementByFilename(manager, type, name);
+  if (loadedElement) {
+    return loadedElement;
   }
 
   logger.debug(`[ElementCRUD] Unable to locate ${type}:${name} via available manager operations.`);

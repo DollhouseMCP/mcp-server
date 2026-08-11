@@ -14,7 +14,7 @@
  * Bearer-protected route.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from '@jest/globals';
+import { describe, it, expect, beforeAll, afterAll, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
@@ -23,6 +23,7 @@ import { EmbeddedAuthorizationServer } from '../../../../src/auth/embedded-as/Em
 import { loadPublicSigningJwksFromStore } from '../../../../src/auth/embedded-as/EmbeddedASTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { TrivialConsentMethod } from '../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import {
   loadOrGenerateSigningJwks,
   rotateSigningKeyViaStore,
@@ -478,10 +479,33 @@ describe('EmbeddedAuthorizationServer store-backed live signing keys', () => {
     }
 
     await signingKeyStore.retire(firstKid);
-    await expect(server.validate(firstToken)).resolves.toEqual({
-      ok: false,
-      reason: UNKNOWN_KEY_ID_REASON,
-    });
+    const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    try {
+      await expect(server.validate(firstToken)).resolves.toEqual({
+        ok: false,
+        reason: UNKNOWN_KEY_ID_REASON,
+      });
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'TOKEN_VALIDATION_FAILURE',
+        severity: 'MEDIUM',
+        source: 'EmbeddedASTokens.validateWithStore',
+        additionalData: { reason: UNKNOWN_KEY_ID_REASON },
+      }));
+
+      const tokenWithoutKid = removeTokenKid(secondToken);
+      await expect(server.validate(tokenWithoutKid)).resolves.toEqual({
+        ok: false,
+        reason: 'token missing kid header',
+      });
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'TOKEN_VALIDATION_FAILURE',
+        severity: 'MEDIUM',
+        source: 'EmbeddedASTokens.validateWithStore',
+        additionalData: { reason: 'token missing kid header' },
+      }));
+    } finally {
+      logSpy.mockRestore();
+    }
     await expect(server.validate(secondToken)).resolves.toMatchObject({ ok: true });
     await expect(loadPublicSigningJwksFromStore(signingKeyStore)).resolves.toEqual({
       keys: [expect.objectContaining({ kid: secondKid })],
@@ -508,4 +532,12 @@ function tokenKid(token: string): string {
   const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8')) as { kid?: string };
   expect(header.kid).toEqual(expect.any(String));
   return header.kid ?? '';
+}
+
+function removeTokenKid(token: string): string {
+  const [headerB64, payloadB64, signatureB64] = token.split('.');
+  const header = JSON.parse(Buffer.from(headerB64, 'base64url').toString('utf8')) as Record<string, unknown>;
+  delete header.kid;
+  const rewrittenHeader = Buffer.from(JSON.stringify(header), 'utf8').toString('base64url');
+  return [rewrittenHeader, payloadB64, signatureB64].join('.');
 }

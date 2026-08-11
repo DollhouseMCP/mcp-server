@@ -8,7 +8,8 @@
  * Tests cover the three branches:
  *   - filesystem backend → no DB pool opened (close() is a no-op)
  *   - memory backend → no DB pool opened
- *   - postgres backend without DOLLHOUSE_DATABASE_URL → clear error
+ *   - postgres URL resolution prefers DOLLHOUSE_DATABASE_ADMIN_URL
+ *   - postgres backend without a database URL → clear error
  *
  * The postgres-with-valid-DB-URL happy path is intentionally NOT unit
  * tested here. Mocking the postgres.js + Drizzle stack at unit level
@@ -22,7 +23,7 @@
  *   1. Integration coverage via storage-parity (gated, runs in CI).
  *   2. Manual smoke verification at deploy time:
  *      `DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres
- *       DOLLHOUSE_DATABASE_URL=<...>
+ *       DOLLHOUSE_DATABASE_ADMIN_URL=<...>
  *       node dist/cli/admin-bootstrap.js --method github --github-id 1`
  *      which was confirmed end-to-end in cycle 5 review.
  */
@@ -31,18 +32,24 @@ import { describe, it, expect, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
-import { openCliAuthStorage } from '../../../src/cli/cliAuthStorage.js';
+import {
+  openCliAuthStorage,
+  resolveCliAuthStoragePostgresUrl,
+} from '../../../src/cli/cliAuthStorage.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storage/FilesystemAuthStorageLayer.js';
 
 describe('openCliAuthStorage', () => {
   const savedBackend = process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
+  const savedAdminDbUrl = process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
   const savedDbUrl = process.env.DOLLHOUSE_DATABASE_URL;
   const tmpDirs: string[] = [];
 
   afterEach(async () => {
     if (savedBackend === undefined) delete process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND;
     else process.env.DOLLHOUSE_AUTH_STORAGE_BACKEND = savedBackend;
+    if (savedAdminDbUrl === undefined) delete process.env.DOLLHOUSE_DATABASE_ADMIN_URL;
+    else process.env.DOLLHOUSE_DATABASE_ADMIN_URL = savedAdminDbUrl;
     if (savedDbUrl === undefined) delete process.env.DOLLHOUSE_DATABASE_URL;
     else process.env.DOLLHOUSE_DATABASE_URL = savedDbUrl;
     for (const dir of tmpDirs) {
@@ -78,13 +85,39 @@ describe('openCliAuthStorage', () => {
     await expect(handle.close()).resolves.toBeUndefined();
   });
 
-  it('postgres backend: throws a clear error when DOLLHOUSE_DATABASE_URL is unset', async () => {
+  it('postgres URL resolution: prefers admin URL over app URL', () => {
+    expect(resolveCliAuthStoragePostgresUrl({
+      DOLLHOUSE_DATABASE_ADMIN_URL: 'postgres://admin@example/db',
+      DOLLHOUSE_DATABASE_URL: 'postgres://app@example/db',
+    })).toBe('postgres://admin@example/db');
+  });
+
+  it('postgres URL resolution: falls back to app URL for simple installs', () => {
+    expect(resolveCliAuthStoragePostgresUrl({
+      DOLLHOUSE_DATABASE_URL: 'postgres://app@example/db',
+    })).toBe('postgres://app@example/db');
+  });
+
+  it('postgres URL resolution: treats a blank admin URL as unavailable', () => {
+    expect(resolveCliAuthStoragePostgresUrl({
+      DOLLHOUSE_DATABASE_ADMIN_URL: '   ',
+      DOLLHOUSE_DATABASE_URL: 'postgres://app@example/db',
+    })).toBe('postgres://app@example/db');
+  });
+
+  it('postgres URL resolution: throws a clear error when no database URL is set', () => {
+    expect(() => resolveCliAuthStoragePostgresUrl({})).toThrow(
+      /DOLLHOUSE_DATABASE_ADMIN_URL.*DOLLHOUSE_DATABASE_URL/u,
+    );
+  });
+
+  it('postgres backend: throws a clear error when no database URL is set', async () => {
     // Cycle 19 / B2: same env-routing pattern. Test the explicit
     // backend selection; the env-driven path is covered by integration
     // tests where the env is set in the test runner.
     delete process.env.DOLLHOUSE_DATABASE_URL;
     await expect(openCliAuthStorage({ backend: 'postgres', methods: ['github'] })).rejects.toThrow(
-      /DOLLHOUSE_DATABASE_URL/,
+      /DOLLHOUSE_DATABASE_ADMIN_URL.*DOLLHOUSE_DATABASE_URL/u,
     );
   });
 

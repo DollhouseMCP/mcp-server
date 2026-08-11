@@ -4,6 +4,7 @@ import { Secret, TOTP } from 'otpauth';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { ISecretEncryptionService } from '../../../web-console/security/SecretEncryption.js';
 import type { IConsoleFactorStore } from '../../../web-console/stores/IConsoleFactorStore.js';
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 
 const ENROLLMENT_MODEL = 'ConsoleTotpEnrollment';
 const ENROLLMENT_TTL_SECONDS = 10 * 60;
@@ -131,6 +132,7 @@ export class AdminTotpService {
     const pending = await this.readPendingEnrollment(userId, pendingId);
     const secretBase32 = this.decryptPendingSecret(pending);
     if (!verifyTotpCode(secretBase32, pending.label, code, this.now())) {
+      logTotpEvent('TOTP_VERIFICATION_FAILED', 'MEDIUM', 'Admin TOTP enrollment confirmation failed', userId);
       throw new AdminTotpError('Invalid TOTP code', 'invalid_totp_code');
     }
 
@@ -153,6 +155,7 @@ export class AdminTotpService {
       lastUsedAt: null,
     }, backupCodeHashes);
     await this.authStorage.genericDestroy(ENROLLMENT_MODEL, pendingId);
+    logTotpEvent('TOTP_ENROLLED', 'LOW', 'Admin TOTP factor enrolled', userId);
 
     return { factorId, enrolledAt, backupCodes };
   }
@@ -179,6 +182,11 @@ export class AdminTotpService {
       hashBackupCode(normalizeBackupCode(code)),
       authTime,
     );
+    if (consumed) {
+      logTotpEvent('TOTP_BACKUP_CODE_CONSUMED', 'LOW', 'Admin TOTP backup code consumed', userId);
+    } else {
+      logTotpEvent('TOTP_VERIFICATION_FAILED', 'MEDIUM', 'Admin TOTP proof failed', userId);
+    }
     return consumed ? { ok: true, method: 'backup', authTime } : { ok: false };
   }
 
@@ -195,18 +203,25 @@ export class AdminTotpService {
       { secretClass: 'console_totp_seed', ownerId: secretOwnerId(userId, factor.factorId) },
     ).toString('utf8');
     if (verifyTotpCode(secretBase32, userId, code, authTime)) {
-      return await this.factorStore.disableActiveTotp(userId, authTime)
-        ? { ok: true, method: 'totp', authTime }
-        : { ok: false };
+      const disabled = await this.factorStore.disableActiveTotp(userId, authTime);
+      if (disabled) {
+        logTotpEvent('TOTP_DISABLED', 'LOW', 'Admin TOTP factor disabled', userId);
+      }
+      return disabled ? { ok: true, method: 'totp', authTime } : { ok: false };
     }
-    return await this.factorStore.disableActiveTotpWithBackupCode(
+    const disabled = await this.factorStore.disableActiveTotpWithBackupCode(
       userId,
       factor.factorId,
       hashBackupCode(normalizeBackupCode(code)),
       authTime,
-    )
-      ? { ok: true, method: 'backup', authTime }
-      : { ok: false };
+    );
+    if (disabled) {
+      logTotpEvent('TOTP_BACKUP_CODE_CONSUMED', 'LOW', 'Admin TOTP backup code consumed for disable', userId);
+      logTotpEvent('TOTP_DISABLED', 'LOW', 'Admin TOTP factor disabled', userId);
+    } else {
+      logTotpEvent('TOTP_VERIFICATION_FAILED', 'MEDIUM', 'Admin TOTP disable proof failed', userId);
+    }
+    return disabled ? { ok: true, method: 'backup', authTime } : { ok: false };
   }
 
   private async readPendingEnrollment(userId: string, pendingId: string): Promise<PendingEnrollment> {
@@ -231,6 +246,25 @@ function validateLabel(label: string): string {
     throw new AdminTotpError('Invalid TOTP label', 'invalid_label');
   }
   return trimmed;
+}
+
+function logTotpEvent(
+  type: 'TOTP_ENROLLED' | 'TOTP_DISABLED' | 'TOTP_BACKUP_CODE_CONSUMED' | 'TOTP_VERIFICATION_FAILED',
+  severity: 'LOW' | 'MEDIUM',
+  details: string,
+  userId: string,
+): void {
+  SecurityMonitor.logSecurityEvent({
+    type,
+    severity,
+    source: 'AdminTotpService',
+    details: `${details} [principal:${auditPrincipalFingerprint(userId)}]`,
+    additionalData: { userId },
+  });
+}
+
+function auditPrincipalFingerprint(userId: string): string {
+  return createHash('sha256').update(userId, 'utf8').digest('hex').slice(0, 16);
 }
 
 function secretOwnerId(userId: string, factorId: string): string {

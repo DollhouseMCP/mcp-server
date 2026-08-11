@@ -86,7 +86,7 @@ jobs:
       - name: Run tests
         shell: bash
         run: |
-          npm ci
+          npm ci --ignore-scripts
           npm test -- --maxWorkers=4
       
       - name: Create Pull Request

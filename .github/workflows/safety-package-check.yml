@@ -3,7 +3,7 @@ name: Safety Package Version Check
 
 on:
   pull_request:
-    branches: [main, develop]
+    branches: [main, develop, beta]
     paths:
       - 'packages/safety/src/**'
       - 'packages/safety/package.json'

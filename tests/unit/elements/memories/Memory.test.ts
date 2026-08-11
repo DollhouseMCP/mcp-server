@@ -5,6 +5,7 @@
 import { Memory, MemoryEntry } from '../../../../src/elements/memories/Memory.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService = createTestMetadataService();
@@ -41,6 +42,19 @@ describe('Memory Element', () => {
       
       expect(memory.metadata.name).not.toContain('<script>');
       expect(memory.metadata.description).not.toContain('<img');
+    });
+
+    it('should preserve substantive descriptions up to the 2.1 YAML/frontmatter limit', () => {
+      const longDescription = 'Detailed memory retention context '.repeat(25).trim();
+
+      const memory = new Memory({
+        name: 'Long Description Memory',
+        description: longDescription
+      }, metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeLessThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(memory.metadata.description).toBe(longDescription);
     });
     
     it('should enforce maxEntries limit', () => {

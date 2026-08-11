@@ -13,4 +13,3 @@ export interface MasterKeyProvider {
   getCurrentKey(): Promise<MasterKey>;
   getKey(version: number): Promise<MasterKey>;
 }
-

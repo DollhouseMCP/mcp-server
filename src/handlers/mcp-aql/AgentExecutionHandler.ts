@@ -1,5 +1,7 @@
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
+import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
 import type { AgentManager } from '../../elements/agents/AgentManager.js';
 import type { AgentMetadataV2, AgentNotification } from '../../elements/agents/types.js';
 import { evaluateResiliencePolicy, type ResilienceContext } from '../../elements/agents/resilienceEvaluator.js';
@@ -15,6 +17,8 @@ type StepOutcome = 'success' | 'failure' | 'partial';
 
 export class AgentExecutionHandler {
   private static readonly MAX_RECENT_BLOCKS = 50;
+  // Keep policy ownership and its durable state mutation in one lifecycle operation.
+  private readonly executionOperationLock = new AsyncKeyedLock();
 
   constructor(
     private readonly handlers: HandlerRegistry,
@@ -27,24 +31,28 @@ export class AgentExecutionHandler {
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
     const manager = this.handlers.agentManager;
     const elementName = validateExecutionElementName(method, params);
-    await this.ensureAgentCanExecute(method, manager, elementName);
+    const executionKey = this.executionKey(manager, elementName);
 
-    const handlers: Record<string, () => Promise<unknown>> = {
-      execute: () => this.executeAgent(manager, elementName, params),
-      getState: () => this.getState(manager, elementName, params),
-      updateState: () => this.updateState(manager, elementName, params),
-      complete: () => this.complete(manager, elementName, params),
-      continue: () => this.continueExecution(manager, elementName, params),
-      abort: () => this.abort(manager, elementName, params),
-      getGatheredData: () => this.getGatheredData(manager, elementName, params),
-      prepareHandoff: () => this.prepareHandoff(manager, elementName, params),
-      resumeFromHandoff: () => this.resumeFromHandoff(manager, elementName, params),
-    };
-    const handler = handlers[method];
-    if (!handler) {
-      throw new Error(`Unknown Execute method: ${method}`);
-    }
-    return handler();
+    return this.executionOperationLock.runExclusive(executionKey, async () => {
+      await this.ensureAgentCanExecute(method, manager, elementName);
+
+      const handlers: Record<string, () => Promise<unknown>> = {
+        execute: () => this.executeAgent(manager, elementName, params),
+        getState: () => this.getState(manager, elementName, params),
+        updateState: () => this.updateState(manager, elementName, params),
+        complete: () => this.complete(manager, elementName, params),
+        continue: () => this.continueExecution(manager, elementName, params),
+        abort: () => this.abort(manager, elementName, params),
+        getGatheredData: () => this.getGatheredData(manager, elementName, params),
+        prepareHandoff: () => this.prepareHandoff(manager, elementName, params),
+        resumeFromHandoff: () => this.resumeFromHandoff(manager, elementName, params),
+      };
+      const handler = handlers[method];
+      if (!handler) {
+        throw new Error(`Unknown Execute method: ${method}`);
+      }
+      return handler();
+    });
   }
 
   recordGatekeeperBlock(
@@ -132,12 +140,18 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
+    const runtimeMaxSteps = this.validateRuntimeMaxSteps(params.maxAutonomousSteps);
     const executeResult = await manager.executeAgent(
       elementName,
       params.parameters as Record<string, unknown>
     );
-    const runtimeMaxSteps = this.validateRuntimeMaxSteps(params.maxAutonomousSteps);
-    await this.trackExecutingAgent(manager, elementName, params, runtimeMaxSteps);
+    await this.trackExecutingAgent(
+      manager,
+      elementName,
+      params,
+      runtimeMaxSteps,
+      executeResult.goalId,
+    );
     return { _type: 'ExecuteAgentResult', ...executeResult };
   }
 
@@ -155,8 +169,41 @@ export class AgentExecutionHandler {
     manager: AgentManager,
     elementName: string,
     params: Record<string, unknown>,
-    runtimeMaxSteps: number | undefined
+    runtimeMaxSteps: number | undefined,
+    goalId: string | undefined,
+    preserveExistingState = false,
   ): Promise<void> {
+    const executionKey = this.executionKey(manager, elementName);
+    const previousEntry = this.executingAgents.get(executionKey);
+    const goalIds = [...(previousEntry?.goalIds ?? [])];
+    if (goalId && !goalIds.includes(goalId)) {
+      goalIds.push(goalId);
+    }
+    if (preserveExistingState && previousEntry) {
+      previousEntry.goalIds = goalIds;
+      return;
+    }
+    const executionEntry: ExecutingAgentEntry = {
+      name: elementName,
+      goalIds,
+      metadata: runtimeMaxSteps === undefined ? {} : { maxAutonomousSteps: runtimeMaxSteps },
+      startedAt: Date.now(),
+      continuationCount: 0,
+      retryCount: 0,
+      originalParameters: params.parameters as Record<string, unknown> | undefined,
+      recentBlocks: [],
+    };
+    this.executingAgents.set(executionKey, executionEntry);
+
+    await this.hydrateExecutionPolicies(manager, elementName, executionEntry);
+  }
+
+  private async hydrateExecutionPolicies(
+    manager: AgentManager,
+    elementName: string,
+    executionEntry: ExecutingAgentEntry,
+  ): Promise<void> {
+
     try {
       const agentElement = await manager.read(elementName);
       const agentMeta = agentElement?.metadata as AgentMetadataV2 | undefined;
@@ -164,24 +211,127 @@ export class AgentExecutionHandler {
         (agentMeta?.tools ? translateToolConfigToPolicy(agentMeta.tools) ?? undefined : undefined);
       const resiliencePolicy = agentMeta?.resilience;
 
-      if (gatekeeperPolicy || runtimeMaxSteps !== undefined || resiliencePolicy) {
-        this.executingAgents.set(this.sessionKey(elementName), {
-          name: elementName,
-          metadata: {
-            ...(gatekeeperPolicy ? { gatekeeper: gatekeeperPolicy } : {}),
-            ...(runtimeMaxSteps === undefined ? {} : { maxAutonomousSteps: runtimeMaxSteps }),
-          },
-          startedAt: Date.now(),
-          continuationCount: 0,
-          retryCount: 0,
-          originalParameters: params.parameters as Record<string, unknown> | undefined,
-          resiliencePolicy,
-          recentBlocks: [],
-        });
+      if (gatekeeperPolicy) {
+        executionEntry.metadata.gatekeeper = gatekeeperPolicy;
       }
+      executionEntry.resiliencePolicy = resiliencePolicy;
     } catch {
-      logger.warn('Failed to track executing agent for Gatekeeper policy', { agentName: elementName });
+      logger.warn('Failed to load optional execution policies while tracking agent', {
+        agentName: elementName,
+      });
     }
+  }
+
+  /**
+   * Reclaim durable goals whose transport session was disposed before the
+   * lifecycle completed. The manager's state lookup is already scoped to the
+   * authenticated user's portfolio; the live-session scan prevents one active
+   * session from taking work that is still owned by another.
+   */
+  private async reclaimOrphanedExecution(
+    manager: AgentManager,
+    elementName: string,
+  ): Promise<ExecutingAgentEntry | undefined> {
+    const executionKey = this.executionKey(manager, elementName);
+    const existingEntry = this.executingAgents.get(executionKey);
+    if (existingEntry) {
+      return existingEntry;
+    }
+
+    const excludedGoalIds = this.getTrackedGoalIds(manager, elementName, executionKey);
+    const reclaimedState = await manager.reclaimOrphanedAgentState({
+      agentName: elementName,
+      excludedGoalIds,
+    });
+    const concurrentEntry = this.executingAgents.get(executionKey);
+    if (concurrentEntry) {
+      return concurrentEntry;
+    }
+    const activeGoalIds = reclaimedState?.goals
+      .filter(goal => goal.status === 'in_progress')
+      .map(goal => goal.id) ?? [];
+    const orphanedGoalIds = activeGoalIds.filter(goalId =>
+      !this.isGoalTrackedByAnotherSession(manager, elementName, executionKey, goalId)
+    );
+    if (orphanedGoalIds.length === 0) {
+      return undefined;
+    }
+
+    const reclaimedEntry: ExecutingAgentEntry = {
+      name: elementName,
+      goalIds: orphanedGoalIds,
+      metadata: {},
+      startedAt: Date.now(),
+      continuationCount: 0,
+      retryCount: 0,
+      recentBlocks: [],
+    };
+    // Claim every orphan synchronously before policy hydration yields. This
+    // prevents two reconnecting sessions from adopting the same durable goal.
+    this.executingAgents.set(executionKey, reclaimedEntry);
+    await this.hydrateExecutionPolicies(manager, elementName, reclaimedEntry);
+    logger.info('Reclaimed orphaned agent execution for replacement session', {
+      agentName: elementName,
+      goalIds: orphanedGoalIds,
+    });
+    return reclaimedEntry;
+  }
+
+  private async reclaimExistingAgentExecution(
+    manager: AgentManager,
+    elementName: string,
+  ): Promise<ExecutingAgentEntry | undefined> {
+    try {
+      return await this.reclaimOrphanedExecution(manager, elementName);
+    } catch (error) {
+      if (error instanceof ElementNotFoundError) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
+  private isGoalTrackedByAnotherSession(
+    manager: AgentManager,
+    elementName: string,
+    currentExecutionKey: string,
+    goalId: string,
+  ): boolean {
+    const canonicalName = manager.canonicalizeExecutionName(elementName);
+    for (const [executionKey, entry] of this.executingAgents) {
+      if (
+        executionKey !== currentExecutionKey &&
+        manager.canonicalizeExecutionName(entry.name) === canonicalName &&
+        entry.goalIds?.includes(goalId)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private getTrackedGoalIds(
+    manager: AgentManager,
+    elementName: string,
+    currentExecutionKey: string,
+  ): string[] {
+    const canonicalName = manager.canonicalizeExecutionName(elementName);
+    const trackedGoalIds = new Set<string>();
+    for (const [executionKey, entry] of this.executingAgents) {
+      if (
+        executionKey !== currentExecutionKey &&
+        manager.canonicalizeExecutionName(entry.name) === canonicalName
+      ) {
+        for (const goalId of entry.goalIds ?? []) {
+          trackedGoalIds.add(goalId);
+        }
+      }
+    }
+    return [...trackedGoalIds];
+  }
+
+  private executionKey(manager: AgentManager, elementName: string): string {
+    return this.sessionKey(manager.canonicalizeExecutionName(elementName));
   }
 
   private async getState(
@@ -204,10 +354,20 @@ export class AgentExecutionHandler {
   ): Promise<unknown> {
     const nextActionHint = this.validateNextActionHint(params.nextActionHint);
     const riskScore = this.validateRiskScore(params.riskScore);
-    const executingAgent = this.executingAgents.get(this.sessionKey(elementName));
+    const executionKey = this.executionKey(manager, elementName);
+    const executingAgent = this.executingAgents.get(executionKey)
+      ?? await this.reclaimOrphanedExecution(manager, elementName);
+    const ownedGoalId = executingAgent?.goalIds?.at(-1);
+    if (!ownedGoalId) {
+      throw new Error(
+        `No active goal found for agent '${elementName}' in this session. ` +
+        'Use execute_agent to start a new goal first.',
+      );
+    }
 
     const updateResult = await manager.recordAgentStep({
       agentName: elementName,
+      goalId: ownedGoalId,
       stepDescription: params.stepDescription as string,
       outcome: params.outcome as StepOutcome,
       findings: params.findings as string,
@@ -258,16 +418,40 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
+    const executionKey = this.executionKey(manager, elementName);
+    const completedAgent = this.executingAgents.get(executionKey)
+      ?? await this.reclaimExistingAgentExecution(manager, elementName);
+    const requestedGoalId = params.goalId as string | undefined;
+    if (!completedAgent?.goalIds?.length) {
+      throw new Error(
+        `No active execution found for agent '${elementName}' in this session. ` +
+        'Nothing to complete.',
+      );
+    }
+    if (requestedGoalId && !completedAgent.goalIds.includes(requestedGoalId)) {
+      throw new Error(
+        `Goal '${requestedGoalId}' is not owned by this session's execution of '${elementName}'.`,
+      );
+    }
+    const ownedGoalId = requestedGoalId ?? completedAgent.goalIds.at(-1);
+    if (!ownedGoalId) {
+      throw new Error(`No owned goal found for agent '${elementName}' in this session.`);
+    }
     const completeResult = await manager.completeAgentGoal({
       agentName: elementName,
       outcome: params.outcome as StepOutcome,
       summary: params.summary as string,
-      goalId: params.goalId as string | undefined,
+      goalId: ownedGoalId,
     });
 
-    const completedAgent = this.executingAgents.get(this.sessionKey(elementName));
     this.recordResilienceCompletion(completedAgent, params.outcome === 'success', elementName);
-    this.executingAgents.delete(this.sessionKey(elementName));
+    const currentAgent = this.executingAgents.get(executionKey);
+    if (currentAgent?.goalIds?.includes(ownedGoalId)) {
+      currentAgent.goalIds = currentAgent.goalIds.filter(id => id !== ownedGoalId);
+    }
+    if (currentAgent && currentAgent.goalIds?.length === 0) {
+      this.executingAgents.delete(executionKey);
+    }
     return { _type: 'CompletionResult', ...completeResult };
   }
 
@@ -290,12 +474,55 @@ export class AgentExecutionHandler {
     elementName: string,
     params: Record<string, unknown>
   ): Promise<unknown> {
+    const ownedGoalId = await this.requireOwnedActiveGoal(manager, elementName);
+
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,
+      goalId: ownedGoalId,
       previousStepResult: params.previousStepResult as string | undefined,
       parameters: params.parameters as Record<string, unknown> | undefined,
     });
+    await this.trackExecutingAgent(
+      manager,
+      elementName,
+      params,
+      undefined,
+      continueResult.goalId,
+      true,
+    );
     return { _type: 'ContinueResult', ...continueResult };
+  }
+
+  private async requireOwnedActiveGoal(
+    manager: AgentManager,
+    elementName: string,
+    requiredGoalId?: string,
+  ): Promise<string> {
+    const executionKey = this.executionKey(manager, elementName);
+    const executionEntry = this.executingAgents.get(executionKey)
+      ?? await this.reclaimOrphanedExecution(manager, elementName);
+    if (!executionEntry) {
+      throw new Error(
+        `No active execution found for agent '${elementName}' in this session. ` +
+        'Use execute_agent to start a new goal. If you are reporting progress for ' +
+        'the current goal, use mcp_aql_create record_execution_step.',
+      );
+    }
+
+    const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    const ownedGoalIds = this.getOwnedActiveGoalIds(activeGoalIds, executionEntry);
+    const ownedGoalId = requiredGoalId
+      ? ownedGoalIds.find(goalId => goalId === requiredGoalId)
+      : ownedGoalIds.at(-1);
+    if (!ownedGoalId) {
+      const goalDetail = requiredGoalId ? ` Goal '${requiredGoalId}' is not owned here.` : '';
+      throw new Error(
+        `No active goal found for agent '${elementName}' in this session.${goalDetail} ` +
+        'Use execute_agent to start a new goal. If you are reporting progress for ' +
+        'the current goal, use mcp_aql_create record_execution_step.',
+      );
+    }
+    return ownedGoalId;
   }
 
   private async abort(
@@ -304,37 +531,164 @@ export class AgentExecutionHandler {
     params: Record<string, unknown>
   ): Promise<unknown> {
     const reason = (params.reason as string) || 'Aborted by user';
-    const activeGoalIds = await this.getActiveGoalIds(manager, elementName);
-    if (activeGoalIds.length === 0) {
-      throw new Error(`No active execution found for agent '${elementName}'. Nothing to abort.`);
+    const executionKey = this.executionKey(manager, elementName);
+    const executionPolicyAtStart = this.executingAgents.get(executionKey)
+      ?? await this.reclaimExistingAgentExecution(manager, elementName);
+    const generation = manager.observeExecutionGeneration(elementName);
+    try {
+      const activeGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+      const ownedGoalIds = this.getOwnedActiveGoalIds(activeGoalIds, executionPolicyAtStart);
+      if (ownedGoalIds.length === 0) {
+        return this.recoverStalePolicy(
+          manager,
+          elementName,
+          executionKey,
+          executionPolicyAtStart,
+          generation,
+          reason,
+        );
+      }
+
+      this.assertExecutionUnchanged(manager, elementName, executionKey, executionPolicyAtStart, generation.token);
+
+      for (const goalId of ownedGoalIds) {
+        await manager.completeAgentGoalForRecovery({
+          agentName: elementName,
+          goalId,
+          outcome: 'failure',
+          summary: `Execution aborted: ${reason}`,
+        });
+        this.abortedGoals.add(this.sessionKey(goalId));
+      }
+
+      const remainingGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+      const remainingOwnedGoalIds = this.getOwnedActiveGoalIds(
+        remainingGoalIds,
+        executionPolicyAtStart,
+      );
+      this.assertExecutionUnchanged(
+        manager,
+        elementName,
+        executionKey,
+        executionPolicyAtStart,
+        generation.token,
+        remainingOwnedGoalIds,
+      );
+
+      this.recordResilienceCompletion(executionPolicyAtStart, false, elementName);
+      if (this.executingAgents.get(executionKey) === executionPolicyAtStart) {
+        this.executingAgents.delete(executionKey);
+      }
+      this.unblockDangerZone(elementName);
+      this.logAbort(elementName, ownedGoalIds, reason);
+
+      return {
+        _type: 'AbortResult',
+        success: true,
+        agentName: elementName,
+        abortedGoalIds: ownedGoalIds,
+        reason,
+        message: `Agent '${elementName}' execution aborted. ${ownedGoalIds.length} goal(s) terminated.`,
+      };
+    } finally {
+      generation.release();
     }
-
-    activeGoalIds.forEach(goalId => this.abortedGoals.add(this.sessionKey(goalId)));
-    await this.markAbortAsFailed(manager, elementName, reason);
-    this.recordResilienceCompletion(this.executingAgents.get(this.sessionKey(elementName)), false, elementName);
-    this.executingAgents.delete(this.sessionKey(elementName));
-    this.unblockDangerZone(elementName);
-    this.logAbort(elementName, activeGoalIds, reason);
-
-    return {
-      _type: 'AbortResult',
-      success: true,
-      agentName: elementName,
-      abortedGoalIds: activeGoalIds,
-      reason,
-      message: `Agent '${elementName}' execution aborted. ${activeGoalIds.length} goal(s) terminated.`,
-    };
   }
 
-  private async markAbortAsFailed(manager: AgentManager, elementName: string, reason: string): Promise<void> {
-    try {
-      await manager.completeAgentGoal({
-        agentName: elementName,
-        outcome: 'failure',
-        summary: `Execution aborted: ${reason}`,
+  private async recoverStalePolicy(
+    manager: AgentManager,
+    elementName: string,
+    executionKey: string,
+    executionPolicyAtStart: ExecutingAgentEntry | undefined,
+    generation: { token: object },
+    reason: string,
+  ): Promise<unknown> {
+    if (!executionPolicyAtStart) {
+      // There is no stale in-memory policy to mutate. A concurrent execution
+      // remains untouched, so preserve the established no-active-execution
+      // result instead of treating unrelated generation history as a race.
+      throw new Error(
+        `No active execution found for agent '${elementName}' in this session. Nothing to abort.`,
+      );
+    }
+    this.assertExecutionUnchanged(
+      manager,
+      elementName,
+      executionKey,
+      executionPolicyAtStart,
+      generation.token,
+    );
+
+    const revalidatedGoalIds = await this.getActiveGoalIds(manager, elementName, true);
+    const revalidatedOwnedGoalIds = this.getOwnedActiveGoalIds(
+      revalidatedGoalIds,
+      executionPolicyAtStart,
+    );
+    this.assertExecutionUnchanged(
+      manager,
+      elementName,
+      executionKey,
+      executionPolicyAtStart,
+      generation.token,
+      revalidatedOwnedGoalIds,
+    );
+
+    if (this.executingAgents.get(executionKey) === executionPolicyAtStart) {
+      this.executingAgents.delete(executionKey);
+      this.unblockDangerZone(elementName);
+      SecurityMonitor.logSecurityEvent({
+        type: 'AGENT_POLICY_RECOVERED',
+        severity: 'MEDIUM',
+        source: 'AgentExecutionHandler.abort',
+        details: `Recovered stale execution policy for agent: ${elementName}`,
+        additionalData: { agentName: elementName, reason: 'stale_execution_policy' },
       });
-    } catch {
-      logger.warn('Failed to mark aborted agent goal as failed', { agentName: elementName });
+      return {
+        _type: 'AbortResult',
+        success: true,
+        agentName: elementName,
+        abortedGoalIds: [],
+        recoveredStalePolicy: true,
+        reason,
+        message: `Removed stale execution policy for agent '${elementName}'. ` +
+          'No active goal owned by this session remained.',
+      };
+    }
+
+    throw new Error(
+      `No active execution found for agent '${elementName}' in this session. Nothing to abort.`,
+    );
+  }
+
+  private getOwnedActiveGoalIds(
+    activeGoalIds: string[],
+    executionEntry: ExecutingAgentEntry | undefined,
+  ): string[] {
+    if (!executionEntry?.goalIds?.length) {
+      return [];
+    }
+    const ownedGoalIds = new Set(executionEntry.goalIds);
+    return activeGoalIds.filter(goalId => ownedGoalIds.has(goalId));
+  }
+
+  private assertExecutionUnchanged(
+    manager: AgentManager,
+    elementName: string,
+    executionKey: string,
+    executionPolicyAtStart: ExecutingAgentEntry | undefined,
+    generationToken: object,
+    activeGoalIds: string[] = [],
+  ): void {
+    const currentPolicy = this.executingAgents.get(executionKey);
+    if (
+      activeGoalIds.length > 0 ||
+      manager.hasExecutionGenerationChanged(elementName, generationToken) ||
+      (currentPolicy !== undefined && currentPolicy !== executionPolicyAtStart)
+    ) {
+      throw new Error(
+        `Execution state changed while aborting agent '${elementName}'. ` +
+        'The newer execution policy was preserved; retry abort_execution to abort it.'
+      );
     }
   }
 
@@ -379,7 +733,11 @@ export class AgentExecutionHandler {
       throw new Error('goalId is required for prepare_handoff');
     }
 
-    const gatheredData = await manager.getGatheredData({ agentName: elementName, goalId });
+    const ownedGoalId = await this.requireOwnedActiveGoal(manager, elementName, goalId);
+    const gatheredData = await manager.getGatheredData({
+      agentName: elementName,
+      goalId: ownedGoalId,
+    });
     const { activeElements, successCriteria } = await this.getHandoffMetadata(manager, elementName);
     const handoffState = prepareHandoffState(elementName, gatheredData, activeElements, successCriteria);
 
@@ -417,7 +775,10 @@ export class AgentExecutionHandler {
     }
 
     const restoredState = parseHandoffBlock(handoffBlockParam);
-    if (restoredState.agentName !== elementName) {
+    if (
+      manager.canonicalizeExecutionName(restoredState.agentName) !==
+      manager.canonicalizeExecutionName(elementName)
+    ) {
       logger.warn('Handoff agent mismatch detected', {
         expectedAgent: elementName,
         blockAgent: restoredState.agentName,
@@ -425,9 +786,15 @@ export class AgentExecutionHandler {
       throw new Error('Handoff agent mismatch: the handoff block was not prepared for this agent');
     }
 
+    const ownedGoalId = await this.requireOwnedActiveGoal(
+      manager,
+      elementName,
+      restoredState.goalId,
+    );
     const callerParams = (params.parameters as Record<string, unknown>) || {};
     const continueResult = await manager.continueAgentExecution({
       agentName: elementName,
+      goalId: ownedGoalId,
       previousStepResult: `Resumed from handoff (goalId: ${restoredState.goalId}, ${restoredState.goalProgress.stepsCompleted} steps completed)`,
       parameters: {
         ...callerParams,
@@ -435,6 +802,14 @@ export class AgentExecutionHandler {
         originalGoalId: restoredState.goalId,
       },
     });
+    await this.trackExecutingAgent(
+      manager,
+      elementName,
+      params,
+      undefined,
+      continueResult.goalId,
+      true,
+    );
 
     return {
       _type: 'ResumeResult',
@@ -458,7 +833,9 @@ export class AgentExecutionHandler {
   }
 
   private collectGatekeeperNotifications(agentName: string): AgentNotification[] {
-    const executingAgent = this.executingAgents.get(this.sessionKey(agentName));
+    const executingAgent = this.executingAgents.get(
+      this.executionKey(this.handlers.agentManager, agentName),
+    );
     return executingAgent?.recentBlocks.flatMap(block => this.gatekeeperNotification(block)) ?? [];
   }
 
@@ -520,7 +897,9 @@ export class AgentExecutionHandler {
     stepOutcome: string
   ): Record<string, unknown> | null {
     const autonomy = updateResult.autonomy as { continue: boolean; reason?: string; factors?: string[] } | undefined;
-    const executingAgent = this.executingAgents.get(this.sessionKey(agentName));
+    const executingAgent = this.executingAgents.get(
+      this.executionKey(this.handlers.agentManager, agentName),
+    );
     const context = this.buildResilienceContext(agentName, stepOutcome, autonomy, executingAgent);
     if (!context || !executingAgent?.resiliencePolicy) {
       return null;
@@ -663,13 +1042,22 @@ export class AgentExecutionHandler {
     };
   }
 
-  private async getActiveGoalIds(manager: AgentManager, agentName: string): Promise<string[]> {
+  private async getActiveGoalIds(
+    manager: AgentManager,
+    agentName: string,
+    strict = false,
+  ): Promise<string[]> {
     try {
-      const stateResult = await manager.getAgentState({ agentName });
+      const stateResult = strict
+        ? await manager.getAgentStateForRecovery({ agentName })
+        : await manager.getAgentState({ agentName });
       return stateResult?.state?.goals
         ?.filter((g: { status: string }) => g.status === 'in_progress')
         .map((g: { id: string }) => g.id) ?? [];
-    } catch {
+    } catch (error) {
+      if (strict && !(error instanceof ElementNotFoundError)) {
+        throw error;
+      }
       return [];
     }
   }

@@ -35,6 +35,7 @@ import {
   authKv,
 } from '../../../database/schema/auth.js';
 import { authAllowlist } from '../../../database/schema/authAllowlist.js';
+import { normalizeAuthAllowlistValue } from '../allowlistIdentity.js';
 import type {
   AllowlistAddInput,
   AllowlistMatchValues,
@@ -428,7 +429,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
-    const value = input.value.toLowerCase();
+    const value = normalizeAuthAllowlistValue(input.kind, input.value);
     try {
       const rows = await withSystemContext(this.db, (tx) =>
         tx.insert(authAllowlist).values({
@@ -482,15 +483,24 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     // No values supplied → trivially false (no possible match).
     const predicates: SQL[] = [];
     if (values.email) {
-      const pred = and(eq(authAllowlist.kind, 'email'), eq(authAllowlist.value, values.email.toLowerCase()));
+      const pred = and(
+        eq(authAllowlist.kind, 'email'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('email', values.email))
+      );
       if (pred) predicates.push(pred);
     }
     if (values.githubUsername) {
-      const pred = and(eq(authAllowlist.kind, 'github_username'), eq(authAllowlist.value, values.githubUsername.toLowerCase()));
+      const pred = and(
+        eq(authAllowlist.kind, 'github_username'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('github_username', values.githubUsername))
+      );
       if (pred) predicates.push(pred);
     }
     if (values.githubId) {
-      const pred = and(eq(authAllowlist.kind, 'github_id'), eq(authAllowlist.value, values.githubId));
+      const pred = and(
+        eq(authAllowlist.kind, 'github_id'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('github_id', values.githubId))
+      );
       if (pred) predicates.push(pred);
     }
     if (predicates.length === 0) return false;

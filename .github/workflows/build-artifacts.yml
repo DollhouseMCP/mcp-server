@@ -3,9 +3,9 @@ name: Build Artifacts
 
 on:
   push:
-    branches: [main, develop, codex/hosted-http-integration]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop, codex/hosted-http-integration]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions:
@@ -47,12 +47,12 @@ jobs:
             typescript-build-${{ runner.os }}-
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: Install ShellCheck
         run: |
           sudo apt-get update
-          sudo apt-get install -y shellcheck
+          sudo apt-get install -y --no-install-recommends shellcheck
 
       - name: Lint shell scripts
         run: npm run lint:shell

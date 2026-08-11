@@ -78,22 +78,30 @@ export function assertAllowlistKind(value: string, name: string): asserts value 
 }
 
 export function normalizeAllowlistValue(kind: ConsoleAccountAllowlistKind, value: string): string {
-  const trimmed = value.trim();
-  return kind === 'github_id' ? trimmed : trimmed.toLowerCase();
+  const normalized = normalizeAllowlistDisplayValue(value);
+  if (kind === 'github_id') return normalized;
+  if (kind === 'github_username') return normalized.toLowerCase();
+  return normalized.replace(/[A-Z]/g, character => character.toLowerCase());
+}
+
+export function normalizeAllowlistDisplayValue(value: string): string {
+  // Security principals must retain their identity. NFC collapses canonically
+  // equivalent encodings without rewriting look-alike characters into ASCII.
+  return value.normalize('NFC').trim();
 }
 
 export function validateAllowlistValue(kind: ConsoleAccountAllowlistKind, value: string, name: string): void {
-  const trimmed = value.trim();
-  if (trimmed === '' || trimmed.length > 320) {
+  const normalized = normalizeAllowlistDisplayValue(value);
+  if (normalized === '' || normalized.length > 320) {
     throw new ConsoleStoreValidationError(`${name} must be non-empty and at most 320 characters`);
   }
-  if (kind === 'email' && !isLiteEmailAddress(trimmed)) {
+  if (kind === 'email' && !isLiteEmailAddress(normalized)) {
     throw new ConsoleStoreValidationError(`${name} must be a valid email address`);
   }
-  if (kind === 'github_username' && !/^[A-Za-z0-9-]{1,39}$/.test(trimmed)) {
+  if (kind === 'github_username' && !/^[A-Za-z0-9-]{1,39}$/.test(normalized)) {
     throw new ConsoleStoreValidationError(`${name} must be a valid GitHub username`);
   }
-  if (kind === 'github_id' && !/^\d+$/.test(trimmed)) {
+  if (kind === 'github_id' && !/^\d+$/.test(normalized)) {
     throw new ConsoleStoreValidationError(`${name} must be a numeric GitHub id`);
   }
 }

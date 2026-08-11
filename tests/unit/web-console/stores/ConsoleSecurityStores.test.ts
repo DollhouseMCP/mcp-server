@@ -1216,6 +1216,34 @@ describe('InMemoryConsoleAccountAllowlistStore', () => {
       revokedAt: FIVE_MINUTES,
     })).rejects.toThrow('revokedByUserId must be a UUID');
   });
+
+  it('rejects non-ASCII GitHub usernames instead of rewriting confusables', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+
+    await expect(store.add({
+      kind: 'github_username',
+      value: 'ｍick',
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    })).rejects.toThrow('valid GitHub username');
+  });
+
+  it('preserves distinct Unicode email principals while canonicalizing NFC', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+    const cyrillicAlice = '\u0430lice@example.test';
+    const entry = await store.add({
+      kind: 'email',
+      value: cyrillicAlice,
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+    });
+
+    expect(entry.displayValue).toBe(cyrillicAlice);
+    expect(entry.normalizedValue).toBe(cyrillicAlice);
+    await expect(store.matchesIdentity({ email: cyrillicAlice })).resolves.toBe(true);
+    await expect(store.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(false);
+    await expect(store.matchesIdentity({ email: '\u0410lice@example.test' })).resolves.toBe(false);
+  });
 });
 
 describe('InMemoryConsoleSecurityInvalidationStore', () => {

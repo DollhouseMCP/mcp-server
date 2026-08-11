@@ -148,6 +148,28 @@ describe('AgentManager DB-backed runtime state', () => {
             expect.objectContaining({ description: 'remember me' }),
           ]),
         );
+
+        const recoveryState = await reloadedManager.getAgentStateForRecovery({
+          agentName: 'db-state-agent',
+        });
+        const activeGoal = recoveryState.state.goals.find((goal) => goal.status === 'in_progress');
+        expect(activeGoal).toBeDefined();
+
+        await reloadedManager.completeAgentGoalForRecovery({
+          agentName: 'db-state-agent',
+          goalId: activeGoal!.id,
+          outcome: 'failure',
+          summary: 'Recovery-path integration test',
+        });
+
+        const completedState = await reloadedManager.getAgentStateForRecovery({
+          agentName: 'db-state-agent',
+        });
+        expect(completedState.state.goals).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ id: activeGoal!.id, status: 'failed' }),
+          ]),
+        );
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
@@ -235,8 +257,10 @@ describe('AgentManager DB-backed runtime state', () => {
     };
 
     try {
+      // Production HTTP sessions share the root AgentManager. Reuse one here
+      // so this test catches session state leaking through its element cache.
+      const manager = createDbAgentManager(tempDir, tracker);
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createDbAgentManager(tempDir, tracker);
         const created = await manager.create(
           'shared-state-agent',
           'Persists isolated runtime state in Postgres',
@@ -253,7 +277,6 @@ describe('AgentManager DB-backed runtime state', () => {
       });
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionBeta }, async () => {
-        const manager = createDbAgentManager(tempDir, tracker);
         await manager.executeAgent('shared-state-agent', { objective: 'goal from beta' });
       });
 
@@ -280,7 +303,6 @@ describe('AgentManager DB-backed runtime state', () => {
       );
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createDbAgentManager(tempDir, tracker);
         const state = await manager.getAgentState({ agentName: 'shared-state-agent' });
         expect(state.state.goals).toEqual(
           expect.arrayContaining([expect.objectContaining({ description: 'goal from alpha' })]),

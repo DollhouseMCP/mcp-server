@@ -10,6 +10,7 @@ import { ElementType } from '../../../../src/portfolio/types.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import type { MetadataService } from '../../../../src/services/MetadataService.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 // Mock dependencies
 jest.mock('../../../../src/security/securityMonitor.js');
@@ -61,6 +62,19 @@ describe('Agent Element', () => {
       }, metadataService);
       expect(unicodeAgent.metadata.name).toBeDefined();
       expect(unicodeAgent.metadata.description).toBeDefined();
+    });
+
+    it('should preserve substantive descriptions up to the 2.1 YAML/frontmatter limit', () => {
+      const longDescription = 'Detailed agent operating guidance '.repeat(25).trim();
+
+      const longAgent = new Agent({
+        name: 'Long Description Agent',
+        description: longDescription
+      }, metadataService);
+
+      expect(longDescription.length).toBeGreaterThan(500);
+      expect(longDescription.length).toBeLessThan(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
+      expect(longAgent.metadata.description).toBe(longDescription);
     });
   });
 

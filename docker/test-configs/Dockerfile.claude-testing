@@ -4,10 +4,10 @@
 
 # Use Node.js 20 slim for smaller image size
 # Pinned to specific version for reproducible builds
-FROM node:20.18.1-slim
+FROM node:22-slim
 
 # Install system dependencies required for building native modules and Claude Code
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     build-essential \
@@ -24,7 +24,7 @@ COPY packages/ /app/dollhousemcp/packages/
 
 # Install DollhouseMCP dependencies (including local @dollhousemcp/safety package)
 WORKDIR /app/dollhousemcp
-RUN npm ci
+RUN npm ci --ignore-scripts
 
 # Copy the rest of DollhouseMCP source
 COPY . /app/dollhousemcp/
@@ -32,13 +32,16 @@ COPY . /app/dollhousemcp/
 # Build DollhouseMCP
 RUN npm run build
 
-# Install Claude Code CLI globally
+# Install Claude Code CLI globally. Lifecycle scripts remain disabled during the
+# package install; only the pinned package's required native-launcher installer
+# is run explicitly.
 # Official package name: @anthropic-ai/claude-code
-# Using specific version for reproducibility (latest as of Sep 2025)
-RUN npm install -g @anthropic-ai/claude-code@1.0.110
+# Pin the current release for reproducibility.
+RUN npm install -g --ignore-scripts @anthropic-ai/claude-code@2.1.222 && \
+    node "$(npm root -g)/@anthropic-ai/claude-code/install.cjs"
 
 # Verify Claude Code installation
-RUN claude --version || echo "Claude Code installed but requires API key for version check"
+RUN claude --version
 
 # Create necessary directories
 RUN mkdir -p /app/portfolio \
@@ -103,12 +106,12 @@ if [ $# -eq 0 ]; then\n\
   echo "  docker run -it -e ANTHROPIC_API_KEY=sk-xxx claude-dollhouse-test [command]"\n\
   echo ""\n\
   echo "Commands:"\n\
-  echo "  claude-code          - Run Claude Code CLI"\n\
+  echo "  claude              - Run Claude Code CLI"\n\
   echo "  test-mcp            - Test MCP server directly"\n\
   echo "  bash                - Get a shell"\n\
   echo ""\n\
   echo "Examples:"\n\
-  echo "  docker run -it -e ANTHROPIC_API_KEY=sk-xxx claude-dollhouse-test claude-code"\n\
+  echo "  docker run -it -e ANTHROPIC_API_KEY=sk-xxx claude-dollhouse-test claude"\n\
   echo "  docker run -it -e ANTHROPIC_API_KEY=sk-xxx claude-dollhouse-test test-mcp"\n\
   exit 0\n\
 fi\n\
@@ -219,4 +222,4 @@ WORKDIR /home/claude
 ENTRYPOINT ["/entrypoint.sh"]
 
 # Default command
-CMD ["claude-code"]
+CMD ["claude"]

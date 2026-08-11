@@ -4,6 +4,7 @@ export * from './ConsoleProjectorHelpers.js';
 export * from './ConsoleRequestContext.js';
 export * from './ConsoleRouterAssembler.js';
 export * from './ConsoleRouteExecution.js';
+export * from './ConsoleUnicodeNormalization.js';
 export * from './ConsoleReturnPaths.js';
 export * from './ConsoleSecuredRouterAssembler.js';
 export * from './ConsoleSessionActivationBridgeState.js';

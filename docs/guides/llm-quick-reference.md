@@ -231,6 +231,10 @@ mcp_aql_create {
 }
 ```
 
+The response is a receipt containing `id`, `timestamp`, and `trustLevel`. Entry
+content is not echoed because new entries begin as untrusted and are validated
+asynchronously before their trust level can be promoted.
+
 ---
 
 ## Templates
@@ -306,7 +310,7 @@ mcp_aql_execute { "operation": "continue_execution", "params": { "element_name":
 ### Reviewing Gathered Data
 
 ```json
-mcp_aql_read { "operation": "get_gathered_data", "params": { "element_name": "my-agent" } }
+mcp_aql_read { "operation": "get_gathered_data", "params": { "element_name": "my-agent", "goalId": "goal_abc123" } }
 ```
 
 ### Exporting and Importing Elements

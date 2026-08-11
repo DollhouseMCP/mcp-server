@@ -81,7 +81,14 @@ describe('MCPAQLHandler', () => {
       memoryManager: {
         find: jest.fn().mockResolvedValue({
           metadata: { name: TEST_MEMORY_NAME },
-          addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
+          addEntry: jest.fn().mockResolvedValue({
+            id: 'entry-1',
+            timestamp: new Date('2026-01-01T00:00:00.000Z'),
+            content: 'Test entry content',
+            tags: ['tag1', 'tag2'],
+            metadata: { key: 'value' },
+            trustLevel: 'untrusted',
+          }),
           removeEntry: jest.fn().mockReturnValue(true),
           getEntries: jest.fn().mockReturnValue(new Map()),
           clearAll: jest.fn().mockResolvedValue({ cleared: true }),
@@ -91,6 +98,7 @@ describe('MCPAQLHandler', () => {
         assertPersistable: jest.fn().mockResolvedValue(undefined),
       },
       agentManager: {
+        canonicalizeExecutionName: jest.fn((name: string) => name),
         executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
         getAgentState: jest.fn().mockResolvedValue({ status: 'idle', steps: [] }),
         recordAgentStep: jest.fn().mockResolvedValue({ recorded: true }),
@@ -230,7 +238,13 @@ describe('MCPAQLHandler', () => {
 
         expect(result.success).toBe(true);
         if (result.success) {
-          expect(result.data).toEqual({ entryId: 'entry-1' });
+          expect(result.data).toEqual({
+            id: 'entry-1',
+            timestamp: '2026-01-01T00:00:00.000Z',
+            trustLevel: 'untrusted',
+          });
+          expect(result.data).not.toHaveProperty('content');
+          expect(result.data).not.toHaveProperty('metadata');
         }
         expect(mockRegistry.memoryManager.find).toHaveBeenCalled();
       });
@@ -1647,7 +1661,11 @@ describe('MCPAQLHandler', () => {
         memoryManager: {
           find: jest.fn().mockResolvedValue({
             metadata: { name: TEST_MEMORY_NAME },
-            addEntry: jest.fn().mockResolvedValue({ entryId: 'entry-1' }),
+            addEntry: jest.fn().mockResolvedValue({
+              id: 'entry-1',
+              timestamp: new Date('2026-01-01T00:00:00.000Z'),
+              trustLevel: 'untrusted',
+            }),
             removeEntry: jest.fn().mockReturnValue(true),
             getEntries: jest.fn().mockReturnValue(new Map()),
             clearAll: jest.fn().mockResolvedValue({ cleared: true }),
@@ -1657,6 +1675,7 @@ describe('MCPAQLHandler', () => {
           assertPersistable: jest.fn().mockResolvedValue(undefined),
         },
         agentManager: {
+          canonicalizeExecutionName: jest.fn((name: string) => name),
           executeAgent: jest.fn().mockResolvedValue({ result: 'executed' }),
           getAgentState: jest.fn().mockResolvedValue({ status: 'idle', steps: [] }),
           recordAgentStep: jest.fn().mockResolvedValue({ recorded: true }),
@@ -2404,6 +2423,53 @@ describe('MCPAQLHandler', () => {
       expect(verificationNotifier.showCode).toHaveBeenCalled();
     });
 
+    it('should enforce a three-challenge sliding window before displaying codes', async () => {
+      const verificationStore = {
+        set: jest.fn(),
+        get: jest.fn(),
+        verify: jest.fn(),
+        clear: jest.fn(),
+        size: jest.fn().mockReturnValue(0),
+        cleanup: jest.fn(),
+        destroy: jest.fn(),
+      };
+      const verificationNotifier = {
+        showCode: jest.fn(),
+        isAvailable: jest.fn().mockReturnValue(true),
+      };
+      const releaseHandler = new MCPAQLHandler({
+        ...mockRegistry,
+        verificationStore,
+        verificationNotifier,
+      } as unknown as HandlerRegistry);
+      const startedAt = 1_800_000_000_000;
+      const nowSpy = jest.spyOn(Date, 'now').mockReturnValue(startedAt);
+
+      try {
+        for (let attempt = 0; attempt < 3; attempt += 1) {
+          await expect(releaseHandler.handleCreate({ operation: 'release_deadlock' }))
+            .resolves.toEqual(expect.objectContaining({ success: true }));
+        }
+        nowSpy.mockReturnValue(startedAt + 100_000);
+        const blocked = await releaseHandler.handleCreate({ operation: 'release_deadlock' });
+
+        expect(blocked.success).toBe(false);
+        if (!blocked.success) {
+          expect(blocked.error).toContain('Too many deadlock relief challenges requested');
+        }
+        expect(verificationStore.set).toHaveBeenCalledTimes(3);
+        expect(verificationNotifier.showCode).toHaveBeenCalledTimes(3);
+
+        nowSpy.mockReturnValue(startedAt + 300_001);
+        await expect(releaseHandler.handleCreate({ operation: 'release_deadlock' }))
+          .resolves.toEqual(expect.objectContaining({ success: true }));
+        expect(verificationStore.set).toHaveBeenCalledTimes(4);
+        expect(verificationNotifier.showCode).toHaveBeenCalledTimes(4);
+      } finally {
+        nowSpy.mockRestore();
+      }
+    });
+
     it('should complete deadlock relief after successful verification', async () => {
       const verificationStore = {
         set: jest.fn(),
@@ -2461,6 +2527,93 @@ describe('MCPAQLHandler', () => {
       }
       expect(verificationStore.verify).toHaveBeenCalledWith(VALID_CHALLENGE_ID, 'RELIEF1');
       expect(elementCRUD.releaseDeadlock).toHaveBeenCalled();
+    });
+
+    it('should classify invalid, expired, and wrong-code metrics separately', async () => {
+      const verificationStore = {
+        set: jest.fn(),
+        get: jest.fn()
+          .mockReturnValueOnce(undefined)
+          .mockReturnValueOnce({
+            code: 'RELIEF1',
+            expiresAt: Date.now() + 300000,
+            reason: 'Deadlock relief requested',
+          }),
+        verify: jest.fn().mockReturnValue(false),
+        clear: jest.fn(),
+        size: jest.fn().mockReturnValue(1),
+        cleanup: jest.fn(),
+        destroy: jest.fn(),
+      };
+      const releaseHandler = new MCPAQLHandler({
+        ...mockRegistry,
+        verificationStore,
+      } as unknown as HandlerRegistry);
+
+      await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: 'invalid', code: 'WRONG1' },
+      });
+      await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: VALID_CHALLENGE_ID, code: 'WRONG1' },
+      });
+      await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: VALID_CHALLENGE_ID, code: 'WRONG1' },
+      });
+
+      expect(releaseHandler.getVerificationMetrics()).toEqual(expect.objectContaining({
+        totalAttempts: 3,
+        totalInvalidFormat: 1,
+        totalExpired: 1,
+        totalFailures: 1,
+      }));
+    });
+
+    it('should share failed-attempt rate limiting with danger-zone verification', async () => {
+      const verificationStore = {
+        set: jest.fn(),
+        get: jest.fn().mockReturnValue({
+          code: 'RELIEF1',
+          expiresAt: Date.now() + 300000,
+          reason: 'Deadlock relief requested',
+        }),
+        verify: jest.fn().mockReturnValue(false),
+        clear: jest.fn(),
+        size: jest.fn().mockReturnValue(1),
+        cleanup: jest.fn(),
+        destroy: jest.fn(),
+      };
+      const elementCRUD = {
+        ...mockRegistry.elementCRUD,
+        releaseDeadlock: jest.fn(),
+      };
+      const releaseHandler = new MCPAQLHandler({
+        ...mockRegistry,
+        elementCRUD,
+        verificationStore,
+      } as unknown as HandlerRegistry);
+
+      for (let attempt = 0; attempt < 11; attempt += 1) {
+        const rejected = await releaseHandler.handleCreate({
+          operation: 'release_deadlock',
+          params: { challenge_id: VALID_CHALLENGE_ID, code: 'WRONG1' },
+        });
+        expect(rejected.success).toBe(false);
+      }
+
+      const rateLimited = await releaseHandler.handleCreate({
+        operation: 'release_deadlock',
+        params: { challenge_id: VALID_CHALLENGE_ID, code: 'WRONG2' },
+      });
+
+      expect(rateLimited.success).toBe(false);
+      if (!rateLimited.success) {
+        expect(rateLimited.error).toContain('Too many failed verification attempts');
+      }
+      expect(verificationStore.verify).toHaveBeenCalledTimes(11);
+      expect(elementCRUD.releaseDeadlock).not.toHaveBeenCalled();
     });
 
     it('should remain available even when confirm_operation is sandboxed by an active element', async () => {

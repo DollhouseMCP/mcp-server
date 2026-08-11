@@ -9,9 +9,10 @@
  * because IAuthProvider is the outer abstraction the HTTP middleware
  * calls on every request.
  *
- * Same design intent as instrumentAuthMethod: wrap from outside so the
- * concrete provider class file is untouched (no SonarCloud complexity
- * re-flag on the existing validate() bodies).
+ * Audit logging remains owned by concrete providers because they have the
+ * issuer/key/source context operators need. This wrapper is performance-only
+ * so one validation failure does not emit duplicate TOKEN_VALIDATION_FAILURE
+ * events when a concrete provider already logged the failure.
  *
  * When `monitor` is undefined, returns the original provider untouched.
  *

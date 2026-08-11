@@ -124,4 +124,3 @@ function assertUuid(userId: string): void {
     throw new Error(`DatabaseTokenStore: userId must be a UUID; got ${got}`);
   }
 }
-

@@ -315,6 +315,50 @@ describe('GitHub Workflow Validation', () => {
       expect(downloadStep?.run).toContain('https://token.actions.githubusercontent.com');
     });
   });
+
+  describe('Beta prerelease workflow channels', () => {
+    it('should route exact beta and numbered beta versions to the beta npm dist-tag', () => {
+      const npmWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-npm.yml'), 'utf8');
+      const packagesWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-github-packages.yml'), 'utf8');
+
+      expect(npmWorkflow).toContain('*-beta|*-beta.*)');
+      expect(packagesWorkflow).toContain('*-beta|*-beta.*)');
+    });
+
+    it('should allow exact beta and numbered beta versions in beta CD workflows', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+      const betaDeployWorkflow = fs.readFileSync(path.join(workflowDir, 'deploy-beta-alpha-vps.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+      expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+    });
+
+    it('should dispatch and await every beta artifact publisher at the release tag', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('actions: write');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-npm.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-github-packages.yml');
+      expect(betaPublishWorkflow).toContain('dispatch_and_capture publish-mcpb.yml');
+      expect(betaPublishWorkflow).toContain('gh workflow run "${workflow}" --ref "${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('--field tag_name="${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('gh run list');
+      expect(betaPublishWorkflow).toContain('gh run watch "${run_id}" --exit-status');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids=("${npm_run_id}" "${packages_run_id}" "${mcpb_run_id}")');
+    });
+
+    it('should recover release creation only when an existing tag points at the same commit', () => {
+      const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
+
+      expect(betaPublishWorkflow).toContain('refs/tags/${tag_name}^{}');
+      expect(betaPublishWorkflow).toContain('[[ "${remote_tag_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('echo "tag_exists=${tag_exists}"');
+      expect(betaPublishWorkflow).toContain('} >> "$GITHUB_OUTPUT"');
+      expect(betaPublishWorkflow).toContain('TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${TAG_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('gh release create "${TAG_NAME}"');
+    });
+  });
 });
 
 // Helper functions

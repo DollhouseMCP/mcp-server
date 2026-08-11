@@ -1092,6 +1092,31 @@ describe('AccountAdminModule', () => {
     ]);
   });
 
+  it('preserves distinct allowlist principals before storage', async () => {
+    const { module } = mutationFixture();
+    const add = findRoute(module.routes, ACCOUNT_ALLOWLIST_PATH, 'POST');
+    const cyrillicAlice = '\u0430lice@example.test';
+
+    await expect(add.handler(consoleRequest({
+      body: { kind: 'github_username', value: 'ｍick' },
+    }))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_request' },
+    });
+    await expect(add.handler(consoleRequest({
+      body: { kind: 'email', value: cyrillicAlice },
+    }))).resolves.toMatchObject({
+      status: 201,
+      body: { kind: 'email', value: cyrillicAlice },
+    });
+    await expect(add.handler(consoleRequest({
+      body: { kind: 'email', value: 'alice@example.test' },
+    }))).resolves.toMatchObject({
+      status: 201,
+      body: { kind: 'email', value: 'alice@example.test' },
+    });
+  });
+
   it('rejects malformed list query parameters before hitting the store', async () => {
     const { module } = mutationFixture();
     const route = findRoute(module.routes, ADMIN_USERS_PATH);

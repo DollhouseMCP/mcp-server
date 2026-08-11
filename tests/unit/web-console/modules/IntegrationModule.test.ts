@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import {
   AeadSecretEncryptionService,
@@ -21,6 +21,7 @@ import {
   type IntegrationDescriptorRecord,
   type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 // Built from parts so it is not a hardcoded IP literal; any public address satisfies the SSRF guard.
 const PUBLIC_TEST_ADDRESS = [8, 8, 8, 8].join('.');
@@ -669,6 +670,41 @@ describe('IntegrationModule', () => {
       accessTokenCiphertext: null,
       refreshTokenCiphertext: null,
     });
+  });
+
+  it('logs integration credential decrypt failures with caller context', async () => {
+    const { module } = writeModuleFixture({
+      records: [integrationFixture({
+        accessTokenCiphertext: Buffer.from('not-valid-ciphertext'),
+        refreshTokenCiphertext: null,
+      })],
+    });
+    const disconnect = findRoute(module.routes, GITHUB_PATH, 'DELETE');
+    const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+    try {
+      const result = await disconnect.handler(consoleRequest());
+
+      expect(result).toMatchObject({
+        status: 200,
+        body: {
+          provider: 'github',
+          status: 'disconnected',
+        },
+      });
+      expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'OPERATION_FAILED',
+        severity: 'MEDIUM',
+        source: 'IntegrationService',
+        details: 'Integration credential decrypt failed',
+        additionalData: {
+          userId: USER_ID,
+          provider: 'github',
+          secretClass: 'integration_access_token',
+        },
+      }));
+    } finally {
+      logSpy.mockRestore();
+    }
   });
 
   it('binds encrypted integration credentials to the owning user AAD', async () => {

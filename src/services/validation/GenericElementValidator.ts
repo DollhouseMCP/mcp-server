@@ -430,7 +430,8 @@ export class GenericElementValidator implements ElementValidator {
 
     if (description.length > SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH) {
       return ValidatorHelpers.fail([
-        `Description exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters`
+        `Description exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters ` +
+        '(frontmatter overhead reserved)'
       ]);
     }
 

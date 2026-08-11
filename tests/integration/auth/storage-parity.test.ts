@@ -708,6 +708,20 @@ function runContractSuite(
       expect(await storage.allowlistMatchesIdentity({ email: 'bob@example.com' })).toBe(false);
     });
 
+    it('matchesIdentity() preserves distinct Unicode email principals', async () => {
+      const cyrillicAlice = '\u0430lice@example.com';
+      await storage.allowlistAdd({ kind: 'email', value: cyrillicAlice });
+
+      expect(await storage.allowlistMatchesIdentity({ email: cyrillicAlice })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ email: ALICE_EMAIL })).toBe(false);
+    });
+
+    it('matchesIdentity() accepts canonically equivalent Unicode email encodings', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'jose\u0301@example.com' });
+
+      expect(await storage.allowlistMatchesIdentity({ email: 'jos\u00e9@example.com' })).toBe(true);
+    });
+
     it('matchesIdentity() matches by github_username (case-insensitive input)', async () => {
       await storage.allowlistAdd({ kind: 'github_username', value: 'insomnolence' });
       expect(await storage.allowlistMatchesIdentity({ githubUsername: 'insomnolence' })).toBe(true);

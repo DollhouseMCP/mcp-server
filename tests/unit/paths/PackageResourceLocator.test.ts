@@ -20,8 +20,12 @@ import { PackageResourceLocator } from '../../../src/paths/PackageResourceLocato
  * at `<pkgRoot>/<tree>/paths/PackageResourceLocator.<ext>`.
  */
 function fakeModuleUrl(pkgRoot: string, tree: 'src' | 'dist', ext: 'ts' | 'js'): string {
-  const filePath = path.join(pkgRoot, tree, 'paths', `PackageResourceLocator.${ext}`);
+  const filePath = path.join(path.resolve(pkgRoot), tree, 'paths', `PackageResourceLocator.${ext}`);
   return pathToFileURL(filePath).href;
+}
+
+function rooted(...segments: string[]): string {
+  return path.join(path.resolve(segments[0]), ...segments.slice(1));
 }
 
 describe('PackageResourceLocator', () => {
@@ -29,13 +33,13 @@ describe('PackageResourceLocator', () => {
     it('detects tree root when loaded from dist', () => {
       const url = fakeModuleUrl('/opt/pkg', 'dist', 'js');
       const locator = new PackageResourceLocator(url);
-      expect(locator.getTreeRoot()).toBe('/opt/pkg/dist');
+      expect(locator.getTreeRoot()).toBe(rooted('/opt/pkg', 'dist'));
     });
 
     it('detects tree root when loaded from src (dev mode)', () => {
       const url = fakeModuleUrl('/opt/pkg', 'src', 'ts');
       const locator = new PackageResourceLocator(url);
-      expect(locator.getTreeRoot()).toBe('/opt/pkg/src');
+      expect(locator.getTreeRoot()).toBe(rooted('/opt/pkg', 'src'));
     });
 
     it('uses import.meta.url by default', () => {
@@ -55,9 +59,9 @@ describe('PackageResourceLocator', () => {
       // Tree root should be the filesystem root with no trailing slash
       // beyond the base (POSIX root is '/'; we accept that).
       const treeRoot = locator.getTreeRoot();
-      expect(treeRoot === '/' || !treeRoot.endsWith('/')).toBe(true);
+      expect(treeRoot === path.parse(treeRoot).root || !treeRoot.endsWith(path.sep)).toBe(true);
       // Containment check still works for a normal subpath.
-      expect(locator.resolve('foo.txt')).toBe('/foo.txt');
+      expect(locator.resolve('foo.txt')).toBe(path.resolve('/foo.txt'));
     });
   });
 
@@ -65,7 +69,7 @@ describe('PackageResourceLocator', () => {
     it('returns the parent of the tree root', () => {
       const url = fakeModuleUrl('/opt/pkg', 'dist', 'js');
       const locator = new PackageResourceLocator(url);
-      expect(locator.getPackageRoot()).toBe('/opt/pkg');
+      expect(locator.getPackageRoot()).toBe(path.resolve('/opt/pkg'));
     });
   });
 
@@ -74,14 +78,14 @@ describe('PackageResourceLocator', () => {
       const url = fakeModuleUrl('/opt/pkg', 'dist', 'js');
       const locator = new PackageResourceLocator(url);
       expect(locator.resolve('seed-elements/memories/foo.yaml'))
-        .toBe('/opt/pkg/dist/seed-elements/memories/foo.yaml');
+        .toBe(rooted('/opt/pkg', 'dist', 'seed-elements', 'memories', 'foo.yaml'));
     });
 
     it('joins a relative path against the tree root (src case)', () => {
       const url = fakeModuleUrl('/opt/pkg', 'src', 'ts');
       const locator = new PackageResourceLocator(url);
       expect(locator.resolve('seed-elements/memories/foo.yaml'))
-        .toBe('/opt/pkg/src/seed-elements/memories/foo.yaml');
+        .toBe(rooted('/opt/pkg', 'src', 'seed-elements', 'memories', 'foo.yaml'));
     });
 
     it('rejects paths that escape the tree root via .. segments', () => {
@@ -115,7 +119,7 @@ describe('PackageResourceLocator', () => {
       const locator = new PackageResourceLocator(url);
       // seed-elements/../seed-elements → seed-elements, stays inside dist
       expect(locator.resolve('seed-elements/../seed-elements/foo.yaml'))
-        .toBe('/opt/pkg/dist/seed-elements/foo.yaml');
+        .toBe(rooted('/opt/pkg', 'dist', 'seed-elements', 'foo.yaml'));
     });
   });
 

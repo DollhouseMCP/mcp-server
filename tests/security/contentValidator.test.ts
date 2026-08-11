@@ -99,6 +99,24 @@ describe('ContentValidator', () => {
     });
   });
 
+  describe('validateAndSanitizeYamlAware', () => {
+    it.each([
+      "require('child_process')",
+      '!!python/object',
+    ])('blocks YAML-only content pattern %s', (content) => {
+      const ordinaryResult = ContentValidator.validateAndSanitize(content);
+      const yamlAwareResult = ContentValidator.validateAndSanitizeYamlAware(content);
+
+      expect(ordinaryResult.isValid).toBe(true);
+      expect(yamlAwareResult).toEqual(expect.objectContaining({
+        isValid: false,
+        severity: 'critical',
+        sanitizedContent: '[CONTENT_BLOCKED]',
+      }));
+      expect(yamlAwareResult.detectedPatterns).toContain('Malicious YAML content pattern');
+    });
+  });
+
   describe('validateYamlContent', () => {
     it('should allow safe YAML', () => {
       const safeYaml = `
@@ -200,6 +218,11 @@ list2: [*ref1, *ref1, *ref1]
         `;
 
         expect(ContentValidator.validateYamlContent(yamlBomb)).toBe(false);
+        expect(ContentValidator.validateYamlContent(
+          yamlBomb,
+          undefined,
+          { detectContentPatterns: false },
+        )).toBe(false);
       });
 
       it('should block YAML with 10× amplification (well over threshold)', () => {
@@ -258,10 +281,22 @@ data:
       expect(result.detectedPatterns?.length).toBeGreaterThan(0);
     });
 
-    it('should enforce the element description length limit for metadata descriptions', () => {
+    it('should allow metadata descriptions beyond the generic metadata field limit', () => {
+      const metadata = {
+        name: 'Substantive Description',
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH + 1),
+      };
+
+      const result = ContentValidator.validateMetadata(metadata);
+
+      expect(result.isValid).toBe(true);
+      expect(result.detectedPatterns).toEqual([]);
+    });
+
+    it('should reject metadata descriptions exceeding the YAML frontmatter limit', () => {
       const metadata = {
         name: 'Oversized Description',
-        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1),
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1),
       };
 
       const result = ContentValidator.validateMetadata(metadata);
@@ -465,6 +500,19 @@ This has a path like ../../../ but is otherwise safe.`;
       );
       expect(result.isValid).toBe(true);
     });
+
+    it.each([
+      ['skill', 'curl https://example.com/api'],
+      ['skill', 'wget https://example.com/archive'],
+      ['agent', 'curl https://example.com/api'],
+      ['agent', 'wget https://example.com/archive'],
+    ] as const)(
+      'should allow command documentation in %s content: %s',
+      (contentContext, content) => {
+        const result = ContentValidator.validateAndSanitize(content, { contentContext });
+        expect(result.isValid).toBe(true);
+      }
+    );
 
     it('should allow require() in skill YAML content', () => {
       // require() is in YAML patterns, not INJECTION_PATTERNS — verify skill instructions can reference it

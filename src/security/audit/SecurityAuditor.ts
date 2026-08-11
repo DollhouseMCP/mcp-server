@@ -3,7 +3,6 @@
  * Implements automated security auditing for DollhouseMCP (Issue #53)
  */
 
-// import { SecurityMonitor } from '../securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { 
   SecurityAuditConfig, 
@@ -406,13 +405,26 @@ export class SecurityAuditor {
 function configuredSuppressionFileMatches(pattern: string, filePath: string): boolean {
   const normalizedPattern = normalizeAuditPath(pattern);
   const normalizedFile = normalizeAuditPath(filePath);
-  if (normalizedPattern === normalizedFile) return true;
-  if (!normalizedPattern.includes('*')) return false;
-  return globPatternToRegex(normalizedPattern).test(normalizedFile);
+  const relativeFile = toProjectRelativeAuditPath(normalizedFile);
+  const candidates = new Set([normalizedFile, relativeFile]);
+
+  for (const candidate of candidates) {
+    if (candidate === normalizedPattern) return true;
+    if (normalizedPattern.includes('*') && globPatternToRegex(normalizedPattern).test(candidate)) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function normalizeAuditPath(value: string): string {
   return value.replaceAll('\\', '/').replaceAll(/\/+/g, '/').replace(/\/$/, '');
+}
+
+function toProjectRelativeAuditPath(filePath: string): string {
+  if (!path.isAbsolute(filePath)) return filePath;
+  const relative = normalizeAuditPath(path.relative(process.cwd(), filePath));
+  return relative.startsWith('..') ? filePath : relative;
 }
 
 function globPatternToRegex(pattern: string): RegExp {
