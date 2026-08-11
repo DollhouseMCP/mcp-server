@@ -99,47 +99,56 @@ function sanitizeMetadataObject(metadata: Record<string, any>, removedKeys: stri
  * Find description fields that would leave insufficient YAML/frontmatter space.
  *
  * Element descriptions are metadata and are serialized into YAML frontmatter, so
- * The field limit deliberately reserves space for required structural metadata;
- * the serialized-content validator remains the authoritative aggregate check.
- * This walks nested metadata too because templates, agents, and skills all have
- * description-like nested fields.
+ * the field limit deliberately reserves space for required structural metadata.
+ * The same budget applies across all nested description fields, preventing several
+ * individually valid fields from collectively exceeding the frontmatter limit.
  */
 export function findOversizedDescriptionFields(
   value: unknown,
   path = 'input',
-  maxLength = SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
-  seen = new WeakSet<object>()
+  maxLength = SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
 ): string[] {
-  if (!value || typeof value !== 'object') {
-    return [];
-  }
+  const descriptions: Array<{ readonly path: string; readonly length: number }> = [];
+  const seen = new WeakSet<object>();
 
-  if (seen.has(value)) {
-    return [];
-  }
-  seen.add(value);
+  const collect = (candidate: unknown, candidatePath: string): void => {
+    if (!candidate || typeof candidate !== 'object' || seen.has(candidate)) return;
+    seen.add(candidate);
 
-  const errors: string[] = [];
-  const entries = Array.isArray(value)
-    ? value.map((item, index) => [String(index), item] as const)
-    : Object.entries(value);
+    const entries = Array.isArray(candidate)
+      ? candidate.map((item, index) => [String(index), item] as const)
+      : Object.entries(candidate);
 
-  for (const [key, child] of entries) {
-    let childPath: string;
-    if (Array.isArray(value)) {
-      childPath = `${path}[${key}]`;
-    } else if (key.length > 0) {
-      childPath = `${path}.${key}`;
-    } else {
-      childPath = `${path}[""]`;
+    for (const [key, child] of entries) {
+      let childPath: string;
+      if (Array.isArray(candidate)) {
+        childPath = `${candidatePath}[${key}]`;
+      } else if (key.length > 0) {
+        childPath = `${candidatePath}.${key}`;
+      } else {
+        childPath = `${candidatePath}[""]`;
+      }
+
+      if (key === 'description' && typeof child === 'string') {
+        descriptions.push({ path: childPath, length: child.length });
+      }
+      collect(child, childPath);
     }
+  };
 
-    if (key === 'description' && typeof child === 'string' && child.length > maxLength) {
-      errors.push(`${childPath} exceeds maximum description length of ${maxLength} characters (frontmatter overhead reserved)`);
-      continue;
-    }
+  collect(value, path);
 
-    errors.push(...findOversizedDescriptionFields(child, childPath, maxLength, seen));
+  const errors = descriptions
+    .filter(description => description.length > maxLength)
+    .map(description =>
+      `${description.path} exceeds maximum description length of ${maxLength} characters (frontmatter overhead reserved)`
+    );
+  const aggregateLength = descriptions.reduce((total, description) => total + description.length, 0);
+  if (descriptions.length > 1 && aggregateLength > maxLength) {
+    errors.push(
+      `${path} description fields total ${aggregateLength} characters, exceeding the aggregate ` +
+      `frontmatter description budget of ${maxLength} characters`
+    );
   }
 
   return errors;

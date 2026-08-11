@@ -1,5 +1,4 @@
 import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
-import { UnicodeValidator } from '../../../security/validators/unicodeValidator.js';
 import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { ConsoleHandlerResult, ConsoleRequest, ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
@@ -14,6 +13,7 @@ import type {
 } from '../../stores/IConsoleAccountAllowlistStore.js';
 import {
   assertAllowlistKind,
+  normalizeAllowlistDisplayValue,
   validateAllowlistValue,
 } from '../../stores/IConsoleAccountAllowlistStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
@@ -156,7 +156,7 @@ function parseAddBody(body: unknown): { readonly kind: 'valid'; readonly value: 
     if (typeof record.kind !== 'string') throw new ConsoleStoreValidationError('kind must be a string.');
     assertAllowlistKind(record.kind, 'kind');
     if (typeof record.value !== 'string') throw new ConsoleStoreValidationError('value must be a string.');
-    const value = UnicodeValidator.normalize(record.value).normalizedContent.trim();
+    const value = normalizeAllowlistDisplayValue(record.value);
     validateAllowlistValue(record.kind, value, 'value');
     if (record.note !== undefined && record.note !== null && typeof record.note !== 'string') {
       throw new ConsoleStoreValidationError('note must be a string or null.');

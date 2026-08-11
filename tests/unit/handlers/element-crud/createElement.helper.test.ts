@@ -193,6 +193,23 @@ describe('createElement helper', () => {
       expect(mockContext.personaManager.create).not.toHaveBeenCalled();
     });
 
+    it('should reject nested descriptions that collectively exceed the frontmatter budget', async () => {
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+
+      const result = await createElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        description: descriptionPart,
+        metadata: {
+          variables: [{ name: 'topic', description: descriptionPart }],
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌ Description too large');
+      expect(result.content[0].text).toContain('aggregate frontmatter description budget');
+      expect(mockContext.templateManager.create).not.toHaveBeenCalled();
+    });
+
     it('should sanitize metadata to remove dangerous properties', async () => {
       const metadata = {
         description: 'safe',

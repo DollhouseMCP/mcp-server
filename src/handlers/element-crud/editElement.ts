@@ -809,6 +809,15 @@ export async function editElement(
 
   // Deep merge the update into the element with security options
   const mergedData = deepMerge(editableElement, updateObj, MERGE_OPTIONS);
+  const mergedDescriptionErrors = findOversizedDescriptionFields(
+    mergedData.metadata,
+    'element.metadata'
+  );
+  if (mergedDescriptionErrors.length > 0) {
+    return error(
+      `Description length validation failed:\n${mergedDescriptionErrors.map(descriptionError => `  • ${descriptionError}`).join('\n')}`
+    );
+  }
 
   // Apply merged data back to element
   for (const [key, value] of Object.entries(mergedData)) {

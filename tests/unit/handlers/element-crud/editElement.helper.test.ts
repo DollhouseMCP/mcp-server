@@ -1248,6 +1248,47 @@ describe('editElement helper', () => {
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
     });
 
+    it('should reject nested descriptions that collectively exceed the frontmatter budget', async () => {
+      const element = createMockElement('test-template');
+      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+
+      const result = await editElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        input: {
+          description: descriptionPart,
+          metadata: {
+            variables: [{ name: 'topic', description: descriptionPart }],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('aggregate frontmatter description budget');
+      expect(mockContext.templateManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should include existing descriptions in the aggregate frontmatter budget', async () => {
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+      const element = createMockElement('test-template', { description: descriptionPart });
+      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        input: {
+          metadata: {
+            variables: [{ name: 'topic', description: descriptionPart }],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('element.metadata description fields total');
+      expect(mockContext.templateManager.save).not.toHaveBeenCalled();
+    });
+
     it('should format empty metadata keys without doubled path separators', async () => {
       const element = createMockElement('test-skill');
       mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
