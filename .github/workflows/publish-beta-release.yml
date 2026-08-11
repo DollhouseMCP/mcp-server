@@ -83,20 +83,56 @@ jobs:
             fi
           fi
 
-          if gh release view "${tag_name}" >/dev/null 2>&1; then
-            echo "::error::Release ${tag_name} already exists"
-            exit 1
+          release_exists=false
+          if release_json=$(gh release view "${tag_name}" \
+            --json tagName,isPrerelease,isDraft,targetCommitish 2>/dev/null); then
+            release_exists=true
+            release_tag=$(jq -r '.tagName' <<<"${release_json}")
+            release_prerelease=$(jq -r '.isPrerelease' <<<"${release_json}")
+            release_draft=$(jq -r '.isDraft' <<<"${release_json}")
+            release_target=$(jq -r '.targetCommitish' <<<"${release_json}")
+
+            if [[ "${tag_exists}" != "true" ]]; then
+              echo "::error::Release ${tag_name} exists without its expected Git tag"
+              exit 1
+            fi
+            if [[ "${release_tag}" != "${tag_name}" ]]; then
+              echo "::error::Release lookup returned tag ${release_tag}, not ${tag_name}"
+              exit 1
+            fi
+            if [[ "${release_prerelease}" != "true" || "${release_draft}" != "false" ]]; then
+              echo "::error::Existing release ${tag_name} must be a published prerelease"
+              exit 1
+            fi
+            if [[ "${release_target}" != "${GITHUB_SHA}" ]]; then
+              echo "::error::Release ${tag_name} targets ${release_target}, not ${GITHUB_SHA}"
+              exit 1
+            fi
           fi
 
+          npm_exists=false
           if npm view "@dollhousemcp/mcp-server@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "::error::npm version ${package_version} already exists"
-            exit 1
+            if [[ "${release_exists}" != "true" ]]; then
+              echo "::error::npm version ${package_version} exists without a matching reusable GitHub prerelease"
+              exit 1
+            fi
+            npm_beta_version=$(npm view "@dollhousemcp/mcp-server" dist-tags.beta --registry=https://registry.npmjs.org 2>/dev/null || true)
+            if [[ ! "${npm_beta_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
+              echo "::error::npm version ${package_version} exists, but dist-tags.beta is invalid or unset (${npm_beta_version:-<unset>})"
+              exit 1
+            fi
+            if [[ "${npm_beta_version}" != "${package_version}" ]]; then
+              echo "::warning::npm dist-tags.beta points to ${npm_beta_version}; leaving that valid beta channel unchanged while repairing ${package_version} artifacts"
+            fi
+            npm_exists=true
           fi
 
           {
             echo "version=${package_version}"
             echo "tag_name=${tag_name}"
             echo "tag_exists=${tag_exists}"
+            echo "release_exists=${release_exists}"
+            echo "npm_exists=${npm_exists}"
           } >> "$GITHUB_OUTPUT"
 
       - name: Verify default-branch release workflows are prerelease-safe
@@ -151,13 +187,20 @@ jobs:
       - name: Dry-run summary
         if: ${{ inputs.dry_run == true }}
         shell: bash
+        env:
+          RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}
         run: |
+          if [[ "${RELEASE_EXISTS}" == "true" ]]; then
+            release_action="reuse matching GitHub prerelease"
+          else
+            release_action="create GitHub prerelease"
+          fi
           {
             echo "## Beta Publish Dry Run"
             echo ""
             echo "- Version: \`${{ steps.release.outputs.version }}\`"
             echo "- Tag: \`${{ steps.release.outputs.tag_name }}\`"
-            echo "- Would create GitHub prerelease: yes"
+            echo "- Release action: ${release_action}"
             echo "- Downstream npm dist-tag: \`beta\`"
             echo "- Downstream bundle: \`dollhousemcp-${{ steps.release.outputs.version }}.mcpb\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -171,6 +214,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
           TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}
+          RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -182,11 +226,15 @@ jobs:
             echo "Reusing ${TAG_NAME}, which already points to ${GITHUB_SHA}"
           fi
 
-          gh release create "${TAG_NAME}" \
-            --target "${GITHUB_SHA}" \
-            --title "DollhouseMCP ${TAG_NAME}" \
-            --notes-file beta-release-notes.md \
-            --prerelease
+          if [[ "${RELEASE_EXISTS}" != "true" ]]; then
+            gh release create "${TAG_NAME}" \
+              --target "${GITHUB_SHA}" \
+              --title "DollhouseMCP ${TAG_NAME}" \
+              --notes-file beta-release-notes.md \
+              --prerelease
+          else
+            echo "Reusing published prerelease ${TAG_NAME}, which targets ${GITHUB_SHA}"
+          fi
 
       # Releases created with GITHUB_TOKEN do not emit workflow runs. Dispatch
       # each publisher explicitly at the immutable release tag, capture the new
@@ -197,6 +245,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          NPM_EXISTS: ${{ steps.release.outputs.npm_exists }}
         run: |
           dispatch_and_capture() {
             local workflow="$1"
@@ -231,11 +280,18 @@ jobs:
               | head -n 1
           }
 
-          npm_run_id=$(dispatch_and_capture publish-npm.yml --field dry_run=false)
+          publisher_run_ids=()
+          if [[ "${NPM_EXISTS}" != "true" ]]; then
+            npm_run_id=$(dispatch_and_capture publish-npm.yml --field dry_run=false)
+            publisher_run_ids+=("${npm_run_id}")
+          else
+            echo "Skipping npm publisher: ${TAG_NAME} is already published with the beta dist-tag"
+          fi
+
           packages_run_id=$(dispatch_and_capture publish-github-packages.yml --field dry_run=false)
           mcpb_run_id=$(dispatch_and_capture publish-mcpb.yml --field tag_name="${TAG_NAME}")
 
-          publisher_run_ids=("${npm_run_id}" "${packages_run_id}" "${mcpb_run_id}")
+          publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")
           for run_id in "${publisher_run_ids[@]}"; do
             gh run watch "${run_id}" --exit-status
           done
