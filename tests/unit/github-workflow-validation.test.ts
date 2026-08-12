@@ -358,6 +358,8 @@ describe('GitHub Workflow Validation', () => {
       expect(betaPublishWorkflow).toContain('--json tagName,isPrerelease,isDraft,targetCommitish');
       expect(betaPublishWorkflow).toContain('[[ "${release_prerelease}" != "true" || "${release_draft}" != "false" ]]');
       expect(betaPublishWorkflow).toContain('[[ "${release_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('::warning::Release ${tag_name} records a different targetCommitish');
+      expect(betaPublishWorkflow).not.toContain('::error::Release ${tag_name} targets');
       expect(betaPublishWorkflow).toContain('echo "release_exists=${release_exists}"');
       expect(betaPublishWorkflow).toContain('echo "npm_publish_complete=${npm_publish_complete}"');
       expect(betaPublishWorkflow).toContain('beta_is_newer()');

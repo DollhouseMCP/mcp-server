@@ -104,9 +104,11 @@ jobs:
               echo "::error::Existing release ${tag_name} must be a published prerelease"
               exit 1
             fi
+            # The dereferenced remote tag above is the authoritative release identity.
+            # GitHub ignores targetCommitish when the tag already exists, and this
+            # metadata may retain a symbolic branch name that advances after release.
             if [[ "${release_target}" != "${GITHUB_SHA}" ]]; then
-              echo "::error::Release ${tag_name} targets ${release_target}, not ${GITHUB_SHA}"
-              exit 1
+              echo "::warning::Release ${tag_name} records a different targetCommitish; verified tag ${tag_name} resolves to ${GITHUB_SHA}"
             fi
           fi
 

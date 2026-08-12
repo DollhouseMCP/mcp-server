@@ -20,6 +20,7 @@ interface BetaWorkflow {
 
 interface Scenario {
   readonly tagTarget?: string;
+  readonly branchTarget?: string;
   readonly release?: {
     readonly tagName?: string;
     readonly isPrerelease?: boolean;
@@ -85,6 +86,18 @@ describe('Publish Beta Release state validation', () => {
     });
   });
 
+  it('rejects a tag that resolves to another commit without mutating release state', () => {
+    const result = runScenario({
+      tagTarget: 'f'.repeat(40),
+      release: matchingRelease({ targetCommitish: 'beta' }),
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain(`Tag v${packageVersion} already exists at ${'f'.repeat(40)}`);
+    expect(result.commands).toHaveLength(2);
+    expect(result.commands.every(command => command.startsWith('git ls-remote --tags '))).toBe(true);
+  });
+
   it('rejects release metadata that names a different tag', () => {
     const result = runScenario({
       tagTarget: expectedSha,
@@ -95,14 +108,41 @@ describe('Publish Beta Release state validation', () => {
     expect(result.stdout).toContain('Release lookup returned tag v2.1.0-beta.wrong');
   });
 
-  it('rejects an existing release that targets another commit', () => {
+  it('accepts a symbolic release target when the immutable tag matches', () => {
+    const result = runScenario({
+      tagTarget: expectedSha,
+      branchTarget: expectedSha,
+      release: matchingRelease({ targetCommitish: 'beta' }),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('records a different targetCommitish');
+    expect(result.outputs.release_exists).toBe('true');
+  });
+
+  it('accepts a symbolic release target after the branch advances', () => {
+    const result = runScenario({
+      tagTarget: expectedSha,
+      branchTarget: 'f'.repeat(40),
+      release: matchingRelease({ targetCommitish: 'beta' }),
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(
+      `verified tag v${packageVersion} resolves to ${expectedSha}`,
+    );
+    expect(result.outputs.release_exists).toBe('true');
+  });
+
+  it('treats non-authoritative release target metadata as audit-only', () => {
     const result = runScenario({
       tagTarget: expectedSha,
       release: matchingRelease({ targetCommitish: 'f'.repeat(40) }),
     });
 
-    expect(result.status).toBe(1);
-    expect(result.stdout).toContain(`not ${expectedSha}`);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('records a different targetCommitish');
+    expect(result.stdout).not.toContain('f'.repeat(40));
   });
 
   it('rejects a draft or non-prerelease release', () => {
@@ -228,12 +268,14 @@ function runScenario(scenario: Scenario): {
   readonly stdout: string;
   readonly stderr: string;
   readonly outputs: Readonly<Record<string, string>>;
+  readonly commands: readonly string[];
 } {
   expect(validationScript).toBeDefined();
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'beta-release-state-'));
   tempDirectories.push(directory);
   const binDirectory = path.join(directory, 'bin');
   const outputPath = path.join(directory, 'github-output');
+  const commandLogPath = path.join(directory, 'commands.log');
   fs.mkdirSync(binDirectory);
   writeExecutable(path.join(binDirectory, 'git'), fakeGitScript);
   writeExecutable(path.join(binDirectory, 'gh'), fakeGhScript);
@@ -252,6 +294,8 @@ function runScenario(scenario: Scenario): {
       INPUT_VERSION: packageVersion,
       FAKE_TAG_OBJECT: scenario.tagTarget ? 'a'.repeat(40) : '',
       FAKE_TAG_TARGET: scenario.tagTarget ?? '',
+      FAKE_BRANCH_TARGET: scenario.branchTarget ?? '',
+      FAKE_COMMAND_LOG: commandLogPath,
       FAKE_RELEASE_EXISTS: release ? 'true' : 'false',
       FAKE_RELEASE_JSON: release ? JSON.stringify(release) : '',
       FAKE_NPM_EXISTS: scenario.npmExists ? 'true' : 'false',
@@ -265,6 +309,7 @@ function runScenario(scenario: Scenario): {
     stdout: result.stdout,
     stderr: result.stderr,
     outputs: readOutputs(outputPath),
+    commands: readLines(commandLogPath),
   };
 }
 
@@ -286,14 +331,23 @@ function readOutputs(filePath: string): Readonly<Record<string, string>> {
   );
 }
 
+function readLines(filePath: string): readonly string[] {
+  if (!fs.existsSync(filePath)) return [];
+  return fs.readFileSync(filePath, 'utf8').trim().split('\n').filter(Boolean);
+}
+
 const fakeGitScript = `#!/usr/bin/env bash
 set -euo pipefail
+printf 'git %s\n' "$*" >> "\${FAKE_COMMAND_LOG}"
 case "$*" in
   *'refs/tags/'*'^{}'*)
     [[ -z "\${FAKE_TAG_TARGET:-}" ]] || printf '%s refs/tags/tag^{}\n' "\${FAKE_TAG_TARGET}"
     ;;
   *'refs/tags/'*)
     [[ -z "\${FAKE_TAG_OBJECT:-}" ]] || printf '%s refs/tags/tag\n' "\${FAKE_TAG_OBJECT}"
+    ;;
+  *'refs/heads/'*)
+    [[ -z "\${FAKE_BRANCH_TARGET:-}" ]] || printf '%s refs/heads/branch\n' "\${FAKE_BRANCH_TARGET}"
     ;;
   *)
     exit 2
@@ -303,6 +357,7 @@ esac
 
 const fakeGhScript = `#!/usr/bin/env bash
 set -euo pipefail
+printf 'gh %s\n' "$*" >> "\${FAKE_COMMAND_LOG}"
 if [[ "$1" == 'release' && "$2" == 'view' && "\${FAKE_RELEASE_EXISTS:-false}" == 'true' ]]; then
   printf '%s\n' "\${FAKE_RELEASE_JSON}"
   exit 0
@@ -312,6 +367,7 @@ exit 1
 
 const fakeNpmScript = `#!/usr/bin/env bash
 set -euo pipefail
+printf 'npm %s\n' "$*" >> "\${FAKE_COMMAND_LOG}"
 if [[ "$*" == *'dist-tags.beta'* ]]; then
   [[ -z "\${FAKE_NPM_BETA_VERSION:-}" ]] || printf '%s\n' "\${FAKE_NPM_BETA_VERSION}"
   exit 0
