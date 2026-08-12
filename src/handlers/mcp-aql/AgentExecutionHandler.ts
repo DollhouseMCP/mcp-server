@@ -888,7 +888,10 @@ export class AgentExecutionHandler {
     const blockCheck = enforcer.check(agentName);
     const sessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
     // Execution responses are not a global operator feed: only return the block
-    // created for this agent's active goal in this exact session.
+    // created for this agent's active goal in this exact session. Undefined
+    // session IDs match for stdio, but a session-owned block is suppressed when
+    // runtime context is unavailable. Legacy blocks without goal ownership are
+    // likewise enforced without being replayed as fresh goal notifications.
     if (
       !blockCheck.blocked ||
       blockCheck.sessionId !== sessionId ||
