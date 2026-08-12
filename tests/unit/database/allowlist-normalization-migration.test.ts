@@ -18,9 +18,23 @@ describe('allowlist identity normalization migration', () => {
     expect(migrationSql).not.toContain('unaccent');
   });
 
-  it('rebuilds console lookup keys from preserved display identities', () => {
+  it('captures every legacy active console row before rebuilding lookup keys', () => {
+    expect(migrationSql).toContain('CREATE TABLE IF NOT EXISTS "account_allowlist_identity_migration_reviews"');
+    expect(migrationSql).toContain('"legacy_normalized_value"');
+    expect(migrationSql).toContain('"legacy_display_value"');
+    expect(migrationSql).toContain('WHERE "revoked_at" IS NULL\nON CONFLICT ("entry_id") DO NOTHING');
+    expect(migrationSql.indexOf('INSERT INTO "account_allowlist_identity_migration_reviews"'))
+      .toBeLessThan(migrationSql.indexOf('UPDATE "account_allowlist_entries"'));
+  });
+
+  it('rebuilds console lookup keys without confusable folding', () => {
     expect(migrationSql).toContain('SET\n  "normalized_value" = CASE');
     expect(migrationSql).toContain("WHEN \"kind\" IN ('email', 'github_username') THEN translate(");
+  });
+
+  it('warns while legacy console identities still need operator review', () => {
+    expect(migrationSql).toContain('WHERE "reviewed_at" IS NULL');
+    expect(migrationSql).toContain('require identity review before account-allowlist authority cutover');
   });
 
   it('fails closed on embedded and active-console canonical collisions', () => {
