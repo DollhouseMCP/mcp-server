@@ -198,12 +198,19 @@ export class DangerZoneEnforcer {
 
       if (data.version === 1 && data.blocks && typeof data.blocks === 'object') {
         for (const [name, block] of Object.entries(data.blocks)) {
+          const parsedBlockedAt = new Date(block.blockedAt);
+          const blockedAt = Number.isNaN(parsedBlockedAt.getTime())
+            ? new Date(0)
+            : parsedBlockedAt;
+          if (blockedAt.getTime() === 0 && block.blockedAt !== blockedAt.toISOString()) {
+            logger.warn(`Invalid persisted blockedAt for agent '${name}'; preserving block with epoch timestamp`);
+          }
           this.blockedContexts.set(name, {
             eventId: block.eventId ?? block.verificationId,
             agentName: name,
             reason: block.reason,
             triggeredPatterns: block.triggeredPatterns ?? [],
-            blockedAt: new Date(block.blockedAt),
+            blockedAt,
             verificationId: block.verificationId,
             sessionId: block.sessionId,
             goalId: block.goalId,

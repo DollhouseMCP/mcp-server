@@ -464,6 +464,30 @@ describe('DangerZoneEnforcer', () => {
       expect(result.blockedAt).toBe('2026-01-01T00:00:00.000Z');
     });
 
+    it('should preserve a block with a safe timestamp when persisted blockedAt is invalid', async () => {
+      const persistedData = JSON.stringify({
+        version: 1,
+        blocks: {
+          'agent-invalid-time': {
+            reason: 'Previous session block',
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
+            blockedAt: 'not-a-timestamp',
+            verificationId: 'v-invalid-time',
+          },
+        },
+      });
+
+      const fileOps = createMockFileOps({ readFileResult: persistedData });
+      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      await instance.initialize();
+
+      expect(instance.check('agent-invalid-time')).toEqual(expect.objectContaining({
+        blocked: true,
+        blockedAt: '1970-01-01T00:00:00.000Z',
+        verificationId: 'v-invalid-time',
+      }));
+    });
+
     it('should start with empty blocks when file is missing', async () => {
       const fileOps = createMockFileOps({
         readFileError: Object.assign(new Error('ENOENT'), { code: 'ENOENT' }),
