@@ -55,15 +55,17 @@ interface BlockedContext {
  */
 interface PersistedBlocks {
   version: number;
-  blocks: Record<string, {
-    eventId?: string;
-    reason: string;
-    triggeredPatterns: string[];
-    blockedAt: string;
-    verificationId?: string;
-    sessionId?: string;
-    goalId?: string;
-  }>;
+  blocks: Record<string, PersistedBlock>;
+}
+
+interface PersistedBlock {
+  eventId?: string;
+  reason: string;
+  triggeredPatterns: string[];
+  blockedAt: string;
+  verificationId?: string;
+  sessionId?: string;
+  goalId?: string;
 }
 
 /**
@@ -198,23 +200,7 @@ export class DangerZoneEnforcer {
 
       if (data.version === 1 && data.blocks && typeof data.blocks === 'object') {
         for (const [name, block] of Object.entries(data.blocks)) {
-          const parsedBlockedAt = new Date(block.blockedAt);
-          const blockedAt = Number.isNaN(parsedBlockedAt.getTime())
-            ? new Date(0)
-            : parsedBlockedAt;
-          if (blockedAt.getTime() === 0 && block.blockedAt !== blockedAt.toISOString()) {
-            logger.warn(`Invalid persisted blockedAt for agent '${name}'; preserving block with epoch timestamp`);
-          }
-          this.blockedContexts.set(name, {
-            eventId: block.eventId ?? block.verificationId,
-            agentName: name,
-            reason: block.reason,
-            triggeredPatterns: block.triggeredPatterns ?? [],
-            blockedAt,
-            verificationId: block.verificationId,
-            sessionId: block.sessionId,
-            goalId: block.goalId,
-          });
+          this.blockedContexts.set(name, this.restoreBlockedContext(name, block));
         }
 
         if (this.blockedContexts.size > 0) {
@@ -247,6 +233,30 @@ export class DangerZoneEnforcer {
         });
       }
     }
+  }
+
+  private restoreBlockedContext(agentName: string, block: PersistedBlock): BlockedContext {
+    return {
+      // Legacy records predate eventId; their challenge ID is the only stable identity available.
+      eventId: block.eventId ?? block.verificationId,
+      agentName,
+      reason: block.reason,
+      triggeredPatterns: block.triggeredPatterns ?? [],
+      blockedAt: this.restoreBlockedAt(agentName, block.blockedAt),
+      verificationId: block.verificationId,
+      sessionId: block.sessionId,
+      goalId: block.goalId,
+    };
+  }
+
+  private restoreBlockedAt(agentName: string, value: string): Date {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+
+    logger.warn(`Invalid persisted blockedAt for agent '${agentName}'; preserving block with epoch timestamp`);
+    return new Date(0);
   }
 
   /**
