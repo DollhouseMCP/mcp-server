@@ -701,7 +701,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
       const entries = await this.readAllowlistRaw();
       const value = normalizeAuthAllowlistValue(input.kind, input.value);
-      const duplicate = entries.find(e =>
+      const duplicate = entries.some(e =>
         e.kind === input.kind && storedAuthAllowlistValueMatches(input.kind, e.value, value));
       if (duplicate) {
         throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
@@ -749,15 +749,13 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
     const entries = await this.readAllowlist();
     if (entries.length === 0) return false;
-    const email = values.email && normalizeAuthAllowlistValue('email', values.email);
-    const githubUsername = values.githubUsername && normalizeAuthAllowlistValue('github_username', values.githubUsername);
-    const githubId = values.githubId && normalizeAuthAllowlistValue('github_id', values.githubId);
     for (const e of entries) {
-      if (e.kind === 'email' && email && storedAuthAllowlistValueMatches(e.kind, e.value, email)) return true;
-      if (e.kind === 'github_username' && githubUsername &&
-        storedAuthAllowlistValueMatches(e.kind, e.value, githubUsername)) return true;
-      if (e.kind === 'github_id' && githubId &&
-        storedAuthAllowlistValueMatches(e.kind, e.value, githubId)) return true;
+      if (e.kind === 'email' && values.email &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.email)) return true;
+      if (e.kind === 'github_username' && values.githubUsername &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.githubUsername)) return true;
+      if (e.kind === 'github_id' && values.githubId &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.githubId)) return true;
     }
     return false;
   }

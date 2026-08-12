@@ -83,6 +83,8 @@ BEGIN
       SELECT
         "kind",
         CASE
+          -- Keep casing ASCII-only. PostgreSQL lower() is locale-aware and can
+          -- alter a non-ASCII security principal.
           WHEN "kind" IN ('email', 'github_username') THEN translate(
             normalize(btrim("display_value"), NFC),
             'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
@@ -104,6 +106,8 @@ END $$;
 UPDATE "account_allowlist_entries"
 SET
   "normalized_value" = CASE
+    -- Keep casing ASCII-only. PostgreSQL lower() is locale-aware and can alter
+    -- a non-ASCII security principal.
     WHEN "kind" IN ('email', 'github_username') THEN translate(
       normalize(btrim("display_value"), NFC),
       'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
@@ -113,12 +117,16 @@ SET
   END,
   "display_value" = normalize(btrim("display_value"), NFC)
 WHERE
-  "normalized_value" IS DISTINCT FROM CASE
-    WHEN "kind" IN ('email', 'github_username') THEN translate(
-      normalize(btrim("display_value"), NFC),
-      'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
-      'abcdefghijklmnopqrstuvwxyz'
-    )
-    ELSE normalize(btrim("display_value"), NFC)
-  END
-  OR "display_value" IS DISTINCT FROM normalize(btrim("display_value"), NFC);
+  "revoked_at" IS NULL
+  AND (
+    "normalized_value" IS DISTINCT FROM CASE
+      -- Match the ASCII-only casing policy used above.
+      WHEN "kind" IN ('email', 'github_username') THEN translate(
+        normalize(btrim("display_value"), NFC),
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZ',
+        'abcdefghijklmnopqrstuvwxyz'
+      )
+      ELSE normalize(btrim("display_value"), NFC)
+    END
+    OR "display_value" IS DISTINCT FROM normalize(btrim("display_value"), NFC)
+  );

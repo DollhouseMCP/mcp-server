@@ -30,6 +30,10 @@ describe('allowlist identity normalization migration', () => {
   it('rebuilds console lookup keys without confusable folding', () => {
     expect(migrationSql).toContain('SET\n  "normalized_value" = CASE');
     expect(migrationSql).toContain("WHEN \"kind\" IN ('email', 'github_username') THEN translate(");
+    expect(migrationSql).toContain('translate(\n            normalize(btrim("display_value"), NFC)');
+    expect(migrationSql.match(/'ABCDEFGHIJKLMNOPQRSTUVWXYZ'/g)).toHaveLength(3);
+    expect(migrationSql.match(/'abcdefghijklmnopqrstuvwxyz'/g)).toHaveLength(3);
+    expect(migrationSql).toContain('PostgreSQL lower() is locale-aware');
   });
 
   it('warns while legacy console identities still need operator review', () => {
@@ -41,5 +45,12 @@ describe('allowlist identity normalization migration', () => {
     expect(migrationSql.match(/HAVING count\(\*\) > 1/g)).toHaveLength(2);
     expect(migrationSql).toContain('auth_allowlist contains identities that collide');
     expect(migrationSql).toContain('account_allowlist_entries contains active identities that collide');
+    expect(migrationSql.indexOf('account_allowlist_entries contains active identities that collide'))
+      .toBeLessThan(migrationSql.indexOf('UPDATE "account_allowlist_entries"'));
+  });
+
+  it('leaves revoked console rows unchanged as audit history', () => {
+    const consoleUpdate = migrationSql.slice(migrationSql.indexOf('UPDATE "account_allowlist_entries"'));
+    expect(consoleUpdate).toContain('"revoked_at" IS NULL\n  AND (');
   });
 });
