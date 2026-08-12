@@ -344,19 +344,33 @@ describe('GitHub Workflow Validation', () => {
       expect(betaPublishWorkflow).toContain('--field tag_name="${TAG_NAME}"');
       expect(betaPublishWorkflow).toContain('gh run list');
       expect(betaPublishWorkflow).toContain('gh run watch "${run_id}" --exit-status');
-      expect(betaPublishWorkflow).toContain('publisher_run_ids=("${npm_run_id}" "${packages_run_id}" "${mcpb_run_id}")');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids=()');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${npm_run_id}")');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")');
     });
 
-    it('should recover release creation only when an existing tag points at the same commit', () => {
+    it('should reuse only a matching published prerelease and safely retry publishers', () => {
       const betaPublishWorkflow = fs.readFileSync(path.join(workflowDir, 'publish-beta-release.yml'), 'utf8');
 
       expect(betaPublishWorkflow).toContain('refs/tags/${tag_name}^{}');
       expect(betaPublishWorkflow).toContain('[[ "${remote_tag_target}" != "${GITHUB_SHA}" ]]');
       expect(betaPublishWorkflow).toContain('echo "tag_exists=${tag_exists}"');
+      expect(betaPublishWorkflow).toContain('--json tagName,isPrerelease,isDraft,targetCommitish');
+      expect(betaPublishWorkflow).toContain('[[ "${release_prerelease}" != "true" || "${release_draft}" != "false" ]]');
+      expect(betaPublishWorkflow).toContain('[[ "${release_target}" != "${GITHUB_SHA}" ]]');
+      expect(betaPublishWorkflow).toContain('echo "release_exists=${release_exists}"');
+      expect(betaPublishWorkflow).toContain('echo "npm_publish_complete=${npm_publish_complete}"');
+      expect(betaPublishWorkflow).toContain('beta_is_newer()');
+      expect(betaPublishWorkflow).not.toContain('import semver from');
       expect(betaPublishWorkflow).toContain('} >> "$GITHUB_OUTPUT"');
       expect(betaPublishWorkflow).toContain('TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}');
+      expect(betaPublishWorkflow).toContain('RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}');
       expect(betaPublishWorkflow).toContain('if [[ "${TAG_EXISTS}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('if [[ "${RELEASE_EXISTS}" != "true" ]]');
       expect(betaPublishWorkflow).toContain('gh release create "${TAG_NAME}"');
+      expect(betaPublishWorkflow).toContain('NPM_PUBLISH_COMPLETE: ${{ steps.release.outputs.npm_publish_complete }}');
+      expect(betaPublishWorkflow).toContain('if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]');
+      expect(betaPublishWorkflow).toContain('publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")');
     });
   });
 });
