@@ -1244,6 +1244,29 @@ describe('InMemoryConsoleAccountAllowlistStore', () => {
     await expect(store.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(false);
     await expect(store.matchesIdentity({ email: '\u0410lice@example.test' })).resolves.toBe(false);
   });
+
+  it('uses the preserved display identity for legacy Unicode-cased rows', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore([{
+      id: FACTOR_ID,
+      kind: 'email',
+      normalizedValue: '\u00e4lice@example.test',
+      displayValue: '\u00c4lice@example.test',
+      note: null,
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+      revokedByUserId: null,
+      revokedAt: null,
+    }]);
+
+    await expect(store.matchesIdentity({ email: '\u00c4lice@example.test' })).resolves.toBe(true);
+    await expect(store.matchesIdentity({ email: '\u00e4lice@example.test' })).resolves.toBe(false);
+    await expect(store.add({
+      kind: 'email',
+      value: '\u00c4lice@example.test',
+      createdByUserId: USER_ID,
+      createdAt: THIRTY_MINUTES,
+    })).rejects.toThrow('already exists');
+  });
 });
 
 describe('InMemoryConsoleSecurityInvalidationStore', () => {
