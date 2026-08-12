@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, or, type SQL } from 'drizzle-orm';
+import { and, asc, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -26,6 +26,20 @@ import {
 
 export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllowlistStore {
   constructor(private readonly db: DatabaseInstance) {}
+
+  async assertIdentityMigrationReviewed(): Promise<void> {
+    const rows = await withSystemContext(this.db, tx => tx.execute(sql`
+      SELECT "entry_id" AS "entryId"
+      FROM "account_allowlist_identity_migration_reviews"
+      WHERE "reviewed_at" IS NULL
+      LIMIT 1
+    `)) as unknown as Array<{ readonly entryId: string }>;
+    if (rows.length > 0) {
+      throw new Error(
+        'Sign-in allowlist authority cutover refused: legacy account allowlist identities require operator review.',
+      );
+    }
+  }
 
   async listActive(): Promise<ConsoleAccountAllowlistEntry[]> {
     return withSystemContext(this.db, tx => listActiveAccountAllowlistEntriesWithTx(tx));

@@ -1954,6 +1954,19 @@ describe('PostgresAdminAuditWriter', () => {
 });
 
 describe('PostgresConsoleAccountAllowlistStore', () => {
+  it('blocks sign-in authority cutover while legacy identities need review', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    transaction.execute = jest.fn()
+      .mockResolvedValueOnce([{ entryId: ALLOWLIST_ID }])
+      .mockResolvedValueOnce([]);
+
+    await expect(store.assertIdentityMigrationReviewed()).rejects.toThrow(
+      'legacy account allowlist identities require operator review',
+    );
+    await expect(store.assertIdentityMigrationReviewed()).resolves.toBeUndefined();
+    expect(transaction.execute).toHaveBeenCalledTimes(2);
+  });
+
   it('uses active-entry filters and maps allowlist rows without exposing revoked history', async () => {
     const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
     transaction.select = jest.fn(() => selectingOrderedChain([allowlistRow()]));

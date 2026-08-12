@@ -159,7 +159,7 @@ WHERE reviewed_at IS NULL
 ORDER BY captured_at, entry_id;
 ```
 
-For each result, verify the intended principal against the external identity provider. Revoke and recreate an entry if the stored display value is not the intended principal, then record the review with a timestamp and a non-sensitive note. This explicit operator step avoids making visually similar cross-script identities equivalent during migration.
+For each result, verify the intended principal against the external identity provider. Revoke and recreate an entry if the stored display value is not the intended principal, then record the review with a timestamp and a non-sensitive note. Embedded PostgreSQL startup fails closed while any review remains pending, so the uncertain table cannot silently become the live sign-in authority. This explicit operator step avoids making visually similar cross-script identities equivalent during migration.
 
 **Denial behavior:** a denied user sees an "Access denied" HTML page (not a raw JSON error), and an `auth.allowlist_denied` event lands in `auth_identity_events` with their identity values for operator diagnosis. The audit log is queryable via `psql` or the future web console.
 
