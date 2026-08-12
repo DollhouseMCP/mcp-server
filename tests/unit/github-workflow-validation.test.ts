@@ -360,6 +360,8 @@ describe('GitHub Workflow Validation', () => {
       expect(betaPublishWorkflow).toContain('[[ "${release_target}" != "${GITHUB_SHA}" ]]');
       expect(betaPublishWorkflow).toContain('echo "release_exists=${release_exists}"');
       expect(betaPublishWorkflow).toContain('echo "npm_publish_complete=${npm_publish_complete}"');
+      expect(betaPublishWorkflow).toContain('beta_is_newer()');
+      expect(betaPublishWorkflow).not.toContain('import semver from');
       expect(betaPublishWorkflow).toContain('} >> "$GITHUB_OUTPUT"');
       expect(betaPublishWorkflow).toContain('TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}');
       expect(betaPublishWorkflow).toContain('RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}');

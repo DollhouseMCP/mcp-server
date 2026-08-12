@@ -122,19 +122,48 @@ jobs:
               exit 1
             fi
             npm_latest_version=$(npm view "@dollhousemcp/mcp-server" dist-tags.latest --registry=https://registry.npmjs.org 2>/dev/null || true)
-            if ! node --input-type=module -e '
-              import semver from "semver";
-              const version = process.argv[1];
-              if (!semver.valid(version) || semver.prerelease(version) !== null) process.exit(1);
-            ' "${npm_latest_version}"; then
+            if [[ ! "${npm_latest_version}" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
               echo "::error::npm dist-tags.latest must point to a stable SemVer before a beta retry can skip npm publication (${npm_latest_version:-<unset>})"
               exit 1
             fi
             if [[ "${npm_beta_version}" != "${package_version}" ]]; then
-              if ! node --input-type=module -e '
-                import semver from "semver";
-                if (!semver.gt(process.argv[1], process.argv[2])) process.exit(1);
-              ' "${npm_beta_version}" "${package_version}"; then
+              beta_is_newer() {
+                local left="$1"
+                local right="$2"
+                local left_core="${left%%-*}"
+                local right_core="${right%%-*}"
+                local left_pre="${left#*-}"
+                local right_pre="${right#*-}"
+                local -a left_core_parts right_core_parts left_ids right_ids
+                local index left_id right_id
+                local LC_ALL=C
+
+                IFS='.' read -r -a left_core_parts <<< "${left_core}"
+                IFS='.' read -r -a right_core_parts <<< "${right_core}"
+                for index in 0 1 2; do
+                  if ((10#${left_core_parts[index]} > 10#${right_core_parts[index]})); then return 0; fi
+                  if ((10#${left_core_parts[index]} < 10#${right_core_parts[index]})); then return 1; fi
+                done
+
+                IFS='.' read -r -a left_ids <<< "${left_pre}"
+                IFS='.' read -r -a right_ids <<< "${right_pre}"
+                for ((index = 0; index < ${#left_ids[@]} && index < ${#right_ids[@]}; index++)); do
+                  left_id="${left_ids[index]}"
+                  right_id="${right_ids[index]}"
+                  [[ "${left_id}" == "${right_id}" ]] && continue
+                  if [[ "${left_id}" =~ ^[0-9]+$ && "${right_id}" =~ ^[0-9]+$ ]]; then
+                    if ((10#${left_id} > 10#${right_id})); then return 0; fi
+                    return 1
+                  fi
+                  if [[ "${left_id}" =~ ^[0-9]+$ ]]; then return 1; fi
+                  if [[ "${right_id}" =~ ^[0-9]+$ ]]; then return 0; fi
+                  [[ "${left_id}" > "${right_id}" ]] && return 0
+                  return 1
+                done
+                ((${#left_ids[@]} > ${#right_ids[@]}))
+              }
+
+              if ! beta_is_newer "${npm_beta_version}" "${package_version}"; then
                 echo "::error::npm dist-tags.beta points to older beta ${npm_beta_version}; refusing to report ${package_version} complete"
                 exit 1
               fi
