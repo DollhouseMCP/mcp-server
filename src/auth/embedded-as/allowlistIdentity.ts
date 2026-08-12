@@ -17,3 +17,19 @@ export function normalizeAuthAllowlistValue(
   const principal = normalizeAuthAllowlistPrincipal(value);
   return kind === 'github_id' ? principal : principal.toLowerCase();
 }
+
+/**
+ * Compare a persisted allowlist value with a presented identity.
+ *
+ * Older durable stores may contain canonically equivalent NFD values.
+ * Normalize both sides at the comparison boundary so upgrades preserve
+ * access without introducing cross-script confusable rewriting.
+ */
+export function storedAuthAllowlistValueMatches(
+  kind: AuthAllowlistKind,
+  storedValue: string,
+  presentedValue: string,
+): boolean {
+  return normalizeAuthAllowlistValue(kind, storedValue)
+    === normalizeAuthAllowlistValue(kind, presentedValue);
+}

@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 import {
   normalizeAuthAllowlistPrincipal,
   normalizeAuthAllowlistValue,
+  storedAuthAllowlistValueMatches,
 } from '../../../../src/auth/embedded-as/allowlistIdentity.js';
 
 describe('normalizeAuthAllowlistPrincipal', () => {
@@ -21,5 +22,18 @@ describe('normalizeAuthAllowlistPrincipal', () => {
     expect(normalizeAuthAllowlistValue('email', ' ALICE@example.test ')).toBe('alice@example.test');
     expect(normalizeAuthAllowlistValue('github_username', 'Mick')).toBe('mick');
     expect(normalizeAuthAllowlistValue('github_id', ' 184286 ')).toBe('184286');
+  });
+
+  it('matches canonical equivalents without collapsing cross-script look-alikes', () => {
+    expect(storedAuthAllowlistValueMatches(
+      'email',
+      'jose\u0301@example.test',
+      'jos\u00e9@example.test',
+    )).toBe(true);
+    expect(storedAuthAllowlistValueMatches(
+      'email',
+      '\u0430lice@example.test',
+      'alice@example.test',
+    )).toBe(false);
   });
 });
