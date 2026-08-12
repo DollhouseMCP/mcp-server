@@ -121,8 +121,24 @@ jobs:
               echo "::error::npm version ${package_version} exists, but dist-tags.beta is invalid or unset (${npm_beta_version:-<unset>})"
               exit 1
             fi
+            npm_latest_version=$(npm view "@dollhousemcp/mcp-server" dist-tags.latest --registry=https://registry.npmjs.org 2>/dev/null || true)
+            if ! node --input-type=module -e '
+              import semver from "semver";
+              const version = process.argv[1];
+              if (!semver.valid(version) || semver.prerelease(version) !== null) process.exit(1);
+            ' "${npm_latest_version}"; then
+              echo "::error::npm dist-tags.latest must point to a stable SemVer before a beta retry can skip npm publication (${npm_latest_version:-<unset>})"
+              exit 1
+            fi
             if [[ "${npm_beta_version}" != "${package_version}" ]]; then
-              echo "::warning::npm dist-tags.beta points to ${npm_beta_version}; leaving that valid beta channel unchanged while repairing ${package_version} artifacts"
+              if ! node --input-type=module -e '
+                import semver from "semver";
+                if (!semver.gt(process.argv[1], process.argv[2])) process.exit(1);
+              ' "${npm_beta_version}" "${package_version}"; then
+                echo "::error::npm dist-tags.beta points to older beta ${npm_beta_version}; refusing to report ${package_version} complete"
+                exit 1
+              fi
+              echo "::warning::npm dist-tags.beta points to newer beta ${npm_beta_version}; leaving that channel unchanged while repairing ${package_version} artifacts"
             fi
             npm_publish_complete=true
           fi

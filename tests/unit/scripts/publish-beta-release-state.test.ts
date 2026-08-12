@@ -28,6 +28,7 @@ interface Scenario {
   };
   readonly npmExists?: boolean;
   readonly npmBetaVersion?: string;
+  readonly npmLatestVersion?: string;
 }
 
 const projectRoot = process.cwd();
@@ -126,6 +127,7 @@ describe('Publish Beta Release state validation', () => {
       release: matchingRelease(),
       npmExists: true,
       npmBetaVersion: packageVersion,
+      npmLatestVersion: '2.0.40',
     });
 
     expect(result.status).toBe(0);
@@ -138,11 +140,38 @@ describe('Publish Beta Release state validation', () => {
       release: matchingRelease(),
       npmExists: true,
       npmBetaVersion: '2.1.0-beta.2',
+      npmLatestVersion: '2.0.40',
     });
 
     expect(result.status).toBe(0);
     expect(result.outputs.npm_publish_complete).toBe('true');
-    expect(result.stdout).toContain('leaving that valid beta channel unchanged');
+    expect(result.stdout).toContain('leaving that channel unchanged');
+  });
+
+  it('rejects an older beta dist-tag rather than treating npm as complete', () => {
+    const result = runScenario({
+      tagTarget: expectedSha,
+      release: matchingRelease(),
+      npmExists: true,
+      npmBetaVersion: '2.0.99-beta.9',
+      npmLatestVersion: '2.0.40',
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('points to older beta 2.0.99-beta.9');
+  });
+
+  it('rejects skipping npm when latest points to a prerelease', () => {
+    const result = runScenario({
+      tagTarget: expectedSha,
+      release: matchingRelease(),
+      npmExists: true,
+      npmBetaVersion: packageVersion,
+      npmLatestVersion: packageVersion,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toContain('dist-tags.latest must point to a stable SemVer');
   });
 
   it('rejects an existing npm version when the beta dist-tag is invalid', () => {
@@ -151,6 +180,7 @@ describe('Publish Beta Release state validation', () => {
       release: matchingRelease(),
       npmExists: true,
       npmBetaVersion: '2.0.40',
+      npmLatestVersion: '2.0.40',
     });
 
     expect(result.status).toBe(1);
@@ -161,6 +191,7 @@ describe('Publish Beta Release state validation', () => {
     const result = runScenario({
       npmExists: true,
       npmBetaVersion: packageVersion,
+      npmLatestVersion: '2.0.40',
     });
 
     expect(result.status).toBe(1);
@@ -211,6 +242,7 @@ function runScenario(scenario: Scenario): {
       FAKE_RELEASE_JSON: release ? JSON.stringify(release) : '',
       FAKE_NPM_EXISTS: scenario.npmExists ? 'true' : 'false',
       FAKE_NPM_BETA_VERSION: scenario.npmBetaVersion ?? '',
+      FAKE_NPM_LATEST_VERSION: scenario.npmLatestVersion ?? '',
     },
   });
 
@@ -268,6 +300,10 @@ const fakeNpmScript = `#!/usr/bin/env bash
 set -euo pipefail
 if [[ "$*" == *'dist-tags.beta'* ]]; then
   [[ -z "\${FAKE_NPM_BETA_VERSION:-}" ]] || printf '%s\n' "\${FAKE_NPM_BETA_VERSION}"
+  exit 0
+fi
+if [[ "$*" == *'dist-tags.latest'* ]]; then
+  [[ -z "\${FAKE_NPM_LATEST_VERSION:-}" ]] || printf '%s\n' "\${FAKE_NPM_LATEST_VERSION}"
   exit 0
 fi
 if [[ "\${FAKE_NPM_EXISTS:-false}" == 'true' ]]; then
