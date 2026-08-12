@@ -135,14 +135,22 @@ jobs:
                 local left_pre="${left#*-}"
                 local right_pre="${right#*-}"
                 local -a left_core_parts right_core_parts left_ids right_ids
-                local index left_id right_id
+                local index left_id right_id left_number right_number
                 local LC_ALL=C
 
                 IFS='.' read -r -a left_core_parts <<< "${left_core}"
                 IFS='.' read -r -a right_core_parts <<< "${right_core}"
                 for index in 0 1 2; do
-                  if ((10#${left_core_parts[index]} > 10#${right_core_parts[index]})); then return 0; fi
-                  if ((10#${left_core_parts[index]} < 10#${right_core_parts[index]})); then return 1; fi
+                  left_number="${left_core_parts[index]}"
+                  right_number="${right_core_parts[index]}"
+                  left_number="${left_number#"${left_number%%[!0]*}"}"
+                  right_number="${right_number#"${right_number%%[!0]*}"}"
+                  left_number="${left_number:-0}"
+                  right_number="${right_number:-0}"
+                  if ((${#left_number} > ${#right_number})); then return 0; fi
+                  if ((${#left_number} < ${#right_number})); then return 1; fi
+                  if [[ "${left_number}" > "${right_number}" ]]; then return 0; fi
+                  if [[ "${left_number}" < "${right_number}" ]]; then return 1; fi
                 done
 
                 IFS='.' read -r -a left_ids <<< "${left_pre}"
@@ -152,7 +160,13 @@ jobs:
                   right_id="${right_ids[index]}"
                   [[ "${left_id}" == "${right_id}" ]] && continue
                   if [[ "${left_id}" =~ ^[0-9]+$ && "${right_id}" =~ ^[0-9]+$ ]]; then
-                    if ((10#${left_id} > 10#${right_id})); then return 0; fi
+                    left_number="${left_id#"${left_id%%[!0]*}"}"
+                    right_number="${right_id#"${right_id%%[!0]*}"}"
+                    left_number="${left_number:-0}"
+                    right_number="${right_number:-0}"
+                    if ((${#left_number} > ${#right_number})); then return 0; fi
+                    if ((${#left_number} < ${#right_number})); then return 1; fi
+                    if [[ "${left_number}" > "${right_number}" ]]; then return 0; fi
                     return 1
                   fi
                   if [[ "${left_id}" =~ ^[0-9]+$ ]]; then return 1; fi

@@ -148,6 +148,20 @@ describe('Publish Beta Release state validation', () => {
     expect(result.stdout).toContain('leaving that channel unchanged');
   });
 
+  it('compares numeric prerelease identifiers without fixed-width overflow', () => {
+    const result = runScenario({
+      tagTarget: expectedSha,
+      release: matchingRelease(),
+      npmExists: true,
+      npmBetaVersion: '2.1.0-beta.9223372036854775808',
+      npmLatestVersion: '2.0.40',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.outputs.npm_publish_complete).toBe('true');
+    expect(result.stdout).toContain('leaving that channel unchanged');
+  });
+
   it('rejects an older beta dist-tag rather than treating npm as complete', () => {
     const result = runScenario({
       tagTarget: expectedSha,
