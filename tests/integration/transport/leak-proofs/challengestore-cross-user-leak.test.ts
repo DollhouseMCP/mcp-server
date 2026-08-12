@@ -213,7 +213,7 @@ describe('challengestore-cross-user-leak: ChallengeStore and DangerZoneEnforcer 
         element_name: agentName,
         stepDescription: 'Completed setup',
         outcome: 'success',
-        nextActionHint: 'rm -rf /tmp/session-a-autonomy-danger',
+        nextActionHint: 'beetlejuice_beetlejuice_beetlejuice',
         riskScore: 100,
       },
     });

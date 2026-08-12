@@ -19,6 +19,7 @@
 import os from 'os';
 import path from 'path';
 import fs from 'fs/promises';
+import { randomUUID } from 'node:crypto';
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from './securityMonitor.js';
 import { EvictingQueue } from '../utils/EvictingQueue.js';
@@ -31,6 +32,8 @@ const METRICS_WINDOW_SIZE = 1000;
  * Blocked execution context
  */
 interface BlockedContext {
+  /** Stable identity for this block event */
+  eventId?: string;
   /** Agent name that triggered danger zone */
   agentName: string;
   /** Reason for blocking */
@@ -43,6 +46,8 @@ interface BlockedContext {
   verificationId?: string;
   /** Issue #1947: Session that created this block. Undefined = globally verifiable (backward compat). */
   sessionId?: string;
+  /** Goal whose autonomy evaluation created this block. */
+  goalId?: string;
 }
 
 /**
@@ -50,13 +55,17 @@ interface BlockedContext {
  */
 interface PersistedBlocks {
   version: number;
-  blocks: Record<string, {
-    reason: string;
-    triggeredPatterns: string[];
-    blockedAt: string;
-    verificationId?: string;
-    sessionId?: string;
-  }>;
+  blocks: Record<string, PersistedBlock>;
+}
+
+interface PersistedBlock {
+  eventId?: string;
+  reason: string;
+  triggeredPatterns: string[];
+  blockedAt: string;
+  verificationId?: string;
+  sessionId?: string;
+  goalId?: string;
 }
 
 /**
@@ -83,6 +92,8 @@ export interface DangerZoneAuditContext {
 export interface BlockCheckResult {
   /** Whether the context is blocked */
   blocked: boolean;
+  /** Stable identity for this block event */
+  eventId?: string;
   /** Reason for blocking (if blocked) */
   reason?: string;
   /** How to resolve the block */
@@ -91,6 +102,10 @@ export interface BlockCheckResult {
   verificationId?: string;
   /** Issue #1947: Session that created this block (undefined = globally verifiable) */
   sessionId?: string;
+  /** Goal whose autonomy evaluation created this block */
+  goalId?: string;
+  /** Original ISO-8601 time when the block was created */
+  blockedAt?: string;
 }
 
 /**
@@ -185,14 +200,7 @@ export class DangerZoneEnforcer {
 
       if (data.version === 1 && data.blocks && typeof data.blocks === 'object') {
         for (const [name, block] of Object.entries(data.blocks)) {
-          this.blockedContexts.set(name, {
-            agentName: name,
-            reason: block.reason,
-            triggeredPatterns: block.triggeredPatterns ?? [],
-            blockedAt: new Date(block.blockedAt),
-            verificationId: block.verificationId,
-            sessionId: block.sessionId,
-          });
+          this.blockedContexts.set(name, this.restoreBlockedContext(name, block));
         }
 
         if (this.blockedContexts.size > 0) {
@@ -227,6 +235,30 @@ export class DangerZoneEnforcer {
     }
   }
 
+  private restoreBlockedContext(agentName: string, block: PersistedBlock): BlockedContext {
+    return {
+      // Legacy records predate eventId; their challenge ID is the only stable identity available.
+      eventId: block.eventId ?? block.verificationId,
+      agentName,
+      reason: block.reason,
+      triggeredPatterns: block.triggeredPatterns ?? [],
+      blockedAt: this.restoreBlockedAt(agentName, block.blockedAt),
+      verificationId: block.verificationId,
+      sessionId: block.sessionId,
+      goalId: block.goalId,
+    };
+  }
+
+  private restoreBlockedAt(agentName: string, value: string): Date {
+    const parsed = new Date(value);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed;
+    }
+
+    logger.warn(`Invalid persisted blockedAt for agent '${agentName}'; preserving block with epoch timestamp`);
+    return new Date(0);
+  }
+
   /**
    * Block an agent context due to danger zone trigger
    *
@@ -255,12 +287,14 @@ export class DangerZoneEnforcer {
 
     const trimmed = agentName.trim();
     const context: BlockedContext = {
+      eventId: randomUUID(),
       agentName: trimmed,
       reason,
       triggeredPatterns,
       blockedAt: new Date(),
       verificationId,
       sessionId,
+      goalId: auditContext?.goalId,
     };
 
     this.blockedContexts.set(trimmed, context);
@@ -273,6 +307,7 @@ export class DangerZoneEnforcer {
         reason,
         triggeredPatterns,
         verificationId,
+        eventId: context.eventId,
       }
     );
 
@@ -436,6 +471,7 @@ export class DangerZoneEnforcer {
 
     return {
       blocked: true,
+      eventId: context.eventId,
       reason: context.reason,
       // Issue #142 / #405: Actionable verify_challenge instructions
       resolution: context.verificationId
@@ -443,6 +479,8 @@ export class DangerZoneEnforcer {
         : 'Contact administrator to enable danger zone operations',
       verificationId: context.verificationId,
       sessionId: context.sessionId,
+      goalId: context.goalId,
+      blockedAt: context.blockedAt.toISOString(),
     };
   }
 
@@ -610,11 +648,13 @@ export class DangerZoneEnforcer {
 
     for (const [name, ctx] of this.blockedContexts) {
       data.blocks[name] = {
+        eventId: ctx.eventId,
         reason: ctx.reason,
         triggeredPatterns: ctx.triggeredPatterns,
         blockedAt: ctx.blockedAt.toISOString(),
         verificationId: ctx.verificationId,
         sessionId: ctx.sessionId,
+        goalId: ctx.goalId,
       };
     }
 

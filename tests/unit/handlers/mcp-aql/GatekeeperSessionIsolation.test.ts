@@ -281,7 +281,7 @@ describe('DangerZoneEnforcer session guard', () => {
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
     // Block from Session A
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], 'challenge-123', undefined, 'session-a');
 
     // Try to unblock from Session B — should be rejected
     const result = enforcer.unblock('agent-1', 'challenge-123', 'session-b');
@@ -301,7 +301,7 @@ describe('DangerZoneEnforcer session guard', () => {
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], 'challenge-123', undefined, 'session-a');
 
     const result = enforcer.unblock('agent-1', 'challenge-123', 'session-a');
     expect(result).toBe(true);
@@ -319,7 +319,7 @@ describe('DangerZoneEnforcer session guard', () => {
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
     // Block without sessionId (old format)
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], 'challenge-123');
 
     // Any session can unblock
     const result = enforcer.unblock('agent-1', 'challenge-123', 'session-b');
@@ -334,7 +334,7 @@ describe('DangerZoneEnforcer session guard', () => {
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
 
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], 'challenge-123', undefined, 'session-a');
 
     // Caller with no sessionId — should be rejected because block has one
     const result = enforcer.unblock('agent-1', 'challenge-123', undefined);
@@ -348,7 +348,7 @@ describe('DangerZoneEnforcer session guard', () => {
     } as any;
 
     const enforcer = new DangerZoneEnforcer(mockFileOps);
-    enforcer.block('agent-1', 'danger', ['rm -rf'], 'challenge-123', undefined, 'session-a');
+    enforcer.block('agent-1', 'danger', ['beetlejuice_beetlejuice_beetlejuice'], 'challenge-123', undefined, 'session-a');
 
     const check = enforcer.check('agent-1');
     expect(check.sessionId).toBe('session-a');
