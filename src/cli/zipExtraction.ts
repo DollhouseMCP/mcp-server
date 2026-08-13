@@ -198,6 +198,8 @@ function extractArchive(
                     return;
                 }
 
+                // Lazy entry reads remain sequential: the shared byte ceiling is updated by one
+                // extraction at a time, and the next entry is requested only after it completes.
                 extractEntry(openedZip, entry, destinationRoot, extracted, limits.maxExpandedBytes)
                     .then(() => {
                         if (!settled) openedZip.readEntry();
@@ -216,11 +218,13 @@ async function extractEntry(
     extracted: { bytes: number },
     maxExpandedBytes: number,
 ): Promise<void> {
+    // Preserve extract-zip's handling of Finder metadata without weakening entry validation.
     if (entry.fileName === '__MACOSX/' || entry.fileName.startsWith('__MACOSX/')) {
         return;
     }
 
     const destination = destinationForEntry(destinationRoot, entry.fileName);
+    // validateEntryType has already required directory names and attributes to agree.
     if (isDirectoryEntry(entry)) {
         fs.mkdirSync(destination, { recursive: true, mode: 0o700 });
         return;
@@ -271,8 +275,8 @@ async function extractEntry(
 function openEntryStream(zipFile: ZipFile, entry: Entry): Promise<Readable> {
     return new Promise((resolve, reject) => {
         zipFile.openReadStream(entry, (error, stream) => {
-            if (error) {
-                reject(error);
+            if (error || !stream) {
+                reject(error ?? new Error(`Unable to read ZIP entry: ${entry.fileName}`));
                 return;
             }
             resolve(stream);
@@ -292,6 +296,7 @@ function validateEntryPath(fileName: string, destinationRoot: string): void {
     ) {
         throw new Error(`ZIP entry escapes the extraction directory: ${fileName}`);
     }
+    // Canonical containment is enforced by destinationForEntry before any filesystem write.
     destinationForEntry(destinationRoot, fileName);
 }
 
@@ -360,7 +365,10 @@ function isDirectoryEntry(entry: ZipEntryMetadata): boolean {
 
 function inspectExtractedTree(root: string, maxExpandedBytes: number): number {
     let totalSize = 0;
-    const visit = (directory: string): void => {
+    const pendingDirectories = [root];
+    while (pendingDirectories.length > 0) {
+        const directory = pendingDirectories.pop();
+        if (!directory) break;
         for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
             const candidate = path.join(directory, entry.name);
             const stats = fs.lstatSync(candidate);
@@ -368,7 +376,7 @@ function inspectExtractedTree(root: string, maxExpandedBytes: number): number {
                 throw new Error(`ZIP extraction produced an unsupported file type: ${entry.name}`);
             }
             if (stats.isDirectory()) {
-                visit(candidate);
+                pendingDirectories.push(candidate);
                 continue;
             }
             totalSize += stats.size;
@@ -378,8 +386,7 @@ function inspectExtractedTree(root: string, maxExpandedBytes: number): number {
                 );
             }
         }
-    };
-    visit(root);
+    }
     return totalSize;
 }
 
@@ -388,10 +395,32 @@ function selectConversionInput(tempDir: string): string {
     if (contents.length === 0) {
         throw new Error('ZIP file appears to be empty');
     }
+    if (isRegularFile(path.join(tempDir, 'SKILL.md'))) {
+        return tempDir;
+    }
+
+    const skillDirectories = contents
+        .filter(entry => entry.isDirectory())
+        .map(entry => path.join(tempDir, entry.name))
+        .filter(directory => isRegularFile(path.join(directory, 'SKILL.md')));
+    if (skillDirectories.length === 1) {
+        return skillDirectories[0];
+    }
     if (contents.length === 1 && contents[0].isDirectory()) {
         return path.join(tempDir, contents[0].name);
     }
     return tempDir;
+}
+
+function isRegularFile(candidate: string): boolean {
+    try {
+        return fs.lstatSync(candidate).isFile();
+    } catch (error) {
+        if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
+            return false;
+        }
+        throw error;
+    }
 }
 
 function toError(reason: unknown): Error {

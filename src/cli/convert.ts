@@ -327,17 +327,16 @@ async function convertToAnthropic(input: string, options: ConvertOptions): Promi
  * Now: Separate function handles cleanup with proper error handling
  */
 function cleanupTempDirectory(tempDir: string | null, verbose: boolean): void {
-    if (tempDir && fs.existsSync(tempDir)) {
-        if (verbose) {
-            console.log(chalk.gray(`\nCleaning up temporary files...`));
-        }
-        try {
-            fs.rmSync(tempDir, { recursive: true, force: true });
-        } catch (cleanupError) {
-            // Log error details but don't fail on cleanup errors
-            const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
-            console.warn(chalk.yellow(`Warning: Failed to cleanup temp directory: ${tempDir} - ${errorMessage}`));
-        }
+    if (!tempDir) return;
+    if (verbose) {
+        console.log(chalk.gray(`\nCleaning up temporary files...`));
+    }
+    try {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    } catch (cleanupError) {
+        // Log error details but don't fail on cleanup errors
+        const errorMessage = cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        console.warn(chalk.yellow(`Warning: Failed to cleanup temp directory: ${tempDir} - ${errorMessage}`));
     }
 }
 

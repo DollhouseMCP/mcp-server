@@ -87,6 +87,33 @@ describe('secure ZIP extraction', () => {
         expect(path.dirname(result.tempDir)).toBe(fixture);
     });
 
+    it('selects the sole skill directory when harmless root files are present', async () => {
+        const fixture = createFixtureDirectory();
+        const zipPath = path.join(fixture, 'skill-with-readme.zip');
+        await createZip(zipPath, archive => {
+            archive.append('root notes', { name: 'README.md' });
+            archive.append('skill', { name: 'safe-skill/SKILL.md' });
+        });
+
+        const result = await extractZipForConversion(zipPath, { tempParent: fixture });
+        cleanupPaths.push(result.tempDir);
+
+        expect(result.actualInput).toBe(path.join(result.tempDir, 'safe-skill'));
+    });
+
+    it('rejects duplicate file destinations and removes partial output', async () => {
+        const fixture = createFixtureDirectory();
+        const zipPath = path.join(fixture, 'duplicate.zip');
+        await createZip(zipPath, archive => {
+            archive.append('first', { name: 'SKILL.md' });
+            archive.append('second', { name: 'SKILL.md' });
+        });
+
+        await expect(extractZipForConversion(zipPath, { tempParent: fixture }))
+            .rejects.toThrow();
+        expect(extractionDirectories(fixture)).toEqual([]);
+    });
+
     it('rejects an archive symlink before materializing it and removes partial output', async () => {
         const fixture = createFixtureDirectory();
         const zipPath = path.join(fixture, 'symlink.zip');
@@ -201,6 +228,15 @@ describe('secure ZIP extraction', () => {
             freshState(),
             defaultLimits(),
         )).toThrow('invalid expanded size');
+    });
+
+    it('treats an unspecified UNIX mode as a regular entry', () => {
+        expect(() => validateZipEntryForExtraction(
+            fakeEntry('unspecified-mode.txt', 0),
+            os.tmpdir(),
+            freshState(),
+            defaultLimits(),
+        )).not.toThrow();
     });
 });
 
