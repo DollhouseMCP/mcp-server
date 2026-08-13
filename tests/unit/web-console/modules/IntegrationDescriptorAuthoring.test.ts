@@ -245,6 +245,29 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(missingProvider.status).toBe(422);
   });
 
+  it.each([
+    ['display_name', { display_name: 'Trusted\u202E CRM' }],
+    ['category', { category: 'crm\u200B' }],
+  ])('rejects unsafe Unicode in human-visible descriptor %s', async (_field, override) => {
+    const { service } = fixture();
+
+    const result = await service.create(consoleRequest({ body: oauthBody(override) }));
+
+    expect(result.status).toBe(422);
+    expect(String(bodyOf(result).detail)).toContain('directional or zero-width characters');
+  });
+
+  it('NFC-normalizes international descriptor display values without folding scripts', async () => {
+    const { service } = fixture();
+
+    const result = await service.create(consoleRequest({
+      body: oauthBody({ display_name: 'Cafe\u0301 Δοκιμή', category: '統合' }),
+    }));
+
+    expect(result.status).toBe(201);
+    expect(bodyOf(result)).toMatchObject({ display_name: 'Café Δοκιμή', category: '統合' });
+  });
+
   it('rejects provider ids reserved by a built-in or curated boot-registry provider', async () => {
     // github is a bespoke registry provider with no descriptor; a BYO github
     // would route the deployment-brokered GitHub token to a chosen host.

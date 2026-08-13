@@ -433,7 +433,7 @@
     {
       "rule": "DMCP-SEC-004",
       "file": "src/auth/embedded-as/dcrPolicyMiddleware.ts",
-      "reason": "EXACT DCR BOUNDARY: OAuth redirect URIs and client metadata are validated by validateDcrClientMetadata. Protocol identifiers and callback URIs must remain byte-exact rather than being Unicode-folded."
+      "reason": "EXACT DCR BOUNDARY: OAuth redirect URIs and protocol identifiers remain byte-exact. Human-visible client_name rejects directional and zero-width characters in dcrPolicy and is NFC-normalized before persistence."
     },
     {
       "rule": "DMCP-SEC-004",
@@ -453,7 +453,7 @@
     {
       "rule": "DMCP-SEC-004",
       "file": "src/web-console/modules/integrations/IntegrationDescriptorAuthoringService.ts",
-      "reason": "EXACT CONSOLE SERVICE: Requests arrive through the secured normalized console router. Descriptor fields receive method-specific type, length, URL, and provider validation before persistence."
+      "reason": "EXACT CONSOLE SERVICE: Requests arrive through the secured normalized console router. Human-visible display_name and category are NFC-normalized and reject directional or zero-width characters; remaining fields receive method-specific validation before persistence."
     },
     {
       "rule": "DMCP-SEC-004",

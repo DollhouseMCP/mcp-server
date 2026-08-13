@@ -119,6 +119,21 @@ describe('dcrPolicyMiddleware — issue #2220 open DCR hardening', () => {
     });
   });
 
+  it('NFC-normalizes the accepted human-visible client name before persistence', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const app = makeApp({ storage, rateLimitStore: new InMemoryRateLimitStore() });
+
+    const res = await request(app)
+      .post('/reg')
+      .send({
+        client_name: 'Cafe\u0301 MCP',
+        redirect_uris: ['https://client.example.com/oauth/callback'],
+      })
+      .expect(201);
+
+    expect(res.body.client_name).toBe('Café MCP');
+  });
+
   it('runs the shared-store limiter before JSON parsing', async () => {
     const storage = new InMemoryAuthStorageLayer();
     const rateLimitStore = new InMemoryRateLimitStore();

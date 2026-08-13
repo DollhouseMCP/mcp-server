@@ -15,6 +15,23 @@ import * as os from 'os';
 import { Stats } from 'fs';
 import { VULNERABLE_PATTERNS } from '../../../fixtures/testCredentials.js';
 
+function canonicalSuppressionPattern(value: string): string {
+  return value
+    .replaceAll('\\', '/')
+    .replaceAll(/\/+/g, '/')
+    .replace(/^(?:\*\*\/)+/, '');
+}
+
+function isFirstPartySourceGlob(value: string): boolean {
+  const canonical = canonicalSuppressionPattern(value);
+  return canonical.startsWith('src/') && canonical.slice('src/'.length).includes('*');
+}
+
+function isBlanketVendorSuppression(value: string): boolean {
+  const canonical = canonicalSuppressionPattern(value);
+  return canonical.startsWith('src/web-console/ui/vendor/') && canonical.includes('*');
+}
+
 /**
  * Create a mock FileOperationsService for testing
  */
@@ -109,8 +126,10 @@ describe('SecurityAuditor', () => {
       ]);
       expect(sourceSuppressions.filter(suppression =>
         suppression.rule === '*' &&
-        suppression.file?.startsWith('src/web-console/ui/vendor/') &&
-        suppression.file.includes('*'))).toEqual([]);
+        typeof suppression.file === 'string' &&
+        isBlanketVendorSuppression(suppression.file))).toEqual([]);
+
+      expect(isBlanketVendorSuppression('**/src/web-console/ui/vendor/**/*')).toBe(true);
 
       const vendorDir = path.join(tempDir, 'src', 'web-console', 'ui', 'vendor');
       const uiDir = path.dirname(vendorDir);
@@ -137,13 +156,13 @@ describe('SecurityAuditor', () => {
       );
       const parsed: unknown = JSON.parse(await fs.readFile(configPath, 'utf8'));
       const entries = (parsed as { suppressions: Array<{ file?: string }> }).suppressions;
-      const productionDirectoryGlobs = entries.filter(({ file }) => {
-        if (typeof file !== 'string') return false;
-        const projectRelative = file.replace(/^\*\*\//, '');
-        return projectRelative.startsWith('src/') && projectRelative.slice('src/'.length).includes('*');
-      });
+      const productionDirectoryGlobs = entries.filter(
+        ({ file }) => typeof file === 'string' && isFirstPartySourceGlob(file),
+      );
 
       expect(productionDirectoryGlobs).toEqual([]);
+      expect(isFirstPartySourceGlob('src\\web-console\\**\\*.ts')).toBe(true);
+      expect(isFirstPartySourceGlob('**/**/src/web-console/**/*.ts')).toBe(true);
     });
 
     test('should run audit on empty directory', async () => {

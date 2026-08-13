@@ -187,12 +187,15 @@ three exact files inventoried by the vendor manifest. Regression tests now fail
 if a first-party source-directory glob is added to the custom policy or if the
 blanket vendored-directory rule returns.
 
-Running the stricter policy exposed fourteen medium Unicode findings. Thirteen
+Running the stricter policy exposed fourteen medium Unicode findings. Eleven
 were reviewed as exact OAuth or normalized-console boundaries and now carry
-file-specific DMCP-SEC-004 reasons. The remaining finding involved a
-human-visible TOTP enrollment label; that label is now normalized before
-validation while opaque TOTP codes, pending IDs, and CSRF values remain
-byte-exact. A test-only rate-limit finding is suppressed only for its exact
+file-specific DMCP-SEC-004 reasons. Three human-visible boundaries required
+code fixes: the TOTP enrollment label, public-DCR `client_name`, and BYO
+integration descriptor `display_name`/`category`. TOTP labels use the existing
+security normalization, descriptor display values use NFC without cross-script
+folding and reject directional or zero-width characters, DCR client names apply
+the same targeted rejection before NFC normalization, and opaque protocol values
+remain byte-exact. A test-only rate-limit finding is suppressed only for its exact
 in-process integration harness. Eight low integration-subsystem audit-logging
 observations remain visible and are tracked in #2490.
 
@@ -202,7 +205,8 @@ observations remain visible and are tracked in #2490.
 | --- | --- |
 | Build and script typecheck | Passed |
 | Lint and `git diff --check` | Passed |
-| Focused suppression and TOTP route tests | Passed: 58 tests |
+| Focused suppression, DCR, TOTP, and descriptor tests | Passed: 111 tests |
+| Broader embedded-auth and descriptor/store tests | Passed: 491 tests |
 | Strict security audit (`--fail-on-high`) | Passed: zero critical, high, or medium findings; eight low observations tracked in #2490 |
 | Full unit suite | 582 suites / 12,921 tests passed before four unrelated suites timed out under prolonged single-process resource contention; all four suites passed independently |
 | Frozen-parent ancestry | Passed: both frozen parents remain ancestors and all 34 Todd/Insomnolence-authored commits from the hosted parent remain reachable |

@@ -20,6 +20,30 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
     expect(decision.redirectHosts).toEqual(['client.example.com']);
   });
 
+  it.each([
+    ['zero-width', 'Trusted\u200B Client'],
+    ['bidirectional override', 'Trusted\u202E Client'],
+  ])('rejects %s characters in the human-visible client name', (_label, clientName) => {
+    const decision = validateDcrClientMetadata({
+      client_name: clientName,
+      redirect_uris: ['https://client.example.com/oauth/callback'],
+    });
+
+    expect(decision.allowed).toBe(false);
+    expect(decision.errors).toContain(
+      'client_name must not contain directional or zero-width characters',
+    );
+  });
+
+  it('allows international client names without confusable-character folding', () => {
+    const decision = validateDcrClientMetadata({
+      client_name: 'Δοκιμή クライアント',
+      redirect_uris: ['https://client.example.com/oauth/callback'],
+    });
+
+    expect(decision.allowed).toBe(true);
+  });
+
   it('allows loopback HTTP callbacks for local/native MCP clients', () => {
     expect(validateRedirectUriShape('http://127.0.0.1:5173/callback', { applicationType: 'native' }).ok).toBe(true);
     expect(validateRedirectUriShape('http://localhost:8787/callback', { applicationType: 'native' }).ok).toBe(true);

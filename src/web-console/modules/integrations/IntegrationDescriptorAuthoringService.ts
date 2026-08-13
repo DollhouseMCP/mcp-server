@@ -1,10 +1,15 @@
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
+import { containsUnsafeDisplayUnicode } from '../../../security/validators/displayText.js';
 import type {
   ConsoleHandlerResult,
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
-import { ConsoleStoreValidationError, isUniqueViolation } from '../../stores/ConsoleStoreValidation.js';
+import {
+  ConsoleStoreValidationError,
+  isUniqueViolation,
+  isValidDisplayString,
+} from '../../stores/ConsoleStoreValidation.js';
 import type {
   IIntegrationDescriptorStore,
   IntegrationDescriptorCreateInput,
@@ -314,10 +319,10 @@ function parseDescriptorBody(body: unknown, mode: 'create' | 'patch'): ParsedDes
     parsed.provider = requireString(input.provider, 'provider');
   }
   if (mode === 'create' || input.display_name !== undefined) {
-    parsed.displayName = requireString(input.display_name, 'display_name');
+    parsed.displayName = requireDisplayString(input.display_name, 'display_name', 120);
   }
   if (mode === 'create' || input.category !== undefined) {
-    parsed.category = requireString(input.category, 'category');
+    parsed.category = requireDisplayString(input.category, 'category', 80);
   }
   if (mode === 'create' || input.auth_strategy !== undefined) {
     parsed.authStrategy = requireString(input.auth_strategy, 'auth_strategy');
@@ -484,6 +489,16 @@ function requireString(value: unknown, name: string): string {
     throw new DescriptorBodyError(`${name} must be a non-empty string`);
   }
   return value;
+}
+
+function requireDisplayString(value: unknown, name: string, maxLength: number): string {
+  const normalized = requireString(value, name).normalize('NFC');
+  if (!isValidDisplayString(normalized, maxLength) || containsUnsafeDisplayUnicode(normalized)) {
+    throw new DescriptorBodyError(
+      `${name} must be a printable non-empty string up to ${maxLength} characters without directional or zero-width characters`,
+    );
+  }
+  return normalized;
 }
 
 function requireStringArray(value: unknown, name: string): readonly string[] {
