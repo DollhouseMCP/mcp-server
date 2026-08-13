@@ -2,6 +2,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 
 import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
+import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
@@ -542,7 +543,7 @@ function buildAllowedUrl(
   }
   const base = `https://${descriptor.apiHosts[0]}`;
   const url = new URL(path, base);
-  if (url.protocol !== 'https:' || !descriptor.apiHosts.includes(url.hostname)) {
+  if (url.protocol !== 'https:' || !isIntegrationApiHostAllowed(url.hostname, descriptor.apiHosts)) {
     throw new IntegrationRequestError('integration_host_not_allowed', 'Integration request host is not allowed.', 403);
   }
   url.username = '';

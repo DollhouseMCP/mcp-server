@@ -307,6 +307,27 @@ describe('IntegrationOperationCatalog', () => {
     }))).rejects.toMatchObject({ code: 'invalid_openapi_spec' });
   });
 
+  it('accepts an equivalent canonical spelling of an allowlisted OpenAPI server host', async () => {
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({
+        ownership: 'byo',
+        ownerUserId: USER_ID,
+        apiHosts: ['gmail.googleapis.com'],
+      }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    const result = await runAsUser(contextTracker, () => catalog.ingestOpenApiSpec({
+      provider: 'gmail',
+      spec: {
+        ...openApiSpec(),
+        servers: [{ url: 'https://GMAIL.GOOGLEAPIS.COM./' }],
+      },
+    }));
+
+    expect(result.operationCount).toBeGreaterThan(0);
+  });
+
   it('rejects specs nested past the external-ref scan depth instead of skipping the check', async () => {
     const { catalog, contextTracker } = createCatalog({
       descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }),

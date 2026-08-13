@@ -717,6 +717,12 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.upsert(oauthDescriptorInput({
       apiHosts: ['localhost'],
     }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['API.Example.com'],
+    }))).rejects.toThrow('apiHosts must contain unique canonical hostnames');
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['api.example.com', 'api.example.com'],
+    }))).rejects.toThrow('apiHosts must contain unique canonical hostnames');
     const baseOauth = oauthDescriptorInput().oauth;
     if (!baseOauth) throw new Error('fixture oauth missing');
     await expect(store.upsert(oauthDescriptorInput({

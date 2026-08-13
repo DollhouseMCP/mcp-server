@@ -6,6 +6,10 @@ import type {
 } from '../../platform/ConsolePlatformTypes.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import {
+  canonicalizeIntegrationApiHosts,
+  IntegrationApiHostValidationError,
+} from '../../security/IntegrationApiHosts.js';
+import {
   ConsoleStoreValidationError,
   isUniqueViolation,
   isValidDisplayString,
@@ -331,7 +335,7 @@ function parseDescriptorBody(body: unknown, mode: 'create' | 'patch'): ParsedDes
     }
   }
   if (mode === 'create' || input.api_hosts !== undefined) {
-    parsed.apiHosts = requireStringArray(input.api_hosts, 'api_hosts');
+    parsed.apiHosts = parseApiHosts(input.api_hosts);
   }
   if (input.oauth !== undefined) {
     const { oauth, clientSecret } = parseOAuthBody(input.oauth);
@@ -345,6 +349,18 @@ function parseDescriptorBody(body: unknown, mode: 'create' | 'patch'): ParsedDes
     parsed.operationPromotion = requireRecord(input.operation_promotion, 'operation_promotion');
   }
   return parsed;
+}
+
+function parseApiHosts(value: unknown): readonly string[] {
+  const hosts = requireStringArray(value, 'api_hosts');
+  try {
+    return canonicalizeIntegrationApiHosts(hosts, 'api_hosts');
+  } catch (error) {
+    if (error instanceof IntegrationApiHostValidationError) {
+      throw new DescriptorBodyError(error.message);
+    }
+    throw error;
+  }
 }
 
 function parseOAuthBody(value: unknown): {

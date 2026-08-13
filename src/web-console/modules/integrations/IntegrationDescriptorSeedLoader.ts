@@ -23,6 +23,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { logger } from '../../../utils/logger.js';
+import { canonicalizeIntegrationApiHosts } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import {
   type IIntegrationDescriptorStore,
@@ -179,7 +180,7 @@ export class IntegrationDescriptorSeedLoader {
       ownerUserId: null,
       displayName: readString(seed, 'displayName') ?? '',
       category: readString(seed, 'category') ?? '',
-      apiHosts: readStringArray(seed, 'apiHosts'),
+      apiHosts: canonicalizeIntegrationApiHosts(readStringArray(seed, 'apiHosts')),
       operationPromotion: readRecord(seed, 'operationPromotion'),
       createdAt: timestamp,
       updatedAt: timestamp,
