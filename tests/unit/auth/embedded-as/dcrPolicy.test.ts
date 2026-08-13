@@ -23,6 +23,8 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
   it.each([
     ['zero-width', 'Trusted\u200B Client'],
     ['bidirectional override', 'Trusted\u202E Client'],
+    ['invisible separator', 'Trusted\u2063 Client'],
+    ['Arabic letter mark', 'Trusted\u061C Client'],
   ])('rejects %s characters in the human-visible client name', (_label, clientName) => {
     const decision = validateDcrClientMetadata({
       client_name: clientName,
