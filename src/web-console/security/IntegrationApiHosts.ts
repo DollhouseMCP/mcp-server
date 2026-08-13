@@ -8,12 +8,21 @@ const CANONICAL_DNS_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?
 
 export class IntegrationApiHostValidationError extends Error {}
 
+export interface IntegrationApiHostCanonicalizationOptions {
+  /** Read-only compatibility for suffixes accepted before #2494; never use for new writes or egress checks. */
+  readonly allowLegacyPrivateSuffixes?: boolean;
+}
+
 /**
  * Convert a user-supplied DNS hostname to the representation used by URL.hostname:
  * lowercase ASCII with IDNs encoded as punycode. A single DNS root dot is accepted
  * and removed so equivalent URL spellings compare consistently.
  */
-export function canonicalizeIntegrationApiHost(value: string, name = 'API host'): string {
+export function canonicalizeIntegrationApiHost(
+  value: string,
+  name = 'API host',
+  options: IntegrationApiHostCanonicalizationOptions = {},
+): string {
   if (typeof value !== 'string' || value === '' || value.length > MAX_HOST_INPUT_LENGTH) {
     throw invalidHost(name);
   }
@@ -39,7 +48,9 @@ export function canonicalizeIntegrationApiHost(value: string, name = 'API host')
 
   const canonical = parsed.hostname;
   if (canonical.length === 0 || canonical.length > MAX_CANONICAL_HOST_LENGTH ||
-      !CANONICAL_DNS_HOST.test(canonical) || isIP(canonical) !== 0 || isPrivateDnsName(canonical)) {
+      !CANONICAL_DNS_HOST.test(canonical) || isIP(canonical) !== 0 ||
+      isAlwaysPrivateDnsName(canonical) ||
+      (!options.allowLegacyPrivateSuffixes && isRestrictedPrivateDnsName(canonical))) {
     throw new IntegrationApiHostValidationError(`${name} must be a public DNS hostname`);
   }
   return canonical;
@@ -49,6 +60,7 @@ export function canonicalizeIntegrationApiHost(value: string, name = 'API host')
 export function canonicalizeIntegrationApiHosts(
   values: readonly string[],
   name = 'apiHosts',
+  options: IntegrationApiHostCanonicalizationOptions = {},
 ): readonly string[] {
   if (!Array.isArray(values) || values.length === 0 || values.length > 25) {
     throw new IntegrationApiHostValidationError(`${name} must contain 1-25 hosts`);
@@ -56,7 +68,7 @@ export function canonicalizeIntegrationApiHosts(
   const canonical: string[] = [];
   const seen = new Set<string>();
   for (const [index, value] of values.entries()) {
-    const host = canonicalizeIntegrationApiHost(value, `${name}[${index}]`);
+    const host = canonicalizeIntegrationApiHost(value, `${name}[${index}]`, options);
     if (!seen.has(host)) {
       seen.add(host);
       canonical.push(host);
@@ -78,13 +90,16 @@ export function isIntegrationApiHostAllowed(
   }
 }
 
-function isPrivateDnsName(hostname: string): boolean {
+function isAlwaysPrivateDnsName(hostname: string): boolean {
   return !hostname.includes('.') ||
     hostname === 'localhost' ||
-    hostname === 'home.arpa' ||
     hostname.endsWith('.localhost') ||
     hostname.endsWith('.local') ||
-    hostname.endsWith('.internal') ||
+    hostname.endsWith('.internal');
+}
+
+function isRestrictedPrivateDnsName(hostname: string): boolean {
+  return hostname === 'home.arpa' ||
     hostname.endsWith('.home.arpa') ||
     hostname.endsWith('.corp') ||
     hostname.endsWith('.home') ||

@@ -91,4 +91,14 @@ describe('IntegrationApiHosts', () => {
     expect(isIntegrationApiHostAllowed('other.example.com', ['api.example.com'])).toBe(false);
     expect(isIntegrationApiHostAllowed('localhost', ['api.example.com'])).toBe(false);
   });
+
+  it('keeps legacy private-suffix compatibility read-only and blocks runtime egress', () => {
+    expect(canonicalizeIntegrationApiHost(
+      'api.company.corp',
+      'legacy api host',
+      { allowLegacyPrivateSuffixes: true },
+    )).toBe('api.company.corp');
+    expect(() => canonicalizeIntegrationApiHost('api.company.corp')).toThrow('public DNS hostname');
+    expect(isIntegrationApiHostAllowed('api.company.corp', ['api.company.corp'])).toBe(false);
+  });
 });

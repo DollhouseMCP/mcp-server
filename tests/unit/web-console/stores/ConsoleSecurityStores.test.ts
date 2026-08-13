@@ -718,6 +718,9 @@ describe('InMemoryIntegrationDescriptorStore', () => {
       apiHosts: ['localhost'],
     }))).rejects.toThrow(ConsoleStoreValidationError);
     await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['api.company.corp'],
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
       apiHosts: ['API.Example.com'],
     }))).rejects.toThrow('apiHosts must contain unique canonical hostnames');
     await expect(store.upsert(oauthDescriptorInput({
@@ -750,6 +753,28 @@ describe('InMemoryIntegrationDescriptorStore', () => {
       createdAt: NOW,
       updatedAt: NOW,
     })).resolves.toMatchObject({ provider: 'airtable' });
+  });
+
+  it('keeps legacy private-suffix descriptors readable without permitting new writes', async () => {
+    const base = oauthDescriptorInput();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const legacyRecord = {
+      id: DESCRIPTOR_ID,
+      ...base,
+      apiHosts: ['api.company.corp'],
+      oauth: {
+        ...base.oauth,
+        authorizationUrl: 'https://auth.company.corp/authorize',
+        tokenUrl: 'https://auth.company.corp/token',
+      },
+    };
+    const store = new InMemoryIntegrationDescriptorStore([legacyRecord]);
+
+    await expect(store.listVisible(USER_ID)).resolves.toEqual([
+      expect.objectContaining({ id: DESCRIPTOR_ID, apiHosts: ['api.company.corp'] }),
+    ]);
+    await expect(store.upsert({ ...base, apiHosts: ['api.company.corp'] }))
+      .rejects.toThrow(ConsoleStoreValidationError);
   });
 
   it('validates basic static-key injection: fixed Authorization header, no prefix', async () => {

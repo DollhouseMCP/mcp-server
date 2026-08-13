@@ -841,6 +841,23 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(row.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
   });
 
+  it('keeps descriptors with legacy private suffixes readable after host hardening', async () => {
+    const row = integrationDescriptorRow({
+      apiHosts: ['api.company.corp'],
+      oauth: {
+        ...integrationDescriptorRow().oauth as Record<string, unknown>,
+        authorizationUrl: 'https://auth.company.corp/authorize',
+        tokenUrl: 'https://auth.company.corp/token',
+      },
+    });
+    transaction.select = jest.fn(() => selectingChain([row]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.listVisible(USER_ID)).resolves.toEqual([
+      expect.objectContaining({ id: DESCRIPTOR_ID, apiHosts: ['api.company.corp'] }),
+    ]);
+  });
+
   it('paginates visible descriptors and encodes the next (provider, id) cursor', async () => {
     const rows = [
       integrationDescriptorRow({ provider: 'svc-a', id: '00000000-0000-4000-8000-0000000000a1' }),

@@ -187,7 +187,10 @@ export function isAfterDescriptorPageCursor(
 
 export function validateIntegrationDescriptorRecord(record: IntegrationDescriptorRecord): void {
   assertUuid(record.id, 'id');
-  validateIntegrationDescriptorShape(record);
+  // Rows written before #2494 may contain private suffixes that were valid at
+  // the time. Keep them readable so one row cannot break list/provider reads;
+  // runtime allowlist checks still reject egress and every new write is strict.
+  validateIntegrationDescriptorShape(record, true);
 }
 
 export function validateIntegrationDescriptorInput(input: IntegrationDescriptorCreateInput): void {
@@ -207,7 +210,7 @@ export function validateIntegrationDescriptorInput(input: IntegrationDescriptorC
     operationPromotion: input.operationPromotion ?? {},
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
-  });
+  }, false);
 }
 
 export function cloneIntegrationDescriptorRecord(
@@ -241,6 +244,7 @@ const RESERVED_DESCRIPTOR_PROVIDER_IDS = new Set(['descriptors', 'github']);
 
 function validateIntegrationDescriptorShape(
   record: Omit<IntegrationDescriptorRecord, 'id'> & { readonly id?: string },
+  allowLegacyPrivateSuffixes: boolean,
 ): void {
   assertUserIntegrationProvider(record.provider);
   if (RESERVED_DESCRIPTOR_PROVIDER_IDS.has(record.provider)) {
@@ -261,8 +265,8 @@ function validateIntegrationDescriptorShape(
   }
   assertDisplayString(record.displayName, 'displayName', 120);
   assertDisplayString(record.category, 'category', 80);
-  validateAuthStrategy(record);
-  validateApiHosts(record.apiHosts);
+  validateAuthStrategy(record, allowLegacyPrivateSuffixes);
+  validateApiHosts(record.apiHosts, allowLegacyPrivateSuffixes);
   validateOptionalCredential(record.clientSecretCiphertext, record.credentialKeyVersion);
   validateJsonRecord(record.operationPromotion, 'operationPromotion', 8192);
   if (record.updatedAt < record.createdAt) {
@@ -273,12 +277,12 @@ function validateIntegrationDescriptorShape(
 function validateAuthStrategy(record: Pick<
   IntegrationDescriptorRecord,
   'authStrategy' | 'oauth' | 'staticApiKey' | 'clientSecretCiphertext'
->): void {
+>, allowLegacyPrivateSuffixes: boolean): void {
   switch (record.authStrategy) {
     case 'oauth2_authorization_code':
       if (!record.oauth) throw new ConsoleStoreValidationError('oauth descriptor is required');
       if (record.staticApiKey) throw new ConsoleStoreValidationError('oauth descriptor cannot include staticApiKey');
-      validateOAuthDescriptor(record.oauth);
+      validateOAuthDescriptor(record.oauth, allowLegacyPrivateSuffixes);
       return;
     case 'static_api_key':
       if (!record.staticApiKey) throw new ConsoleStoreValidationError('staticApiKey descriptor is required');
@@ -295,10 +299,10 @@ function validateAuthStrategy(record: Pick<
   }
 }
 
-function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor): void {
+function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor, allowLegacyPrivateSuffixes: boolean): void {
   assertDisplayString(oauth.clientId, 'oauth.clientId', 200);
-  validatePublicHttpsUrl(oauth.authorizationUrl, 'oauth.authorizationUrl');
-  validatePublicHttpsUrl(oauth.tokenUrl, 'oauth.tokenUrl');
+  validatePublicHttpsUrl(oauth.authorizationUrl, 'oauth.authorizationUrl', allowLegacyPrivateSuffixes);
+  validatePublicHttpsUrl(oauth.tokenUrl, 'oauth.tokenUrl', allowLegacyPrivateSuffixes);
   const pkce: string = oauth.pkce;
   if (pkce !== 'required' && pkce !== 'supported' && pkce !== 'unsupported') {
     throw new ConsoleStoreValidationError('oauth.pkce must be required, supported, or unsupported');
@@ -336,9 +340,9 @@ function validateStaticApiKeyDescriptor(staticApiKey: IntegrationStaticApiKeyDes
   }
 }
 
-function validateApiHosts(hosts: readonly string[]): void {
+function validateApiHosts(hosts: readonly string[], allowLegacyPrivateSuffixes: boolean): void {
   try {
-    const canonical = canonicalizeIntegrationApiHosts(hosts);
+    const canonical = canonicalizeIntegrationApiHosts(hosts, 'apiHosts', { allowLegacyPrivateSuffixes });
     if (canonical.length !== hosts.length || canonical.some((host, index) => host !== hosts[index])) {
       throw new ConsoleStoreValidationError('apiHosts must contain unique canonical hostnames');
     }
@@ -359,7 +363,7 @@ function validateOptionalCredential(ciphertext: Buffer | null, keyVersion: strin
   }
 }
 
-function validatePublicHttpsUrl(value: string, name: string): void {
+function validatePublicHttpsUrl(value: string, name: string, allowLegacyPrivateSuffixes: boolean): void {
   let url;
   try {
     url = new URL(value);
@@ -370,12 +374,12 @@ function validatePublicHttpsUrl(value: string, name: string): void {
   if (url.username || url.password || url.hash) {
     throw new ConsoleStoreValidationError(`${name} must not include credentials or fragments`);
   }
-  validatePublicDnsHost(url.hostname, name);
+  validatePublicDnsHost(url.hostname, name, allowLegacyPrivateSuffixes);
 }
 
-function validatePublicDnsHost(host: string, name: string): void {
+function validatePublicDnsHost(host: string, name: string, allowLegacyPrivateSuffixes: boolean): void {
   try {
-    const canonical = canonicalizeIntegrationApiHost(host, name);
+    const canonical = canonicalizeIntegrationApiHost(host, name, { allowLegacyPrivateSuffixes });
     if (host !== canonical) {
       throw new ConsoleStoreValidationError(`${name} must use its canonical hostname`);
     }
