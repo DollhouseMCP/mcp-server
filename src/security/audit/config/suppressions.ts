@@ -286,15 +286,6 @@ export const suppressions: Suppression[] = [
   },
 
   // ========================================
-  // Vendored Browser Library False Positives
-  // ========================================
-  {
-    rule: '*',
-    file: 'src/web-console/ui/vendor/**/*',
-    reason: 'Vendored minified browser libraries are pinned third-party assets; dependency provenance and updates are handled outside the project source-code pattern scanner.'
-  },
-
-  // ========================================
   // Service Layer False Positives (Refactor PR)
   // ========================================
   {

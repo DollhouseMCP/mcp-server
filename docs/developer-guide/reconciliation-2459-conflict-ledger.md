@@ -148,5 +148,66 @@ of the semantic review and verification:
 | Hosted deployment dry run | Passed for a distinct disposable instance name; no files, images, containers, clones, or HTTP requests were changed |
 | GitHub quality/security checks | Pending |
 
-The reconciliation PR must not be merged without explicit approval from Mick,
-and the PR must use a merge commit so both original histories remain visible.
+## Post-Reconciliation Corrective Audit (#2489)
+
+The audit compared the frozen hosted and beta parents with hosted integration at
+`7385761de575a45c86b3f60212c259f1d0c4dc38`. The parent trees differed in
+462 files. The reconciled tree retained the hosted version of 272 files, selected
+the beta version of 123 files, and produced an explicit hybrid in 67 files.
+
+The 123 beta-selected files break down into 43 runtime/security files, 46 tests,
+14 workflows, 11 packaging or container files, six documentation files, and
+three package/audit configuration files. The runtime/security review produced
+the following classifications:
+
+| Classification | Count | Decision |
+| --- | ---: | --- |
+| Intentional beta behavior | 32 | Retain token and TOTP failure auditing, canonical cache paths, admin-role CLI database access, agent execution ownership and orphan recovery, permissive description limits, memory control-field validation and safe rendering, template path hardening, console request normalization, and secret-crypto failure auditing |
+| No runtime effect | 9 | Retain comment-only or trailing-newline differences; they do not change emitted behavior |
+| Beta package identity | 1 | Retain `2.1.0-beta.1` generated identity until the normal release build regenerates it |
+| Confirmed policy regression | 1 | Correct `src/security/audit/config/security-suppressions.json` as described below |
+
+The workflow and packaging selections are the beta CI, release-channel,
+artifact, portability, and manually dispatched alpha-deployment controls already
+recorded as persistent beta integration units. Hosted-specific OAuth/DCR,
+web-console composition, database migrations, storage ownership, and deployment
+implementation remained hosted-selected or explicit hybrids.
+
+### Suppression-policy correction
+
+The merge reintroduced eleven first-party directory globs into
+`security-suppressions.json`. Those globs covered future files in web-console
+platform/services/stores/UI, embedded auth, context, database, DI registrars,
+paths, state, and storage. It also restored a blanket `rule: '*'` suppression
+for `src/web-console/ui/vendor/**/*` in `suppressions.ts`.
+
+#2489 removes those broad entries while retaining the existing exact-file,
+reasoned suppressions. Vendored JavaScript remains excluded only through the
+three exact files inventoried by the vendor manifest. Regression tests now fail
+if a first-party source-directory glob is added to the custom policy or if the
+blanket vendored-directory rule returns.
+
+Running the stricter policy exposed fourteen medium Unicode findings. Thirteen
+were reviewed as exact OAuth or normalized-console boundaries and now carry
+file-specific DMCP-SEC-004 reasons. The remaining finding involved a
+human-visible TOTP enrollment label; that label is now normalized before
+validation while opaque TOTP codes, pending IDs, and CSRF values remain
+byte-exact. A test-only rate-limit finding is suppressed only for its exact
+in-process integration harness. Eight low integration-subsystem audit-logging
+observations remain visible and are tracked in #2490.
+
+### Corrective verification
+
+| Check | Result |
+| --- | --- |
+| Build and script typecheck | Passed |
+| Lint and `git diff --check` | Passed |
+| Focused suppression and TOTP route tests | Passed: 58 tests |
+| Strict security audit (`--fail-on-high`) | Passed: zero critical, high, or medium findings; eight low observations tracked in #2490 |
+| Full unit suite | 582 suites / 12,921 tests passed before four unrelated suites timed out under prolonged single-process resource contention; all four suites passed independently |
+| Frozen-parent ancestry | Passed: both frozen parents remain ancestors and all 34 Todd/Insomnolence-authored commits from the hosted parent remain reachable |
+| GitHub quality/security checks | Pending |
+
+The corrective PR must not be merged without explicit approval from Mick. Any
+later promotion must use merge commits so both original histories remain
+visible.

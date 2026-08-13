@@ -5,6 +5,7 @@ import QRCode from 'qrcode';
 
 import type { IConsoleIdentityResolver } from '../../../web-console/identity/IConsoleIdentityResolver.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
+import { UnicodeValidator } from '../../../security/validators/unicodeValidator.js';
 import type { IRateLimitStore } from '../storage/IRateLimitStore.js';
 import { AdminTotpError, type AdminTotpService } from './AdminTotpService.js';
 import {
@@ -40,7 +41,8 @@ export function mountAdminTotpInteractionRoutes(router: Router, deps: AdminTotpI
     void (async () => {
       const principal = await resolvePrincipal(req, res, deps);
       if (!principal) return;
-      const label = typeof req.query.label === 'string' ? req.query.label : 'DollhouseMCP Admin';
+      const rawLabel = typeof req.query.label === 'string' ? req.query.label : 'DollhouseMCP Admin';
+      const label = UnicodeValidator.normalize(rawLabel).normalizedContent;
       try {
         const enrollment = await deps.totpService.beginEnrollment(principal.userId, label);
         const csrf = await issueRouteCsrf(deps.storage, enrollment.pendingId, principal.userId);

@@ -6,6 +6,7 @@ import { describe, expect, beforeEach, afterEach, jest, test } from '@jest/globa
 import { SecurityAuditor } from '../../../../src/security/audit/SecurityAuditor.js';
 import { CodeScanner } from '../../../../src/security/audit/scanners/CodeScanner.js';
 import { SecurityRules } from '../../../../src/security/audit/rules/SecurityRules.js';
+import { suppressions as sourceSuppressions } from '../../../../src/security/audit/config/suppressions.js';
 import type { SecurityAuditConfig } from '../../../../src/security/audit/types.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import * as fs from 'fs/promises';
@@ -100,6 +101,17 @@ describe('SecurityAuditor', () => {
 
     test('default scan excludes only the recorded vendored bundles, not first-party console code', async () => {
       const defaultConfig = await SecurityAuditor.getDefaultConfig(mockFileOperations);
+      expect(defaultConfig.scanners.code.exclude.filter(pattern =>
+        pattern.startsWith('src/web-console/ui/vendor/'))).toEqual([
+        'src/web-console/ui/vendor/purify.min.js',
+        'src/web-console/ui/vendor/marked.min.js',
+        'src/web-console/ui/vendor/js-yaml.min.js',
+      ]);
+      expect(sourceSuppressions.filter(suppression =>
+        suppression.rule === '*' &&
+        suppression.file?.startsWith('src/web-console/ui/vendor/') &&
+        suppression.file.includes('*'))).toEqual([]);
+
       const vendorDir = path.join(tempDir, 'src', 'web-console', 'ui', 'vendor');
       const uiDir = path.dirname(vendorDir);
       await fs.mkdir(vendorDir, { recursive: true });
@@ -112,6 +124,26 @@ describe('SecurityAuditor', () => {
 
       expect(findings.some(finding => finding.file?.endsWith('/ui/app.js'))).toBe(true);
       expect(findings.some(finding => finding.file?.endsWith('/vendor/purify.min.js'))).toBe(false);
+    });
+
+    test('custom audit policy does not suppress first-party source directories', async () => {
+      const configPath = path.join(
+        process.cwd(),
+        'src',
+        'security',
+        'audit',
+        'config',
+        'security-suppressions.json',
+      );
+      const parsed: unknown = JSON.parse(await fs.readFile(configPath, 'utf8'));
+      const entries = (parsed as { suppressions: Array<{ file?: string }> }).suppressions;
+      const productionDirectoryGlobs = entries.filter(({ file }) => {
+        if (typeof file !== 'string') return false;
+        const projectRelative = file.replace(/^\*\*\//, '');
+        return projectRelative.startsWith('src/') && projectRelative.slice('src/'.length).includes('*');
+      });
+
+      expect(productionDirectoryGlobs).toEqual([]);
     });
 
     test('should run audit on empty directory', async () => {

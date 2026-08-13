@@ -93,6 +93,11 @@
       "reason": "Performance-only instrumentation wrapper. Concrete auth providers own TOKEN_VALIDATION_FAILURE audit logging with issuer/key/provider context, and this wrapper intentionally avoids duplicate security events."
     },
     {
+      "rule": "DMCP-SEC-003",
+      "file": "tests/integration/integrations/wiredIntegrationHarness.ts",
+      "reason": "Integration-test harness that wires MCP handlers in-process. It is not a deployed network boundary; production transports own rate limiting."
+    },
+    {
       "rule": "DMCP-SEC-004",
       "file": "src/auto-dollhouse/operationExtensions.ts",
       "reason": "Static schema/route definitions only — no runtime user input processing. Actual Unicode normalization is in evaluatePermission.ts and permissionRoutes.ts."
