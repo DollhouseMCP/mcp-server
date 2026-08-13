@@ -47,6 +47,7 @@ function lookupReturning(address: string): DnsLookup {
 function providerWith(input: {
   readonly dnsLookup: DnsLookup;
   readonly fetch?: PinnedFetch;
+  readonly descriptor?: IntegrationDescriptorRecord;
 }): {
   readonly provider: ConfiguredOAuthIntegrationProvider;
   readonly factory: jest.Mock;
@@ -73,7 +74,7 @@ function providerWith(input: {
     return { fetch: fetchImpl, close: () => Promise.resolve() };
   });
   const provider = new ConfiguredOAuthIntegrationProvider({
-    descriptor: descriptor(),
+    descriptor: input.descriptor ?? descriptor(),
     clientSecret: 'gmail-client-secret',
     pinnedOutbound: factory as unknown as PinnedOutboundFactory,
     dnsLookup: input.dnsLookup,
@@ -91,6 +92,43 @@ const EXCHANGE_REQUEST = {
 };
 
 describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
+  it.each([
+    ['token exchange', 'exchange'],
+    ['token refresh', 'refresh'],
+    ['token revocation', 'revoke'],
+  ] as const)('rejects a legacy private-suffix host before DNS or %s egress', async (_label, operation) => {
+    const restrictedHost = 'auth.company.corp';
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const restrictedDescriptor: IntegrationDescriptorRecord = {
+      ...base,
+      oauth: {
+        ...base.oauth,
+        tokenUrl: operation === 'revoke'
+          ? base.oauth.tokenUrl
+          : `https://${restrictedHost}/oauth/token`,
+        tokenExchange: operation === 'revoke'
+          ? { ...base.oauth.tokenExchange, revocationUrl: `https://${restrictedHost}/oauth/revoke` }
+          : base.oauth.tokenExchange,
+      },
+    };
+    const lookup = jest.fn(lookupReturning(PUBLIC_ADDRESS));
+    const { provider, factory } = providerWith({
+      descriptor: restrictedDescriptor,
+      dnsLookup: lookup,
+    });
+
+    const request = operation === 'exchange'
+      ? provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)
+      : operation === 'refresh'
+        ? provider.refreshCredentials({ refreshToken: 'refresh-token' })
+        : provider.revokeCredentials({ accessToken: 'access-token' });
+
+    await expect(request).rejects.toThrow('configured_oauth_endpoint_not_allowed');
+    expect(lookup).not.toHaveBeenCalled();
+    expect(factory).not.toHaveBeenCalled();
+  });
+
   it('fails closed on token exchange when tokenUrl resolves to a private address, before any secret is sent', async () => {
     const { provider, factory } = providerWith({ dnsLookup: lookupReturning(PRIVATE_ADDRESS) });
     await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST))
