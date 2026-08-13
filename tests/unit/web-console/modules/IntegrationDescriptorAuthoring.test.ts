@@ -252,6 +252,8 @@ describe('IntegrationDescriptorAuthoringService', () => {
     ['category', { category: 'crm\u061C' }],
     ['display_name', { display_name: 'Trusted\u034F CRM' }],
     ['category', { category: 'crm\uFE00' }],
+    ['display_name', { display_name: 'Trusted\u009C CRM' }],
+    ['category', { category: 'crm\u2029' }],
   ])('rejects unsafe Unicode in human-visible descriptor %s', async (_field, override) => {
     const { service } = fixture();
 

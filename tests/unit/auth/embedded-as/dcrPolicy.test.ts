@@ -27,6 +27,8 @@ describe('dcrPolicy — issue #2220 constrained open DCR', () => {
     ['Arabic letter mark', 'Trusted\u061C Client'],
     ['combining grapheme joiner', 'Trusted\u034F Client'],
     ['variation selector', 'Trusted\uFE00 Client'],
+    ['C1 control', 'Trusted\u008D Client'],
+    ['line separator', 'Trusted\u2028 Client'],
   ])('rejects %s characters in the human-visible client name', (_label, clientName) => {
     const decision = validateDcrClientMetadata({
       client_name: clientName,
