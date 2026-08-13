@@ -2,7 +2,7 @@ import { isIP } from 'node:net';
 
 const MAX_HOST_INPUT_LENGTH = 1024;
 const MAX_CANONICAL_HOST_LENGTH = 253;
-const FORBIDDEN_HOST_SYNTAX = /[\\/:@?#%\[\]]/u;
+const FORBIDDEN_HOST_SYNTAX = /[\\/:@?#%\u005B\u005D]/u;
 const UNSAFE_HOST_UNICODE = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u;
 const CANONICAL_DNS_HOST = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/;
 
