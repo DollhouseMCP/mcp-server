@@ -272,5 +272,9 @@ function readStringArray(value: unknown, key: string): readonly string[] {
 
 function readStringArrayField(value: Readonly<Record<string, unknown>>, key: string): readonly string[] {
   const field = value[key];
-  return Array.isArray(field) ? field.filter((entry): entry is string => typeof entry === 'string') : [];
+  if (!Array.isArray(field)) return [];
+  if (field.some(entry => typeof entry !== 'string')) {
+    throw new Error(`descriptor seed field '${key}' must contain only strings`);
+  }
+  return field as string[];
 }
