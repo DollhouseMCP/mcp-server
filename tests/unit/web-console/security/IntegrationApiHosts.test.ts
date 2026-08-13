@@ -58,11 +58,25 @@ describe('IntegrationApiHosts', () => {
     'api.localhost',
     'service.local',
     'service.internal',
+    'router.home.arpa',
+    'service.corp',
+    'service.home',
+    'service.lan',
     '127.0.0.1',
     '[::1]',
     'singlelabel',
   ])('rejects non-public host %s', input => {
     expect(() => canonicalizeIntegrationApiHost(input)).toThrow(/public DNS hostname|must be a hostname/);
+  });
+
+  it('accepts the DNS maximum and rejects a hostname beyond it', () => {
+    const atLimit = [63, 63, 63, 61].map(length => 'a'.repeat(length)).join('.');
+    const beyondLimit = [63, 63, 63, 62].map(length => 'a'.repeat(length)).join('.');
+
+    expect(atLimit).toHaveLength(253);
+    expect(canonicalizeIntegrationApiHost(atLimit)).toBe(atLimit);
+    expect(beyondLimit).toHaveLength(254);
+    expect(() => canonicalizeIntegrationApiHost(beyondLimit)).toThrow('must be a public DNS hostname');
   });
 
   it('requires a bounded non-empty source list even when entries would deduplicate', () => {

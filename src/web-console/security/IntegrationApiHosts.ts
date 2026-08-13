@@ -81,9 +81,14 @@ export function isIntegrationApiHostAllowed(
 function isPrivateDnsName(hostname: string): boolean {
   return !hostname.includes('.') ||
     hostname === 'localhost' ||
+    hostname === 'home.arpa' ||
     hostname.endsWith('.localhost') ||
     hostname.endsWith('.local') ||
-    hostname.endsWith('.internal');
+    hostname.endsWith('.internal') ||
+    hostname.endsWith('.home.arpa') ||
+    hostname.endsWith('.corp') ||
+    hostname.endsWith('.home') ||
+    hostname.endsWith('.lan');
 }
 
 function invalidHost(name: string): IntegrationApiHostValidationError {
