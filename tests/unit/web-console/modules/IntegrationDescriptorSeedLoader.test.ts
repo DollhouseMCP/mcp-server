@@ -141,6 +141,51 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(record?.clientSecretCiphertext).toBeNull();
   });
 
+  it('canonicalizes curated API hosts before persistence', async () => {
+    const dir = await seedDirWith({
+      'examplekey.json': {
+        ...STATIC_SEED,
+        apiHosts: ['API.ExampleKey.Test.', 'api.examplekey.test'],
+      },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const loader = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      newEncryption(),
+      credentials({}),
+      { now: () => FIXED_NOW },
+    );
+
+    const result = await loader.loadSeeds();
+
+    expect(result).toMatchObject({ loaded: 1, failed: 0 });
+    const record = await store.findVisibleByProvider(VISIBLE_USER, 'examplekey');
+    expect(record?.apiHosts).toEqual(['api.examplekey.test']);
+  });
+
+  it('fails a curated seed instead of silently dropping non-string host entries', async () => {
+    const dir = await seedDirWith({
+      'examplekey.json': {
+        ...STATIC_SEED,
+        apiHosts: [42, 'api.examplekey.test'],
+      },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const loader = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      newEncryption(),
+      credentials({}),
+      { now: () => FIXED_NOW },
+    );
+
+    const result = await loader.loadSeeds();
+
+    expect(result).toMatchObject({ loaded: 0, failed: 1 });
+    expect(await store.findVisibleByProvider(VISIBLE_USER, 'examplekey')).toBeNull();
+  });
+
   it('skips the reserved github provider id', async () => {
     const dir = await seedDirWith({ 'github.json': { ...OAUTH_SEED, provider: 'github' } });
     const store = new InMemoryIntegrationDescriptorStore();

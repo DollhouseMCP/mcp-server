@@ -139,7 +139,7 @@ function renderEditor(manager) {
             ${field('Category', 'category', descriptor?.category ?? '', 'Example: Project management', true)}
             ${field('Allowed API hosts', 'api_hosts', descriptor?.api_hosts?.join(', ') ?? '', 'api.example.com, uploads.example.com', true)}
           </div>
-          <p class="int-field-help">Provider IDs use lowercase letters, numbers, and hyphens. Hosts must be exact API hostnames; URLs and paths are not accepted.</p>
+          <p class="int-field-help">Provider IDs use lowercase letters, numbers, and hyphens. Hosts must be exact API hostnames; URLs and paths are not accepted. Saved hosts are shown as lowercase ASCII, with international domains displayed as punycode.</p>
         </section>
         <section class="int-form-section">
           <h3>Authentication</h3>

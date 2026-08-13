@@ -22,6 +22,10 @@ import {
 } from './IntegrationPublicHostGuard.js';
 import { createPinnedOutboundFactory, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
 import { logger } from '../../../utils/logger.js';
+import {
+  canonicalizeIntegrationApiHost,
+  IntegrationApiHostValidationError,
+} from '../../security/IntegrationApiHosts.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
 
@@ -207,10 +211,19 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     init: RequestInit,
   ): Promise<TokenEndpointResponse> {
     const url = new URL(urlValue);
+    let canonicalHostname: string;
     let vetted: DnsLookupAddress;
     try {
-      vetted = await assertPublicResolvedHost(url.hostname, this.dnsLookupImpl);
+      canonicalHostname = canonicalizeIntegrationApiHost(url.hostname, `oauth.${endpoint} endpoint host`);
+      vetted = await assertPublicResolvedHost(canonicalHostname, this.dnsLookupImpl);
     } catch (error) {
+      if (error instanceof IntegrationApiHostValidationError) {
+        logger.warn('Configured OAuth endpoint host rejected by canonical host policy', {
+          provider: this.descriptor.id,
+          endpoint,
+        });
+        throw new Error('configured_oauth_endpoint_not_allowed');
+      }
       if (error instanceof PublicHostGuardError) {
         logger.warn('Configured OAuth endpoint host rejected by public-host guard', {
           provider: this.descriptor.id,
@@ -224,7 +237,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       throw error;
     }
     const outbound = this.pinnedOutboundFactory({
-      hostname: url.hostname,
+      hostname: canonicalHostname,
       address: vetted.address,
       family: vetted.family,
     });

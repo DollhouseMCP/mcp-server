@@ -6,6 +6,7 @@ import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import { logger } from '../../../utils/logger.js';
+import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
@@ -329,7 +330,7 @@ function parseAllowedServerUrl(value: string, descriptor: IntegrationDescriptorR
   } catch {
     throw new IntegrationRemoteMcpBridgeError('remote_mcp_invalid_server_url', 'Remote MCP server URL is invalid.', 400);
   }
-  if (url.protocol !== 'https:' || !descriptor.apiHosts.includes(url.hostname)) {
+  if (url.protocol !== 'https:' || !isIntegrationApiHostAllowed(url.hostname, descriptor.apiHosts)) {
     throw new IntegrationRemoteMcpBridgeError(
       'remote_mcp_server_not_allowed',
       'Remote MCP server URL must use HTTPS and a descriptor apiHosts host.',

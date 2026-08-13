@@ -57,6 +57,34 @@ describe('IntegrationRemoteMcpBridge', () => {
     }]);
   });
 
+  it('accepts an equivalent canonical spelling of an allowlisted remote MCP host', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn().mockResolvedValue({
+        tools: [{ name: 'search', description: 'Search', inputSchema: { type: 'object', properties: {} } }],
+      }),
+      callTool: jest.fn(),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({
+      clientFactory,
+      descriptor: descriptor({
+        operationPromotion: {
+          remoteMcp: {
+            serverUrl: 'https://MCP.EXAMPLE.COM./mcp',
+            tools: ['search'],
+          },
+        },
+      }),
+    });
+
+    const tools = await runAsUser(contextTracker, () => bridge.listAllowedTools());
+
+    expect(tools).toHaveLength(1);
+    expect(clientFactory).toHaveBeenCalledWith(expect.objectContaining({
+      serverUrl: new URL('https://mcp.example.com./mcp'),
+    }));
+  });
+
   it('skips discovery for providers the discovery gate refuses, before any credential use', async () => {
     const clientFactory = jest.fn<RemoteMcpClientFactory>();
     const discoveryGate = jest.fn<(provider: string) => Promise<boolean>>().mockResolvedValue(false);

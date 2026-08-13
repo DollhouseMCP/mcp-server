@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
+import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import {
@@ -747,7 +748,6 @@ function normalizePathItem(
 }
 
 function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descriptor: IntegrationDescriptorRecord): void {
-  const allowed = new Set(descriptor.apiHosts);
   const servers = Array.isArray(spec.servers) ? spec.servers : [];
   for (const serverValue of servers) {
     const url = readString(asRecord(serverValue).url);
@@ -758,7 +758,7 @@ function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descrip
     } catch {
       continue;
     }
-    if (parsed.protocol !== 'https:' || !allowed.has(parsed.hostname)) {
+    if (parsed.protocol !== 'https:' || !isIntegrationApiHostAllowed(parsed.hostname, descriptor.apiHosts)) {
       throw new IntegrationOperationCatalogError(
         'invalid_openapi_spec',
         'OpenAPI servers must use HTTPS hosts present in the descriptor apiHosts allowlist.',

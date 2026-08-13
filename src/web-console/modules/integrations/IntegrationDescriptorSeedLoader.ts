@@ -23,6 +23,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { logger } from '../../../utils/logger.js';
+import { canonicalizeIntegrationApiHosts } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import {
   type IIntegrationDescriptorStore,
@@ -179,7 +180,7 @@ export class IntegrationDescriptorSeedLoader {
       ownerUserId: null,
       displayName: readString(seed, 'displayName') ?? '',
       category: readString(seed, 'category') ?? '',
-      apiHosts: readStringArray(seed, 'apiHosts'),
+      apiHosts: canonicalizeIntegrationApiHosts(readStringArray(seed, 'apiHosts')),
       operationPromotion: readRecord(seed, 'operationPromotion'),
       createdAt: timestamp,
       updatedAt: timestamp,
@@ -271,5 +272,9 @@ function readStringArray(value: unknown, key: string): readonly string[] {
 
 function readStringArrayField(value: Readonly<Record<string, unknown>>, key: string): readonly string[] {
   const field = value[key];
-  return Array.isArray(field) ? field.filter((entry): entry is string => typeof entry === 'string') : [];
+  if (!Array.isArray(field)) return [];
+  if (field.some(entry => typeof entry !== 'string')) {
+    throw new Error(`descriptor seed field '${key}' must contain only strings`);
+  }
+  return field as string[];
 }

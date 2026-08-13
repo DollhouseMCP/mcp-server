@@ -189,6 +189,41 @@ describe('IntegrationDescriptorAuthoringService', () => {
     });
   });
 
+  it('persists and returns canonical de-duplicated API hosts', async () => {
+    const { service, descriptorStore } = fixture();
+
+    const result = await service.create(consoleRequest({
+      body: oauthBody({
+        api_hosts: [
+          'API.MyCRM.Example',
+          'api.mycrm.example.',
+          'bücher.example',
+          'xn--bcher-kva.example',
+        ],
+      }),
+    }));
+
+    expect(result.status).toBe(201);
+    expect(bodyOf(result).api_hosts).toEqual(['api.mycrm.example', 'xn--bcher-kva.example']);
+    const stored = await descriptorStore.findById(bodyOf(result).id as string, USER_ID);
+    expect(stored?.apiHosts).toEqual(['api.mycrm.example', 'xn--bcher-kva.example']);
+  });
+
+  it.each([
+    'https://api.mycrm.example',
+    'user@api.mycrm.example',
+    'api.mycrm.example:443',
+    'api.mycrm.example/path',
+    'api\u200B.mycrm.example',
+  ])('rejects API host syntax that is not a bare hostname: %s', async apiHost => {
+    const { service } = fixture();
+
+    const result = await service.create(consoleRequest({ body: oauthBody({ api_hosts: [apiHost] }) }));
+
+    expect(result.status).toBe(422);
+    expect(String(bodyOf(result).detail)).toContain('must be a hostname');
+  });
+
   it('rejects provider ids colliding with any visible descriptor', async () => {
     const { service } = fixture();
     await service.create(consoleRequest({ body: oauthBody() }));
