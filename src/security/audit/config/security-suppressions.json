@@ -397,26 +397,6 @@
     },
     {
       "rule": "DMCP-SEC-004",
-      "file": "src/web-console/platform/**/*.ts",
-      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Platform routing owns ConsoleUnicodeNormalization and request canonicalization. New non-route middleware must be reviewed before relying on this suppression."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/web-console/services/**/*.ts",
-      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Web-console services are invoked from normalized console routes or trusted lifecycle jobs. New externally reachable service entry points require manual DMCP-SEC-004 review."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/web-console/stores/**/*.ts",
-      "reason": "CENTRALIZED WEB-CONSOLE NORMALIZATION: Web-console stores are reached from normalized console route handlers or trusted server composition. New direct external-input store entry points require manual DMCP-SEC-004 review."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/web-console/ui/*.js",
-      "reason": "Browser console modules send requests through ui/api.js, which applies native NFC normalization to API paths and JSON payload keys before fetch. Server-side ConsoleUnicodeNormalization remains the authoritative boundary for all console route params, query values, and bodies."
-    },
-    {
-      "rule": "DMCP-SEC-004",
       "file": "src/auth/authMiddleware.ts",
       "reason": "Bearer Authorization values are opaque credentials and must be exact-match validated, not Unicode-folded. MCP request payloads are normalized after authentication by StreamableHttpServer/ServerSetup before tool handlers see user content."
     },
@@ -437,48 +417,78 @@
     },
     {
       "rule": "DMCP-SEC-004",
-      "file": "src/auth/embedded-as/**/*.ts",
-      "reason": "Embedded OAuth/OIDC authorization-server layer handles exact protocol artifacts (code, state, verifier, token, cookie bindings) where Unicode normalization would weaken comparisons. Human-visible fields are validated by method-specific policies; MCP/console payload content is normalized at its own ingress boundary."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/context/**/*.ts",
-      "reason": "Context policy/session context helpers receive normalized/validated identities from the auth and MCP ingress layers. They do not parse raw request bodies or free-form user text."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/database/**/*.ts",
-      "reason": "Database schema/RLS/user-context layer consumes typed IDs and records after validation at auth, console, or MCP boundaries. It does not accept raw request payloads directly."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/di/registrars/*.ts",
-      "reason": "DI registrar wiring only. Any strings here are service IDs/config keys; raw user input is normalized by the services/routes registered through the container."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/paths/**/*.ts",
-      "reason": "Path helpers validate strict ASCII identifier/path segments and reject unsafe Unicode rather than normalizing it into acceptable filesystem names. Upstream identity and request payload normalization happens before path resolution."
-    },
-    {
-      "rule": "DMCP-SEC-004",
       "file": "src/server/sseTickets.ts",
       "reason": "SSE tickets are random base64url opaque credentials bound to a stream name and must be exact-match redeemed once. Normalizing ticket values would weaken token comparison semantics."
     },
     {
       "rule": "DMCP-SEC-004",
-      "file": "src/state/**/*.ts",
-      "reason": "State stores persist typed challenge/confirmation records after upstream validation. They do not parse raw request payload text; MCP/console ingress normalization happens before records reach this layer."
-    },
-    {
-      "rule": "DMCP-SEC-004",
-      "file": "src/storage/**/*.ts",
-      "reason": "Storage layers persist typed element/config/state records after MCP, web-console, or element-manager validation. They are not raw ingress points; Unicode normalization is enforced before persistence."
-    },
-    {
-      "rule": "DMCP-SEC-004",
       "file": "eslint.config.js",
       "reason": "Build-time ESLint configuration only. Contains rule metadata and file patterns, not production request handling or user-input processing."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/platform/ConsoleSecuredRouterAssembler.ts",
+      "reason": "EXACT ROUTER BOUNDARY: This assembler installs ConsoleUnicodeNormalization for request targets before every handler and body-key normalization after authentication. Its direct query reads inspect only already-normalized credential-presence keys."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/dcrPolicyMiddleware.ts",
+      "reason": "EXACT DCR BOUNDARY: OAuth redirect URIs and protocol identifiers remain byte-exact. Human-visible client_name rejects directional and zero-width characters in dcrPolicy and is NFC-normalized before persistence."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/InteractionRouter.ts",
+      "reason": "EXACT OIDC BOUNDARY: Interaction IDs, CSRF values, cookies, method IDs, and OAuth query fields are opaque protocol values checked by exact comparison. Human-entered form fields are validated by the selected authentication method."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/EmbeddedAuthorizationServer.ts",
+      "reason": "EXACT AUTHORIZATION-SERVER BOUNDARY: Bearer tokens, OAuth parameters, headers, and signing-key identifiers are opaque exact-match values. The packaged font path is restricted by an ASCII filename allowlist."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/integrations/IntegrationModule.ts",
+      "reason": "EXACT CONSOLE ROUTE MODULE: Provider route parameters arrive through ConsoleUnicodeNormalization and are then restricted by PROVIDER_ID_PATTERN plus the reserved-provider set."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/integrations/IntegrationDescriptorAuthoringService.ts",
+      "reason": "EXACT CONSOLE SERVICE: Requests arrive through the secured normalized console router. Human-visible display_name and category are NFC-normalized and reject directional or zero-width characters; remaining fields receive method-specific validation before persistence."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/collection/CollectionService.ts",
+      "reason": "EXACT CONSOLE SERVICE: Query keys and values arrive through ConsoleUnicodeNormalization, then type, search, page, and page-size fields receive bounded semantic validation."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/collection/CollectionModule.ts",
+      "reason": "EXACT CONSOLE ROUTE MODULE: Collection type and name parameters are normalized by ConsoleRouterAssembler before this module performs type checks and dispatches to the service."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/collection/CollectionInstallService.ts",
+      "reason": "EXACT CONSOLE SERVICE: Body keys arrive normalized; the catalog path is bounded and restricted to library paths, then authoritative collection path/content validation runs before portfolio persistence."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/web-console/modules/account-admin/AccountAdminAllowlistService.ts",
+      "reason": "EXACT CONSOLE SERVICE: Body keys arrive normalized. Allowlist values use normalizeAllowlistDisplayValue followed by kind-specific validation; notes are bounded and are not authorization identifiers."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/methods/MagicLinkMethod.ts",
+      "reason": "EXACT MAGIC-LINK BOUNDARY: Link tokens and CSRF bindings are opaque signed credentials and must not be Unicode-normalized. Email addresses and IP rate-limit keys use their own canonicalization and validation."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/methods/LocalAccountMethod.ts",
+      "reason": "EXACT LOCAL-AUTH BOUNDARY: Invite tokens are opaque credentials and passwords must be hashed exactly as entered. Request bodies are capped and all account fields receive method-specific validation."
+    },
+    {
+      "rule": "DMCP-SEC-004",
+      "file": "src/auth/embedded-as/methods/GithubSocialMethod.ts",
+      "reason": "EXACT GITHUB OAUTH BOUNDARY: Authorization code and state are opaque OAuth values bound to the interaction cookie and verified by exact comparison before exchange."
     },
     {
       "rule": "DMCP-SEC-006",

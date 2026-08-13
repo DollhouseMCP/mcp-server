@@ -189,6 +189,10 @@ async function buildClientMetadata(input: unknown, Client: DcrClientConstructor)
     : {};
   const metadata: Record<string, unknown> = { ...body };
 
+  if (typeof metadata.client_name === 'string') {
+    metadata.client_name = metadata.client_name.normalize('NFC');
+  }
+
   metadata.client_id = await generateUniqueClientId(Client);
   metadata.client_id_issued_at = Math.floor(Date.now() / 1000);
   metadata.id_token_signed_response_alg ??= 'ES256';

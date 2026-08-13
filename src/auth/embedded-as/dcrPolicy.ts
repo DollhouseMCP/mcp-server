@@ -9,6 +9,7 @@
  */
 
 import { isLoopbackIpAddress, isPublicIpAddress, parseIpAddress } from '../../security/ipAddressClassifier.js';
+import { containsUnsafeDisplayUnicode } from '../../security/validators/displayText.js';
 
 const MAX_REDIRECT_URIS = 10;
 const MAX_URI_LENGTH = 2048;
@@ -288,6 +289,9 @@ function validateStringMetadata(metadata: Record<string, unknown>, errors: strin
     }
     if (containsControlCharacter(value)) {
       errors.push(`${key} must not contain control characters`);
+    }
+    if (key === 'client_name' && containsUnsafeDisplayUnicode(value)) {
+      errors.push('client_name must not contain directional or zero-width characters');
     }
   }
 }
