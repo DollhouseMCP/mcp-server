@@ -847,9 +847,9 @@ function jsonCredentialPropertyValueEnd(
   cursorAfterName: number,
   normalizedExpected: string,
 ): number | null {
-  let cursor = skipHorizontalWhitespace(value, cursorAfterName);
+  let cursor = skipStructuredWhitespace(value, cursorAfterName);
   if (value[cursor] !== ':') return null;
-  cursor = skipHorizontalWhitespace(value, cursor + 1);
+  cursor = skipStructuredWhitespace(value, cursor + 1);
   if (value[cursor] === '"') {
     const parsed = parseJsonStringAt(value, cursor);
     return parsed !== null && normalizePercentEscapes(parsed.value) === normalizedExpected
@@ -976,9 +976,9 @@ function credentialHeaderValueEchoEnd(
   cursorAfterName: number,
   header: CredentialHeaderRedaction,
 ): number | null {
-  let cursor = skipHorizontalWhitespace(value, cursorAfterName);
+  let cursor = skipStructuredWhitespace(value, cursorAfterName);
   if (value[cursor] !== ':') return null;
-  cursor = skipHorizontalWhitespace(value, cursor + 1);
+  cursor = skipStructuredWhitespace(value, cursor + 1);
 
   const quote = value[cursor] === '"' || value[cursor] === "'" ? value[cursor] : null;
   if (quote === '"') {
@@ -1029,9 +1029,10 @@ function scanJsonStringAt(value: string, start: number): ScannedJsonString {
   return { value: null, end: value.length };
 }
 
-function skipHorizontalWhitespace(value: string, start: number): number {
+function skipStructuredWhitespace(value: string, start: number): number {
   let cursor = start;
-  while (value[cursor] === ' ' || value[cursor] === '\t') cursor += 1;
+  while (value[cursor] === ' ' || value[cursor] === '\t' ||
+         value[cursor] === '\r' || value[cursor] === '\n') cursor += 1;
   return cursor;
 }
 

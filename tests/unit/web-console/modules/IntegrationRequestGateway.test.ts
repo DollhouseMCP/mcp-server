@@ -290,6 +290,31 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('{[redacted]} {"key":"available"} {"other":"a"}');
   });
 
+  it('redacts pretty-printed object-style query echoes', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('{"key"\r\n:\n"a"}', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/pretty-object-query-echo',
+    }));
+
+    expect(result.response).toBe('{[redacted]}');
+  });
+
   it('normalizes percent escapes in query names without leaking short credentials', async () => {
     const fetches: string[] = [];
     const gateway = gatewayFixture({
@@ -533,6 +558,31 @@ describe('IntegrationRequestGateway', () => {
     }));
 
     expect(result.response).toBe('{[redacted]} {"X-Api-\\u004bey":"available"}');
+  });
+
+  it('redacts pretty-printed object-style header echoes', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('{"X-Api-Key"\n:\r\n"a"}', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/pretty-object-header-echo',
+    }));
+
+    expect(result.response).toBe('{[redacted]}');
   });
 
   it('handles malformed quoted text without repeatedly rescanning the response suffix', async () => {
