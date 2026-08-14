@@ -166,17 +166,14 @@ jobs:
             echo "✗ package.json NOT FOUND"
           fi
 
-      - name: Enforce hosted integration unit tests
-        if: >-
-          always() &&
-          (github.base_ref == 'codex/hosted-http-integration' ||
-          github.ref == 'refs/heads/codex/hosted-http-integration')
+      - name: Enforce unit test result
+        if: always()
         shell: bash
         env:
           TEST_OUTCOME: ${{ steps.original_tests.outcome }}
         run: |
           if [ "$TEST_OUTCOME" != "success" ]; then
-            echo "Unit tests failed for the hosted integration gate."
+            echo "Unit tests failed for the core build gate."
             exit 1
           fi
 

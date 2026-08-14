@@ -141,8 +141,9 @@ describe('SecurityAuditor', () => {
       const scanner = new CodeScanner(defaultConfig.scanners.code);
       const findings = await scanner.scan({ projectRoot: tempDir });
 
-      expect(findings.some(finding => finding.file?.endsWith('/ui/app.js'))).toBe(true);
-      expect(findings.some(finding => finding.file?.endsWith('/vendor/purify.min.js'))).toBe(false);
+      const normalizedFindingPaths = findings.map(finding => finding.file?.replaceAll('\\', '/'));
+      expect(normalizedFindingPaths.some(file => file?.endsWith('/ui/app.js'))).toBe(true);
+      expect(normalizedFindingPaths.some(file => file?.endsWith('/vendor/purify.min.js'))).toBe(false);
     });
 
     test('custom audit policy does not suppress first-party source directories', async () => {

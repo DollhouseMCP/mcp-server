@@ -8,7 +8,7 @@ const migrationPath = path.resolve(
   testDir,
   '../../../src/database/migrations/0045_normalize_allowlist_identities.sql',
 );
-const migrationSql = fs.readFileSync(migrationPath, 'utf8');
+const migrationSql = fs.readFileSync(migrationPath, 'utf8').replaceAll('\r\n', '\n');
 
 describe('allowlist identity normalization migration', () => {
   it('normalizes canonical encodings without compatibility folding', () => {

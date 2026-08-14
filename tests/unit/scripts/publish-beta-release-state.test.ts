@@ -282,12 +282,19 @@ function runScenario(scenario: Scenario): {
   writeExecutable(path.join(binDirectory, 'npm'), fakeNpmScript);
 
   const release = scenario.release;
-  const result = spawnSync('/bin/bash', ['-c', validationScript ?? 'exit 99'], {
+  const bashExecutable = process.platform === 'win32' ? 'bash' : '/bin/bash';
+  const shellBinDirectory = process.platform === 'win32'
+    ? binDirectory
+      .replaceAll('\\', '/')
+      .replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`)
+    : binDirectory;
+  const shellScript = `export PATH="$FAKE_BIN_DIRECTORY:$PATH"\n${validationScript ?? 'exit 99'}`;
+  const result = spawnSync(bashExecutable, ['-c', shellScript], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
+      FAKE_BIN_DIRECTORY: shellBinDirectory,
       GITHUB_REF_NAME: 'beta',
       GITHUB_SHA: expectedSha,
       GITHUB_OUTPUT: outputPath,
@@ -303,6 +310,7 @@ function runScenario(scenario: Scenario): {
       FAKE_NPM_LATEST_VERSION: scenario.npmLatestVersion ?? '',
     },
   });
+  if (result.error) throw result.error;
 
   return {
     status: result.status,
