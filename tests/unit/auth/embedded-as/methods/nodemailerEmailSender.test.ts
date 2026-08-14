@@ -109,12 +109,16 @@ describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
       connectionTimeoutMs: 500,
     });
 
-    await expect(sender.verify()).rejects.toThrow(/STARTTLS|implicit TLS|authenticate/);
+    const verification = sender.verify();
+    await expect(verification).rejects.toThrow('SMTP verify failed for 127.0.0.1:465');
+    await expect(verification).rejects.toThrow(
+      'Confirm the server supports STARTTLS (port 587) or implicit TLS (port 465)',
+    );
   }, 5_000);
 });
 
 describe('NodemailerEmailSender — magic-link delivery', () => {
-  it('passes the expected envelope and escaped HTML to Nodemailer', async () => {
+  function createSenderWithMockTransport() {
     const sender = new NodemailerEmailSender({
       host: 'smtp.example.com',
       port: 587,
@@ -125,6 +129,11 @@ describe('NodemailerEmailSender — magic-link delivery', () => {
     }).transporter;
     const sendMail = jest.fn(async (_message: unknown) => ({ messageId: 'test' }));
     transport.sendMail = sendMail;
+    return { sender, sendMail };
+  }
+
+  it('passes the expected envelope and escaped HTML to Nodemailer', async () => {
+    const { sender, sendMail } = createSenderWithMockTransport();
 
     await sender.sendMagicLink({
       to: 'user@example.com',
@@ -138,5 +147,26 @@ describe('NodemailerEmailSender — magic-link delivery', () => {
       text: expect.stringContaining('token=a&next="<done>"'),
       html: expect.stringContaining('token=a&amp;next=&quot;&lt;done>&quot;'),
     }));
+  });
+
+  it('accepts a magic-link URL at the 2048-character limit', async () => {
+    const { sender, sendMail } = createSenderWithMockTransport();
+
+    await sender.sendMagicLink({
+      to: 'user@example.com',
+      url: 'x'.repeat(2_048),
+    });
+
+    expect(sendMail).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a magic-link URL over 2048 characters before delivery', async () => {
+    const { sender, sendMail } = createSenderWithMockTransport();
+
+    await expect(sender.sendMagicLink({
+      to: 'user@example.com',
+      url: 'x'.repeat(2_049),
+    })).rejects.toThrow('magic-link URL exceeds 2048 chars (got 2049)');
+    expect(sendMail).not.toHaveBeenCalled();
   });
 });
