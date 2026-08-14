@@ -53,9 +53,7 @@ try {
 
   console.log(`Web console preview: ${BASE_URL}/ui`);
   console.log('Username: e2e_admin');
-  // Intentional: this fixed, non-production E2E credential is printed so a
-  // developer can sign in to the local preview it seeds.
-  console.log(`Password: ${seed.SEED_PASSWORD}`); // codeql[js/clear-text-logging]
+  console.log(`Password: ${seed.SEED_PASSWORD}`);
   console.log(`Runtime: ${process.env.E2E_APP_ENTRY ?? 'src/index.ts'}`);
   console.log(`Logs: ${logPath}`);
   console.log('Press Ctrl-C to stop.');
