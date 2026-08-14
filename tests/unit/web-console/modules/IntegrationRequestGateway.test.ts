@@ -376,6 +376,32 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts quoted header-name echoes from non-JSON responses', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(
+        '{"X-Api-Key":"a"} {"X-Api-Key":"available"}',
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/quoted-short-header-key',
+    }));
+
+    expect(result.response).toBe('{[redacted]} {"X-Api-Key":"available"}');
+  });
+
   it('redacts encoded custom-header echoes for short credentials', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({

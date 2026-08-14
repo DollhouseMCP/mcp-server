@@ -489,6 +489,11 @@ interface CredentialHeaderRedaction {
   readonly requireValueBoundary: boolean;
 }
 
+interface CredentialHeaderEchoMatch {
+  readonly start: number;
+  readonly end: number;
+}
+
 interface CredentialQueryRedaction {
   readonly name: string;
   readonly value: string;
@@ -843,10 +848,10 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
     const index = normalizedValue.indexOf(normalizedName, searchFrom);
     if (index < 0) break;
     searchFrom = index + header.name.length;
-    const valueEnd = credentialHeaderEchoEnd(value, index, header);
-    if (valueEnd === null) continue;
-    parts.push(value.slice(copyFrom, index), REDACTED);
-    copyFrom = valueEnd;
+    const match = credentialHeaderEchoMatch(value, index, header);
+    if (match === null) continue;
+    parts.push(value.slice(copyFrom, match.start), REDACTED);
+    copyFrom = match.end;
     searchFrom = copyFrom;
   }
   if (parts.length === 0) return value;
@@ -854,15 +859,23 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
   return parts.join('');
 }
 
-function credentialHeaderEchoEnd(
+function credentialHeaderEchoMatch(
   value: string,
   headerStart: number,
   header: CredentialHeaderRedaction,
-): number | null {
+): CredentialHeaderEchoMatch | null {
   const before = headerStart === 0 ? '' : value[headerStart - 1];
-  if (before !== '' && /[A-Za-z0-9-]/.test(before)) return null;
+  const nameQuote = before === '"' || before === "'" ? before : null;
+  const matchStart = nameQuote === null ? headerStart : headerStart - 1;
+  const boundaryBefore = matchStart === 0 ? '' : value[matchStart - 1];
+  if (boundaryBefore !== '' && /[A-Za-z0-9-]/.test(boundaryBefore)) return null;
 
-  let cursor = skipHorizontalWhitespace(value, headerStart + header.name.length);
+  let cursor = headerStart + header.name.length;
+  if (nameQuote !== null) {
+    if (value[cursor] !== nameQuote) return null;
+    cursor += 1;
+  }
+  cursor = skipHorizontalWhitespace(value, cursor);
   if (value[cursor] !== ':') return null;
   cursor = skipHorizontalWhitespace(value, cursor + 1);
 
@@ -871,9 +884,9 @@ function credentialHeaderEchoEnd(
   if (!credentialHeaderValueMatches(value, valueStart, header)) return null;
 
   const valueEnd = valueStart + header.value.length;
-  if (quote !== null && value[valueEnd] === quote) return valueEnd + 1;
+  if (quote !== null && value[valueEnd] === quote) return { start: matchStart, end: valueEnd + 1 };
   if (header.requireValueBoundary && !isCredentialValueBoundary(value[valueEnd] ?? '')) return null;
-  return valueEnd;
+  return { start: matchStart, end: valueEnd };
 }
 
 function skipHorizontalWhitespace(value: string, start: number): number {
