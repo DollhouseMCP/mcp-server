@@ -155,6 +155,7 @@ describe('IntegrationRequestGateway', () => {
         exactEcho: 'a',
         queryEcho: 'received key=a',
         unrelated: 'monkey=available',
+        longerValue: 'received key=available',
       })),
     });
 
@@ -169,6 +170,7 @@ describe('IntegrationRequestGateway', () => {
       exactEcho: '[redacted]',
       queryEcho: 'received [redacted]',
       unrelated: 'monkey=available',
+      longerValue: 'received key=available',
     });
   });
 
@@ -213,7 +215,11 @@ describe('IntegrationRequestGateway', () => {
         accessTokenCiphertext: encrypt('/', 'airtable'),
         refreshTokenCiphertext: null,
       })],
-      fetch: () => Promise.resolve(jsonResponse(200, '%2f')),
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        scalar: '%2f',
+        decodedQuery: 'received key=/ safely',
+        encodedQuery: 'received key=%2f safely',
+      })),
     });
 
     const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
@@ -222,7 +228,11 @@ describe('IntegrationRequestGateway', () => {
       path: '/encoded-short-key',
     }));
 
-    expect(result.response).toBe('[redacted]');
+    expect(result.response).toEqual({
+      scalar: '[redacted]',
+      decodedQuery: 'received [redacted] safely',
+      encodedQuery: 'received [redacted] safely',
+    });
   });
 
   it('redacts normalized custom-header echoes for short credentials', async () => {
@@ -241,6 +251,7 @@ describe('IntegrationRequestGateway', () => {
         lowercase: 'received x-api-key:a',
         mixedCase: 'received X-Api-Key:\t a safely',
         quoted: 'received X-API-KEY: "a" safely',
+        longerValue: 'received X-Api-Key: available',
       })),
     });
 
@@ -255,6 +266,7 @@ describe('IntegrationRequestGateway', () => {
       lowercase: 'received [redacted]',
       mixedCase: 'received [redacted] safely',
       quoted: 'received [redacted] safely',
+      longerValue: 'received X-Api-Key: available',
     });
   });
 
@@ -270,6 +282,7 @@ describe('IntegrationRequestGateway', () => {
         ordinary: 'a valid response',
         normalized: 'received authorization: bEaReR a safely',
         differentCase: 'received authorization: bearer A safely',
+        longerValue: 'received authorization: bearer available',
       })),
     });
 
@@ -283,6 +296,7 @@ describe('IntegrationRequestGateway', () => {
       ordinary: 'a valid response',
       normalized: 'received [redacted] safely',
       differentCase: 'received authorization: bearer A safely',
+      longerValue: 'received authorization: bearer available',
     });
   });
 

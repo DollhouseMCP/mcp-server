@@ -486,6 +486,7 @@ interface CredentialHeaderRedaction {
   readonly name: string;
   readonly value: string;
   readonly caseInsensitivePrefixLength?: number;
+  readonly requireValueBoundary: boolean;
 }
 
 interface CredentialQueryRedaction {
@@ -759,7 +760,7 @@ function redactCredentialQueryEcho(value: string, query: CredentialQueryRedactio
     const valueEnd = valueStart + query.value.length;
     const after = value[valueEnd] ?? '';
     const nameBoundary = before === '' || !/[A-Za-z0-9_.~-]/.test(before);
-    const valueBoundary = after === '' || /[&\s"'#,}\]]/.test(after);
+    const valueBoundary = isCredentialValueBoundary(after);
     if (nameBoundary && valueBoundary &&
         normalizedValue.startsWith(normalizedQueryValue, valueStart)) {
       parts.push(value.slice(copyFrom, index), REDACTED);
@@ -800,6 +801,10 @@ function normalizePercentEscapes(value: string): string {
   return value.replace(/%[0-9a-f]{2}/gi, escape => escape.toUpperCase());
 }
 
+function isCredentialValueBoundary(value: string): boolean {
+  return value === '' || /[&\s"'#,.;:!?)}\]>]/.test(value);
+}
+
 function redactCredentialHeaderEchoes(
   value: string,
   headers: readonly CredentialHeaderRedaction[],
@@ -830,7 +835,13 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
       const valueStart = quote ? cursor + 1 : cursor;
       if (credentialHeaderValueMatches(value, valueStart, header)) {
         let valueEnd = valueStart + header.value.length;
-        if (quote && value[valueEnd] === quote) valueEnd += 1;
+        const hasClosingQuote = quote !== null && value[valueEnd] === quote;
+        if (hasClosingQuote) valueEnd += 1;
+        if (header.requireValueBoundary && !hasClosingQuote &&
+            !isCredentialValueBoundary(value[valueEnd] ?? '')) {
+          searchFrom = index + header.name.length;
+          continue;
+        }
         parts.push(value.slice(copyFrom, index), REDACTED);
         copyFrom = valueEnd;
         searchFrom = copyFrom;
@@ -896,22 +907,39 @@ function buildCredentialRedactions(
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
     const authorization = `Bearer ${credential}`;
     addEmbedded(authorization);
-    headers.push({ name: 'Authorization', value: authorization, caseInsensitivePrefixLength: 'Bearer '.length });
+    headers.push({
+      name: 'Authorization',
+      value: authorization,
+      caseInsensitivePrefixLength: 'Bearer '.length,
+      requireValueBoundary: credential.length < MIN_EMBEDDED_CREDENTIAL_LENGTH,
+    });
   } else if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
     if (descriptor.staticApiKey.injection.location === 'basic') {
       const encoded = Buffer.from(credential, 'utf8').toString('base64');
       addCredential(encoded);
       const authorization = `Basic ${encoded}`;
       addEmbedded(authorization);
-      headers.push({ name: 'Authorization', value: authorization, caseInsensitivePrefixLength: 'Basic '.length });
+      headers.push({
+        name: 'Authorization',
+        value: authorization,
+        caseInsensitivePrefixLength: 'Basic '.length,
+        requireValueBoundary: encoded.length < MIN_EMBEDDED_CREDENTIAL_LENGTH,
+      });
     } else {
       const injectedValue = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
       addCredential(injectedValue);
       if (descriptor.staticApiKey.injection.location === 'query') {
         const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
-        queries.push({ name: descriptor.staticApiKey.injection.name, value: encodedValue });
+        queries.push({ name: descriptor.staticApiKey.injection.name, value: injectedValue });
+        if (encodedValue !== injectedValue) {
+          queries.push({ name: descriptor.staticApiKey.injection.name, value: encodedValue });
+        }
       } else {
-        headers.push({ name: descriptor.staticApiKey.injection.name, value: injectedValue });
+        headers.push({
+          name: descriptor.staticApiKey.injection.name,
+          value: injectedValue,
+          requireValueBoundary: credential.length < MIN_EMBEDDED_CREDENTIAL_LENGTH,
+        });
       }
     }
   }
