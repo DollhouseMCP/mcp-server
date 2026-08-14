@@ -185,6 +185,7 @@ describe('IntegrationRequestGateway', () => {
         ordinary: 'a valid response',
         lowercase: 'received x-api-key:a',
         mixedCase: 'received X-Api-Key:\t a safely',
+        quoted: 'received X-API-KEY: "a" safely',
       })),
     });
 
@@ -198,6 +199,35 @@ describe('IntegrationRequestGateway', () => {
       ordinary: 'a valid response',
       lowercase: 'received [redacted]',
       mixedCase: 'received [redacted] safely',
+      quoted: 'received [redacted] safely',
+    });
+  });
+
+  it('redacts case-normalized authorization schemes while matching credential bytes exactly', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        ordinary: 'a valid response',
+        normalized: 'received authorization: bEaReR a safely',
+        differentCase: 'received authorization: bearer A safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/short-bearer',
+    }));
+
+    expect(result.response).toEqual({
+      ordinary: 'a valid response',
+      normalized: 'received [redacted] safely',
+      differentCase: 'received authorization: bearer A safely',
     });
   });
 

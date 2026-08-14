@@ -482,6 +482,7 @@ interface CredentialRedactions {
 interface CredentialHeaderRedaction {
   readonly name: string;
   readonly value: string;
+  readonly caseInsensitivePrefixLength?: number;
 }
 
 // Single-replica/dev fallback used only when no IRateLimitStore is injected (production
@@ -747,9 +748,13 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
     if ((before === '' || !/[A-Za-z0-9-]/.test(before)) && value[cursor] === ':') {
       cursor += 1;
       while (value[cursor] === ' ' || value[cursor] === '\t') cursor += 1;
-      if (value.startsWith(header.value, cursor)) {
+      const quote = value[cursor] === '"' || value[cursor] === "'" ? value[cursor] : null;
+      const valueStart = quote ? cursor + 1 : cursor;
+      if (credentialHeaderValueMatches(value, valueStart, header)) {
+        let valueEnd = valueStart + header.value.length;
+        if (quote && value[valueEnd] === quote) valueEnd += 1;
         parts.push(value.slice(copyFrom, index), REDACTED);
-        copyFrom = cursor + header.value.length;
+        copyFrom = valueEnd;
         searchFrom = copyFrom;
         continue;
       }
@@ -759,6 +764,19 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
   if (parts.length === 0) return value;
   parts.push(value.slice(copyFrom));
   return parts.join('');
+}
+
+function credentialHeaderValueMatches(
+  value: string,
+  valueStart: number,
+  header: CredentialHeaderRedaction,
+): boolean {
+  const prefixLength = header.caseInsensitivePrefixLength ?? 0;
+  if (prefixLength === 0) return value.startsWith(header.value, valueStart);
+  const actualPrefix = value.slice(valueStart, valueStart + prefixLength).toLowerCase();
+  const expectedPrefix = header.value.slice(0, prefixLength).toLowerCase();
+  return actualPrefix === expectedPrefix &&
+    value.startsWith(header.value.slice(prefixLength), valueStart + prefixLength);
 }
 
 function buildCredentialRedactions(
@@ -790,14 +808,14 @@ function buildCredentialRedactions(
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
     const authorization = `Bearer ${credential}`;
     addEmbedded(authorization);
-    headers.push({ name: 'Authorization', value: authorization });
+    headers.push({ name: 'Authorization', value: authorization, caseInsensitivePrefixLength: 'Bearer '.length });
   } else if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
     if (descriptor.staticApiKey.injection.location === 'basic') {
       const encoded = Buffer.from(credential, 'utf8').toString('base64');
       addCredential(encoded);
       const authorization = `Basic ${encoded}`;
       addEmbedded(authorization);
-      headers.push({ name: 'Authorization', value: authorization });
+      headers.push({ name: 'Authorization', value: authorization, caseInsensitivePrefixLength: 'Basic '.length });
     } else {
       const injectedValue = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
       addCredential(injectedValue);
