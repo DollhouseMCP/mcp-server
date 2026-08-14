@@ -26,8 +26,10 @@ import {
   canonicalizeIntegrationApiHost,
   IntegrationApiHostValidationError,
 } from '../../security/IntegrationApiHosts.js';
+import { readBoundedResponseText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
+const MAX_TOKEN_ENDPOINT_RESPONSE_BYTES = 256 * 1024;
 
 export interface ConfiguredOAuthIntegrationProviderConfig {
   readonly descriptor: IntegrationDescriptorRecord;
@@ -243,7 +245,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     });
     try {
       const response = await outbound.fetch(urlValue, init);
-      return { ok: response.ok, status: response.status, body: await readJson(response) };
+      return { ok: response.ok, status: response.status, body: await readBoundedJson(response) };
     } finally {
       await outbound.close();
     }
@@ -326,9 +328,19 @@ function accountLabelFromTokenResponse(
   return field ? readString(body, field) : null;
 }
 
-async function readJson(response: Response): Promise<unknown> {
+async function readBoundedJson(response: Response): Promise<unknown> {
+  let text: string;
   try {
-    return await response.json() as unknown;
+    text = await readBoundedResponseText(response, MAX_TOKEN_ENDPOINT_RESPONSE_BYTES);
+  } catch (error) {
+    if (error instanceof ResponseBodyTooLargeError) {
+      throw new Error('configured_oauth_endpoint_response_too_large');
+    }
+    throw error;
+  }
+
+  try {
+    return JSON.parse(text) as unknown;
   } catch {
     return null;
   }

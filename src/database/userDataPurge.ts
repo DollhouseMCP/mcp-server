@@ -19,6 +19,7 @@ import {
   userSettings,
 } from './schema/index.js';
 import type { DrizzleTx } from './db-utils.js';
+import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
 
 /**
  * The complete set of user-owned tables that `ON DELETE CASCADE` off `users.id`, expressed
@@ -119,7 +120,9 @@ function githubLogin(account: DeletionIdentityAccount): string | null {
     return null;
   }
   const login = (account.rawProfile as { readonly login?: unknown }).login;
-  return typeof login === 'string' && login.trim() !== '' ? login.toLowerCase() : null;
+  if (typeof login !== 'string') return null;
+  const normalized = normalizeAuthAllowlistValue('github_username', login);
+  return normalized || null;
 }
 
 /** Collect the identity match values from the account's own row + its federated logins. */
@@ -128,14 +131,16 @@ export function collectDeletionIdentity(
   accounts: readonly DeletionIdentityAccount[],
 ): DeletionIdentity {
   const emails = new Set<string>();
-  if (userEmail) emails.add(userEmail.toLowerCase());
+  if (userEmail) emails.add(normalizeAuthAllowlistValue('email', userEmail));
   const subs = new Set<string>();
   const githubIds = new Set<string>();
   const githubLogins = new Set<string>();
   for (const account of accounts) {
     subs.add(account.sub);
-    if (account.email) emails.add(account.email.toLowerCase());
-    if (account.provider === 'github' && account.externalSub) githubIds.add(account.externalSub);
+    if (account.email) emails.add(normalizeAuthAllowlistValue('email', account.email));
+    if (account.provider === 'github' && account.externalSub) {
+      githubIds.add(normalizeAuthAllowlistValue('github_id', account.externalSub));
+    }
     const login = githubLogin(account);
     if (login) githubLogins.add(login);
   }

@@ -15,6 +15,7 @@ import {
   type DnsLookupAddress,
 } from './IntegrationPublicHostGuard.js';
 import { createPinnedOutboundFactory, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
+import { readBoundedResponseText as readBoundedText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
@@ -273,6 +274,7 @@ export class IntegrationRequestGateway {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== null) headers.set('Content-Type', 'application/json');
     injectCredential(descriptor, url, headers, credential);
+    const credentialRedactions = buildCredentialRedactions(descriptor, credential);
     const vetted = await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
     // Pin the connection to the vetted address so a second connect-time DNS
     // resolution cannot retarget the request (DNS-rebinding TOCTOU).
@@ -293,7 +295,7 @@ export class IntegrationRequestGateway {
         // initial URL, so a 3xx to an internal or non-allowlisted host must not be followed.
         redirect: 'error',
       });
-      return await readBoundedResponse(response, controller);
+      return await readBoundedResponse(response, controller, credentialRedactions);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         throw error;
@@ -643,72 +645,95 @@ async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup):
   }
 }
 
-async function readBoundedResponse(response: Response, controller: AbortController): Promise<IntegrationHttpResponse> {
-  const text = await readBoundedResponseText(response, controller);
-  return {
-    status: response.status,
-    body: parseResponseBody(text, response.headers.get('content-type')),
-  };
-}
-
-async function readBoundedResponseText(response: Response, controller: AbortController): Promise<string> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength !== null && Number.parseInt(contentLength, 10) > MAX_RESPONSE_BODY_BYTES) {
+async function readBoundedResponse(
+  response: Response,
+  controller: AbortController,
+  credentialRedactions: readonly string[],
+): Promise<IntegrationHttpResponse> {
+  let text: string;
+  try {
+    text = await readBoundedText(response, MAX_RESPONSE_BODY_BYTES);
+  } catch (error) {
+    if (!(error instanceof ResponseBodyTooLargeError)) throw error;
     controller.abort();
     throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
   }
-  if (!response.body) {
-    // No readable stream to bound incrementally; the Content-Length pre-check above
-    // is the primary guard, and this buffered read is re-checked against the cap below.
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BODY_BYTES) {
-      controller.abort();
-      throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
-    }
-    return text;
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_RESPONSE_BODY_BYTES) {
-        controller.abort();
-        await reader.cancel();
-        throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, totalBytes).toString('utf8');
+  return {
+    status: response.status,
+    body: parseResponseBody(text, response.headers.get('content-type'), credentialRedactions),
+  };
 }
 
-function parseResponseBody(text: string, contentType: string | null): unknown {
+function parseResponseBody(
+  text: string,
+  contentType: string | null,
+  credentialRedactions: readonly string[],
+): unknown {
   if (text === '') return null;
   if (contentType?.toLowerCase().includes('application/json')) {
     try {
-      return redactCredentialFields(JSON.parse(text) as unknown);
+      return redactResponseCredentials(JSON.parse(text) as unknown, credentialRedactions);
     } catch {
       return REDACTED;
     }
   }
-  return text;
+  return redactCredentialText(text, credentialRedactions);
 }
 
-function redactCredentialFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactCredentialFields);
+function redactResponseCredentials(value: unknown, credentialRedactions: readonly string[]): unknown {
+  if (typeof value === 'string') return redactCredentialText(value, credentialRedactions);
+  if (Array.isArray(value)) return value.map(item => redactResponseCredentials(item, credentialRedactions));
   if (!value || typeof value !== 'object') return value;
   const output: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(value)) {
-    output[key] = isCredentialKey(key) ? REDACTED : redactCredentialFields(field);
+    const redactedKey = redactCredentialText(key, credentialRedactions);
+    const redactedField = isCredentialKey(key)
+      ? REDACTED
+      : redactResponseCredentials(field, credentialRedactions);
+    Object.defineProperty(output, redactedKey, {
+      value: redactedField,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
   }
   return output;
+}
+
+function redactCredentialText(value: string, credentialRedactions: readonly string[]): string {
+  let redacted = value;
+  for (const secret of credentialRedactions) {
+    redacted = redacted.replaceAll(secret, REDACTED);
+  }
+  return redacted;
+}
+
+function buildCredentialRedactions(
+  descriptor: IntegrationDescriptorRecord,
+  credential: string,
+): readonly string[] {
+  const values = new Set<string>();
+  const add = (value: string): void => {
+    if (!value) return;
+    values.add(value);
+    values.add(encodeURIComponent(value));
+    values.add(new URLSearchParams({ value }).toString().slice('value='.length));
+  };
+
+  add(credential);
+  if (descriptor.authStrategy === 'oauth2_authorization_code') {
+    add(`Bearer ${credential}`);
+  } else if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
+    if (descriptor.staticApiKey.injection.location === 'basic') {
+      const encoded = Buffer.from(credential, 'utf8').toString('base64');
+      add(encoded);
+      add(`Basic ${encoded}`);
+    } else {
+      add(`${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`);
+    }
+  }
+
+  return [...values].sort((left, right) => right.length - left.length);
 }
 
 // Credential-shaped field-name fragments matched anywhere in the key (case-insensitive).

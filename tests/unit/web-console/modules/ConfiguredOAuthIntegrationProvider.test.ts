@@ -186,4 +186,54 @@ describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
     // Credential-bearing calls must never follow a redirect to another host.
     expect(fetchCalls.map(call => call.redirect)).toEqual(['error', 'error']);
   });
+
+  it('rejects a streaming token response that exceeds the byte cap', async () => {
+    let canceled = false;
+    const chunk = new Uint8Array(70 * 1024);
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let index = 0; index < 4; index += 1) controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST))
+      .rejects.toThrow('configured_oauth_endpoint_response_too_large');
+    expect(canceled).toBe(true);
+  });
+
+  it('rejects an oversized token response from its content-length before reading', async () => {
+    let canceled = false;
+    const body = new ReadableStream<Uint8Array>({
+      pull() {
+        return Promise.resolve();
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(body, {
+        status: 200,
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': String(300 * 1024),
+        },
+      })),
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST))
+      .rejects.toThrow('configured_oauth_endpoint_response_too_large');
+    expect(canceled).toBe(true);
+  });
 });

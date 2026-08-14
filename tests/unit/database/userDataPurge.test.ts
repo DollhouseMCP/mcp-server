@@ -62,6 +62,22 @@ describe('collectDeletionIdentity', () => {
     ]);
     expect(identity).toEqual({ subs: ['s'], emails: [], githubIds: [], githubLogins: [] });
   });
+
+  it('uses allowlist canonicalization for deletion identities', () => {
+    const identity = collectDeletionIdentity(' Cafe\u0301@Example.com ', [
+      {
+        sub: 'sub-1',
+        provider: 'github',
+        externalSub: ' 184286 ',
+        email: 'CAF\u00c9@EXAMPLE.COM',
+        rawProfile: { login: ' Octo\u0301Cat ' },
+      },
+    ]);
+
+    expect(identity.emails).toEqual(['caf\u00e9@example.com']);
+    expect(identity.githubIds).toEqual(['184286']);
+    expect(identity.githubLogins).toEqual(['oct\u00f3cat']);
+  });
 });
 
 describe('purgeUserScopedData', () => {

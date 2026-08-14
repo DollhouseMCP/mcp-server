@@ -49,7 +49,12 @@ describe('IntegrationRequestGateway', () => {
         return Promise.resolve(jsonResponse(200, {
           ok: true,
           access_token: 'upstream-token',
-          nested: { api_key: 'upstream-key' },
+          nested: {
+            api_key: 'upstream-key',
+            echoed: 'Bearer gmail-access-token',
+          },
+          scalarValues: ['gmail-access-token'],
+          'credential-gmail-access-token': 'echoed in a key',
         }));
       },
     });
@@ -73,7 +78,9 @@ describe('IntegrationRequestGateway', () => {
       response: {
         ok: true,
         access_token: '[redacted]',
-        nested: { api_key: '[redacted]' },
+        nested: { api_key: '[redacted]', echoed: '[redacted]' },
+        scalarValues: ['[redacted]'],
+        'credential-[redacted]': '[redacted]',
       },
       provenance: {
         source: 'third_party_integration',
@@ -98,6 +105,38 @@ describe('IntegrationRequestGateway', () => {
         status: 200,
       }),
     ]);
+  });
+
+  it('redacts an echoed credential from a non-JSON response', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(new Response('received Bearer gmail-access-token', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/echo',
+    }));
+
+    expect(result.response).toBe('received [redacted]');
+    expect(JSON.stringify(result)).not.toContain('gmail-access-token');
+  });
+
+  it('redacts an echoed credential from a JSON scalar response', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(jsonResponse(200, 'gmail-access-token')),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/echo-scalar',
+    }));
+
+    expect(result.response).toBe('[redacted]');
   });
 
   it('issues the upstream request with redirect: error so redirects cannot bypass the host allowlist', async () => {
@@ -158,7 +197,9 @@ describe('IntegrationRequestGateway', () => {
       })],
       fetch: (url, init) => {
         fetches.push({ url: urlString(url), init });
-        return Promise.resolve(jsonResponse(200, { records: [] }));
+        return Promise.resolve(jsonResponse(200, {
+          echoed: new Headers(init?.headers).get('Authorization'),
+        }));
       },
     });
 
@@ -170,6 +211,7 @@ describe('IntegrationRequestGateway', () => {
 
     const authorization = new Headers(fetches[0]?.init?.headers).get('Authorization');
     expect(authorization).toBe(`Basic ${Buffer.from('twilio-sid:twilio-secret', 'utf8').toString('base64')}`);
+    expect(result.response).toEqual({ echoed: '[redacted]' });
     // Neither the raw credential nor the query string carries the secret.
     expect(fetches[0]?.url).toBe('https://api.airtable.com/v0/app/table');
     expect(JSON.stringify(result)).not.toContain('twilio-secret');
