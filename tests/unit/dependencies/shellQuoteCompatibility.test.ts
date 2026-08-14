@@ -2,6 +2,10 @@ import { describe, expect, it } from '@jest/globals';
 import { parse, quote } from 'shell-quote';
 
 describe('shell-quote compatibility for MCP Inspector', () => {
+  it('parses a command with no arguments', () => {
+    expect(parse('node')).toEqual(['node']);
+  });
+
   it.each([
     {
       command: 'node dist/index.js --transport stdio',
