@@ -451,6 +451,39 @@ describe('IntegrationRequestGateway', () => {
     }
   });
 
+  it('redacts alternate JSON escapes of short header values', async () => {
+    const cases = [
+      { credential: 'a', body: '{"X-Api-Key":"\\u0061"}' },
+      { credential: '"', body: '{"X-Api-Key":"\\u0022"}' },
+      { credential: '/', body: '{"X-Api-Key":"\\/"}' },
+    ];
+    for (const testCase of cases) {
+      const gateway = gatewayFixture({
+        descriptors: [staticDescriptor({
+          staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+        })],
+        records: [integrationRecord({
+          provider: 'airtable' as UserIntegrationProvider,
+          authorizedPermissions: { scopes: [] },
+          accessTokenCiphertext: encrypt(testCase.credential, 'airtable'),
+          refreshTokenCiphertext: null,
+        })],
+        fetch: () => Promise.resolve(new Response(testCase.body, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        })),
+      });
+
+      const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+        provider: 'airtable',
+        method: 'GET',
+        path: '/alternate-escaped-short-header-key',
+      }));
+
+      expect(result.response).toBe('{[redacted]}');
+    }
+  });
+
   it('redacts encoded custom-header echoes for short credentials', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({

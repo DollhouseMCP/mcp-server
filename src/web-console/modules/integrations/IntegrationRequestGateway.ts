@@ -494,6 +494,11 @@ interface CredentialHeaderEchoMatch {
   readonly end: number;
 }
 
+interface ParsedJsonString {
+  readonly value: string;
+  readonly end: number;
+}
+
 interface CredentialQueryRedaction {
   readonly name: string;
   readonly value: string;
@@ -885,6 +890,15 @@ function credentialHeaderEchoMatch(
   cursor = skipHorizontalWhitespace(value, cursor + 1);
 
   const quote = value[cursor] === '"' || value[cursor] === "'" ? value[cursor] : null;
+  if (quote === '"') {
+    const parsed = parseJsonStringAt(value, cursor);
+    if (parsed !== null) {
+      return parsed.value.length === header.value.length &&
+        credentialHeaderValueMatches(parsed.value, 0, header)
+        ? { start: matchStart, end: parsed.end }
+        : null;
+    }
+  }
   const valueStart = quote ? cursor + 1 : cursor;
   if (!credentialHeaderValueMatches(value, valueStart, header)) return null;
 
@@ -892,6 +906,29 @@ function credentialHeaderEchoMatch(
   if (quote !== null && value[valueEnd] === quote) return { start: matchStart, end: valueEnd + 1 };
   if (header.requireValueBoundary && !isCredentialValueBoundary(value[valueEnd] ?? '')) return null;
   return { start: matchStart, end: valueEnd };
+}
+
+function parseJsonStringAt(value: string, start: number): ParsedJsonString | null {
+  let escaped = false;
+  for (let cursor = start + 1; cursor < value.length; cursor += 1) {
+    const character = value[cursor];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (character === '\\') {
+      escaped = true;
+      continue;
+    }
+    if (character !== '"') continue;
+    try {
+      const parsed = JSON.parse(value.slice(start, cursor + 1)) as unknown;
+      return typeof parsed === 'string' ? { value: parsed, end: cursor + 1 } : null;
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 function skipHorizontalWhitespace(value: string, start: number): number {
