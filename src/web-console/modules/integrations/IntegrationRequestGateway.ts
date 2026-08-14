@@ -765,7 +765,7 @@ function redactCredentialQueryEchoes(
 function redactCredentialQueryEcho(value: string, query: CredentialQueryRedaction): string {
   const normalizedValue = normalizePercentEscapes(value);
   const normalizedQueryValue = normalizePercentEscapes(query.value);
-  const marker = `${query.name}=`;
+  const marker = normalizePercentEscapes(`${query.name}=`);
   const parts: string[] = [];
   let copyFrom = 0;
   let searchFrom = 0;
@@ -834,8 +834,8 @@ function redactCredentialHeaderEchoes(
 }
 
 function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedaction): string {
-  const normalizedValue = value.toLowerCase();
-  const normalizedName = header.name.toLowerCase();
+  const normalizedValue = asciiLowercase(value);
+  const normalizedName = asciiLowercase(header.name);
   const parts: string[] = [];
   let copyFrom = 0;
   let searchFrom = 0;
@@ -892,14 +892,18 @@ function credentialHeaderValueMatches(
     const actualValue = value.slice(valueStart, valueStart + header.value.length);
     return normalizePercentEscapes(actualValue) === normalizePercentEscapes(header.value);
   }
-  const actualPrefix = value.slice(valueStart, valueStart + prefixLength).toLowerCase();
-  const expectedPrefix = header.value.slice(0, prefixLength).toLowerCase();
+  const actualPrefix = asciiLowercase(value.slice(valueStart, valueStart + prefixLength));
+  const expectedPrefix = asciiLowercase(header.value.slice(0, prefixLength));
   const actualSuffix = normalizePercentEscapes(
     value.slice(valueStart + prefixLength, valueStart + header.value.length),
   );
   const expectedSuffix = normalizePercentEscapes(header.value.slice(prefixLength));
   return actualPrefix === expectedPrefix &&
     actualSuffix === expectedSuffix;
+}
+
+function asciiLowercase(value: string): string {
+  return value.replace(/[A-Z]/g, character => character.toLowerCase());
 }
 
 function buildCredentialRedactions(

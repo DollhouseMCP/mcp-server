@@ -240,6 +240,42 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('normalizes percent escapes in query names without leaking short credentials', async () => {
+    const fetches: string[] = [];
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: '%2f', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: (url) => {
+        fetches.push(url.toString());
+        return Promise.resolve(jsonResponse(200, {
+          serialized: 'received %252f=a safely',
+          decoded: 'received %2f=a safely',
+          unrelated: 'received %2f=available',
+        }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/percent-query-name',
+    }));
+
+    expect(fetches[0]).toContain('%252f=a');
+    expect(result.response).toEqual({
+      serialized: 'received [redacted] safely',
+      decoded: 'received [redacted] safely',
+      unrelated: 'received %2f=available',
+    });
+  });
+
   it('redacts percent-encoded query credentials regardless of escape hex case', async () => {
     const credential = 'abc/def:ghi';
     const gateway = gatewayFixture({
@@ -379,6 +415,7 @@ describe('IntegrationRequestGateway', () => {
         differentCase: 'received authorization: bearer A safely',
         longerValue: 'received authorization: bearer available',
         capitalizedLongerValue: 'received Authorization: Bearer available',
+        unicodePrefix: '\u0130 Authorization: Bearer a safely',
       })),
     });
 
@@ -394,6 +431,7 @@ describe('IntegrationRequestGateway', () => {
       differentCase: 'received authorization: bearer A safely',
       longerValue: 'received authorization: bearer available',
       capitalizedLongerValue: 'received Authorization: Bearer available',
+      unicodePrefix: '\u0130 [redacted] safely',
     });
   });
 
