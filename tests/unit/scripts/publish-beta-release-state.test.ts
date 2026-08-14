@@ -283,12 +283,18 @@ function runScenario(scenario: Scenario): {
 
   const release = scenario.release;
   const bashExecutable = process.platform === 'win32' ? 'bash' : '/bin/bash';
-  const result = spawnSync(bashExecutable, ['-c', validationScript ?? 'exit 99'], {
+  const shellBinDirectory = process.platform === 'win32'
+    ? binDirectory
+      .replaceAll('\\', '/')
+      .replace(/^([A-Za-z]):/, (_match, drive: string) => `/${drive.toLowerCase()}`)
+    : binDirectory;
+  const shellScript = `export PATH="$FAKE_BIN_DIRECTORY:$PATH"\n${validationScript ?? 'exit 99'}`;
+  const result = spawnSync(bashExecutable, ['-c', shellScript], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`,
+      FAKE_BIN_DIRECTORY: shellBinDirectory,
       GITHUB_REF_NAME: 'beta',
       GITHUB_SHA: expectedSha,
       GITHUB_OUTPUT: outputPath,
