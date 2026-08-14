@@ -24,6 +24,7 @@ const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_MAX = 60;
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
 const REDACTED = '[redacted]';
+const MIN_EMBEDDED_CREDENTIAL_LENGTH = 8;
 const RATE_LIMIT_SCOPE = 'web-console:integrations:request-gateway:v1';
 
 interface RateLimitState {
@@ -472,6 +473,11 @@ interface GatewayRequestContext {
   readonly url: URL;
 }
 
+interface CredentialRedactions {
+  readonly exact: ReadonlySet<string>;
+  readonly embedded: readonly string[];
+}
+
 // Single-replica/dev fallback used only when no IRateLimitStore is injected (production
 // passes the auto-expiring store). Bounded by a time-amortized sweep that drops expired
 // buckets at most once per window — so the Map size tracks active keys in the current
@@ -648,7 +654,7 @@ async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup):
 async function readBoundedResponse(
   response: Response,
   controller: AbortController,
-  credentialRedactions: readonly string[],
+  credentialRedactions: CredentialRedactions,
 ): Promise<IntegrationHttpResponse> {
   let text: string;
   try {
@@ -667,7 +673,7 @@ async function readBoundedResponse(
 function parseResponseBody(
   text: string,
   contentType: string | null,
-  credentialRedactions: readonly string[],
+  credentialRedactions: CredentialRedactions,
 ): unknown {
   if (text === '') return null;
   if (contentType?.toLowerCase().includes('application/json')) {
@@ -680,7 +686,7 @@ function parseResponseBody(
   return redactCredentialText(text, credentialRedactions);
 }
 
-function redactResponseCredentials(value: unknown, credentialRedactions: readonly string[]): unknown {
+function redactResponseCredentials(value: unknown, credentialRedactions: CredentialRedactions): unknown {
   if (typeof value === 'string') return redactCredentialText(value, credentialRedactions);
   if (Array.isArray(value)) return value.map(item => redactResponseCredentials(item, credentialRedactions));
   if (!value || typeof value !== 'object') return value;
@@ -700,9 +706,10 @@ function redactResponseCredentials(value: unknown, credentialRedactions: readonl
   return output;
 }
 
-function redactCredentialText(value: string, credentialRedactions: readonly string[]): string {
+function redactCredentialText(value: string, credentialRedactions: CredentialRedactions): string {
+  if (credentialRedactions.exact.has(value)) return REDACTED;
   let redacted = value;
-  for (const secret of credentialRedactions) {
+  for (const secret of credentialRedactions.embedded) {
     redacted = redacted.replaceAll(secret, REDACTED);
   }
   return redacted;
@@ -711,29 +718,51 @@ function redactCredentialText(value: string, credentialRedactions: readonly stri
 function buildCredentialRedactions(
   descriptor: IntegrationDescriptorRecord,
   credential: string,
-): readonly string[] {
-  const values = new Set<string>();
-  const add = (value: string): void => {
+): CredentialRedactions {
+  const exact = new Set<string>();
+  const embedded = new Set<string>();
+  const variants = (value: string): readonly string[] => [
+    value,
+    encodeURIComponent(value),
+    new URLSearchParams({ value }).toString().slice('value='.length),
+  ];
+  const addExact = (value: string): void => {
     if (!value) return;
-    values.add(value);
-    values.add(encodeURIComponent(value));
-    values.add(new URLSearchParams({ value }).toString().slice('value='.length));
+    for (const variant of variants(value)) exact.add(variant);
+  };
+  const addEmbedded = (value: string): void => {
+    addExact(value);
+    for (const variant of variants(value)) embedded.add(variant);
+  };
+  const addCredential = (value: string): void => {
+    addExact(value);
+    if (value.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) addEmbedded(value);
   };
 
-  add(credential);
+  addCredential(credential);
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
-    add(`Bearer ${credential}`);
+    addEmbedded(`Bearer ${credential}`);
   } else if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
     if (descriptor.staticApiKey.injection.location === 'basic') {
       const encoded = Buffer.from(credential, 'utf8').toString('base64');
-      add(encoded);
-      add(`Basic ${encoded}`);
+      addCredential(encoded);
+      addEmbedded(`Basic ${encoded}`);
     } else {
-      add(`${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`);
+      const injectedValue = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
+      addCredential(injectedValue);
+      if (descriptor.staticApiKey.injection.location === 'query') {
+        const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
+        addEmbedded(`${descriptor.staticApiKey.injection.name}=${encodedValue}`);
+      } else {
+        addEmbedded(`${descriptor.staticApiKey.injection.name}: ${injectedValue}`);
+      }
     }
   }
 
-  return [...values].sort((left, right) => right.length - left.length);
+  return {
+    exact,
+    embedded: [...embedded].sort((left, right) => right.length - left.length),
+  };
 }
 
 // Credential-shaped field-name fragments matched anywhere in the key (case-insensitive).

@@ -139,6 +139,37 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('[redacted]');
   });
 
+  it('redacts exact short credentials without corrupting unrelated response text', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        ordinary: 'a valid response',
+        exactEcho: 'a',
+        queryEcho: 'received key=a',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/short-key',
+    }));
+
+    expect(result.response).toEqual({
+      ordinary: 'a valid response',
+      exactEcho: '[redacted]',
+      queryEcho: 'received [redacted]',
+    });
+  });
+
   it('issues the upstream request with redirect: error so redirects cannot bypass the host allowlist', async () => {
     const inits: Array<RequestInit | undefined> = [];
     const gateway = gatewayFixture({
