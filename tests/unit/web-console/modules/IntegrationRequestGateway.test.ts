@@ -265,6 +265,31 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts object-style query echoes from non-JSON responses', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(
+        '{"key":"a"} {"key":"available"} {"other":"a"}',
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/object-query-echo',
+    }));
+
+    expect(result.response).toBe('{[redacted]} {"key":"available"} {"other":"a"}');
+  });
+
   it('normalizes percent escapes in query names without leaking short credentials', async () => {
     const fetches: string[] = [];
     const gateway = gatewayFixture({
@@ -508,6 +533,32 @@ describe('IntegrationRequestGateway', () => {
     }));
 
     expect(result.response).toBe('{[redacted]} {"X-Api-\\u004bey":"available"}');
+  });
+
+  it('handles malformed quoted text without repeatedly rescanning the response suffix', async () => {
+    const malformed = '\\"'.repeat(16 * 1024);
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(malformed, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/malformed-quoted-text',
+    }));
+
+    expect(result.response).toBe(malformed);
   });
 
   it('redacts encoded custom-header echoes for short credentials', async () => {

@@ -499,6 +499,11 @@ interface ParsedJsonString {
   readonly end: number;
 }
 
+interface ScannedJsonString {
+  readonly value: string | null;
+  readonly end: number;
+}
+
 interface CredentialQueryRedaction {
   readonly name: string;
   readonly value: string;
@@ -778,7 +783,8 @@ function redactCredentialQueryEchoes(
 }
 
 function redactCredentialQueryEcho(value: string, query: CredentialQueryRedaction): string {
-  const normalizedValue = normalizePercentEscapes(value);
+  const jsonRedacted = redactJsonCredentialQueryEchoes(value, query);
+  const normalizedValue = normalizePercentEscapes(jsonRedacted);
   const normalizedQueryValue = normalizePercentEscapes(query.value);
   const marker = normalizePercentEscapes(`${query.name}=`);
   const parts: string[] = [];
@@ -787,24 +793,72 @@ function redactCredentialQueryEcho(value: string, query: CredentialQueryRedactio
   for (;;) {
     const index = normalizedValue.indexOf(marker, searchFrom);
     if (index < 0) break;
-    const before = index === 0 ? '' : value[index - 1];
+    const before = index === 0 ? '' : jsonRedacted[index - 1];
     const valueStart = index + marker.length;
     const valueEnd = valueStart + query.value.length;
-    const after = value[valueEnd] ?? '';
+    const after = jsonRedacted[valueEnd] ?? '';
     const nameBoundary = before === '' || !/[A-Za-z0-9_.~-]/.test(before);
     const valueBoundary = isCredentialValueBoundary(after);
     if (nameBoundary && valueBoundary &&
         normalizedValue.startsWith(normalizedQueryValue, valueStart)) {
-      parts.push(value.slice(copyFrom, index), REDACTED);
+      parts.push(jsonRedacted.slice(copyFrom, index), REDACTED);
       copyFrom = valueEnd;
       searchFrom = valueEnd;
       continue;
     }
     searchFrom = index + marker.length;
   }
+  if (parts.length === 0) return jsonRedacted;
+  parts.push(jsonRedacted.slice(copyFrom));
+  return parts.join('');
+}
+
+function redactJsonCredentialQueryEchoes(
+  value: string,
+  query: CredentialQueryRedaction,
+): string {
+  const normalizedName = normalizePercentEscapes(query.name);
+  const normalizedQueryValue = normalizePercentEscapes(query.value);
+  const parts: string[] = [];
+  let copyFrom = 0;
+  let searchFrom = 0;
+  for (;;) {
+    const start = value.indexOf('"', searchFrom);
+    if (start < 0) break;
+    const scannedName = scanJsonStringAt(value, start);
+    searchFrom = scannedName.end;
+    if (scannedName.value === null ||
+        normalizePercentEscapes(scannedName.value) !== normalizedName) continue;
+    const before = start === 0 ? '' : value[start - 1];
+    if (before !== '' && /[A-Za-z0-9_.~-]/.test(before)) continue;
+    const valueEnd = jsonCredentialPropertyValueEnd(value, scannedName.end, normalizedQueryValue);
+    if (valueEnd === null) continue;
+    parts.push(value.slice(copyFrom, start), REDACTED);
+    copyFrom = valueEnd;
+    searchFrom = valueEnd;
+  }
   if (parts.length === 0) return value;
   parts.push(value.slice(copyFrom));
   return parts.join('');
+}
+
+function jsonCredentialPropertyValueEnd(
+  value: string,
+  cursorAfterName: number,
+  normalizedExpected: string,
+): number | null {
+  let cursor = skipHorizontalWhitespace(value, cursorAfterName);
+  if (value[cursor] !== ':') return null;
+  cursor = skipHorizontalWhitespace(value, cursor + 1);
+  if (value[cursor] === '"') {
+    const parsed = parseJsonStringAt(value, cursor);
+    return parsed !== null && normalizePercentEscapes(parsed.value) === normalizedExpected
+      ? parsed.end
+      : null;
+  }
+  let end = cursor;
+  while (end < value.length && !/[\s,}\]]/.test(value[end] ?? '')) end += 1;
+  return normalizePercentEscapes(value.slice(cursor, end)) === normalizedExpected ? end : null;
 }
 
 function redactPercentEncodedCredentials(value: string, patterns: readonly string[]): string {
@@ -881,16 +935,12 @@ function redactJsonCredentialHeaderEchoes(
   for (;;) {
     const start = value.indexOf('"', searchFrom);
     if (start < 0) break;
-    const parsedName = parseJsonStringAt(value, start);
-    if (parsedName === null) {
-      searchFrom = start + 1;
-      continue;
-    }
-    searchFrom = parsedName.end;
-    if (asciiLowercase(parsedName.value) !== normalizedName) continue;
+    const scannedName = scanJsonStringAt(value, start);
+    searchFrom = scannedName.end;
+    if (scannedName.value === null || asciiLowercase(scannedName.value) !== normalizedName) continue;
     const before = start === 0 ? '' : value[start - 1];
     if (before !== '' && /[A-Za-z0-9-]/.test(before)) continue;
-    const valueEnd = credentialHeaderValueEchoEnd(value, parsedName.end, header);
+    const valueEnd = credentialHeaderValueEchoEnd(value, scannedName.end, header);
     if (valueEnd === null) continue;
     parts.push(value.slice(copyFrom, start), REDACTED);
     copyFrom = valueEnd;
@@ -950,6 +1000,11 @@ function credentialHeaderValueEchoEnd(
 }
 
 function parseJsonStringAt(value: string, start: number): ParsedJsonString | null {
+  const scanned = scanJsonStringAt(value, start);
+  return scanned.value === null ? null : { value: scanned.value, end: scanned.end };
+}
+
+function scanJsonStringAt(value: string, start: number): ScannedJsonString {
   let escaped = false;
   for (let cursor = start + 1; cursor < value.length; cursor += 1) {
     const character = value[cursor];
@@ -964,12 +1019,14 @@ function parseJsonStringAt(value: string, start: number): ParsedJsonString | nul
     if (character !== '"') continue;
     try {
       const parsed = JSON.parse(value.slice(start, cursor + 1)) as unknown;
-      return typeof parsed === 'string' ? { value: parsed, end: cursor + 1 } : null;
+      return typeof parsed === 'string'
+        ? { value: parsed, end: cursor + 1 }
+        : { value: null, end: cursor + 1 };
     } catch {
-      return null;
+      return { value: null, end: cursor + 1 };
     }
   }
-  return null;
+  return { value: null, end: value.length };
 }
 
 function skipHorizontalWhitespace(value: string, start: number): number {
