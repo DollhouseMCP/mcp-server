@@ -177,19 +177,6 @@ jobs:
             exit 1
           fi
 
-      - name: Run compiled tests approach
-        if: false  # Temporarily disabled - see PR #845
-        # Original condition: if: steps.original_tests.outcome == 'failure'
-        working-directory: ${{ github.workspace }}
-        run: |
-          echo "=== Running compiled test approach ==="
-          echo "Explicitly setting working directory to: ${{ github.workspace }}"
-          pwd
-          # Build the tests first
-          npm run build:test
-          # Run the compiled tests using cross-env
-          ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config tests/jest.config.compiled.cjs --ci --watchAll=false
-
       - name: Validation complete
         run: |
           echo "✅ Core Build & Test Complete!"

@@ -186,6 +186,9 @@ describe('GitHub Workflow Validation', () => {
       expect(performanceTests?.if).toContain(hostedBranch);
       expect(operatingSystems).toEqual(expect.stringContaining(hostedBranch));
       expect(operatingSystems).toEqual(expect.stringContaining('["ubuntu-latest"]'));
+      expect(steps).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ if: false })])
+      );
     });
 
     it('should give core and extended compatibility checks distinct names', () => {
