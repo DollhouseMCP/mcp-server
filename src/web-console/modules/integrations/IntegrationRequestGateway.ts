@@ -1022,6 +1022,11 @@ function collectStaticApiKeyRedactions(
     addQueryCredentialRedactions(collector.queries, staticApiKey.injection.name, injectedValue);
     return;
   }
+  const valuePrefix = staticApiKey.injection.valuePrefix ?? '';
+  if (asciiLowercase(staticApiKey.injection.name) === 'authorization' && valuePrefix) {
+    addAuthorizationRedactions(collector, injectedValue, credential, valuePrefix.length);
+    return;
+  }
   collector.addHeader(staticApiKey.injection.name, injectedValue, credential);
 }
 

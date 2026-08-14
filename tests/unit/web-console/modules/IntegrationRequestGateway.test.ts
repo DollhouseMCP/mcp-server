@@ -469,6 +469,34 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts case-normalized static Authorization schemes for short credentials', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor()],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        normalized: 'received authorization: bearer a safely',
+        differentCase: 'received authorization: bearer A safely',
+        longerValue: 'received authorization: bearer available',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/short-static-bearer',
+    }));
+
+    expect(result.response).toEqual({
+      normalized: 'received [redacted] safely',
+      differentCase: 'received authorization: bearer A safely',
+      longerValue: 'received authorization: bearer available',
+    });
+  });
+
   it('issues the upstream request with redirect: error so redirects cannot bypass the host allowlist', async () => {
     const inits: Array<RequestInit | undefined> = [];
     const gateway = gatewayFixture({
