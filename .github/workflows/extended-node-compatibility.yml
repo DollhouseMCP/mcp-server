@@ -22,7 +22,7 @@ env:
 
 jobs:
   extended-compatibility:
-    name: Test (${{ matrix.os }}, Node ${{ matrix.node-version }})
+    name: Extended (${{ matrix.os }}, Node ${{ matrix.node-version }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
 

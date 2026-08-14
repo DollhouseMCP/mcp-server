@@ -163,7 +163,7 @@ describe('GitHub Workflow Validation', () => {
       }
     );
 
-    it('should enforce unit tests and defer performance tests at the hosted stage', () => {
+    it('should enforce unit tests on every core platform and defer performance at the hosted stage', () => {
       const content = fs.readFileSync(
         path.join(workflowDir, 'core-build-test.yml'),
         'utf8'
@@ -172,14 +172,13 @@ describe('GitHub Workflow Validation', () => {
       const steps = workflow.jobs['hosted-test'].steps;
       const operatingSystems = workflow.jobs['hosted-test'].strategy?.matrix?.os;
       const unitTestGate = steps.find(
-        (step) => step.name === 'Enforce hosted integration unit tests'
+        (step) => step.name === 'Enforce unit test result'
       );
       const performanceTests = steps.find(
         (step) => step.id === 'performance_tests'
       );
 
-      expect(unitTestGate?.if).toContain('always()');
-      expect(unitTestGate?.if).toContain(hostedBranch);
+      expect(unitTestGate?.if).toBe('always()');
       expect(unitTestGate?.env?.TEST_OUTCOME).toBe(
         '${{ steps.original_tests.outcome }}'
       );
@@ -187,6 +186,21 @@ describe('GitHub Workflow Validation', () => {
       expect(performanceTests?.if).toContain(hostedBranch);
       expect(operatingSystems).toEqual(expect.stringContaining(hostedBranch));
       expect(operatingSystems).toEqual(expect.stringContaining('["ubuntu-latest"]'));
+    });
+
+    it('should give core and extended compatibility checks distinct names', () => {
+      const core = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'core-build-test.yml'), 'utf8')
+      ) as Workflow;
+      const extended = yaml.load(
+        fs.readFileSync(path.join(workflowDir, 'extended-node-compatibility.yml'), 'utf8')
+      ) as Workflow;
+
+      expect(core.jobs['hosted-test'].name).toContain('Test (');
+      expect(extended.jobs['extended-compatibility'].name).toContain('Extended (');
+      expect(core.jobs['hosted-test'].name).not.toBe(
+        extended.jobs['extended-compatibility'].name
+      );
     });
 
     it('should require successful MCP payloads from every Docker gate', () => {
