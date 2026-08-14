@@ -494,6 +494,19 @@ interface CredentialQueryRedaction {
   readonly value: string;
 }
 
+interface CredentialRedactionCollector {
+  readonly addExact: (value: string) => void;
+  readonly addEmbedded: (value: string) => void;
+  readonly addCredential: (value: string, allowEmbedded?: boolean) => void;
+  readonly addHeader: (
+    name: string,
+    value: string,
+    sensitiveValue: string,
+    caseInsensitivePrefixLength?: number,
+  ) => void;
+  readonly queries: CredentialQueryRedaction[];
+}
+
 // Single-replica/dev fallback used only when no IRateLimitStore is injected (production
 // passes the auto-expiring store). Bounded by a time-amortized sweep that drops expired
 // buckets at most once per window — so the Map size tracks active keys in the current
@@ -953,37 +966,13 @@ function buildCredentialRedactions(
     }
   };
 
-  addCredential(credential);
-  if (descriptor.authStrategy === 'oauth2_authorization_code') {
-    const authorization = `Bearer ${credential}`;
-    if (credential.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) addEmbedded(authorization);
-    else addExact(authorization);
-    addHeader('Authorization', authorization, credential, 'Bearer '.length);
-  } else if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
-    if (descriptor.staticApiKey.injection.location === 'basic') {
-      const encoded = Buffer.from(credential, 'utf8').toString('base64');
-      addCredential(encoded);
-      const authorization = `Basic ${encoded}`;
-      if (encoded.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) addEmbedded(authorization);
-      else addExact(authorization);
-      addHeader('Authorization', authorization, encoded, 'Basic '.length);
-    } else {
-      const injectedValue = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
-      addCredential(injectedValue, credential.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
-      if (descriptor.staticApiKey.injection.location === 'query') {
-        const queryName = descriptor.staticApiKey.injection.name;
-        const encodedName = new URLSearchParams([[queryName, '']]).toString().slice(0, -1);
-        const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
-        const queryNames = new Set([queryName, encodedName]);
-        const queryValues = new Set([injectedValue, encodedValue]);
-        for (const name of queryNames) {
-          for (const value of queryValues) queries.push({ name, value });
-        }
-      } else {
-        addHeader(descriptor.staticApiKey.injection.name, injectedValue, credential);
-      }
-    }
-  }
+  collectCredentialStrategyRedactions(descriptor, credential, {
+    addExact,
+    addEmbedded,
+    addCredential,
+    addHeader,
+    queries,
+  });
 
   return {
     exact,
@@ -993,6 +982,68 @@ function buildCredentialRedactions(
     headers,
     queries,
   };
+}
+
+function collectCredentialStrategyRedactions(
+  descriptor: IntegrationDescriptorRecord,
+  credential: string,
+  collector: CredentialRedactionCollector,
+): void {
+  collector.addCredential(credential);
+  if (descriptor.authStrategy === 'oauth2_authorization_code') {
+    const authorization = `Bearer ${credential}`;
+    addAuthorizationRedactions(collector, authorization, credential, 'Bearer '.length);
+    return;
+  }
+  if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
+    collectStaticApiKeyRedactions(descriptor.staticApiKey, credential, collector);
+  }
+}
+
+function collectStaticApiKeyRedactions(
+  staticApiKey: NonNullable<IntegrationDescriptorRecord['staticApiKey']>,
+  credential: string,
+  collector: CredentialRedactionCollector,
+): void {
+  if (staticApiKey.injection.location === 'basic') {
+    const encoded = Buffer.from(credential, 'utf8').toString('base64');
+    collector.addCredential(encoded);
+    addAuthorizationRedactions(collector, `Basic ${encoded}`, encoded, 'Basic '.length);
+    return;
+  }
+
+  const injectedValue = `${staticApiKey.injection.valuePrefix ?? ''}${credential}`;
+  collector.addCredential(injectedValue, credential.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
+  if (staticApiKey.injection.location === 'query') {
+    addQueryCredentialRedactions(collector.queries, staticApiKey.injection.name, injectedValue);
+    return;
+  }
+  collector.addHeader(staticApiKey.injection.name, injectedValue, credential);
+}
+
+function addAuthorizationRedactions(
+  collector: CredentialRedactionCollector,
+  authorization: string,
+  sensitiveValue: string,
+  prefixLength: number,
+): void {
+  if (sensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) collector.addEmbedded(authorization);
+  else collector.addExact(authorization);
+  collector.addHeader('Authorization', authorization, sensitiveValue, prefixLength);
+}
+
+function addQueryCredentialRedactions(
+  queries: CredentialQueryRedaction[],
+  queryName: string,
+  injectedValue: string,
+): void {
+  const encodedName = new URLSearchParams([[queryName, '']]).toString().slice(0, -1);
+  const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
+  const queryNames = new Set([queryName, encodedName]);
+  const queryValues = new Set([injectedValue, encodedValue]);
+  for (const name of queryNames) {
+    for (const value of queryValues) queries.push({ name, value });
+  }
 }
 
 // Credential-shaped field-name fragments matched anywhere in the key (case-insensitive).
