@@ -1043,8 +1043,8 @@ function addQueryCredentialRedactions(
 ): void {
   const encodedName = new URLSearchParams([[queryName, '']]).toString().slice(0, -1);
   const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
-  const queryNames = new Set([queryName, encodedName]);
-  const queryValues = new Set([injectedValue, encodedValue]);
+  const queryNames = new Set([queryName, encodedName, encodeURIComponent(queryName)]);
+  const queryValues = new Set([injectedValue, encodedValue, encodeURIComponent(injectedValue)]);
   for (const name of queryNames) {
     for (const value of queryValues) queries.push({ name, value });
   }

@@ -213,14 +213,16 @@ describe('IntegrationRequestGateway', () => {
       records: [integrationRecord({
         provider: 'airtable' as UserIntegrationProvider,
         authorizedPermissions: { scopes: [] },
-        accessTokenCiphertext: encrypt('a', 'airtable'),
+        accessTokenCiphertext: encrypt('a b', 'airtable'),
         refreshTokenCiphertext: null,
       })],
       fetch: (url) => {
         fetches.push(url.toString());
         return Promise.resolve(jsonResponse(200, {
-          serialized: 'received api+key=a safely',
-          decoded: 'received api key=a safely',
+          serialized: 'received api+key=a+b safely',
+          percentEncoded: 'received api%20key=a%20b safely',
+          mixedEncoding: 'received api%20key=a+b safely',
+          decoded: 'received api key=a b safely',
           unrelated: 'received api+key=available',
         }));
       },
@@ -232,9 +234,11 @@ describe('IntegrationRequestGateway', () => {
       path: '/encoded-query-name',
     }));
 
-    expect(fetches[0]).toContain('api+key=a');
+    expect(fetches[0]).toContain('api+key=a+b');
     expect(result.response).toEqual({
       serialized: 'received [redacted] safely',
+      percentEncoded: 'received [redacted] safely',
+      mixedEncoding: 'received [redacted] safely',
       decoded: 'received [redacted] safely',
       unrelated: 'received api+key=available',
     });
