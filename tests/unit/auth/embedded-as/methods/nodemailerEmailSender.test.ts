@@ -9,7 +9,7 @@
  * link configuration that silently never delivers email.
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest } from '@jest/globals';
 import { NodemailerEmailSender } from '../../../../../src/auth/embedded-as/methods/nodemailerEmailSender.js';
 
 describe('NodemailerEmailSender — port enforcement', () => {
@@ -44,6 +44,46 @@ describe('NodemailerEmailSender — port enforcement', () => {
       user: 'u', password: 'p', from: 'from@example.com',
     })).not.toThrow();
   });
+
+  it('configures STARTTLS and all timeout phases on port 587', () => {
+    const sender = new NodemailerEmailSender({
+      host: 'smtp.example.com',
+      port: 587,
+      user: 'u', password: 'p', from: 'from@example.com',
+      connectionTimeoutMs: 1_234,
+    });
+    const { options } = (sender as unknown as {
+      transporter: { options: Record<string, unknown> };
+    }).transporter;
+
+    expect(options).toMatchObject({
+      host: 'smtp.example.com',
+      port: 587,
+      secure: false,
+      requireTLS: true,
+      auth: { user: 'u', pass: 'p' },
+      connectionTimeout: 1_234,
+      greetingTimeout: 1_234,
+      socketTimeout: 1_234,
+    });
+  });
+
+  it('configures implicit TLS without requiring STARTTLS on port 465', () => {
+    const sender = new NodemailerEmailSender({
+      host: 'smtp.example.com',
+      port: 465,
+      user: 'u', password: 'p', from: 'from@example.com',
+    });
+    const { options } = (sender as unknown as {
+      transporter: { options: Record<string, unknown> };
+    }).transporter;
+
+    expect(options).toMatchObject({
+      port: 465,
+      secure: true,
+      requireTLS: false,
+    });
+  });
 });
 
 describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
@@ -71,4 +111,32 @@ describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
 
     await expect(sender.verify()).rejects.toThrow(/STARTTLS|implicit TLS|authenticate/);
   }, 5_000);
+});
+
+describe('NodemailerEmailSender — magic-link delivery', () => {
+  it('passes the expected envelope and escaped HTML to Nodemailer', async () => {
+    const sender = new NodemailerEmailSender({
+      host: 'smtp.example.com',
+      port: 587,
+      user: 'u', password: 'p', from: 'from@example.com',
+    });
+    const transport = (sender as unknown as {
+      transporter: { sendMail: (message: unknown) => Promise<unknown> };
+    }).transporter;
+    const sendMail = jest.fn(async (_message: unknown) => ({ messageId: 'test' }));
+    transport.sendMail = sendMail;
+
+    await sender.sendMagicLink({
+      to: 'user@example.com',
+      url: 'https://mcp.example/auth/email/verify?token=a&next=<done>',
+    });
+
+    expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
+      from: 'from@example.com',
+      to: 'user@example.com',
+      subject: 'Sign in to DollhouseMCP',
+      text: expect.stringContaining('token=a&next=<done>'),
+      html: expect.stringContaining('token=a&amp;next=&lt;done>'),
+    }));
+  });
 });
