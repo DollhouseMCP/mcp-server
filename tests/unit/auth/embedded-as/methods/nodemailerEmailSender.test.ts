@@ -128,15 +128,15 @@ describe('NodemailerEmailSender — magic-link delivery', () => {
 
     await sender.sendMagicLink({
       to: 'user@example.com',
-      url: 'https://mcp.example/auth/email/verify?token=a&next=<done>',
+      url: 'https://mcp.example/auth/email/verify?token=a&next="<done>"',
     });
 
     expect(sendMail).toHaveBeenCalledWith(expect.objectContaining({
       from: 'from@example.com',
       to: 'user@example.com',
       subject: 'Sign in to DollhouseMCP',
-      text: expect.stringContaining('token=a&next=<done>'),
-      html: expect.stringContaining('token=a&amp;next=&lt;done>'),
+      text: expect.stringContaining('token=a&next="<done>"'),
+      html: expect.stringContaining('token=a&amp;next=&quot;&lt;done>&quot;'),
     }));
   });
 });
