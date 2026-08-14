@@ -476,6 +476,12 @@ interface GatewayRequestContext {
 interface CredentialRedactions {
   readonly exact: ReadonlySet<string>;
   readonly embedded: readonly string[];
+  readonly headers: readonly CredentialHeaderRedaction[];
+}
+
+interface CredentialHeaderRedaction {
+  readonly name: string;
+  readonly value: string;
 }
 
 // Single-replica/dev fallback used only when no IRateLimitStore is injected (production
@@ -708,11 +714,51 @@ function redactResponseCredentials(value: unknown, credentialRedactions: Credent
 
 function redactCredentialText(value: string, credentialRedactions: CredentialRedactions): string {
   if (credentialRedactions.exact.has(value)) return REDACTED;
-  let redacted = value;
+  let redacted = redactCredentialHeaderEchoes(value, credentialRedactions.headers);
   for (const secret of credentialRedactions.embedded) {
     redacted = redacted.replaceAll(secret, REDACTED);
   }
   return redacted;
+}
+
+function redactCredentialHeaderEchoes(
+  value: string,
+  headers: readonly CredentialHeaderRedaction[],
+): string {
+  let redacted = value;
+  for (const header of headers) {
+    redacted = redactCredentialHeaderEcho(redacted, header);
+  }
+  return redacted;
+}
+
+function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedaction): string {
+  const normalizedValue = value.toLowerCase();
+  const normalizedName = header.name.toLowerCase();
+  const parts: string[] = [];
+  let copyFrom = 0;
+  let searchFrom = 0;
+  for (;;) {
+    const index = normalizedValue.indexOf(normalizedName, searchFrom);
+    if (index < 0) break;
+    const before = index === 0 ? '' : value[index - 1];
+    let cursor = index + header.name.length;
+    while (value[cursor] === ' ' || value[cursor] === '\t') cursor += 1;
+    if ((before === '' || !/[A-Za-z0-9-]/.test(before)) && value[cursor] === ':') {
+      cursor += 1;
+      while (value[cursor] === ' ' || value[cursor] === '\t') cursor += 1;
+      if (value.startsWith(header.value, cursor)) {
+        parts.push(value.slice(copyFrom, index), REDACTED);
+        copyFrom = cursor + header.value.length;
+        searchFrom = copyFrom;
+        continue;
+      }
+    }
+    searchFrom = index + header.name.length;
+  }
+  if (parts.length === 0) return value;
+  parts.push(value.slice(copyFrom));
+  return parts.join('');
 }
 
 function buildCredentialRedactions(
@@ -721,6 +767,7 @@ function buildCredentialRedactions(
 ): CredentialRedactions {
   const exact = new Set<string>();
   const embedded = new Set<string>();
+  const headers: CredentialHeaderRedaction[] = [];
   const variants = (value: string): readonly string[] => [
     value,
     encodeURIComponent(value),
@@ -741,12 +788,16 @@ function buildCredentialRedactions(
 
   addCredential(credential);
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
-    addEmbedded(`Bearer ${credential}`);
+    const authorization = `Bearer ${credential}`;
+    addEmbedded(authorization);
+    headers.push({ name: 'Authorization', value: authorization });
   } else if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
     if (descriptor.staticApiKey.injection.location === 'basic') {
       const encoded = Buffer.from(credential, 'utf8').toString('base64');
       addCredential(encoded);
-      addEmbedded(`Basic ${encoded}`);
+      const authorization = `Basic ${encoded}`;
+      addEmbedded(authorization);
+      headers.push({ name: 'Authorization', value: authorization });
     } else {
       const injectedValue = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
       addCredential(injectedValue);
@@ -754,7 +805,7 @@ function buildCredentialRedactions(
         const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
         addEmbedded(`${descriptor.staticApiKey.injection.name}=${encodedValue}`);
       } else {
-        addEmbedded(`${descriptor.staticApiKey.injection.name}: ${injectedValue}`);
+        headers.push({ name: descriptor.staticApiKey.injection.name, value: injectedValue });
       }
     }
   }
@@ -762,6 +813,7 @@ function buildCredentialRedactions(
   return {
     exact,
     embedded: [...embedded].sort((left, right) => right.length - left.length),
+    headers,
   };
 }
 

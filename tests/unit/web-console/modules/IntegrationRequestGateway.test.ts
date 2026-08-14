@@ -170,6 +170,37 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts normalized custom-header echoes for short credentials', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        ordinary: 'a valid response',
+        lowercase: 'received x-api-key:a',
+        mixedCase: 'received X-Api-Key:\t a safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/short-header-key',
+    }));
+
+    expect(result.response).toEqual({
+      ordinary: 'a valid response',
+      lowercase: 'received [redacted]',
+      mixedCase: 'received [redacted] safely',
+    });
+  });
+
   it('issues the upstream request with redirect: error so redirects cannot bypass the host allowlist', async () => {
     const inits: Array<RequestInit | undefined> = [];
     const gateway = gatewayFixture({
