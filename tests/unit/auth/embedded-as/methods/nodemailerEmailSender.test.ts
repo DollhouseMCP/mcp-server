@@ -109,9 +109,13 @@ describe('NodemailerEmailSender — verify() must-fix #10 startup gate', () => {
       connectionTimeoutMs: 500,
     });
 
-    const verification = sender.verify();
-    await expect(verification).rejects.toThrow('SMTP verify failed for 127.0.0.1:465');
-    await expect(verification).rejects.toThrow(
+    const verificationError = await sender.verify().catch((error: unknown) => error);
+    expect(verificationError).toBeInstanceOf(Error);
+    if (!(verificationError instanceof Error)) {
+      throw new Error('Expected SMTP verification to reject with an Error');
+    }
+    expect(verificationError.message).toContain('SMTP verify failed for 127.0.0.1:465');
+    expect(verificationError.message).toContain(
       'Confirm the server supports STARTTLS (port 587) or implicit TLS (port 465)',
     );
   }, 5_000);
@@ -145,7 +149,7 @@ describe('NodemailerEmailSender — magic-link delivery', () => {
       to: 'user@example.com',
       subject: 'Sign in to DollhouseMCP',
       text: expect.stringContaining('token=a&next="<done>"'),
-      html: expect.stringContaining('token=a&amp;next=&quot;&lt;done>&quot;'),
+      html: expect.stringContaining('token=a&amp;next=&quot;&lt;done&gt;&quot;'),
     }));
   });
 
