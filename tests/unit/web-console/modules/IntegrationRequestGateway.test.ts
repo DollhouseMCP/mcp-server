@@ -154,6 +154,7 @@ describe('IntegrationRequestGateway', () => {
         ordinary: 'a valid response',
         exactEcho: 'a',
         queryEcho: 'received key=a',
+        unrelated: 'monkey=available',
       })),
     });
 
@@ -167,7 +168,61 @@ describe('IntegrationRequestGateway', () => {
       ordinary: 'a valid response',
       exactEcho: '[redacted]',
       queryEcho: 'received [redacted]',
+      unrelated: 'monkey=available',
     });
+  });
+
+  it('redacts percent-encoded query credentials regardless of escape hex case', async () => {
+    const credential = 'abc/def:ghi';
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt(credential, 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        scalar: 'abc%2fdef%3aghi',
+        query: 'received key=abc%2fdef%3aghi safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/encoded-key',
+    }));
+
+    expect(result.response).toEqual({
+      scalar: '[redacted]',
+      query: 'received [redacted] safely',
+    });
+  });
+
+  it('redacts an exact lowercase percent escape for a short query credential', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('/', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, '%2f')),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/encoded-short-key',
+    }));
+
+    expect(result.response).toBe('[redacted]');
   });
 
   it('redacts normalized custom-header echoes for short credentials', async () => {

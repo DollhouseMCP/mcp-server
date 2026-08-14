@@ -475,14 +475,22 @@ interface GatewayRequestContext {
 
 interface CredentialRedactions {
   readonly exact: ReadonlySet<string>;
+  readonly percentExact: ReadonlySet<string>;
   readonly embedded: readonly string[];
+  readonly percentEmbedded: readonly string[];
   readonly headers: readonly CredentialHeaderRedaction[];
+  readonly queries: readonly CredentialQueryRedaction[];
 }
 
 interface CredentialHeaderRedaction {
   readonly name: string;
   readonly value: string;
   readonly caseInsensitivePrefixLength?: number;
+}
+
+interface CredentialQueryRedaction {
+  readonly name: string;
+  readonly value: string;
 }
 
 // Single-replica/dev fallback used only when no IRateLimitStore is injected (production
@@ -714,12 +722,82 @@ function redactResponseCredentials(value: unknown, credentialRedactions: Credent
 }
 
 function redactCredentialText(value: string, credentialRedactions: CredentialRedactions): string {
-  if (credentialRedactions.exact.has(value)) return REDACTED;
+  if (credentialRedactions.exact.has(value) ||
+      credentialRedactions.percentExact.has(normalizePercentEscapes(value))) {
+    return REDACTED;
+  }
   let redacted = redactCredentialHeaderEchoes(value, credentialRedactions.headers);
+  redacted = redactCredentialQueryEchoes(redacted, credentialRedactions.queries);
   for (const secret of credentialRedactions.embedded) {
     redacted = redacted.replaceAll(secret, REDACTED);
   }
+  redacted = redactPercentEncodedCredentials(redacted, credentialRedactions.percentEmbedded);
   return redacted;
+}
+
+function redactCredentialQueryEchoes(
+  value: string,
+  queries: readonly CredentialQueryRedaction[],
+): string {
+  let redacted = value;
+  for (const query of queries) redacted = redactCredentialQueryEcho(redacted, query);
+  return redacted;
+}
+
+function redactCredentialQueryEcho(value: string, query: CredentialQueryRedaction): string {
+  const normalizedValue = normalizePercentEscapes(value);
+  const normalizedQueryValue = normalizePercentEscapes(query.value);
+  const marker = `${query.name}=`;
+  const parts: string[] = [];
+  let copyFrom = 0;
+  let searchFrom = 0;
+  for (;;) {
+    const index = normalizedValue.indexOf(marker, searchFrom);
+    if (index < 0) break;
+    const before = index === 0 ? '' : value[index - 1];
+    const valueStart = index + marker.length;
+    const valueEnd = valueStart + query.value.length;
+    const after = value[valueEnd] ?? '';
+    const nameBoundary = before === '' || !/[A-Za-z0-9_.~-]/.test(before);
+    const valueBoundary = after === '' || /[&\s"'#,}\]]/.test(after);
+    if (nameBoundary && valueBoundary &&
+        normalizedValue.startsWith(normalizedQueryValue, valueStart)) {
+      parts.push(value.slice(copyFrom, index), REDACTED);
+      copyFrom = valueEnd;
+      searchFrom = valueEnd;
+      continue;
+    }
+    searchFrom = index + marker.length;
+  }
+  if (parts.length === 0) return value;
+  parts.push(value.slice(copyFrom));
+  return parts.join('');
+}
+
+function redactPercentEncodedCredentials(value: string, patterns: readonly string[]): string {
+  let redacted = value;
+  for (const pattern of patterns) {
+    const normalizedValue = normalizePercentEscapes(redacted);
+    const parts: string[] = [];
+    let copyFrom = 0;
+    let searchFrom = 0;
+    for (;;) {
+      const index = normalizedValue.indexOf(pattern, searchFrom);
+      if (index < 0) break;
+      parts.push(redacted.slice(copyFrom, index), REDACTED);
+      copyFrom = index + pattern.length;
+      searchFrom = copyFrom;
+    }
+    if (parts.length > 0) {
+      parts.push(redacted.slice(copyFrom));
+      redacted = parts.join('');
+    }
+  }
+  return redacted;
+}
+
+function normalizePercentEscapes(value: string): string {
+  return value.replace(/%[0-9a-f]{2}/gi, escape => escape.toUpperCase());
 }
 
 function redactCredentialHeaderEchoes(
@@ -784,20 +862,30 @@ function buildCredentialRedactions(
   credential: string,
 ): CredentialRedactions {
   const exact = new Set<string>();
+  const percentExact = new Set<string>();
   const embedded = new Set<string>();
+  const percentEmbedded = new Set<string>();
   const headers: CredentialHeaderRedaction[] = [];
-  const variants = (value: string): readonly string[] => [
-    value,
+  const queries: CredentialQueryRedaction[] = [];
+  const encodedVariants = (value: string): readonly string[] => [
     encodeURIComponent(value),
     new URLSearchParams({ value }).toString().slice('value='.length),
   ];
   const addExact = (value: string): void => {
     if (!value) return;
-    for (const variant of variants(value)) exact.add(variant);
+    exact.add(value);
+    for (const variant of encodedVariants(value)) {
+      exact.add(variant);
+      if (variant.includes('%')) percentExact.add(normalizePercentEscapes(variant));
+    }
   };
   const addEmbedded = (value: string): void => {
     addExact(value);
-    for (const variant of variants(value)) embedded.add(variant);
+    embedded.add(value);
+    for (const variant of encodedVariants(value)) {
+      embedded.add(variant);
+      if (variant.includes('%')) percentEmbedded.add(normalizePercentEscapes(variant));
+    }
   };
   const addCredential = (value: string): void => {
     addExact(value);
@@ -821,7 +909,7 @@ function buildCredentialRedactions(
       addCredential(injectedValue);
       if (descriptor.staticApiKey.injection.location === 'query') {
         const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
-        addEmbedded(`${descriptor.staticApiKey.injection.name}=${encodedValue}`);
+        queries.push({ name: descriptor.staticApiKey.injection.name, value: encodedValue });
       } else {
         headers.push({ name: descriptor.staticApiKey.injection.name, value: injectedValue });
       }
@@ -830,8 +918,11 @@ function buildCredentialRedactions(
 
   return {
     exact,
+    percentExact,
     embedded: [...embedded].sort((left, right) => right.length - left.length),
+    percentEmbedded: [...percentEmbedded].sort((left, right) => right.length - left.length),
     headers,
+    queries,
   };
 }
 
