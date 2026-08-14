@@ -849,7 +849,8 @@ function redactCredentialHeaderEchoes(
 }
 
 function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedaction): string {
-  const normalizedValue = asciiLowercase(value);
+  const jsonRedacted = redactJsonCredentialHeaderEchoes(value, header);
+  const normalizedValue = asciiLowercase(jsonRedacted);
   const normalizedName = asciiLowercase(header.name);
   const parts: string[] = [];
   let copyFrom = 0;
@@ -858,11 +859,42 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
     const index = normalizedValue.indexOf(normalizedName, searchFrom);
     if (index < 0) break;
     searchFrom = index + header.name.length;
-    const match = credentialHeaderEchoMatch(value, index, header);
+    const match = credentialHeaderEchoMatch(jsonRedacted, index, header);
     if (match === null) continue;
-    parts.push(value.slice(copyFrom, match.start), REDACTED);
+    parts.push(jsonRedacted.slice(copyFrom, match.start), REDACTED);
     copyFrom = match.end;
     searchFrom = copyFrom;
+  }
+  if (parts.length === 0) return jsonRedacted;
+  parts.push(jsonRedacted.slice(copyFrom));
+  return parts.join('');
+}
+
+function redactJsonCredentialHeaderEchoes(
+  value: string,
+  header: CredentialHeaderRedaction,
+): string {
+  const normalizedName = asciiLowercase(header.name);
+  const parts: string[] = [];
+  let copyFrom = 0;
+  let searchFrom = 0;
+  for (;;) {
+    const start = value.indexOf('"', searchFrom);
+    if (start < 0) break;
+    const parsedName = parseJsonStringAt(value, start);
+    if (parsedName === null) {
+      searchFrom = start + 1;
+      continue;
+    }
+    searchFrom = parsedName.end;
+    if (asciiLowercase(parsedName.value) !== normalizedName) continue;
+    const before = start === 0 ? '' : value[start - 1];
+    if (before !== '' && /[A-Za-z0-9-]/.test(before)) continue;
+    const valueEnd = credentialHeaderValueEchoEnd(value, parsedName.end, header);
+    if (valueEnd === null) continue;
+    parts.push(value.slice(copyFrom, start), REDACTED);
+    copyFrom = valueEnd;
+    searchFrom = valueEnd;
   }
   if (parts.length === 0) return value;
   parts.push(value.slice(copyFrom));
@@ -885,7 +917,16 @@ function credentialHeaderEchoMatch(
     if (value[cursor] !== nameQuote) return null;
     cursor += 1;
   }
-  cursor = skipHorizontalWhitespace(value, cursor);
+  const valueEnd = credentialHeaderValueEchoEnd(value, cursor, header);
+  return valueEnd === null ? null : { start: matchStart, end: valueEnd };
+}
+
+function credentialHeaderValueEchoEnd(
+  value: string,
+  cursorAfterName: number,
+  header: CredentialHeaderRedaction,
+): number | null {
+  let cursor = skipHorizontalWhitespace(value, cursorAfterName);
   if (value[cursor] !== ':') return null;
   cursor = skipHorizontalWhitespace(value, cursor + 1);
 
@@ -895,7 +936,7 @@ function credentialHeaderEchoMatch(
     if (parsed !== null) {
       return parsed.value.length === header.value.length &&
         credentialHeaderValueMatches(parsed.value, 0, header)
-        ? { start: matchStart, end: parsed.end }
+        ? parsed.end
         : null;
     }
   }
@@ -903,9 +944,9 @@ function credentialHeaderEchoMatch(
   if (!credentialHeaderValueMatches(value, valueStart, header)) return null;
 
   const valueEnd = valueStart + header.value.length;
-  if (quote !== null && value[valueEnd] === quote) return { start: matchStart, end: valueEnd + 1 };
+  if (quote !== null && value[valueEnd] === quote) return valueEnd + 1;
   if (header.requireValueBoundary && !isCredentialValueBoundary(value[valueEnd] ?? '')) return null;
-  return { start: matchStart, end: valueEnd };
+  return valueEnd;
 }
 
 function parseJsonStringAt(value: string, start: number): ParsedJsonString | null {
