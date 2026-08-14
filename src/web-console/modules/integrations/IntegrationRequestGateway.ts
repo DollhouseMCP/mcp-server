@@ -825,34 +825,44 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
   for (;;) {
     const index = normalizedValue.indexOf(normalizedName, searchFrom);
     if (index < 0) break;
-    const before = index === 0 ? '' : value[index - 1];
-    let cursor = index + header.name.length;
-    while (value[cursor] === ' ' || value[cursor] === '\t') cursor += 1;
-    if ((before === '' || !/[A-Za-z0-9-]/.test(before)) && value[cursor] === ':') {
-      cursor += 1;
-      while (value[cursor] === ' ' || value[cursor] === '\t') cursor += 1;
-      const quote = value[cursor] === '"' || value[cursor] === "'" ? value[cursor] : null;
-      const valueStart = quote ? cursor + 1 : cursor;
-      if (credentialHeaderValueMatches(value, valueStart, header)) {
-        let valueEnd = valueStart + header.value.length;
-        const hasClosingQuote = quote !== null && value[valueEnd] === quote;
-        if (hasClosingQuote) valueEnd += 1;
-        if (header.requireValueBoundary && !hasClosingQuote &&
-            !isCredentialValueBoundary(value[valueEnd] ?? '')) {
-          searchFrom = index + header.name.length;
-          continue;
-        }
-        parts.push(value.slice(copyFrom, index), REDACTED);
-        copyFrom = valueEnd;
-        searchFrom = copyFrom;
-        continue;
-      }
-    }
     searchFrom = index + header.name.length;
+    const valueEnd = credentialHeaderEchoEnd(value, index, header);
+    if (valueEnd === null) continue;
+    parts.push(value.slice(copyFrom, index), REDACTED);
+    copyFrom = valueEnd;
+    searchFrom = copyFrom;
   }
   if (parts.length === 0) return value;
   parts.push(value.slice(copyFrom));
   return parts.join('');
+}
+
+function credentialHeaderEchoEnd(
+  value: string,
+  headerStart: number,
+  header: CredentialHeaderRedaction,
+): number | null {
+  const before = headerStart === 0 ? '' : value[headerStart - 1];
+  if (before !== '' && /[A-Za-z0-9-]/.test(before)) return null;
+
+  let cursor = skipHorizontalWhitespace(value, headerStart + header.name.length);
+  if (value[cursor] !== ':') return null;
+  cursor = skipHorizontalWhitespace(value, cursor + 1);
+
+  const quote = value[cursor] === '"' || value[cursor] === "'" ? value[cursor] : null;
+  const valueStart = quote ? cursor + 1 : cursor;
+  if (!credentialHeaderValueMatches(value, valueStart, header)) return null;
+
+  const valueEnd = valueStart + header.value.length;
+  if (quote !== null && value[valueEnd] === quote) return valueEnd + 1;
+  if (header.requireValueBoundary && !isCredentialValueBoundary(value[valueEnd] ?? '')) return null;
+  return valueEnd;
+}
+
+function skipHorizontalWhitespace(value: string, start: number): number {
+  let cursor = start;
+  while (value[cursor] === ' ' || value[cursor] === '\t') cursor += 1;
+  return cursor;
 }
 
 function credentialHeaderValueMatches(
