@@ -282,12 +282,13 @@ function runScenario(scenario: Scenario): {
   writeExecutable(path.join(binDirectory, 'npm'), fakeNpmScript);
 
   const release = scenario.release;
-  const result = spawnSync('/bin/bash', ['-c', validationScript ?? 'exit 99'], {
+  const bashExecutable = process.platform === 'win32' ? 'bash' : '/bin/bash';
+  const result = spawnSync(bashExecutable, ['-c', validationScript ?? 'exit 99'], {
     cwd: projectRoot,
     encoding: 'utf8',
     env: {
       ...process.env,
-      PATH: `${binDirectory}:${process.env.PATH ?? ''}`,
+      PATH: `${binDirectory}${path.delimiter}${process.env.PATH ?? ''}`,
       GITHUB_REF_NAME: 'beta',
       GITHUB_SHA: expectedSha,
       GITHUB_OUTPUT: outputPath,
@@ -303,6 +304,7 @@ function runScenario(scenario: Scenario): {
       FAKE_NPM_LATEST_VERSION: scenario.npmLatestVersion ?? '',
     },
   });
+  if (result.error) throw result.error;
 
   return {
     status: result.status,
