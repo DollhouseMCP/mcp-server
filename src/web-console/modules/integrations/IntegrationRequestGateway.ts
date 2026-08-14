@@ -704,8 +704,12 @@ function parseResponseBody(
 
 function redactResponseCredentials(value: unknown, credentialRedactions: CredentialRedactions): unknown {
   if (typeof value === 'string') return redactCredentialText(value, credentialRedactions);
+  if (value === null || typeof value === 'number' || typeof value === 'boolean') {
+    const serialized = String(value);
+    return redactCredentialText(serialized, credentialRedactions) === serialized ? value : REDACTED;
+  }
   if (Array.isArray(value)) return value.map(item => redactResponseCredentials(item, credentialRedactions));
-  if (!value || typeof value !== 'object') return value;
+  if (typeof value !== 'object') return value;
   const output: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(value)) {
     const redactedKey = redactCredentialText(key, credentialRedactions);

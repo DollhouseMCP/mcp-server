@@ -139,6 +139,36 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('[redacted]');
   });
 
+  it('redacts credentials parsed as non-string JSON scalars', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('12345678', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        echoed: 12345678,
+        ordinaryNumber: 42,
+        ordinaryBoolean: true,
+        ordinaryNull: null,
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/echo-number',
+    }));
+
+    expect(result.response).toEqual({
+      echoed: '[redacted]',
+      ordinaryNumber: 42,
+      ordinaryBoolean: true,
+      ordinaryNull: null,
+    });
+  });
+
   it('redacts exact short credentials without corrupting unrelated response text', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({

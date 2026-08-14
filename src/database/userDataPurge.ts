@@ -121,8 +121,20 @@ function githubLogin(account: DeletionIdentityAccount): string | null {
   }
   const login = (account.rawProfile as { readonly login?: unknown }).login;
   if (typeof login !== 'string') return null;
-  const normalized = normalizeAuthAllowlistValue('github_username', login);
-  return normalized || null;
+  return login;
+}
+
+function addDeletionAllowlistValues(
+  values: Set<string>,
+  kind: 'email' | 'github_username' | 'github_id',
+  value: string,
+): void {
+  const normalized = normalizeAuthAllowlistValue(kind, value);
+  if (!normalized) return;
+  values.add(normalized);
+  // Before NFC canonicalization, durable allowlists stored lowercased input verbatim.
+  // Retain that spelling so account deletion also removes legacy NFD/whitespace rows.
+  values.add(value.toLowerCase());
 }
 
 /** Collect the identity match values from the account's own row + its federated logins. */
@@ -131,18 +143,18 @@ export function collectDeletionIdentity(
   accounts: readonly DeletionIdentityAccount[],
 ): DeletionIdentity {
   const emails = new Set<string>();
-  if (userEmail) emails.add(normalizeAuthAllowlistValue('email', userEmail));
+  if (userEmail) addDeletionAllowlistValues(emails, 'email', userEmail);
   const subs = new Set<string>();
   const githubIds = new Set<string>();
   const githubLogins = new Set<string>();
   for (const account of accounts) {
     subs.add(account.sub);
-    if (account.email) emails.add(normalizeAuthAllowlistValue('email', account.email));
+    if (account.email) addDeletionAllowlistValues(emails, 'email', account.email);
     if (account.provider === 'github' && account.externalSub) {
-      githubIds.add(normalizeAuthAllowlistValue('github_id', account.externalSub));
+      addDeletionAllowlistValues(githubIds, 'github_id', account.externalSub);
     }
     const login = githubLogin(account);
-    if (login) githubLogins.add(login);
+    if (login) addDeletionAllowlistValues(githubLogins, 'github_username', login);
   }
   return {
     subs: [...subs],

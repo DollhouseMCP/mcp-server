@@ -74,9 +74,24 @@ describe('collectDeletionIdentity', () => {
       },
     ]);
 
-    expect(identity.emails).toEqual(['caf\u00e9@example.com']);
-    expect(identity.githubIds).toEqual(['184286']);
-    expect(identity.githubLogins).toEqual(['oct\u00f3cat']);
+    expect(identity.emails).toEqual([
+      'caf\u00e9@example.com',
+      ' cafe\u0301@example.com ',
+    ]);
+    expect(identity.githubIds).toEqual(['184286', ' 184286 ']);
+    expect(identity.githubLogins).toEqual([
+      'oct\u00f3cat',
+      ' octo\u0301cat ',
+    ]);
+  });
+
+  it('retains a legacy NFD spelling so deletion removes pre-canonicalization rows', () => {
+    const identity = collectDeletionIdentity('cafe\u0301@example.com', []);
+
+    expect(identity.emails).toEqual([
+      'caf\u00e9@example.com',
+      'cafe\u0301@example.com',
+    ]);
   });
 });
 
