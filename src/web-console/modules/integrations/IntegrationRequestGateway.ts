@@ -971,10 +971,13 @@ function buildCredentialRedactions(
       const injectedValue = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
       addCredential(injectedValue, credential.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
       if (descriptor.staticApiKey.injection.location === 'query') {
+        const queryName = descriptor.staticApiKey.injection.name;
+        const encodedName = new URLSearchParams([[queryName, '']]).toString().slice(0, -1);
         const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
-        queries.push({ name: descriptor.staticApiKey.injection.name, value: injectedValue });
-        if (encodedValue !== injectedValue) {
-          queries.push({ name: descriptor.staticApiKey.injection.name, value: encodedValue });
+        const queryNames = new Set([queryName, encodedName]);
+        const queryValues = new Set([injectedValue, encodedValue]);
+        for (const name of queryNames) {
+          for (const value of queryValues) queries.push({ name, value });
         }
       } else {
         addHeader(descriptor.staticApiKey.injection.name, injectedValue, credential);

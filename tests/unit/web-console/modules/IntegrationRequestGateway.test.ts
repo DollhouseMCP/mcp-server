@@ -204,6 +204,42 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts decoded and serialized query names for short credentials', async () => {
+    const fetches: string[] = [];
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'api key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: (url) => {
+        fetches.push(url.toString());
+        return Promise.resolve(jsonResponse(200, {
+          serialized: 'received api+key=a safely',
+          decoded: 'received api key=a safely',
+          unrelated: 'received api+key=available',
+        }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/encoded-query-name',
+    }));
+
+    expect(fetches[0]).toContain('api+key=a');
+    expect(result.response).toEqual({
+      serialized: 'received [redacted] safely',
+      decoded: 'received [redacted] safely',
+      unrelated: 'received api+key=available',
+    });
+  });
+
   it('redacts percent-encoded query credentials regardless of escape hex case', async () => {
     const credential = 'abc/def:ghi';
     const gateway = gatewayFixture({
