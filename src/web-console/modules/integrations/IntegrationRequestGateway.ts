@@ -871,11 +871,18 @@ function credentialHeaderValueMatches(
   header: CredentialHeaderRedaction,
 ): boolean {
   const prefixLength = header.caseInsensitivePrefixLength ?? 0;
-  if (prefixLength === 0) return value.startsWith(header.value, valueStart);
+  if (prefixLength === 0) {
+    const actualValue = value.slice(valueStart, valueStart + header.value.length);
+    return normalizePercentEscapes(actualValue) === normalizePercentEscapes(header.value);
+  }
   const actualPrefix = value.slice(valueStart, valueStart + prefixLength).toLowerCase();
   const expectedPrefix = header.value.slice(0, prefixLength).toLowerCase();
+  const actualSuffix = normalizePercentEscapes(
+    value.slice(valueStart + prefixLength, valueStart + header.value.length),
+  );
+  const expectedSuffix = normalizePercentEscapes(header.value.slice(prefixLength));
   return actualPrefix === expectedPrefix &&
-    value.startsWith(header.value.slice(prefixLength), valueStart + prefixLength);
+    actualSuffix === expectedSuffix;
 }
 
 function buildCredentialRedactions(
@@ -908,36 +915,57 @@ function buildCredentialRedactions(
       if (variant.includes('%')) percentEmbedded.add(normalizePercentEscapes(variant));
     }
   };
-  const addCredential = (value: string): void => {
+  const addCredential = (
+    value: string,
+    allowEmbedded = value.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH,
+  ): void => {
     addExact(value);
-    if (value.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) addEmbedded(value);
+    if (allowEmbedded) addEmbedded(value);
+  };
+  const addHeader = (
+    name: string,
+    value: string,
+    sensitiveValue: string,
+    caseInsensitivePrefixLength = 0,
+  ): void => {
+    const requireValueBoundary = sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH;
+    const prefix = value.slice(0, value.length - sensitiveValue.length);
+    const candidates = new Map<string, number>([[value, caseInsensitivePrefixLength]]);
+    for (const encodedValue of encodedVariants(value)) {
+      candidates.set(encodedValue, caseInsensitivePrefixLength > 0 ? prefix.trimEnd().length : 0);
+    }
+    if (prefix) {
+      for (const encodedSensitiveValue of encodedVariants(sensitiveValue)) {
+        candidates.set(`${prefix}${encodedSensitiveValue}`, caseInsensitivePrefixLength);
+      }
+    }
+    for (const [candidate, prefixLength] of candidates) {
+      headers.push({
+        name,
+        value: candidate,
+        caseInsensitivePrefixLength: prefixLength || undefined,
+        requireValueBoundary,
+      });
+    }
   };
 
   addCredential(credential);
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
     const authorization = `Bearer ${credential}`;
-    addEmbedded(authorization);
-    headers.push({
-      name: 'Authorization',
-      value: authorization,
-      caseInsensitivePrefixLength: 'Bearer '.length,
-      requireValueBoundary: credential.length < MIN_EMBEDDED_CREDENTIAL_LENGTH,
-    });
+    if (credential.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) addEmbedded(authorization);
+    else addExact(authorization);
+    addHeader('Authorization', authorization, credential, 'Bearer '.length);
   } else if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
     if (descriptor.staticApiKey.injection.location === 'basic') {
       const encoded = Buffer.from(credential, 'utf8').toString('base64');
       addCredential(encoded);
       const authorization = `Basic ${encoded}`;
-      addEmbedded(authorization);
-      headers.push({
-        name: 'Authorization',
-        value: authorization,
-        caseInsensitivePrefixLength: 'Basic '.length,
-        requireValueBoundary: encoded.length < MIN_EMBEDDED_CREDENTIAL_LENGTH,
-      });
+      if (encoded.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) addEmbedded(authorization);
+      else addExact(authorization);
+      addHeader('Authorization', authorization, encoded, 'Basic '.length);
     } else {
       const injectedValue = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
-      addCredential(injectedValue);
+      addCredential(injectedValue, credential.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
       if (descriptor.staticApiKey.injection.location === 'query') {
         const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
         queries.push({ name: descriptor.staticApiKey.injection.name, value: injectedValue });
@@ -945,11 +973,7 @@ function buildCredentialRedactions(
           queries.push({ name: descriptor.staticApiKey.injection.name, value: encodedValue });
         }
       } else {
-        headers.push({
-          name: descriptor.staticApiKey.injection.name,
-          value: injectedValue,
-          requireValueBoundary: credential.length < MIN_EMBEDDED_CREDENTIAL_LENGTH,
-        });
+        addHeader(descriptor.staticApiKey.injection.name, injectedValue, credential);
       }
     }
   }

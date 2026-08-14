@@ -270,6 +270,35 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts encoded custom-header echoes for short credentials', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('/', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        uppercase: 'received X-Api-Key: %2F safely',
+        lowercase: 'received x-api-key:%2f safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/encoded-short-header-key',
+    }));
+
+    expect(result.response).toEqual({
+      uppercase: 'received [redacted] safely',
+      lowercase: 'received [redacted] safely',
+    });
+  });
+
   it('redacts case-normalized authorization schemes while matching credential bytes exactly', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
@@ -283,6 +312,7 @@ describe('IntegrationRequestGateway', () => {
         normalized: 'received authorization: bEaReR a safely',
         differentCase: 'received authorization: bearer A safely',
         longerValue: 'received authorization: bearer available',
+        capitalizedLongerValue: 'received Authorization: Bearer available',
       })),
     });
 
@@ -297,6 +327,37 @@ describe('IntegrationRequestGateway', () => {
       normalized: 'received [redacted] safely',
       differentCase: 'received authorization: bearer A safely',
       longerValue: 'received authorization: bearer available',
+      capitalizedLongerValue: 'received Authorization: Bearer available',
+    });
+  });
+
+  it('redacts encoded authorization echoes for short credentials', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('/', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        encodedWrapper: 'received Authorization: Bearer %2f safely',
+        encodedHeaderValue: 'received authorization: bearer%20%2F safely',
+        formEncodedHeaderValue: 'received authorization: bEaReR+%2f safely',
+        unrelated: 'received Authorization: Bearer%20available',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/encoded-short-bearer',
+    }));
+
+    expect(result.response).toEqual({
+      encodedWrapper: 'received [redacted] safely',
+      encodedHeaderValue: 'received [redacted] safely',
+      formEncodedHeaderValue: 'received [redacted] safely',
+      unrelated: 'received Authorization: Bearer%20available',
     });
   });
 
