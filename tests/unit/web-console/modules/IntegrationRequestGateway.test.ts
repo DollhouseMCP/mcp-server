@@ -169,6 +169,27 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('recursively redacts credentials in structured-suffix JSON media types', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(JSON.stringify({ echo: 'a', ordinary: 'available' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/problem+json; charset=utf-8' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/problem',
+    }));
+
+    expect(result.response).toEqual({ echo: '[redacted]', ordinary: 'available' });
+  });
+
   it('redacts exact short credentials without corrupting unrelated response text', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({
@@ -400,6 +421,34 @@ describe('IntegrationRequestGateway', () => {
     }));
 
     expect(result.response).toBe('{[redacted]} {"X-Api-Key":"available"}');
+  });
+
+  it('redacts JSON-escaped short header values from non-JSON responses', async () => {
+    for (const credential of ['"', '\\', '\n']) {
+      const gateway = gatewayFixture({
+        descriptors: [staticDescriptor({
+          staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+        })],
+        records: [integrationRecord({
+          provider: 'airtable' as UserIntegrationProvider,
+          authorizedPermissions: { scopes: [] },
+          accessTokenCiphertext: encrypt(credential, 'airtable'),
+          refreshTokenCiphertext: null,
+        })],
+        fetch: () => Promise.resolve(new Response(JSON.stringify({ 'X-Api-Key': credential }), {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        })),
+      });
+
+      const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+        provider: 'airtable',
+        method: 'GET',
+        path: '/escaped-short-header-key',
+      }));
+
+      expect(result.response).toBe('{[redacted]}');
+    }
   });
 
   it('redacts encoded custom-header echoes for short credentials', async () => {

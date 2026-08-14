@@ -710,7 +710,7 @@ function parseResponseBody(
   credentialRedactions: CredentialRedactions,
 ): unknown {
   if (text === '') return null;
-  if (contentType?.toLowerCase().includes('application/json')) {
+  if (isJsonMediaType(contentType)) {
     try {
       return redactResponseCredentials(JSON.parse(text) as unknown, credentialRedactions);
     } catch {
@@ -718,6 +718,11 @@ function parseResponseBody(
     }
   }
   return redactCredentialText(text, credentialRedactions);
+}
+
+function isJsonMediaType(contentType: string | null): boolean {
+  const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
+  return mediaType === 'application/json' || mediaType.endsWith('+json');
 }
 
 function redactResponseCredentials(value: unknown, credentialRedactions: CredentialRedactions): unknown {
@@ -965,6 +970,11 @@ function buildCredentialRedactions(
     const requireValueBoundary = sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH;
     const prefix = value.slice(0, value.length - sensitiveValue.length);
     const candidates = new Map<string, number>([[value, caseInsensitivePrefixLength]]);
+    const escapedPrefix = jsonStringContent(prefix);
+    candidates.set(
+      jsonStringContent(value),
+      caseInsensitivePrefixLength > 0 ? escapedPrefix.length : 0,
+    );
     for (const encodedValue of encodedVariants(value)) {
       candidates.set(encodedValue, caseInsensitivePrefixLength > 0 ? prefix.trimEnd().length : 0);
     }
@@ -972,6 +982,10 @@ function buildCredentialRedactions(
       for (const encodedSensitiveValue of encodedVariants(sensitiveValue)) {
         candidates.set(`${prefix}${encodedSensitiveValue}`, caseInsensitivePrefixLength);
       }
+      candidates.set(
+        `${escapedPrefix}${jsonStringContent(sensitiveValue)}`,
+        caseInsensitivePrefixLength > 0 ? escapedPrefix.length : 0,
+      );
     }
     for (const [candidate, prefixLength] of candidates) {
       headers.push({
@@ -999,6 +1013,10 @@ function buildCredentialRedactions(
     headers,
     queries,
   };
+}
+
+function jsonStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
 }
 
 function collectCredentialStrategyRedactions(
