@@ -177,6 +177,96 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('[redacted]');
   });
 
+  it.each([
+    ['missing', null],
+    ['mislabelled', 'text/plain'],
+  ])('redacts short credentials in valid JSON with %s content type', async (_label, contentType) => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => {
+        const headers = new Headers();
+        if (contentType !== null) headers.set('Content-Type', contentType);
+        return Promise.resolve(new Response(new TextEncoder().encode('{"echo":"a","ordinary":"available"}'), {
+          status: 200,
+          headers,
+        }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: `/json-${_label}-content-type`,
+    }));
+
+    expect(result.response).toBe('{"echo":"[redacted]","ordinary":"available"}');
+  });
+
+  it('removes superseded duplicate JSON fields that contain short credentials', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(
+        new TextEncoder().encode('{"echo":"a","echo":"safe"}'),
+        { status: 200 },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/json-duplicate-fields',
+    }));
+
+    expect(result.response).toBe('{"echo":"safe"}');
+  });
+
+  it('redacts a JSON string scalar when content type is absent', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(new TextEncoder().encode('"a"'), { status: 200 })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/json-string-no-content-type',
+    }));
+
+    expect(result.response).toBe('"[redacted]"');
+  });
+
+  it('keeps text-redaction behavior for malformed JSON-shaped non-JSON responses', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(new Response('{ordinary gmail-access-token', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/malformed-json-shaped-text',
+    }));
+
+    expect(result.response).toBe('{ordinary [redacted]');
+  });
+
   it('redacts credentials parsed as non-string JSON scalars', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
@@ -350,7 +440,7 @@ describe('IntegrationRequestGateway', () => {
       path: '/pretty-object-query-echo',
     }));
 
-    expect(result.response).toBe('{[redacted]}');
+    expect(result.response).toBe('{"key":"[redacted]"}');
   });
 
   it('recovers object-style query redaction after an unmatched quote', async () => {
@@ -623,7 +713,7 @@ describe('IntegrationRequestGateway', () => {
         path: '/escaped-short-header-key',
       }));
 
-      expect(result.response).toBe('{[redacted]}');
+      expect(result.response).toBe('{"X-Api-Key":"[redacted]"}');
     }
   });
 
@@ -656,7 +746,7 @@ describe('IntegrationRequestGateway', () => {
         path: '/alternate-escaped-short-header-key',
       }));
 
-      expect(result.response).toBe('{[redacted]}');
+      expect(result.response).toBe('{"X-Api-Key":"[redacted]"}');
     }
   });
 
@@ -708,7 +798,7 @@ describe('IntegrationRequestGateway', () => {
       path: '/pretty-object-header-echo',
     }));
 
-    expect(result.response).toBe('{[redacted]}');
+    expect(result.response).toBe('{"X-Api-Key":"[redacted]"}');
   });
 
   it('handles malformed quoted text without repeatedly rescanning the response suffix', async () => {

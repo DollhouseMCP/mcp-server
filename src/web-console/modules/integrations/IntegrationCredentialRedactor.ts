@@ -63,11 +63,20 @@ export function redactIntegrationResponseBody(
   credentialRedactions: CredentialRedactions,
 ): unknown {
   if (text === '') return null;
-  if (isJsonMediaType(contentType)) {
+  const declaredJson = isJsonMediaType(contentType);
+  if (declaredJson || isJsonShapedBody(text)) {
     try {
-      return redactResponseCredentials(JSON.parse(text) as unknown, credentialRedactions);
+      const parsed = JSON.parse(text) as unknown;
+      const redacted = redactResponseCredentials(parsed, credentialRedactions);
+      if (declaredJson) return redacted;
+      // Keep the response typed as text when JSON was not declared, but always
+      // serialize the parsed form. Besides recursive redaction, this removes
+      // superseded duplicate properties that could otherwise retain a secret.
+      return JSON.stringify(redacted);
     } catch {
-      return REDACTED;
+      // A declared JSON response fails closed. Mislabelled structured-looking
+      // text retains the existing text-redaction fallback when parsing fails.
+      if (declaredJson) return REDACTED;
     }
   }
   return redactCredentialText(text, credentialRedactions);
@@ -76,6 +85,11 @@ export function redactIntegrationResponseBody(
 function isJsonMediaType(contentType: string | null): boolean {
   const mediaType = contentType?.split(';', 1)[0]?.trim().toLowerCase() ?? '';
   return mediaType === 'application/json' || mediaType.endsWith('+json');
+}
+
+function isJsonShapedBody(text: string): boolean {
+  const first = text.trimStart()[0];
+  return first === '{' || first === '[' || first === '"';
 }
 
 function redactResponseCredentials(value: unknown, credentialRedactions: CredentialRedactions): unknown {
