@@ -589,6 +589,31 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('bounds embedded credential matching for long shared prefixes', async () => {
+    const credential = `${'a'.repeat(8191)}b`;
+    const responseBody = 'a'.repeat(240 * 1024);
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt(credential, 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(responseBody, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/long-shared-prefix',
+    }));
+
+    expect(result.response).toBe(responseBody);
+  }, 5_000);
+
   it('redacts bounded standalone prefixed query values for short credentials', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({
