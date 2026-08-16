@@ -353,6 +353,31 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('{[redacted]}');
   });
 
+  it('recovers object-style query redaction after an unmatched quote', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('" {"key":"a"}', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/malformed-prefix-object-query-echo',
+    }));
+
+    expect(result.response).toBe('" {[redacted]}');
+  });
+
   it('normalizes percent escapes in query names without leaking short credentials', async () => {
     const fetches: string[] = [];
     const gateway = gatewayFixture({
@@ -772,6 +797,34 @@ describe('IntegrationRequestGateway', () => {
       longerValue: 'received authorization: bearer available',
       capitalizedLongerValue: 'received Authorization: Bearer available',
       unicodePrefix: '\u0130 [redacted] safely',
+    });
+  });
+
+  it('redacts bounded standalone authorization wrappers for short credentials', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        standalone: 'received bEaReR a safely',
+        longerValue: 'received Bearer available safely',
+        prefixedToken: 'received NotBearer a safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/short-standalone-bearer',
+    }));
+
+    expect(result.response).toEqual({
+      standalone: 'received [redacted] safely',
+      longerValue: 'received Bearer available safely',
+      prefixedToken: 'received NotBearer a safely',
     });
   });
 

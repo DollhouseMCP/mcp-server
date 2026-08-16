@@ -22,6 +22,7 @@ export interface CredentialRedactions {
   readonly percentEmbedded: readonly string[];
   readonly headers: readonly CredentialHeaderRedaction[];
   readonly queries: readonly CredentialQueryRedaction[];
+  readonly boundedValues: readonly CredentialBoundedValueRedaction[];
 }
 
 interface CredentialHeaderRedaction {
@@ -51,17 +52,9 @@ interface CredentialQueryRedaction {
   readonly value: string;
 }
 
-interface CredentialRedactionCollector {
-  readonly addExact: (value: string) => void;
-  readonly addEmbedded: (value: string) => void;
-  readonly addCredential: (value: string, allowEmbedded?: boolean) => void;
-  readonly addHeader: (
-    name: string,
-    value: string,
-    sensitiveValue: string,
-    caseInsensitivePrefixLength?: number,
-  ) => void;
-  readonly queries: CredentialQueryRedaction[];
+interface CredentialBoundedValueRedaction {
+  readonly value: string;
+  readonly caseInsensitivePrefixLength: number;
 }
 
 export function redactIntegrationResponseBody(
@@ -116,6 +109,7 @@ function redactCredentialText(value: string, credentialRedactions: CredentialRed
   }
   let redacted = redactCredentialHeaderEchoes(value, credentialRedactions.headers);
   redacted = redactCredentialQueryEchoes(redacted, credentialRedactions.queries);
+  redacted = redactBoundedCredentialValues(redacted, credentialRedactions.boundedValues);
   for (const secret of credentialRedactions.embedded) {
     redacted = redacted.replaceAll(secret, REDACTED);
   }
@@ -175,8 +169,10 @@ function redactJsonCredentialQueryEchoes(
   for (;;) {
     const start = value.indexOf('"', searchFrom);
     if (start < 0) break;
-    const scannedName = scanJsonStringAt(value, start);
-    searchFrom = scannedName.end;
+    const scannedName = scanJsonStringAt(value, start, maxJsonStringSourceLength(query.name.length));
+    // Advance one code unit so a quote consumed by malformed surrounding text
+    // can still be considered as the start of the next bounded candidate.
+    searchFrom = start + 1;
     if (scannedName.value === null ||
         normalizePercentEscapes(scannedName.value) !== normalizedName) continue;
     const before = start === 0 ? '' : value[start - 1];
@@ -285,8 +281,8 @@ function redactJsonCredentialHeaderEchoes(
   for (;;) {
     const start = value.indexOf('"', searchFrom);
     if (start < 0) break;
-    const scannedName = scanJsonStringAt(value, start);
-    searchFrom = scannedName.end;
+    const scannedName = scanJsonStringAt(value, start, maxJsonStringSourceLength(header.name.length));
+    searchFrom = start + 1;
     if (scannedName.value === null || asciiLowercase(scannedName.value) !== normalizedName) continue;
     const before = start === 0 ? '' : value[start - 1];
     if (before !== '' && isHttpFieldNameCharacter(before)) continue;
@@ -354,9 +350,10 @@ function parseJsonStringAt(value: string, start: number): ParsedJsonString | nul
   return scanned.value === null ? null : { value: scanned.value, end: scanned.end };
 }
 
-function scanJsonStringAt(value: string, start: number): ScannedJsonString {
+function scanJsonStringAt(value: string, start: number, maxSourceLength = value.length - start): ScannedJsonString {
   let escaped = false;
-  for (let cursor = start + 1; cursor < value.length; cursor += 1) {
+  const end = Math.min(value.length, start + maxSourceLength);
+  for (let cursor = start + 1; cursor < end; cursor += 1) {
     const character = value[cursor];
     if (escaped) {
       escaped = false;
@@ -376,7 +373,14 @@ function scanJsonStringAt(value: string, start: number): ScannedJsonString {
       return { value: null, end: cursor + 1 };
     }
   }
-  return { value: null, end: value.length };
+  return { value: null, end };
+}
+
+function maxJsonStringSourceLength(decodedCodeUnits: number): number {
+  // A JSON string can encode each UTF-16 code unit as six source characters
+  // (`\uXXXX`), plus its two surrounding quotes. Bounding candidate scans by
+  // this value keeps overlap recovery linear in the bounded response size.
+  return 2 + (decodedCodeUnits * 6);
 }
 
 function skipStructuredWhitespace(value: string, start: number): number {
@@ -410,7 +414,9 @@ function asciiLowercase(value: string): string {
 }
 
 function isHttpFieldNameCharacter(value: string): boolean {
-  const code = value.charCodeAt(0);
+  if (value.length !== 1) return false;
+  const code = value.codePointAt(0);
+  if (code === undefined) return false;
   if ((code >= 0x30 && code <= 0x39) ||
       (code >= 0x41 && code <= 0x5a) ||
       (code >= 0x61 && code <= 0x7a)) return true;
@@ -427,6 +433,7 @@ export function buildCredentialRedactions(
   const percentEmbedded = new Set<string>();
   const headers: CredentialHeaderRedaction[] = [];
   const queries: CredentialQueryRedaction[] = [];
+  const boundedValues: CredentialBoundedValueRedaction[] = [];
   const encodedVariants = (value: string): readonly string[] => [
     encodeURIComponent(value),
     new URLSearchParams({ value }).toString().slice('value='.length),
@@ -487,6 +494,9 @@ export function buildCredentialRedactions(
         caseInsensitivePrefixLength: prefixLength || undefined,
         requireValueBoundary,
       });
+      if (requireValueBoundary && prefixLength > 0) {
+        boundedValues.push({ value: candidate, caseInsensitivePrefixLength: prefixLength });
+      }
     }
   };
 
@@ -526,7 +536,57 @@ export function buildCredentialRedactions(
     percentEmbedded: [...percentEmbedded].sort((left, right) => right.length - left.length),
     headers,
     queries,
+    boundedValues: deduplicateBoundedValues(boundedValues),
   };
+}
+
+function deduplicateBoundedValues(
+  values: readonly CredentialBoundedValueRedaction[],
+): readonly CredentialBoundedValueRedaction[] {
+  const unique = new Map<string, CredentialBoundedValueRedaction>();
+  for (const value of values) unique.set(`${value.caseInsensitivePrefixLength}:${value.value}`, value);
+  return [...unique.values()].sort((left, right) => right.value.length - left.value.length);
+}
+
+function redactBoundedCredentialValues(
+  value: string,
+  patterns: readonly CredentialBoundedValueRedaction[],
+): string {
+  let redacted = value;
+  for (const pattern of patterns) redacted = redactBoundedCredentialValue(redacted, pattern);
+  return redacted;
+}
+
+function redactBoundedCredentialValue(
+  value: string,
+  pattern: CredentialBoundedValueRedaction,
+): string {
+  const prefix = asciiLowercase(pattern.value.slice(0, pattern.caseInsensitivePrefixLength));
+  const normalizedValue = asciiLowercase(value);
+  const parts: string[] = [];
+  let copyFrom = 0;
+  let searchFrom = 0;
+  for (;;) {
+    const index = normalizedValue.indexOf(prefix, searchFrom);
+    if (index < 0) break;
+    searchFrom = index + prefix.length;
+    const before = index === 0 ? '' : value[index - 1] ?? '';
+    const after = value[index + pattern.value.length] ?? '';
+    if ((before !== '' && isHttpFieldNameCharacter(before)) ||
+        !isCredentialValueBoundary(after) ||
+        !credentialHeaderValueMatches(value, index, {
+          name: '',
+          value: pattern.value,
+          caseInsensitivePrefixLength: pattern.caseInsensitivePrefixLength,
+          requireValueBoundary: true,
+        })) continue;
+    parts.push(value.slice(copyFrom, index), REDACTED);
+    copyFrom = index + pattern.value.length;
+    searchFrom = copyFrom;
+  }
+  if (parts.length === 0) return value;
+  parts.push(value.slice(copyFrom));
+  return parts.join('');
 }
 
 function jsonStringContent(value: string): string {
