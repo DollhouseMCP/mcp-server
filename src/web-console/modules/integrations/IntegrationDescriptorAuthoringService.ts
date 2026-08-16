@@ -13,6 +13,7 @@ import {
   ConsoleStoreValidationError,
   isUniqueViolation,
   isValidDisplayString,
+  isWellFormedUnicode,
 } from '../../stores/ConsoleStoreValidation.js';
 import type {
   IIntegrationDescriptorStore,
@@ -409,6 +410,9 @@ function parseStaticApiKeyBody(value: unknown): IntegrationStaticApiKeyDescripto
   if (valuePrefix !== undefined && valuePrefix !== null && typeof valuePrefix !== 'string') {
     throw new DescriptorBodyError('static_api_key.injection.value_prefix must be a string or null');
   }
+  if (typeof valuePrefix === 'string' && !isWellFormedUnicode(valuePrefix)) {
+    throw new DescriptorBodyError('static_api_key.injection.value_prefix must contain well-formed Unicode');
+  }
   // Basic owns its header: the name defaults to Authorization and any other
   // supplied value is rejected here (rather than deferring to a store 422).
   let name: string;
@@ -419,6 +423,9 @@ function parseStaticApiKeyBody(value: unknown): IntegrationStaticApiKeyDescripto
     name = 'Authorization';
   } else {
     name = requireString(injection.name, 'static_api_key.injection.name');
+    if (!isWellFormedUnicode(name)) {
+      throw new DescriptorBodyError('static_api_key.injection.name must contain well-formed Unicode');
+    }
   }
   return {
     injection: {

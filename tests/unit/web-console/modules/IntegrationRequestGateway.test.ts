@@ -139,6 +139,44 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('[redacted]');
   });
 
+  it('redacts longer credential wrappers before overlapping raw credentials', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        accessTokenCiphertext: encrypt('abcdefgh', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received Bearer abcdefgh safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/overlapping-redactions',
+    }));
+
+    expect(result.response).toBe('received [redacted] safely');
+  });
+
+  it('fails closed when a declared JSON response is malformed', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(new Response('{"echo":"gmail-access-token"', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/malformed-json',
+    }));
+
+    expect(result.response).toBe('[redacted]');
+  });
+
   it('redacts credentials parsed as non-string JSON scalars', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
@@ -445,6 +483,69 @@ describe('IntegrationRequestGateway', () => {
       quoted: 'received [redacted] safely',
       longerValue: 'received X-Api-Key: available',
     });
+  });
+
+  it('redacts the exact normalized header value sent by Fetch', async () => {
+    const sentValues: string[] = [];
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: ' Bearer ' } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: (_url, init) => {
+        const sent = new Headers(init?.headers).get('X-Api-Key') ?? '';
+        sentValues.push(sent);
+        return Promise.resolve(new Response(`X-Api-Key: ${sent}`, {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/normalized-header-value',
+    }));
+
+    expect(sentValues).toEqual(['Bearer a']);
+    expect(result.response).toBe('[redacted]');
+  });
+
+  it('does not treat configured header names as suffixes of other HTTP field names', async () => {
+    const tokenPunctuation = "!#$%&'*+-.^_`|~";
+    const body = [...tokenPunctuation]
+      .flatMap(character => [
+        `${character}X-Api-Key: a`,
+        `${character}\"X-Api-Key\":\"a\"`,
+      ])
+      .join('\n');
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/header-token-boundaries',
+    }));
+
+    expect(result.response).toBe(body);
   });
 
   it('redacts quoted header-name echoes from non-JSON responses', async () => {

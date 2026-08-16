@@ -802,6 +802,28 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.upsert(basicInput({ location: 'basic', name: 'Authorization', valuePrefix: 'Basic ' })))
       .rejects.toThrow(ConsoleStoreValidationError);
   });
+
+  it.each(['\ud800', '\udc00'])('rejects malformed Unicode in stored static-key injection descriptors', async malformed => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const input = (name: string, valuePrefix: string | null) => ({
+      provider: 'airtable',
+      ownership: 'byo' as const,
+      ownerUserId: USER_ID,
+      displayName: 'Airtable',
+      category: 'database',
+      authStrategy: 'static_api_key' as const,
+      apiHosts: ['api.airtable.example'],
+      staticApiKey: { injection: { location: 'query' as const, name, valuePrefix } },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    await expect(store.upsert(input(`key${malformed}`, null))).rejects.toThrow('well-formed Unicode');
+    await expect(store.upsert(input('key', `prefix${malformed}`))).rejects.toThrow('well-formed Unicode');
+  });
 });
 
 describe('InMemoryIntegrationOpenApiSpecStore', () => {

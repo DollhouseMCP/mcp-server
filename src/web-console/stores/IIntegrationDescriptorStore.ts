@@ -4,6 +4,7 @@ import {
   assertNullableDisplayString,
   assertNonEmptyBuffer,
   assertUuid,
+  assertWellFormedUnicode,
   cloneBuffer,
   cloneDate,
 } from './ConsoleStoreValidation.js';
@@ -334,6 +335,10 @@ function validateStaticApiKeyDescriptor(staticApiKey: IntegrationStaticApiKeyDes
   }
   assertDisplayString(staticApiKey.injection.name, 'staticApiKey.injection.name', 120);
   assertNullableDisplayString(staticApiKey.injection.valuePrefix, 'staticApiKey.injection.valuePrefix', 40);
+  assertWellFormedUnicode(staticApiKey.injection.name, 'staticApiKey.injection.name');
+  if (staticApiKey.injection.valuePrefix !== null) {
+    assertWellFormedUnicode(staticApiKey.injection.valuePrefix, 'staticApiKey.injection.valuePrefix');
+  }
   const lower = staticApiKey.injection.name.toLowerCase();
   if (['cookie', 'set-cookie'].includes(lower)) {
     throw new ConsoleStoreValidationError('staticApiKey injection name is reserved');
