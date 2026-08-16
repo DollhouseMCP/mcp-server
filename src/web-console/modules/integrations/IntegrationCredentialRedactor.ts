@@ -118,16 +118,45 @@ function redactResponseCredentials(value: unknown, credentialRedactions: Credent
 
 function redactCredentialText(value: string, credentialRedactions: CredentialRedactions): string {
   if (credentialRedactions.exact.has(value) ||
-      credentialRedactions.percentExact.has(normalizePercentEscapes(value))) {
+      credentialRedactions.percentExact.has(normalizePercentEscapes(value)) ||
+      hasSemanticExactCredential(value, credentialRedactions.exact)) {
     return REDACTED;
   }
   let redacted = redactCredentialHeaderEchoes(value, credentialRedactions.headers);
   redacted = redactCredentialQueryEchoes(redacted, credentialRedactions.queries);
   redacted = redactBoundedCredentialValues(redacted, credentialRedactions.boundedValues);
-  for (const secret of credentialRedactions.embedded) {
-    redacted = redacted.replaceAll(secret, REDACTED);
-  }
+  redacted = redactEmbeddedCredentialValues(redacted, credentialRedactions.embedded);
   redacted = redactPercentEncodedCredentials(redacted, credentialRedactions.percentEmbedded);
+  return redacted;
+}
+
+function hasSemanticExactCredential(value: string, patterns: ReadonlySet<string>): boolean {
+  for (const pattern of patterns) {
+    if (credentialValuesEqual(value, pattern)) return true;
+  }
+  return false;
+}
+
+function redactEmbeddedCredentialValues(value: string, patterns: readonly string[]): string {
+  let redacted = value;
+  for (const pattern of patterns) {
+    const parts: string[] = [];
+    let copyFrom = 0;
+    let searchFrom = 0;
+    while (searchFrom < redacted.length) {
+      const index = searchFrom;
+      searchFrom += 1;
+      const valueEnd = matchCredentialValueEnd(redacted, index, pattern);
+      if (valueEnd === null) continue;
+      parts.push(redacted.slice(copyFrom, index), REDACTED);
+      copyFrom = valueEnd;
+      searchFrom = valueEnd;
+    }
+    if (parts.length > 0) {
+      parts.push(redacted.slice(copyFrom));
+      redacted = parts.join('');
+    }
+  }
   return redacted;
 }
 
@@ -142,29 +171,26 @@ function redactCredentialQueryEchoes(
 
 function redactCredentialQueryEcho(value: string, query: CredentialQueryRedaction): string {
   const jsonRedacted = redactJsonCredentialQueryEchoes(value, query);
-  const normalizedValue = normalizePercentEscapes(jsonRedacted);
-  const normalizedQueryValue = normalizePercentEscapes(query.value);
-  const marker = normalizePercentEscapes(`${query.name}=`);
   const parts: string[] = [];
   let copyFrom = 0;
   let searchFrom = 0;
-  for (;;) {
-    const index = normalizedValue.indexOf(marker, searchFrom);
-    if (index < 0) break;
+  while (searchFrom < jsonRedacted.length) {
+    const index = searchFrom;
+    searchFrom += 1;
+    const nameEnd = matchCredentialValueEnd(jsonRedacted, index, query.name);
+    if (nameEnd === null || jsonRedacted[nameEnd] !== '=') continue;
     const before = index === 0 ? '' : jsonRedacted[index - 1];
-    const valueStart = index + marker.length;
-    const valueEnd = valueStart + query.value.length;
+    const valueStart = nameEnd + 1;
+    const valueEnd = matchCredentialValueEnd(jsonRedacted, valueStart, query.value);
+    if (valueEnd === null) continue;
     const after = jsonRedacted[valueEnd] ?? '';
     const nameBoundary = before === '' || !/[A-Za-z0-9_.~-]/.test(before);
     const valueBoundary = isCredentialValueBoundary(after);
-    if (nameBoundary && valueBoundary &&
-        normalizedValue.startsWith(normalizedQueryValue, valueStart)) {
+    if (nameBoundary && valueBoundary) {
       parts.push(jsonRedacted.slice(copyFrom, index), REDACTED);
       copyFrom = valueEnd;
       searchFrom = valueEnd;
-      continue;
     }
-    searchFrom = index + marker.length;
   }
   if (parts.length === 0) return jsonRedacted;
   parts.push(jsonRedacted.slice(copyFrom));
@@ -175,8 +201,6 @@ function redactJsonCredentialQueryEchoes(
   value: string,
   query: CredentialQueryRedaction,
 ): string {
-  const normalizedName = normalizePercentEscapes(query.name);
-  const normalizedQueryValue = normalizePercentEscapes(query.value);
   const parts: string[] = [];
   let copyFrom = 0;
   let searchFrom = 0;
@@ -187,11 +211,10 @@ function redactJsonCredentialQueryEchoes(
     // Advance one code unit so a quote consumed by malformed surrounding text
     // can still be considered as the start of the next bounded candidate.
     searchFrom = start + 1;
-    if (scannedName.value === null ||
-        normalizePercentEscapes(scannedName.value) !== normalizedName) continue;
+    if (scannedName.value === null || !credentialValuesEqual(scannedName.value, query.name)) continue;
     const before = start === 0 ? '' : value[start - 1];
     if (before !== '' && /[A-Za-z0-9_.~-]/.test(before)) continue;
-    const valueEnd = jsonCredentialPropertyValueEnd(value, scannedName.end, normalizedQueryValue);
+    const valueEnd = jsonCredentialPropertyValueEnd(value, scannedName.end, query.value);
     if (valueEnd === null) continue;
     parts.push(value.slice(copyFrom, start), REDACTED);
     copyFrom = valueEnd;
@@ -205,20 +228,20 @@ function redactJsonCredentialQueryEchoes(
 function jsonCredentialPropertyValueEnd(
   value: string,
   cursorAfterName: number,
-  normalizedExpected: string,
+  expected: string,
 ): number | null {
   let cursor = skipStructuredWhitespace(value, cursorAfterName);
   if (value[cursor] !== ':') return null;
   cursor = skipStructuredWhitespace(value, cursor + 1);
   if (value[cursor] === '"') {
     const parsed = parseJsonStringAt(value, cursor);
-    return parsed !== null && normalizePercentEscapes(parsed.value) === normalizedExpected
+    return parsed !== null && credentialValuesEqual(parsed.value, expected)
       ? parsed.end
       : null;
   }
   let end = cursor;
   while (end < value.length && !/[\s,}\]]/.test(value[end] ?? '')) end += 1;
-  return normalizePercentEscapes(value.slice(cursor, end)) === normalizedExpected ? end : null;
+  return credentialValuesEqual(value.slice(cursor, end), expected) ? end : null;
 }
 
 function redactPercentEncodedCredentials(value: string, patterns: readonly string[]): string {
@@ -344,16 +367,14 @@ function credentialHeaderValueEchoEnd(
   if (quote === '"') {
     const parsed = parseJsonStringAt(value, cursor);
     if (parsed !== null) {
-      return parsed.value.length === header.value.length &&
-        credentialHeaderValueMatches(parsed.value, 0, header)
+      return credentialHeaderValueMatchEnd(parsed.value, 0, header) === parsed.value.length
         ? parsed.end
         : null;
     }
   }
   const valueStart = quote ? cursor + 1 : cursor;
-  if (!credentialHeaderValueMatches(value, valueStart, header)) return null;
-
-  const valueEnd = valueStart + header.value.length;
+  const valueEnd = credentialHeaderValueMatchEnd(value, valueStart, header);
+  if (valueEnd === null) return null;
   if (quote !== null && value[valueEnd] === quote) return valueEnd + 1;
   if (header.requireValueBoundary && !isCredentialValueBoundary(value[valueEnd] ?? '')) return null;
   return valueEnd;
@@ -404,23 +425,87 @@ function skipStructuredWhitespace(value: string, start: number): number {
   return cursor;
 }
 
-function credentialHeaderValueMatches(
+function credentialHeaderValueMatchEnd(
   value: string,
   valueStart: number,
   header: CredentialHeaderRedaction,
-): boolean {
-  const prefixLength = header.caseInsensitivePrefixLength ?? 0;
-  if (prefixLength === 0) {
-    const actualValue = value.slice(valueStart, valueStart + header.value.length);
-    return normalizePercentEscapes(actualValue) === normalizePercentEscapes(header.value);
-  }
-  const actualPrefix = asciiLowercase(value.slice(valueStart, valueStart + prefixLength));
-  const expectedPrefix = asciiLowercase(header.value.slice(0, prefixLength));
-  const actualSuffix = normalizePercentEscapes(
-    value.slice(valueStart + prefixLength, valueStart + header.value.length),
+): number | null {
+  return matchCredentialValueEnd(
+    value,
+    valueStart,
+    header.value,
+    header.caseInsensitivePrefixLength ?? 0,
   );
-  const expectedSuffix = normalizePercentEscapes(header.value.slice(prefixLength));
-  return actualPrefix === expectedPrefix && actualSuffix === expectedSuffix;
+}
+
+function credentialValuesEqual(actual: string, expected: string): boolean {
+  return matchCredentialValueEnd(actual, 0, expected) === actual.length;
+}
+
+function matchCredentialValueEnd(
+  value: string,
+  valueStart: number,
+  expected: string,
+  caseInsensitivePrefixLength = 0,
+): number | null {
+  let valueCursor = valueStart;
+  let expectedCursor = 0;
+  while (expectedCursor < expected.length) {
+    const expectedEscape = expected.slice(expectedCursor, expectedCursor + 3);
+    if (/^%[0-9A-Fa-f]{2}$/.test(expectedEscape)) {
+      const actualEscape = value.slice(valueCursor, valueCursor + 3);
+      if (normalizePercentEscapes(actualEscape) === normalizePercentEscapes(expectedEscape)) {
+        valueCursor += 3;
+        expectedCursor += 3;
+        continue;
+      }
+    }
+    const codePoint = expected.codePointAt(expectedCursor);
+    if (codePoint === undefined) return null;
+    const character = String.fromCodePoint(codePoint);
+    const caseInsensitive = expectedCursor < caseInsensitivePrefixLength;
+    const rawCandidate = value.slice(valueCursor, valueCursor + character.length);
+    if (credentialCharacterEquals(rawCandidate, character, caseInsensitive)) {
+      valueCursor += character.length;
+      expectedCursor += character.length;
+      continue;
+    }
+    const encodedLength = matchPercentEncodedCharacter(value, valueCursor, character, caseInsensitive);
+    if (encodedLength === null) return null;
+    valueCursor += encodedLength;
+    expectedCursor += character.length;
+  }
+  return valueCursor;
+}
+
+function credentialCharacterEquals(actual: string, expected: string, caseInsensitive: boolean): boolean {
+  return caseInsensitive
+    ? asciiLowercase(actual) === asciiLowercase(expected)
+    : actual === expected;
+}
+
+function matchPercentEncodedCharacter(
+  value: string,
+  start: number,
+  expected: string,
+  caseInsensitive: boolean,
+): number | null {
+  const candidates = caseInsensitive && /^[A-Za-z]$/.test(expected)
+    ? [expected.toLowerCase(), expected.toUpperCase()]
+    : [expected];
+  for (const candidate of candidates) {
+    const encoded = percentEncodeUtf8(candidate);
+    if (normalizePercentEscapes(value.slice(start, start + encoded.length)) === encoded) {
+      return encoded.length;
+    }
+  }
+  return null;
+}
+
+function percentEncodeUtf8(value: string): string {
+  return [...Buffer.from(value, 'utf8')]
+    .map(byte => `%${byte.toString(16).toUpperCase().padStart(2, '0')}`)
+    .join('');
 }
 
 function asciiLowercase(value: string): string {
@@ -489,8 +574,10 @@ export function buildCredentialRedactions(
       jsonStringContent(value),
       caseInsensitivePrefixLength > 0 ? escapedPrefix.length : 0,
     );
-    for (const encodedValue of encodedVariants(value)) {
-      candidates.set(encodedValue, caseInsensitivePrefixLength > 0 ? prefix.trimEnd().length : 0);
+    const encodedValues = encodedVariants(value);
+    const encodedPrefixes = encodedVariants(prefix);
+    for (const [index, encodedValue] of encodedValues.entries()) {
+      candidates.set(encodedValue, caseInsensitivePrefixLength > 0 ? encodedPrefixes[index]?.length ?? 0 : 0);
     }
     if (prefix) {
       for (const encodedSensitiveValue of encodedVariants(sensitiveValue)) {
@@ -508,7 +595,7 @@ export function buildCredentialRedactions(
         caseInsensitivePrefixLength: prefixLength || undefined,
         requireValueBoundary,
       });
-      if (requireValueBoundary && prefixLength > 0) {
+      if (requireValueBoundary && prefix.length > 0) {
         boundedValues.push({ value: candidate, caseInsensitivePrefixLength: prefixLength });
       }
     }
@@ -519,6 +606,10 @@ export function buildCredentialRedactions(
   addCredential(injection.value, injection.sensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
   if (injection.location === 'query') {
     addQueryCredentialRedactions(queries, injection.name, injection.value);
+    const prefixLength = injection.value.length - injection.sensitiveValue.length;
+    if (injection.sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH && prefixLength > 0) {
+      boundedValues.push({ value: injection.value, caseInsensitivePrefixLength: 0 });
+    }
   } else {
     if (injection.value && injection.sensitiveValue) {
       addHeader(
@@ -575,27 +666,25 @@ function redactBoundedCredentialValue(
   value: string,
   pattern: CredentialBoundedValueRedaction,
 ): string {
-  const prefix = asciiLowercase(pattern.value.slice(0, pattern.caseInsensitivePrefixLength));
-  const normalizedValue = asciiLowercase(value);
   const parts: string[] = [];
   let copyFrom = 0;
   let searchFrom = 0;
-  for (;;) {
-    const index = normalizedValue.indexOf(prefix, searchFrom);
-    if (index < 0) break;
-    searchFrom = index + prefix.length;
+  while (searchFrom < value.length) {
+    const index = searchFrom;
+    searchFrom += 1;
+    const valueEnd = matchCredentialValueEnd(
+      value,
+      index,
+      pattern.value,
+      pattern.caseInsensitivePrefixLength,
+    );
+    if (valueEnd === null) continue;
     const before = index === 0 ? '' : value[index - 1] ?? '';
-    const after = value[index + pattern.value.length] ?? '';
+    const after = value[valueEnd] ?? '';
     if ((before !== '' && isHttpFieldNameCharacter(before)) ||
-        !isCredentialValueBoundary(after) ||
-        !credentialHeaderValueMatches(value, index, {
-          name: '',
-          value: pattern.value,
-          caseInsensitivePrefixLength: pattern.caseInsensitivePrefixLength,
-          requireValueBoundary: true,
-        })) continue;
+        !isCredentialValueBoundary(after)) continue;
     parts.push(value.slice(copyFrom, index), REDACTED);
-    copyFrom = index + pattern.value.length;
+    copyFrom = valueEnd;
     searchFrom = copyFrom;
   }
   if (parts.length === 0) return value;

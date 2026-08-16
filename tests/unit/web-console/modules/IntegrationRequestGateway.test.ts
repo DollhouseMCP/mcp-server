@@ -534,6 +534,93 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it.each([
+    ['a', 'received key=%61 safely'],
+    ['a', 'received %6Bey=%61 safely'],
+    ['abcdefgh', 'received key=abc%64efgh safely'],
+  ])('redacts optionally percent-encoded query credential bytes', async (credential, body) => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt(credential, 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(body, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/optionally-encoded-query-key',
+    }));
+
+    expect(result.response).toBe('received [redacted] safely');
+  });
+
+  it('redacts optionally percent-encoded credentials in generic scalar echoes', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('abcdefgh', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        scalar: 'abc%64efgh',
+        embedded: 'received abc%64efgh safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/optionally-encoded-generic-echo',
+    }));
+
+    expect(result.response).toEqual({
+      scalar: '[redacted]',
+      embedded: 'received [redacted] safely',
+    });
+  });
+
+  it('redacts bounded standalone prefixed query values for short credentials', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: 'Token-' } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        standalone: 'received Token-a safely',
+        encoded: 'received Token%2Da safely',
+        longerValue: 'received Token-available safely',
+        prefixedToken: 'received NotToken-a safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/short-prefixed-query-value',
+    }));
+
+    expect(result.response).toEqual({
+      standalone: 'received [redacted] safely',
+      encoded: 'received [redacted] safely',
+      longerValue: 'received Token-available safely',
+      prefixedToken: 'received NotToken-a safely',
+    });
+  });
+
   it('redacts an exact lowercase percent escape for a short query credential', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({
@@ -597,6 +684,36 @@ describe('IntegrationRequestGateway', () => {
       mixedCase: 'received [redacted] safely',
       quoted: 'received [redacted] safely',
       longerValue: 'received X-Api-Key: available',
+    });
+  });
+
+  it('redacts bounded standalone custom-header prefixes for short credentials', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: 'Token-' } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        standalone: 'received Token-a safely',
+        encoded: 'received Token%2Da safely',
+        longerValue: 'received Token-available safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/short-prefixed-header-value',
+    }));
+
+    expect(result.response).toEqual({
+      standalone: 'received [redacted] safely',
+      encoded: 'received [redacted] safely',
+      longerValue: 'received Token-available safely',
     });
   });
 
@@ -973,6 +1090,36 @@ describe('IntegrationRequestGateway', () => {
       normalized: 'received [redacted] safely',
       differentCase: 'received authorization: bearer A safely',
       longerValue: 'received authorization: bearer available',
+    });
+  });
+
+  it('measures the case-insensitive authorization prefix after URL encoding', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'Authorization', valuePrefix: 'Token ABC ' } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        encoded: 'received authorization: token%20abc%20a safely',
+        formEncoded: 'received authorization: token+abc+a safely',
+        longerValue: 'received authorization: token%20abc%20available',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/encoded-authorization-prefix',
+    }));
+
+    expect(result.response).toEqual({
+      encoded: 'received [redacted] safely',
+      formEncoded: 'received [redacted] safely',
+      longerValue: 'received authorization: token%20abc%20available',
     });
   });
 
