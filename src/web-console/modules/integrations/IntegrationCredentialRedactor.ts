@@ -537,7 +537,9 @@ function redactJsonCredentialLabelEchoes(value: string, patterns: readonly strin
       start,
       maxJsonStringSourceLength(MAX_CREDENTIAL_ECHO_LABEL_LENGTH),
     );
-    searchFrom = scannedName.value === null ? start + 1 : scannedName.end;
+    // Advance one code unit so a quote consumed as the end of malformed
+    // surrounding text can still begin the next bounded label candidate.
+    searchFrom = start + 1;
     if (scannedName.value === null || !isCredentialKey(scannedName.value)) continue;
     const before = value[start - 1] ?? '';
     if (before !== '' && isHttpFieldNameCharacter(before)) continue;
@@ -727,12 +729,24 @@ function credentialHeaderValueMatches(
   value: string,
   header: CredentialHeaderRedaction,
 ): ReadonlyMap<number, number> {
-  const prefixLength = header.caseInsensitivePrefixLength ?? 0;
+  return findCredentialValueMatches(
+    value,
+    header.value,
+    header.caseInsensitivePrefixLength ?? 0,
+  );
+}
+
+function findCredentialValueMatches(
+  value: string,
+  expected: string,
+  caseInsensitivePrefixLength: number,
+): ReadonlyMap<number, number> {
+  const prefixLength = caseInsensitivePrefixLength;
   if (prefixLength === 0) {
-    return new Map(findLinearMatches(value, header.value).map(match => [match.start, match.end]));
+    return new Map(findLinearMatches(value, expected).map(match => [match.start, match.end]));
   }
-  const prefix = header.value.slice(0, prefixLength);
-  const suffix = header.value.slice(prefixLength);
+  const prefix = expected.slice(0, prefixLength);
+  const suffix = expected.slice(prefixLength);
   const suffixesByStart = new Map(
     findLinearMatches(value, suffix).map(match => [match.start, match.end]),
   );
@@ -1173,30 +1187,42 @@ function redactBoundedCredentialValue(
   value: string,
   pattern: CredentialBoundedValueRedaction,
 ): string {
-  const parts: string[] = [];
-  let copyFrom = 0;
-  let searchFrom = 0;
-  while (searchFrom < value.length) {
-    const index = searchFrom;
-    searchFrom += 1;
-    const valueEnd = matchCredentialValueEnd(
-      value,
-      index,
-      pattern.value,
-      pattern.caseInsensitivePrefixLength,
-    );
-    if (valueEnd === null) continue;
-    const before = index === 0 ? '' : value[index - 1] ?? '';
-    const after = value[valueEnd] ?? '';
+  const literalRedacted = redactLinearBoundedCredentialValue(
+    value,
+    identityDecodedText(value),
+    pattern,
+  );
+  if (!literalRedacted.includes('%') && !literalRedacted.includes('+')) return literalRedacted;
+  return redactLinearBoundedCredentialValue(
+    literalRedacted,
+    decodePercentEscapesWithOffsets(literalRedacted, true),
+    pattern,
+  );
+}
+
+function redactLinearBoundedCredentialValue(
+  source: string,
+  decoded: DecodedText,
+  pattern: CredentialBoundedValueRedaction,
+): string {
+  const valueMatches = findCredentialValueMatches(
+    decoded.value,
+    pattern.value,
+    pattern.caseInsensitivePrefixLength,
+  );
+  const matches = [...valueMatches].flatMap(([start, end]) => {
+    const before = decoded.value[start - 1] ?? '';
+    const after = decoded.value[end] ?? '';
     if ((before !== '' && isHttpFieldNameCharacter(before)) ||
-        !isCredentialValueBoundary(after)) continue;
-    parts.push(value.slice(copyFrom, index), REDACTED);
-    copyFrom = valueEnd;
-    searchFrom = copyFrom;
-  }
-  if (parts.length === 0) return value;
-  parts.push(value.slice(copyFrom));
-  return parts.join('');
+        !isCredentialValueBoundary(after)) return [];
+    const sourceStart = decoded.sourceStarts[start];
+    const sourceEnd = decoded.sourceEnds[end - 1];
+    return sourceStart !== undefined && sourceEnd !== undefined &&
+      !isInsideRedactionMarker(source, sourceStart, sourceEnd)
+      ? [{ start: sourceStart, end: sourceEnd }]
+      : [];
+  });
+  return applyRedactionMatches(source, matches);
 }
 
 function jsonStringContent(value: string): string {

@@ -533,6 +533,29 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('prefix {[redacted]}');
   });
 
+  it('recovers overlapping escaped credential labels in malformed surrounding text', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('" {"access_token":"\\u0061"}', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/overlapping-escaped-label',
+    }));
+
+    expect(result.response).toBe('" {[redacted]}');
+  });
+
   it('redacts decoded and serialized query names for short credentials', async () => {
     const fetches: string[] = [];
     const gateway = gatewayFixture({
@@ -1429,6 +1452,29 @@ describe('IntegrationRequestGateway', () => {
       longerValue: 'received Bearer available safely',
       prefixedToken: 'received NotBearer a safely',
     });
+  });
+
+  it('checks short standalone authorization boundaries after form decoding', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received%20Bearer%20a%20safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/encoded-authorization-boundaries',
+    }));
+
+    expect(result.response).toBe('received%20[redacted]%20safely');
   });
 
   it('redacts encoded authorization echoes for short credentials', async () => {
