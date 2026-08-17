@@ -318,6 +318,10 @@ function redactCredentialText(value: string, credentialRedactions: CredentialRed
   redacted = redactCredentialLabelEchoes(redacted, credentialRedactions.labelledValues);
   redacted = redactBoundedCredentialValues(redacted, credentialRedactions.boundedValues);
   redacted = redactEmbeddedCredentialValues(redacted, credentialRedactions.embedded);
+  redacted = redactJsonEscapedEmbeddedCredentialValues(
+    redacted,
+    credentialRedactions.semanticEmbedded,
+  );
   redacted = redactOptionallyEncodedEmbeddedCredentialValues(
     redacted,
     credentialRedactions.semanticEmbedded,
@@ -358,6 +362,18 @@ function redactEmbeddedCredentialValues(value: string, patterns: readonly string
   let redacted = value;
   for (const pattern of patterns) {
     redacted = redactLinearMatches(redacted, pattern, identityDecodedText(redacted));
+  }
+  return redacted;
+}
+
+function redactJsonEscapedEmbeddedCredentialValues(
+  value: string,
+  patterns: readonly string[],
+): string {
+  let redacted = value;
+  for (const pattern of patterns) {
+    if (!redacted.includes('\\')) break;
+    redacted = redactLinearMatches(redacted, pattern, decodeJsonEscapesWithOffsets(redacted));
   }
   return redacted;
 }
@@ -436,6 +452,75 @@ function decodePercentEscapesWithOffsets(value: string, decodeFormSpaces = false
     cursor += character.length;
   }
   return { value: decoded.join(''), sourceStarts, sourceEnds };
+}
+
+const SIMPLE_JSON_ESCAPES: Readonly<Record<string, string>> = {
+  '"': '"',
+  '\\': '\\',
+  '/': '/',
+  b: '\b',
+  f: '\f',
+  n: '\n',
+  r: '\r',
+  t: '\t',
+};
+
+function decodeJsonEscapesWithOffsets(value: string): DecodedText {
+  const decoded: string[] = [];
+  const sourceStarts: number[] = [];
+  const sourceEnds: number[] = [];
+  let cursor = 0;
+  while (cursor < value.length) {
+    const escape = decodeJsonEscapeAt(value, cursor);
+    if (escape !== null) {
+      decoded.push(escape.value);
+      appendDecodedSourceOffsets(sourceStarts, sourceEnds, cursor, escape.end, escape.value.length);
+      cursor = escape.end;
+      continue;
+    }
+    const codePoint = value.codePointAt(cursor);
+    if (codePoint === undefined) break;
+    const character = String.fromCodePoint(codePoint);
+    decoded.push(character);
+    appendDecodedSourceOffsets(
+      sourceStarts,
+      sourceEnds,
+      cursor,
+      cursor + character.length,
+      character.length,
+    );
+    cursor += character.length;
+  }
+  return { value: decoded.join(''), sourceStarts, sourceEnds };
+}
+
+function decodeJsonEscapeAt(
+  value: string,
+  start: number,
+): { readonly value: string; readonly end: number } | null {
+  if (value[start] !== '\\') return null;
+  const marker = value[start + 1] ?? '';
+  const simple = SIMPLE_JSON_ESCAPES[marker];
+  if (simple !== undefined) return { value: simple, end: start + 2 };
+  return marker === 'u' ? decodeJsonUnicodeEscapeAt(value, start) : null;
+}
+
+function decodeJsonUnicodeEscapeAt(
+  value: string,
+  start: number,
+): { readonly value: string; readonly end: number } | null {
+  const firstHex = value.slice(start + 2, start + 6);
+  if (!/^[0-9A-Fa-f]{4}$/.test(firstHex)) return null;
+  const firstCodeUnit = Number.parseInt(firstHex, 16);
+  const secondHex = value.slice(start + 8, start + 12);
+  if (firstCodeUnit >= 0xd800 && firstCodeUnit <= 0xdbff &&
+      value.slice(start + 6, start + 8) === '\\u' && /^[0-9A-Fa-f]{4}$/.test(secondHex)) {
+    const secondCodeUnit = Number.parseInt(secondHex, 16);
+    if (secondCodeUnit >= 0xdc00 && secondCodeUnit <= 0xdfff) {
+      return { value: String.fromCharCode(firstCodeUnit, secondCodeUnit), end: start + 12 };
+    }
+  }
+  return { value: String.fromCharCode(firstCodeUnit), end: start + 6 };
 }
 
 function appendDecodedSourceOffsets(

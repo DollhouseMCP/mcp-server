@@ -969,6 +969,29 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts JSON-escaped long credentials in unlabelled text', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('abcdefgh', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received \\u0061bcdefgh safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/json-escaped-unlabelled-token',
+    }));
+
+    expect(result.response).toBe('received [redacted] safely');
+  });
+
   it('preserves literal pluses while decoding optional percent escapes', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
