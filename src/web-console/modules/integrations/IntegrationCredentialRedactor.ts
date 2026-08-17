@@ -10,6 +10,8 @@ export interface EffectiveCredentialInjection {
   readonly sensitiveValue: string;
   /** Sensitive components an upstream may decode and echo independently. */
   readonly additionalSensitiveValues?: readonly string[];
+  /** Sensitive composites that are safe to redact only at token boundaries. */
+  readonly additionalBoundedValues?: readonly string[];
   /** Labelled sensitive components an upstream may decode and echo independently. */
   readonly additionalStructuredValues?: readonly CredentialStructuredValue[];
   readonly caseInsensitivePrefixLength?: number;
@@ -1071,6 +1073,12 @@ export function buildCredentialRedactions(
   if (injection.sensitiveValue !== credential) addCredential(injection.sensitiveValue);
   for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
     addCredential(sensitiveValue);
+  }
+  for (const boundedValue of injection.additionalBoundedValues ?? []) {
+    addCredential(boundedValue);
+    for (const value of new Set([boundedValue, ...encodedVariants(boundedValue)])) {
+      boundedValues.push({ value, caseInsensitivePrefixLength: 0 });
+    }
   }
   for (const structuredValue of injection.additionalStructuredValues ?? []) {
     addQueryCredentialRedactions(

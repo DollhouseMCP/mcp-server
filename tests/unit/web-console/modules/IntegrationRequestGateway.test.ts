@@ -1630,6 +1630,32 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts a short decoded Basic composite only at token boundaries', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'basic', name: 'Authorization', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('u:a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received u:a safely; xu:a remains; u:available remains', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/v0/app/table',
+    }));
+
+    expect(result.response).toBe('received [redacted] safely; xu:a remains; u:available remains');
+  });
+
   it('redacts a short decoded Basic password in labelled text', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({

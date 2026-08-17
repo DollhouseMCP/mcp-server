@@ -649,6 +649,7 @@ function injectCredential(
       return {
         ...injection,
         additionalSensitiveValues: [password],
+        additionalBoundedValues: [credential],
         additionalStructuredValues: [{
           name: 'password',
           value: password,
