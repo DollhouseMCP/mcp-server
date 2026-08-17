@@ -340,7 +340,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   }
 
   try {
-    const jsonText = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+    const jsonText = text.codePointAt(0) === 0xfeff ? text.slice(1) : text;
     return JSON.parse(jsonText) as unknown;
   } catch {
     return null;

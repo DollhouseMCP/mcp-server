@@ -560,6 +560,29 @@ describe('IntegrationRequestGateway', () => {
     );
   });
 
+  it('redacts short OAuth tokens under camelCase credential labels', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(
+        'accessToken=a; refreshToken: a; idToken=%61; tokenizedValue=a',
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/camel-case-token-labels',
+    }));
+
+    expect(result.response).toBe('[redacted]; [redacted]; [redacted]; tokenizedValue=a');
+  });
+
   it('accepts form-space boundaries around encoded credential labels', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({

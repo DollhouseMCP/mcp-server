@@ -78,6 +78,11 @@ interface JsonNumberToken {
   readonly lexeme: string;
 }
 
+interface ScannedJsonNumbers {
+  readonly strings: ReadonlySet<string>;
+  readonly tokens: readonly JsonNumberToken[];
+}
+
 const JSON_NUMBER_SENTINEL_PREFIX = '__DOLLHOUSE_LOSSLESS_JSON_NUMBER_';
 
 export function redactIntegrationResponseBody(
@@ -85,7 +90,7 @@ export function redactIntegrationResponseBody(
   contentType: string | null,
   credentialRedactions: CredentialRedactions,
 ): unknown {
-  const normalizedText = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  const normalizedText = text.codePointAt(0) === 0xfeff ? text.slice(1) : text;
   if (normalizedText === '') return null;
   const declaredJson = isJsonMediaType(contentType);
   if (declaredJson) {
@@ -135,6 +140,12 @@ function redactJsonShapedTextWithoutLosingNumbers(
 }
 
 function protectJsonNumberLexemes(text: string): ProtectedJsonNumbers {
+  const { strings, tokens } = scanJsonNumbers(text);
+  if (tokens.length === 0) return { text, lexemesBySentinel: new Map() };
+  return replaceJsonNumbersWithSentinels(text, strings, tokens);
+}
+
+function scanJsonNumbers(text: string): ScannedJsonNumbers {
   const strings = new Set<string>();
   const tokens: JsonNumberToken[] = [];
   const numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
@@ -160,18 +171,19 @@ function protectJsonNumberLexemes(text: string): ProtectedJsonNumbers {
     }
     cursor += 1;
   }
-  if (tokens.length === 0) return { text, lexemesBySentinel: new Map() };
+  return { strings, tokens };
+}
 
+function replaceJsonNumbersWithSentinels(
+  text: string,
+  strings: ReadonlySet<string>,
+  tokens: readonly JsonNumberToken[],
+): ProtectedJsonNumbers {
   const lexemesBySentinel = new Map<string, string>();
   const parts: string[] = [];
   let copyFrom = 0;
   for (const [index, token] of tokens.entries()) {
-    let attempt = 0;
-    let sentinel: string;
-    do {
-      sentinel = `${JSON_NUMBER_SENTINEL_PREFIX}${index}_${attempt}__`;
-      attempt += 1;
-    } while (strings.has(sentinel) || lexemesBySentinel.has(sentinel));
+    const sentinel = uniqueJsonNumberSentinel(index, strings, lexemesBySentinel);
     lexemesBySentinel.set(sentinel, token.lexeme);
     parts.push(text.slice(copyFrom, token.start), JSON.stringify(sentinel));
     copyFrom = token.end;
@@ -180,13 +192,26 @@ function protectJsonNumberLexemes(text: string): ProtectedJsonNumbers {
   return { text: parts.join(''), lexemesBySentinel };
 }
 
+function uniqueJsonNumberSentinel(
+  index: number,
+  strings: ReadonlySet<string>,
+  lexemesBySentinel: ReadonlyMap<string, string>,
+): string {
+  let attempt = 0;
+  for (;;) {
+    const sentinel = `${JSON_NUMBER_SENTINEL_PREFIX}${index}_${attempt}__`;
+    if (!strings.has(sentinel) && !lexemesBySentinel.has(sentinel)) return sentinel;
+    attempt += 1;
+  }
+}
+
 function restoreJsonNumberLexemes(
   text: string,
   lexemesBySentinel: ReadonlyMap<string, string>,
 ): string {
   if (lexemesBySentinel.size === 0) return text;
   const sentinelPattern = new RegExp(
-    `"${JSON_NUMBER_SENTINEL_PREFIX}\\d+_\\d+__"`,
+    String.raw`"${JSON_NUMBER_SENTINEL_PREFIX}\d+_\d+__"`,
     'g',
   );
   return text.replace(sentinelPattern, serialized => {
@@ -211,17 +236,14 @@ function redactResponseCredentials(
   protectedNumbers: ReadonlyMap<string, string> = new Map(),
   preserveProtectedNumberLexemes = true,
 ): unknown {
-  if (typeof value === 'string') {
-    const numberLexeme = protectedNumbers.get(value);
-    if (numberLexeme !== undefined) {
-      if (redactCredentialText(numberLexeme, credentialRedactions) !== numberLexeme) return REDACTED;
-      return preserveProtectedNumberLexemes ? value : Number(numberLexeme);
-    }
-    return redactCredentialText(value, credentialRedactions);
-  }
+  if (typeof value === 'string') return redactResponseString(
+    value,
+    credentialRedactions,
+    protectedNumbers,
+    preserveProtectedNumberLexemes,
+  );
   if (value === null || typeof value === 'number' || typeof value === 'boolean') {
-    const serialized = String(value);
-    return redactCredentialText(serialized, credentialRedactions) === serialized ? value : REDACTED;
+    return redactResponsePrimitive(value, credentialRedactions);
   }
   if (Array.isArray(value)) {
     return value.map(item => redactResponseCredentials(
@@ -232,6 +254,40 @@ function redactResponseCredentials(
     ));
   }
   if (typeof value !== 'object') return value;
+  return redactResponseObject(
+    value,
+    credentialRedactions,
+    protectedNumbers,
+    preserveProtectedNumberLexemes,
+  );
+}
+
+function redactResponseString(
+  value: string,
+  credentialRedactions: CredentialRedactions,
+  protectedNumbers: ReadonlyMap<string, string>,
+  preserveProtectedNumberLexemes: boolean,
+): unknown {
+  const numberLexeme = protectedNumbers.get(value);
+  if (numberLexeme === undefined) return redactCredentialText(value, credentialRedactions);
+  if (redactCredentialText(numberLexeme, credentialRedactions) !== numberLexeme) return REDACTED;
+  return preserveProtectedNumberLexemes ? value : Number(numberLexeme);
+}
+
+function redactResponsePrimitive(
+  value: null | number | boolean,
+  credentialRedactions: CredentialRedactions,
+): unknown {
+  const serialized = String(value);
+  return redactCredentialText(serialized, credentialRedactions) === serialized ? value : REDACTED;
+}
+
+function redactResponseObject(
+  value: object,
+  credentialRedactions: CredentialRedactions,
+  protectedNumbers: ReadonlyMap<string, string>,
+  preserveProtectedNumberLexemes: boolean,
+): Readonly<Record<string, unknown>> {
   const output: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(value)) {
     const redactedKey = redactCredentialText(key, credentialRedactions);
@@ -356,10 +412,13 @@ function decodePercentEscapesWithOffsets(value: string, decodeFormSpaces = false
     const encodedCodePoint = decodePercentEncodedCodePoint(value, cursor);
     if (encodedCodePoint !== null) {
       decoded.push(encodedCodePoint.value);
-      for (let index = 0; index < encodedCodePoint.value.length; index += 1) {
-        sourceStarts.push(cursor);
-        sourceEnds.push(encodedCodePoint.end);
-      }
+      appendDecodedSourceOffsets(
+        sourceStarts,
+        sourceEnds,
+        cursor,
+        encodedCodePoint.end,
+        encodedCodePoint.value.length,
+      );
       cursor = encodedCodePoint.end;
       continue;
     }
@@ -367,13 +426,31 @@ function decodePercentEscapesWithOffsets(value: string, decodeFormSpaces = false
     if (codePoint === undefined) break;
     const character = String.fromCodePoint(codePoint);
     decoded.push(character);
-    for (let index = 0; index < character.length; index += 1) {
-      sourceStarts.push(cursor);
-      sourceEnds.push(cursor + character.length);
-    }
+    appendDecodedSourceOffsets(
+      sourceStarts,
+      sourceEnds,
+      cursor,
+      cursor + character.length,
+      character.length,
+    );
     cursor += character.length;
   }
   return { value: decoded.join(''), sourceStarts, sourceEnds };
+}
+
+function appendDecodedSourceOffsets(
+  sourceStarts: number[],
+  sourceEnds: number[],
+  sourceStart: number,
+  sourceEnd: number,
+  decodedLength: number,
+): void {
+  sourceStarts.push(sourceStart);
+  sourceEnds.push(sourceEnd);
+  if (decodedLength === 2) {
+    sourceStarts.push(sourceStart);
+    sourceEnds.push(sourceEnd);
+  }
 }
 
 function decodePercentEncodedCodePoint(
@@ -431,22 +508,36 @@ function redactLinearMatches(
 function findLinearMatches(
   value: string,
   pattern: string,
-  caseInsensitive = false,
+): readonly LinearMatch[] {
+  return findLinearMatchesUsing(value, pattern, exactLinearCharactersEqual);
+}
+
+function findAsciiCaseInsensitiveLinearMatches(
+  value: string,
+  pattern: string,
+): readonly LinearMatch[] {
+  return findLinearMatchesUsing(value, pattern, asciiCaseInsensitiveLinearCharactersEqual);
+}
+
+type LinearCharacterMatcher = (actual: string, expected: string) => boolean;
+
+function findLinearMatchesUsing(
+  value: string,
+  pattern: string,
+  charactersEqual: LinearCharacterMatcher,
 ): readonly LinearMatch[] {
   if (pattern === '' || value === '') return [];
-  const failure = buildMatchFailureTable(pattern, caseInsensitive);
+  const failure = buildMatchFailureTable(pattern, charactersEqual);
   const matches: LinearMatch[] = [];
   let matched = 0;
   for (let index = 0; index < value.length; index += 1) {
-    while (matched > 0 && !linearMatchCharactersEqual(
+    while (matched > 0 && !charactersEqual(
       value[index] ?? '',
       pattern[matched] ?? '',
-      caseInsensitive,
     )) matched = failure[matched - 1] ?? 0;
-    if (linearMatchCharactersEqual(
+    if (charactersEqual(
       value[index] ?? '',
       pattern[matched] ?? '',
-      caseInsensitive,
     )) matched += 1;
     if (matched !== pattern.length) continue;
     matches.push({ start: index - pattern.length + 1, end: index + 1 });
@@ -468,33 +559,32 @@ function applyRedactionMatches(source: string, matches: readonly LinearMatch[]):
   return parts.join('');
 }
 
-function buildMatchFailureTable(pattern: string, caseInsensitive = false): readonly number[] {
+function buildMatchFailureTable(
+  pattern: string,
+  charactersEqual: LinearCharacterMatcher,
+): readonly number[] {
   const failure = new Array<number>(pattern.length).fill(0);
   let matched = 0;
   for (let index = 1; index < pattern.length; index += 1) {
-    while (matched > 0 && !linearMatchCharactersEqual(
+    while (matched > 0 && !charactersEqual(
       pattern[index] ?? '',
       pattern[matched] ?? '',
-      caseInsensitive,
     )) matched = failure[matched - 1] ?? 0;
-    if (linearMatchCharactersEqual(
+    if (charactersEqual(
       pattern[index] ?? '',
       pattern[matched] ?? '',
-      caseInsensitive,
     )) matched += 1;
     failure[index] = matched;
   }
   return failure;
 }
 
-function linearMatchCharactersEqual(
-  actual: string,
-  expected: string,
-  caseInsensitive: boolean,
-): boolean {
-  return caseInsensitive
-    ? asciiLowercase(actual) === asciiLowercase(expected)
-    : actual === expected;
+function exactLinearCharactersEqual(actual: string, expected: string): boolean {
+  return actual === expected;
+}
+
+function asciiCaseInsensitiveLinearCharactersEqual(actual: string, expected: string): boolean {
+  return asciiLowercase(actual) === asciiLowercase(expected);
 }
 
 function isInsideRedactionMarker(source: string, start: number, end: number): boolean {
@@ -516,11 +606,10 @@ function redactCredentialQueryEcho(value: string, query: CredentialQueryRedactio
   const decoded = decodePercentEscapesWithOffsets(jsonRedacted, true);
   const decodedName = decodePercentEscapesWithOffsets(query.name, true).value;
   const decodedValue = decodePercentEscapesWithOffsets(query.value, true).value;
-  const prefixes = findLinearMatches(
-    decoded.value,
-    `${decodedName}=`,
-    query.caseInsensitiveName,
-  );
+  const serializedName = `${decodedName}=`;
+  const prefixes = query.caseInsensitiveName
+    ? findAsciiCaseInsensitiveLinearMatches(decoded.value, serializedName)
+    : findLinearMatches(decoded.value, serializedName);
   const valuesByStart = new Map(
     findLinearMatches(decoded.value, decodedValue).map(match => [match.start, match.end]),
   );
@@ -598,13 +687,23 @@ function redactJsonCredentialLabelEchoes(value: string, patterns: readonly strin
 }
 
 function credentialLabelMatch(value: string, valueMatch: LinearMatch): LinearMatch | null {
+  const valueBounds = credentialLabelValueBounds(value, valueMatch);
+  if (valueBounds === null) return null;
+  const keyStart = credentialLabelKeyStart(value, valueBounds.start);
+  return keyStart === null ? null : { start: keyStart, end: valueBounds.end };
+}
+
+function credentialLabelValueBounds(value: string, valueMatch: LinearMatch): LinearMatch | null {
   const valueQuote = value[valueMatch.start - 1];
   const quotedValue = valueQuote === '"' || valueQuote === "'";
   const valueStart = quotedValue ? valueMatch.start - 1 : valueMatch.start;
   const valueEnd = quotedValue ? valueMatch.end + 1 : valueMatch.end;
   if (quotedValue && value[valueMatch.end] !== valueQuote) return null;
   if (!isCredentialValueBoundary(value[valueEnd] ?? '')) return null;
+  return { start: valueStart, end: valueEnd };
+}
 
+function credentialLabelKeyStart(value: string, valueStart: number): number | null {
   let cursor = skipStructuredWhitespaceBackward(value, valueStart);
   if (cursor === 0 || (value[cursor - 1] !== '=' && value[cursor - 1] !== ':')) return null;
   cursor = skipStructuredWhitespaceBackward(value, cursor - 1);
@@ -622,7 +721,7 @@ function credentialLabelMatch(value: string, valueMatch: LinearMatch): LinearMat
   const matchStart = quotedKey ? keyStart - 1 : keyStart;
   const before = value[matchStart - 1] ?? '';
   if (before !== '' && isHttpFieldNameCharacter(before)) return null;
-  return { start: matchStart, end: valueEnd };
+  return matchStart;
 }
 
 function skipStructuredWhitespaceBackward(value: string, start: number): number {
@@ -756,7 +855,7 @@ function redactLinearCredentialHeaderEcho(
   allowLeadingFormSpaceBoundary = false,
 ): string {
   const valueMatches = credentialHeaderValueMatches(decoded.value, header);
-  const matches = findLinearMatches(decoded.value, header.name, true).flatMap(nameMatch => {
+  const matches = findAsciiCaseInsensitiveLinearMatches(decoded.value, header.name).flatMap(nameMatch => {
     const match = linearCredentialHeaderEchoMatch(decoded.value, nameMatch, header, valueMatches);
     if (match === null) return [];
     const sourceStart = decoded.sourceStarts[match.start];
@@ -796,7 +895,7 @@ function findCredentialValueMatches(
     findLinearMatches(value, suffix).map(match => [match.start, match.end]),
   );
   return new Map(
-    findLinearMatches(value, prefix, true).flatMap(prefixMatch => {
+    findAsciiCaseInsensitiveLinearMatches(value, prefix).flatMap(prefixMatch => {
       const valueEnd = suffixesByStart.get(prefixMatch.end);
       return valueEnd === undefined ? [] : [[prefixMatch.start, valueEnd] as const];
     }),
@@ -809,6 +908,13 @@ function linearCredentialHeaderEchoMatch(
   header: CredentialHeaderRedaction,
   valueMatches: ReadonlyMap<number, number>,
 ): LinearMatch | null {
+  const nameBounds = credentialHeaderNameBounds(value, nameMatch);
+  if (nameBounds === null) return null;
+  const valueEnd = credentialHeaderEchoValueEnd(value, nameBounds.end, header, valueMatches);
+  return valueEnd === null ? null : { start: nameBounds.start, end: valueEnd };
+}
+
+function credentialHeaderNameBounds(value: string, nameMatch: LinearMatch): LinearMatch | null {
   const before = value[nameMatch.start - 1] ?? '';
   const nameQuote = before === '"' || before === "'" ? before : null;
   const matchStart = nameQuote === null ? nameMatch.start : nameMatch.start - 1;
@@ -822,18 +928,23 @@ function linearCredentialHeaderEchoMatch(
   }
   cursor = skipStructuredWhitespace(value, cursor);
   if (value[cursor] !== ':') return null;
-  cursor = skipStructuredWhitespace(value, cursor + 1);
+  return { start: matchStart, end: cursor + 1 };
+}
+
+function credentialHeaderEchoValueEnd(
+  value: string,
+  cursorAfterDelimiter: number,
+  header: CredentialHeaderRedaction,
+  valueMatches: ReadonlyMap<number, number>,
+): number | null {
+  const cursor = skipStructuredWhitespace(value, cursorAfterDelimiter);
   const valueQuote = value[cursor] === '"' || value[cursor] === "'" ? value[cursor] : null;
   const valueStart = valueQuote === null ? cursor : cursor + 1;
   const matchedValueEnd = valueMatches.get(valueStart);
   if (matchedValueEnd === undefined) return null;
-  if (valueQuote !== null) {
-    return value[matchedValueEnd] === valueQuote
-      ? { start: matchStart, end: matchedValueEnd + 1 }
-      : null;
-  }
+  if (valueQuote !== null) return value[matchedValueEnd] === valueQuote ? matchedValueEnd + 1 : null;
   if (header.requireValueBoundary && !isCredentialValueBoundary(value[matchedValueEnd] ?? '')) return null;
-  return { start: matchStart, end: matchedValueEnd };
+  return matchedValueEnd;
 }
 
 function redactJsonCredentialHeaderEchoes(
@@ -960,41 +1071,59 @@ function matchCredentialValueEnd(
   let valueCursor = valueStart;
   let expectedCursor = 0;
   while (expectedCursor < expected.length) {
-    const expectedEscape = expected.slice(expectedCursor, expectedCursor + 3);
-    if (/^%[0-9A-Fa-f]{2}$/.test(expectedEscape)) {
-      const actualEscape = value.slice(valueCursor, valueCursor + 3);
-      if (normalizePercentEscapes(actualEscape) === normalizePercentEscapes(expectedEscape)) {
-        valueCursor += 3;
-        expectedCursor += 3;
-        continue;
-      }
+    const matchingEscapeLength = matchEquivalentPercentEscape(
+      value,
+      valueCursor,
+      expected,
+      expectedCursor,
+    );
+    if (matchingEscapeLength !== null) {
+      valueCursor += matchingEscapeLength;
+      expectedCursor += matchingEscapeLength;
+      continue;
     }
     const codePoint = expected.codePointAt(expectedCursor);
     if (codePoint === undefined) return null;
     const character = String.fromCodePoint(codePoint);
-    const rawCandidate = value.slice(valueCursor, valueCursor + character.length);
     const prefixCharacter = expectedCursor < caseInsensitivePrefixLength;
-    if (character === ' ' && rawCandidate === '+') {
-      valueCursor += 1;
-      expectedCursor += 1;
-      continue;
-    }
-    const rawMatches = prefixCharacter
-      ? asciiLowercase(rawCandidate) === asciiLowercase(character)
-      : rawCandidate === character;
-    if (rawMatches) {
-      valueCursor += character.length;
-      expectedCursor += character.length;
-      continue;
-    }
-    const encodedLength = prefixCharacter
-      ? matchPercentEncodedCharacterCaseInsensitive(value, valueCursor, character)
-      : matchPercentEncodedCharacter(value, valueCursor, character);
-    if (encodedLength === null) return null;
-    valueCursor += encodedLength;
+    const matchedLength = prefixCharacter
+      ? matchCredentialCharacterCaseInsensitive(value, valueCursor, character)
+      : matchCredentialCharacter(value, valueCursor, character);
+    if (matchedLength === null) return null;
+    valueCursor += matchedLength;
     expectedCursor += character.length;
   }
   return valueCursor;
+}
+
+function matchEquivalentPercentEscape(
+  value: string,
+  valueCursor: number,
+  expected: string,
+  expectedCursor: number,
+): number | null {
+  const expectedEscape = expected.slice(expectedCursor, expectedCursor + 3);
+  if (!/^%[0-9A-Fa-f]{2}$/.test(expectedEscape)) return null;
+  const actualEscape = value.slice(valueCursor, valueCursor + 3);
+  return normalizePercentEscapes(actualEscape) === normalizePercentEscapes(expectedEscape) ? 3 : null;
+}
+
+function matchCredentialCharacter(value: string, start: number, expected: string): number | null {
+  const rawCandidate = value.slice(start, start + expected.length);
+  if (expected === ' ' && rawCandidate === '+') return 1;
+  if (rawCandidate === expected) return expected.length;
+  return matchPercentEncodedCharacter(value, start, expected);
+}
+
+function matchCredentialCharacterCaseInsensitive(
+  value: string,
+  start: number,
+  expected: string,
+): number | null {
+  const rawCandidate = value.slice(start, start + expected.length);
+  if (expected === ' ' && rawCandidate === '+') return 1;
+  if (asciiLowercase(rawCandidate) === asciiLowercase(expected)) return expected.length;
+  return matchPercentEncodedCharacterCaseInsensitive(value, start, expected);
 }
 
 function matchPercentEncodedCharacter(
@@ -1041,6 +1170,251 @@ function isHttpFieldNameCharacter(value: string): boolean {
   return "!#$%&'*+-.^_`|~".includes(value);
 }
 
+interface MutableCredentialRedactions {
+  readonly exact: Set<string>;
+  readonly percentExact: Set<string>;
+  readonly embedded: Set<string>;
+  readonly semanticEmbedded: Set<string>;
+  readonly percentEmbedded: Set<string>;
+  readonly headers: CredentialHeaderRedaction[];
+  readonly queries: CredentialQueryRedaction[];
+  readonly labelledValues: Set<string>;
+  readonly boundedValues: CredentialBoundedValueRedaction[];
+}
+
+function createMutableCredentialRedactions(): MutableCredentialRedactions {
+  return {
+    exact: new Set(),
+    percentExact: new Set(),
+    embedded: new Set(),
+    semanticEmbedded: new Set(),
+    percentEmbedded: new Set(),
+    headers: [],
+    queries: [],
+    labelledValues: new Set(),
+    boundedValues: [],
+  };
+}
+
+function credentialEncodedVariants(value: string): readonly string[] {
+  return [
+    encodeURIComponent(value),
+    new URLSearchParams({ value }).toString().slice('value='.length),
+  ];
+}
+
+function addExactCredentialRedaction(state: MutableCredentialRedactions, value: string): void {
+  if (!value) return;
+  state.exact.add(value);
+  for (const variant of credentialEncodedVariants(value)) {
+    state.exact.add(variant);
+    if (variant.includes('%')) state.percentExact.add(normalizePercentEscapes(variant));
+  }
+}
+
+function addEmbeddedCredentialRedaction(state: MutableCredentialRedactions, value: string): void {
+  addExactCredentialRedaction(state, value);
+  state.embedded.add(value);
+  state.semanticEmbedded.add(value);
+  for (const variant of credentialEncodedVariants(value)) {
+    state.embedded.add(variant);
+    if (variant.includes('%')) state.percentEmbedded.add(normalizePercentEscapes(variant));
+  }
+}
+
+function addCredentialRedaction(
+  state: MutableCredentialRedactions,
+  value: string,
+  allowEmbedded = value.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH,
+): void {
+  addExactCredentialRedaction(state, value);
+  if (allowEmbedded) addEmbeddedCredentialRedaction(state, value);
+}
+
+function addHeaderCredentialRedactions(
+  state: MutableCredentialRedactions,
+  name: string,
+  value: string,
+  sensitiveValue: string,
+  caseInsensitivePrefixLength = 0,
+): void {
+  const requireValueBoundary = sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH;
+  const prefix = value.slice(0, value.length - sensitiveValue.length);
+  const candidates = new Map<string, number>([[value, caseInsensitivePrefixLength]]);
+  const escapedPrefix = jsonStringContent(prefix);
+  candidates.set(
+    jsonStringContent(value),
+    caseInsensitivePrefixLength > 0 ? escapedPrefix.length : 0,
+  );
+  const encodedValues = credentialEncodedVariants(value);
+  const encodedPrefixes = credentialEncodedVariants(prefix);
+  for (const [index, encodedValue] of encodedValues.entries()) {
+    candidates.set(
+      encodedValue,
+      caseInsensitivePrefixLength > 0 ? encodedPrefixes[index]?.length ?? 0 : 0,
+    );
+  }
+  if (prefix) addPartiallyEncodedHeaderCandidates(
+    candidates,
+    prefix,
+    sensitiveValue,
+    escapedPrefix,
+    caseInsensitivePrefixLength,
+  );
+  for (const [candidate, prefixLength] of candidates) {
+    state.headers.push({
+      name,
+      value: candidate,
+      caseInsensitivePrefixLength: prefixLength || undefined,
+      requireValueBoundary,
+    });
+    if (requireValueBoundary && prefix.length > 0) {
+      state.boundedValues.push({ value: candidate, caseInsensitivePrefixLength: prefixLength });
+    }
+  }
+}
+
+function addPartiallyEncodedHeaderCandidates(
+  candidates: Map<string, number>,
+  prefix: string,
+  sensitiveValue: string,
+  escapedPrefix: string,
+  caseInsensitivePrefixLength: number,
+): void {
+  for (const encodedSensitiveValue of credentialEncodedVariants(sensitiveValue)) {
+    candidates.set(`${prefix}${encodedSensitiveValue}`, caseInsensitivePrefixLength);
+  }
+  candidates.set(
+    `${escapedPrefix}${jsonStringContent(sensitiveValue)}`,
+    caseInsensitivePrefixLength > 0 ? escapedPrefix.length : 0,
+  );
+}
+
+function addShortBoundedCredentialVariants(
+  state: MutableCredentialRedactions,
+  value: string,
+): void {
+  for (const candidate of new Set([value, ...credentialEncodedVariants(value)])) {
+    state.boundedValues.push({ value: candidate, caseInsensitivePrefixLength: 0 });
+  }
+}
+
+function addBaseCredentialRedactions(
+  state: MutableCredentialRedactions,
+  credential: string,
+  injection: EffectiveCredentialInjection,
+): void {
+  addCredentialRedaction(state, credential);
+  state.labelledValues.add(credential);
+  if (injection.sensitiveValue !== credential) {
+    addCredentialRedaction(state, injection.sensitiveValue);
+    state.labelledValues.add(injection.sensitiveValue);
+  }
+  for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
+    addCredentialRedaction(state, sensitiveValue);
+  }
+  for (const boundedValue of injection.additionalBoundedValues ?? []) {
+    addCredentialRedaction(state, boundedValue);
+    if (boundedValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH) {
+      addShortBoundedCredentialVariants(state, boundedValue);
+    }
+  }
+  for (const structuredValue of injection.additionalStructuredValues ?? []) {
+    addQueryCredentialRedactions(
+      state.queries,
+      structuredValue.name,
+      structuredValue.value,
+      structuredValue.caseInsensitiveName,
+    );
+    addHeaderCredentialRedactions(state, structuredValue.name, structuredValue.value, structuredValue.value);
+  }
+  addCredentialRedaction(
+    state,
+    injection.value,
+    injection.sensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH,
+  );
+}
+
+function addQueryInjectionRedactions(
+  state: MutableCredentialRedactions,
+  injection: EffectiveCredentialInjection,
+): void {
+  addQueryCredentialRedactions(state.queries, injection.name, injection.value);
+  const prefixLength = injection.value.length - injection.sensitiveValue.length;
+  if (injection.sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH && prefixLength > 0) {
+    addShortBoundedCredentialVariants(state, injection.value);
+  }
+}
+
+function addHeaderInjectionRedactions(
+  state: MutableCredentialRedactions,
+  injection: EffectiveCredentialInjection,
+): void {
+  if (injection.value && injection.sensitiveValue) {
+    addHeaderCredentialRedactions(
+      state,
+      injection.name,
+      injection.value,
+      injection.sensitiveValue,
+      injection.caseInsensitivePrefixLength,
+    );
+  }
+  if (injection.configuredValue && injection.configuredSensitiveValue &&
+      injection.configuredValue !== injection.value) {
+    addCredentialRedaction(
+      state,
+      injection.configuredValue,
+      injection.configuredSensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH,
+    );
+    addHeaderCredentialRedactions(
+      state,
+      injection.name,
+      injection.configuredValue,
+      injection.configuredSensitiveValue,
+      injection.configuredCaseInsensitivePrefixLength,
+    );
+  }
+}
+
+function addEffectiveCredentialRedactions(
+  state: MutableCredentialRedactions,
+  credential: string,
+  injection: EffectiveCredentialInjection,
+): void {
+  addBaseCredentialRedactions(state, credential, injection);
+  if (injection.location === 'query') addQueryInjectionRedactions(state, injection);
+  else addHeaderInjectionRedactions(state, injection);
+}
+
+function mergeCredentialRedactions(
+  state: MutableCredentialRedactions,
+  additional: CredentialRedactions,
+): void {
+  for (const value of additional.exact) state.exact.add(value);
+  for (const value of additional.percentExact) state.percentExact.add(value);
+  for (const value of additional.embedded) state.embedded.add(value);
+  for (const value of additional.semanticEmbedded) state.semanticEmbedded.add(value);
+  for (const value of additional.percentEmbedded) state.percentEmbedded.add(value);
+  state.headers.push(...additional.headers);
+  state.queries.push(...additional.queries);
+  for (const value of additional.labelledValues) state.labelledValues.add(value);
+  state.boundedValues.push(...additional.boundedValues);
+}
+
+function finalizeCredentialRedactions(state: MutableCredentialRedactions): CredentialRedactions {
+  return {
+    exact: state.exact,
+    percentExact: state.percentExact,
+    embedded: [...state.embedded].sort((left, right) => right.length - left.length),
+    semanticEmbedded: [...state.semanticEmbedded].sort((left, right) => right.length - left.length),
+    percentEmbedded: [...state.percentEmbedded].sort((left, right) => right.length - left.length),
+    headers: state.headers,
+    queries: state.queries,
+    labelledValues: [...state.labelledValues],
+    boundedValues: deduplicateBoundedValues(state.boundedValues),
+  };
+}
+
 export function buildCredentialRedactions(
   credential: string,
   injection: EffectiveCredentialInjection,
@@ -1049,169 +1423,15 @@ export function buildCredentialRedactions(
     readonly injection: EffectiveCredentialInjection;
   }[] = [],
 ): CredentialRedactions {
-  const exact = new Set<string>();
-  const percentExact = new Set<string>();
-  const embedded = new Set<string>();
-  const semanticEmbedded = new Set<string>();
-  const percentEmbedded = new Set<string>();
-  const headers: CredentialHeaderRedaction[] = [];
-  const queries: CredentialQueryRedaction[] = [];
-  const labelledValues = new Set<string>();
-  const boundedValues: CredentialBoundedValueRedaction[] = [];
-  const encodedVariants = (value: string): readonly string[] => [
-    encodeURIComponent(value),
-    new URLSearchParams({ value }).toString().slice('value='.length),
-  ];
-  const addExact = (value: string): void => {
-    if (!value) return;
-    exact.add(value);
-    for (const variant of encodedVariants(value)) {
-      exact.add(variant);
-      if (variant.includes('%')) percentExact.add(normalizePercentEscapes(variant));
-    }
-  };
-  const addEmbedded = (value: string): void => {
-    addExact(value);
-    embedded.add(value);
-    semanticEmbedded.add(value);
-    for (const variant of encodedVariants(value)) {
-      embedded.add(variant);
-      if (variant.includes('%')) percentEmbedded.add(normalizePercentEscapes(variant));
-    }
-  };
-  const addCredential = (
-    value: string,
-    allowEmbedded = value.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH,
-  ): void => {
-    addExact(value);
-    if (allowEmbedded) addEmbedded(value);
-  };
-  const addHeader = (
-    name: string,
-    value: string,
-    sensitiveValue: string,
-    caseInsensitivePrefixLength = 0,
-  ): void => {
-    const requireValueBoundary = sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH;
-    const prefix = value.slice(0, value.length - sensitiveValue.length);
-    const candidates = new Map<string, number>([[value, caseInsensitivePrefixLength]]);
-    const escapedPrefix = jsonStringContent(prefix);
-    candidates.set(
-      jsonStringContent(value),
-      caseInsensitivePrefixLength > 0 ? escapedPrefix.length : 0,
-    );
-    const encodedValues = encodedVariants(value);
-    const encodedPrefixes = encodedVariants(prefix);
-    for (const [index, encodedValue] of encodedValues.entries()) {
-      candidates.set(encodedValue, caseInsensitivePrefixLength > 0 ? encodedPrefixes[index]?.length ?? 0 : 0);
-    }
-    if (prefix) {
-      for (const encodedSensitiveValue of encodedVariants(sensitiveValue)) {
-        candidates.set(`${prefix}${encodedSensitiveValue}`, caseInsensitivePrefixLength);
-      }
-      candidates.set(
-        `${escapedPrefix}${jsonStringContent(sensitiveValue)}`,
-        caseInsensitivePrefixLength > 0 ? escapedPrefix.length : 0,
-      );
-    }
-    for (const [candidate, prefixLength] of candidates) {
-      headers.push({
-        name,
-        value: candidate,
-        caseInsensitivePrefixLength: prefixLength || undefined,
-        requireValueBoundary,
-      });
-      if (requireValueBoundary && prefix.length > 0) {
-        boundedValues.push({ value: candidate, caseInsensitivePrefixLength: prefixLength });
-      }
-    }
-  };
-
-  addCredential(credential);
-  labelledValues.add(credential);
-  if (injection.sensitiveValue !== credential) {
-    addCredential(injection.sensitiveValue);
-    labelledValues.add(injection.sensitiveValue);
-  }
-  for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
-    addCredential(sensitiveValue);
-  }
-  for (const boundedValue of injection.additionalBoundedValues ?? []) {
-    addCredential(boundedValue);
-    if (boundedValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) continue;
-    for (const value of new Set([boundedValue, ...encodedVariants(boundedValue)])) {
-      boundedValues.push({ value, caseInsensitivePrefixLength: 0 });
-    }
-  }
-  for (const structuredValue of injection.additionalStructuredValues ?? []) {
-    addQueryCredentialRedactions(
-      queries,
-      structuredValue.name,
-      structuredValue.value,
-      structuredValue.caseInsensitiveName,
-    );
-    addHeader(structuredValue.name, structuredValue.value, structuredValue.value);
-  }
-  addCredential(injection.value, injection.sensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
-  if (injection.location === 'query') {
-    addQueryCredentialRedactions(queries, injection.name, injection.value);
-    const prefixLength = injection.value.length - injection.sensitiveValue.length;
-    if (injection.sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH && prefixLength > 0) {
-      for (const value of new Set([injection.value, ...encodedVariants(injection.value)])) {
-        boundedValues.push({ value, caseInsensitivePrefixLength: 0 });
-      }
-    }
-  } else {
-    if (injection.value && injection.sensitiveValue) {
-      addHeader(
-        injection.name,
-        injection.value,
-        injection.sensitiveValue,
-        injection.caseInsensitivePrefixLength,
-      );
-    }
-    if (injection.configuredValue && injection.configuredSensitiveValue &&
-        injection.configuredValue !== injection.value) {
-      addCredential(
-        injection.configuredValue,
-        injection.configuredSensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH,
-      );
-      addHeader(
-        injection.name,
-        injection.configuredValue,
-        injection.configuredSensitiveValue,
-        injection.configuredCaseInsensitivePrefixLength,
-      );
-    }
-  }
-
+  const state = createMutableCredentialRedactions();
+  addEffectiveCredentialRedactions(state, credential, injection);
   for (const additionalInput of additionalCredentials) {
-    const additional = buildCredentialRedactions(
-      additionalInput.credential,
-      additionalInput.injection,
+    mergeCredentialRedactions(
+      state,
+      buildCredentialRedactions(additionalInput.credential, additionalInput.injection),
     );
-    for (const value of additional.exact) exact.add(value);
-    for (const value of additional.percentExact) percentExact.add(value);
-    for (const value of additional.embedded) embedded.add(value);
-    for (const value of additional.semanticEmbedded) semanticEmbedded.add(value);
-    for (const value of additional.percentEmbedded) percentEmbedded.add(value);
-    headers.push(...additional.headers);
-    queries.push(...additional.queries);
-    for (const value of additional.labelledValues) labelledValues.add(value);
-    boundedValues.push(...additional.boundedValues);
   }
-
-  return {
-    exact,
-    percentExact,
-    embedded: [...embedded].sort((left, right) => right.length - left.length),
-    semanticEmbedded: [...semanticEmbedded].sort((left, right) => right.length - left.length),
-    percentEmbedded: [...percentEmbedded].sort((left, right) => right.length - left.length),
-    headers,
-    queries,
-    labelledValues: [...labelledValues],
-    boundedValues: deduplicateBoundedValues(boundedValues),
-  };
+  return finalizeCredentialRedactions(state);
 }
 
 function deduplicateBoundedValues(
@@ -1300,10 +1520,11 @@ function addQueryCredentialRedactions(
 const CREDENTIAL_KEY_SUBSTRINGS = [
   'authorization', 'bearer', 'jwt', 'secret', 'credential', 'password', 'passwd', 'ciphertext',
   'apikey', 'api_key', 'api-key', 'privatekey', 'private_key', 'private-key',
+  'accesstoken', 'refreshtoken', 'idtoken',
 ];
 
 function isCredentialKey(key: string): boolean {
   const lower = key.toLowerCase();
   if (CREDENTIAL_KEY_SUBSTRINGS.some(fragment => lower.includes(fragment))) return true;
-  return /(^|_)(access|refresh|id)?_?token($|_)/i.test(key);
+  return /(^|_)(access|refresh|id)?_?token($|_)/i.test(lower);
 }
