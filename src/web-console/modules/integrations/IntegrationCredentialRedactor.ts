@@ -8,6 +8,8 @@ export interface EffectiveCredentialInjection {
   readonly value: string;
   /** Credential-bearing suffix as it appears in `value`. */
   readonly sensitiveValue: string;
+  /** Sensitive components an upstream may decode and echo independently. */
+  readonly additionalSensitiveValues?: readonly string[];
   readonly caseInsensitivePrefixLength?: number;
   /** Pre-normalization value retained only as an additional defense-in-depth redaction candidate. */
   readonly configuredValue?: string;
@@ -840,6 +842,9 @@ export function buildCredentialRedactions(
 
   addCredential(credential);
   if (injection.sensitiveValue !== credential) addCredential(injection.sensitiveValue);
+  for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
+    addCredential(sensitiveValue);
+  }
   addCredential(injection.value, injection.sensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
   if (injection.location === 'query') {
     addQueryCredentialRedactions(queries, injection.name, injection.value);
