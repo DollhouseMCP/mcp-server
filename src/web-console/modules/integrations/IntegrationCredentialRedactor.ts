@@ -1021,9 +1021,7 @@ export function buildCredentialRedactions(
   };
 
   addCredential(credential);
-  if (credential.length < MIN_EMBEDDED_CREDENTIAL_LENGTH) {
-    labelledValues.add(credential);
-  }
+  labelledValues.add(credential);
   if (injection.sensitiveValue !== credential) addCredential(injection.sensitiveValue);
   for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
     addCredential(sensitiveValue);
