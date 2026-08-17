@@ -1287,6 +1287,33 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe(malformed);
   });
 
+  it('bounds header matching for long repeated credential prefixes', async () => {
+    const credential = `${'a:'.repeat(4_095)}b`;
+    const responseBody = 'a:'.repeat(128 * 1_024);
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'a', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt(credential, 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(responseBody, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/repeated-header-prefix',
+    }));
+
+    expect(result.response).toBe(responseBody);
+  }, 5_000);
+
   it('redacts encoded custom-header echoes for short credentials', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({

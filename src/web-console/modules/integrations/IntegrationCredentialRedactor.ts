@@ -44,11 +44,6 @@ interface CredentialHeaderRedaction {
   readonly requireValueBoundary: boolean;
 }
 
-interface CredentialHeaderEchoMatch {
-  readonly start: number;
-  readonly end: number;
-}
-
 interface ParsedJsonString {
   readonly value: string;
   readonly end: number;
@@ -693,45 +688,91 @@ function redactCredentialHeaderEchoes(
 
 function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedaction): string {
   const jsonRedacted = redactJsonCredentialHeaderEchoes(value, header);
-  const normalizedValue = asciiLowercase(jsonRedacted);
-  const normalizedName = asciiLowercase(header.name);
-  const parts: string[] = [];
-  let copyFrom = 0;
-  let searchFrom = 0;
-  for (;;) {
-    const index = normalizedValue.indexOf(normalizedName, searchFrom);
-    if (index < 0) break;
-    searchFrom = index + header.name.length;
-    const match = credentialHeaderEchoMatch(jsonRedacted, index, header);
-    if (match === null) continue;
-    parts.push(jsonRedacted.slice(copyFrom, match.start), REDACTED);
-    copyFrom = match.end;
-    searchFrom = copyFrom;
-  }
-  const literalRedacted = parts.length === 0
-    ? jsonRedacted
-    : [...parts, jsonRedacted.slice(copyFrom)].join('');
-  return redactEncodedCredentialHeaderEcho(literalRedacted, header);
+  const literalRedacted = redactLinearCredentialHeaderEcho(
+    jsonRedacted,
+    identityDecodedText(jsonRedacted),
+    header,
+  );
+  if (!literalRedacted.includes('%') && !literalRedacted.includes('+')) return literalRedacted;
+  return redactLinearCredentialHeaderEcho(
+    literalRedacted,
+    decodePercentEscapesWithOffsets(literalRedacted, true),
+    header,
+  );
 }
 
-function redactEncodedCredentialHeaderEcho(
-  value: string,
+function redactLinearCredentialHeaderEcho(
+  source: string,
+  decoded: DecodedText,
   header: CredentialHeaderRedaction,
 ): string {
-  if (!value.includes('%') && !value.includes('+')) return value;
-  const decoded = decodePercentEscapesWithOffsets(value, true);
+  const valueMatches = credentialHeaderValueMatches(decoded.value, header);
   const matches = findLinearMatches(decoded.value, header.name, true).flatMap(nameMatch => {
-    const match = credentialHeaderEchoMatch(decoded.value, nameMatch.start, header);
+    const match = linearCredentialHeaderEchoMatch(decoded.value, nameMatch, header, valueMatches);
     if (match === null) return [];
     const sourceStart = decoded.sourceStarts[match.start];
     const sourceEnd = decoded.sourceEnds[match.end - 1];
     return sourceStart !== undefined && sourceEnd !== undefined &&
-      value[sourceStart - 1] !== '+' &&
-      !isInsideRedactionMarker(value, sourceStart, sourceEnd)
+      source[sourceStart - 1] !== '+' &&
+      !isInsideRedactionMarker(source, sourceStart, sourceEnd)
       ? [{ start: sourceStart, end: sourceEnd }]
       : [];
   });
-  return applyRedactionMatches(value, matches);
+  return applyRedactionMatches(source, matches);
+}
+
+function credentialHeaderValueMatches(
+  value: string,
+  header: CredentialHeaderRedaction,
+): ReadonlyMap<number, number> {
+  const prefixLength = header.caseInsensitivePrefixLength ?? 0;
+  if (prefixLength === 0) {
+    return new Map(findLinearMatches(value, header.value).map(match => [match.start, match.end]));
+  }
+  const prefix = header.value.slice(0, prefixLength);
+  const suffix = header.value.slice(prefixLength);
+  const suffixesByStart = new Map(
+    findLinearMatches(value, suffix).map(match => [match.start, match.end]),
+  );
+  return new Map(
+    findLinearMatches(value, prefix, true).flatMap(prefixMatch => {
+      const valueEnd = suffixesByStart.get(prefixMatch.end);
+      return valueEnd === undefined ? [] : [[prefixMatch.start, valueEnd] as const];
+    }),
+  );
+}
+
+function linearCredentialHeaderEchoMatch(
+  value: string,
+  nameMatch: LinearMatch,
+  header: CredentialHeaderRedaction,
+  valueMatches: ReadonlyMap<number, number>,
+): LinearMatch | null {
+  const before = value[nameMatch.start - 1] ?? '';
+  const nameQuote = before === '"' || before === "'" ? before : null;
+  const matchStart = nameQuote === null ? nameMatch.start : nameMatch.start - 1;
+  const boundaryBefore = value[matchStart - 1] ?? '';
+  if (boundaryBefore !== '' && isHttpFieldNameCharacter(boundaryBefore)) return null;
+
+  let cursor = nameMatch.end;
+  if (nameQuote !== null) {
+    if (value[cursor] !== nameQuote) return null;
+    cursor += 1;
+  }
+  cursor = skipStructuredWhitespace(value, cursor);
+  if (value[cursor] !== ':') return null;
+  cursor = skipStructuredWhitespace(value, cursor + 1);
+  const valueQuote = value[cursor] === '"' || value[cursor] === "'" ? value[cursor] : null;
+  const valueStart = valueQuote === null ? cursor : cursor + 1;
+  const matchedValueEnd = valueMatches.get(valueStart);
+  if (matchedValueEnd === undefined) return null;
+  if (valueQuote !== null) {
+    return value[matchedValueEnd] === valueQuote
+      ? { start: matchStart, end: matchedValueEnd + 1 }
+      : null;
+  }
+  if (header.requireValueBoundary && !isCredentialValueBoundary(value[matchedValueEnd] ?? '')) return null;
+  return { start: matchStart, end: matchedValueEnd };
 }
 
 function redactJsonCredentialHeaderEchoes(
@@ -759,26 +800,6 @@ function redactJsonCredentialHeaderEchoes(
   if (parts.length === 0) return value;
   parts.push(value.slice(copyFrom));
   return parts.join('');
-}
-
-function credentialHeaderEchoMatch(
-  value: string,
-  headerStart: number,
-  header: CredentialHeaderRedaction,
-): CredentialHeaderEchoMatch | null {
-  const before = headerStart === 0 ? '' : value[headerStart - 1];
-  const nameQuote = before === '"' || before === "'" ? before : null;
-  const matchStart = nameQuote === null ? headerStart : headerStart - 1;
-  const boundaryBefore = matchStart === 0 ? '' : value[matchStart - 1];
-  if (boundaryBefore !== '' && isHttpFieldNameCharacter(boundaryBefore)) return null;
-
-  let cursor = headerStart + header.name.length;
-  if (nameQuote !== null) {
-    if (value[cursor] !== nameQuote) return null;
-    cursor += 1;
-  }
-  const valueEnd = credentialHeaderValueEchoEnd(value, cursor, header);
-  return valueEnd === null ? null : { start: matchStart, end: valueEnd };
 }
 
 function credentialHeaderValueEchoEnd(
