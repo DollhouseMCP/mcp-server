@@ -317,6 +317,33 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('{"echo":"[redacted]","ordinary":9007199254740995}');
   });
 
+  it('redacts numeric credential lexemes in declared JSON before parsing rounds them', async () => {
+    const credential = '9007199254740993';
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt(credential, 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(`{"echo":${credential},"ordinary":9007199254740995}`, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/declared-json-numeric-credential',
+    }));
+
+    expect(result.response).toEqual({
+      echo: '[redacted]',
+      ordinary: JSON.parse('9007199254740995'),
+    });
+  });
+
   it('does not confuse an upstream string with an internal number sentinel', async () => {
     const gateway = gatewayFixture({
       fetch: () => Promise.resolve(new Response(
@@ -481,6 +508,29 @@ describe('IntegrationRequestGateway', () => {
       unrelated: 'monkey=available',
       longerValue: 'received key=available',
     });
+  });
+
+  it('redacts whitespace-padded whole-body short credentials', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(' \ta\r\n', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/padded-short-token',
+    }));
+
+    expect(result.response).toBe(' \t[redacted]\r\n');
   });
 
   it('redacts short OAuth tokens only in bounded credential-labelled text', async () => {

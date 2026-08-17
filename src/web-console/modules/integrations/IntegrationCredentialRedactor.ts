@@ -89,13 +89,20 @@ export function redactIntegrationResponseBody(
   if (normalizedText === '') return null;
   const declaredJson = isJsonMediaType(contentType);
   if (declaredJson) {
+    let protectedNumbers: ProtectedJsonNumbers;
     let parsed: unknown;
     try {
-      parsed = JSON.parse(normalizedText) as unknown;
+      protectedNumbers = protectJsonNumberLexemes(normalizedText);
+      parsed = JSON.parse(protectedNumbers.text) as unknown;
     } catch {
       return REDACTED;
     }
-    return redactResponseCredentials(parsed, credentialRedactions);
+    return redactResponseCredentials(
+      parsed,
+      credentialRedactions,
+      protectedNumbers.lexemesBySentinel,
+      false,
+    );
   }
   if (isJsonShapedBody(normalizedText)) {
     return redactJsonShapedTextWithoutLosingNumbers(normalizedText, credentialRedactions);
@@ -202,13 +209,13 @@ function redactResponseCredentials(
   value: unknown,
   credentialRedactions: CredentialRedactions,
   protectedNumbers: ReadonlyMap<string, string> = new Map(),
+  preserveProtectedNumberLexemes = true,
 ): unknown {
   if (typeof value === 'string') {
     const numberLexeme = protectedNumbers.get(value);
     if (numberLexeme !== undefined) {
-      return redactCredentialText(numberLexeme, credentialRedactions) === numberLexeme
-        ? value
-        : REDACTED;
+      if (redactCredentialText(numberLexeme, credentialRedactions) !== numberLexeme) return REDACTED;
+      return preserveProtectedNumberLexemes ? value : Number(numberLexeme);
     }
     return redactCredentialText(value, credentialRedactions);
   }
@@ -217,7 +224,12 @@ function redactResponseCredentials(
     return redactCredentialText(serialized, credentialRedactions) === serialized ? value : REDACTED;
   }
   if (Array.isArray(value)) {
-    return value.map(item => redactResponseCredentials(item, credentialRedactions, protectedNumbers));
+    return value.map(item => redactResponseCredentials(
+      item,
+      credentialRedactions,
+      protectedNumbers,
+      preserveProtectedNumberLexemes,
+    ));
   }
   if (typeof value !== 'object') return value;
   const output: Record<string, unknown> = {};
@@ -225,7 +237,12 @@ function redactResponseCredentials(
     const redactedKey = redactCredentialText(key, credentialRedactions);
     const redactedField = isCredentialKey(key)
       ? REDACTED
-      : redactResponseCredentials(field, credentialRedactions, protectedNumbers);
+      : redactResponseCredentials(
+        field,
+        credentialRedactions,
+        protectedNumbers,
+        preserveProtectedNumberLexemes,
+      );
     Object.defineProperty(output, redactedKey, {
       value: redactedField,
       enumerable: true,
@@ -237,11 +254,9 @@ function redactResponseCredentials(
 }
 
 function redactCredentialText(value: string, credentialRedactions: CredentialRedactions): string {
-  if (credentialRedactions.exact.has(value) ||
-      credentialRedactions.percentExact.has(normalizePercentEscapes(value)) ||
-      hasSemanticExactCredential(value, credentialRedactions.exact)) {
-    return REDACTED;
-  }
+  if (isExactCredentialValue(value, credentialRedactions)) return REDACTED;
+  const paddedExact = redactWhitespacePaddedExactCredential(value, credentialRedactions);
+  if (paddedExact !== null) return paddedExact;
   let redacted = redactCredentialHeaderEchoes(value, credentialRedactions.headers);
   redacted = redactCredentialQueryEchoes(redacted, credentialRedactions.queries);
   redacted = redactCredentialLabelEchoes(redacted, credentialRedactions.labelledValues);
@@ -253,6 +268,27 @@ function redactCredentialText(value: string, credentialRedactions: CredentialRed
   );
   redacted = redactPercentEncodedCredentials(redacted, credentialRedactions.percentEmbedded);
   return redacted;
+}
+
+function isExactCredentialValue(value: string, credentialRedactions: CredentialRedactions): boolean {
+  return credentialRedactions.exact.has(value) ||
+    credentialRedactions.percentExact.has(normalizePercentEscapes(value)) ||
+    hasSemanticExactCredential(value, credentialRedactions.exact);
+}
+
+function redactWhitespacePaddedExactCredential(
+  value: string,
+  credentialRedactions: CredentialRedactions,
+): string | null {
+  let start = 0;
+  while (start < value.length && /[\t\n\r ]/.test(value[start] ?? '')) start += 1;
+  let end = value.length;
+  while (end > start && /[\t\n\r ]/.test(value[end - 1] ?? '')) end -= 1;
+  if (start === 0 && end === value.length) return null;
+  const candidate = value.slice(start, end);
+  return candidate !== '' && isExactCredentialValue(candidate, credentialRedactions)
+    ? `${value.slice(0, start)}${REDACTED}${value.slice(end)}`
+    : null;
 }
 
 function hasSemanticExactCredential(value: string, patterns: ReadonlySet<string>): boolean {
