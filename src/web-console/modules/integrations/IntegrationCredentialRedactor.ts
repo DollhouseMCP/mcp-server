@@ -58,6 +58,19 @@ interface CredentialBoundedValueRedaction {
   readonly caseInsensitivePrefixLength: number;
 }
 
+interface ProtectedJsonNumbers {
+  readonly text: string;
+  readonly lexemesBySentinel: ReadonlyMap<string, string>;
+}
+
+interface JsonNumberToken {
+  readonly start: number;
+  readonly end: number;
+  readonly lexeme: string;
+}
+
+const JSON_NUMBER_SENTINEL_PREFIX = '__DOLLHOUSE_LOSSLESS_JSON_NUMBER_';
+
 export function redactIntegrationResponseBody(
   text: string,
   contentType: string | null,
@@ -67,13 +80,10 @@ export function redactIntegrationResponseBody(
   const declaredJson = isJsonMediaType(contentType);
   if (declaredJson || isJsonShapedBody(text)) {
     try {
-      const parsed = JSON.parse(text) as unknown;
-      const redacted = redactResponseCredentials(parsed, credentialRedactions);
-      if (declaredJson) return redacted;
-      // Keep the response typed as text when JSON was not declared, but always
-      // serialize the parsed form. Besides recursive redaction, this removes
-      // superseded duplicate properties that could otherwise retain a secret.
-      return JSON.stringify(redacted);
+      if (!declaredJson) {
+        return redactJsonShapedTextWithoutLosingNumbers(text, credentialRedactions);
+      }
+      return redactResponseCredentials(JSON.parse(text) as unknown, credentialRedactions);
     } catch {
       // A declared JSON response fails closed. Mislabelled structured-looking
       // text retains the existing text-redaction fallback when parsing fails.
@@ -81,6 +91,84 @@ export function redactIntegrationResponseBody(
     }
   }
   return redactCredentialText(text, credentialRedactions);
+}
+
+function redactJsonShapedTextWithoutLosingNumbers(
+  text: string,
+  credentialRedactions: CredentialRedactions,
+): string {
+  const protectedNumbers = protectJsonNumberLexemes(text);
+  const parsed = JSON.parse(protectedNumbers.text) as unknown;
+  const redacted = redactResponseCredentials(
+    parsed,
+    credentialRedactions,
+    protectedNumbers.lexemesBySentinel,
+  );
+  // Parsing still removes superseded duplicate properties that could retain a
+  // secret. Number sentinels prevent that safety pass from rounding identifiers
+  // or rewriting exponent notation in a response that was declared as text.
+  return restoreJsonNumberLexemes(JSON.stringify(redacted), protectedNumbers.lexemesBySentinel);
+}
+
+function protectJsonNumberLexemes(text: string): ProtectedJsonNumbers {
+  const strings = new Set<string>();
+  const tokens: JsonNumberToken[] = [];
+  const numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
+  let cursor = 0;
+  while (cursor < text.length) {
+    if (text[cursor] === '"') {
+      const parsed = parseJsonStringAt(text, cursor);
+      if (parsed === null) throw new SyntaxError('invalid JSON string');
+      strings.add(parsed.value);
+      cursor = parsed.end;
+      continue;
+    }
+    const first = text[cursor] ?? '';
+    if (first === '-' || (first >= '0' && first <= '9')) {
+      numberPattern.lastIndex = cursor;
+      const match = numberPattern.exec(text);
+      if (match !== null) {
+        const lexeme = match[0];
+        tokens.push({ start: cursor, end: cursor + lexeme.length, lexeme });
+        cursor += lexeme.length;
+        continue;
+      }
+    }
+    cursor += 1;
+  }
+  if (tokens.length === 0) return { text, lexemesBySentinel: new Map() };
+
+  const lexemesBySentinel = new Map<string, string>();
+  const parts: string[] = [];
+  let copyFrom = 0;
+  for (const [index, token] of tokens.entries()) {
+    let attempt = 0;
+    let sentinel: string;
+    do {
+      sentinel = `${JSON_NUMBER_SENTINEL_PREFIX}${index}_${attempt}__`;
+      attempt += 1;
+    } while (strings.has(sentinel) || lexemesBySentinel.has(sentinel));
+    lexemesBySentinel.set(sentinel, token.lexeme);
+    parts.push(text.slice(copyFrom, token.start), JSON.stringify(sentinel));
+    copyFrom = token.end;
+  }
+  parts.push(text.slice(copyFrom));
+  return { text: parts.join(''), lexemesBySentinel };
+}
+
+function restoreJsonNumberLexemes(
+  text: string,
+  lexemesBySentinel: ReadonlyMap<string, string>,
+): string {
+  if (lexemesBySentinel.size === 0) return text;
+  const sentinelPattern = new RegExp(
+    `"${JSON_NUMBER_SENTINEL_PREFIX}\\d+_\\d+__"`,
+    'g',
+  );
+  return text.replace(sentinelPattern, serialized => {
+    const sentinel = serialized.slice(1, -1);
+    return lexemesBySentinel.get(sentinel) ?? serialized;
+  });
 }
 
 function isJsonMediaType(contentType: string | null): boolean {
@@ -93,20 +181,34 @@ function isJsonShapedBody(text: string): boolean {
   return first === '{' || first === '[' || first === '"';
 }
 
-function redactResponseCredentials(value: unknown, credentialRedactions: CredentialRedactions): unknown {
-  if (typeof value === 'string') return redactCredentialText(value, credentialRedactions);
+function redactResponseCredentials(
+  value: unknown,
+  credentialRedactions: CredentialRedactions,
+  protectedNumbers: ReadonlyMap<string, string> = new Map(),
+): unknown {
+  if (typeof value === 'string') {
+    const numberLexeme = protectedNumbers.get(value);
+    if (numberLexeme !== undefined) {
+      return redactCredentialText(numberLexeme, credentialRedactions) === numberLexeme
+        ? value
+        : REDACTED;
+    }
+    return redactCredentialText(value, credentialRedactions);
+  }
   if (value === null || typeof value === 'number' || typeof value === 'boolean') {
     const serialized = String(value);
     return redactCredentialText(serialized, credentialRedactions) === serialized ? value : REDACTED;
   }
-  if (Array.isArray(value)) return value.map(item => redactResponseCredentials(item, credentialRedactions));
+  if (Array.isArray(value)) {
+    return value.map(item => redactResponseCredentials(item, credentialRedactions, protectedNumbers));
+  }
   if (typeof value !== 'object') return value;
   const output: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(value)) {
     const redactedKey = redactCredentialText(key, credentialRedactions);
     const redactedField = isCredentialKey(key)
       ? REDACTED
-      : redactResponseCredentials(field, credentialRedactions);
+      : redactResponseCredentials(field, credentialRedactions, protectedNumbers);
     Object.defineProperty(output, redactedKey, {
       value: redactedField,
       enumerable: true,

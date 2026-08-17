@@ -170,6 +170,31 @@ describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
     expect(fetchCalls[0].redirect).toBe('error');
   });
 
+  it('accepts bounded BOM-prefixed JSON for token exchange and refresh', async () => {
+    const responseBody = `\uFEFF${JSON.stringify({
+      access_token: 'bom-access-token',
+      refresh_token: 'bom-refresh-token',
+      email: 'bom@example.com',
+    })}`;
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(responseBody, {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)).resolves.toMatchObject({
+      accessToken: 'bom-access-token',
+      refreshToken: 'bom-refresh-token',
+      accountLabel: 'bom@example.com',
+    });
+    await expect(provider.refreshCredentials({ refreshToken: 'old-refresh-token' })).resolves.toEqual({
+      accessToken: 'bom-access-token',
+      refreshToken: 'bom-refresh-token',
+    });
+  });
+
   it('routes refresh and revocation through the pinned transport', async () => {
     const { provider, pins, fetchCalls } = providerWith({ dnsLookup: lookupReturning(PUBLIC_ADDRESS) });
     const refreshed = await provider.refreshCredentials({ refreshToken: 'refresh-token' });

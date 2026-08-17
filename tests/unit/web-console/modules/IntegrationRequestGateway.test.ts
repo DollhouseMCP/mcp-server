@@ -230,6 +230,81 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('{"echo":"safe"}');
   });
 
+  it.each([
+    ['missing', null],
+    ['mislabelled', 'text/plain'],
+  ])('preserves JSON number lexemes with %s content type while redacting credentials', async (_label, contentType) => {
+    const body = '{"id":9007199254740993,"negative":-9007199254740995,"exponent":1.2300e+45,' +
+      '"negativeZero":-0,"echo":"a","secretNumber":9007199254740997}';
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => {
+        const headers = new Headers();
+        if (contentType !== null) headers.set('Content-Type', contentType);
+        return Promise.resolve(new Response(new TextEncoder().encode(body), { status: 200, headers }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: `/json-numbers-${_label}`,
+    }));
+
+    expect(result.response).toBe(
+      '{"id":9007199254740993,"negative":-9007199254740995,"exponent":1.2300e+45,' +
+      '"negativeZero":-0,"echo":"[redacted]","secretNumber":"[redacted]"}',
+    );
+  });
+
+  it('redacts a credential represented as a JSON number without rounding it first', async () => {
+    const credential = '9007199254740993';
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt(credential, 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(`{"echo":${credential},"ordinary":9007199254740995}`, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/json-numeric-credential',
+    }));
+
+    expect(result.response).toBe('{"echo":"[redacted]","ordinary":9007199254740995}');
+  });
+
+  it('does not confuse an upstream string with an internal number sentinel', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(new Response(
+        '{"label":"__DOLLHOUSE_LOSSLESS_JSON_NUMBER_0_0__","id":9007199254740993}',
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/json-number-sentinel-collision',
+    }));
+
+    expect(result.response).toBe(
+      '{"label":"__DOLLHOUSE_LOSSLESS_JSON_NUMBER_0_0__","id":9007199254740993}',
+    );
+  });
+
   it('redacts a JSON string scalar when content type is absent', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
