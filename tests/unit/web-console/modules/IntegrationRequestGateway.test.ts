@@ -1066,6 +1066,31 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('[redacted]');
   });
 
+  it('redacts a sensitive suffix after Fetch trims header whitespace', async () => {
+    const sentValues: string[] = [];
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a ', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: (_url, init) => {
+        sentValues.push(new Headers(init?.headers).get('Authorization') ?? '');
+        return Promise.resolve(jsonResponse(200, { echoed: 'a' }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/normalized-sensitive-suffix',
+    }));
+
+    expect(sentValues).toEqual(['Bearer a']);
+    expect(result.response).toEqual({ echoed: '[redacted]' });
+  });
+
   it('does not treat configured header names as suffixes of other HTTP field names', async () => {
     const tokenPunctuation = "!#$%&'*+-.^_`|~";
     const body = [...tokenPunctuation]

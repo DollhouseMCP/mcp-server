@@ -670,8 +670,10 @@ function injectHeaderCredential(
   if (effectiveValue === null) {
     throw new IntegrationRequestError('integration_credential_injection_failed', 'Integration credential could not be injected.', 500);
   }
-  const effectiveSensitiveValue = effectiveValue.endsWith(sensitiveValue)
-    ? sensitiveValue
+  const normalizedSensitiveValue = new Headers([[name, sensitiveValue]]).get(name);
+  const effectiveSensitiveValue = normalizedSensitiveValue !== null &&
+      normalizedSensitiveValue !== '' && effectiveValue.endsWith(normalizedSensitiveValue)
+    ? normalizedSensitiveValue
     : effectiveValue;
   const prefixLength = effectiveValue.length - effectiveSensitiveValue.length;
   const configuredPrefixLength = value.length - sensitiveValue.length;
