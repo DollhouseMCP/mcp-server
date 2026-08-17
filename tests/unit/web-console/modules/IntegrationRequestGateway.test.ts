@@ -483,6 +483,31 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts short OAuth tokens only in bounded credential-labelled text', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(
+        'access_token=a; ACCESS_TOKEN: a; api_key=%61; token=available; a normal response',
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/short-labelled-token',
+    }));
+
+    expect(result.response).toBe(
+      '[redacted]; [redacted]; [redacted]; token=available; a normal response',
+    );
+  });
+
   it('redacts decoded and serialized query names for short credentials', async () => {
     const fetches: string[] = [];
     const gateway = gatewayFixture({

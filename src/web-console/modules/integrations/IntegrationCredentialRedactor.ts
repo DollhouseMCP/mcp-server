@@ -33,6 +33,7 @@ export interface CredentialRedactions {
   readonly percentEmbedded: readonly string[];
   readonly headers: readonly CredentialHeaderRedaction[];
   readonly queries: readonly CredentialQueryRedaction[];
+  readonly labelledValues: readonly string[];
   readonly boundedValues: readonly CredentialBoundedValueRedaction[];
 }
 
@@ -246,6 +247,7 @@ function redactCredentialText(value: string, credentialRedactions: CredentialRed
   }
   let redacted = redactCredentialHeaderEchoes(value, credentialRedactions.headers);
   redacted = redactCredentialQueryEchoes(redacted, credentialRedactions.queries);
+  redacted = redactCredentialLabelEchoes(redacted, credentialRedactions.labelledValues);
   redacted = redactBoundedCredentialValues(redacted, credentialRedactions.boundedValues);
   redacted = redactEmbeddedCredentialValues(redacted, credentialRedactions.embedded);
   redacted = redactOptionallyEncodedEmbeddedCredentialValues(
@@ -501,6 +503,63 @@ function redactCredentialQueryEcho(value: string, query: CredentialQueryRedactio
       : [];
   });
   return applyRedactionMatches(jsonRedacted, matches);
+}
+
+const MAX_CREDENTIAL_ECHO_LABEL_LENGTH = 64;
+
+function redactCredentialLabelEchoes(value: string, patterns: readonly string[]): string {
+  let redacted = value;
+  for (const pattern of patterns) {
+    const decoded = decodePercentEscapesWithOffsets(redacted, true);
+    const decodedPattern = decodePercentEscapesWithOffsets(pattern, true).value;
+    const matches = findLinearMatches(decoded.value, decodedPattern).flatMap(valueMatch => {
+      const labelledMatch = credentialLabelMatch(decoded.value, valueMatch);
+      if (labelledMatch === null) return [];
+      const sourceStart = decoded.sourceStarts[labelledMatch.start];
+      const sourceEnd = decoded.sourceEnds[labelledMatch.end - 1];
+      return sourceStart !== undefined && sourceEnd !== undefined &&
+        redacted[sourceStart - 1] !== '+' &&
+        !isInsideRedactionMarker(redacted, sourceStart, sourceEnd)
+        ? [{ start: sourceStart, end: sourceEnd }]
+        : [];
+    });
+    redacted = applyRedactionMatches(redacted, matches);
+  }
+  return redacted;
+}
+
+function credentialLabelMatch(value: string, valueMatch: LinearMatch): LinearMatch | null {
+  const valueQuote = value[valueMatch.start - 1];
+  const quotedValue = valueQuote === '"' || valueQuote === "'";
+  const valueStart = quotedValue ? valueMatch.start - 1 : valueMatch.start;
+  const valueEnd = quotedValue ? valueMatch.end + 1 : valueMatch.end;
+  if (quotedValue && value[valueMatch.end] !== valueQuote) return null;
+  if (!isCredentialValueBoundary(value[valueEnd] ?? '')) return null;
+
+  let cursor = skipStructuredWhitespaceBackward(value, valueStart);
+  if (cursor === 0 || (value[cursor - 1] !== '=' && value[cursor - 1] !== ':')) return null;
+  cursor = skipStructuredWhitespaceBackward(value, cursor - 1);
+  const keyQuote = value[cursor - 1];
+  const quotedKey = keyQuote === '"' || keyQuote === "'";
+  const keyEnd = quotedKey ? cursor - 1 : cursor;
+  let keyStart = keyEnd;
+  while (keyStart > 0 && keyEnd - keyStart < MAX_CREDENTIAL_ECHO_LABEL_LENGTH &&
+         (quotedKey ? value[keyStart - 1] !== keyQuote : /[A-Za-z0-9_.-]/.test(value[keyStart - 1] ?? ''))) {
+    keyStart -= 1;
+  }
+  if (quotedKey && (keyStart === 0 || value[keyStart - 1] !== keyQuote)) return null;
+  const key = value.slice(keyStart, keyEnd);
+  if (!/^[A-Za-z0-9]/.test(key) || !isCredentialKey(key)) return null;
+  const matchStart = quotedKey ? keyStart - 1 : keyStart;
+  const before = value[matchStart - 1] ?? '';
+  if (before !== '' && isHttpFieldNameCharacter(before)) return null;
+  return { start: matchStart, end: valueEnd };
+}
+
+function skipStructuredWhitespaceBackward(value: string, start: number): number {
+  let cursor = start;
+  while (cursor > 0 && /[\t\n\r ]/.test(value[cursor - 1] ?? '')) cursor -= 1;
+  return cursor;
 }
 
 function redactJsonCredentialQueryEchoes(
@@ -858,6 +917,7 @@ export function buildCredentialRedactions(
   const percentEmbedded = new Set<string>();
   const headers: CredentialHeaderRedaction[] = [];
   const queries: CredentialQueryRedaction[] = [];
+  const labelledValues = new Set<string>();
   const boundedValues: CredentialBoundedValueRedaction[] = [];
   const encodedVariants = (value: string): readonly string[] => [
     encodeURIComponent(value),
@@ -929,6 +989,9 @@ export function buildCredentialRedactions(
   };
 
   addCredential(credential);
+  if (credential.length < MIN_EMBEDDED_CREDENTIAL_LENGTH) {
+    labelledValues.add(credential);
+  }
   if (injection.sensitiveValue !== credential) addCredential(injection.sensitiveValue);
   for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
     addCredential(sensitiveValue);
@@ -983,6 +1046,7 @@ export function buildCredentialRedactions(
     percentEmbedded: [...percentEmbedded].sort((left, right) => right.length - left.length),
     headers,
     queries,
+    labelledValues: [...labelledValues],
     boundedValues: deduplicateBoundedValues(boundedValues),
   };
 }
