@@ -896,6 +896,29 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('preserves literal pluses while decoding optional percent escapes', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('abc+defgh', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received abc+def%67h safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/partially-encoded-literal-plus',
+    }));
+
+    expect(result.response).toBe('received [redacted] safely');
+  });
+
   it('bounds embedded credential matching for long shared prefixes', async () => {
     const credential = `${'a'.repeat(8191)}b`;
     const responseBody = 'a'.repeat(240 * 1024);
@@ -1416,6 +1439,32 @@ describe('IntegrationRequestGateway', () => {
     }));
 
     expect(result.response).toBe('received [redacted] safely; X-Api-Key%3A%20available remains');
+  });
+
+  it('accepts form-space boundaries before encoded custom-header echoes', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Custom', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received+X-Custom%3A+a+safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/form-encoded-custom-header-boundary',
+    }));
+
+    expect(result.response).toBe('received+[redacted]+safely');
   });
 
   it('redacts case-normalized authorization schemes while matching credential bytes exactly', async () => {

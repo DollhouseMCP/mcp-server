@@ -287,7 +287,8 @@ function redactOptionallyEncodedEmbeddedCredentialValues(
 ): string {
   let redacted = value;
   for (const pattern of patterns) {
-    if (!redacted.includes('%') && !redacted.includes('+')) break;
+    if (!/%[0-9A-Fa-f]{2}/.test(redacted)) break;
+    redacted = redactLinearMatches(redacted, pattern, decodePercentEscapesWithOffsets(redacted));
     redacted = redactLinearMatches(redacted, pattern, decodePercentEscapesWithOffsets(redacted, true));
   }
   return redacted;
@@ -698,11 +699,17 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
     identityDecodedText(jsonRedacted),
     header,
   );
-  if (!literalRedacted.includes('%') && !literalRedacted.includes('+')) return literalRedacted;
-  return redactLinearCredentialHeaderEcho(
+  if (!/%[0-9A-Fa-f]{2}/.test(literalRedacted)) return literalRedacted;
+  const percentRedacted = redactLinearCredentialHeaderEcho(
     literalRedacted,
-    decodePercentEscapesWithOffsets(literalRedacted, true),
+    decodePercentEscapesWithOffsets(literalRedacted),
     header,
+  );
+  return redactLinearCredentialHeaderEcho(
+    percentRedacted,
+    decodePercentEscapesWithOffsets(percentRedacted, true),
+    header,
+    true,
   );
 }
 
@@ -710,6 +717,7 @@ function redactLinearCredentialHeaderEcho(
   source: string,
   decoded: DecodedText,
   header: CredentialHeaderRedaction,
+  allowLeadingFormSpaceBoundary = false,
 ): string {
   const valueMatches = credentialHeaderValueMatches(decoded.value, header);
   const matches = findLinearMatches(decoded.value, header.name, true).flatMap(nameMatch => {
@@ -718,7 +726,7 @@ function redactLinearCredentialHeaderEcho(
     const sourceStart = decoded.sourceStarts[match.start];
     const sourceEnd = decoded.sourceEnds[match.end - 1];
     return sourceStart !== undefined && sourceEnd !== undefined &&
-      source[sourceStart - 1] !== '+' &&
+      (allowLeadingFormSpaceBoundary || source[sourceStart - 1] !== '+') &&
       !isInsideRedactionMarker(source, sourceStart, sourceEnd)
       ? [{ start: sourceStart, end: sourceEnd }]
       : [];
