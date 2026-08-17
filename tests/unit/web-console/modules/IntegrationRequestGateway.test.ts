@@ -510,6 +510,29 @@ describe('IntegrationRequestGateway', () => {
     );
   });
 
+  it('accepts form-space boundaries around encoded credential labels', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received+access_token%3D%61+safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/form-encoded-labelled-token',
+    }));
+
+    expect(result.response).toBe('received+[redacted]+safely');
+  });
+
   it('redacts escaped long OAuth tokens in credential-labelled non-JSON text', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
@@ -1100,7 +1123,10 @@ describe('IntegrationRequestGateway', () => {
       })],
       fetch: (_url, init) => {
         sentValues.push(new Headers(init?.headers).get('Authorization') ?? '');
-        return Promise.resolve(jsonResponse(200, { echoed: 'a' }));
+        return Promise.resolve(new Response('access_token=a', {
+          status: 200,
+          headers: { 'Content-Type': 'text/plain' },
+        }));
       },
     });
 
@@ -1111,7 +1137,7 @@ describe('IntegrationRequestGateway', () => {
     }));
 
     expect(sentValues).toEqual(['Bearer a']);
-    expect(result.response).toEqual({ echoed: '[redacted]' });
+    expect(result.response).toBe('[redacted]');
   });
 
   it('does not treat configured header names as suffixes of other HTTP field names', async () => {

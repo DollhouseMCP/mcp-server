@@ -507,6 +507,7 @@ const MAX_CREDENTIAL_ECHO_LABEL_LENGTH = 64;
 function redactCredentialLabelEchoes(value: string, patterns: readonly string[]): string {
   let redacted = redactJsonCredentialLabelEchoes(value, patterns);
   for (const pattern of patterns) {
+    const hasFormEncodingEvidence = /%[0-9A-Fa-f]{2}/.test(redacted);
     const decoded = decodePercentEscapesWithOffsets(redacted, true);
     const decodedPattern = decodePercentEscapesWithOffsets(pattern, true).value;
     const matches = findLinearMatches(decoded.value, decodedPattern).flatMap(valueMatch => {
@@ -515,7 +516,7 @@ function redactCredentialLabelEchoes(value: string, patterns: readonly string[])
       const sourceStart = decoded.sourceStarts[labelledMatch.start];
       const sourceEnd = decoded.sourceEnds[labelledMatch.end - 1];
       return sourceStart !== undefined && sourceEnd !== undefined &&
-        redacted[sourceStart - 1] !== '+' &&
+        (redacted[sourceStart - 1] !== '+' || hasFormEncodingEvidence) &&
         !isInsideRedactionMarker(redacted, sourceStart, sourceEnd)
         ? [{ start: sourceStart, end: sourceEnd }]
         : [];
@@ -1084,7 +1085,10 @@ export function buildCredentialRedactions(
 
   addCredential(credential);
   labelledValues.add(credential);
-  if (injection.sensitiveValue !== credential) addCredential(injection.sensitiveValue);
+  if (injection.sensitiveValue !== credential) {
+    addCredential(injection.sensitiveValue);
+    labelledValues.add(injection.sensitiveValue);
+  }
   for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
     addCredential(sensitiveValue);
   }
