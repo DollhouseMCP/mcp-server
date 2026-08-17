@@ -622,10 +622,16 @@ function injectCredential(
       // The stored credential is `username:password` (RFC 7617); encode at
       // injection time so the vault never holds base64-obscured material.
       const encoded = Buffer.from(credential, 'utf8').toString('base64');
+      const password = credential.slice(credential.indexOf(':') + 1);
       const injection = injectHeaderCredential(headers, 'Authorization', `Basic ${encoded}`, encoded, true);
       return {
         ...injection,
-        additionalSensitiveValues: [credential.slice(credential.indexOf(':') + 1)],
+        additionalSensitiveValues: [password],
+        additionalStructuredValues: [{
+          name: 'password',
+          value: password,
+          caseInsensitiveName: true,
+        }],
       };
     }
     const value = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;

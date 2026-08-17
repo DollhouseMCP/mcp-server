@@ -207,6 +207,37 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('{"echo":"[redacted]","ordinary":"available"}');
   });
 
+  it.each([
+    ['declared', 'application/json', { echo: '[redacted]' }],
+    ['missing', null, '{"echo":"[redacted]"}'],
+    ['mislabelled', 'text/plain', '{"echo":"[redacted]"}'],
+  ])('strips a leading BOM before redacting JSON with %s content type', async (_label, contentType, expected) => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => {
+        const headers = new Headers();
+        if (contentType !== null) headers.set('Content-Type', contentType);
+        return Promise.resolve(new Response(new TextEncoder().encode('\uFEFF{"echo":"a"}'), {
+          status: 200,
+          headers,
+        }));
+      },
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: `/bom-json-${_label}-content-type`,
+    }));
+
+    expect(result.response).toEqual(expected);
+  });
+
   it('removes superseded duplicate JSON fields that contain short credentials', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
@@ -1364,6 +1395,32 @@ describe('IntegrationRequestGateway', () => {
       decodedPassword: '[redacted]',
       unrelated: 'a normal response',
     });
+  });
+
+  it('redacts a short decoded Basic password in labelled text', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'basic', name: 'Authorization', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('user:a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('PASSWORD=a; note=available', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/v0/app/table',
+    }));
+
+    expect(result.response).toBe('[redacted]; note=available');
   });
 
   it('fails closed on disallowed method, host escape, oversized body, and rate limit', async () => {

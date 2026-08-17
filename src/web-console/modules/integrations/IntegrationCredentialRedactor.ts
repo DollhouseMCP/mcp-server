@@ -10,11 +10,19 @@ export interface EffectiveCredentialInjection {
   readonly sensitiveValue: string;
   /** Sensitive components an upstream may decode and echo independently. */
   readonly additionalSensitiveValues?: readonly string[];
+  /** Labelled sensitive components an upstream may decode and echo independently. */
+  readonly additionalStructuredValues?: readonly CredentialStructuredValue[];
   readonly caseInsensitivePrefixLength?: number;
   /** Pre-normalization value retained only as an additional defense-in-depth redaction candidate. */
   readonly configuredValue?: string;
   readonly configuredSensitiveValue?: string;
   readonly configuredCaseInsensitivePrefixLength?: number;
+}
+
+export interface CredentialStructuredValue {
+  readonly name: string;
+  readonly value: string;
+  readonly caseInsensitiveName?: boolean;
 }
 
 export interface CredentialRedactions {
@@ -53,6 +61,7 @@ interface ScannedJsonString {
 interface CredentialQueryRedaction {
   readonly name: string;
   readonly value: string;
+  readonly caseInsensitiveName?: boolean;
 }
 
 interface CredentialBoundedValueRedaction {
@@ -78,21 +87,22 @@ export function redactIntegrationResponseBody(
   contentType: string | null,
   credentialRedactions: CredentialRedactions,
 ): unknown {
-  if (text === '') return null;
+  const normalizedText = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+  if (normalizedText === '') return null;
   const declaredJson = isJsonMediaType(contentType);
-  if (declaredJson || isJsonShapedBody(text)) {
+  if (declaredJson || isJsonShapedBody(normalizedText)) {
     try {
       if (!declaredJson) {
-        return redactJsonShapedTextWithoutLosingNumbers(text, credentialRedactions);
+        return redactJsonShapedTextWithoutLosingNumbers(normalizedText, credentialRedactions);
       }
-      return redactResponseCredentials(JSON.parse(text) as unknown, credentialRedactions);
+      return redactResponseCredentials(JSON.parse(normalizedText) as unknown, credentialRedactions);
     } catch {
       // A declared JSON response fails closed. Mislabelled structured-looking
       // text retains the existing text-redaction fallback when parsing fails.
       if (declaredJson) return REDACTED;
     }
   }
-  return redactCredentialText(text, credentialRedactions);
+  return redactCredentialText(normalizedText, credentialRedactions);
 }
 
 function redactJsonShapedTextWithoutLosingNumbers(
@@ -409,7 +419,12 @@ function redactCredentialQueryEcho(value: string, query: CredentialQueryRedactio
   while (searchFrom < jsonRedacted.length) {
     const index = searchFrom;
     searchFrom += 1;
-    const nameEnd = matchCredentialValueEnd(jsonRedacted, index, query.name);
+    const nameEnd = matchCredentialValueEnd(
+      jsonRedacted,
+      index,
+      query.name,
+      query.caseInsensitiveName ? query.name.length : 0,
+    );
     if (nameEnd === null || jsonRedacted[nameEnd] !== '=') continue;
     const before = index === 0 ? '' : jsonRedacted[index - 1];
     const valueStart = nameEnd + 1;
@@ -443,7 +458,7 @@ function redactJsonCredentialQueryEchoes(
     // Advance one code unit so a quote consumed by malformed surrounding text
     // can still be considered as the start of the next bounded candidate.
     searchFrom = start + 1;
-    if (scannedName.value === null || !credentialValuesEqual(scannedName.value, query.name)) continue;
+    if (scannedName.value === null || !credentialQueryNamesEqual(scannedName.value, query)) continue;
     const before = start === 0 ? '' : value[start - 1];
     if (before !== '' && /[A-Za-z0-9_.~-]/.test(before)) continue;
     const valueEnd = jsonCredentialPropertyValueEnd(value, scannedName.end, query.value);
@@ -455,6 +470,15 @@ function redactJsonCredentialQueryEchoes(
   if (parts.length === 0) return value;
   parts.push(value.slice(copyFrom));
   return parts.join('');
+}
+
+function credentialQueryNamesEqual(actual: string, query: CredentialQueryRedaction): boolean {
+  return matchCredentialValueEnd(
+    actual,
+    0,
+    query.name,
+    query.caseInsensitiveName ? query.name.length : 0,
+  ) === actual.length;
 }
 
 function jsonCredentialPropertyValueEnd(
@@ -845,6 +869,14 @@ export function buildCredentialRedactions(
   for (const sensitiveValue of injection.additionalSensitiveValues ?? []) {
     addCredential(sensitiveValue);
   }
+  for (const structuredValue of injection.additionalStructuredValues ?? []) {
+    addQueryCredentialRedactions(
+      queries,
+      structuredValue.name,
+      structuredValue.value,
+      structuredValue.caseInsensitiveName,
+    );
+  }
   addCredential(injection.value, injection.sensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
   if (injection.location === 'query') {
     addQueryCredentialRedactions(queries, injection.name, injection.value);
@@ -945,13 +977,14 @@ function addQueryCredentialRedactions(
   queries: CredentialQueryRedaction[],
   queryName: string,
   injectedValue: string,
+  caseInsensitiveName = false,
 ): void {
   const encodedName = new URLSearchParams([[queryName, '']]).toString().slice(0, -1);
   const encodedValue = new URLSearchParams({ value: injectedValue }).toString().slice('value='.length);
   const queryNames = new Set([queryName, encodedName, encodeURIComponent(queryName)]);
   const queryValues = new Set([injectedValue, encodedValue, encodeURIComponent(injectedValue)]);
   for (const name of queryNames) {
-    for (const value of queryValues) queries.push({ name, value });
+    for (const value of queryValues) queries.push({ name, value, caseInsensitiveName });
   }
 }
 
