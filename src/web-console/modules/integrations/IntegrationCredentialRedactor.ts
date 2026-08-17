@@ -1076,6 +1076,7 @@ export function buildCredentialRedactions(
   }
   for (const boundedValue of injection.additionalBoundedValues ?? []) {
     addCredential(boundedValue);
+    if (boundedValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH) continue;
     for (const value of new Set([boundedValue, ...encodedVariants(boundedValue)])) {
       boundedValues.push({ value, caseInsensitivePrefixLength: 0 });
     }
