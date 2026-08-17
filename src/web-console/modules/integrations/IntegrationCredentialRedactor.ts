@@ -270,14 +270,19 @@ interface DecodedText {
   readonly sourceEnds: readonly number[];
 }
 
+interface LinearMatch {
+  readonly start: number;
+  readonly end: number;
+}
+
 function redactOptionallyEncodedEmbeddedCredentialValues(
   value: string,
   patterns: readonly string[],
 ): string {
   let redacted = value;
   for (const pattern of patterns) {
-    if (!redacted.includes('%')) break;
-    redacted = redactLinearMatches(redacted, pattern, decodePercentEscapesWithOffsets(redacted));
+    if (!redacted.includes('%') && !redacted.includes('+')) break;
+    redacted = redactLinearMatches(redacted, pattern, decodePercentEscapesWithOffsets(redacted, true));
   }
   return redacted;
 }
@@ -292,12 +297,19 @@ function identityDecodedText(value: string): DecodedText {
   return { value, sourceStarts, sourceEnds };
 }
 
-function decodePercentEscapesWithOffsets(value: string): DecodedText {
+function decodePercentEscapesWithOffsets(value: string, decodeFormSpaces = false): DecodedText {
   const decoded: string[] = [];
   const sourceStarts: number[] = [];
   const sourceEnds: number[] = [];
   let cursor = 0;
   while (cursor < value.length) {
+    if (decodeFormSpaces && value[cursor] === '+') {
+      decoded.push(' ');
+      sourceStarts.push(cursor);
+      sourceEnds.push(cursor + 1);
+      cursor += 1;
+      continue;
+    }
     const encodedCodePoint = decodePercentEncodedCodePoint(value, cursor);
     if (encodedCodePoint !== null) {
       decoded.push(encodedCodePoint.value);
@@ -356,24 +368,51 @@ function utf8CodePointByteLength(firstByte: number): number | null {
   return null;
 }
 
-function redactLinearMatches(source: string, pattern: string, decoded: DecodedText): string {
+function redactLinearMatches(
+  source: string,
+  pattern: string,
+  decoded: DecodedText,
+): string {
   if (pattern === '' || decoded.value === '') return source;
-  const failure = buildMatchFailureTable(pattern);
-  const matches: Array<{ readonly start: number; readonly end: number }> = [];
+  const matches = findLinearMatches(decoded.value, pattern).flatMap(match => {
+    const sourceStart = decoded.sourceStarts[match.start];
+    const sourceEnd = decoded.sourceEnds[match.end - 1];
+    return sourceStart !== undefined && sourceEnd !== undefined &&
+      !isInsideRedactionMarker(source, sourceStart, sourceEnd)
+      ? [{ start: sourceStart, end: sourceEnd }]
+      : [];
+  });
+  return applyRedactionMatches(source, matches);
+}
+
+function findLinearMatches(
+  value: string,
+  pattern: string,
+  caseInsensitive = false,
+): readonly LinearMatch[] {
+  if (pattern === '' || value === '') return [];
+  const failure = buildMatchFailureTable(pattern, caseInsensitive);
+  const matches: LinearMatch[] = [];
   let matched = 0;
-  for (let index = 0; index < decoded.value.length; index += 1) {
-    while (matched > 0 && decoded.value[index] !== pattern[matched]) matched = failure[matched - 1] ?? 0;
-    if (decoded.value[index] === pattern[matched]) matched += 1;
+  for (let index = 0; index < value.length; index += 1) {
+    while (matched > 0 && !linearMatchCharactersEqual(
+      value[index] ?? '',
+      pattern[matched] ?? '',
+      caseInsensitive,
+    )) matched = failure[matched - 1] ?? 0;
+    if (linearMatchCharactersEqual(
+      value[index] ?? '',
+      pattern[matched] ?? '',
+      caseInsensitive,
+    )) matched += 1;
     if (matched !== pattern.length) continue;
-    const decodedStart = index - pattern.length + 1;
-    const sourceStart = decoded.sourceStarts[decodedStart];
-    const sourceEnd = decoded.sourceEnds[index];
-    if (sourceStart !== undefined && sourceEnd !== undefined &&
-        !isInsideRedactionMarker(source, sourceStart, sourceEnd)) {
-      matches.push({ start: sourceStart, end: sourceEnd });
-    }
-    matched = 0;
+    matches.push({ start: index - pattern.length + 1, end: index + 1 });
+    matched = failure[matched - 1] ?? 0;
   }
+  return matches;
+}
+
+function applyRedactionMatches(source: string, matches: readonly LinearMatch[]): string {
   if (matches.length === 0) return source;
   const parts: string[] = [];
   let copyFrom = 0;
@@ -386,15 +425,33 @@ function redactLinearMatches(source: string, pattern: string, decoded: DecodedTe
   return parts.join('');
 }
 
-function buildMatchFailureTable(pattern: string): readonly number[] {
+function buildMatchFailureTable(pattern: string, caseInsensitive = false): readonly number[] {
   const failure = new Array<number>(pattern.length).fill(0);
   let matched = 0;
   for (let index = 1; index < pattern.length; index += 1) {
-    while (matched > 0 && pattern[index] !== pattern[matched]) matched = failure[matched - 1] ?? 0;
-    if (pattern[index] === pattern[matched]) matched += 1;
+    while (matched > 0 && !linearMatchCharactersEqual(
+      pattern[index] ?? '',
+      pattern[matched] ?? '',
+      caseInsensitive,
+    )) matched = failure[matched - 1] ?? 0;
+    if (linearMatchCharactersEqual(
+      pattern[index] ?? '',
+      pattern[matched] ?? '',
+      caseInsensitive,
+    )) matched += 1;
     failure[index] = matched;
   }
   return failure;
+}
+
+function linearMatchCharactersEqual(
+  actual: string,
+  expected: string,
+  caseInsensitive: boolean,
+): boolean {
+  return caseInsensitive
+    ? asciiLowercase(actual) === asciiLowercase(expected)
+    : actual === expected;
 }
 
 function isInsideRedactionMarker(source: string, start: number, end: number): boolean {
@@ -413,35 +470,30 @@ function redactCredentialQueryEchoes(
 
 function redactCredentialQueryEcho(value: string, query: CredentialQueryRedaction): string {
   const jsonRedacted = redactJsonCredentialQueryEchoes(value, query);
-  const parts: string[] = [];
-  let copyFrom = 0;
-  let searchFrom = 0;
-  while (searchFrom < jsonRedacted.length) {
-    const index = searchFrom;
-    searchFrom += 1;
-    const nameEnd = matchCredentialValueEnd(
-      jsonRedacted,
-      index,
-      query.name,
-      query.caseInsensitiveName ? query.name.length : 0,
-    );
-    if (nameEnd === null || jsonRedacted[nameEnd] !== '=') continue;
-    const before = index === 0 ? '' : jsonRedacted[index - 1];
-    const valueStart = nameEnd + 1;
-    const valueEnd = matchCredentialValueEnd(jsonRedacted, valueStart, query.value);
-    if (valueEnd === null) continue;
-    const after = jsonRedacted[valueEnd] ?? '';
-    const nameBoundary = before === '' || !/[A-Za-z0-9_.~-]/.test(before);
-    const valueBoundary = isCredentialValueBoundary(after);
-    if (nameBoundary && valueBoundary) {
-      parts.push(jsonRedacted.slice(copyFrom, index), REDACTED);
-      copyFrom = valueEnd;
-      searchFrom = valueEnd;
-    }
-  }
-  if (parts.length === 0) return jsonRedacted;
-  parts.push(jsonRedacted.slice(copyFrom));
-  return parts.join('');
+  const decoded = decodePercentEscapesWithOffsets(jsonRedacted, true);
+  const decodedName = decodePercentEscapesWithOffsets(query.name, true).value;
+  const decodedValue = decodePercentEscapesWithOffsets(query.value, true).value;
+  const prefixes = findLinearMatches(
+    decoded.value,
+    `${decodedName}=`,
+    query.caseInsensitiveName,
+  );
+  const valuesByStart = new Map(
+    findLinearMatches(decoded.value, decodedValue).map(match => [match.start, match.end]),
+  );
+  const matches = prefixes.flatMap(prefix => {
+    const valueEnd = valuesByStart.get(prefix.end);
+    if (valueEnd === undefined ||
+        (prefix.start > 0 && /[A-Za-z0-9_.~-]/.test(decoded.value[prefix.start - 1] ?? '')) ||
+        !isCredentialValueBoundary(decoded.value[valueEnd] ?? '')) return [];
+    const sourceStart = decoded.sourceStarts[prefix.start];
+    const sourceEnd = decoded.sourceEnds[valueEnd - 1];
+    return sourceStart !== undefined && sourceEnd !== undefined &&
+      !isInsideRedactionMarker(jsonRedacted, sourceStart, sourceEnd)
+      ? [{ start: sourceStart, end: sourceEnd }]
+      : [];
+  });
+  return applyRedactionMatches(jsonRedacted, matches);
 }
 
 function redactJsonCredentialQueryEchoes(

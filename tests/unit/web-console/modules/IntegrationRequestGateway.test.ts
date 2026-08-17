@@ -641,18 +641,19 @@ describe('IntegrationRequestGateway', () => {
   });
 
   it('redacts query credentials with mixed form-space encodings', async () => {
+    const credential = 'abcdefgh ijkl mnop';
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({
         staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
       })],
       records: [integrationRecord({
         provider: 'airtable' as UserIntegrationProvider,
-        accessTokenCiphertext: encrypt('a b c', 'airtable'),
+        accessTokenCiphertext: encrypt(credential, 'airtable'),
         refreshTokenCiphertext: null,
       })],
       fetch: () => Promise.resolve(jsonResponse(200, {
-        labelled: 'key=a+b%20c&note=available',
-        scalar: 'a%20b+c',
+        labelled: 'key=abcdefgh+ijkl%20mnop&note=available',
+        scalar: 'abcdefgh%20ijkl+mnop',
       })),
     });
 
@@ -667,6 +668,33 @@ describe('IntegrationRequestGateway', () => {
       scalar: '[redacted]',
     });
   });
+
+  it('bounds structured query matching for long repeated credentials', async () => {
+    const credential = `${'a='.repeat(4_095)}b`;
+    const responseBody = 'a='.repeat(128 * 1_024);
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'a', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt(credential, 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(responseBody, {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/repeated-structured-query-prefix',
+    }));
+
+    expect(result.response).toBe(responseBody);
+  }, 5_000);
 
   it.each([
     ['a', 'received key=%61 safely'],
@@ -695,6 +723,31 @@ describe('IntegrationRequestGateway', () => {
     }));
 
     expect(result.response).toBe('received [redacted] safely');
+  });
+
+  it('uses decoded query delimiters as credential boundaries', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received key=%61%26note=available safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/encoded-query-boundary',
+    }));
+
+    expect(result.response).toBe('received [redacted]%26note=available safely');
   });
 
   it('redacts optionally percent-encoded credentials in generic scalar echoes', async () => {
@@ -1436,7 +1489,7 @@ describe('IntegrationRequestGateway', () => {
         accessTokenCiphertext: encrypt('user:a', 'airtable'),
         refreshTokenCiphertext: null,
       })],
-      fetch: () => Promise.resolve(new Response('PASSWORD=a; Password: a; note=available', {
+      fetch: () => Promise.resolve(new Response('PASSWORD=a; password=A; Password: a; note=available', {
         status: 200,
         headers: { 'Content-Type': 'text/plain' },
       })),
@@ -1448,7 +1501,7 @@ describe('IntegrationRequestGateway', () => {
       path: '/v0/app/table',
     }));
 
-    expect(result.response).toBe('[redacted]; [redacted]; note=available');
+    expect(result.response).toBe('[redacted]; password=A; [redacted]; note=available');
   });
 
   it('fails closed on disallowed method, host escape, oversized body, and rate limit', async () => {
