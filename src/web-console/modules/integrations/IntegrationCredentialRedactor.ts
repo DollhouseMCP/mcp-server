@@ -1240,10 +1240,15 @@ function redactBoundedCredentialValue(
     identityDecodedText(value),
     pattern,
   );
-  if (!literalRedacted.includes('%') && !literalRedacted.includes('+')) return literalRedacted;
-  return redactLinearBoundedCredentialValue(
+  if (!/%[0-9A-Fa-f]{2}/.test(literalRedacted)) return literalRedacted;
+  const percentRedacted = redactLinearBoundedCredentialValue(
     literalRedacted,
-    decodePercentEscapesWithOffsets(literalRedacted, true),
+    decodePercentEscapesWithOffsets(literalRedacted),
+    pattern,
+  );
+  return redactLinearBoundedCredentialValue(
+    percentRedacted,
+    decodePercentEscapesWithOffsets(percentRedacted, true),
     pattern,
   );
 }

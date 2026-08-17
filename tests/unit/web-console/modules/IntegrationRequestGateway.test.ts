@@ -1827,6 +1827,32 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('received [redacted] safely; xu:a remains; u:available remains');
   });
 
+  it('preserves literal pluses in partially encoded bounded Basic composites', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'basic', name: 'Authorization', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('u:+?', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('received u:+%3F safely', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/partially-encoded-basic-composite',
+    }));
+
+    expect(result.response).toBe('received [redacted] safely');
+  });
+
   it('redacts a short decoded Basic password in labelled text', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({
