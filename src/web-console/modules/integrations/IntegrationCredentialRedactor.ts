@@ -514,13 +514,14 @@ function decodeJsonUnicodeEscapeAt(
   const firstCodeUnit = Number.parseInt(firstHex, 16);
   const secondHex = value.slice(start + 8, start + 12);
   if (firstCodeUnit >= 0xd800 && firstCodeUnit <= 0xdbff &&
-      value.slice(start + 6, start + 8) === '\\u' && /^[0-9A-Fa-f]{4}$/.test(secondHex)) {
+      value.slice(start + 6, start + 8) === String.raw`\u` && /^[0-9A-Fa-f]{4}$/.test(secondHex)) {
     const secondCodeUnit = Number.parseInt(secondHex, 16);
     if (secondCodeUnit >= 0xdc00 && secondCodeUnit <= 0xdfff) {
-      return { value: String.fromCharCode(firstCodeUnit, secondCodeUnit), end: start + 12 };
+      const codePoint = 0x10000 + ((firstCodeUnit - 0xd800) << 10) + (secondCodeUnit - 0xdc00);
+      return { value: String.fromCodePoint(codePoint), end: start + 12 };
     }
   }
-  return { value: String.fromCharCode(firstCodeUnit), end: start + 6 };
+  return { value: String.fromCodePoint(firstCodeUnit), end: start + 6 };
 }
 
 function appendDecodedSourceOffsets(
