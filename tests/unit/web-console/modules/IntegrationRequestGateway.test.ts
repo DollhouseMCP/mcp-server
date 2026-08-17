@@ -1015,6 +1015,29 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('received [redacted] safely');
   });
 
+  it('redacts percent-encoded literal pluses in labelled short credentials', async () => {
+    const gateway = gatewayFixture({
+      records: [integrationRecord({
+        provider: 'gmail' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a+b', 'gmail'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response('access_token=%61%2Bb', {
+        status: 200,
+        headers: { 'Content-Type': 'text/plain' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/encoded-labelled-literal-plus',
+    }));
+
+    expect(result.response).toBe('[redacted]');
+  });
+
   it('bounds embedded credential matching for long shared prefixes', async () => {
     const credential = `${'a'.repeat(8191)}b`;
     const responseBody = 'a'.repeat(240 * 1024);

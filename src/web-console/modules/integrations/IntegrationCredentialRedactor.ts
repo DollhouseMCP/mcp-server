@@ -719,23 +719,32 @@ const MAX_CREDENTIAL_ECHO_LABEL_LENGTH = 64;
 function redactCredentialLabelEchoes(value: string, patterns: readonly string[]): string {
   let redacted = redactJsonCredentialLabelEchoes(value, patterns);
   for (const pattern of patterns) {
-    const hasFormEncodingEvidence = /%[0-9A-Fa-f]{2}/.test(redacted);
-    const decoded = decodePercentEscapesWithOffsets(redacted, true);
-    const decodedPattern = decodePercentEscapesWithOffsets(pattern, true).value;
-    const matches = findLinearMatches(decoded.value, decodedPattern).flatMap(valueMatch => {
-      const labelledMatch = credentialLabelMatch(decoded.value, valueMatch);
-      if (labelledMatch === null) return [];
-      const sourceStart = decoded.sourceStarts[labelledMatch.start];
-      const sourceEnd = decoded.sourceEnds[labelledMatch.end - 1];
-      return sourceStart !== undefined && sourceEnd !== undefined &&
-        (redacted[sourceStart - 1] !== '+' || hasFormEncodingEvidence) &&
-        !isInsideRedactionMarker(redacted, sourceStart, sourceEnd)
-        ? [{ start: sourceStart, end: sourceEnd }]
-        : [];
-    });
-    redacted = applyRedactionMatches(redacted, matches);
+    redacted = redactCredentialLabelEchoPattern(redacted, pattern, false);
+    redacted = redactCredentialLabelEchoPattern(redacted, pattern, true);
   }
   return redacted;
+}
+
+function redactCredentialLabelEchoPattern(
+  value: string,
+  pattern: string,
+  decodeFormSpaces: boolean,
+): string {
+  const hasEncodingEvidence = /%[0-9A-Fa-f]{2}/.test(value);
+  const decoded = decodePercentEscapesWithOffsets(value, decodeFormSpaces);
+  const decodedPattern = decodePercentEscapesWithOffsets(pattern, decodeFormSpaces).value;
+  const matches = findLinearMatches(decoded.value, decodedPattern).flatMap(valueMatch => {
+    const labelledMatch = credentialLabelMatch(decoded.value, valueMatch);
+    if (labelledMatch === null) return [];
+    const sourceStart = decoded.sourceStarts[labelledMatch.start];
+    const sourceEnd = decoded.sourceEnds[labelledMatch.end - 1];
+    return sourceStart !== undefined && sourceEnd !== undefined &&
+      (value[sourceStart - 1] !== '+' || hasEncodingEvidence) &&
+      !isInsideRedactionMarker(value, sourceStart, sourceEnd)
+      ? [{ start: sourceStart, end: sourceEnd }]
+      : [];
+  });
+  return applyRedactionMatches(value, matches);
 }
 
 function redactJsonCredentialLabelEchoes(value: string, patterns: readonly string[]): string {
