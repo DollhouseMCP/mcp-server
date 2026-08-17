@@ -876,6 +876,7 @@ export function buildCredentialRedactions(
       structuredValue.value,
       structuredValue.caseInsensitiveName,
     );
+    addHeader(structuredValue.name, structuredValue.value, structuredValue.value);
   }
   addCredential(injection.value, injection.sensitiveValue.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH);
   if (injection.location === 'query') {

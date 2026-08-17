@@ -1408,7 +1408,7 @@ describe('IntegrationRequestGateway', () => {
         accessTokenCiphertext: encrypt('user:a', 'airtable'),
         refreshTokenCiphertext: null,
       })],
-      fetch: () => Promise.resolve(new Response('PASSWORD=a; note=available', {
+      fetch: () => Promise.resolve(new Response('PASSWORD=a; Password: a; note=available', {
         status: 200,
         headers: { 'Content-Type': 'text/plain' },
       })),
@@ -1420,7 +1420,7 @@ describe('IntegrationRequestGateway', () => {
       path: '/v0/app/table',
     }));
 
-    expect(result.response).toBe('[redacted]; note=available');
+    expect(result.response).toBe('[redacted]; [redacted]; note=available');
   });
 
   it('fails closed on disallowed method, host escape, oversized body, and rate limit', async () => {
