@@ -850,7 +850,9 @@ export function buildCredentialRedactions(
     addQueryCredentialRedactions(queries, injection.name, injection.value);
     const prefixLength = injection.value.length - injection.sensitiveValue.length;
     if (injection.sensitiveValue.length < MIN_EMBEDDED_CREDENTIAL_LENGTH && prefixLength > 0) {
-      boundedValues.push({ value: injection.value, caseInsensitivePrefixLength: 0 });
+      for (const value of new Set([injection.value, ...encodedVariants(injection.value)])) {
+        boundedValues.push({ value, caseInsensitivePrefixLength: 0 });
+      }
     }
   } else {
     if (injection.value && injection.sensitiveValue) {

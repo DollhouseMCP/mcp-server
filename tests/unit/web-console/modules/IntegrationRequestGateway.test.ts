@@ -721,6 +721,38 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts serialized standalone query values with spaced prefixes', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: 'Token ' } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        formEncoded: 'received Token+a safely',
+        percentEncoded: 'received Token%20a safely',
+        longerFormValue: 'received Token+available safely',
+        prefixedFormValue: 'received NotToken+a safely',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/short-spaced-query-prefix',
+    }));
+
+    expect(result.response).toEqual({
+      formEncoded: 'received [redacted] safely',
+      percentEncoded: 'received [redacted] safely',
+      longerFormValue: 'received Token+available safely',
+      prefixedFormValue: 'received NotToken+a safely',
+    });
+  });
+
   it('redacts an exact lowercase percent escape for a short query credential', async () => {
     const gateway = gatewayFixture({
       descriptors: [staticDescriptor({
