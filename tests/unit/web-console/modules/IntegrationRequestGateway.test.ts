@@ -1316,6 +1316,32 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts short credentials when upstream encodes the header delimiter', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'header', name: 'X-Api-Key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(
+        'received X-Api-Key%3A%20a safely; X-Api-Key%3A%20available remains',
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/encoded-header-delimiter',
+    }));
+
+    expect(result.response).toBe('received [redacted] safely; X-Api-Key%3A%20available remains');
+  });
+
   it('redacts case-normalized authorization schemes while matching credential bytes exactly', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({
@@ -1821,7 +1847,7 @@ describe('IntegrationRequestGateway', () => {
         });
         return Promise.resolve(fetches.length === 1
           ? jsonResponse(401, { error: 'expired' })
-          : jsonResponse(200, { ok: true }));
+          : jsonResponse(200, { ok: true, echoed: 'gmail-access-token' }));
       },
     });
 
@@ -1831,7 +1857,11 @@ describe('IntegrationRequestGateway', () => {
       path: '/gmail/v1/users/me/profile',
     }));
 
-    expect(result).toMatchObject({ status: 200, refreshed: true });
+    expect(result).toMatchObject({
+      status: 200,
+      refreshed: true,
+      response: { ok: true, echoed: '[redacted]' },
+    });
     expect(fetches.map(call => call.authorization)).toEqual([
       'Bearer gmail-access-token',
       null,

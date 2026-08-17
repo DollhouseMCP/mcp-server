@@ -160,7 +160,14 @@ export class IntegrationRequestGateway {
       throw new IntegrationRequestError('integration_token_refresh_failed', 'Integration token refresh failed.', 502);
     }
     const retryCredential = await this.decryptAuditedAccessToken(refresh.record, session.userId, session.sessionId, method, url, true);
-    const retry = await this.auditedSend(requestContext, descriptor, body, retryCredential, true);
+    const retry = await this.auditedSend(
+      requestContext,
+      descriptor,
+      body,
+      retryCredential,
+      true,
+      [firstCredential],
+    );
     return this.finish(provider, session.userId, session.sessionId, method, url, retry, true);
   }
 
@@ -246,9 +253,10 @@ export class IntegrationRequestGateway {
     body: string | null,
     credential: string,
     refreshed: boolean,
+    previousCredentials: readonly string[] = [],
   ): Promise<IntegrationHttpResponse> {
     try {
-      return await this.send(descriptor, ctx.url, ctx.method, body, credential);
+      return await this.send(descriptor, ctx.url, ctx.method, body, credential, previousCredentials);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         await this.audit({
@@ -275,11 +283,25 @@ export class IntegrationRequestGateway {
     method: string,
     body: string | null,
     credential: string,
+    previousCredentials: readonly string[],
   ): Promise<IntegrationHttpResponse> {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== null) headers.set('Content-Type', 'application/json');
     const effectiveInjection = injectCredential(descriptor, url, headers, credential);
-    const credentialRedactions = buildCredentialRedactions(credential, effectiveInjection);
+    const additionalCredentials = previousCredentials.map(previousCredential => {
+      const redactionUrl = new URL(url);
+      const redactionHeaders = new Headers({ Accept: 'application/json' });
+      if (body !== null) redactionHeaders.set('Content-Type', 'application/json');
+      return {
+        credential: previousCredential,
+        injection: injectCredential(descriptor, redactionUrl, redactionHeaders, previousCredential),
+      };
+    });
+    const credentialRedactions = buildCredentialRedactions(
+      credential,
+      effectiveInjection,
+      additionalCredentials,
+    );
     const vetted = await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
     // Pin the connection to the vetted address so a second connect-time DNS
     // resolution cannot retarget the request (DNS-rebinding TOCTOU).

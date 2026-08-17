@@ -708,9 +708,30 @@ function redactCredentialHeaderEcho(value: string, header: CredentialHeaderRedac
     copyFrom = match.end;
     searchFrom = copyFrom;
   }
-  if (parts.length === 0) return jsonRedacted;
-  parts.push(jsonRedacted.slice(copyFrom));
-  return parts.join('');
+  const literalRedacted = parts.length === 0
+    ? jsonRedacted
+    : [...parts, jsonRedacted.slice(copyFrom)].join('');
+  return redactEncodedCredentialHeaderEcho(literalRedacted, header);
+}
+
+function redactEncodedCredentialHeaderEcho(
+  value: string,
+  header: CredentialHeaderRedaction,
+): string {
+  if (!value.includes('%') && !value.includes('+')) return value;
+  const decoded = decodePercentEscapesWithOffsets(value, true);
+  const matches = findLinearMatches(decoded.value, header.name, true).flatMap(nameMatch => {
+    const match = credentialHeaderEchoMatch(decoded.value, nameMatch.start, header);
+    if (match === null) return [];
+    const sourceStart = decoded.sourceStarts[match.start];
+    const sourceEnd = decoded.sourceEnds[match.end - 1];
+    return sourceStart !== undefined && sourceEnd !== undefined &&
+      value[sourceStart - 1] !== '+' &&
+      !isInsideRedactionMarker(value, sourceStart, sourceEnd)
+      ? [{ start: sourceStart, end: sourceEnd }]
+      : [];
+  });
+  return applyRedactionMatches(value, matches);
 }
 
 function redactJsonCredentialHeaderEchoes(
@@ -941,6 +962,10 @@ function isHttpFieldNameCharacter(value: string): boolean {
 export function buildCredentialRedactions(
   credential: string,
   injection: EffectiveCredentialInjection,
+  additionalCredentials: readonly {
+    readonly credential: string;
+    readonly injection: EffectiveCredentialInjection;
+  }[] = [],
 ): CredentialRedactions {
   const exact = new Set<string>();
   const percentExact = new Set<string>();
@@ -1066,6 +1091,22 @@ export function buildCredentialRedactions(
         injection.configuredCaseInsensitivePrefixLength,
       );
     }
+  }
+
+  for (const additionalInput of additionalCredentials) {
+    const additional = buildCredentialRedactions(
+      additionalInput.credential,
+      additionalInput.injection,
+    );
+    for (const value of additional.exact) exact.add(value);
+    for (const value of additional.percentExact) percentExact.add(value);
+    for (const value of additional.embedded) embedded.add(value);
+    for (const value of additional.semanticEmbedded) semanticEmbedded.add(value);
+    for (const value of additional.percentEmbedded) percentEmbedded.add(value);
+    headers.push(...additional.headers);
+    queries.push(...additional.queries);
+    for (const value of additional.labelledValues) labelledValues.add(value);
+    boundedValues.push(...additional.boundedValues);
   }
 
   return {
