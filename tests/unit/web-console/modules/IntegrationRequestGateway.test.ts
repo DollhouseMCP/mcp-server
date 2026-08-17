@@ -492,7 +492,8 @@ describe('IntegrationRequestGateway', () => {
         refreshTokenCiphertext: null,
       })],
       fetch: () => Promise.resolve(new Response(
-        'access_token=a; ACCESS_TOKEN: a; api_key=%61; token=available; a normal response',
+        'access_token=a; ACCESS_TOKEN: a; api_key=%61; token=available; a normal response; ' +
+        'prefix {"access\\u005ftoken":"\\u0061"} {"access_token":"available"}',
         { status: 200, headers: { 'Content-Type': 'text/plain' } },
       )),
     });
@@ -504,7 +505,8 @@ describe('IntegrationRequestGateway', () => {
     }));
 
     expect(result.response).toBe(
-      '[redacted]; [redacted]; [redacted]; token=available; a normal response',
+      '[redacted]; [redacted]; [redacted]; token=available; a normal response; ' +
+      'prefix {[redacted]} {"access_token":"available"}',
     );
   });
 

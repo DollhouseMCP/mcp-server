@@ -508,7 +508,7 @@ function redactCredentialQueryEcho(value: string, query: CredentialQueryRedactio
 const MAX_CREDENTIAL_ECHO_LABEL_LENGTH = 64;
 
 function redactCredentialLabelEchoes(value: string, patterns: readonly string[]): string {
-  let redacted = value;
+  let redacted = redactJsonCredentialLabelEchoes(value, patterns);
   for (const pattern of patterns) {
     const decoded = decodePercentEscapesWithOffsets(redacted, true);
     const decodedPattern = decodePercentEscapesWithOffsets(pattern, true).value;
@@ -526,6 +526,38 @@ function redactCredentialLabelEchoes(value: string, patterns: readonly string[])
     redacted = applyRedactionMatches(redacted, matches);
   }
   return redacted;
+}
+
+function redactJsonCredentialLabelEchoes(value: string, patterns: readonly string[]): string {
+  const parts: string[] = [];
+  let copyFrom = 0;
+  let searchFrom = 0;
+  for (;;) {
+    const start = value.indexOf('"', searchFrom);
+    if (start < 0) break;
+    const scannedName = scanJsonStringAt(
+      value,
+      start,
+      maxJsonStringSourceLength(MAX_CREDENTIAL_ECHO_LABEL_LENGTH),
+    );
+    searchFrom = scannedName.value === null ? start + 1 : scannedName.end;
+    if (scannedName.value === null || !isCredentialKey(scannedName.value)) continue;
+    const before = value[start - 1] ?? '';
+    if (before !== '' && isHttpFieldNameCharacter(before)) continue;
+    let cursor = skipStructuredWhitespace(value, scannedName.end);
+    if (value[cursor] !== ':') continue;
+    cursor = skipStructuredWhitespace(value, cursor + 1);
+    if (value[cursor] !== '"') continue;
+    const parsedValue = parseJsonStringAt(value, cursor);
+    if (parsedValue === null ||
+        !patterns.some(pattern => credentialValuesEqual(parsedValue.value, pattern))) continue;
+    parts.push(value.slice(copyFrom, start), REDACTED);
+    copyFrom = parsedValue.end;
+    searchFrom = parsedValue.end;
+  }
+  if (parts.length === 0) return value;
+  parts.push(value.slice(copyFrom));
+  return parts.join('');
 }
 
 function credentialLabelMatch(value: string, valueMatch: LinearMatch): LinearMatch | null {
