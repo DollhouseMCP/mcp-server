@@ -640,6 +640,34 @@ describe('IntegrationRequestGateway', () => {
     });
   });
 
+  it('redacts query credentials with mixed form-space encodings', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a b c', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(200, {
+        labelled: 'key=a+b%20c&note=available',
+        scalar: 'a%20b+c',
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/mixed-space-encoding',
+    }));
+
+    expect(result.response).toEqual({
+      labelled: '[redacted]&note=available',
+      scalar: '[redacted]',
+    });
+  });
+
   it.each([
     ['a', 'received key=%61 safely'],
     ['a', 'received %6Bey=%61 safely'],

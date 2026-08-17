@@ -721,6 +721,11 @@ function matchCredentialValueEnd(
     const character = String.fromCodePoint(codePoint);
     const rawCandidate = value.slice(valueCursor, valueCursor + character.length);
     const prefixCharacter = expectedCursor < caseInsensitivePrefixLength;
+    if (character === ' ' && rawCandidate === '+') {
+      valueCursor += 1;
+      expectedCursor += 1;
+      continue;
+    }
     const rawMatches = prefixCharacter
       ? asciiLowercase(rawCandidate) === asciiLowercase(character)
       : rawCandidate === character;
