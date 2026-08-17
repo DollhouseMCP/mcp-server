@@ -373,6 +373,30 @@ describe('IntegrationRequestGateway', () => {
     expect(result.response).toBe('{ordinary [redacted]');
   });
 
+  it('fails closed when heuristic JSON traversal exhausts the stack', async () => {
+    const depth = 50_000;
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor({
+        staticApiKey: { injection: { location: 'query', name: 'key', valuePrefix: null } },
+      })],
+      records: [integrationRecord({
+        provider: 'airtable' as UserIntegrationProvider,
+        accessTokenCiphertext: encrypt('a', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(new Response(
+        `${'['.repeat(depth)}"a"${']'.repeat(depth)}`,
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/deep-json-shaped-text',
+    }))).rejects.toMatchObject({ code: 'integration_request_failed' });
+  });
+
   it('redacts credentials parsed as non-string JSON scalars', async () => {
     const gateway = gatewayFixture({
       records: [integrationRecord({

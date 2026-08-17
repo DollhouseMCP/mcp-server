@@ -90,17 +90,17 @@ export function redactIntegrationResponseBody(
   const normalizedText = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   if (normalizedText === '') return null;
   const declaredJson = isJsonMediaType(contentType);
-  if (declaredJson || isJsonShapedBody(normalizedText)) {
+  if (declaredJson) {
+    let parsed: unknown;
     try {
-      if (!declaredJson) {
-        return redactJsonShapedTextWithoutLosingNumbers(normalizedText, credentialRedactions);
-      }
-      return redactResponseCredentials(JSON.parse(normalizedText) as unknown, credentialRedactions);
+      parsed = JSON.parse(normalizedText) as unknown;
     } catch {
-      // A declared JSON response fails closed. Mislabelled structured-looking
-      // text retains the existing text-redaction fallback when parsing fails.
-      if (declaredJson) return REDACTED;
+      return REDACTED;
     }
+    return redactResponseCredentials(parsed, credentialRedactions);
+  }
+  if (isJsonShapedBody(normalizedText)) {
+    return redactJsonShapedTextWithoutLosingNumbers(normalizedText, credentialRedactions);
   }
   return redactCredentialText(normalizedText, credentialRedactions);
 }
@@ -109,8 +109,15 @@ function redactJsonShapedTextWithoutLosingNumbers(
   text: string,
   credentialRedactions: CredentialRedactions,
 ): string {
-  const protectedNumbers = protectJsonNumberLexemes(text);
-  const parsed = JSON.parse(protectedNumbers.text) as unknown;
+  let protectedNumbers: ProtectedJsonNumbers;
+  let parsed: unknown;
+  try {
+    protectedNumbers = protectJsonNumberLexemes(text);
+    parsed = JSON.parse(protectedNumbers.text) as unknown;
+  } catch {
+    // Only syntax failures retain the historical text-redaction fallback.
+    return redactCredentialText(text, credentialRedactions);
+  }
   const redacted = redactResponseCredentials(
     parsed,
     credentialRedactions,
