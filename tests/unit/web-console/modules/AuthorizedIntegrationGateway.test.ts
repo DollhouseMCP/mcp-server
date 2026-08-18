@@ -1,5 +1,6 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import {
   AuthorizedIntegrationGateway,
   AuthorizedIntegrationOperationCatalog,
@@ -114,6 +115,24 @@ describe('AuthorizedIntegrationGateway', () => {
       error: { code: 'integration_request_denied_by_policy', message: 'Denied.', status: 403 },
       policyContext: { source: 'element' },
     });
+  });
+
+  it('does not write malformed provider input into the security audit event', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const untrustedProvider = 'gho_sensitive-value-that-must-not-be-logged';
+    const gateway = {
+      request: jest.fn<IntegrationRequestGateway['request']>(),
+    } as unknown as IntegrationRequestGateway;
+    const policyEnforcer = {
+      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: false }),
+    } as unknown as IntegrationRequestPolicyEnforcer;
+    const authorized = new AuthorizedIntegrationGateway({ gateway, policyEnforcer });
+
+    await authorized.request({ provider: untrustedProvider, method: 'GET', path: '/anything' });
+
+    const event = SecurityMonitor.getRecentEvents().find(entry => entry.source === 'AuthorizedIntegrationGateway');
+    expect(event?.details).toContain('provider <invalid>');
+    expect(JSON.stringify(event)).not.toContain(untrustedProvider);
   });
 
   it('falls back to a denial error when a disallowed decision carries none', async () => {

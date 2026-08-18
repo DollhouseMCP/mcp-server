@@ -1,4 +1,5 @@
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { containsUnsafeDisplayUnicode } from '../../../security/validators/displayText.js';
 import type {
   ConsoleHandlerResult,
@@ -28,6 +29,7 @@ import type {
   UserIntegrationProvider,
 } from '../../stores/IUserIntegrationStore.js';
 import { isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import {
   serializeIntegrationDescriptor,
   serializeIntegrationDescriptorList,
@@ -123,6 +125,7 @@ export class IntegrationDescriptorAuthoringService {
     const now = this.now();
     try {
       const record = await this.options.descriptorStore.upsert(buildCreateInput(parsed, auth.userId, secret, now, now));
+      auditDescriptorDecision(record.provider, 'created', 'allowed');
       return { status: 201, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
       if (error instanceof ConsoleStoreValidationError) return unprocessable(error.message);
@@ -163,7 +166,10 @@ export class IntegrationDescriptorAuthoringService {
     const merged = mergeDescriptor(existing, parsed);
     if (hasCredentialRoutingChanges(parsed)) {
       const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-      if (isIntegrationConnected(active)) return connectedDescriptorConflict('updated');
+      if (isIntegrationConnected(active)) {
+        auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
+        return connectedDescriptorConflict('updated');
+      }
     }
     // Use `merged` (not `parsed`): it carries `mergedProvider = existing.provider`
     // so encryptClientSecret's provider guard never misfires and the AAD binds
@@ -175,6 +181,7 @@ export class IntegrationDescriptorAuthoringService {
       const record = await this.options.descriptorStore.upsert(
         buildCreateInput(merged, auth.userId, secret, existing.createdAt, this.now()),
       );
+      auditDescriptorDecision(record.provider, 'updated', 'allowed');
       return { status: 200, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
       if (error instanceof ConsoleStoreValidationError) return unprocessable(error.message);
@@ -189,11 +196,15 @@ export class IntegrationDescriptorAuthoringService {
     const existing = await this.findOwned(id, auth.userId);
     if (!existing) return notFound();
     const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-    if (isIntegrationConnected(active)) return connectedDescriptorConflict('deleted');
+    if (isIntegrationConnected(active)) {
+      auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
+      return connectedDescriptorConflict('deleted');
+    }
     const deleted = await this.options.descriptorStore.delete(id, auth.userId);
     if (!deleted) return notFound();
     // Postgres cascades via FK; this keeps in-memory backends equivalent.
     await this.options.specStore.deleteByDescriptorId(id);
+    auditDescriptorDecision(existing.provider, 'deleted', 'allowed');
     return { status: 204 };
   }
 
@@ -226,6 +237,7 @@ export class IntegrationDescriptorAuthoringService {
         createdAt: now,
         updatedAt: now,
       });
+      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'allowed');
       return {
         status: 200,
         body: serializeIntegrationOpenApiSpecMetadata({
@@ -611,6 +623,15 @@ function conflict(detail: string): ConsoleHandlerResult {
 
 function connectedDescriptorConflict(action: 'updated' | 'deleted'): ConsoleHandlerResult {
   return conflict(`descriptor cannot be ${action} while its integration is connected; disconnect it first`);
+}
+
+function auditDescriptorDecision(provider: string, action: string, outcome: 'allowed' | 'blocked_connected'): void {
+  SecurityMonitor.logSecurityEvent({
+    type: 'INTEGRATION_SECURITY_DECISION',
+    severity: outcome === 'allowed' ? 'LOW' : 'MEDIUM',
+    source: 'IntegrationDescriptorAuthoringService',
+    details: `Integration descriptor ${action} ${outcome} for provider ${safeIntegrationAuditProvider(provider)}`,
+  });
 }
 
 function unprocessable(detail: string): ConsoleHandlerResult {

@@ -304,6 +304,20 @@ describe('SecurityAuditor', () => {
       )).toBe(true);
     });
 
+    test('should not combine unrelated name and handle data into an MCP tool finding', async () => {
+      const code = `
+        const file = { name: 'memory.yaml', handle: directoryEntry, path: 'memories/memory.yaml' };
+        const first = { name: 'display-only' };
+        const second = { handle: async () => true };
+        export function collect() { return [file, first, second]; }
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'file-handles.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f => f.ruleId === 'DMCP-SEC-003')).toBe(false);
+    });
+
     test('should detect missing Unicode validation', async () => {
       const code = `
         function processUserInput(request) {

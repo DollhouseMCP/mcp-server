@@ -1,11 +1,13 @@
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
 import type { ActiveElement } from '../../../handlers/mcp-aql/policies/index.js';
 import { resolveCliApprovalPolicy } from '../../../handlers/mcp-aql/OperationSummary.js';
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import {
   assessRisk,
   classifyTool,
   evaluateCliToolPolicy,
 } from '../../../handlers/mcp-aql/policies/ToolClassification.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
 const INTEGRATION_TOOL_NAME = 'integration_request';
 const REMOTE_MCP_DISCOVERY_POLICY_PATH = '_internal:/integration/remote_mcp_discovery';
@@ -53,20 +55,20 @@ export class IntegrationRequestPolicyEnforcer {
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
     const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass);
     if (existingApproval) {
-      return {
+      return this.auditDecision(input.provider, {
         allowed: true,
         approvalContext: {
           requestId: existingApproval.requestId,
           scope: existingApproval.scope,
         },
-      };
+      });
     }
 
     const activeElements = await this.options.getActiveElements();
     const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
     const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
     if (elementDecision.behavior === 'deny') {
-      return {
+      return this.auditDecision(input.provider, {
         allowed: false,
         error: {
           code: 'integration_request_denied_by_policy',
@@ -74,15 +76,16 @@ export class IntegrationRequestPolicyEnforcer {
           status: 403,
         },
         policyContext: elementDecision.policyContext,
-      };
+      });
     }
     if (elementDecision.behavior === 'confirm') {
-      return this.createApprovalRequest(toolInput, classification, activeElements, {
+      const decision = await this.createApprovalRequest(toolInput, classification, activeElements, {
         reason: elementDecision.message ?? 'Integration request requires approval by policy.',
         denyReason: elementDecision.message ?? 'Integration request requires approval by policy.',
         policySource: elementDecision.confirmSource ?? 'unknown',
         policyContext: elementDecision.policyContext,
       });
+      return this.auditDecision(input.provider, decision);
     }
 
     const approvalPolicy = resolveCliApprovalPolicy(activeElements);
@@ -91,15 +94,16 @@ export class IntegrationRequestPolicyEnforcer {
         .filter(el => el.metadata.gatekeeper?.externalRestrictions?.approvalPolicy?.requireApproval?.length)
         .map(el => `${el.type}:${el.name}`)
         .join(', ') || 'env:DOLLHOUSE_CLI_APPROVAL_POLICY';
-      return this.createApprovalRequest(toolInput, classification, activeElements, {
+      const decision = await this.createApprovalRequest(toolInput, classification, activeElements, {
         reason: classification.reason,
         denyReason: `Tool '${INTEGRATION_TOOL_NAME}' classified as ${classification.riskLevel}: ${classification.reason}`,
         policySource,
         policyContext: elementDecision.policyContext,
       });
+      return this.auditDecision(input.provider, decision);
     }
 
-    return { allowed: true, policyContext: elementDecision.policyContext };
+    return this.auditDecision(input.provider, { allowed: true, policyContext: elementDecision.policyContext });
   }
 
   /**
@@ -121,16 +125,45 @@ export class IntegrationRequestPolicyEnforcer {
         path: REMOTE_MCP_DISCOVERY_POLICY_PATH,
       });
       const existingApproval = await this.checkExistingApproval(toolInput, 'read');
-      if (existingApproval) return true;
+      if (existingApproval) return this.auditDiscovery(provider, true);
       const activeElements = await this.options.getActiveElements();
       const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
-      if (elementDecision.behavior === 'deny' || elementDecision.behavior === 'confirm') return false;
+      if (elementDecision.behavior === 'deny' || elementDecision.behavior === 'confirm') {
+        return this.auditDiscovery(provider, false);
+      }
       const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
       const approvalPolicy = resolveCliApprovalPolicy(activeElements);
-      return !approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous');
+      return this.auditDiscovery(
+        provider,
+        !approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous'),
+      );
     } catch {
-      return false;
+      return this.auditDiscovery(provider, false);
     }
+  }
+
+  private auditDecision(
+    provider: string,
+    decision: IntegrationRequestPolicyDecision,
+  ): IntegrationRequestPolicyDecision {
+    const outcome = decision.allowed ? 'allowed' : decision.approvalRequest ? 'approval_required' : 'denied';
+    SecurityMonitor.logSecurityEvent({
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: decision.allowed ? 'LOW' : 'MEDIUM',
+      source: 'IntegrationRequestPolicyEnforcer.authorize',
+      details: `Integration policy ${outcome} request for provider ${safeIntegrationAuditProvider(provider)}`,
+    });
+    return decision;
+  }
+
+  private auditDiscovery(provider: string, allowed: boolean): boolean {
+    SecurityMonitor.logSecurityEvent({
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: allowed ? 'LOW' : 'MEDIUM',
+      source: 'IntegrationRequestPolicyEnforcer.evaluateDiscovery',
+      details: `Integration discovery ${allowed ? 'allowed' : 'denied'} for provider ${safeIntegrationAuditProvider(provider)}`,
+    });
+    return allowed;
   }
 
   private async checkExistingApproval(toolInput: Record<string, unknown>, readWriteClass: 'read' | 'write') {

@@ -22,6 +22,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { logger } from '../../../utils/logger.js';
 import { canonicalizeIntegrationApiHosts } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
@@ -35,6 +36,7 @@ import {
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import { integrationDescriptorClientSecretContext } from './IntegrationSecretContext.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
 const SEED_FILE_EXTENSION = '.json';
 
@@ -105,6 +107,12 @@ export class IntegrationDescriptorSeedLoader {
         else skipped++;
       } catch (err) {
         failed++;
+        SecurityMonitor.logSecurityEvent({
+          type: 'INTEGRATION_SECURITY_DECISION',
+          severity: 'MEDIUM',
+          source: 'IntegrationDescriptorSeedLoader.loadSeeds',
+          details: 'Integration descriptor seed rejected',
+        });
         logger.error(`[IntegrationDescriptorSeedLoader] Failed to load descriptor seed: ${path.basename(file)}`, {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -153,6 +161,12 @@ export class IntegrationDescriptorSeedLoader {
     if (!input) {
       const removed = await this.descriptorStore.deleteCurated(provider as UserIntegrationProvider);
       if (removed) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'INTEGRATION_SECURITY_DECISION',
+          severity: 'MEDIUM',
+          source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+          details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(provider)}`,
+        });
         logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${provider}' because deployment credentials are unavailable`);
       }
       return null;
@@ -160,6 +174,12 @@ export class IntegrationDescriptorSeedLoader {
 
     validateIntegrationDescriptorInput(input);
     const record = await this.descriptorStore.upsert(input);
+    SecurityMonitor.logSecurityEvent({
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: 'LOW',
+      source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+      details: `Curated integration descriptor loaded for provider ${safeIntegrationAuditProvider(provider)}`,
+    });
     logger.debug(`[IntegrationDescriptorSeedLoader] Loaded curated descriptor '${provider}'`, {
       file: path.basename(file),
       authStrategy: input.authStrategy,

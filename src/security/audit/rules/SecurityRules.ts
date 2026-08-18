@@ -63,9 +63,12 @@ function bindingPatternReadsHttpInput(
     if (element.dotDotDotToken) {
       return false;
     }
-    const propertyName = element.propertyName
-      ? propertyNameText(ts, element.propertyName)
-      : ts.isIdentifier(element.name) ? element.name.text : undefined;
+    let propertyName: string | undefined;
+    if (element.propertyName) {
+      propertyName = propertyNameText(ts, element.propertyName);
+    } else if (ts.isIdentifier(element.name)) {
+      propertyName = element.name.text;
+    }
     return propertyName !== undefined && HTTP_INPUT_PROPERTIES.has(propertyName);
   });
 }
@@ -113,7 +116,9 @@ function nodeReadsHttpInput(ts: TypeScriptApi, node: TsNode): boolean {
 function hasHttpInputAccess(content: string): boolean {
   const ts = loadTypeScript();
   if (!ts) {
-    return /\b(?:req|request)\s*(?:\??\.\s*(?:body|query|params)\b|\??\.\s*\[\s*(['"])(?:body|query|params)\1\s*\])/.test(content);
+    const readsProperty = /\b(?:req|request)\s*\??\.\s*(?:body|query|params)\b/.test(content);
+    const readsBracket = /\b(?:req|request)\s*\??\.\s*\[\s*['"](?:body|query|params)['"]\s*\]/.test(content);
+    return readsProperty || readsBracket;
   }
 
   const source = ts.createSourceFile('security-audit-input.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
@@ -126,6 +131,51 @@ function hasHttpInputAccess(content: string): boolean {
     if (!found) {
       ts.forEachChild(node, visit);
     }
+  };
+  visit(source);
+  return found;
+}
+
+function objectHasStaticToolName(ts: TypeScriptApi, node: import('typescript').ObjectLiteralExpression): boolean {
+  return node.properties.some(property => ts.isPropertyAssignment(property)
+    && propertyNameText(ts, property.name) === 'name'
+    && ts.isStringLiteralLike(unwrapExpression(ts, property.initializer)));
+}
+
+function objectHasCallableHandle(ts: TypeScriptApi, node: import('typescript').ObjectLiteralExpression): boolean {
+  return node.properties.some(property => {
+    if (ts.isMethodDeclaration(property)) {
+      return propertyNameText(ts, property.name) === 'handle';
+    }
+    if (!ts.isPropertyAssignment(property) || propertyNameText(ts, property.name) !== 'handle') {
+      return false;
+    }
+    const initializer = unwrapExpression(ts, property.initializer);
+    return ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer);
+  });
+}
+
+function hasMcpToolHandler(content: string): boolean {
+  const ts = loadTypeScript();
+  if (!ts) {
+    const lines = content.split('\n');
+    return lines.some((line, index) => {
+      if (!/\bname\s*:/.test(line)) return false;
+      return lines.slice(index, index + 20).some(candidate => /\bhandle\s*(?::|\()/.test(candidate));
+    });
+  }
+
+  const source = ts.createSourceFile('security-audit-tools.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
+  let found = false;
+  const visit = (node: TsNode): void => {
+    if (found) return;
+    if (ts.isObjectLiteralExpression(node)
+      && objectHasStaticToolName(ts, node)
+      && objectHasCallableHandle(ts, node)) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
   };
   visit(source);
   return found;
@@ -293,10 +343,9 @@ export class SecurityRules {
         check: (content, _context) => {
           const findings: SecurityFinding[] = [];
           // Check for MCP tool handlers without rate limiting
-          const toolPattern = /name:\s*["']([^"']+)["'].*handle:/gs;
           const hasRateLimit = /rateLimiter|checkRateLimit|tokenBucket/i.test(content);
           
-          if (toolPattern.test(content) && !hasRateLimit) {
+          if (hasMcpToolHandler(content) && !hasRateLimit) {
             findings.push({
               ruleId: 'DMCP-SEC-003',
               severity: 'medium' as const,

@@ -1,10 +1,12 @@
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import type {
   IUserIntegrationStore,
   UserIntegrationProvider,
   UserIntegrationRefreshResult,
 } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import type { IntegrationProviderResolver } from './CuratedIntegrationProviders.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 
@@ -36,7 +38,7 @@ export class IntegrationTokenRefreshService {
       ?? null;
     const refreshCredentials = provider?.refreshCredentials?.bind(provider);
     if (!refreshCredentials) {
-      return this.options.store.refresh({
+      const result = await this.options.store.refresh({
         userId: input.userId,
         provider: input.provider,
         staleAccessTokenCiphertext: input.staleAccessTokenCiphertext,
@@ -46,8 +48,9 @@ export class IntegrationTokenRefreshService {
           errorReason: 'provider_unavailable' as const,
         }),
       });
+      return this.auditResult(input.provider, result);
     }
-    return this.options.store.refresh({
+    const result = await this.options.store.refresh({
       userId: input.userId,
       provider: input.provider,
       staleAccessTokenCiphertext: input.staleAccessTokenCiphertext,
@@ -90,6 +93,20 @@ export class IntegrationTokenRefreshService {
         }
       },
     });
+    return this.auditResult(input.provider, result);
+  }
+
+  private auditResult(
+    provider: UserIntegrationProvider,
+    result: UserIntegrationRefreshResult,
+  ): UserIntegrationRefreshResult {
+    SecurityMonitor.logSecurityEvent({
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: result.kind === 'refreshed' || result.kind === 'reused' ? 'LOW' : 'MEDIUM',
+      source: 'IntegrationTokenRefreshService.refreshOnDemand',
+      details: `Integration token refresh ${result.kind} for provider ${safeIntegrationAuditProvider(provider)}`,
+    });
+    return result;
   }
 
   private now(): Date {

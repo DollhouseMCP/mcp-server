@@ -2,11 +2,13 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 
 import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
 import {
   assertPublicResolvedHost,
@@ -467,6 +469,12 @@ export class IntegrationRequestGateway {
   }
 
   private async audit(event: IntegrationRequestAuditEvent): Promise<void> {
+    SecurityMonitor.logSecurityEvent({
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: event.result === 'success' ? 'LOW' : 'MEDIUM',
+      source: 'IntegrationRequestGateway.request',
+      details: `Integration request ${event.result}${event.reason ? ` (${event.reason})` : ''} for provider ${safeIntegrationAuditProvider(event.provider)}`,
+    });
     try {
       await this.options.auditSink?.recordIntegrationRequest(event);
     } catch {
