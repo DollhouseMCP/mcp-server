@@ -316,10 +316,14 @@ describe('renderAllowlistDeniedPage', () => {
     expect(html).not.toMatch(/github_/);
   });
 
-  it('escapes operator-supplied contact note', () => {
-    const html = renderAllowlistDeniedPage('<script>alert("xss")</script>');
-    expect(html).not.toMatch(/<script>/);
-    expect(html).toMatch(/&lt;script&gt;/);
+  it.each([
+    '<script>alert("xss")</script>',
+    '<SCRIPT>alert("xss")</SCRIPT>',
+    '<ScRiPt data-test="xss">alert("xss")</sCrIpT>',
+  ])('escapes operator-supplied contact note: %s', contactNote => {
+    const html = renderAllowlistDeniedPage(contactNote);
+    expect(html).not.toMatch(/<script(?:\s|>)/i);
+    expect(html).toMatch(/&lt;script(?:\s|&gt;)/i);
     expect(html).toMatch(/&quot;|alert\(/);
   });
 

@@ -2,6 +2,10 @@
 
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
+import {
+  createPreviewCredentialFile,
+  removePreviewCredentialFile,
+} from './lib/web-console-preview-credentials.js';
 
 const previewRoot = path.join(process.cwd(), '.console-preview');
 mkdirSync(previewRoot, { recursive: true });
@@ -20,6 +24,7 @@ const [{ BASE_URL, DB_NAME, bootApp, provisionDatabase, superuserUrlFor, waitFor
   ]);
 
 let childPid: number | undefined;
+let credentialPath: string | undefined;
 let stopping = false;
 let forceKillTimer: NodeJS.Timeout | undefined;
 
@@ -51,9 +56,13 @@ try {
   await seed.seedWorld();
   await closeDb();
 
+  credentialPath = createPreviewCredentialFile(previewRoot, {
+    username: 'e2e_admin',
+    password: seed.SEED_PASSWORD,
+  });
+
   console.log(`Web console preview: ${BASE_URL}/ui`);
-  console.log('Username: e2e_admin');
-  console.log(`Password: ${seed.SEED_PASSWORD}`);
+  console.log(`Credentials: ${credentialPath}`);
   console.log(`Runtime: ${process.env.E2E_APP_ENTRY ?? 'src/index.ts'}`);
   console.log(`Logs: ${logPath}`);
   console.log('Press Ctrl-C to stop.');
@@ -66,6 +75,13 @@ try {
   });
 } finally {
   if (forceKillTimer) clearTimeout(forceKillTimer);
+  if (credentialPath) {
+    try {
+      removePreviewCredentialFile(credentialPath);
+    } catch {
+      console.error(`Unable to remove preview credentials: ${credentialPath}`);
+    }
+  }
   await closeDb().catch(() => {});
   if (childPid !== undefined) {
     try { process.kill(-childPid, 'SIGKILL'); } catch { /* process already exited */ }
