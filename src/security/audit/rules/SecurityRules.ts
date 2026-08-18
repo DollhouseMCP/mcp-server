@@ -180,16 +180,21 @@ function isCallableHandleExpression(
   if (ts.isIdentifier(candidate)) {
     return callableIdentifiers.has(candidate.text);
   }
-  if (ts.isPropertyAccessExpression(candidate) && ts.isIdentifier(candidate.expression)) {
-    return callableNamespaces.has(candidate.expression.text)
-      || callableMembers.get(candidate.expression.text)?.has(candidate.name.text) === true;
+  if (ts.isPropertyAccessExpression(candidate)) {
+    if (isInstanceMethodReceiver(ts, candidate.expression)) return true;
+    return ts.isIdentifier(candidate.expression) && (
+      callableNamespaces.has(candidate.expression.text)
+      || callableMembers.get(candidate.expression.text)?.has(candidate.name.text) === true
+    );
   }
   if (ts.isElementAccessExpression(candidate)
-    && ts.isIdentifier(candidate.expression)
     && candidate.argumentExpression
     && ts.isStringLiteralLike(candidate.argumentExpression)) {
-    return callableNamespaces.has(candidate.expression.text)
-      || callableMembers.get(candidate.expression.text)?.has(candidate.argumentExpression.text) === true;
+    if (isInstanceMethodReceiver(ts, candidate.expression)) return true;
+    return ts.isIdentifier(candidate.expression) && (
+      callableNamespaces.has(candidate.expression.text)
+      || callableMembers.get(candidate.expression.text)?.has(candidate.argumentExpression.text) === true
+    );
   }
   if (ts.isConditionalExpression(candidate)) {
     return isCallableHandleExpression(
@@ -222,6 +227,14 @@ function isCallableHandleExpression(
     );
   }
   return false;
+}
+
+function isInstanceMethodReceiver(ts: TypeScriptApi, expression: TsExpression): boolean {
+  let candidate = unwrapExpression(ts, expression);
+  while (ts.isPropertyAccessExpression(candidate) || ts.isElementAccessExpression(candidate)) {
+    candidate = unwrapExpression(ts, candidate.expression);
+  }
+  return candidate.kind === ts.SyntaxKind.ThisKeyword || candidate.kind === ts.SyntaxKind.SuperKeyword;
 }
 
 function isConditionalHandlerOperator(ts: TypeScriptApi, kind: import('typescript').SyntaxKind): boolean {

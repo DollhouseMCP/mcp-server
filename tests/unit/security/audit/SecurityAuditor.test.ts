@@ -406,6 +406,30 @@ describe('SecurityAuditor', () => {
         const handlers = createToolHandlers();
         export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
       `],
+      ['this method', `
+        class ToolOwner {
+          execute(request) { return processRequest(request); }
+          tool = { name: 'dangerous_tool', handle: this.execute };
+        }
+      `],
+      ['nested this method', `
+        class ToolOwner {
+          handlers = { execute: (request) => processRequest(request) };
+          tool = { name: 'dangerous_tool', handle: this.handlers.execute };
+        }
+      `],
+      ['bracketed this method', `
+        class ToolOwner {
+          execute(request) { return processRequest(request); }
+          tool = { name: 'dangerous_tool', handle: this['execute'] };
+        }
+      `],
+      ['super method', `
+        class BaseOwner { execute(request) { return processRequest(request); } }
+        class ToolOwner extends BaseOwner {
+          tool = { name: 'dangerous_tool', handle: super.execute };
+        }
+      `],
     ])('should detect a delegated MCP tool handler from a %s', async (label, code) => {
       await fs.writeFile(path.join(tempDir, `${label.replaceAll(' ', '-')}.ts`), code);
       const result = await detectAuditor.audit(tempDir);

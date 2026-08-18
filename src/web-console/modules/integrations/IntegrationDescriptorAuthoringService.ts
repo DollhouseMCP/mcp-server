@@ -167,7 +167,7 @@ export class IntegrationDescriptorAuthoringService {
 
   async update(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const existing = await this.findOwned(singleParamValue(req.params.id), auth.userId);
+    const existing = await this.findOwnedForMutation(singleParamValue(req.params.id), auth.userId, 'updated');
     if (!existing) {
       auditDescriptorDecision('<unresolved>', 'updated', 'denied_not_found');
       return notFound();
@@ -230,17 +230,17 @@ export class IntegrationDescriptorAuthoringService {
       auditDescriptorDecision('<unresolved>', 'deleted', 'denied_not_found');
       return notFound();
     }
-    const existing = await this.findOwned(id, auth.userId);
+    const existing = await this.findOwnedForMutation(id, auth.userId, 'deleted');
     if (!existing) {
       auditDescriptorDecision('<unresolved>', 'deleted', 'denied_not_found');
       return notFound();
     }
-    const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-    if (hasIntegrationCredentials(active)) {
-      auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
-      return connectedDescriptorConflict('deleted');
-    }
     try {
+      const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
+      if (hasIntegrationCredentials(active)) {
+        auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
+        return connectedDescriptorConflict('deleted');
+      }
       const deleted = await this.options.descriptorStore.delete(id, auth.userId);
       if (!deleted) {
         auditDescriptorDecision(existing.provider, 'deleted', 'failed');
@@ -258,34 +258,28 @@ export class IntegrationDescriptorAuthoringService {
 
   async putSpec(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const descriptor = await this.findOwned(singleParamValue(req.params.id), auth.userId);
+    const descriptor = await this.findOwnedForMutation(
+      singleParamValue(req.params.id),
+      auth.userId,
+      'spec_updated',
+    );
     if (!descriptor) {
       auditDescriptorDecision('<unresolved>', 'spec_updated', 'denied_not_found');
       return notFound();
     }
-    const input = asRecord(req.body);
-    if (!input.spec || typeof input.spec !== 'object' || Array.isArray(input.spec)) {
-      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
-      return unprocessable('spec must be a JSON object');
-    }
-    const sourceUrl = input.source_url;
-    if (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== 'string') {
-      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
-      return unprocessable('source_url must be a string or null');
-    }
-    let prepared;
     try {
-      prepared = prepareOpenApiSpecForDescriptor(input.spec, descriptor);
-    } catch (error) {
-      if (error instanceof IntegrationOperationCatalogError) {
+      const input = asRecord(req.body);
+      if (!input.spec || typeof input.spec !== 'object' || Array.isArray(input.spec)) {
         auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
-        return catalogError(error);
+        return unprocessable('spec must be a JSON object');
       }
-      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'failed');
-      throw error;
-    }
-    const now = this.now();
-    try {
+      const sourceUrl = input.source_url;
+      if (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== 'string') {
+        auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
+        return unprocessable('source_url must be a string or null');
+      }
+      const prepared = prepareOpenApiSpecForDescriptor(input.spec, descriptor);
+      const now = this.now();
       const record = await this.options.specStore.upsert({
         descriptorId: descriptor.id,
         spec: prepared.normalizedSpec,
@@ -309,6 +303,10 @@ export class IntegrationDescriptorAuthoringService {
         }),
       };
     } catch (error) {
+      if (error instanceof IntegrationOperationCatalogError) {
+        auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
+        return catalogError(error);
+      }
       if (error instanceof ConsoleStoreValidationError) {
         auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
         return unprocessable(error.message);
@@ -358,6 +356,19 @@ export class IntegrationDescriptorAuthoringService {
   private async findOwned(id: string | undefined, userId: string): Promise<IntegrationDescriptorRecord | null> {
     if (!isUuidShaped(id)) return null;
     return this.options.descriptorStore.findById(id, userId);
+  }
+
+  private async findOwnedForMutation(
+    id: string | undefined,
+    userId: string,
+    action: 'updated' | 'deleted' | 'spec_updated',
+  ): Promise<IntegrationDescriptorRecord | null> {
+    try {
+      return await this.findOwned(id, userId);
+    } catch (error) {
+      auditDescriptorDecision('<unresolved>', action, 'failed');
+      throw error;
+    }
   }
 
   private encryptClientSecret(

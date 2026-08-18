@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
@@ -580,6 +580,32 @@ describe('IntegrationDescriptorAuthoringService', () => {
         details: expect.stringContaining('updated failed for provider mycrm'),
       }),
     ]));
+  });
+
+  it('audits descriptor lookup failures for every mutation route before propagating', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const lookupFailure = new Error('test descriptor lookup failure');
+    const { service, descriptorStore } = fixture();
+    jest.spyOn(descriptorStore, 'findById').mockRejectedValue(lookupFailure);
+
+    await expect(service.update(consoleRequest({
+      params: { id: UNKNOWN_ID },
+      body: { display_name: 'Renamed' },
+    }))).rejects.toBe(lookupFailure);
+    await expect(service.remove(consoleRequest({ params: { id: UNKNOWN_ID } }))).rejects.toBe(lookupFailure);
+    await expect(service.putSpec(consoleRequest({
+      params: { id: UNKNOWN_ID },
+      body: { spec: { openapi: '3.0.0', paths: {} } },
+    }))).rejects.toBe(lookupFailure);
+
+    const events = SecurityMonitor.getRecentEvents()
+      .filter(event => event.source === 'IntegrationDescriptorAuthoringService');
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ details: 'Integration descriptor updated failed for provider <invalid>' }),
+      expect.objectContaining({ details: 'Integration descriptor deleted failed for provider <invalid>' }),
+      expect.objectContaining({ details: 'Integration descriptor spec_updated failed for provider <invalid>' }),
+    ]));
+    expect(JSON.stringify(events)).not.toContain(lookupFailure.message);
   });
 
   it('reads descriptors by id only for the owner', async () => {
