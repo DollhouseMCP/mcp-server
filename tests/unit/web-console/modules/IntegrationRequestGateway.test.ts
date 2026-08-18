@@ -41,6 +41,22 @@ function requestBodyString(init: Parameters<typeof fetch>[1]): string | null {
 }
 
 describe('IntegrationRequestGateway', () => {
+  it('does not persist unresolved provider input in descriptor-not-found audit events', async () => {
+    const untrustedProvider = 'sk_live_12345678901234567890';
+    const gateway = gatewayFixture();
+
+    await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: untrustedProvider,
+      method: 'GET',
+      path: '/anything',
+    }))).rejects.toMatchObject({ code: 'integration_descriptor_not_found', status: 404 });
+
+    expect(gateway.audit.events).toEqual([
+      expect.objectContaining({ provider: 'unresolved', reason: 'descriptor_not_found' }),
+    ]);
+    expect(JSON.stringify(gateway.audit.events)).not.toContain(untrustedProvider);
+  });
+
   it('injects OAuth credentials server-side and redacts token-shaped response fields', async () => {
     const fetches: Array<{ readonly url: string; readonly init: RequestInit | undefined }> = [];
     const gateway = gatewayFixture({

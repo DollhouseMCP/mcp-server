@@ -203,19 +203,19 @@ async function authorizeOrDeny(
     policy = await policyEnforcer.authorize(input);
   } catch (error) {
     if (error instanceof IntegrationPolicyUnavailableError) {
-      auditAuthorization(input.provider, 'unavailable');
+      auditAuthorization('unavailable');
       return { authorized: false, denial: { ok: false, error: POLICY_UNAVAILABLE_ERROR } };
     }
     throw error;
   }
   if (policy.allowed) {
-    auditAuthorization(input.provider, 'allowed');
+    auditAuthorization('allowed');
     return {
       authorized: true,
       ...(policy.approvalContext ? { approvalContext: policy.approvalContext } : {}),
     };
   }
-  auditAuthorization(input.provider, policy.approvalRequest ? 'approval_required' : 'denied');
+  auditAuthorization(policy.approvalRequest ? 'approval_required' : 'denied');
   return {
     authorized: false,
     denial: {
@@ -227,15 +227,14 @@ async function authorizeOrDeny(
   };
 }
 
-function auditAuthorization(
-  provider: string,
-  outcome: 'allowed' | 'denied' | 'approval_required' | 'unavailable',
-): void {
+function auditAuthorization(outcome: 'allowed' | 'denied' | 'approval_required' | 'unavailable'): void {
   SecurityMonitor.logSecurityEvent({
     type: 'INTEGRATION_SECURITY_DECISION',
     severity: outcome === 'allowed' ? 'LOW' : 'MEDIUM',
     source: 'AuthorizedIntegrationGateway',
-    details: `Authorized integration decision ${outcome} for provider ${safeIntegrationAuditProvider(provider)}`,
+    // This facade runs before descriptor resolution, so provider is still raw
+    // caller input. Correlate the decision without ever echoing that value.
+    details: `Authorized integration decision ${outcome} for provider ${safeIntegrationAuditProvider('<unresolved>')}`,
   });
 }
 

@@ -142,7 +142,11 @@ function objectHasStaticToolName(ts: TypeScriptApi, node: import('typescript').O
     && ts.isStringLiteralLike(unwrapExpression(ts, property.initializer)));
 }
 
-function objectHasCallableHandle(ts: TypeScriptApi, node: import('typescript').ObjectLiteralExpression): boolean {
+function objectHasCallableHandle(
+  ts: TypeScriptApi,
+  node: import('typescript').ObjectLiteralExpression,
+  callableIdentifiers: ReadonlySet<string>,
+): boolean {
   return node.properties.some(property => {
     if (ts.isMethodDeclaration(property)) {
       return propertyNameText(ts, property.name) === 'handle';
@@ -151,8 +155,30 @@ function objectHasCallableHandle(ts: TypeScriptApi, node: import('typescript').O
       return false;
     }
     const initializer = unwrapExpression(ts, property.initializer);
-    return ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer);
+    return ts.isArrowFunction(initializer)
+      || ts.isFunctionExpression(initializer)
+      || (ts.isIdentifier(initializer) && callableIdentifiers.has(initializer.text));
   });
+}
+
+function collectCallableIdentifiers(
+  ts: TypeScriptApi,
+  source: import('typescript').SourceFile,
+): ReadonlySet<string> {
+  const callable = new Set<string>();
+  const visit = (node: TsNode): void => {
+    if (ts.isFunctionDeclaration(node) && node.name) {
+      callable.add(node.name.text);
+    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
+      const initializer = unwrapExpression(ts, node.initializer);
+      if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+        callable.add(node.name.text);
+      }
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  return callable;
 }
 
 function hasMcpToolHandler(content: string): boolean {
@@ -161,17 +187,20 @@ function hasMcpToolHandler(content: string): boolean {
     const lines = content.split('\n');
     return lines.some((line, index) => {
       if (!/\bname\s*:/.test(line)) return false;
-      return lines.slice(index, index + 20).some(candidate => /\bhandle\s*(?::|\()/.test(candidate));
+      // The fallback is deliberately bounded; production scans load TypeScript
+      // and use object-local AST analysis below.
+      return lines.slice(index, index + 20).some(candidate => /\bhandle\s*[:(]/.test(candidate));
     });
   }
 
   const source = ts.createSourceFile('security-audit-tools.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
+  const callableIdentifiers = collectCallableIdentifiers(ts, source);
   let found = false;
   const visit = (node: TsNode): void => {
     if (found) return;
     if (ts.isObjectLiteralExpression(node)
       && objectHasStaticToolName(ts, node)
-      && objectHasCallableHandle(ts, node)) {
+      && objectHasCallableHandle(ts, node, callableIdentifiers)) {
       found = true;
       return;
     }

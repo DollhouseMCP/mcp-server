@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import {
   InMemoryIntegrationDescriptorStore,
@@ -162,6 +163,7 @@ describe('IntegrationRemoteMcpBridge', () => {
   });
 
   it('replaces credential-bearing remote MCP errors with a static failure', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn(),
       callTool: jest.fn().mockRejectedValue(new Error('Bearer remote-access-token was rejected')),
@@ -178,6 +180,10 @@ describe('IntegrationRemoteMcpBridge', () => {
       message: 'Remote MCP tool call failed.',
       status: 502,
     } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'IntegrationRemoteMcpBridge',
+      details: expect.stringContaining('tool_call remote_mcp_call_failed'),
+    }));
   });
 
   it('redacts bearer-token echoes from discovered tool metadata', async () => {

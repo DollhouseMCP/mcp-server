@@ -922,6 +922,7 @@ describe('IntegrationModule', () => {
   });
 
   it('refreshes configured OAuth tokens through store-level single-flight helper', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const fetchCalls: Array<{ readonly url: string; readonly body: string | null }> = [];
     const fetchImpl = (url: string | URL, init?: RequestInit) => {
       fetchCalls.push({ url: url.toString(), body: formBodyString(init?.body) });
@@ -992,6 +993,10 @@ describe('IntegrationModule', () => {
       secretClass: 'integration_refresh_token',
       ownerId: `gmail:${USER_ID}`,
     }).toString('utf8')).toBe('gmail-rotated-refresh-token');
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'IntegrationTokenRefreshService.refreshOnDemand',
+      details: expect.stringContaining('refresh refreshed for provider gmail'),
+    }));
   });
 });
 

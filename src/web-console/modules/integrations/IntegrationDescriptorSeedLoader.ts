@@ -114,7 +114,7 @@ export class IntegrationDescriptorSeedLoader {
           type: 'INTEGRATION_SECURITY_DECISION',
           severity: 'MEDIUM',
           source: 'IntegrationDescriptorSeedLoader.loadSeeds',
-          details: 'Integration descriptor seed rejected',
+          details: `Integration descriptor seed rejected for provider ${safeIntegrationAuditProvider(path.parse(file).name)}`,
         });
         logger.error(`[IntegrationDescriptorSeedLoader] Failed to load descriptor seed: ${path.basename(file)}`, {
           error: err instanceof Error ? err.message : String(err),
@@ -154,7 +154,7 @@ export class IntegrationDescriptorSeedLoader {
       throw new Error('descriptor seed is missing a string "provider"');
     }
     if (RESERVED_PROVIDER_IDS.has(provider)) {
-      logger.warn(`[IntegrationDescriptorSeedLoader] Skipping reserved provider id '${provider}'`, {
+      logger.warn(`[IntegrationDescriptorSeedLoader] Skipping reserved provider id '${safeIntegrationAuditProvider(provider)}'`, {
         file: path.basename(file),
       });
       return null;
@@ -174,7 +174,7 @@ export class IntegrationDescriptorSeedLoader {
           source: 'IntegrationDescriptorSeedLoader.processSeedFile',
           details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(provider)}`,
         });
-        logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${provider}' because deployment credentials are unavailable`, {
+        logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${safeIntegrationAuditProvider(provider)}' because deployment credentials are unavailable`, {
           revokedIntegrations: revoked,
         });
       }
@@ -189,7 +189,7 @@ export class IntegrationDescriptorSeedLoader {
       source: 'IntegrationDescriptorSeedLoader.processSeedFile',
       details: `Curated integration descriptor loaded for provider ${safeIntegrationAuditProvider(provider)}`,
     });
-    logger.debug(`[IntegrationDescriptorSeedLoader] Loaded curated descriptor '${provider}'`, {
+    logger.debug(`[IntegrationDescriptorSeedLoader] Loaded curated descriptor '${safeIntegrationAuditProvider(provider)}'`, {
       file: path.basename(file),
       authStrategy: input.authStrategy,
     });
@@ -225,7 +225,7 @@ export class IntegrationDescriptorSeedLoader {
       const credentials = this.resolveCredentials(provider);
       if (!credentials.clientId || !credentials.clientSecret) {
         logger.info(
-          `[IntegrationDescriptorSeedLoader] Skipping curated OAuth provider '${provider}' — deployment credentials not configured`,
+          `[IntegrationDescriptorSeedLoader] Skipping curated OAuth provider '${safeIntegrationAuditProvider(provider)}' — deployment credentials not configured`,
         );
         return null;
       }

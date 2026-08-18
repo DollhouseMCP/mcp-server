@@ -117,9 +117,14 @@ describe('AuthorizedIntegrationGateway', () => {
     });
   });
 
-  it('does not write malformed provider input into the security audit event', async () => {
+  it.each([
+    'gho_sensitive-value-that-must-not-be-logged',
+    'sk_live_12345678901234567890',
+    'xoxb-1234567890-abcdef',
+    'glpat-abcdef123456',
+    'opaquecredentialvalue1234567890',
+  ])('does not write token-shaped provider input into the security audit event: %s', async untrustedProvider => {
     SecurityMonitor.clearAllEventsForTesting();
-    const untrustedProvider = 'gho_sensitive-value-that-must-not-be-logged';
     const gateway = {
       request: jest.fn<IntegrationRequestGateway['request']>(),
     } as unknown as IntegrationRequestGateway;

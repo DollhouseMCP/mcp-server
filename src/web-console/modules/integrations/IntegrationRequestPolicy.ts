@@ -55,20 +55,20 @@ export class IntegrationRequestPolicyEnforcer {
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
     const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass);
     if (existingApproval) {
-      return this.auditDecision(input.provider, {
+      return {
         allowed: true,
         approvalContext: {
           requestId: existingApproval.requestId,
           scope: existingApproval.scope,
         },
-      });
+      };
     }
 
     const activeElements = await this.options.getActiveElements();
     const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
     const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
     if (elementDecision.behavior === 'deny') {
-      return this.auditDecision(input.provider, {
+      return {
         allowed: false,
         error: {
           code: 'integration_request_denied_by_policy',
@@ -76,7 +76,7 @@ export class IntegrationRequestPolicyEnforcer {
           status: 403,
         },
         policyContext: elementDecision.policyContext,
-      });
+      };
     }
     if (elementDecision.behavior === 'confirm') {
       const decision = await this.createApprovalRequest(toolInput, classification, activeElements, {
@@ -85,7 +85,7 @@ export class IntegrationRequestPolicyEnforcer {
         policySource: elementDecision.confirmSource ?? 'unknown',
         policyContext: elementDecision.policyContext,
       });
-      return this.auditDecision(input.provider, decision);
+      return decision;
     }
 
     const approvalPolicy = resolveCliApprovalPolicy(activeElements);
@@ -100,10 +100,10 @@ export class IntegrationRequestPolicyEnforcer {
         policySource,
         policyContext: elementDecision.policyContext,
       });
-      return this.auditDecision(input.provider, decision);
+      return decision;
     }
 
-    return this.auditDecision(input.provider, { allowed: true, policyContext: elementDecision.policyContext });
+    return { allowed: true, policyContext: elementDecision.policyContext };
   }
 
   /**
@@ -140,20 +140,6 @@ export class IntegrationRequestPolicyEnforcer {
     } catch {
       return this.auditDiscovery(provider, false);
     }
-  }
-
-  private auditDecision(
-    provider: string,
-    decision: IntegrationRequestPolicyDecision,
-  ): IntegrationRequestPolicyDecision {
-    const outcome = decision.allowed ? 'allowed' : decision.approvalRequest ? 'approval_required' : 'denied';
-    SecurityMonitor.logSecurityEvent({
-      type: 'INTEGRATION_SECURITY_DECISION',
-      severity: decision.allowed ? 'LOW' : 'MEDIUM',
-      source: 'IntegrationRequestPolicyEnforcer.authorize',
-      details: `Integration policy ${outcome} request for provider ${safeIntegrationAuditProvider(provider)}`,
-    });
-    return decision;
   }
 
   private auditDiscovery(provider: string, allowed: boolean): boolean {

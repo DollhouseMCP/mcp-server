@@ -127,7 +127,7 @@ export class IntegrationRequestGateway {
     const method = normalizeMethod(input.method);
     const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider);
     if (!descriptor) {
-      await this.auditDenied(provider, session.userId, session.sessionId, method, null, null, 'descriptor_not_found');
+      await this.auditDenied('unresolved', session.userId, session.sessionId, method, null, null, 'descriptor_not_found');
       throw new IntegrationRequestError('integration_descriptor_not_found', 'Integration descriptor was not found.', 404);
     }
     const url = await this.buildAuditedUrl(descriptor, provider, session.userId, session.sessionId, method, input.path, input.query);
@@ -469,11 +469,12 @@ export class IntegrationRequestGateway {
   }
 
   private async audit(event: IntegrationRequestAuditEvent): Promise<void> {
+    const reasonSuffix = event.reason ? ` (${event.reason})` : '';
     SecurityMonitor.logSecurityEvent({
       type: 'INTEGRATION_SECURITY_DECISION',
       severity: event.result === 'success' ? 'LOW' : 'MEDIUM',
       source: 'IntegrationRequestGateway.request',
-      details: `Integration request ${event.result}${event.reason ? ` (${event.reason})` : ''} for provider ${safeIntegrationAuditProvider(event.provider)}`,
+      details: `Integration request ${event.result}${reasonSuffix} for provider ${safeIntegrationAuditProvider(event.provider)}`,
     });
     try {
       await this.options.auditSink?.recordIntegrationRequest(event);

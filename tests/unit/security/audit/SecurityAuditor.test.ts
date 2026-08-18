@@ -318,6 +318,20 @@ describe('SecurityAuditor', () => {
       expect(result.findings.some(f => f.ruleId === 'DMCP-SEC-003')).toBe(false);
     });
 
+    test('should detect a delegated callable MCP tool handler', async () => {
+      const code = `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: execute };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'delegated-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === 'DMCP-SEC-003' && f.message.includes('rate limiting')
+      )).toBe(true);
+    });
+
     test('should detect missing Unicode validation', async () => {
       const code = `
         function processUserInput(request) {

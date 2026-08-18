@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import {
   IntegrationDescriptorSeedLoader,
   type IntegrationDescriptorSeedCredentialResolver,
@@ -75,6 +76,7 @@ function loaderOptions(integrationStore = new InMemoryUserIntegrationStore()) {
 
 describe('IntegrationDescriptorSeedLoader', () => {
   it('loads a curated OAuth descriptor, injecting clientId and encrypting the client secret', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const encryption = newEncryption();
@@ -105,6 +107,10 @@ describe('IntegrationDescriptorSeedLoader', () => {
       integrationDescriptorClientSecretContext({ provider: 'examplecorp', ownerUserId: null }),
     );
     expect(plaintext.toString('utf8')).toBe('deployment-secret');
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+      details: expect.stringContaining('loaded for provider examplecorp'),
+    }));
   });
 
   it('skips a curated OAuth descriptor when deployment credentials are not configured', async () => {

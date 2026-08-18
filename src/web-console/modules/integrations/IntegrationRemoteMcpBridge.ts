@@ -206,47 +206,49 @@ export class IntegrationRemoteMcpBridge {
   }
 
   async callTool(input: RemoteMcpCallInput): Promise<RemoteMcpCallResult> {
-    const session = this.options.contextTracker.requireSessionContext('IntegrationRemoteMcpBridge');
-    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, input.provider as UserIntegrationProvider);
-    if (!descriptor) {
-      this.auditRemote(input.provider, 'tool_call', 'descriptor_not_found');
-      throw new IntegrationRemoteMcpBridgeError('remote_mcp_descriptor_not_found', 'Remote MCP descriptor was not found.', 404);
-    }
-    const config = readRemoteMcpConfig(descriptor);
-    if (!config?.allowedTools.has(input.remoteName)) {
-      this.auditRemote(descriptor.provider, 'tool_call', 'tool_not_allowed');
-      throw new IntegrationRemoteMcpBridgeError('remote_mcp_tool_not_allowed', 'Remote MCP tool is not allowlisted for this integration.', 403);
-    }
-    const integration = await this.options.integrationStore.findByProvider(session.userId, descriptor.provider);
-    if (!isIntegrationConnected(integration)) {
-      this.auditRemote(descriptor.provider, 'tool_call', 'not_connected');
-      throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
-    }
-    const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-    const bearerToken = this.decryptAccessToken(integration, session.userId);
-    const result = await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
-      const result = await this.awaitRemoteOperation(
-        client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
-        'remote_mcp_call_timeout',
-        'Remote MCP tool call timed out.',
-        'remote_mcp_call_failed',
-        'Remote MCP tool call failed.',
-      );
-      return this.redactRemoteCallResult({
-        provider: descriptor.provider,
-        remoteName: input.remoteName,
-        result,
-        provenance: {
-          source: 'third_party_integration',
-          trust: 'untrusted',
+    try {
+      const session = this.options.contextTracker.requireSessionContext('IntegrationRemoteMcpBridge');
+      const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, input.provider as UserIntegrationProvider);
+      if (!descriptor) {
+        throw new IntegrationRemoteMcpBridgeError('remote_mcp_descriptor_not_found', 'Remote MCP descriptor was not found.', 404);
+      }
+      const config = readRemoteMcpConfig(descriptor);
+      if (!config?.allowedTools.has(input.remoteName)) {
+        throw new IntegrationRemoteMcpBridgeError('remote_mcp_tool_not_allowed', 'Remote MCP tool is not allowlisted for this integration.', 403);
+      }
+      const integration = await this.options.integrationStore.findByProvider(session.userId, descriptor.provider);
+      if (!isIntegrationConnected(integration)) {
+        throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
+      }
+      const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
+      const bearerToken = this.decryptAccessToken(integration, session.userId);
+      const result = await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
+        const remoteResult = await this.awaitRemoteOperation(
+          client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
+          'remote_mcp_call_timeout',
+          'Remote MCP tool call timed out.',
+          'remote_mcp_call_failed',
+          'Remote MCP tool call failed.',
+        );
+        return this.redactRemoteCallResult({
           provider: descriptor.provider,
-          remoteTool: input.remoteName,
-          handling: 'data_only_not_instructions',
-        },
-      }, bearerToken);
-    });
-    this.auditRemote(descriptor.provider, 'tool_call', 'allowed');
-    return result;
+          remoteName: input.remoteName,
+          result: remoteResult,
+          provenance: {
+            source: 'third_party_integration',
+            trust: 'untrusted',
+            provider: descriptor.provider,
+            remoteTool: input.remoteName,
+            handling: 'data_only_not_instructions',
+          },
+        }, bearerToken);
+      });
+      this.auditRemote(descriptor.provider, 'tool_call', 'allowed');
+      return result;
+    } catch (error) {
+      this.auditRemote(input.provider, 'tool_call', remoteFailureOutcome(error));
+      throw error;
+    }
   }
 
   private auditRemote(provider: string, action: 'discovery' | 'tool_call', outcome: string): void {
@@ -405,6 +407,10 @@ export class IntegrationRemoteMcpBridge {
       502,
     );
   }
+}
+
+function remoteFailureOutcome(error: unknown): string {
+  return error instanceof IntegrationRemoteMcpBridgeError ? error.code : 'failed';
 }
 
 async function createSdkRemoteMcpClient(input: {
