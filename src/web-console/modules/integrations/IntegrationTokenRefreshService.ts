@@ -33,6 +33,15 @@ export class IntegrationTokenRefreshService {
   constructor(private readonly options: IntegrationTokenRefreshServiceOptions) {}
 
   async refreshOnDemand(input: IntegrationTokenRefreshInput): Promise<UserIntegrationRefreshResult> {
+    try {
+      return await this.executeRefreshOnDemand(input);
+    } catch (error) {
+      this.auditOutcome(input.provider, 'failed');
+      throw error;
+    }
+  }
+
+  private async executeRefreshOnDemand(input: IntegrationTokenRefreshInput): Promise<UserIntegrationRefreshResult> {
     const provider = this.options.providers.get(input.provider)
       ?? await this.options.resolveProvider?.(input.userId, input.provider)
       ?? null;
@@ -100,13 +109,20 @@ export class IntegrationTokenRefreshService {
     provider: UserIntegrationProvider,
     result: UserIntegrationRefreshResult,
   ): UserIntegrationRefreshResult {
+    this.auditOutcome(provider, result.kind);
+    return result;
+  }
+
+  private auditOutcome(
+    provider: UserIntegrationProvider,
+    outcome: UserIntegrationRefreshResult['kind'],
+  ): void {
     SecurityMonitor.logSecurityEvent({
       type: 'INTEGRATION_SECURITY_DECISION',
-      severity: result.kind === 'refreshed' || result.kind === 'reused' ? 'LOW' : 'MEDIUM',
+      severity: outcome === 'refreshed' || outcome === 'reused' ? 'LOW' : 'MEDIUM',
       source: 'IntegrationTokenRefreshService.refreshOnDemand',
-      details: `Integration token refresh ${result.kind} for provider ${safeIntegrationAuditProvider(provider)}`,
+      details: `Integration token refresh ${outcome} for provider ${safeIntegrationAuditProvider(provider)}`,
     });
-    return result;
   }
 
   private now(): Date {

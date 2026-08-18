@@ -998,6 +998,50 @@ describe('IntegrationModule', () => {
       details: expect.stringContaining('refresh refreshed for provider gmail'),
     }));
   });
+
+  it.each([false, true])(
+    'audits store refresh exceptions before propagating (configured provider: %s)',
+    async configuredProvider => {
+      SecurityMonitor.clearAllEventsForTesting();
+      const store = new InMemoryUserIntegrationStore();
+      const storeFailure = new Error('database connection included only in the thrown error');
+      jest.spyOn(store, 'refresh').mockRejectedValue(storeFailure);
+      const secretEncryption = new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      });
+      const providers = configuredProvider
+        ? [new ConfiguredOAuthIntegrationProvider({
+          descriptor: oauthDescriptorFixture(),
+          clientSecret: 'gmail-client-secret',
+          ...providerOutbound(() => Promise.reject(new Error('not reached'))),
+        })]
+        : [];
+      const service = new IntegrationTokenRefreshService({
+        store,
+        providers: new IntegrationProviderRegistry(providers),
+        secretEncryption,
+        now: () => NOW,
+      });
+
+      await expect(service.refreshOnDemand({
+        userId: USER_ID,
+        provider: 'gmail',
+        staleAccessTokenCiphertext: Buffer.from('stale-token-ciphertext'),
+      })).rejects.toBe(storeFailure);
+
+      const events = SecurityMonitor.getRecentEvents().filter(
+        event => event.source === 'IntegrationTokenRefreshService.refreshOnDemand',
+      );
+      expect(events).toEqual([
+        expect.objectContaining({
+          severity: 'MEDIUM',
+          details: 'Integration token refresh failed for provider gmail',
+        }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain(storeFailure.message);
+    },
+  );
 });
 
 function oauthDescriptorFixture(): IntegrationDescriptorRecord {
