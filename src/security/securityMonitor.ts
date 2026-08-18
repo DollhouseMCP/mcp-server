@@ -13,6 +13,7 @@
 import { logger } from '../utils/logger.js';
 import { EvictingQueue } from '../utils/EvictingQueue.js';
 import { EventDeduplicator } from '../utils/EventDeduplicator.js';
+import type { SessionContext } from '../context/SessionContext.js';
 
 export interface SecurityEvent {
   type: 'CONTENT_INJECTION_ATTEMPT' | 'YAML_INJECTION_ATTEMPT' | 'PATH_TRAVERSAL_ATTEMPT' |
@@ -73,6 +74,9 @@ export interface SecurityEvent {
 export interface SecurityLogEntry extends SecurityEvent {
   timestamp: string;
   id: string;
+  correlationId?: string;
+  userId?: string;
+  sessionId?: string;
 }
 
 export interface SecurityLogDelivery {
@@ -81,6 +85,12 @@ export interface SecurityLogDelivery {
 }
 
 type SecurityLogListener = (entry: SecurityLogEntry, delivery: SecurityLogDelivery) => void;
+
+type SecurityAttributionContext = {
+  getCorrelationId(): string | undefined;
+  getSessionContext(): SessionContext | undefined;
+};
+type SecurityAttributionContextProvider = () => SecurityAttributionContext | undefined;
 
 /** Deduplication window: suppress identical events within this period */
 const DEDUP_WINDOW_MS = 60_000;
@@ -98,6 +108,8 @@ export class SecurityMonitor {
   // ── Static facade state (fallback when no instance wired) ────────────
   private static _instance: SecurityMonitor | null = null;
   private static _fallback = new SecurityMonitor();
+
+  constructor(private readonly _attributionContextProvider?: SecurityAttributionContextProvider) {}
 
   /** Wire the DI-managed instance. Called once at container startup. */
   static setInstance(instance: SecurityMonitor): void {
@@ -133,10 +145,16 @@ export class SecurityMonitor {
       return;
     }
 
+    const attributionContext = this._attributionContextProvider?.();
+    const session = attributionContext?.getSessionContext();
+    const correlationId = attributionContext?.getCorrelationId();
     const logEntry: SecurityLogEntry = {
       ...event,
       timestamp: new Date().toISOString(),
       id: `SEC-${Date.now()}-${++this._eventCount}`,
+      ...(correlationId ? { correlationId } : {}),
+      ...(session?.userId ? { userId: session.userId } : {}),
+      ...(session?.sessionId ? { sessionId: session.sessionId } : {}),
     };
 
     this._events.push(logEntry);

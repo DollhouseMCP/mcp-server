@@ -51,6 +51,35 @@ describe('SecurityMonitor', () => {
       unsubscribe();
     });
 
+    it('captures request attribution before a security event enters the replay backlog', () => {
+      const contextTracker = {
+        getCorrelationId: jest.fn(() => 'REQUEST-CORRELATION'),
+        getSessionContext: jest.fn(() => ({
+          userId: 'request-user',
+          sessionId: 'request-session',
+        })),
+      };
+      const attributionProvider = jest.fn(() => contextTracker);
+      const monitor = new SecurityMonitor(attributionProvider);
+      expect(attributionProvider).not.toHaveBeenCalled();
+      monitor.instanceLogSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'runtime-request',
+        details: 'Request completed before log hooks were wired',
+      });
+      expect(attributionProvider).toHaveBeenCalledTimes(1);
+      const listener = jest.fn();
+
+      monitor.instanceAddLogListener(listener, { replayExisting: true });
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        correlationId: 'REQUEST-CORRELATION',
+        userId: 'request-user',
+        sessionId: 'request-session',
+      }), { replayed: true });
+    });
+
     it('should store critical events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
