@@ -106,6 +106,7 @@ describe('IntegrationRemoteMcpBridge', () => {
   });
 
   it('proxies calls with decrypted credentials and untrusted provenance', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const callTool = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] });
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn(),
@@ -131,6 +132,16 @@ describe('IntegrationRemoteMcpBridge', () => {
         handling: 'data_only_not_instructions',
       },
     });
+
+    await runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: { q: 'status' },
+    }));
+    const events = SecurityMonitor.getRecentEvents()
+      .filter(entry => entry.source === 'IntegrationRemoteMcpBridge' && entry.details.includes('tool_call allowed'));
+    expect(events).toHaveLength(2);
+    expect(events[0]?.details).not.toBe(events[1]?.details);
   });
 
   it('redacts bearer-token echoes throughout remote MCP call results', async () => {

@@ -146,6 +146,7 @@ function objectHasCallableHandle(
   ts: TypeScriptApi,
   node: import('typescript').ObjectLiteralExpression,
   callableIdentifiers: ReadonlySet<string>,
+  callableNamespaces: ReadonlySet<string>,
 ): boolean {
   return node.properties.some(property => {
     if (ts.isMethodDeclaration(property)) {
@@ -157,15 +158,22 @@ function objectHasCallableHandle(
     const initializer = unwrapExpression(ts, property.initializer);
     return ts.isArrowFunction(initializer)
       || ts.isFunctionExpression(initializer)
-      || (ts.isIdentifier(initializer) && callableIdentifiers.has(initializer.text));
+      || (ts.isIdentifier(initializer) && callableIdentifiers.has(initializer.text))
+      || (ts.isPropertyAccessExpression(initializer)
+        && ts.isIdentifier(initializer.expression)
+        && callableNamespaces.has(initializer.expression.text));
   });
 }
 
 function collectCallableIdentifiers(
   ts: TypeScriptApi,
   source: import('typescript').SourceFile,
-): ReadonlySet<string> {
+): {
+  readonly identifiers: ReadonlySet<string>;
+  readonly namespaces: ReadonlySet<string>;
+} {
   const callable = new Set<string>();
+  const namespaces = new Set<string>();
   const visit = (node: TsNode): void => {
     if (ts.isFunctionDeclaration(node) && node.name) {
       callable.add(node.name.text);
@@ -175,6 +183,8 @@ function collectCallableIdentifiers(
       callable.add(node.name.text);
     } else if (ts.isImportSpecifier(node)) {
       callable.add(node.name.text);
+    } else if (ts.isNamespaceImport(node)) {
+      namespaces.add(node.name.text);
     } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       const initializer = unwrapExpression(ts, node.initializer);
       if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
@@ -184,7 +194,7 @@ function collectCallableIdentifiers(
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return callable;
+  return { identifiers: callable, namespaces };
 }
 
 function hasMcpToolHandler(content: string): boolean {
@@ -200,13 +210,13 @@ function hasMcpToolHandler(content: string): boolean {
   }
 
   const source = ts.createSourceFile('security-audit-tools.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
-  const callableIdentifiers = collectCallableIdentifiers(ts, source);
+  const callableBindings = collectCallableIdentifiers(ts, source);
   let found = false;
   const visit = (node: TsNode): void => {
     if (found) return;
     if (ts.isObjectLiteralExpression(node)
       && objectHasStaticToolName(ts, node)
-      && objectHasCallableHandle(ts, node, callableIdentifiers)) {
+      && objectHasCallableHandle(ts, node, callableBindings.identifiers, callableBindings.namespaces)) {
       found = true;
       return;
     }

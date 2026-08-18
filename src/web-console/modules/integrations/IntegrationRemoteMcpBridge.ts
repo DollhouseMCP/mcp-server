@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { lookup as dnsLookup } from 'node:dns/promises';
 
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -252,11 +253,12 @@ export class IntegrationRemoteMcpBridge {
   }
 
   private auditRemote(provider: string, action: 'discovery' | 'tool_call', outcome: string): void {
+    const correlationId = randomUUID();
     SecurityMonitor.logSecurityEvent({
       type: 'INTEGRATION_SECURITY_DECISION',
       severity: outcome === 'allowed' ? 'LOW' : 'MEDIUM',
       source: 'IntegrationRemoteMcpBridge',
-      details: `Remote MCP ${action} ${outcome} for provider ${safeIntegrationAuditProvider(provider)}`,
+      details: `Remote MCP ${action} ${outcome} for provider ${safeIntegrationAuditProvider(provider)} request ${correlationId}`,
     });
   }
 
