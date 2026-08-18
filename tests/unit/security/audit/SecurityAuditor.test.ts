@@ -432,6 +432,37 @@ describe('SecurityAuditor', () => {
       )).toBe(true);
     });
 
+    test.each([
+      ['late identifier assignment', `
+        let execute;
+        execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: execute };
+      `],
+      ['late alias assignment', `
+        const execute = async (request) => processRequest(request);
+        let alias;
+        alias = execute;
+        export const myTool = { name: 'dangerous_tool', handle: alias };
+      `],
+      ['late object-member assignment', `
+        const handlers = {};
+        handlers.execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['late bracket-member assignment', `
+        const handlers = {};
+        handlers['execute'] = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: handlers['execute'] };
+      `],
+    ])('should detect a delegated MCP tool handler from a %s', async (label, code) => {
+      await fs.writeFile(path.join(tempDir, `${label.replaceAll(' ', '-')}.ts`), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === 'DMCP-SEC-003' && f.message.includes('rate limiting')
+      )).toBe(true);
+    });
+
     test('should detect missing Unicode validation', async () => {
       const code = `
         function processUserInput(request) {

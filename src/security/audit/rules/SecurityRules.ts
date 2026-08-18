@@ -244,6 +244,34 @@ type CallableMemberAlias = {
   readonly initializer: TsExpression;
 };
 
+function collectCallableBinding(
+  ts: TypeScriptApi,
+  name: string,
+  initializerExpression: TsExpression,
+  callable: Set<string>,
+  members: Map<string, Set<string>>,
+  aliases: CallableAlias[],
+  memberAliases: CallableMemberAlias[],
+): void {
+  const initializer = unwrapExpression(ts, initializerExpression);
+  if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+    callable.add(name);
+    return;
+  }
+  if (!ts.isObjectLiteralExpression(initializer)) {
+    aliases.push({ name, initializer });
+    return;
+  }
+
+  const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
+  if (callableObjectMembers.direct.size > 0) {
+    members.set(name, new Set(callableObjectMembers.direct));
+  }
+  for (const member of callableObjectMembers.pending) {
+    memberAliases.push({ objectName: name, ...member });
+  }
+}
+
 function collectCallableVariable(
   ts: TypeScriptApi,
   node: import('typescript').VariableDeclaration,
@@ -253,23 +281,42 @@ function collectCallableVariable(
   memberAliases: CallableMemberAlias[],
 ): void {
   if (!ts.isIdentifier(node.name) || !node.initializer) return;
+  collectCallableBinding(ts, node.name.text, node.initializer, callable, members, aliases, memberAliases);
+}
 
-  const initializer = unwrapExpression(ts, node.initializer);
-  if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
-    callable.add(node.name.text);
+function callableMemberAssignmentTarget(
+  ts: TypeScriptApi,
+  expression: TsExpression,
+): { readonly objectName: string; readonly memberName: string } | null {
+  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+    return { objectName: expression.expression.text, memberName: expression.name.text };
+  }
+  if (ts.isElementAccessExpression(expression)
+    && ts.isIdentifier(expression.expression)
+    && expression.argumentExpression
+    && ts.isStringLiteralLike(expression.argumentExpression)) {
+    return { objectName: expression.expression.text, memberName: expression.argumentExpression.text };
+  }
+  return null;
+}
+
+function collectCallableAssignment(
+  ts: TypeScriptApi,
+  node: import('typescript').BinaryExpression,
+  callable: Set<string>,
+  members: Map<string, Set<string>>,
+  aliases: CallableAlias[],
+  memberAliases: CallableMemberAlias[],
+): void {
+  if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return;
+  const left = unwrapExpression(ts, node.left);
+  if (ts.isIdentifier(left)) {
+    collectCallableBinding(ts, left.text, node.right, callable, members, aliases, memberAliases);
     return;
   }
-  if (!ts.isObjectLiteralExpression(initializer)) {
-    aliases.push({ name: node.name.text, initializer });
-    return;
-  }
-
-  const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
-  if (callableObjectMembers.direct.size > 0) {
-    members.set(node.name.text, new Set(callableObjectMembers.direct));
-  }
-  for (const member of callableObjectMembers.pending) {
-    memberAliases.push({ objectName: node.name.text, ...member });
+  const target = callableMemberAssignmentTarget(ts, left);
+  if (target) {
+    memberAliases.push({ ...target, initializer: unwrapExpression(ts, node.right) });
   }
 }
 
@@ -294,6 +341,8 @@ function collectCallableNode(
     namespaces.add(node.name.text);
   } else if (ts.isVariableDeclaration(node)) {
     collectCallableVariable(ts, node, callable, members, aliases, memberAliases);
+  } else if (ts.isBinaryExpression(node)) {
+    collectCallableAssignment(ts, node, callable, members, aliases, memberAliases);
   }
 }
 
