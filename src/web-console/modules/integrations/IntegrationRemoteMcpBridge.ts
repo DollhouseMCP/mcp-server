@@ -174,6 +174,8 @@ export class IntegrationRemoteMcpBridge {
       );
       return listed.tools.flatMap(tool => {
         if (!config.allowedTools.has(tool.name)) return [];
+        // A name is both the allowlist key and invocation target; redacting it
+        // would authorize one name and invoke another, so credential echoes fail closed.
         if (this.redactRemotePayload(tool.name, bearerToken) !== tool.name) {
           throw new IntegrationRemoteMcpBridgeError(
             'remote_mcp_response_invalid',
