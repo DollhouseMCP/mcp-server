@@ -189,6 +189,36 @@ describe('IntegrationDescriptorAuthoringService', () => {
     });
   });
 
+  it.each(['\ud800', '\udc00'])('rejects malformed Unicode in static-key injection descriptors', async malformed => {
+    const { service } = fixture();
+    const malformedName = await service.create(consoleRequest({
+      body: staticKeyBody({
+        static_api_key: { injection: { location: 'query', name: `key${malformed}`, value_prefix: null } },
+      }),
+    }));
+    const malformedPrefix = await service.create(consoleRequest({
+      body: staticKeyBody({
+        static_api_key: { injection: { location: 'header', name: 'Authorization', value_prefix: `Bearer ${malformed}` } },
+      }),
+    }));
+
+    expect(malformedName.status).toBe(422);
+    expect(String(bodyOf(malformedName).detail)).toContain('well-formed Unicode');
+    expect(malformedPrefix.status).toBe(422);
+    expect(String(bodyOf(malformedPrefix).detail)).toContain('well-formed Unicode');
+  });
+
+  it('accepts valid surrogate pairs in static-key value prefixes', async () => {
+    const { service } = fixture();
+    const result = await service.create(consoleRequest({
+      body: staticKeyBody({
+        static_api_key: { injection: { location: 'header', name: 'Authorization', value_prefix: 'Key \u{1F511} ' } },
+      }),
+    }));
+
+    expect(result.status).toBe(201);
+  });
+
   it('persists and returns canonical de-duplicated API hosts', async () => {
     const { service, descriptorStore } = fixture();
 

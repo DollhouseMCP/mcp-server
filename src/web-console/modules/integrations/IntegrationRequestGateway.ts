@@ -15,6 +15,13 @@ import {
   type DnsLookupAddress,
 } from './IntegrationPublicHostGuard.js';
 import { createPinnedOutboundFactory, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
+import { readBoundedResponseText as readBoundedText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
+import {
+  buildCredentialRedactions,
+  type CredentialRedactions,
+  type EffectiveCredentialInjection,
+  redactIntegrationResponseBody,
+} from './IntegrationCredentialRedactor.js';
 
 const MAX_REQUEST_BODY_BYTES = 64 * 1024;
 const MAX_RESPONSE_BODY_BYTES = 256 * 1024;
@@ -22,7 +29,6 @@ const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_RATE_LIMIT_WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_MAX = 60;
 const ALLOWED_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']);
-const REDACTED = '[redacted]';
 const RATE_LIMIT_SCOPE = 'web-console:integrations:request-gateway:v1';
 
 interface RateLimitState {
@@ -154,7 +160,14 @@ export class IntegrationRequestGateway {
       throw new IntegrationRequestError('integration_token_refresh_failed', 'Integration token refresh failed.', 502);
     }
     const retryCredential = await this.decryptAuditedAccessToken(refresh.record, session.userId, session.sessionId, method, url, true);
-    const retry = await this.auditedSend(requestContext, descriptor, body, retryCredential, true);
+    const retry = await this.auditedSend(
+      requestContext,
+      descriptor,
+      body,
+      retryCredential,
+      true,
+      [firstCredential],
+    );
     return this.finish(provider, session.userId, session.sessionId, method, url, retry, true);
   }
 
@@ -240,9 +253,10 @@ export class IntegrationRequestGateway {
     body: string | null,
     credential: string,
     refreshed: boolean,
+    previousCredentials: readonly string[] = [],
   ): Promise<IntegrationHttpResponse> {
     try {
-      return await this.send(descriptor, ctx.url, ctx.method, body, credential);
+      return await this.send(descriptor, ctx.url, ctx.method, body, credential, previousCredentials);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         await this.audit({
@@ -269,10 +283,25 @@ export class IntegrationRequestGateway {
     method: string,
     body: string | null,
     credential: string,
+    previousCredentials: readonly string[],
   ): Promise<IntegrationHttpResponse> {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== null) headers.set('Content-Type', 'application/json');
-    injectCredential(descriptor, url, headers, credential);
+    const effectiveInjection = injectCredential(descriptor, url, headers, credential);
+    const additionalCredentials = previousCredentials.map(previousCredential => {
+      const redactionUrl = new URL(url);
+      const redactionHeaders = new Headers({ Accept: 'application/json' });
+      if (body !== null) redactionHeaders.set('Content-Type', 'application/json');
+      return {
+        credential: previousCredential,
+        injection: injectCredential(descriptor, redactionUrl, redactionHeaders, previousCredential),
+      };
+    });
+    const credentialRedactions = buildCredentialRedactions(
+      credential,
+      effectiveInjection,
+      additionalCredentials,
+    );
     const vetted = await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
     // Pin the connection to the vetted address so a second connect-time DNS
     // resolution cannot retarget the request (DNS-rebinding TOCTOU).
@@ -293,7 +322,7 @@ export class IntegrationRequestGateway {
         // initial URL, so a 3xx to an internal or non-allowlisted host must not be followed.
         redirect: 'error',
       });
-      return await readBoundedResponse(response, controller);
+      return await readBoundedResponse(response, controller, credentialRedactions);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         throw error;
@@ -606,27 +635,83 @@ function injectCredential(
   url: URL,
   headers: Headers,
   credential: string,
-): void {
+): EffectiveCredentialInjection {
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
-    headers.set('Authorization', `Bearer ${credential}`);
-    return;
+    return injectHeaderCredential(headers, 'Authorization', `Bearer ${credential}`, credential, true);
   }
   if (descriptor.authStrategy === 'static_api_key' && descriptor.staticApiKey) {
     if (descriptor.staticApiKey.injection.location === 'basic') {
       // The stored credential is `username:password` (RFC 7617); encode at
       // injection time so the vault never holds base64-obscured material.
-      headers.set('Authorization', `Basic ${Buffer.from(credential, 'utf8').toString('base64')}`);
-      return;
+      const encoded = Buffer.from(credential, 'utf8').toString('base64');
+      const password = credential.slice(credential.indexOf(':') + 1);
+      const injection = injectHeaderCredential(headers, 'Authorization', `Basic ${encoded}`, encoded, true);
+      return {
+        ...injection,
+        additionalSensitiveValues: [password],
+        additionalBoundedValues: [credential],
+        additionalStructuredValues: [{
+          name: 'password',
+          value: password,
+          caseInsensitiveName: true,
+        }],
+      };
     }
     const value = `${descriptor.staticApiKey.injection.valuePrefix ?? ''}${credential}`;
     if (descriptor.staticApiKey.injection.location === 'header') {
-      headers.set(descriptor.staticApiKey.injection.name, value);
-      return;
+      const caseInsensitivePrefix = descriptor.staticApiKey.injection.name.toLowerCase() === 'authorization' &&
+        Boolean(descriptor.staticApiKey.injection.valuePrefix);
+      return injectHeaderCredential(
+        headers,
+        descriptor.staticApiKey.injection.name,
+        value,
+        credential,
+        caseInsensitivePrefix,
+      );
     }
-    url.searchParams.set(descriptor.staticApiKey.injection.name, value);
-    return;
+    const name = descriptor.staticApiKey.injection.name;
+    url.searchParams.set(name, value);
+    return {
+      location: 'query',
+      name,
+      value: url.searchParams.get(name) ?? value,
+      sensitiveValue: credential,
+    };
   }
   throw new IntegrationRequestError('integration_auth_strategy_not_supported', 'Integration auth strategy is not supported.', 400);
+}
+
+function injectHeaderCredential(
+  headers: Headers,
+  name: string,
+  value: string,
+  sensitiveValue: string,
+  caseInsensitivePrefix: boolean,
+): EffectiveCredentialInjection {
+  headers.set(name, value);
+  const effectiveValue = headers.get(name);
+  if (effectiveValue === null) {
+    throw new IntegrationRequestError('integration_credential_injection_failed', 'Integration credential could not be injected.', 500);
+  }
+  const normalizedSensitiveValue = new Headers([[name, sensitiveValue]]).get(name);
+  const effectiveSensitiveValue = normalizedSensitiveValue !== null &&
+      normalizedSensitiveValue !== '' && effectiveValue.endsWith(normalizedSensitiveValue)
+    ? normalizedSensitiveValue
+    : effectiveValue;
+  const prefixLength = effectiveValue.length - effectiveSensitiveValue.length;
+  const configuredPrefixLength = value.length - sensitiveValue.length;
+  return {
+    location: 'header',
+    name,
+    value: effectiveValue,
+    sensitiveValue: effectiveSensitiveValue,
+    caseInsensitivePrefixLength: caseInsensitivePrefix && prefixLength > 0 ? prefixLength : undefined,
+    configuredValue: value,
+    configuredSensitiveValue: sensitiveValue,
+    configuredCaseInsensitivePrefixLength: caseInsensitivePrefix && configuredPrefixLength > 0
+      ? configuredPrefixLength
+      : undefined,
+  };
 }
 
 async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup): Promise<DnsLookupAddress> {
@@ -643,85 +728,21 @@ async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup):
   }
 }
 
-async function readBoundedResponse(response: Response, controller: AbortController): Promise<IntegrationHttpResponse> {
-  const text = await readBoundedResponseText(response, controller);
-  return {
-    status: response.status,
-    body: parseResponseBody(text, response.headers.get('content-type')),
-  };
-}
-
-async function readBoundedResponseText(response: Response, controller: AbortController): Promise<string> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength !== null && Number.parseInt(contentLength, 10) > MAX_RESPONSE_BODY_BYTES) {
+async function readBoundedResponse(
+  response: Response,
+  controller: AbortController,
+  credentialRedactions: CredentialRedactions,
+): Promise<IntegrationHttpResponse> {
+  let text: string;
+  try {
+    text = await readBoundedText(response, MAX_RESPONSE_BODY_BYTES);
+  } catch (error) {
+    if (!(error instanceof ResponseBodyTooLargeError)) throw error;
     controller.abort();
     throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
   }
-  if (!response.body) {
-    // No readable stream to bound incrementally; the Content-Length pre-check above
-    // is the primary guard, and this buffered read is re-checked against the cap below.
-    const text = await response.text();
-    if (Buffer.byteLength(text, 'utf8') > MAX_RESPONSE_BODY_BYTES) {
-      controller.abort();
-      throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
-    }
-    return text;
-  }
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > MAX_RESPONSE_BODY_BYTES) {
-        controller.abort();
-        await reader.cancel();
-        throw new IntegrationRequestError('integration_response_too_large', 'Integration response body is too large.', 502);
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, totalBytes).toString('utf8');
-}
-
-function parseResponseBody(text: string, contentType: string | null): unknown {
-  if (text === '') return null;
-  if (contentType?.toLowerCase().includes('application/json')) {
-    try {
-      return redactCredentialFields(JSON.parse(text) as unknown);
-    } catch {
-      return REDACTED;
-    }
-  }
-  return text;
-}
-
-function redactCredentialFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactCredentialFields);
-  if (!value || typeof value !== 'object') return value;
-  const output: Record<string, unknown> = {};
-  for (const [key, field] of Object.entries(value)) {
-    output[key] = isCredentialKey(key) ? REDACTED : redactCredentialFields(field);
-  }
-  return output;
-}
-
-// Credential-shaped field-name fragments matched anywhere in the key (case-insensitive).
-// Each `key`/`secret` separator variant is listed explicitly so the check stays a plain
-// substring scan rather than a high-complexity regex.
-const CREDENTIAL_KEY_SUBSTRINGS = [
-  'authorization', 'bearer', 'jwt', 'secret', 'credential', 'password', 'passwd', 'ciphertext',
-  'apikey', 'api_key', 'api-key', 'privatekey', 'private_key', 'private-key',
-];
-
-function isCredentialKey(key: string): boolean {
-  const lower = key.toLowerCase();
-  if (CREDENTIAL_KEY_SUBSTRINGS.some(fragment => lower.includes(fragment))) return true;
-  // token / access_token / refresh_token / id_token, bounded so e.g. 'tokenizer' is not redacted.
-  return /(^|_)(access|refresh|id)?_?token($|_)/i.test(key);
+  return {
+    status: response.status,
+    body: redactIntegrationResponseBody(text, response.headers.get('content-type'), credentialRedactions),
+  };
 }

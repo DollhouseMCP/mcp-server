@@ -17,6 +17,7 @@ import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueVal
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import { isWellFormedUnicode } from '../../stores/ConsoleStoreValidation.js';
 import {
   serializeIntegrationList,
 } from './IntegrationDtos.js';
@@ -509,7 +510,9 @@ function readStaticApiKey(body: unknown): string | null {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
   if (typeof record.api_key !== 'string') return null;
   const value = record.api_key.trim();
-  if (value.length === 0 || Buffer.byteLength(value, 'utf8') > 8192) return null;
+  if (value.length === 0 || !isWellFormedUnicode(value) || Buffer.byteLength(value, 'utf8') > 8192) {
+    return null;
+  }
   return value;
 }
 
@@ -519,7 +522,7 @@ type CapturedStaticCredential =
 
 function readApiKeyCredential(body: unknown): CapturedStaticCredential {
   const apiKey = readStaticApiKey(body);
-  if (!apiKey) return { error: badRequest('invalid_static_api_key', 'A non-empty api_key is required.') };
+  if (!apiKey) return { error: badRequest('invalid_static_api_key', 'A valid, non-empty api_key is required.') };
   return { credential: apiKey, defaultAccountLabel: null };
 }
 
@@ -533,8 +536,9 @@ function readBasicCredential(body: unknown): CapturedStaticCredential {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
   const username = typeof record.username === 'string' ? record.username.trim() : '';
   const password = typeof record.password === 'string' ? record.password : '';
-  if (username.length === 0 || password.length === 0) {
-    return { error: badRequest('invalid_basic_credential', 'Non-empty username and password are required.') };
+  if (username.length === 0 || password.length === 0 ||
+      !isWellFormedUnicode(username) || !isWellFormedUnicode(password)) {
+    return { error: badRequest('invalid_basic_credential', 'Valid, non-empty username and password are required.') };
   }
   if (username.includes(':')) {
     return { error: badRequest('invalid_basic_credential', 'username must not contain ":".') };

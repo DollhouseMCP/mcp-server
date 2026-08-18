@@ -876,6 +876,51 @@ describe('IntegrationModule', () => {
     await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
   });
 
+  it.each([
+    ['leading', String.fromCharCode(0xd800)],
+    ['trailing', String.fromCharCode(0xdc00)],
+  ])('rejects a static API key containing a %s lone surrogate', async (_position, malformed) => {
+    const store = new InMemoryUserIntegrationStore();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture())],
+      now: () => NOW,
+    });
+    const connect = findRoute(module.routes, AIRTABLE_CONNECT_PATH, 'POST');
+
+    await expect(connect.handler(consoleRequest({ body: { api_key: `key-${malformed}` } }))).resolves
+      .toMatchObject({
+        status: 400,
+        body: { code: 'invalid_static_api_key' },
+      });
+    await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
+  });
+
+  it('accepts a static API key containing a well-formed surrogate pair', async () => {
+    const store = new InMemoryUserIntegrationStore();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture())],
+      now: () => NOW,
+    });
+    const connect = findRoute(module.routes, AIRTABLE_CONNECT_PATH, 'POST');
+
+    await expect(connect.handler(consoleRequest({
+      body: { api_key: `key-${String.fromCodePoint(0x1f600)}` },
+    }))).resolves.toMatchObject({ status: 200 });
+    await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toMatchObject({
+      status: 'connected',
+    });
+  });
+
   it('refreshes configured OAuth tokens through store-level single-flight helper', async () => {
     const fetchCalls: Array<{ readonly url: string; readonly body: string | null }> = [];
     const fetchImpl = (url: string | URL, init?: RequestInit) => {

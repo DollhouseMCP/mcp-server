@@ -100,6 +100,23 @@ export function assertNullableDisplayString(value: string | null, name: string, 
   assertDisplayString(value, name, maxLength);
 }
 
+export function isWellFormedUnicode(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codePoint = value.codePointAt(index);
+    if (codePoint === undefined || (codePoint >= 0xd800 && codePoint <= 0xdfff)) return false;
+    if (codePoint > 0xffff) {
+      index += 1;
+    }
+  }
+  return true;
+}
+
+export function assertWellFormedUnicode(value: string, name: string): void {
+  if (!isWellFormedUnicode(value)) {
+    throw new ConsoleStoreValidationError(`${name} must contain well-formed Unicode`);
+  }
+}
+
 /**
  * Membership test for a readonly literal tuple against a wider string.
  * `tuple.includes(value)` won't type-check when value is a wider `string`
