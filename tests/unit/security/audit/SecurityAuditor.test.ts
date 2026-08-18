@@ -375,6 +375,46 @@ describe('SecurityAuditor', () => {
     });
 
     test.each([
+      ['local class instance', `
+        class ToolHandlers { execute(request) { return processRequest(request); } }
+        const handlers = new ToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['imported class instance', `
+        import { ToolHandlers } from './handlers.js';
+        const handlers = new ToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['late-bound class instance', `
+        class ToolHandlers { execute(request) { return processRequest(request); } }
+        let handlers;
+        handlers = new ToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['aliased class instance', `
+        class ToolHandlers { execute(request) { return processRequest(request); } }
+        const instance = new ToolHandlers();
+        const handlers = instance;
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+      ['static class method', `
+        class ToolHandlers { static execute(request) { return processRequest(request); } }
+        export const myTool = { name: 'dangerous_tool', handle: ToolHandlers.execute };
+      `],
+      ['factory-created handler object', `
+        const handlers = createToolHandlers();
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `],
+    ])('should detect a delegated MCP tool handler from a %s', async (label, code) => {
+      await fs.writeFile(path.join(tempDir, `${label.replaceAll(' ', '-')}.ts`), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === 'DMCP-SEC-003' && f.message.includes('rate limiting')
+      )).toBe(true);
+    });
+
+    test.each([
       ['factory call', `
         function createHandler() { return async (request) => processRequest(request); }
         export const myTool = { name: 'dangerous_tool', handle: createHandler() };

@@ -20,6 +20,7 @@ import {
 import { IntegrationDescriptorAuthoringService } from '../../../../src/web-console/modules/integrations/IntegrationDescriptorAuthoringService.js';
 import { createStoreIntegrationProviderResolver } from '../../../../src/web-console/modules/integrations/CuratedIntegrationProviders.js';
 import { integrationDescriptorClientSecretContext, integrationSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
+import type { ISecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
@@ -99,11 +100,14 @@ function fixture(options: {
   readonly descriptors?: readonly IntegrationDescriptorRecord[];
   readonly withEncryption?: boolean;
   readonly reservedProviderIds?: ReadonlySet<string>;
+  readonly secretEncryption?: ISecretEncryptionService;
 } = {}) {
   const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? []);
   const specStore = new InMemoryIntegrationOpenApiSpecStore();
   const integrationStore = new InMemoryUserIntegrationStore();
-  const secretEncryption = options.withEncryption === false ? null : encryption();
+  const secretEncryption = options.withEncryption === false
+    ? null
+    : options.secretEncryption ?? encryption();
   const service = new IntegrationDescriptorAuthoringService({
     descriptorStore,
     specStore,
@@ -537,6 +541,45 @@ describe('IntegrationDescriptorAuthoringService', () => {
 
     expect(result.status).toBe(503);
     await expect(descriptorStore.listVisible(USER_ID)).resolves.toHaveLength(0);
+  });
+
+  it('audits create and update failures when client-secret encryption throws', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const encryptionFailure = new Error('test encryption failure');
+    const throwingEncryption: ISecretEncryptionService = {
+      encrypt: () => { throw encryptionFailure; },
+      decrypt: () => { throw new Error('not used'); },
+    };
+    const { service: createService, descriptorStore } = fixture({ secretEncryption: throwingEncryption });
+
+    await expect(createService.create(consoleRequest({ body: oauthBody() }))).rejects.toBe(encryptionFailure);
+    await expect(descriptorStore.listVisible(USER_ID)).resolves.toHaveLength(0);
+
+    const seeded = fixture();
+    const created = bodyOf(await seeded.service.create(consoleRequest({ body: oauthBody() })));
+    const failingUpdateService = new IntegrationDescriptorAuthoringService({
+      descriptorStore: seeded.descriptorStore,
+      specStore: seeded.specStore,
+      integrationStore: seeded.integrationStore,
+      secretEncryption: throwingEncryption,
+      now: () => NOW,
+    });
+    await expect(failingUpdateService.update(consoleRequest({
+      params: { id: created.id as string },
+      body: { oauth: { ...(oauthBody().oauth as Record<string, unknown>), client_secret: 'rotated-secret' } },
+    }))).rejects.toBe(encryptionFailure);
+
+    const events = SecurityMonitor.getRecentEvents();
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created failed for provider mycrm'),
+      }),
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('updated failed for provider mycrm'),
+      }),
+    ]));
   });
 
   it('reads descriptors by id only for the owner', async () => {

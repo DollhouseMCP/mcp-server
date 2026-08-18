@@ -249,6 +249,7 @@ function collectCallableBinding(
   name: string,
   initializerExpression: TsExpression,
   callable: Set<string>,
+  namespaces: Set<string>,
   members: Map<string, Set<string>>,
   aliases: CallableAlias[],
   memberAliases: CallableMemberAlias[],
@@ -256,6 +257,21 @@ function collectCallableBinding(
   const initializer = unwrapExpression(ts, initializerExpression);
   if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
     callable.add(name);
+    return;
+  }
+  if (ts.isCallExpression(initializer)) {
+    // Without inter-module type resolution a factory may return either the
+    // handler itself or an object containing handler methods. Preserve both
+    // conservative interpretations for security-audit coverage.
+    callable.add(name);
+    namespaces.add(name);
+    return;
+  }
+  if (ts.isNewExpression(initializer)) {
+    // The scanner does not resolve class declarations or imported types. A
+    // constructed instance can expose callable prototype methods, so treat
+    // its members conservatively in the same way as a namespace import.
+    namespaces.add(name);
     return;
   }
   if (!ts.isObjectLiteralExpression(initializer)) {
@@ -276,12 +292,13 @@ function collectCallableVariable(
   ts: TypeScriptApi,
   node: import('typescript').VariableDeclaration,
   callable: Set<string>,
+  namespaces: Set<string>,
   members: Map<string, Set<string>>,
   aliases: CallableAlias[],
   memberAliases: CallableMemberAlias[],
 ): void {
   if (!ts.isIdentifier(node.name) || !node.initializer) return;
-  collectCallableBinding(ts, node.name.text, node.initializer, callable, members, aliases, memberAliases);
+  collectCallableBinding(ts, node.name.text, node.initializer, callable, namespaces, members, aliases, memberAliases);
 }
 
 function callableMemberAssignmentTarget(
@@ -304,6 +321,7 @@ function collectCallableAssignment(
   ts: TypeScriptApi,
   node: import('typescript').BinaryExpression,
   callable: Set<string>,
+  namespaces: Set<string>,
   members: Map<string, Set<string>>,
   aliases: CallableAlias[],
   memberAliases: CallableMemberAlias[],
@@ -311,7 +329,7 @@ function collectCallableAssignment(
   if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return;
   const left = unwrapExpression(ts, node.left);
   if (ts.isIdentifier(left)) {
-    collectCallableBinding(ts, left.text, node.right, callable, members, aliases, memberAliases);
+    collectCallableBinding(ts, left.text, node.right, callable, namespaces, members, aliases, memberAliases);
     return;
   }
   const target = callableMemberAssignmentTarget(ts, left);
@@ -331,25 +349,29 @@ function collectCallableNode(
 ): void {
   if (ts.isFunctionDeclaration(node) && node.name) {
     callable.add(node.name.text);
+  } else if (ts.isClassDeclaration(node) && node.name) {
+    namespaces.add(node.name.text);
   } else if (ts.isImportClause(node) && node.name) {
     // Default imports are opaque without resolving another module. Treat
     // them conservatively when assigned to a tool's handle property.
     callable.add(node.name.text);
+    namespaces.add(node.name.text);
   } else if (ts.isImportSpecifier(node)) {
     callable.add(node.name.text);
+    namespaces.add(node.name.text);
   } else if (ts.isNamespaceImport(node)) {
     namespaces.add(node.name.text);
   } else if (ts.isVariableDeclaration(node)) {
-    collectCallableVariable(ts, node, callable, members, aliases, memberAliases);
+    collectCallableVariable(ts, node, callable, namespaces, members, aliases, memberAliases);
   } else if (ts.isBinaryExpression(node)) {
-    collectCallableAssignment(ts, node, callable, members, aliases, memberAliases);
+    collectCallableAssignment(ts, node, callable, namespaces, members, aliases, memberAliases);
   }
 }
 
 function resolveCallableAliases(
   ts: TypeScriptApi,
   callable: Set<string>,
-  namespaces: ReadonlySet<string>,
+  namespaces: Set<string>,
   members: Map<string, Set<string>>,
   aliases: readonly CallableAlias[],
   memberAliases: readonly CallableMemberAlias[],
@@ -358,6 +380,11 @@ function resolveCallableAliases(
   while (changed) {
     changed = false;
     for (const alias of aliases) {
+      const initializer = unwrapExpression(ts, alias.initializer);
+      if (ts.isIdentifier(initializer) && namespaces.has(initializer.text) && !namespaces.has(alias.name)) {
+        namespaces.add(alias.name);
+        changed = true;
+      }
       if (!callable.has(alias.name) && isCallableHandleExpression(
         ts,
         alias.initializer,

@@ -116,28 +116,28 @@ export class IntegrationDescriptorAuthoringService {
     // not be claimed by a BYO descriptor — it would shadow that provider's
     // routing while the gateway still injects the registry provider's stored
     // credential (deployment-token exfiltration for `github`).
-    if (this.options.reservedProviderIds?.has(parsed.provider)) {
-      auditDescriptorDecision(parsed.provider, 'created', 'denied_reserved');
-      return conflict(`provider '${parsed.provider}' is reserved by a built-in or curated provider`);
-    }
-    // A provider id shared with ANY visible descriptor (curated or own BYO)
-    // would make provider-keyed resolution ambiguous for this user.
-    const collision = await this.options.descriptorStore.findVisibleByProvider(
-      auth.userId,
-      parsed.provider as UserIntegrationProvider,
-    );
-    if (collision) {
-      auditDescriptorDecision(parsed.provider, 'created', 'denied_conflict');
-      return conflict(`provider '${parsed.provider}' already has a visible descriptor`);
-    }
-
-    const secret = this.encryptClientSecret(parsed, auth.userId, null);
-    if (secret === ENCRYPTION_UNAVAILABLE) {
-      auditDescriptorDecision(parsed.provider, 'created', 'unavailable');
-      return encryptionUnavailable();
-    }
-    const now = this.now();
     try {
+      if (this.options.reservedProviderIds?.has(parsed.provider)) {
+        auditDescriptorDecision(parsed.provider, 'created', 'denied_reserved');
+        return conflict(`provider '${parsed.provider}' is reserved by a built-in or curated provider`);
+      }
+      // A provider id shared with ANY visible descriptor (curated or own BYO)
+      // would make provider-keyed resolution ambiguous for this user.
+      const collision = await this.options.descriptorStore.findVisibleByProvider(
+        auth.userId,
+        parsed.provider as UserIntegrationProvider,
+      );
+      if (collision) {
+        auditDescriptorDecision(parsed.provider, 'created', 'denied_conflict');
+        return conflict(`provider '${parsed.provider}' already has a visible descriptor`);
+      }
+
+      const secret = this.encryptClientSecret(parsed, auth.userId, null);
+      if (secret === ENCRYPTION_UNAVAILABLE) {
+        auditDescriptorDecision(parsed.provider, 'created', 'unavailable');
+        return encryptionUnavailable();
+      }
+      const now = this.now();
       const record = await this.options.descriptorStore.upsert(buildCreateInput(parsed, auth.userId, secret, now, now));
       auditDescriptorDecision(record.provider, 'created', 'allowed');
       return { status: 201, body: serializeIntegrationDescriptor(record) };
@@ -190,24 +190,24 @@ export class IntegrationDescriptorAuthoringService {
       return unprocessable('provider cannot be changed; delete and recreate the descriptor');
     }
 
-    const merged = mergeDescriptor(existing, parsed);
-    if (hasCredentialRoutingChanges(parsed)) {
-      const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-      if (hasIntegrationCredentials(active)) {
-        auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
-        return connectedDescriptorConflict('updated');
-      }
-    }
-    // Use `merged` (not `parsed`): it carries `mergedProvider = existing.provider`
-    // so encryptClientSecret's provider guard never misfires and the AAD binds
-    // to the real provider. Passing `parsed` here dropped a rotated secret when
-    // the PATCH body omitted `provider`.
-    const secret = this.encryptClientSecret(merged, auth.userId, preservedSecret(existing, merged));
-    if (secret === ENCRYPTION_UNAVAILABLE) {
-      auditDescriptorDecision(existing.provider, 'updated', 'unavailable');
-      return encryptionUnavailable();
-    }
     try {
+      const merged = mergeDescriptor(existing, parsed);
+      if (hasCredentialRoutingChanges(parsed)) {
+        const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
+        if (hasIntegrationCredentials(active)) {
+          auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
+          return connectedDescriptorConflict('updated');
+        }
+      }
+      // Use `merged` (not `parsed`): it carries `mergedProvider = existing.provider`
+      // so encryptClientSecret's provider guard never misfires and the AAD binds
+      // to the real provider. Passing `parsed` here dropped a rotated secret when
+      // the PATCH body omitted `provider`.
+      const secret = this.encryptClientSecret(merged, auth.userId, preservedSecret(existing, merged));
+      if (secret === ENCRYPTION_UNAVAILABLE) {
+        auditDescriptorDecision(existing.provider, 'updated', 'unavailable');
+        return encryptionUnavailable();
+      }
       const record = await this.options.descriptorStore.upsert(
         buildCreateInput(merged, auth.userId, secret, existing.createdAt, this.now()),
       );
