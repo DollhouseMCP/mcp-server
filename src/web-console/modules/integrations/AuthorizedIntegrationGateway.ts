@@ -44,10 +44,10 @@ import {
  * verification binds to always matches what is actually executed. The
  * management-write facades (ingestOpenApiSpec / regenerateSkill / remote-MCP
  * callTool) authorize on a synthetic `_internal:/...` sentinel target
- * carrying the material content (the spec body, the tool arguments); their
- * provenance-only inputs (`sourceUrl`, `regenerateSkill`) are deliberately
- * outside the bound scope, and the sentinel path is gateway-rejectable so a
- * management approval can never be replayed as a real integration_request.
+ * carrying the behavior-changing content (the spec and regenerate flag, or
+ * the tool arguments). Provenance-only `sourceUrl` remains outside the bound
+ * scope, and the sentinel path is gateway-rejectable so a management approval
+ * can never be replayed as a real integration_request.
  */
 
 type PolicyErrorShape = NonNullable<IntegrationRequestPolicyDecision['error']>;
@@ -114,7 +114,10 @@ export class AuthorizedIntegrationOperationCatalog {
       provider: input.provider,
       method: 'PUT',
       path: INTEGRATION_OPENAPI_SPEC_POLICY_PATH,
-      body: input.spec,
+      body: {
+        spec: input.spec,
+        regenerateSkill: input.regenerateSkill === true,
+      },
     });
     if (!decision.authorized) return decision.denial;
     const result = await this.options.catalog.ingestOpenApiSpec(input);

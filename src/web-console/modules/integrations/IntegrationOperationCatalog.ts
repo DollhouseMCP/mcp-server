@@ -714,8 +714,12 @@ function buildNormalizedPaths(rawPaths: Readonly<Record<string, unknown>>): Reco
   const normalizedPaths: Record<string, unknown> = {};
   const operationIds = new Set<string>();
   for (const [path, pathItemValue] of Object.entries(rawPaths).sort(([left], [right]) => left.localeCompare(right))) {
-    if (!path.startsWith('/')) {
-      throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI paths must start with /.', 400);
+    if (!path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        'OpenAPI paths must be absolute paths without protocol-relative or backslash forms.',
+        400,
+      );
     }
     const normalizedPathItem = normalizePathItem(asRecord(pathItemValue), path, operationIds);
     if (Object.keys(normalizedPathItem).some(key => HTTP_METHODS.has(key))) {

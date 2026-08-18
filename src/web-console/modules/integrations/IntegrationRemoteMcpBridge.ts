@@ -18,6 +18,12 @@ import {
   type DnsLookupAddress,
 } from './IntegrationPublicHostGuard.js';
 import { createPinnedOutboundFactory, type PinnedFetch, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
+import {
+  createBoundedRemoteMcpFetch,
+  DEFAULT_REMOTE_MCP_RESPONSE_BYTES,
+  redactRemoteMcpCredentialEchoes,
+  RemoteMcpPayloadSafetyError,
+} from './IntegrationRemoteMcpSecurity.js';
 
 const DEFAULT_REMOTE_MCP_TIMEOUT_MS = 5_000;
 
@@ -38,6 +44,7 @@ export interface IntegrationRemoteMcpBridgeOptions {
   readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
+  readonly maxResponseBytes?: number;
 }
 
 export interface RemoteMcpTool {
@@ -101,12 +108,14 @@ export class IntegrationRemoteMcpBridge {
   private readonly pinnedOutboundFactory: PinnedOutboundFactory;
   private readonly dnsLookupImpl: DnsLookup;
   private readonly timeoutMs: number;
+  private readonly maxResponseBytes: number;
 
   constructor(private readonly options: IntegrationRemoteMcpBridgeOptions) {
     this.clientFactory = options.clientFactory ?? createSdkRemoteMcpClient;
     this.pinnedOutboundFactory = options.pinnedOutbound ?? createPinnedOutboundFactory();
     this.dnsLookupImpl = options.dnsLookup ?? dnsLookup;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REMOTE_MCP_TIMEOUT_MS;
+    this.maxResponseBytes = options.maxResponseBytes ?? DEFAULT_REMOTE_MCP_RESPONSE_BYTES;
   }
 
   async listAllowedTools(): Promise<readonly RemoteMcpTool[]> {
@@ -156,20 +165,32 @@ export class IntegrationRemoteMcpBridge {
     const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
     const bearerToken = this.decryptAccessToken(integration, userId);
     return await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
-      const listed = await withTimeout(
+      const listed = await this.awaitRemoteOperation(
         client.listTools(),
-        this.timeoutMs,
         'remote_mcp_list_timeout',
         'Remote MCP tools/list timed out.',
+        'remote_mcp_list_failed',
+        'Remote MCP tools/list failed.',
       );
       return listed.tools.flatMap(tool => {
         if (!config.allowedTools.has(tool.name)) return [];
+        if (this.redactRemotePayload(tool.name, bearerToken) !== tool.name) {
+          throw new IntegrationRemoteMcpBridgeError(
+            'remote_mcp_response_invalid',
+            'Remote MCP tool metadata could not be handled safely.',
+            502,
+          );
+        }
+        const safeTool = this.redactRemotePayload({
+          description: tool.description,
+          inputSchema: tool.inputSchema,
+        }, bearerToken) as { description?: unknown; inputSchema?: unknown };
         return [{
           provider: descriptor.provider,
           remoteName: tool.name,
           localName: remoteMcpLocalToolName(descriptor.provider, tool.name),
-          description: tool.description,
-          inputSchema: tool.inputSchema,
+          description: typeof safeTool.description === 'string' ? safeTool.description : undefined,
+          inputSchema: safeTool.inputSchema as Tool['inputSchema'],
           serverUrl: config.serverUrl.toString(),
         }];
       });
@@ -193,16 +214,17 @@ export class IntegrationRemoteMcpBridge {
     const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
     const bearerToken = this.decryptAccessToken(integration, session.userId);
     return await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
-      const result = await withTimeout(
+      const result = await this.awaitRemoteOperation(
         client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
-        this.timeoutMs,
         'remote_mcp_call_timeout',
         'Remote MCP tool call timed out.',
+        'remote_mcp_call_failed',
+        'Remote MCP tool call failed.',
       );
       return {
         provider: descriptor.provider,
         remoteName: input.remoteName,
-        result,
+        result: this.redactRemotePayload(result, bearerToken),
         provenance: {
           source: 'third_party_integration',
           trust: 'untrusted',
@@ -271,7 +293,8 @@ export class IntegrationRemoteMcpBridge {
   }
 
   private async connectClient(serverUrl: URL, bearerToken: string, pinnedFetch: PinnedFetch): Promise<RemoteMcpClient> {
-    const clientPromise = this.clientFactory({ serverUrl, bearerToken, pinnedFetch });
+    const boundedFetch = createBoundedRemoteMcpFetch(pinnedFetch, this.maxResponseBytes);
+    const clientPromise = this.clientFactory({ serverUrl, bearerToken, pinnedFetch: boundedFetch });
     try {
       return await withTimeout(
         clientPromise,
@@ -283,7 +306,40 @@ export class IntegrationRemoteMcpBridge {
       // If the connection resolves after the timeout fired, close it so we don't leak
       // a dangling transport (the try/finally below only covers the post-connect phase).
       void clientPromise.then(client => client.close()).catch(() => { /* best-effort cleanup */ });
-      throw error;
+      if (error instanceof IntegrationRemoteMcpBridgeError) throw error;
+      throw new IntegrationRemoteMcpBridgeError(
+        'remote_mcp_connect_failed',
+        'Remote MCP server connection failed.',
+        502,
+      );
+    }
+  }
+
+  private async awaitRemoteOperation<T>(
+    promise: Promise<T>,
+    timeoutCode: string,
+    timeoutMessage: string,
+    failureCode: string,
+    failureMessage: string,
+  ): Promise<T> {
+    try {
+      return await withTimeout(promise, this.timeoutMs, timeoutCode, timeoutMessage);
+    } catch (error) {
+      if (error instanceof IntegrationRemoteMcpBridgeError) throw error;
+      throw new IntegrationRemoteMcpBridgeError(failureCode, failureMessage, 502);
+    }
+  }
+
+  private redactRemotePayload(value: unknown, bearerToken: string): unknown {
+    try {
+      return redactRemoteMcpCredentialEchoes(value, bearerToken);
+    } catch (error) {
+      if (!(error instanceof RemoteMcpPayloadSafetyError)) throw error;
+      throw new IntegrationRemoteMcpBridgeError(
+        'remote_mcp_response_invalid',
+        'Remote MCP response could not be handled safely.',
+        502,
+      );
     }
   }
 }
@@ -329,6 +385,13 @@ function parseAllowedServerUrl(value: string, descriptor: IntegrationDescriptorR
     url = new URL(value);
   } catch {
     throw new IntegrationRemoteMcpBridgeError('remote_mcp_invalid_server_url', 'Remote MCP server URL is invalid.', 400);
+  }
+  if (url.username !== '' || url.password !== '') {
+    throw new IntegrationRemoteMcpBridgeError(
+      'remote_mcp_invalid_server_url',
+      'Remote MCP server URL must not contain user information.',
+      400,
+    );
   }
   if (url.protocol !== 'https:' || !isIntegrationApiHostAllowed(url.hostname, descriptor.apiHosts)) {
     throw new IntegrationRemoteMcpBridgeError(

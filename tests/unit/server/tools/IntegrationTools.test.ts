@@ -463,7 +463,10 @@ describe('IntegrationTools', () => {
       provider: 'gmail',
       method: 'PUT',
       path: '_internal:/integration/openapi_spec',
-      body: { openapi: '3.1.0', paths: { '/profile': { get: { responses: { 200: { description: 'ok' } } } } } },
+      body: {
+        spec: { openapi: '3.1.0', paths: { '/profile': { get: { responses: { 200: { description: 'ok' } } } } } },
+        regenerateSkill: false,
+      },
     });
     expect(catalog.ingestOpenApiSpec).not.toHaveBeenCalled();
     expect(JSON.parse(result.content[0].text)).toMatchObject({

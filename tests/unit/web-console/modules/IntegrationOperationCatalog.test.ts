@@ -307,6 +307,31 @@ describe('IntegrationOperationCatalog', () => {
     }))).rejects.toMatchObject({ code: 'invalid_openapi_spec' });
   });
 
+  it.each([
+    ['protocol-relative', '//evil.example.com/messages'],
+    ['backslash-bearing', '/gmail\\v1/messages'],
+  ])('rejects %s OpenAPI operation paths during ingestion', async (_label, unsafePath) => {
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    await expect(runAsUser(contextTracker, () => catalog.ingestOpenApiSpec({
+      provider: 'gmail',
+      spec: {
+        ...openApiSpec(),
+        paths: {
+          [unsafePath]: {
+            get: { operationId: 'unsafe', responses: { 200: { description: 'ok' } } },
+          },
+        },
+      },
+    }))).rejects.toMatchObject({
+      code: 'invalid_openapi_spec',
+      message: expect.stringContaining('absolute paths'),
+    });
+  });
+
   it('accepts an equivalent canonical spelling of an allowlisted OpenAPI server host', async () => {
     const { catalog, contextTracker } = createCatalog({
       descriptor: descriptor({
