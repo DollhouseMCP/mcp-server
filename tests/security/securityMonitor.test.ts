@@ -45,7 +45,9 @@ describe('SecurityMonitor', () => {
 
       expect(listener).toHaveBeenCalledTimes(2);
       expect(listener.mock.calls[0]?.[0]).toMatchObject({ source: 'startup-seed-loader' });
+      expect(listener.mock.calls[0]?.[1]).toEqual({ replayed: true });
       expect(listener.mock.calls[1]?.[0]).toMatchObject({ source: 'runtime-request' });
+      expect(listener.mock.calls[1]?.[1]).toEqual({ replayed: false });
       unsubscribe();
     });
 

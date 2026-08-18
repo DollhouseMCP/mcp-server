@@ -75,6 +75,13 @@ export interface SecurityLogEntry extends SecurityEvent {
   id: string;
 }
 
+export interface SecurityLogDelivery {
+  /** True when the entry predates this listener registration. */
+  readonly replayed: boolean;
+}
+
+type SecurityLogListener = (entry: SecurityLogEntry, delivery: SecurityLogDelivery) => void;
+
 /** Deduplication window: suppress identical events within this period */
 const DEDUP_WINDOW_MS = 60_000;
 
@@ -85,7 +92,7 @@ export class SecurityMonitor {
   // ── Instance state (used when wired via DI) ──────────────────────────
   private _eventCount = 0;
   private readonly _events = new EvictingQueue<SecurityLogEntry>(1000);
-  private _logListener?: (entry: SecurityLogEntry) => void;
+  private _logListener?: SecurityLogListener;
   private readonly _dedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
 
   // ── Static facade state (fallback when no instance wired) ────────────
@@ -105,13 +112,13 @@ export class SecurityMonitor {
   // ── Instance methods ─────────────────────────────────────────────────
 
   instanceAddLogListener(
-    fn: (entry: SecurityLogEntry) => void,
+    fn: SecurityLogListener,
     options: { readonly replayExisting?: boolean } = {},
   ): () => void {
     const backlog = options.replayExisting ? this._events.toArray() : [];
     this._logListener = fn;
     for (const entry of backlog) {
-      fn(entry);
+      fn(entry, { replayed: true });
     }
     return () => { this._logListener = undefined; };
   }
@@ -133,7 +140,7 @@ export class SecurityMonitor {
     };
 
     this._events.push(logEntry);
-    this._logListener?.(logEntry);
+    this._logListener?.(logEntry, { replayed: false });
 
     if (event.severity === 'CRITICAL') {
       logger.error('[CRITICAL SECURITY ALERT]', {
@@ -205,7 +212,7 @@ export class SecurityMonitor {
   // ── Static facade (delegates to active instance) ─────────────────────
 
   static addLogListener(
-    fn: (entry: SecurityLogEntry) => void,
+    fn: SecurityLogListener,
     options: { readonly replayExisting?: boolean } = {},
   ): () => void {
     return this.active.instanceAddLogListener(fn, options);

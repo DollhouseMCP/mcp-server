@@ -235,6 +235,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
   });
 
   it('skips the reserved github provider id', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const dir = await seedDirWith({ 'github.json': { ...OAUTH_SEED, provider: 'github' } });
     const store = new InMemoryIntegrationDescriptorStore();
     const loader = new IntegrationDescriptorSeedLoader(
@@ -249,6 +250,10 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(result.loaded).toBe(0);
     expect(result.skipped).toBe(1);
     expect(await store.findVisibleByProvider(VISIBLE_USER, 'github')).toBeNull();
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+      details: 'Integration descriptor seed denied_reserved for provider github',
+    }));
   });
 
   it('records a per-file failure for invalid content without throwing', async () => {

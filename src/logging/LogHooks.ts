@@ -150,7 +150,7 @@ export function wireLogHooks(
 
   // --- SecurityMonitor (security, static) ---------------------------------
   {
-    const unsub = SecurityMonitor.addLogListener((logEntry) => {
+    const unsub = SecurityMonitor.addLogListener((logEntry, delivery) => {
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: logEntry.timestamp,
@@ -164,7 +164,10 @@ export function wireLogHooks(
           severity: logEntry.severity,
           sourceComponent: logEntry.source,
         },
-        ...getRequestAttribution(contextTracker),
+        // Backlog entries predate this listener and therefore the current
+        // context. Attaching it would falsely attribute startup decisions to
+        // the synthetic bootstrap session that wires the log hooks.
+        ...(delivery.replayed ? {} : getRequestAttribution(contextTracker)),
       };
       logManager.log(entry);
     }, { replayExisting: true });

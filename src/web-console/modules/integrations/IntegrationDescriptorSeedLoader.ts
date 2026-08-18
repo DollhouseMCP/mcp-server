@@ -154,6 +154,12 @@ export class IntegrationDescriptorSeedLoader {
       throw new Error('descriptor seed is missing a string "provider"');
     }
     if (RESERVED_PROVIDER_IDS.has(provider)) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: `Integration descriptor seed denied_reserved for provider ${safeIntegrationAuditProvider(provider)}`,
+      });
       logger.warn(`[IntegrationDescriptorSeedLoader] Skipping reserved provider id '${safeIntegrationAuditProvider(provider)}'`, {
         file: path.basename(file),
       });

@@ -636,7 +636,7 @@ describe('LogHooks', () => {
         source: 'PersonaManager.activatePersona',
         details: 'Suspicious path detected',
         additionalData: { path: '/etc/passwd' },
-      });
+      }, { replayed: false });
 
       expect(mockLogManager.logCalls).toHaveLength(1);
       const loggedEntry = mockLogManager.logCalls[0];
@@ -666,7 +666,7 @@ describe('LogHooks', () => {
         severity: 'CRITICAL',
         source: 'SecureYamlParser',
         details: 'Malicious YAML detected',
-      });
+      }, { replayed: false });
 
       expect(mockLogManager.logCalls).toHaveLength(1);
       const loggedEntry = mockLogManager.logCalls[0];
@@ -676,6 +676,70 @@ describe('LogHooks', () => {
         sourceComponent: 'SecureYamlParser',
       });
 
+      spy.mockRestore();
+    });
+
+    it('does not attach the current bootstrap context to replayed security events', () => {
+      let capturedCallback: any;
+      const spy = jest.spyOn(SecurityMonitor, 'addLogListener').mockImplementation((fn: any) => {
+        capturedCallback = fn;
+        return jest.fn() as any;
+      });
+      const contextTracker = {
+        getCorrelationId: jest.fn(() => 'BOOTSTRAP-CORRELATION'),
+        getSessionContext: jest.fn(() => ({
+          userId: 'bootstrap-user',
+          sessionId: 'bootstrap-session',
+        })),
+      };
+
+      wireLogHooks(mockLogManager, makeMockContainer({ ContextTracker: contextTracker }));
+      capturedCallback({
+        timestamp: '2026-02-10T12:00:00.000Z',
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: 'Integration descriptor seed denied_reserved for provider github',
+      }, { replayed: true });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      expect(mockLogManager.logCalls[0]).not.toHaveProperty('correlationId');
+      expect(mockLogManager.logCalls[0]).not.toHaveProperty('userId');
+      expect(mockLogManager.logCalls[0]).not.toHaveProperty('sessionId');
+      expect(contextTracker.getCorrelationId).not.toHaveBeenCalled();
+      expect(contextTracker.getSessionContext).not.toHaveBeenCalled();
+      spy.mockRestore();
+    });
+
+    it('attaches the active request context to live security events', () => {
+      let capturedCallback: any;
+      const spy = jest.spyOn(SecurityMonitor, 'addLogListener').mockImplementation((fn: any) => {
+        capturedCallback = fn;
+        return jest.fn() as any;
+      });
+      const contextTracker = {
+        getCorrelationId: jest.fn(() => 'REQUEST-CORRELATION'),
+        getSessionContext: jest.fn(() => ({
+          userId: 'request-user',
+          sessionId: 'request-session',
+        })),
+      };
+
+      wireLogHooks(mockLogManager, makeMockContainer({ ContextTracker: contextTracker }));
+      capturedCallback({
+        timestamp: '2026-02-10T12:00:00.000Z',
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'IntegrationRequestGateway',
+        details: 'Integration request allowed',
+      }, { replayed: false });
+
+      expect(mockLogManager.logCalls).toHaveLength(1);
+      expect(mockLogManager.logCalls[0]).toMatchObject({
+        correlationId: 'REQUEST-CORRELATION',
+        userId: 'request-user',
+        sessionId: 'request-session',
+      });
       spy.mockRestore();
     });
   });
