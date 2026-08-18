@@ -53,6 +53,15 @@ describe('IntegrationRemoteMcpSecurity', () => {
     });
   });
 
+  it('redacts credential substrings in serialized primitives', () => {
+    expect(redactRemoteMcpCredentialEchoes({ value: 91234 }, '123')).toEqual({
+      value: '9[redacted]4',
+    });
+    expect(redactRemoteMcpCredentialEchoes({ value: true }, 'rue')).toEqual({
+      value: 't[redacted]',
+    });
+  });
+
   it('rejects declared and chunked POST responses above the byte limit', async () => {
     const encoder = new TextEncoder();
     const declaredFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response('small', {
@@ -87,6 +96,9 @@ describe('IntegrationRemoteMcpSecurity', () => {
 
   it('fails closed for empty credentials and circular custom-client output', () => {
     expect(() => redactRemoteMcpCredentialEchoes({}, '')).toThrow(RemoteMcpPayloadSafetyError);
+    expect(() => redactRemoteMcpCredentialEchoes({}, '[redacted]')).toThrow(RemoteMcpPayloadSafetyError);
+    expect(() => redactRemoteMcpCredentialEchoes({}, 'red')).toThrow(RemoteMcpPayloadSafetyError);
+    expect(() => redactRemoteMcpCredentialEchoes({}, '\uD800')).toThrow(RemoteMcpPayloadSafetyError);
     const circular: Record<string, unknown> = {};
     circular.self = circular;
     expect(() => redactRemoteMcpCredentialEchoes(circular, 'credential')).toThrow(

@@ -74,8 +74,8 @@ export function createBoundedRemoteMcpFetch(
  * custom-client output fail closed instead of overflowing the process stack.
  */
 export function redactRemoteMcpCredentialEchoes(value: unknown, credential: string): unknown {
-  if (credential === '') {
-    throw new RemoteMcpPayloadSafetyError('Remote MCP credential is empty.');
+  if (credential === '' || REDACTED.includes(credential)) {
+    throw new RemoteMcpPayloadSafetyError('Remote MCP credential cannot be safely redacted.');
   }
   const patterns = credentialPatterns(credential);
   if (!isContainer(value)) return redactPrimitive(value, patterns);
@@ -143,7 +143,9 @@ function createContainer(value: object): unknown[] | Record<string, unknown> {
 function redactPrimitive(value: unknown, patterns: CredentialPatterns): unknown {
   if (typeof value === 'string') return redactCredentialString(value, patterns);
   if (value === null || typeof value === 'number' || typeof value === 'boolean') {
-    return patterns.exact.includes(String(value)) ? REDACTED : value;
+    const serialized = String(value);
+    const redacted = redactCredentialString(serialized, patterns);
+    return redacted === serialized ? value : redacted;
   }
   return value;
 }
@@ -153,7 +155,7 @@ function credentialPatterns(credential: string): CredentialPatterns {
     // Reject lone surrogates before constructing UTF-8 alternatives.
     encodeURIComponent(credential);
   } catch {
-    return { exact: [credential], encoded: null };
+    throw new RemoteMcpPayloadSafetyError('Remote MCP credential cannot be safely redacted.');
   }
   return {
     exact: [credential],
@@ -186,23 +188,25 @@ function encodedCredentialPattern(credential: string): RegExp {
 
 function unicodeEscapedCharacterPattern(character: string): string {
   let pattern = '';
-  for (let index = 0; index < character.length; index += 1) {
-    const hexadecimal = character.charCodeAt(index).toString(16).padStart(4, '0');
-    pattern += `\\\\u${Array.from(hexadecimal, caseInsensitiveHexDigit).join('')}`;
+  for (const codeUnit of character.split('')) {
+    const value = codeUnit.codePointAt(0);
+    if (value === undefined) continue;
+    const hexadecimal = value.toString(16).padStart(4, '0');
+    pattern += String.raw`\\u${Array.from(hexadecimal, caseInsensitiveHexDigit).join('')}`;
   }
   return pattern;
 }
 
 function jsonShortEscape(character: string): string | null {
   switch (character) {
-    case '"': return '\\"';
-    case '\\': return '\\\\';
-    case '/': return '\\/';
-    case '\b': return '\\b';
-    case '\f': return '\\f';
-    case '\n': return '\\n';
-    case '\r': return '\\r';
-    case '\t': return '\\t';
+    case '"': return String.raw`\"`;
+    case '\\': return String.raw`\\`;
+    case '/': return String.raw`\/`;
+    case '\b': return String.raw`\b`;
+    case '\f': return String.raw`\f`;
+    case '\n': return String.raw`\n`;
+    case '\r': return String.raw`\r`;
+    case '\t': return String.raw`\t`;
     default: return null;
   }
 }
@@ -220,7 +224,7 @@ function caseInsensitiveHexDigit(value: string): string {
 }
 
 function escapeRegexCharacter(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return value.replace(/[.*+?^${}()|[\]\\]/g, String.raw`\\$&`);
 }
 
 function defineSafeProperty(
