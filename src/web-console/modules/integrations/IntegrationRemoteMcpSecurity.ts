@@ -230,14 +230,19 @@ function redactCredentialString(value: string, patterns: CredentialPatterns): st
   let redacted = value;
   for (const pattern of patterns.exact) redacted = redacted.replaceAll(pattern, REDACTED);
   if (patterns.encoded) redacted = redacted.replace(patterns.encoded, REDACTED);
-  return redacted;
+  if (redacted.includes(patterns.credential)) return REDACTED;
+  return decodedVariantContainsCredential(redacted, patterns.credential, true) ? REDACTED : redacted;
 }
 
-function decodedVariantContainsCredential(value: string, credential: string): boolean {
+function decodedVariantContainsCredential(
+  value: string,
+  credential: string,
+  inspectFirstLayer = false,
+): boolean {
   const seen = new Set<string>([value]);
   let frontier = [value];
   for (let depth = 0; depth < MAX_CREDENTIAL_DECODE_DEPTH; depth += 1) {
-    const expanded = expandDecodedFrontier(frontier, credential, depth > 0, seen);
+    const expanded = expandDecodedFrontier(frontier, credential, inspectFirstLayer || depth > 0, seen);
     if (expanded.containsCredential) return true;
     frontier = expanded.next;
     if (frontier.length === 0) return false;

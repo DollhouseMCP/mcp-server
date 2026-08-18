@@ -78,6 +78,9 @@ describe('IntegrationRemoteMcpSecurity', () => {
     expect(redactRemoteMcpCredentialEchoes({ value: true }, 'rue')).toEqual({
       value: 't[redacted]',
     });
+    expect(redactRemoteMcpCredentialEchoes({ value: 'd]xx' }, 'd]x')).toEqual({
+      value: '[redacted]',
+    });
   });
 
   it('rejects declared and chunked POST responses above the byte limit', async () => {
