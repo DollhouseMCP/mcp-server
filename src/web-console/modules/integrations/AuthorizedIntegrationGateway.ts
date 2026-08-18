@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import {
   type IntegrationRequestGateway,
@@ -228,13 +230,15 @@ async function authorizeOrDeny(
 }
 
 function auditAuthorization(outcome: 'allowed' | 'denied' | 'approval_required' | 'unavailable'): void {
+  const correlationId = randomUUID();
   SecurityMonitor.logSecurityEvent({
     type: 'INTEGRATION_SECURITY_DECISION',
     severity: outcome === 'allowed' ? 'LOW' : 'MEDIUM',
     source: 'AuthorizedIntegrationGateway',
     // This facade runs before descriptor resolution, so provider is still raw
-    // caller input. Correlate the decision without ever echoing that value.
-    details: `Authorized integration decision ${outcome} for provider ${safeIntegrationAuditProvider('<unresolved>')}`,
+    // caller input. A random correlation ID preserves every decision through
+    // SecurityMonitor deduplication without deriving log data from that input.
+    details: `Authorized integration decision ${outcome} for provider ${safeIntegrationAuditProvider('<unresolved>')} request ${correlationId}`,
   });
 }
 

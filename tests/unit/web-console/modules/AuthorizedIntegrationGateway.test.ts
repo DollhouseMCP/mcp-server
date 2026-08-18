@@ -140,6 +140,25 @@ describe('AuthorizedIntegrationGateway', () => {
     expect(JSON.stringify(event)).not.toContain(untrustedProvider);
   });
 
+  it('retains separate authorization decisions through security-event deduplication', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const gateway = {
+      request: jest.fn<IntegrationRequestGateway['request']>(),
+    } as unknown as IntegrationRequestGateway;
+    const policyEnforcer = {
+      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>().mockResolvedValue({ allowed: false }),
+    } as unknown as IntegrationRequestPolicyEnforcer;
+    const authorized = new AuthorizedIntegrationGateway({ gateway, policyEnforcer });
+
+    await authorized.request({ ...REQUEST });
+    await authorized.request({ ...REQUEST });
+
+    const events = SecurityMonitor.getRecentEvents()
+      .filter(entry => entry.source === 'AuthorizedIntegrationGateway');
+    expect(events).toHaveLength(2);
+    expect(events[0]?.details).not.toBe(events[1]?.details);
+  });
+
   it('falls back to a denial error when a disallowed decision carries none', async () => {
     const gateway = {
       request: jest.fn<IntegrationRequestGateway['request']>(),

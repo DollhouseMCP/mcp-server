@@ -169,6 +169,12 @@ function collectCallableIdentifiers(
   const visit = (node: TsNode): void => {
     if (ts.isFunctionDeclaration(node) && node.name) {
       callable.add(node.name.text);
+    } else if (ts.isImportClause(node) && node.name) {
+      // Default imports are opaque without resolving another module. Treat
+      // them conservatively when assigned to a tool's handle property.
+      callable.add(node.name.text);
+    } else if (ts.isImportSpecifier(node)) {
+      callable.add(node.name.text);
     } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
       const initializer = unwrapExpression(ts, node.initializer);
       if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
