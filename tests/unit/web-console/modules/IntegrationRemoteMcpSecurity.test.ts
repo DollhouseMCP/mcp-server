@@ -59,6 +59,7 @@ describe('IntegrationRemoteMcpSecurity', () => {
       nestedJson: 'abc\\\\/def',
       mixedLayers: 'abc%255Cu002fdef',
       malformedNeighbor: '%ZZabc%252Fdef',
+      invalidUtf8Neighbor: '%FF%61%62%63%252F%64%65%66',
     }, 'abc/def');
 
     expect(result).toEqual({
@@ -66,6 +67,7 @@ describe('IntegrationRemoteMcpSecurity', () => {
       nestedJson: '[redacted]',
       mixedLayers: '[redacted]',
       malformedNeighbor: '[redacted]',
+      invalidUtf8Neighbor: '[redacted]',
     });
   });
 

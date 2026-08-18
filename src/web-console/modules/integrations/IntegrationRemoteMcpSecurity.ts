@@ -6,6 +6,7 @@ const MAX_PAYLOAD_NODES = 100_000;
 const MAX_CREDENTIAL_DECODE_DEPTH = 4;
 const JSON_ESCAPE_PATTERN = /\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})/g;
 const PERCENT_ESCAPE_RUN_PATTERN = /(?:%[0-9A-Fa-f]{2})+/g;
+const UTF8_DECODER = new TextDecoder();
 
 export const DEFAULT_REMOTE_MCP_RESPONSE_BYTES = 1024 * 1024;
 
@@ -278,14 +279,17 @@ function decodedVariants(value: string): readonly string[] {
 }
 
 function decodeValidPercentEscapeRuns(value: string): string {
-  return value.replace(PERCENT_ESCAPE_RUN_PATTERN, (run) => {
-    try {
-      return decodeURIComponent(run);
-    } catch {
-      // Preserve runs that are byte-shaped but not valid UTF-8.
-      return run;
-    }
-  });
+  return value.replace(PERCENT_ESCAPE_RUN_PATTERN, decodePercentEscapeRun);
+}
+
+function decodePercentEscapeRun(run: string): string {
+  const bytes = new Uint8Array(run.length / 3);
+  for (let offset = 0; offset < run.length; offset += 3) {
+    bytes[offset / 3] = Number.parseInt(run.slice(offset + 1, offset + 3), 16);
+  }
+  // Decoding is inspection-only. Replacement characters isolate invalid UTF-8
+  // bytes while allowing adjacent valid spans to continue through the bounded scan.
+  return UTF8_DECODER.decode(bytes);
 }
 
 function decodeJsonEscapes(value: string): string {
