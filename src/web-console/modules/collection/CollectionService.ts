@@ -14,6 +14,7 @@ import {
   COLLECTION_LIST_DEFAULT_PAGE_SIZE,
   COLLECTION_LIST_MAX_PAGE_SIZE,
   COLLECTION_SEARCH_QUERY_MAX_LENGTH,
+  collectionElementNameFromPath,
   collectionElementPath,
   serializeCollectionElementList,
   serializeCollectionIndexEntry,
@@ -91,7 +92,7 @@ export class CollectionService {
       return invalidRequest('name path parameter must be a canonical collection element name.');
     }
 
-    const path = collectionElementPath(type, name);
+    const path = await this.resolveIndexedPath(type, name);
     let fetched: { metadata: unknown; content: string };
     try {
       fetched = await this.options.details.getCollectionContent(path);
@@ -118,6 +119,20 @@ export class CollectionService {
       content: fetched.content,
     };
     return { status: 200, body };
+  }
+
+  private async resolveIndexedPath(type: ConsolePortfolioElementType, name: string): Promise<string> {
+    try {
+      const index = await this.options.index.getIndex();
+      const entries = Object.hasOwn(index.index, type) ? index.index[type] : [];
+      const indexed = entries.find(entry =>
+        collectionElementNameFromPath(entry.path, entry.name) === name
+        && isSafeIndexedElementPath(entry.path, type, name));
+      if (indexed) return indexed.path;
+    } catch {
+      // Detail fetching remains available when the index is temporarily down.
+    }
+    return collectionElementPath(type, name);
   }
 
   private async browseList(
@@ -185,6 +200,17 @@ export class CollectionService {
       installEnabled: this.installEnabled,
     });
   }
+}
+
+function isSafeIndexedElementPath(
+  path: string,
+  type: ConsolePortfolioElementType,
+  name: string,
+): boolean {
+  const base = `library/${type}/${name}`;
+  return type === 'memories'
+    ? path === `${base}.yaml` || path === `${base}.yml`
+    : path === `${base}.md`;
 }
 
 function degradedList(page: number, pageSize: number, installEnabled: boolean): unknown {

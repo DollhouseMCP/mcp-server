@@ -120,6 +120,31 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(await store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).toBeNull();
   });
 
+  it('removes a previously persisted curated OAuth descriptor when credentials are withdrawn', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const configured = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
+      { now: () => FIXED_NOW },
+    );
+    await configured.loadSeeds();
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.not.toBeNull();
+
+    const disabled = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({}),
+      { now: () => FIXED_NOW },
+    );
+    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+  });
+
   it('loads a curated static-API-key descriptor without deployment credentials', async () => {
     const dir = await seedDirWith({ 'examplekey.json': STATIC_SEED });
     const store = new InMemoryIntegrationDescriptorStore();

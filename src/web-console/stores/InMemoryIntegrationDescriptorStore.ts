@@ -94,6 +94,15 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
     return true;
   }
 
+  async deleteCurated(provider: UserIntegrationProvider): Promise<boolean> {
+    await Promise.resolve();
+    const record = [...this.records.values()].find(candidate =>
+      candidate.provider === provider && candidate.ownership === 'curated');
+    if (!record) return false;
+    this.records.delete(record.id);
+    return true;
+  }
+
   async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
     await Promise.resolve();
     validateIntegrationDescriptorInput(input);

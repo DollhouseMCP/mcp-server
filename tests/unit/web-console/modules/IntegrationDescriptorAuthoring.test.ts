@@ -100,15 +100,17 @@ function fixture(options: {
 } = {}) {
   const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? []);
   const specStore = new InMemoryIntegrationOpenApiSpecStore();
+  const integrationStore = new InMemoryUserIntegrationStore();
   const secretEncryption = options.withEncryption === false ? null : encryption();
   const service = new IntegrationDescriptorAuthoringService({
     descriptorStore,
     specStore,
+    integrationStore,
     secretEncryption,
     ...(options.reservedProviderIds ? { reservedProviderIds: options.reservedProviderIds } : {}),
     now: () => NOW,
   });
-  return { service, descriptorStore, specStore, secretEncryption };
+  return { service, descriptorStore, specStore, integrationStore, secretEncryption };
 }
 
 function curatedRecord(provider: string, id: string): IntegrationDescriptorRecord {
@@ -138,6 +140,22 @@ function curatedRecord(provider: string, id: string): IntegrationDescriptorRecor
     createdAt: NOW,
     updatedAt: NOW,
   };
+}
+
+async function connectFixtureIntegration(
+  store: InMemoryUserIntegrationStore,
+  provider: string,
+): Promise<void> {
+  await store.connect({
+    userId: USER_ID,
+    provider,
+    externalAccountLabel: 'test account',
+    externalInstallationId: null,
+    authorizedPermissions: { scopes: [] },
+    accessTokenCiphertext: Buffer.from('encrypted-test-token'),
+    refreshTokenCiphertext: null,
+    connectedAt: NOW,
+  });
 }
 
 function bodyOf(result: { body?: unknown }): Record<string, unknown> {
@@ -381,6 +399,55 @@ describe('IntegrationDescriptorAuthoringService', () => {
     ).toString('utf8')).toBe('rotated-secret-value');
   });
 
+  it('requires disconnect before credential-routing changes or descriptor deletion', async () => {
+    const { service, integrationStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: staticKeyBody() })));
+    const descriptorId = created.id as string;
+    await connectFixtureIntegration(integrationStore, 'airtable');
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { display_name: 'Airtable Workspace' },
+    }))).resolves.toMatchObject({ status: 200 });
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.airtable.example'] },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_conflict' },
+    });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
+
+    await integrationStore.disconnect({ userId: USER_ID, provider: 'airtable', revokedAt: NOW });
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.airtable.example'] },
+    }))).resolves.toMatchObject({ status: 200 });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 204 });
+  });
+
+  it('allows descriptor maintenance when the provider has no usable credential', async () => {
+    const { service, integrationStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+    await integrationStore.recordError({
+      userId: USER_ID,
+      provider: MYCRM,
+      errorReason: 'provider_unavailable',
+      occurredAt: NOW,
+    });
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.mycrm.example'] },
+    }))).resolves.toMatchObject({ status: 200 });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 204 });
+  });
+
   it('rejects PATCH and DELETE by non-owner and on curated descriptors', async () => {
     const curated = curatedRecord('shared-crm', '00000000-0000-4000-8000-0000000000c1');
     const { service } = fixture({ descriptors: [curated] });
@@ -513,11 +580,13 @@ describe('IntegrationDescriptorAuthoringService', () => {
       listVisible: store.listVisible.bind(store),
       listVisiblePage: store.listVisiblePage.bind(store),
       delete: store.delete.bind(store),
+      deleteCurated: store.deleteCurated.bind(store),
       upsert: () => Promise.reject(uniqueViolation),
     } as unknown as InMemoryIntegrationDescriptorStore;
     const service = new IntegrationDescriptorAuthoringService({
       descriptorStore: racingStore,
       specStore: new InMemoryIntegrationOpenApiSpecStore(),
+      integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: encryption(),
       now: () => NOW,
     });
@@ -976,16 +1045,18 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
   it('refreshes through a store-resolved provider absent from the boot registry', async () => {
     const secretEncryption = encryption();
     const descriptorStore = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
     const authoring = new IntegrationDescriptorAuthoringService({
       descriptorStore,
       specStore: new InMemoryIntegrationOpenApiSpecStore(),
+      integrationStore,
       secretEncryption,
       now: () => NOW,
     });
     const created = bodyOf(await authoring.create(consoleRequest({ body: oauthBody() })));
     expect(created.provider).toBe(MYCRM);
 
-    const integrationStore = new InMemoryUserIntegrationStore([{
+    integrationStore.set({
       id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
       userId: USER_ID,
       provider: MYCRM,
@@ -1000,7 +1071,7 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
       connectedAt: NOW,
       lastSyncAt: null,
       revokedAt: null,
-    }]);
+    });
     const record = await integrationStore.findByProvider(USER_ID, MYCRM);
     if (!record?.accessTokenCiphertext) throw new Error('fixture integration missing');
 

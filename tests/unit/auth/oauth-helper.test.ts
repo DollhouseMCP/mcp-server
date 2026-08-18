@@ -200,8 +200,10 @@ describe(HELPER_FILENAME, () => {
       // only the server, on import, writes github_token.enc (file mode).
       await expect(fs.access(path.join(authDir, 'github_token.enc'))).rejects.toMatchObject({ code: 'ENOENT' });
       await expect(fs.access(path.join(authDir, LEGACY_PLAINTEXT_TOKEN_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
-      // State/pid cleaned up on success (state flow id matched this flow).
-      await expect(fs.access(path.join(authDir, HELPER_STATE_FILE))).rejects.toMatchObject({ code: 'ENOENT' });
+      // Successful state remains until the server correlates and imports the
+      // encrypted handoff; the PID belongs only to the helper process.
+      await expect(fs.readFile(path.join(authDir, HELPER_STATE_FILE), 'utf8'))
+        .resolves.toContain(TEST_FLOW_ID);
       await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await closeServer(server);

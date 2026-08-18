@@ -1182,7 +1182,10 @@ export class ElementInstaller {
   } {
     // SECURITY: Generate and validate local filename to prevent path traversal
     const originalFilename = sanitizedPath.split('/').pop() || 'downloaded-element.md';
-    const filename = validateFilename(originalFilename);
+    const validatedFilename = validateFilename(originalFilename);
+    const filename = elementType === ElementType.MEMORY && validatedFilename.endsWith('.yml')
+      ? `${validatedFilename.slice(0, -4)}.yaml`
+      : validatedFilename;
 
     // Get appropriate directory for element type
     const elementDir = this.portfolioManager.getElementDir(elementType);

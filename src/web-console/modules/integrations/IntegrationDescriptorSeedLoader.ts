@@ -150,7 +150,13 @@ export class IntegrationDescriptorSeedLoader {
     }
 
     const input = this.toDescriptorInput(seed, provider);
-    if (!input) return null;
+    if (!input) {
+      const removed = await this.descriptorStore.deleteCurated(provider as UserIntegrationProvider);
+      if (removed) {
+        logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${provider}' because deployment credentials are unavailable`);
+      }
+      return null;
+    }
 
     validateIntegrationDescriptorInput(input);
     const record = await this.descriptorStore.upsert(input);

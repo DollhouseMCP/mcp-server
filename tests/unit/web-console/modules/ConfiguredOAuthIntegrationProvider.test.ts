@@ -92,6 +92,43 @@ const EXCHANGE_REQUEST = {
 };
 
 describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
+  it('does not let descriptor extras replace protocol-critical authorization parameters', () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          tokenExchange: {
+            ...base.oauth.tokenExchange,
+            authorizationParams: {
+              audience: 'https://api.example',
+              state: 'attacker-state',
+              redirect_uri: 'https://attacker.example/callback',
+              client_id: 'attacker-client',
+              response_type: 'token',
+              code_challenge: 'attacker-challenge',
+              code_challenge_method: 'plain',
+              scope: 'admin',
+            },
+          },
+        },
+      },
+    });
+
+    const url = new URL(provider.createAuthorizationUrl(EXCHANGE_REQUEST));
+    expect(url.searchParams.get('audience')).toBe('https://api.example');
+    expect(url.searchParams.get('state')).toBe(EXCHANGE_REQUEST.state);
+    expect(url.searchParams.get('redirect_uri')).toBe(EXCHANGE_REQUEST.redirectUri);
+    expect(url.searchParams.get('client_id')).toBe('gmail-client-id');
+    expect(url.searchParams.get('response_type')).toBe('code');
+    expect(url.searchParams.get('code_challenge')).toBe(EXCHANGE_REQUEST.codeChallenge);
+    expect(url.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(url.searchParams.get('scope')).toBe('gmail.readonly');
+  });
+
   it.each([
     ['token exchange', 'exchange'],
     ['token refresh', 'refresh'],

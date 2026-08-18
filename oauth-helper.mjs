@@ -373,7 +373,11 @@ async function main() {
   async function finish(status, errorCode, exitCode) {
     clearInterval(heartbeatInterval);
     await writeTerminalResult(status, attempts, errorCode);
-    await cleanupStateFile();
+    // The server needs successful flow state to correlate and consume the
+    // encrypted token handoff. Failed flows have no handoff to import.
+    if (status !== 'success') {
+      await cleanupStateFile();
+    }
     await cleanupPidFile();
     process.exit(exitCode);
   }

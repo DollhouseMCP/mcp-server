@@ -386,6 +386,34 @@ describe('CollectionModule', () => {
       expect(result.status).toBe(200);
     });
 
+    it('preserves an indexed .yml memory path for detail fetching', async () => {
+      const paths: string[] = [];
+      const definition = routeWith(DETAIL_PATH, fakePorts({
+        index: {
+          getIndex: () => Promise.resolve(collectionIndex({
+            memories: [indexEntry({
+              path: 'library/memories/legacy-guide.yml',
+              type: 'memories',
+              name: 'Legacy Guide',
+            })],
+          })),
+        },
+        details: {
+          getCollectionContent: path => {
+            paths.push(path);
+            return Promise.resolve({ metadata: { name: 'Legacy Guide' }, content: 'entries: []' });
+          },
+        },
+      }));
+
+      const result = await invoke(definition, consoleRequest({
+        params: { type: 'memories', name: 'legacy-guide' },
+      } as Partial<ConsoleRequest>));
+      expect(result.status).toBe(200);
+      expect(paths).toEqual(['library/memories/legacy-guide.yml']);
+      expect((result.body as CollectionElementDetailDto).path).toBe('library/memories/legacy-guide.yml');
+    });
+
     it('rejects traversal-shaped names without fetching', async () => {
       const paths: string[] = [];
       const definition = routeWith(DETAIL_PATH, fakePorts({

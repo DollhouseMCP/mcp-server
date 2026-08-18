@@ -23,7 +23,11 @@ import type {
   IntegrationStaticApiKeyDescriptor,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
-import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import type {
+  IUserIntegrationStore,
+  UserIntegrationProvider,
+} from '../../stores/IUserIntegrationStore.js';
+import { isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import {
   serializeIntegrationDescriptor,
   serializeIntegrationDescriptorList,
@@ -55,6 +59,7 @@ export class IntegrationDescriptorAuthoringService {
   constructor(private readonly options: {
     readonly descriptorStore: IIntegrationDescriptorStore;
     readonly specStore: IIntegrationOpenApiSpecStore;
+    readonly integrationStore: IUserIntegrationStore;
     readonly secretEncryption?: ISecretEncryptionService | null;
     /**
      * Provider ids owned by the boot-time registry (bespoke providers like
@@ -156,6 +161,10 @@ export class IntegrationDescriptorAuthoringService {
     }
 
     const merged = mergeDescriptor(existing, parsed);
+    if (hasCredentialRoutingChanges(parsed)) {
+      const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
+      if (isIntegrationConnected(active)) return connectedDescriptorConflict('updated');
+    }
     // Use `merged` (not `parsed`): it carries `mergedProvider = existing.provider`
     // so encryptClientSecret's provider guard never misfires and the AAD binds
     // to the real provider. Passing `parsed` here dropped a rotated secret when
@@ -177,6 +186,10 @@ export class IntegrationDescriptorAuthoringService {
     const auth = requireConsoleAuthentication(req);
     const id = singleParamValue(req.params.id);
     if (!isUuidShaped(id)) return notFound();
+    const existing = await this.findOwned(id, auth.userId);
+    if (!existing) return notFound();
+    const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
+    if (isIntegrationConnected(active)) return connectedDescriptorConflict('deleted');
     const deleted = await this.options.descriptorStore.delete(id, auth.userId);
     if (!deleted) return notFound();
     // Postgres cascades via FK; this keeps in-memory backends equivalent.
@@ -472,6 +485,15 @@ function mergeDescriptor(
   };
 }
 
+function hasCredentialRoutingChanges(parsed: ParsedDescriptorBody): boolean {
+  return parsed.authStrategy !== undefined
+    || parsed.apiHosts !== undefined
+    || parsed.oauth !== undefined
+    || parsed.staticApiKey !== undefined
+    || parsed.operationPromotion !== undefined
+    || parsed.clientSecret !== undefined;
+}
+
 /** A stored secret survives a PATCH only while the descriptor stays OAuth. */
 function preservedSecret(existing: IntegrationDescriptorRecord, merged: ParsedDescriptorBody): Buffer | null {
   if (merged.authStrategy !== 'oauth2_authorization_code') return null;
@@ -585,6 +607,10 @@ function catalogError(error: IntegrationOperationCatalogError): ConsoleHandlerRe
 
 function conflict(detail: string): ConsoleHandlerResult {
   return consoleProblem(409, 'Conflict', 'integration_descriptor_conflict', detail);
+}
+
+function connectedDescriptorConflict(action: 'updated' | 'deleted'): ConsoleHandlerResult {
+  return conflict(`descriptor cannot be ${action} while its integration is connected; disconnect it first`);
 }
 
 function unprocessable(detail: string): ConsoleHandlerResult {

@@ -115,6 +115,17 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     return rows.length > 0;
   }
 
+  async deleteCurated(provider: UserIntegrationProvider): Promise<boolean> {
+    const rows = await withSystemContext(this.db, tx =>
+      tx.delete(integrationProviderDescriptors).where(and(
+        eq(integrationProviderDescriptors.provider, provider),
+        eq(integrationProviderDescriptors.ownership, 'curated'),
+        isNull(integrationProviderDescriptors.ownerUserId),
+      )).returning({ id: integrationProviderDescriptors.id }),
+    );
+    return rows.length > 0;
+  }
+
   async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
     const rows = await withSystemContext(this.db, async tx => {

@@ -123,6 +123,8 @@ export interface IIntegrationDescriptorStore {
    * as defense-in-depth).
    */
   delete(id: string, ownerUserId: string): Promise<boolean>;
+  /** Remove a deployment-owned curated descriptor by provider id. */
+  deleteCurated(provider: UserIntegrationProvider): Promise<boolean>;
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
 }
 

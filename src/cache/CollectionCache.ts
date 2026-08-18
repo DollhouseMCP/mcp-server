@@ -4,7 +4,6 @@
 
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
-import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { ISharedCacheStore } from '../storage/sharedCache/ISharedCacheStore.js';
 import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
@@ -70,8 +69,14 @@ export class CollectionCache {
         };
     this.fileOperations = config.fileOperations;
     this.sharedCache = config.sharedCache ?? null;
-    this.cacheDir = this.resolveCacheDir(config.cacheDir, config.baseDir);
-    this.cacheFile = path.join(this.cacheDir, 'collection-cache.json');
+    this.cacheDir = path.resolve(this.resolveCacheDir(config.cacheDir, config.baseDir));
+    if (this.cacheDir.includes('\0')) {
+      throw new Error('Collection cache directory contains a null byte');
+    }
+    this.cacheFile = path.resolve(this.cacheDir, 'collection-cache.json');
+    if (path.dirname(this.cacheFile) !== this.cacheDir) {
+      throw new Error('Collection cache file must remain inside the configured cache directory');
+    }
 
     logger.debug('CollectionCache initialized', {
       cacheFile: this.cacheFile,
@@ -117,19 +122,6 @@ export class CollectionCache {
     }
 
     try {
-      // Validate cache file path (basic security check)
-      if (this.cacheFile.includes('..') || this.cacheFile.includes('\0')) {
-        // SECURITY FIX: Add audit logging for path traversal attempt detection
-        SecurityMonitor.logSecurityEvent({
-          type: 'PATH_TRAVERSAL_ATTEMPT',
-          severity: 'HIGH',
-          source: 'CollectionCache.loadCache',
-          details: `Potential path traversal attempt detected in cache file path: ${this.cacheFile.substring(0, 100)}`
-        });
-        logger.warn('Invalid cache file path, skipping cache load');
-        return null;
-      }
-
       const data = await this.fileOperations.readFile(this.cacheFile, {
         source: 'CollectionCache.loadCache',
         maxSize: 50 * 1024 * 1024 // 50MB for collection cache
