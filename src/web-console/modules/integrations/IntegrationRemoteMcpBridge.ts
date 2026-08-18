@@ -206,12 +206,14 @@ export class IntegrationRemoteMcpBridge {
   }
 
   async callTool(input: RemoteMcpCallInput): Promise<RemoteMcpCallResult> {
+    let auditProvider = input.provider;
     try {
       const session = this.options.contextTracker.requireSessionContext('IntegrationRemoteMcpBridge');
       const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, input.provider as UserIntegrationProvider);
       if (!descriptor) {
         throw new IntegrationRemoteMcpBridgeError('remote_mcp_descriptor_not_found', 'Remote MCP descriptor was not found.', 404);
       }
+      auditProvider = descriptor.provider;
       const config = readRemoteMcpConfig(descriptor);
       if (!config?.allowedTools.has(input.remoteName)) {
         throw new IntegrationRemoteMcpBridgeError('remote_mcp_tool_not_allowed', 'Remote MCP tool is not allowlisted for this integration.', 403);
@@ -246,7 +248,7 @@ export class IntegrationRemoteMcpBridge {
       this.auditRemote(descriptor.provider, 'tool_call', 'allowed');
       return result;
     } catch (error) {
-      this.auditRemote(input.provider, 'tool_call', remoteFailureOutcome(error));
+      this.auditRemote(auditProvider, 'tool_call', remoteFailureOutcome(error));
       throw error;
     }
   }
