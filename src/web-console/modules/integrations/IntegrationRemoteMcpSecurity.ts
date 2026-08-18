@@ -20,6 +20,11 @@ interface ResponseByteLimitState {
   byteBeforePrevious: number;
 }
 
+interface DecodedFrontierResult {
+  readonly containsCredential: boolean;
+  readonly next: string[];
+}
+
 interface PayloadTraversalFrame {
   readonly source: object;
   readonly target: unknown[] | Record<string, unknown>;
@@ -230,20 +235,41 @@ function decodedVariantContainsCredential(value: string, credential: string): bo
   const seen = new Set<string>([value]);
   let frontier = [value];
   for (let depth = 0; depth < MAX_CREDENTIAL_DECODE_DEPTH; depth += 1) {
-    const next: string[] = [];
-    for (const variant of frontier) {
-      for (const decoded of decodedVariants(variant)) {
-        if (depth > 0 && decoded.includes(credential)) return true;
-        if (decoded !== variant && !seen.has(decoded)) {
-          seen.add(decoded);
-          next.push(decoded);
-        }
-      }
-    }
-    frontier = next;
+    const expanded = expandDecodedFrontier(frontier, credential, depth > 0, seen);
+    if (expanded.containsCredential) return true;
+    frontier = expanded.next;
     if (frontier.length === 0) return false;
   }
   return false;
+}
+
+function expandDecodedFrontier(
+  frontier: readonly string[],
+  credential: string,
+  inspectForCredential: boolean,
+  seen: Set<string>,
+): DecodedFrontierResult {
+  const next: string[] = [];
+  for (const variant of frontier) {
+    for (const decoded of decodedVariants(variant)) {
+      if (inspectForCredential && decoded.includes(credential)) {
+        return { containsCredential: true, next };
+      }
+      appendUnseenDecodedVariant(decoded, variant, seen, next);
+    }
+  }
+  return { containsCredential: false, next };
+}
+
+function appendUnseenDecodedVariant(
+  decoded: string,
+  source: string,
+  seen: Set<string>,
+  next: string[],
+): void {
+  if (decoded === source || seen.has(decoded)) return;
+  seen.add(decoded);
+  next.push(decoded);
 }
 
 function decodedVariants(value: string): readonly string[] {
@@ -259,7 +285,7 @@ function decodedVariants(value: string): readonly string[] {
 function decodeJsonEscapes(value: string): string {
   return value.replace(JSON_ESCAPE_PATTERN, (escape) => {
     if (escape.startsWith(String.raw`\u`)) {
-      return String.fromCharCode(Number.parseInt(escape.slice(2), 16));
+      return String.fromCodePoint(Number.parseInt(escape.slice(2), 16));
     }
     switch (escape[1]) {
       case '"': return '"';

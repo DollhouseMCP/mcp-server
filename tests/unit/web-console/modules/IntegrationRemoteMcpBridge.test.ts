@@ -203,6 +203,29 @@ describe('IntegrationRemoteMcpBridge', () => {
     });
   });
 
+  it('fails closed when a credential collides with behavior-defining wrapper metadata', async () => {
+    const secretEncryption = encryption();
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn(),
+      callTool: jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] }),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({
+      clientFactory,
+      integrations: [integration(secretEncryption, REMOTE_DOCS, REMOTE_DOCS)],
+      secretEncryption,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_response_invalid',
+      status: 502,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+  });
+
   it('rejects remote MCP server URLs outside descriptor apiHosts', async () => {
     const { bridge, contextTracker } = fixture({
       descriptor: descriptor({
@@ -385,6 +408,7 @@ function fixture(options: {
   readonly integration?: UserIntegrationRecord;
   readonly integrations?: readonly UserIntegrationRecord[];
   readonly integrationStore?: IUserIntegrationStore;
+  readonly secretEncryption?: AeadSecretEncryptionService;
   readonly clientFactory?: RemoteMcpClientFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
@@ -393,7 +417,7 @@ function fixture(options: {
   readonly discoveryGate?: (provider: string) => Promise<boolean>;
 } = {}) {
   const contextTracker = new ContextTracker();
-  const secretEncryption = encryption();
+  const secretEncryption = options.secretEncryption ?? encryption();
   const descriptorRecords = options.descriptors ?? [options.descriptor ?? descriptor()];
   const integrationRecords = options.integrations ?? [options.integration ?? integration(secretEncryption)];
   return {
@@ -452,7 +476,11 @@ function descriptor(overrides: Partial<IntegrationDescriptorRecord> = {}): Integ
   };
 }
 
-function integration(secretEncryption: AeadSecretEncryptionService, provider = REMOTE_DOCS): UserIntegrationRecord {
+function integration(
+  secretEncryption: AeadSecretEncryptionService,
+  provider = REMOTE_DOCS,
+  accessToken = 'remote-access-token',
+): UserIntegrationRecord {
   return {
     id: INTEGRATION_ID,
     userId: USER_ID,
@@ -461,7 +489,7 @@ function integration(secretEncryption: AeadSecretEncryptionService, provider = R
     externalInstallationId: null,
     authorizedPermissions: { scopes: ['docs.read'] },
     accessTokenCiphertext: secretEncryption.encrypt(
-      Buffer.from('remote-access-token', 'utf8'),
+      Buffer.from(accessToken, 'utf8'),
       integrationSecretContext('access_token', USER_ID, provider),
     ),
     refreshTokenCiphertext: null,

@@ -183,18 +183,15 @@ export class IntegrationRemoteMcpBridge {
             502,
           );
         }
-        const safeTool = this.redactRemotePayload({
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-        }, bearerToken) as { description?: unknown; inputSchema?: unknown };
-        return [{
+        const remoteTool: RemoteMcpTool = {
           provider: descriptor.provider,
           remoteName: tool.name,
           localName: remoteMcpLocalToolName(descriptor.provider, tool.name),
-          description: typeof safeTool.description === 'string' ? safeTool.description : undefined,
-          inputSchema: safeTool.inputSchema as Tool['inputSchema'],
+          description: tool.description,
+          inputSchema: tool.inputSchema,
           serverUrl: config.serverUrl.toString(),
-        }];
+        };
+        return [this.redactRemoteTool(remoteTool, bearerToken)];
       });
     });
   }
@@ -223,10 +220,10 @@ export class IntegrationRemoteMcpBridge {
         'remote_mcp_call_failed',
         'Remote MCP tool call failed.',
       );
-      return {
+      return this.redactRemoteCallResult({
         provider: descriptor.provider,
         remoteName: input.remoteName,
-        result: this.redactRemotePayload(result, bearerToken),
+        result,
         provenance: {
           source: 'third_party_integration',
           trust: 'untrusted',
@@ -234,7 +231,7 @@ export class IntegrationRemoteMcpBridge {
           remoteTool: input.remoteName,
           handling: 'data_only_not_instructions',
         },
-      };
+      }, bearerToken);
     });
   }
 
@@ -343,6 +340,47 @@ export class IntegrationRemoteMcpBridge {
         502,
       );
     }
+  }
+
+  private redactRemoteTool(tool: RemoteMcpTool, bearerToken: string): RemoteMcpTool {
+    const safe = this.redactRemotePayload(tool, bearerToken) as RemoteMcpTool;
+    this.assertRemoteWrapperFieldsUnchanged([
+      [safe.provider, tool.provider],
+      [safe.remoteName, tool.remoteName],
+      [safe.localName, tool.localName],
+    ]);
+    return safe;
+  }
+
+  private redactRemoteCallResult(
+    result: RemoteMcpCallResult,
+    bearerToken: string,
+  ): RemoteMcpCallResult {
+    const safe = this.redactRemotePayload(result, bearerToken) as RemoteMcpCallResult;
+    this.assertRemoteWrapperFieldsUnchanged([
+      [safe.provider, result.provider],
+      [safe.remoteName, result.remoteName],
+      [safe.provenance.source, result.provenance.source],
+      [safe.provenance.trust, result.provenance.trust],
+      [safe.provenance.provider, result.provenance.provider],
+      [safe.provenance.remoteTool, result.provenance.remoteTool],
+      [safe.provenance.handling, result.provenance.handling],
+    ]);
+    return safe;
+  }
+
+  private assertRemoteWrapperFieldsUnchanged(fields: readonly (readonly [unknown, unknown])[]): void {
+    if (fields.some(([safe, original]) => safe !== original)) {
+      throw this.unsafeRemoteWrapperError();
+    }
+  }
+
+  private unsafeRemoteWrapperError(): IntegrationRemoteMcpBridgeError {
+    return new IntegrationRemoteMcpBridgeError(
+      'remote_mcp_response_invalid',
+      'Remote MCP response could not be handled safely.',
+      502,
+    );
   }
 }
 
