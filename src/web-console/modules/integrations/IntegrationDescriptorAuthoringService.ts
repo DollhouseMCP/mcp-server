@@ -28,7 +28,7 @@ import type {
   IUserIntegrationStore,
   UserIntegrationProvider,
 } from '../../stores/IUserIntegrationStore.js';
-import { isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
+import { hasIntegrationCredentials } from '../../stores/IUserIntegrationStore.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import {
   serializeIntegrationDescriptor,
@@ -166,7 +166,7 @@ export class IntegrationDescriptorAuthoringService {
     const merged = mergeDescriptor(existing, parsed);
     if (hasCredentialRoutingChanges(parsed)) {
       const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-      if (isIntegrationConnected(active)) {
+      if (hasIntegrationCredentials(active)) {
         auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
         return connectedDescriptorConflict('updated');
       }
@@ -196,7 +196,7 @@ export class IntegrationDescriptorAuthoringService {
     const existing = await this.findOwned(id, auth.userId);
     if (!existing) return notFound();
     const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-    if (isIntegrationConnected(active)) {
+    if (hasIntegrationCredentials(active)) {
       auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
       return connectedDescriptorConflict('deleted');
     }
@@ -498,6 +498,8 @@ function mergeDescriptor(
 }
 
 function hasCredentialRoutingChanges(parsed: ParsedDescriptorBody): boolean {
+  // Promotion selects which remote operations receive the stored credential,
+  // so changing it is a routing change even though the credential is unchanged.
   return parsed.authStrategy !== undefined
     || parsed.apiHosts !== undefined
     || parsed.oauth !== undefined

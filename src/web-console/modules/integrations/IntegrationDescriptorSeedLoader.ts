@@ -34,7 +34,7 @@ import {
   type IntegrationRefreshMode,
   validateIntegrationDescriptorInput,
 } from '../../stores/IIntegrationDescriptorStore.js';
-import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import { integrationDescriptorClientSecretContext } from './IntegrationSecretContext.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
@@ -60,6 +60,7 @@ export type IntegrationDescriptorSeedCredentialResolver = (
 
 export interface IntegrationDescriptorSeedLoaderOptions {
   readonly now?: () => Date;
+  readonly integrationStore: IUserIntegrationStore;
 }
 
 export interface IntegrationDescriptorSeedResult {
@@ -72,15 +73,17 @@ export interface IntegrationDescriptorSeedResult {
 
 export class IntegrationDescriptorSeedLoader {
   private readonly now: () => Date;
+  private readonly integrationStore: IUserIntegrationStore;
 
   constructor(
     private readonly seedDir: string,
     private readonly descriptorStore: IIntegrationDescriptorStore,
     private readonly secretEncryption: ISecretEncryptionService,
     private readonly resolveCredentials: IntegrationDescriptorSeedCredentialResolver,
-    options: IntegrationDescriptorSeedLoaderOptions = {},
+    options: IntegrationDescriptorSeedLoaderOptions,
   ) {
     this.now = options.now ?? (() => new Date());
+    this.integrationStore = options.integrationStore;
   }
 
   /**
@@ -159,6 +162,10 @@ export class IntegrationDescriptorSeedLoader {
 
     const input = this.toDescriptorInput(seed, provider);
     if (!input) {
+      const revoked = await this.integrationStore.revokeAllByProvider(
+        provider as UserIntegrationProvider,
+        this.now(),
+      );
       const removed = await this.descriptorStore.deleteCurated(provider as UserIntegrationProvider);
       if (removed) {
         SecurityMonitor.logSecurityEvent({
@@ -167,7 +174,9 @@ export class IntegrationDescriptorSeedLoader {
           source: 'IntegrationDescriptorSeedLoader.processSeedFile',
           details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(provider)}`,
         });
-        logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${provider}' because deployment credentials are unavailable`);
+        logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${provider}' because deployment credentials are unavailable`, {
+          revokedIntegrations: revoked,
+        });
       }
       return null;
     }

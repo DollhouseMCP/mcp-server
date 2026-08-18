@@ -14,6 +14,7 @@ import {
   type IntegrationDescriptorCreateInput,
 } from '../../../../src/web-console/stores/IIntegrationDescriptorStore.js';
 import { InMemoryIntegrationDescriptorStore } from '../../../../src/web-console/stores/InMemoryIntegrationDescriptorStore.js';
+import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
 
 const VISIBLE_USER = '11111111-1111-4111-8111-111111111111';
 const NOW = new Date('2026-06-24T00:00:00.000Z');
@@ -137,6 +138,7 @@ describe('loadCuratedIntegrationProviders', () => {
     const providers = await loadCuratedIntegrationProviders({
       seedDir: undefined,
       descriptorStore: new InMemoryIntegrationDescriptorStore(),
+      integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: newEncryption(),
     });
     expect(providers).toEqual([]);
@@ -150,6 +152,7 @@ describe('loadCuratedIntegrationProviders', () => {
     const providers = await loadCuratedIntegrationProviders({
       seedDir: dir,
       descriptorStore: new InMemoryIntegrationDescriptorStore(),
+      integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: newEncryption(),
       now: () => NOW,
       credentialResolver: () => ({ clientId: 'cid', clientSecret: 'csecret' }),

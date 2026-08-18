@@ -187,6 +187,22 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     );
     return rows[0] ? fromRow(rows[0]) : null;
   }
+
+  async revokeAllByProvider(provider: UserIntegrationProvider, revokedAt: Date): Promise<number> {
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(userIntegrations).set({
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status: 'revoked',
+        errorReason: null,
+        revokedAt,
+      }).where(and(
+        eq(userIntegrations.provider, provider),
+        isNull(userIntegrations.revokedAt),
+      )).returning({ id: userIntegrations.id }),
+    );
+    return rows.length;
+  }
 }
 
 function validateConnectInput(input: UserIntegrationConnectInput): void {

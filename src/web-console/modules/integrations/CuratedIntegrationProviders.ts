@@ -21,6 +21,7 @@ import type {
   IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
 import { ConfiguredOAuthIntegrationProvider } from './ConfiguredOAuthIntegrationProvider.js';
 import type { DnsLookup } from './IntegrationPublicHostGuard.js';
 import type { PinnedOutboundFactory } from './PinnedOutboundFactory.js';
@@ -163,6 +164,7 @@ export function buildIntegrationProviderFromDescriptor(
 export interface LoadCuratedIntegrationProvidersParams {
   readonly seedDir: string | null | undefined;
   readonly descriptorStore: IIntegrationDescriptorStore;
+  readonly integrationStore: IUserIntegrationStore;
   readonly secretEncryption: ISecretEncryptionService;
   readonly now?: () => Date;
   /** Overridable for tests; defaults to reading deployment credentials from process.env. */
@@ -185,7 +187,10 @@ export async function loadCuratedIntegrationProviders(
     params.descriptorStore,
     params.secretEncryption,
     params.credentialResolver ?? createEnvIntegrationDescriptorCredentialResolver(),
-    params.now ? { now: params.now } : {},
+    {
+      integrationStore: params.integrationStore,
+      ...(params.now ? { now: params.now } : {}),
+    },
   );
   const { descriptors } = await loader.loadSeeds();
   return buildConfiguredIntegrationProviders(descriptors, params.secretEncryption, params.outbound ?? {});

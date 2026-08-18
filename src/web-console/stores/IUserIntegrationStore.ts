@@ -52,6 +52,14 @@ export function isIntegrationConnected(
   return record?.status === 'connected' && record.revokedAt === null;
 }
 
+/** True while an unrevoked row still holds credential material requiring cleanup. */
+export function hasIntegrationCredentials(
+  record: UserIntegrationRecord | null,
+): record is UserIntegrationRecord {
+  return record?.revokedAt === null
+    && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null);
+}
+
 export interface IUserIntegrationStore {
   listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
@@ -59,6 +67,7 @@ export interface IUserIntegrationStore {
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
+  revokeAllByProvider(provider: UserIntegrationProvider, revokedAt: Date): Promise<number>;
 }
 
 export interface UserIntegrationConnectInput {
