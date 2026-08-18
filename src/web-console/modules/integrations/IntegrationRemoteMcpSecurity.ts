@@ -149,15 +149,15 @@ function redactPrimitive(value: unknown, patterns: CredentialPatterns): unknown 
 }
 
 function credentialPatterns(credential: string): CredentialPatterns {
-  let encoded: string;
   try {
-    encoded = encodeURIComponent(credential);
+    // Reject lone surrogates before constructing UTF-8 alternatives.
+    encodeURIComponent(credential);
   } catch {
     return { exact: [credential], percentEncoded: null };
   }
   return {
     exact: [credential],
-    percentEncoded: encoded === credential ? null : percentEncodedCredentialPattern(encoded),
+    percentEncoded: percentEncodedCredentialPattern(credential),
   };
 }
 
@@ -168,25 +168,20 @@ function redactCredentialString(value: string, patterns: CredentialPatterns): st
   return redacted;
 }
 
-function percentEncodedCredentialPattern(encoded: string): RegExp {
+function percentEncodedCredentialPattern(credential: string): RegExp {
   let pattern = '';
-  for (let cursor = 0; cursor < encoded.length;) {
-    const first = encoded[cursor] ?? '';
-    const second = encoded[cursor + 1] ?? '';
-    const third = encoded[cursor + 2] ?? '';
-    if (first === '%' && isHexDigit(second) && isHexDigit(third)) {
-      pattern += `%${caseInsensitiveHexDigit(second)}${caseInsensitiveHexDigit(third)}`;
-      cursor += 3;
-      continue;
-    }
-    pattern += escapeRegexCharacter(first);
-    cursor += 1;
+  for (const character of credential) {
+    const encodedBytes = Array.from(new TextEncoder().encode(character), percentEncodedBytePattern).join('');
+    pattern += `(?:${escapeRegexCharacter(character)}|${encodedBytes})`;
   }
   return new RegExp(pattern, 'g');
 }
 
-function isHexDigit(value: string): boolean {
-  return /^[0-9A-Fa-f]$/.test(value);
+function percentEncodedBytePattern(byte: number): string {
+  const hexadecimal = byte.toString(16).padStart(2, '0');
+  const first = caseInsensitiveHexDigit(hexadecimal[0] ?? '');
+  const second = caseInsensitiveHexDigit(hexadecimal[1] ?? '');
+  return `%${first}${second}`;
 }
 
 function caseInsensitiveHexDigit(value: string): string {

@@ -22,6 +22,21 @@ describe('IntegrationRemoteMcpSecurity', () => {
     });
   });
 
+  it('redacts URI-unreserved credential characters when remotely percent encoded', () => {
+    const credential = 'header.payload-signature_v1~';
+    const result = redactRemoteMcpCredentialEchoes({
+      encoded: 'header%2epayload%2Dsignature%5fv1%7e',
+      mixed: 'header%2Epayload-signature%5Fv1~',
+      ordinaryCaseIsSignificant: 'Header%2epayload%2Dsignature%5fv1%7e',
+    }, credential);
+
+    expect(result).toEqual({
+      encoded: '[redacted]',
+      mixed: '[redacted]',
+      ordinaryCaseIsSignificant: 'Header%2epayload%2Dsignature%5fv1%7e',
+    });
+  });
+
   it('rejects declared and chunked POST responses above the byte limit', async () => {
     const encoder = new TextEncoder();
     const declaredFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response('small', {
