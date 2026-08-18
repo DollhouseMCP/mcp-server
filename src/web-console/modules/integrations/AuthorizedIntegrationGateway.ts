@@ -202,8 +202,8 @@ async function authorizeOrDeny(
   try {
     policy = await policyEnforcer.authorize(input);
   } catch (error) {
+    auditAuthorization('unavailable');
     if (error instanceof IntegrationPolicyUnavailableError) {
-      auditAuthorization('unavailable');
       return { authorized: false, denial: { ok: false, error: POLICY_UNAVAILABLE_ERROR } };
     }
     throw error;

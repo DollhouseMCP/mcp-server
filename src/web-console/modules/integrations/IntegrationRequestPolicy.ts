@@ -51,6 +51,15 @@ export class IntegrationRequestPolicyEnforcer {
   constructor(private readonly options: IntegrationRequestPolicyEnforcerOptions) {}
 
   async authorize(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
+    try {
+      return await this.evaluateAuthorization(input);
+    } catch (error) {
+      if (error instanceof IntegrationPolicyUnavailableError) throw error;
+      throw new IntegrationPolicyUnavailableError(error);
+    }
+  }
+
+  private async evaluateAuthorization(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
     const toolInput = integrationToolInput(input);
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
     const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass);
@@ -206,8 +215,8 @@ export class IntegrationRequestPolicyEnforcer {
 }
 
 export class IntegrationPolicyUnavailableError extends Error {
-  constructor() {
-    super('Integration request policy is temporarily unavailable.');
+  constructor(cause?: unknown) {
+    super('Integration request policy is temporarily unavailable.', cause === undefined ? undefined : { cause });
     this.name = 'IntegrationPolicyUnavailableError';
   }
 }

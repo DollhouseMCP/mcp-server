@@ -178,6 +178,7 @@ describe('AuthorizedIntegrationGateway', () => {
   });
 
   it('maps policy unavailability to a fail-closed 503 outcome', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const gateway = {
       request: jest.fn<IntegrationRequestGateway['request']>(),
     } as unknown as IntegrationRequestGateway;
@@ -194,6 +195,30 @@ describe('AuthorizedIntegrationGateway', () => {
       ok: false,
       error: { code: 'integration_request_policy_unavailable', status: 503 },
     });
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'AuthorizedIntegrationGateway',
+      details: expect.stringContaining('decision unavailable'),
+    }));
+  });
+
+  it('audits unexpected policy failures as unavailable before propagating them', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const gateway = {
+      request: jest.fn<IntegrationRequestGateway['request']>(),
+    } as unknown as IntegrationRequestGateway;
+    const policyEnforcer = {
+      authorize: jest.fn<IntegrationRequestPolicyEnforcer['authorize']>()
+        .mockRejectedValue(new Error('unexpected policy backend failure')),
+    } as unknown as IntegrationRequestPolicyEnforcer;
+    const authorized = new AuthorizedIntegrationGateway({ gateway, policyEnforcer });
+
+    await expect(authorized.request({ ...REQUEST })).rejects.toThrow('unexpected policy backend failure');
+
+    expect(gateway.request).not.toHaveBeenCalled();
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'AuthorizedIntegrationGateway',
+      details: expect.stringContaining('decision unavailable'),
+    }));
   });
 
   it('propagates transport errors from the raw gateway unchanged', async () => {

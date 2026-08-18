@@ -3,7 +3,10 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { Gatekeeper } from '../../../../src/handlers/mcp-aql/Gatekeeper.js';
 import type { ActiveElement } from '../../../../src/handlers/mcp-aql/policies/index.js';
 import { StaticAuditHmacKeyResolver } from '../../../../src/security/auditHmacKey.js';
-import { IntegrationRequestPolicyEnforcer } from '../../../../src/web-console/modules/integrations/IntegrationRequestPolicy.js';
+import {
+  IntegrationPolicyUnavailableError,
+  IntegrationRequestPolicyEnforcer,
+} from '../../../../src/web-console/modules/integrations/IntegrationRequestPolicy.js';
 
 const SEND_PATH = '/gmail/v1/users/me/messages/send';
 const REMOTE_DOCS = 'remote-docs';
@@ -230,6 +233,49 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     });
 
     await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
+  });
+
+  it('normalizes active-element loading failures to policy unavailability', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-elements-unavailable-test',
+      new StaticAuditHmacKeyResolver('dd'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.reject(new Error('element resolution failed')),
+    });
+
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/anything',
+    })).rejects.toBeInstanceOf(IntegrationPolicyUnavailableError);
+  });
+
+  it('normalizes approval-request persistence failures to policy unavailability', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-approval-unavailable-test',
+      new StaticAuditHmacKeyResolver('ee'.repeat(32)),
+    );
+    jest.spyOn(gatekeeper, 'createCliApprovalRequest')
+      .mockRejectedValue(new Error('approval store unavailable'));
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([integrationWriteGuard()]),
+    });
+
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'POST',
+      path: SEND_PATH,
+      body: { raw: 'abc' },
+    })).rejects.toBeInstanceOf(IntegrationPolicyUnavailableError);
   });
 });
 
