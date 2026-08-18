@@ -8,7 +8,7 @@ export const DEFAULT_REMOTE_MCP_RESPONSE_BYTES = 1024 * 1024;
 
 interface CredentialPatterns {
   readonly exact: readonly string[];
-  readonly percentEncoded: RegExp | null;
+  readonly encoded: RegExp | null;
 }
 
 interface PayloadTraversalFrame {
@@ -153,28 +153,58 @@ function credentialPatterns(credential: string): CredentialPatterns {
     // Reject lone surrogates before constructing UTF-8 alternatives.
     encodeURIComponent(credential);
   } catch {
-    return { exact: [credential], percentEncoded: null };
+    return { exact: [credential], encoded: null };
   }
   return {
     exact: [credential],
-    percentEncoded: percentEncodedCredentialPattern(credential),
+    encoded: encodedCredentialPattern(credential),
   };
 }
 
 function redactCredentialString(value: string, patterns: CredentialPatterns): string {
   let redacted = value;
   for (const pattern of patterns.exact) redacted = redacted.replaceAll(pattern, REDACTED);
-  if (patterns.percentEncoded) redacted = redacted.replace(patterns.percentEncoded, REDACTED);
+  if (patterns.encoded) redacted = redacted.replace(patterns.encoded, REDACTED);
   return redacted;
 }
 
-function percentEncodedCredentialPattern(credential: string): RegExp {
+function encodedCredentialPattern(credential: string): RegExp {
   let pattern = '';
   for (const character of credential) {
     const encodedBytes = Array.from(new TextEncoder().encode(character), percentEncodedBytePattern).join('');
-    pattern += `(?:${escapeRegexCharacter(character)}|${encodedBytes})`;
+    const alternatives = [
+      escapeRegexCharacter(character),
+      encodedBytes,
+      unicodeEscapedCharacterPattern(character),
+    ];
+    const shortEscape = jsonShortEscape(character);
+    if (shortEscape) alternatives.push(escapeRegexCharacter(shortEscape));
+    pattern += `(?:${alternatives.join('|')})`;
   }
   return new RegExp(pattern, 'g');
+}
+
+function unicodeEscapedCharacterPattern(character: string): string {
+  let pattern = '';
+  for (let index = 0; index < character.length; index += 1) {
+    const hexadecimal = character.charCodeAt(index).toString(16).padStart(4, '0');
+    pattern += `\\\\u${Array.from(hexadecimal, caseInsensitiveHexDigit).join('')}`;
+  }
+  return pattern;
+}
+
+function jsonShortEscape(character: string): string | null {
+  switch (character) {
+    case '"': return '\\"';
+    case '\\': return '\\\\';
+    case '/': return '\\/';
+    case '\b': return '\\b';
+    case '\f': return '\\f';
+    case '\n': return '\\n';
+    case '\r': return '\\r';
+    case '\t': return '\\t';
+    default: return null;
+  }
 }
 
 function percentEncodedBytePattern(byte: number): string {

@@ -37,6 +37,22 @@ describe('IntegrationRemoteMcpSecurity', () => {
     });
   });
 
+  it('redacts credentials in already-serialized JSON and log strings', () => {
+    const result = redactRemoteMcpCredentialEchoes({
+      shortEscape: 'abc\\/def',
+      unicodeEscape: '\\u0061bc\\u002fdef',
+      mixed: 'a%62c\\u002Fdef',
+      ordinaryCaseIsSignificant: '\\u0041bc\\/def',
+    }, 'abc/def');
+
+    expect(result).toEqual({
+      shortEscape: '[redacted]',
+      unicodeEscape: '[redacted]',
+      mixed: '[redacted]',
+      ordinaryCaseIsSignificant: '\\u0041bc\\/def',
+    });
+  });
+
   it('rejects declared and chunked POST responses above the byte limit', async () => {
     const encoder = new TextEncoder();
     const declaredFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response('small', {
