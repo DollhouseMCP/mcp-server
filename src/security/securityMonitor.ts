@@ -104,8 +104,15 @@ export class SecurityMonitor {
 
   // ── Instance methods ─────────────────────────────────────────────────
 
-  instanceAddLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
+  instanceAddLogListener(
+    fn: (entry: SecurityLogEntry) => void,
+    options: { readonly replayExisting?: boolean } = {},
+  ): () => void {
+    const backlog = options.replayExisting ? this._events.toArray() : [];
     this._logListener = fn;
+    for (const entry of backlog) {
+      fn(entry);
+    }
     return () => { this._logListener = undefined; };
   }
 
@@ -197,8 +204,11 @@ export class SecurityMonitor {
 
   // ── Static facade (delegates to active instance) ─────────────────────
 
-  static addLogListener(fn: (entry: SecurityLogEntry) => void): () => void {
-    return this.active.instanceAddLogListener(fn);
+  static addLogListener(
+    fn: (entry: SecurityLogEntry) => void,
+    options: { readonly replayExisting?: boolean } = {},
+  ): () => void {
+    return this.active.instanceAddLogListener(fn, options);
   }
 
   static logSecurityEvent(event: SecurityEvent): void {

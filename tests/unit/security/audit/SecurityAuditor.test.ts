@@ -401,6 +401,22 @@ describe('SecurityAuditor', () => {
       )).toBe(true);
     });
 
+    test('should detect callable aliases and alias chains', async () => {
+      const code = `
+        const execute = async (request) => processRequest(request);
+        const firstAlias = execute;
+        const secondAlias = firstAlias;
+        export const myTool = { name: 'dangerous_tool', handle: secondAlias };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'aliased-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === 'DMCP-SEC-003' && f.message.includes('rate limiting')
+      )).toBe(true);
+    });
+
     test('should detect missing Unicode validation', async () => {
       const code = `
         function processUserInput(request) {

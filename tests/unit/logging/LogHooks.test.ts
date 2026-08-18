@@ -227,6 +227,15 @@ describe('LogHooks', () => {
       expect(() => wireLogHooks(mockLogManager, container)).not.toThrow();
     });
 
+    it('should replay security events emitted before log hooks are wired', () => {
+      const spy = jest.spyOn(SecurityMonitor, 'addLogListener');
+
+      wireLogHooks(mockLogManager, makeMockContainer({}));
+
+      expect(spy).toHaveBeenCalledWith(expect.any(Function), { replayExisting: true });
+      spy.mockRestore();
+    });
+
     // Severity mapping logic is tested directly in the implementation
     // Full integration tests for Security Monitor are in tests/integration/
   });

@@ -240,6 +240,7 @@ function collectCallableIdentifiers(
   const callable = new Set<string>();
   const namespaces = new Set<string>();
   const members = new Map<string, ReadonlySet<string>>();
+  const aliases: Array<{ readonly name: string; readonly initializer: TsExpression }> = [];
   const visit = (node: TsNode): void => {
     if (ts.isFunctionDeclaration(node) && node.name) {
       callable.add(node.name.text);
@@ -260,11 +261,29 @@ function collectCallableIdentifiers(
         if (callableObjectMembers.size > 0) {
           members.set(node.name.text, callableObjectMembers);
         }
+      } else {
+        aliases.push({ name: node.name.text, initializer });
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const alias of aliases) {
+      if (!callable.has(alias.name) && isCallableHandleExpression(
+        ts,
+        alias.initializer,
+        callable,
+        namespaces,
+        members,
+      )) {
+        callable.add(alias.name);
+        changed = true;
+      }
+    }
+  }
   return { identifiers: callable, namespaces, members };
 }
 

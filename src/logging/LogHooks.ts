@@ -167,7 +167,7 @@ export function wireLogHooks(
         ...getRequestAttribution(contextTracker),
       };
       logManager.log(entry);
-    });
+    }, { replayExisting: true });
     cleanups.push(unsub);
   }
 

@@ -26,6 +26,29 @@ describe('SecurityMonitor', () => {
   });
 
   describe('logSecurityEvent', () => {
+    it('replays startup events when the unified listener requests the backlog', () => {
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'startup-seed-loader',
+        details: 'Seed rejected before log hooks were wired',
+      });
+      const listener = jest.fn();
+
+      const unsubscribe = SecurityMonitor.addLogListener(listener, { replayExisting: true });
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'runtime-request',
+        details: 'Runtime integration request allowed',
+      });
+
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(listener.mock.calls[0]?.[0]).toMatchObject({ source: 'startup-seed-loader' });
+      expect(listener.mock.calls[1]?.[0]).toMatchObject({ source: 'runtime-request' });
+      unsubscribe();
+    });
+
     it('should store critical events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
