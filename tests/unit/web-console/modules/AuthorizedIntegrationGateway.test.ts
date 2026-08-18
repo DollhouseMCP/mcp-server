@@ -187,9 +187,33 @@ describe('AuthorizedIntegrationOperationCatalog', () => {
       provider: 'gmail',
       method: 'PUT',
       path: '_internal:/integration/openapi_spec',
-      body: spec,
+      body: { spec, regenerateSkill: false },
     });
     expect(outcome).toMatchObject({ ok: true, result: { operationCount: 1 } });
+  });
+
+  it('binds the regenerate-skill side effect into spec-ingestion approval input', async () => {
+    const catalog = {
+      ingestOpenApiSpec: jest.fn<IntegrationOperationCatalog['ingestOpenApiSpec']>().mockResolvedValue({
+        provider: 'gmail',
+        descriptorId: '00000000-0000-4000-8000-000000000001',
+        specHash: 'a'.repeat(64),
+        operationCount: 1,
+      }),
+    } as unknown as IntegrationOperationCatalog;
+    const policyEnforcer = enforcerAllowing();
+    const authorized = new AuthorizedIntegrationOperationCatalog({ catalog, policyEnforcer });
+    const spec = { openapi: '3.1.0', paths: {} };
+
+    await authorized.ingestOpenApiSpec({ provider: 'gmail', spec, sourceUrl: null, regenerateSkill: false });
+    await authorized.ingestOpenApiSpec({ provider: 'gmail', spec, sourceUrl: null, regenerateSkill: true });
+
+    expect(policyEnforcer.authorize).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      body: { spec, regenerateSkill: false },
+    }));
+    expect(policyEnforcer.authorize).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      body: { spec, regenerateSkill: true },
+    }));
   });
 
   it('never mutates through the catalog when policy denies a management write', async () => {

@@ -16,6 +16,7 @@ import {
 } from '../../../../src/web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
 import { integrationSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
 import type { DnsLookup } from '../../../../src/web-console/modules/integrations/IntegrationPublicHostGuard.js';
+import type { PinnedFetch, PinnedOutboundFactory } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 
 const USER_ID = '00000000-0000-4000-8000-000000000001';
 const DESCRIPTOR_ID = '00000000-0000-4000-8000-000000000002';
@@ -131,6 +132,100 @@ describe('IntegrationRemoteMcpBridge', () => {
     });
   });
 
+  it('redacts bearer-token echoes throughout remote MCP call results', async () => {
+    const credential = 'remote-access-token';
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn(),
+      callTool: jest.fn().mockResolvedValue({
+        content: [{ type: 'text', text: `remote echoed ${credential}` }],
+        structuredContent: {
+          nested: [`Bearer ${credential}`, { [credential]: credential }],
+        },
+      }),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({ clientFactory });
+
+    const result = await runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }));
+
+    expect(JSON.stringify(result)).not.toContain(credential);
+    expect(result.result).toMatchObject({
+      content: [{ text: 'remote echoed [redacted]' }],
+      structuredContent: {
+        nested: ['Bearer [redacted]', { '[redacted]': '[redacted]' }],
+      },
+    });
+  });
+
+  it('replaces credential-bearing remote MCP errors with a static failure', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn(),
+      callTool: jest.fn().mockRejectedValue(new Error('Bearer remote-access-token was rejected')),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({ clientFactory });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_call_failed',
+      message: 'Remote MCP tool call failed.',
+      status: 502,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+  });
+
+  it('redacts bearer-token echoes from discovered tool metadata', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn().mockResolvedValue({
+        tools: [{
+          name: 'search',
+          description: 'Use remote-access-token to search',
+          inputSchema: { type: 'object', description: 'Bearer remote-access-token' },
+        }],
+      }),
+      callTool: jest.fn(),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({ clientFactory });
+
+    const tools = await runAsUser(contextTracker, () => bridge.listAllowedTools());
+
+    expect(JSON.stringify(tools)).not.toContain('remote-access-token');
+    expect(tools[0]).toMatchObject({
+      description: 'Use [redacted] to search',
+      inputSchema: { description: 'Bearer [redacted]' },
+    });
+  });
+
+  it('fails closed when a credential collides with behavior-defining wrapper metadata', async () => {
+    const secretEncryption = encryption();
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn(),
+      callTool: jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] }),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({
+      clientFactory,
+      integrations: [integration(secretEncryption, REMOTE_DOCS, REMOTE_DOCS)],
+      secretEncryption,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_response_invalid',
+      status: 502,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+  });
+
   it('rejects remote MCP server URLs outside descriptor apiHosts', async () => {
     const { bridge, contextTracker } = fixture({
       descriptor: descriptor({
@@ -150,6 +245,67 @@ describe('IntegrationRemoteMcpBridge', () => {
     }))).rejects.toMatchObject({
       code: 'remote_mcp_server_not_allowed',
       status: 400,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+  });
+
+  it('rejects remote MCP server URLs containing user information', async () => {
+    const { bridge, contextTracker } = fixture({
+      descriptor: descriptor({
+        operationPromotion: {
+          remoteMcp: {
+            serverUrl: 'https://user:password@mcp.example.com/mcp',
+            tools: ['search'],
+          },
+        },
+      }),
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_invalid_server_url',
+      status: 400,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+  });
+
+  it('rejects chunked remote MCP POST responses that exceed the byte cap', async () => {
+    const encoder = new TextEncoder();
+    const rawFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('12345'));
+        controller.enqueue(encoder.encode('67890'));
+        controller.close();
+      },
+    }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const pinnedOutbound: PinnedOutboundFactory = () => ({
+      fetch: rawFetch,
+      close: () => Promise.resolve(),
+    });
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockImplementation(async ({ pinnedFetch, serverUrl }) => {
+      const response = await pinnedFetch(serverUrl, { method: 'POST' });
+      await response.text();
+      return {
+        listTools: () => Promise.resolve({ tools: [] }),
+        callTool: () => Promise.resolve({}),
+        close: () => Promise.resolve(),
+      };
+    });
+    const { bridge, contextTracker } = fixture({
+      clientFactory,
+      pinnedOutbound,
+      maxResponseBytes: 8,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_connect_failed',
+      message: 'Remote MCP server connection failed.',
+      status: 502,
     } satisfies Partial<IntegrationRemoteMcpBridgeError>);
   });
 
@@ -252,13 +408,16 @@ function fixture(options: {
   readonly integration?: UserIntegrationRecord;
   readonly integrations?: readonly UserIntegrationRecord[];
   readonly integrationStore?: IUserIntegrationStore;
+  readonly secretEncryption?: AeadSecretEncryptionService;
   readonly clientFactory?: RemoteMcpClientFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
+  readonly maxResponseBytes?: number;
+  readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly discoveryGate?: (provider: string) => Promise<boolean>;
 } = {}) {
   const contextTracker = new ContextTracker();
-  const secretEncryption = encryption();
+  const secretEncryption = options.secretEncryption ?? encryption();
   const descriptorRecords = options.descriptors ?? [options.descriptor ?? descriptor()];
   const integrationRecords = options.integrations ?? [options.integration ?? integration(secretEncryption)];
   return {
@@ -271,6 +430,8 @@ function fixture(options: {
       discoveryGate: options.discoveryGate ?? (() => Promise.resolve(true)),
       dnsLookup: options.dnsLookup ?? publicDnsLookup,
       timeoutMs: options.timeoutMs,
+      maxResponseBytes: options.maxResponseBytes,
+      pinnedOutbound: options.pinnedOutbound,
       clientFactory: options.clientFactory ?? (() => Promise.resolve({
         listTools: () => Promise.resolve({ tools: [] }),
         callTool: () => Promise.resolve({}),
@@ -315,7 +476,11 @@ function descriptor(overrides: Partial<IntegrationDescriptorRecord> = {}): Integ
   };
 }
 
-function integration(secretEncryption: AeadSecretEncryptionService, provider = REMOTE_DOCS): UserIntegrationRecord {
+function integration(
+  secretEncryption: AeadSecretEncryptionService,
+  provider = REMOTE_DOCS,
+  accessToken = 'remote-access-token',
+): UserIntegrationRecord {
   return {
     id: INTEGRATION_ID,
     userId: USER_ID,
@@ -324,7 +489,7 @@ function integration(secretEncryption: AeadSecretEncryptionService, provider = R
     externalInstallationId: null,
     authorizedPermissions: { scopes: ['docs.read'] },
     accessTokenCiphertext: secretEncryption.encrypt(
-      Buffer.from('remote-access-token', 'utf8'),
+      Buffer.from(accessToken, 'utf8'),
       integrationSecretContext('access_token', USER_ID, provider),
     ),
     refreshTokenCiphertext: null,
