@@ -110,7 +110,12 @@ export class SecurityMonitor {
   }
 
   instanceLogSecurityEvent(event: SecurityEvent): void {
-    if (this._dedup.shouldSuppress(`${event.type}\0${event.source}\0${event.details}`)) {
+    // Integration decisions are discrete authorization and credentialed-egress
+    // records. Suppressing an identical-looking event can erase another user,
+    // session, or request before LogHooks attaches that attribution.
+    const isDiscreteIntegrationDecision = event.type === 'INTEGRATION_SECURITY_DECISION';
+    if (!isDiscreteIntegrationDecision
+      && this._dedup.shouldSuppress(`${event.type}\0${event.source}\0${event.details}`)) {
       return;
     }
 

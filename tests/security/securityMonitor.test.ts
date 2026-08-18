@@ -355,6 +355,20 @@ describe('SecurityMonitor', () => {
       expect(events).toHaveLength(2);
     });
 
+    it('should retain repeated integration security decisions', () => {
+      const event = {
+        type: 'INTEGRATION_SECURITY_DECISION' as const,
+        severity: 'MEDIUM' as const,
+        source: 'integration-test',
+        details: 'Identical decision details',
+      };
+
+      SecurityMonitor.logSecurityEvent(event);
+      SecurityMonitor.logSecurityEvent(event);
+
+      expect(SecurityMonitor.getRecentEvents()).toHaveLength(2);
+    });
+
     it('should handle high-volume repeated events without memory growth', () => {
       // Simulate element load flooding — same event 500 times
       for (let i = 0; i < 500; i++) {

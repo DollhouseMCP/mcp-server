@@ -156,7 +156,7 @@ describe('AuthorizedIntegrationGateway', () => {
     const events = SecurityMonitor.getRecentEvents()
       .filter(entry => entry.source === 'AuthorizedIntegrationGateway');
     expect(events).toHaveLength(2);
-    expect(events[0]?.details).not.toBe(events[1]?.details);
+    expect(events[0]?.details).toBe(events[1]?.details);
   });
 
   it('falls back to a denial error when a disallowed decision carries none', async () => {

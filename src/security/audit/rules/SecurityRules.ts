@@ -147,6 +147,7 @@ function objectHasCallableHandle(
   node: import('typescript').ObjectLiteralExpression,
   callableIdentifiers: ReadonlySet<string>,
   callableNamespaces: ReadonlySet<string>,
+  callableMembers: ReadonlyMap<string, ReadonlySet<string>>,
 ): boolean {
   return node.properties.some(property => {
     if (ts.isMethodDeclaration(property)) {
@@ -161,8 +162,29 @@ function objectHasCallableHandle(
       || (ts.isIdentifier(initializer) && callableIdentifiers.has(initializer.text))
       || (ts.isPropertyAccessExpression(initializer)
         && ts.isIdentifier(initializer.expression)
-        && callableNamespaces.has(initializer.expression.text));
+        && (callableNamespaces.has(initializer.expression.text)
+          || callableMembers.get(initializer.expression.text)?.has(initializer.name.text) === true));
   });
+}
+
+function collectObjectCallableMembers(
+  ts: TypeScriptApi,
+  object: import('typescript').ObjectLiteralExpression,
+): ReadonlySet<string> {
+  const members = new Set<string>();
+  for (const property of object.properties) {
+    if (ts.isMethodDeclaration(property)) {
+      const name = propertyNameText(ts, property.name);
+      if (name) members.add(name);
+    } else if (ts.isPropertyAssignment(property)) {
+      const initializer = unwrapExpression(ts, property.initializer);
+      const name = propertyNameText(ts, property.name);
+      if (name && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
+        members.add(name);
+      }
+    }
+  }
+  return members;
 }
 
 function collectCallableIdentifiers(
@@ -171,9 +193,11 @@ function collectCallableIdentifiers(
 ): {
   readonly identifiers: ReadonlySet<string>;
   readonly namespaces: ReadonlySet<string>;
+  readonly members: ReadonlyMap<string, ReadonlySet<string>>;
 } {
   const callable = new Set<string>();
   const namespaces = new Set<string>();
+  const members = new Map<string, ReadonlySet<string>>();
   const visit = (node: TsNode): void => {
     if (ts.isFunctionDeclaration(node) && node.name) {
       callable.add(node.name.text);
@@ -189,12 +213,17 @@ function collectCallableIdentifiers(
       const initializer = unwrapExpression(ts, node.initializer);
       if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
         callable.add(node.name.text);
+      } else if (ts.isObjectLiteralExpression(initializer)) {
+        const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
+        if (callableObjectMembers.size > 0) {
+          members.set(node.name.text, callableObjectMembers);
+        }
       }
     }
     ts.forEachChild(node, visit);
   };
   visit(source);
-  return { identifiers: callable, namespaces };
+  return { identifiers: callable, namespaces, members };
 }
 
 function hasMcpToolHandler(content: string): boolean {
@@ -216,7 +245,13 @@ function hasMcpToolHandler(content: string): boolean {
     if (found) return;
     if (ts.isObjectLiteralExpression(node)
       && objectHasStaticToolName(ts, node)
-      && objectHasCallableHandle(ts, node, callableBindings.identifiers, callableBindings.namespaces)) {
+      && objectHasCallableHandle(
+        ts,
+        node,
+        callableBindings.identifiers,
+        callableBindings.namespaces,
+        callableBindings.members,
+      )) {
       found = true;
       return;
     }

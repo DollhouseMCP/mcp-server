@@ -141,7 +141,7 @@ describe('IntegrationRemoteMcpBridge', () => {
     const events = SecurityMonitor.getRecentEvents()
       .filter(entry => entry.source === 'IntegrationRemoteMcpBridge' && entry.details.includes('tool_call allowed'));
     expect(events).toHaveLength(2);
-    expect(events[0]?.details).not.toBe(events[1]?.details);
+    expect(events[0]?.details).toBe(events[1]?.details);
   });
 
   it('redacts bearer-token echoes throughout remote MCP call results', async () => {
