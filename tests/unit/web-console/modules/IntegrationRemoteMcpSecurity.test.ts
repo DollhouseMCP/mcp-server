@@ -58,12 +58,14 @@ describe('IntegrationRemoteMcpSecurity', () => {
       doublePercent: 'abc%252Fdef',
       nestedJson: 'abc\\\\/def',
       mixedLayers: 'abc%255Cu002fdef',
+      malformedNeighbor: '%ZZabc%252Fdef',
     }, 'abc/def');
 
     expect(result).toEqual({
       doublePercent: '[redacted]',
       nestedJson: '[redacted]',
       mixedLayers: '[redacted]',
+      malformedNeighbor: '[redacted]',
     });
   });
 

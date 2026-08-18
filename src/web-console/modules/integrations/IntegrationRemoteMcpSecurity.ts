@@ -5,6 +5,7 @@ const MAX_PAYLOAD_DEPTH = 128;
 const MAX_PAYLOAD_NODES = 100_000;
 const MAX_CREDENTIAL_DECODE_DEPTH = 4;
 const JSON_ESCAPE_PATTERN = /\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})/g;
+const PERCENT_ESCAPE_RUN_PATTERN = /(?:%[0-9A-Fa-f]{2})+/g;
 
 export const DEFAULT_REMOTE_MCP_RESPONSE_BYTES = 1024 * 1024;
 
@@ -273,13 +274,18 @@ function appendUnseenDecodedVariant(
 }
 
 function decodedVariants(value: string): readonly string[] {
-  const variants = [decodeJsonEscapes(value)];
-  try {
-    variants.push(decodeURIComponent(value));
-  } catch {
-    // Malformed percent escapes have no URI-decoded variant.
-  }
-  return variants;
+  return [decodeJsonEscapes(value), decodeValidPercentEscapeRuns(value)];
+}
+
+function decodeValidPercentEscapeRuns(value: string): string {
+  return value.replace(PERCENT_ESCAPE_RUN_PATTERN, (run) => {
+    try {
+      return decodeURIComponent(run);
+    } catch {
+      // Preserve runs that are byte-shaped but not valid UTF-8.
+      return run;
+    }
+  });
 }
 
 function decodeJsonEscapes(value: string): string {
