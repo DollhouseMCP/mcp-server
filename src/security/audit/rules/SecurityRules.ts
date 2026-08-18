@@ -243,62 +243,61 @@ type CallableMemberAlias = {
   readonly memberName: string;
   readonly initializer: TsExpression;
 };
+interface CallableCollection {
+  readonly callable: Set<string>;
+  readonly namespaces: Set<string>;
+  readonly members: Map<string, Set<string>>;
+  readonly aliases: CallableAlias[];
+  readonly memberAliases: CallableMemberAlias[];
+}
 
 function collectCallableBinding(
   ts: TypeScriptApi,
   name: string,
   initializerExpression: TsExpression,
-  callable: Set<string>,
-  namespaces: Set<string>,
-  members: Map<string, Set<string>>,
-  aliases: CallableAlias[],
-  memberAliases: CallableMemberAlias[],
+  collection: CallableCollection,
 ): void {
   const initializer = unwrapExpression(ts, initializerExpression);
   if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
-    callable.add(name);
+    collection.callable.add(name);
     return;
   }
   if (ts.isCallExpression(initializer)) {
     // Without inter-module type resolution a factory may return either the
     // handler itself or an object containing handler methods. Preserve both
     // conservative interpretations for security-audit coverage.
-    callable.add(name);
-    namespaces.add(name);
+    collection.callable.add(name);
+    collection.namespaces.add(name);
     return;
   }
   if (ts.isNewExpression(initializer)) {
     // The scanner does not resolve class declarations or imported types. A
     // constructed instance can expose callable prototype methods, so treat
     // its members conservatively in the same way as a namespace import.
-    namespaces.add(name);
+    collection.namespaces.add(name);
     return;
   }
   if (!ts.isObjectLiteralExpression(initializer)) {
-    aliases.push({ name, initializer });
+    collection.aliases.push({ name, initializer });
     return;
   }
 
   const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
   if (callableObjectMembers.direct.size > 0) {
-    members.set(name, new Set(callableObjectMembers.direct));
+    collection.members.set(name, new Set(callableObjectMembers.direct));
   }
   for (const member of callableObjectMembers.pending) {
-    memberAliases.push({ objectName: name, ...member });
+    collection.memberAliases.push({ objectName: name, ...member });
   }
 }
 
 function collectCallableVariable(
   ts: TypeScriptApi,
   node: import('typescript').VariableDeclaration,
-  callable: Set<string>,
-  namespaces: Set<string>,
-  members: Map<string, Set<string>>,
-  aliases: CallableAlias[],
-  memberAliases: CallableMemberAlias[],
+  collection: CallableCollection,
 ): void {
   if (!ts.isIdentifier(node.name) || !node.initializer) return;
-  collectCallableBinding(ts, node.name.text, node.initializer, callable, namespaces, members, aliases, memberAliases);
+  collectCallableBinding(ts, node.name.text, node.initializer, collection);
 }
 
 function callableMemberAssignmentTarget(
@@ -320,95 +319,110 @@ function callableMemberAssignmentTarget(
 function collectCallableAssignment(
   ts: TypeScriptApi,
   node: import('typescript').BinaryExpression,
-  callable: Set<string>,
-  namespaces: Set<string>,
-  members: Map<string, Set<string>>,
-  aliases: CallableAlias[],
-  memberAliases: CallableMemberAlias[],
+  collection: CallableCollection,
 ): void {
   if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return;
   const left = unwrapExpression(ts, node.left);
   if (ts.isIdentifier(left)) {
-    collectCallableBinding(ts, left.text, node.right, callable, namespaces, members, aliases, memberAliases);
+    collectCallableBinding(ts, left.text, node.right, collection);
     return;
   }
   const target = callableMemberAssignmentTarget(ts, left);
   if (target) {
-    memberAliases.push({ ...target, initializer: unwrapExpression(ts, node.right) });
+    collection.memberAliases.push({ ...target, initializer: unwrapExpression(ts, node.right) });
   }
+}
+
+function importedCallableName(ts: TypeScriptApi, node: TsNode): string | undefined {
+  if (ts.isImportClause(node)) return node.name?.text;
+  if (ts.isImportSpecifier(node)) return node.name.text;
+  return undefined;
 }
 
 function collectCallableNode(
   ts: TypeScriptApi,
   node: TsNode,
-  callable: Set<string>,
-  namespaces: Set<string>,
-  members: Map<string, Set<string>>,
-  aliases: CallableAlias[],
-  memberAliases: CallableMemberAlias[],
+  collection: CallableCollection,
 ): void {
   if (ts.isFunctionDeclaration(node) && node.name) {
-    callable.add(node.name.text);
-  } else if (ts.isClassDeclaration(node) && node.name) {
-    namespaces.add(node.name.text);
-  } else if (ts.isImportClause(node) && node.name) {
+    collection.callable.add(node.name.text);
+    return;
+  }
+  if (ts.isClassDeclaration(node) && node.name) {
+    collection.namespaces.add(node.name.text);
+    return;
+  }
+  const importedName = importedCallableName(ts, node);
+  if (importedName) {
     // Default imports are opaque without resolving another module. Treat
     // them conservatively when assigned to a tool's handle property.
-    callable.add(node.name.text);
-    namespaces.add(node.name.text);
-  } else if (ts.isImportSpecifier(node)) {
-    callable.add(node.name.text);
-    namespaces.add(node.name.text);
-  } else if (ts.isNamespaceImport(node)) {
-    namespaces.add(node.name.text);
-  } else if (ts.isVariableDeclaration(node)) {
-    collectCallableVariable(ts, node, callable, namespaces, members, aliases, memberAliases);
-  } else if (ts.isBinaryExpression(node)) {
-    collectCallableAssignment(ts, node, callable, namespaces, members, aliases, memberAliases);
+    collection.callable.add(importedName);
+    collection.namespaces.add(importedName);
+    return;
   }
+  if (ts.isNamespaceImport(node)) collection.namespaces.add(node.name.text);
+  if (ts.isVariableDeclaration(node)) collectCallableVariable(ts, node, collection);
+  if (ts.isBinaryExpression(node)) collectCallableAssignment(ts, node, collection);
+}
+
+function resolveCallableAlias(
+  ts: TypeScriptApi,
+  alias: CallableAlias,
+  collection: CallableCollection,
+): boolean {
+  let changed = false;
+  const initializer = unwrapExpression(ts, alias.initializer);
+  if (ts.isIdentifier(initializer)
+    && collection.namespaces.has(initializer.text)
+    && !collection.namespaces.has(alias.name)) {
+    collection.namespaces.add(alias.name);
+    changed = true;
+  }
+  if (!collection.callable.has(alias.name) && isCallableHandleExpression(
+    ts,
+    alias.initializer,
+    collection.callable,
+    collection.namespaces,
+    collection.members,
+  )) {
+    collection.callable.add(alias.name);
+    changed = true;
+  }
+  return changed;
+}
+
+function resolveCallableMemberAlias(
+  ts: TypeScriptApi,
+  memberAlias: CallableMemberAlias,
+  collection: CallableCollection,
+): boolean {
+  const objectMembers = collection.members.get(memberAlias.objectName) ?? new Set<string>();
+  if (objectMembers.has(memberAlias.memberName) || !isCallableHandleExpression(
+    ts,
+    memberAlias.initializer,
+    collection.callable,
+    collection.namespaces,
+    collection.members,
+  )) {
+    return false;
+  }
+  objectMembers.add(memberAlias.memberName);
+  collection.members.set(memberAlias.objectName, objectMembers);
+  return true;
 }
 
 function resolveCallableAliases(
   ts: TypeScriptApi,
-  callable: Set<string>,
-  namespaces: Set<string>,
-  members: Map<string, Set<string>>,
-  aliases: readonly CallableAlias[],
-  memberAliases: readonly CallableMemberAlias[],
+  collection: CallableCollection,
 ): void {
   let changed = true;
   while (changed) {
     changed = false;
-    for (const alias of aliases) {
-      const initializer = unwrapExpression(ts, alias.initializer);
-      if (ts.isIdentifier(initializer) && namespaces.has(initializer.text) && !namespaces.has(alias.name)) {
-        namespaces.add(alias.name);
-        changed = true;
-      }
-      if (!callable.has(alias.name) && isCallableHandleExpression(
-        ts,
-        alias.initializer,
-        callable,
-        namespaces,
-        members,
-      )) {
-        callable.add(alias.name);
-        changed = true;
-      }
+    for (const alias of collection.aliases) {
+      changed = resolveCallableAlias(ts, alias, collection) || changed;
     }
-    for (const memberAlias of memberAliases) {
-      const objectMembers = members.get(memberAlias.objectName) ?? new Set<string>();
-      if (!objectMembers.has(memberAlias.memberName) && isCallableHandleExpression(
-        ts,
-        memberAlias.initializer,
-        callable,
-        namespaces,
-        members,
-      )) {
-        objectMembers.add(memberAlias.memberName);
-        members.set(memberAlias.objectName, objectMembers);
-        changed = true;
-      }
+    for (const memberAlias of collection.memberAliases) {
+      changed = resolveCallableMemberAlias(ts, memberAlias, collection) || changed;
     }
   }
 }
@@ -421,18 +435,24 @@ function collectCallableIdentifiers(
   readonly namespaces: ReadonlySet<string>;
   readonly members: ReadonlyMap<string, ReadonlySet<string>>;
 } {
-  const callable = new Set<string>();
-  const namespaces = new Set<string>();
-  const members = new Map<string, Set<string>>();
-  const aliases: CallableAlias[] = [];
-  const memberAliases: CallableMemberAlias[] = [];
+  const collection: CallableCollection = {
+    callable: new Set<string>(),
+    namespaces: new Set<string>(),
+    members: new Map<string, Set<string>>(),
+    aliases: [],
+    memberAliases: [],
+  };
   const visit = (node: TsNode): void => {
-    collectCallableNode(ts, node, callable, namespaces, members, aliases, memberAliases);
+    collectCallableNode(ts, node, collection);
     ts.forEachChild(node, visit);
   };
   visit(source);
-  resolveCallableAliases(ts, callable, namespaces, members, aliases, memberAliases);
-  return { identifiers: callable, namespaces, members };
+  resolveCallableAliases(ts, collection);
+  return {
+    identifiers: collection.callable,
+    namespaces: collection.namespaces,
+    members: collection.members,
+  };
 }
 
 function hasMcpToolHandler(content: string): boolean {
