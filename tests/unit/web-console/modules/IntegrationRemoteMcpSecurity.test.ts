@@ -53,6 +53,20 @@ describe('IntegrationRemoteMcpSecurity', () => {
     });
   });
 
+  it('redacts credentials recovered through bounded recursive decoding', () => {
+    const result = redactRemoteMcpCredentialEchoes({
+      doublePercent: 'abc%252Fdef',
+      nestedJson: 'abc\\\\/def',
+      mixedLayers: 'abc%255Cu002fdef',
+    }, 'abc/def');
+
+    expect(result).toEqual({
+      doublePercent: '[redacted]',
+      nestedJson: '[redacted]',
+      mixedLayers: '[redacted]',
+    });
+  });
+
   it('redacts credential substrings in serialized primitives', () => {
     expect(redactRemoteMcpCredentialEchoes({ value: 91234 }, '123')).toEqual({
       value: '9[redacted]4',
@@ -84,14 +98,33 @@ describe('IntegrationRemoteMcpSecurity', () => {
     await expect(chunked.text()).rejects.toBeInstanceOf(RemoteMcpPayloadSafetyError);
   });
 
-  it('leaves long-lived GET response streams uncapped', async () => {
-    const pinnedFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response('1234567890'));
+  it('caps each GET SSE event without imposing a cumulative stream limit', async () => {
+    const encoder = new TextEncoder();
+    const allowedFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('1234\n'));
+        controller.enqueue(encoder.encode('\n5678\r\n'));
+        controller.enqueue(encoder.encode('\r\n'));
+        controller.close();
+      },
+    })));
+    const oversizedFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response(new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('1234'));
+        controller.enqueue(encoder.encode('56789'));
+        controller.close();
+      },
+    })));
 
-    const response = await createBoundedRemoteMcpFetch(pinnedFetch, 8)(new URL('https://mcp.example.com'), {
+    const response = await createBoundedRemoteMcpFetch(allowedFetch, 8)(new URL('https://mcp.example.com'), {
+      method: 'GET',
+    });
+    const oversized = await createBoundedRemoteMcpFetch(oversizedFetch, 8)(new URL('https://mcp.example.com'), {
       method: 'GET',
     });
 
-    await expect(response.text()).resolves.toBe('1234567890');
+    await expect(response.text()).resolves.toBe('1234\n\n5678\r\n\r\n');
+    await expect(oversized.text()).rejects.toBeInstanceOf(RemoteMcpPayloadSafetyError);
   });
 
   it('fails closed for empty credentials and circular custom-client output', () => {

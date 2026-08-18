@@ -3,12 +3,21 @@ import type { PinnedFetch } from './PinnedOutboundFactory.js';
 const REDACTED = '[redacted]';
 const MAX_PAYLOAD_DEPTH = 128;
 const MAX_PAYLOAD_NODES = 100_000;
+const MAX_CREDENTIAL_DECODE_DEPTH = 4;
+const JSON_ESCAPE_PATTERN = /\\(?:["\\/bfnrt]|u[0-9a-fA-F]{4})/g;
 
 export const DEFAULT_REMOTE_MCP_RESPONSE_BYTES = 1024 * 1024;
 
 interface CredentialPatterns {
+  readonly credential: string;
   readonly exact: readonly string[];
   readonly encoded: RegExp | null;
+}
+
+interface ResponseByteLimitState {
+  totalBytes: number;
+  previousByte: number;
+  byteBeforePrevious: number;
 }
 
 interface PayloadTraversalFrame {
@@ -32,8 +41,7 @@ export class RemoteMcpPayloadSafetyError extends Error {
 }
 
 /**
- * Limit each MCP POST response while preserving JSON and SSE streaming semantics.
- * Long-lived GET notification streams are intentionally not capped cumulatively.
+ * Limit each MCP POST response and each event on long-lived GET SSE streams.
  */
 export function createBoundedRemoteMcpFetch(
   pinnedFetch: PinnedFetch,
@@ -41,31 +49,77 @@ export function createBoundedRemoteMcpFetch(
 ): PinnedFetch {
   return async (input, init) => {
     const response = await pinnedFetch(input, init);
-    if ((init?.method ?? 'GET').toUpperCase() !== 'POST') return response;
+    const method = (init?.method ?? 'GET').toUpperCase();
+    if (method === 'POST') return boundRemoteMcpResponse(response, maxBytes, false);
+    if (method === 'GET') return boundRemoteMcpResponse(response, maxBytes, true);
+    return response;
+  };
+}
 
+function boundRemoteMcpResponse(response: Response, maxBytes: number, perSseEvent: boolean): Response {
+  if (!perSseEvent) {
     const contentLength = response.headers.get('content-length');
     if (contentLength !== null && Number.parseInt(contentLength, 10) > maxBytes) {
-      await response.body?.cancel().catch(() => {});
+      void response.body?.cancel().catch(() => {});
       throw new RemoteMcpPayloadSafetyError('Remote MCP response exceeds the configured byte limit.');
     }
-    if (!response.body) return response;
+  }
+  if (!response.body) return response;
 
-    let totalBytes = 0;
-    const boundedBody = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
-      transform(chunk, controller) {
-        totalBytes += chunk.byteLength;
-        if (totalBytes > maxBytes) {
-          throw new RemoteMcpPayloadSafetyError('Remote MCP response exceeds the configured byte limit.');
-        }
-        controller.enqueue(chunk);
-      },
-    }));
-    return new Response(boundedBody, {
-      status: response.status,
-      statusText: response.statusText,
-      headers: response.headers,
-    });
+  const state: ResponseByteLimitState = {
+    totalBytes: 0,
+    previousByte: -1,
+    byteBeforePrevious: -1,
   };
+  const boundedBody = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      enforceResponseByteLimit(chunk, maxBytes, perSseEvent, state);
+      controller.enqueue(chunk);
+    },
+  }));
+  return new Response(boundedBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+function enforceResponseByteLimit(
+  chunk: Uint8Array,
+  maxBytes: number,
+  perSseEvent: boolean,
+  state: ResponseByteLimitState,
+): void {
+  if (!perSseEvent) {
+    state.totalBytes += chunk.byteLength;
+    assertWithinResponseByteLimit(state.totalBytes, maxBytes);
+    return;
+  }
+  for (const byte of chunk) {
+    if (isSseEventBoundary(byte, state.previousByte, state.byteBeforePrevious)) {
+      state.totalBytes = 0;
+    } else {
+      state.totalBytes += 1;
+      assertWithinResponseByteLimit(state.totalBytes, maxBytes);
+    }
+    state.byteBeforePrevious = state.previousByte;
+    state.previousByte = byte;
+  }
+}
+
+function assertWithinResponseByteLimit(totalBytes: number, maxBytes: number): void {
+  if (totalBytes > maxBytes) {
+    throw new RemoteMcpPayloadSafetyError('Remote MCP response exceeds the configured byte limit.');
+  }
+}
+
+function isSseEventBoundary(byte: number, previousByte: number, byteBeforePrevious: number): boolean {
+  const LF = 0x0a;
+  const CR = 0x0d;
+  if (byte === CR) return previousByte === CR || previousByte === LF;
+  if (byte !== LF) return false;
+  if (previousByte === LF) return true;
+  return previousByte === CR && (byteBeforePrevious === CR || byteBeforePrevious === LF);
 }
 
 /**
@@ -158,16 +212,67 @@ function credentialPatterns(credential: string): CredentialPatterns {
     throw new RemoteMcpPayloadSafetyError('Remote MCP credential cannot be safely redacted.');
   }
   return {
+    credential,
     exact: [credential],
     encoded: encodedCredentialPattern(credential),
   };
 }
 
 function redactCredentialString(value: string, patterns: CredentialPatterns): string {
+  if (decodedVariantContainsCredential(value, patterns.credential)) return REDACTED;
   let redacted = value;
   for (const pattern of patterns.exact) redacted = redacted.replaceAll(pattern, REDACTED);
   if (patterns.encoded) redacted = redacted.replace(patterns.encoded, REDACTED);
   return redacted;
+}
+
+function decodedVariantContainsCredential(value: string, credential: string): boolean {
+  const seen = new Set<string>([value]);
+  let frontier = [value];
+  for (let depth = 0; depth < MAX_CREDENTIAL_DECODE_DEPTH; depth += 1) {
+    const next: string[] = [];
+    for (const variant of frontier) {
+      for (const decoded of decodedVariants(variant)) {
+        if (depth > 0 && decoded.includes(credential)) return true;
+        if (decoded !== variant && !seen.has(decoded)) {
+          seen.add(decoded);
+          next.push(decoded);
+        }
+      }
+    }
+    frontier = next;
+    if (frontier.length === 0) return false;
+  }
+  return false;
+}
+
+function decodedVariants(value: string): readonly string[] {
+  const variants = [decodeJsonEscapes(value)];
+  try {
+    variants.push(decodeURIComponent(value));
+  } catch {
+    // Malformed percent escapes have no URI-decoded variant.
+  }
+  return variants;
+}
+
+function decodeJsonEscapes(value: string): string {
+  return value.replace(JSON_ESCAPE_PATTERN, (escape) => {
+    if (escape.startsWith(String.raw`\u`)) {
+      return String.fromCharCode(Number.parseInt(escape.slice(2), 16));
+    }
+    switch (escape[1]) {
+      case '"': return '"';
+      case '\\': return '\\';
+      case '/': return '/';
+      case 'b': return '\b';
+      case 'f': return '\f';
+      case 'n': return '\n';
+      case 'r': return '\r';
+      case 't': return '\t';
+      default: return escape;
+    }
+  });
 }
 
 function encodedCredentialPattern(credential: string): RegExp {
