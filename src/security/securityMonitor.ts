@@ -104,6 +104,7 @@ export class SecurityMonitor {
   private readonly _events = new EvictingQueue<SecurityLogEntry>(1000);
   private _logListener?: SecurityLogListener;
   private readonly _dedup = new EventDeduplicator(DEDUP_WINDOW_MS, DEDUP_MAX_SIZE);
+  private _attributionWarningEmitted = false;
 
   // ── Static facade state (fallback when no instance wired) ────────────
   private static _instance: SecurityMonitor | null = null;
@@ -114,6 +115,13 @@ export class SecurityMonitor {
   /** Wire the DI-managed instance. Called once at container startup. */
   static setInstance(instance: SecurityMonitor): void {
     this._instance = instance;
+  }
+
+  /** Release a DI-managed instance without disturbing a newer container. */
+  static clearInstance(instance: SecurityMonitor): void {
+    if (this._instance === instance) {
+      this._instance = null;
+    }
   }
 
   /** Get the active instance (DI-managed or fallback). */
@@ -145,7 +153,7 @@ export class SecurityMonitor {
       return;
     }
 
-    const attributionContext = this._attributionContextProvider?.();
+    const attributionContext = this.getAttributionContext();
     const session = attributionContext?.getSessionContext();
     const correlationId = attributionContext?.getCorrelationId();
     const logEntry: SecurityLogEntry = {
@@ -171,6 +179,18 @@ export class SecurityMonitor {
       if (process.env.DOLLHOUSE_SECURITY_ALERTS === 'true') {
         // Alert mechanism integration point (Slack, PagerDuty, SIEM)
       }
+    }
+  }
+
+  private getAttributionContext(): SecurityAttributionContext | undefined {
+    try {
+      return this._attributionContextProvider?.();
+    } catch {
+      if (!this._attributionWarningEmitted) {
+        this._attributionWarningEmitted = true;
+        logger.warn('Security event attribution unavailable; recording without request context');
+      }
+      return undefined;
     }
   }
 

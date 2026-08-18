@@ -80,6 +80,46 @@ describe('SecurityMonitor', () => {
       }), { replayed: true });
     });
 
+    it('records security events when optional request attribution is unavailable', () => {
+      const monitor = new SecurityMonitor(() => {
+        throw new Error('disposed context tracker');
+      });
+
+      expect(() => monitor.instanceLogSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'runtime-request',
+        details: 'Request completed after attribution teardown',
+      })).not.toThrow();
+
+      expect(monitor.instanceGetRecentEvents()).toEqual([
+        expect.objectContaining({
+          source: 'runtime-request',
+          details: 'Request completed after attribution teardown',
+        }),
+      ]);
+    });
+
+    it('does not clear a newer DI monitor when an older container is disposed', () => {
+      const olderMonitor = new SecurityMonitor();
+      const newerMonitor = new SecurityMonitor();
+      SecurityMonitor.setInstance(olderMonitor);
+      SecurityMonitor.setInstance(newerMonitor);
+
+      SecurityMonitor.clearInstance(olderMonitor);
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'newer-container',
+        details: 'Newer monitor remains active',
+      });
+
+      expect(olderMonitor.instanceGetRecentEvents()).toHaveLength(0);
+      expect(newerMonitor.instanceGetRecentEvents()).toEqual([
+        expect.objectContaining({ source: 'newer-container' }),
+      ]);
+    });
+
     it('should store critical events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',

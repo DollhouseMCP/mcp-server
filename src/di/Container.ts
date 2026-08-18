@@ -203,6 +203,7 @@ interface ServiceRecord<T = unknown> {
 export class DollhouseContainer {
   private services = new Map<string, ServiceRecord>();
   private personasDir: string | null = null;
+  private securityMonitorInstance: SecurityMonitor | null = null;
   /** Issue #706: Set to true once completeDeferredSetup() resolves. */
   public deferredSetupComplete = false;
 
@@ -220,6 +221,8 @@ export class DollhouseContainer {
       details: 'Dependency injection container initializing'
     });
     this.registerServices();
+    const securityMonitor = this.services.get('SecurityMonitor')?.instance;
+    this.securityMonitorInstance = securityMonitor instanceof SecurityMonitor ? securityMonitor : null;
     // Issue #1948: Register LifecycleService in DI if provided
     if (lifecycleService) {
       this.register('LifecycleService', () => lifecycleService);
@@ -2155,6 +2158,7 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    try {
     // Close the HTTP server first so the port is freed immediately (#1856)
     try {
       const { shutdownWebServer } = await import('../web/server.js');
@@ -2176,6 +2180,11 @@ export class DollhouseContainer {
     const disposalPromises = this.buildDisposalPromises();
     const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
     this.reportDisposalFailures(disposalPromises, results);
+    } finally {
+      if (this.securityMonitorInstance) {
+        SecurityMonitor.clearInstance(this.securityMonitorInstance);
+      }
+    }
   }
 
   private buildDisposalPromises(): Array<{ name: string; promise: Promise<void> }> {
