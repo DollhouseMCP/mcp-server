@@ -101,15 +101,23 @@ export class IntegrationDescriptorAuthoringService {
     try {
       parsed = parseDescriptorBody(req.body, 'create');
     } catch (error) {
-      if (error instanceof DescriptorBodyError) return unprocessable(error.message);
+      if (error instanceof DescriptorBodyError) {
+        auditDescriptorDecision('<unresolved>', 'created', 'denied_invalid');
+        return unprocessable(error.message);
+      }
+      auditDescriptorDecision('<unresolved>', 'created', 'failed');
       throw error;
     }
-    if (!parsed.provider) return unprocessable('provider is required');
+    if (!parsed.provider) {
+      auditDescriptorDecision('<unresolved>', 'created', 'denied_invalid');
+      return unprocessable('provider is required');
+    }
     // A boot-registry provider id (bespoke `github` or a curated seed) must
     // not be claimed by a BYO descriptor — it would shadow that provider's
     // routing while the gateway still injects the registry provider's stored
     // credential (deployment-token exfiltration for `github`).
     if (this.options.reservedProviderIds?.has(parsed.provider)) {
+      auditDescriptorDecision(parsed.provider, 'created', 'denied_reserved');
       return conflict(`provider '${parsed.provider}' is reserved by a built-in or curated provider`);
     }
     // A provider id shared with ANY visible descriptor (curated or own BYO)
@@ -118,23 +126,34 @@ export class IntegrationDescriptorAuthoringService {
       auth.userId,
       parsed.provider as UserIntegrationProvider,
     );
-    if (collision) return conflict(`provider '${parsed.provider}' already has a visible descriptor`);
+    if (collision) {
+      auditDescriptorDecision(parsed.provider, 'created', 'denied_conflict');
+      return conflict(`provider '${parsed.provider}' already has a visible descriptor`);
+    }
 
     const secret = this.encryptClientSecret(parsed, auth.userId, null);
-    if (secret === ENCRYPTION_UNAVAILABLE) return encryptionUnavailable();
+    if (secret === ENCRYPTION_UNAVAILABLE) {
+      auditDescriptorDecision(parsed.provider, 'created', 'unavailable');
+      return encryptionUnavailable();
+    }
     const now = this.now();
     try {
       const record = await this.options.descriptorStore.upsert(buildCreateInput(parsed, auth.userId, secret, now, now));
       auditDescriptorDecision(record.provider, 'created', 'allowed');
       return { status: 201, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
-      if (error instanceof ConsoleStoreValidationError) return unprocessable(error.message);
+      if (error instanceof ConsoleStoreValidationError) {
+        auditDescriptorDecision(parsed.provider, 'created', 'denied_invalid');
+        return unprocessable(error.message);
+      }
       // Two concurrent creates for the same (provider, owner) both pass the
       // pre-check under READ COMMITTED; the loser trips the unique constraint.
       // Surface it as the same 409 the pre-check returns, not a 500.
       if (isUniqueViolation(error)) {
+        auditDescriptorDecision(parsed.provider, 'created', 'denied_conflict');
         return conflict(`provider '${parsed.provider}' already has a visible descriptor`);
       }
+      auditDescriptorDecision(parsed.provider, 'created', 'failed');
       throw error;
     }
   }
@@ -149,17 +168,25 @@ export class IntegrationDescriptorAuthoringService {
   async update(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
     const existing = await this.findOwned(singleParamValue(req.params.id), auth.userId);
-    if (!existing) return notFound();
+    if (!existing) {
+      auditDescriptorDecision('<unresolved>', 'updated', 'denied_not_found');
+      return notFound();
+    }
     let parsed: ParsedDescriptorBody;
     try {
       parsed = parseDescriptorBody(req.body, 'patch');
     } catch (error) {
-      if (error instanceof DescriptorBodyError) return unprocessable(error.message);
+      if (error instanceof DescriptorBodyError) {
+        auditDescriptorDecision(existing.provider, 'updated', 'denied_invalid');
+        return unprocessable(error.message);
+      }
+      auditDescriptorDecision(existing.provider, 'updated', 'failed');
       throw error;
     }
     if (parsed.provider !== undefined && parsed.provider !== existing.provider) {
       // The store's upsert identity is (provider, ownership, owner); renaming
       // would strand the old row. Delete + recreate instead.
+      auditDescriptorDecision(existing.provider, 'updated', 'denied_invalid');
       return unprocessable('provider cannot be changed; delete and recreate the descriptor');
     }
 
@@ -176,7 +203,10 @@ export class IntegrationDescriptorAuthoringService {
     // to the real provider. Passing `parsed` here dropped a rotated secret when
     // the PATCH body omitted `provider`.
     const secret = this.encryptClientSecret(merged, auth.userId, preservedSecret(existing, merged));
-    if (secret === ENCRYPTION_UNAVAILABLE) return encryptionUnavailable();
+    if (secret === ENCRYPTION_UNAVAILABLE) {
+      auditDescriptorDecision(existing.provider, 'updated', 'unavailable');
+      return encryptionUnavailable();
+    }
     try {
       const record = await this.options.descriptorStore.upsert(
         buildCreateInput(merged, auth.userId, secret, existing.createdAt, this.now()),
@@ -184,7 +214,11 @@ export class IntegrationDescriptorAuthoringService {
       auditDescriptorDecision(record.provider, 'updated', 'allowed');
       return { status: 200, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
-      if (error instanceof ConsoleStoreValidationError) return unprocessable(error.message);
+      if (error instanceof ConsoleStoreValidationError) {
+        auditDescriptorDecision(existing.provider, 'updated', 'denied_invalid');
+        return unprocessable(error.message);
+      }
+      auditDescriptorDecision(existing.provider, 'updated', 'failed');
       throw error;
     }
   }
@@ -192,39 +226,62 @@ export class IntegrationDescriptorAuthoringService {
   async remove(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
     const id = singleParamValue(req.params.id);
-    if (!isUuidShaped(id)) return notFound();
+    if (!isUuidShaped(id)) {
+      auditDescriptorDecision('<unresolved>', 'deleted', 'denied_not_found');
+      return notFound();
+    }
     const existing = await this.findOwned(id, auth.userId);
-    if (!existing) return notFound();
+    if (!existing) {
+      auditDescriptorDecision('<unresolved>', 'deleted', 'denied_not_found');
+      return notFound();
+    }
     const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
     if (hasIntegrationCredentials(active)) {
       auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
       return connectedDescriptorConflict('deleted');
     }
-    const deleted = await this.options.descriptorStore.delete(id, auth.userId);
-    if (!deleted) return notFound();
-    // Postgres cascades via FK; this keeps in-memory backends equivalent.
-    await this.options.specStore.deleteByDescriptorId(id);
-    auditDescriptorDecision(existing.provider, 'deleted', 'allowed');
-    return { status: 204 };
+    try {
+      const deleted = await this.options.descriptorStore.delete(id, auth.userId);
+      if (!deleted) {
+        auditDescriptorDecision(existing.provider, 'deleted', 'failed');
+        return notFound();
+      }
+      // Postgres cascades via FK; this keeps in-memory backends equivalent.
+      await this.options.specStore.deleteByDescriptorId(id);
+      auditDescriptorDecision(existing.provider, 'deleted', 'allowed');
+      return { status: 204 };
+    } catch (error) {
+      auditDescriptorDecision(existing.provider, 'deleted', 'failed');
+      throw error;
+    }
   }
 
   async putSpec(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
     const descriptor = await this.findOwned(singleParamValue(req.params.id), auth.userId);
-    if (!descriptor) return notFound();
+    if (!descriptor) {
+      auditDescriptorDecision('<unresolved>', 'spec_updated', 'denied_not_found');
+      return notFound();
+    }
     const input = asRecord(req.body);
     if (!input.spec || typeof input.spec !== 'object' || Array.isArray(input.spec)) {
+      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
       return unprocessable('spec must be a JSON object');
     }
     const sourceUrl = input.source_url;
     if (sourceUrl !== undefined && sourceUrl !== null && typeof sourceUrl !== 'string') {
+      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
       return unprocessable('source_url must be a string or null');
     }
     let prepared;
     try {
       prepared = prepareOpenApiSpecForDescriptor(input.spec, descriptor);
     } catch (error) {
-      if (error instanceof IntegrationOperationCatalogError) return catalogError(error);
+      if (error instanceof IntegrationOperationCatalogError) {
+        auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
+        return catalogError(error);
+      }
+      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'failed');
       throw error;
     }
     const now = this.now();
@@ -252,7 +309,11 @@ export class IntegrationDescriptorAuthoringService {
         }),
       };
     } catch (error) {
-      if (error instanceof ConsoleStoreValidationError) return unprocessable(error.message);
+      if (error instanceof ConsoleStoreValidationError) {
+        auditDescriptorDecision(descriptor.provider, 'spec_updated', 'denied_invalid');
+        return unprocessable(error.message);
+      }
+      auditDescriptorDecision(descriptor.provider, 'spec_updated', 'failed');
       throw error;
     }
   }
@@ -627,7 +688,17 @@ function connectedDescriptorConflict(action: 'updated' | 'deleted'): ConsoleHand
   return conflict(`descriptor cannot be ${action} while its integration is connected; disconnect it first`);
 }
 
-function auditDescriptorDecision(provider: string, action: string, outcome: 'allowed' | 'blocked_connected'): void {
+type DescriptorAuditOutcome =
+  | 'allowed'
+  | 'blocked_connected'
+  | 'denied_conflict'
+  | 'denied_invalid'
+  | 'denied_not_found'
+  | 'denied_reserved'
+  | 'failed'
+  | 'unavailable';
+
+function auditDescriptorDecision(provider: string, action: string, outcome: DescriptorAuditOutcome): void {
   SecurityMonitor.logSecurityEvent({
     type: 'INTEGRATION_SECURITY_DECISION',
     severity: outcome === 'allowed' ? 'LOW' : 'MEDIUM',

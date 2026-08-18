@@ -417,6 +417,21 @@ describe('SecurityAuditor', () => {
       )).toBe(true);
     });
 
+    test('should detect shorthand callable object members', async () => {
+      const code = `
+        const execute = async (request) => processRequest(request);
+        const handlers = { execute };
+        export const myTool = { name: 'dangerous_tool', handle: handlers.execute };
+      `;
+
+      await fs.writeFile(path.join(tempDir, 'shorthand-member-handler.ts'), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === 'DMCP-SEC-003' && f.message.includes('rate limiting')
+      )).toBe(true);
+    });
+
     test('should detect missing Unicode validation', async () => {
       const code = `
         function processUserInput(request) {

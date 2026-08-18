@@ -212,21 +212,29 @@ function isCallableHandleExpression(
 function collectObjectCallableMembers(
   ts: TypeScriptApi,
   object: import('typescript').ObjectLiteralExpression,
-): ReadonlySet<string> {
+): {
+  readonly direct: ReadonlySet<string>;
+  readonly pending: readonly { readonly memberName: string; readonly initializer: TsExpression }[];
+} {
   const members = new Set<string>();
+  const pending: Array<{ readonly memberName: string; readonly initializer: TsExpression }> = [];
   for (const property of object.properties) {
     if (ts.isMethodDeclaration(property)) {
       const name = propertyNameText(ts, property.name);
       if (name) members.add(name);
+    } else if (ts.isShorthandPropertyAssignment(property)) {
+      pending.push({ memberName: property.name.text, initializer: property.name });
     } else if (ts.isPropertyAssignment(property)) {
       const initializer = unwrapExpression(ts, property.initializer);
       const name = propertyNameText(ts, property.name);
       if (name && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
         members.add(name);
+      } else if (name) {
+        pending.push({ memberName: name, initializer });
       }
     }
   }
-  return members;
+  return { direct: members, pending };
 }
 
 function collectCallableIdentifiers(
@@ -239,8 +247,13 @@ function collectCallableIdentifiers(
 } {
   const callable = new Set<string>();
   const namespaces = new Set<string>();
-  const members = new Map<string, ReadonlySet<string>>();
+  const members = new Map<string, Set<string>>();
   const aliases: Array<{ readonly name: string; readonly initializer: TsExpression }> = [];
+  const memberAliases: Array<{
+    readonly objectName: string;
+    readonly memberName: string;
+    readonly initializer: TsExpression;
+  }> = [];
   const visit = (node: TsNode): void => {
     if (ts.isFunctionDeclaration(node) && node.name) {
       callable.add(node.name.text);
@@ -258,8 +271,11 @@ function collectCallableIdentifiers(
         callable.add(node.name.text);
       } else if (ts.isObjectLiteralExpression(initializer)) {
         const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
-        if (callableObjectMembers.size > 0) {
-          members.set(node.name.text, callableObjectMembers);
+        if (callableObjectMembers.direct.size > 0) {
+          members.set(node.name.text, new Set(callableObjectMembers.direct));
+        }
+        for (const member of callableObjectMembers.pending) {
+          memberAliases.push({ objectName: node.name.text, ...member });
         }
       } else {
         aliases.push({ name: node.name.text, initializer });
@@ -280,6 +296,20 @@ function collectCallableIdentifiers(
         members,
       )) {
         callable.add(alias.name);
+        changed = true;
+      }
+    }
+    for (const memberAlias of memberAliases) {
+      const objectMembers = members.get(memberAlias.objectName) ?? new Set<string>();
+      if (!objectMembers.has(memberAlias.memberName) && isCallableHandleExpression(
+        ts,
+        memberAlias.initializer,
+        callable,
+        namespaces,
+        members,
+      )) {
+        objectMembers.add(memberAlias.memberName);
+        members.set(memberAlias.objectName, objectMembers);
         changed = true;
       }
     }

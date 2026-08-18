@@ -1,5 +1,7 @@
 import { describe, expect, it } from '@jest/globals';
 
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
+
 import {
   AeadSecretEncryptionService,
   CONSOLE_INTEGRATION_STATE_COOKIE,
@@ -273,6 +275,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 
   it('rejects provider ids colliding with any visible descriptor', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const { service } = fixture();
     await service.create(consoleRequest({ body: oauthBody() }));
 
@@ -310,6 +313,12 @@ describe('IntegrationDescriptorAuthoringService', () => {
     });
     const shadowing = await curatedService.create(consoleRequest({ body: oauthBody() }));
     expect(shadowing.status).toBe(409);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created denied_conflict for provider mycrm'),
+      }),
+    ]));
   });
 
   it('rejects coded strategies, reserved provider ids, and store-invalid descriptors with 422', async () => {
@@ -358,6 +367,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 
   it('rejects provider ids reserved by a built-in or curated boot-registry provider', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     // github is a bespoke registry provider with no descriptor; a BYO github
     // would route the deployment-brokered GitHub token to a chosen host.
     const { service } = fixture({ reservedProviderIds: new Set(['github', 'gmail']) });
@@ -374,6 +384,12 @@ describe('IntegrationDescriptorAuthoringService', () => {
     // The store also refuses github directly (belt), independent of the registry.
     const storeReserved = await service.create(consoleRequest({ body: oauthBody({ provider: 'github' }) }));
     expect([409, 422]).toContain(storeReserved.status);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created denied_reserved for provider github'),
+      }),
+    ]));
   });
 
   it('stores a rotated client secret when the PATCH body omits provider', async () => {
