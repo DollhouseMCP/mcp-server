@@ -237,53 +237,74 @@ function collectObjectCallableMembers(
   return { direct: members, pending };
 }
 
-function collectCallableIdentifiers(
+type CallableAlias = { readonly name: string; readonly initializer: TsExpression };
+type CallableMemberAlias = {
+  readonly objectName: string;
+  readonly memberName: string;
+  readonly initializer: TsExpression;
+};
+
+function collectCallableVariable(
   ts: TypeScriptApi,
-  source: import('typescript').SourceFile,
-): {
-  readonly identifiers: ReadonlySet<string>;
-  readonly namespaces: ReadonlySet<string>;
-  readonly members: ReadonlyMap<string, ReadonlySet<string>>;
-} {
-  const callable = new Set<string>();
-  const namespaces = new Set<string>();
-  const members = new Map<string, Set<string>>();
-  const aliases: Array<{ readonly name: string; readonly initializer: TsExpression }> = [];
-  const memberAliases: Array<{
-    readonly objectName: string;
-    readonly memberName: string;
-    readonly initializer: TsExpression;
-  }> = [];
-  const visit = (node: TsNode): void => {
-    if (ts.isFunctionDeclaration(node) && node.name) {
-      callable.add(node.name.text);
-    } else if (ts.isImportClause(node) && node.name) {
-      // Default imports are opaque without resolving another module. Treat
-      // them conservatively when assigned to a tool's handle property.
-      callable.add(node.name.text);
-    } else if (ts.isImportSpecifier(node)) {
-      callable.add(node.name.text);
-    } else if (ts.isNamespaceImport(node)) {
-      namespaces.add(node.name.text);
-    } else if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer) {
-      const initializer = unwrapExpression(ts, node.initializer);
-      if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
-        callable.add(node.name.text);
-      } else if (ts.isObjectLiteralExpression(initializer)) {
-        const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
-        if (callableObjectMembers.direct.size > 0) {
-          members.set(node.name.text, new Set(callableObjectMembers.direct));
-        }
-        for (const member of callableObjectMembers.pending) {
-          memberAliases.push({ objectName: node.name.text, ...member });
-        }
-      } else {
-        aliases.push({ name: node.name.text, initializer });
-      }
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(source);
+  node: import('typescript').VariableDeclaration,
+  callable: Set<string>,
+  members: Map<string, Set<string>>,
+  aliases: CallableAlias[],
+  memberAliases: CallableMemberAlias[],
+): void {
+  if (!ts.isIdentifier(node.name) || !node.initializer) return;
+
+  const initializer = unwrapExpression(ts, node.initializer);
+  if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+    callable.add(node.name.text);
+    return;
+  }
+  if (!ts.isObjectLiteralExpression(initializer)) {
+    aliases.push({ name: node.name.text, initializer });
+    return;
+  }
+
+  const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
+  if (callableObjectMembers.direct.size > 0) {
+    members.set(node.name.text, new Set(callableObjectMembers.direct));
+  }
+  for (const member of callableObjectMembers.pending) {
+    memberAliases.push({ objectName: node.name.text, ...member });
+  }
+}
+
+function collectCallableNode(
+  ts: TypeScriptApi,
+  node: TsNode,
+  callable: Set<string>,
+  namespaces: Set<string>,
+  members: Map<string, Set<string>>,
+  aliases: CallableAlias[],
+  memberAliases: CallableMemberAlias[],
+): void {
+  if (ts.isFunctionDeclaration(node) && node.name) {
+    callable.add(node.name.text);
+  } else if (ts.isImportClause(node) && node.name) {
+    // Default imports are opaque without resolving another module. Treat
+    // them conservatively when assigned to a tool's handle property.
+    callable.add(node.name.text);
+  } else if (ts.isImportSpecifier(node)) {
+    callable.add(node.name.text);
+  } else if (ts.isNamespaceImport(node)) {
+    namespaces.add(node.name.text);
+  } else if (ts.isVariableDeclaration(node)) {
+    collectCallableVariable(ts, node, callable, members, aliases, memberAliases);
+  }
+}
+
+function resolveCallableAliases(
+  ts: TypeScriptApi,
+  callable: Set<string>,
+  namespaces: ReadonlySet<string>,
+  members: Map<string, Set<string>>,
+  aliases: readonly CallableAlias[],
+  memberAliases: readonly CallableMemberAlias[],
+): void {
   let changed = true;
   while (changed) {
     changed = false;
@@ -314,6 +335,27 @@ function collectCallableIdentifiers(
       }
     }
   }
+}
+
+function collectCallableIdentifiers(
+  ts: TypeScriptApi,
+  source: import('typescript').SourceFile,
+): {
+  readonly identifiers: ReadonlySet<string>;
+  readonly namespaces: ReadonlySet<string>;
+  readonly members: ReadonlyMap<string, ReadonlySet<string>>;
+} {
+  const callable = new Set<string>();
+  const namespaces = new Set<string>();
+  const members = new Map<string, Set<string>>();
+  const aliases: CallableAlias[] = [];
+  const memberAliases: CallableMemberAlias[] = [];
+  const visit = (node: TsNode): void => {
+    collectCallableNode(ts, node, callable, namespaces, members, aliases, memberAliases);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  resolveCallableAliases(ts, callable, namespaces, members, aliases, memberAliases);
   return { identifiers: callable, namespaces, members };
 }
 
