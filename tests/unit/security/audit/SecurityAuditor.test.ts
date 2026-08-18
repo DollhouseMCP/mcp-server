@@ -374,6 +374,33 @@ describe('SecurityAuditor', () => {
       )).toBe(true);
     });
 
+    test.each([
+      ['factory call', `
+        function createHandler() { return async (request) => processRequest(request); }
+        export const myTool = { name: 'dangerous_tool', handle: createHandler() };
+      `],
+      ['conditional callable', `
+        const primary = async (request) => processRequest(request);
+        const fallback = async (request) => fallbackRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: enabled ? primary : fallback };
+      `],
+      ['local bracket member', `
+        const handlers = { execute: async (request) => processRequest(request) };
+        export const myTool = { name: 'dangerous_tool', handle: handlers['execute'] };
+      `],
+      ['namespace bracket member', `
+        import * as handlers from './handlers.js';
+        export const myTool = { name: 'dangerous_tool', handle: handlers['execute'] };
+      `],
+    ])('should detect a delegated MCP tool handler from a %s', async (label, code) => {
+      await fs.writeFile(path.join(tempDir, `${label.replaceAll(' ', '-')}.ts`), code);
+      const result = await detectAuditor.audit(tempDir);
+
+      expect(result.findings.some(f =>
+        f.ruleId === 'DMCP-SEC-003' && f.message.includes('rate limiting')
+      )).toBe(true);
+    });
+
     test('should detect missing Unicode validation', async () => {
       const code = `
         function processUserInput(request) {

@@ -156,15 +156,57 @@ function objectHasCallableHandle(
     if (!ts.isPropertyAssignment(property) || propertyNameText(ts, property.name) !== 'handle') {
       return false;
     }
-    const initializer = unwrapExpression(ts, property.initializer);
-    return ts.isArrowFunction(initializer)
-      || ts.isFunctionExpression(initializer)
-      || (ts.isIdentifier(initializer) && callableIdentifiers.has(initializer.text))
-      || (ts.isPropertyAccessExpression(initializer)
-        && ts.isIdentifier(initializer.expression)
-        && (callableNamespaces.has(initializer.expression.text)
-          || callableMembers.get(initializer.expression.text)?.has(initializer.name.text) === true));
+    return isCallableHandleExpression(
+      ts,
+      property.initializer,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    );
   });
+}
+
+function isCallableHandleExpression(
+  ts: TypeScriptApi,
+  expression: TsExpression,
+  callableIdentifiers: ReadonlySet<string>,
+  callableNamespaces: ReadonlySet<string>,
+  callableMembers: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  const candidate = unwrapExpression(ts, expression);
+  if (ts.isArrowFunction(candidate) || ts.isFunctionExpression(candidate) || ts.isCallExpression(candidate)) {
+    return true;
+  }
+  if (ts.isIdentifier(candidate)) {
+    return callableIdentifiers.has(candidate.text);
+  }
+  if (ts.isPropertyAccessExpression(candidate) && ts.isIdentifier(candidate.expression)) {
+    return callableNamespaces.has(candidate.expression.text)
+      || callableMembers.get(candidate.expression.text)?.has(candidate.name.text) === true;
+  }
+  if (ts.isElementAccessExpression(candidate)
+    && ts.isIdentifier(candidate.expression)
+    && candidate.argumentExpression
+    && ts.isStringLiteralLike(candidate.argumentExpression)) {
+    return callableNamespaces.has(candidate.expression.text)
+      || callableMembers.get(candidate.expression.text)?.has(candidate.argumentExpression.text) === true;
+  }
+  if (ts.isConditionalExpression(candidate)) {
+    return isCallableHandleExpression(
+      ts,
+      candidate.whenTrue,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    ) && isCallableHandleExpression(
+      ts,
+      candidate.whenFalse,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    );
+  }
+  return false;
 }
 
 function collectObjectCallableMembers(
