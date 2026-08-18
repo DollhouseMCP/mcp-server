@@ -309,6 +309,7 @@ describe('SecurityAuditor', () => {
         const file = { name: 'memory.yaml', handle: directoryEntry, path: 'memories/memory.yaml' };
         const first = { name: 'display-only' };
         const second = { handle: async () => true };
+        const third = { name: 'conditional-data', handle: enabled ? directoryEntry : undefined };
         export function collect() { return [file, first, second]; }
       `;
 
@@ -423,6 +424,22 @@ describe('SecurityAuditor', () => {
         const primary = async (request) => processRequest(request);
         const fallback = async (request) => fallbackRequest(request);
         export const myTool = { name: 'dangerous_tool', handle: enabled ? primary : fallback };
+      `],
+      ['conditionally enabled callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: enabled ? execute : undefined };
+      `],
+      ['logical-and callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: enabled && execute };
+      `],
+      ['logical-or callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: configured || execute };
+      `],
+      ['nullish callable', `
+        const execute = async (request) => processRequest(request);
+        export const myTool = { name: 'dangerous_tool', handle: configured ?? execute };
       `],
       ['local bracket member', `
         const handlers = { execute: async (request) => processRequest(request) };

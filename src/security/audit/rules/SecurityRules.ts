@@ -198,7 +198,7 @@ function isCallableHandleExpression(
       callableIdentifiers,
       callableNamespaces,
       callableMembers,
-    ) && isCallableHandleExpression(
+    ) || isCallableHandleExpression(
       ts,
       candidate.whenFalse,
       callableIdentifiers,
@@ -206,7 +206,28 @@ function isCallableHandleExpression(
       callableMembers,
     );
   }
+  if (ts.isBinaryExpression(candidate) && isConditionalHandlerOperator(ts, candidate.operatorToken.kind)) {
+    return isCallableHandleExpression(
+      ts,
+      candidate.left,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    ) || isCallableHandleExpression(
+      ts,
+      candidate.right,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    );
+  }
   return false;
+}
+
+function isConditionalHandlerOperator(ts: TypeScriptApi, kind: import('typescript').SyntaxKind): boolean {
+  return kind === ts.SyntaxKind.AmpersandAmpersandToken
+    || kind === ts.SyntaxKind.BarBarToken
+    || kind === ts.SyntaxKind.QuestionQuestionToken;
 }
 
 function collectObjectCallableMembers(
