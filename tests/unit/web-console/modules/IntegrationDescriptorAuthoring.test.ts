@@ -417,6 +417,13 @@ describe('IntegrationDescriptorAuthoringService', () => {
       status: 409,
       body: { code: 'integration_descriptor_conflict' },
     });
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { operation_promotion: { operations: ['records.list'] } },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_conflict' },
+    });
     await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
       .resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
 
@@ -446,6 +453,27 @@ describe('IntegrationDescriptorAuthoringService', () => {
     }))).resolves.toMatchObject({ status: 200 });
     await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
       .resolves.toMatchObject({ status: 204 });
+  });
+
+  it('blocks descriptor changes when refresh failed but encrypted credentials remain', async () => {
+    const { service, integrationStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+    await connectFixtureIntegration(integrationStore, MYCRM);
+    await integrationStore.refresh({
+      userId: USER_ID,
+      provider: MYCRM,
+      staleAccessTokenCiphertext: Buffer.from('encrypted-test-token'),
+      refreshedAt: NOW,
+      refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'token_refresh_failed' }),
+    });
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.mycrm.example'] },
+    }))).resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
   });
 
   it('rejects PATCH and DELETE by non-owner and on curated descriptors', async () => {

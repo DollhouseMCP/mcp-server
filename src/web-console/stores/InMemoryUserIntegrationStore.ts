@@ -124,6 +124,25 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     return cloneUserIntegrationRecord(disconnected);
   }
 
+  async revokeAllByProvider(provider: UserIntegrationProvider, revokedAt: Date): Promise<number> {
+    await Promise.resolve();
+    let revoked = 0;
+    for (const record of this.records.values()) {
+      if (record.provider !== provider || record.revokedAt !== null) continue;
+      this.records.set(record.id, cloneUserIntegrationRecord({
+        ...record,
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status: 'revoked',
+        errorReason: null,
+        revokedAt,
+      }));
+      this.activeProviderIndex.delete(activeProviderKey(record.userId, provider));
+      revoked++;
+    }
+    return revoked;
+  }
+
   set(record: UserIntegrationRecord): void {
     validateUserIntegrationRecord(record);
     const cloned = cloneUserIntegrationRecord(record);

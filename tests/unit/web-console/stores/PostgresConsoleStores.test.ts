@@ -757,6 +757,21 @@ describe('PostgresUserIntegrationStore', () => {
     });
   });
 
+  it('clears all credential material when revoking a withdrawn provider', async () => {
+    const chain = returningChain([{ id: INTEGRATION_ID }, { id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4' }]);
+    transaction.update = jest.fn(() => chain);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.revokeAllByProvider('linear', FIVE_MINUTES)).resolves.toBe(2);
+    expect(chain.set).toHaveBeenCalledWith({
+      accessTokenCiphertext: null,
+      refreshTokenCiphertext: null,
+      status: 'revoked',
+      errorReason: null,
+      revokedAt: FIVE_MINUTES,
+    });
+  });
+
   it('locks an active integration before updating refreshed credentials', async () => {
     const updated = userIntegrationRow({
       provider: 'linear',

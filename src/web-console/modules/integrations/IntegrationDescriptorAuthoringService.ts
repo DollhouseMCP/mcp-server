@@ -27,7 +27,7 @@ import type {
   IUserIntegrationStore,
   UserIntegrationProvider,
 } from '../../stores/IUserIntegrationStore.js';
-import { isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
+import { hasIntegrationCredentials } from '../../stores/IUserIntegrationStore.js';
 import {
   serializeIntegrationDescriptor,
   serializeIntegrationDescriptorList,
@@ -163,7 +163,7 @@ export class IntegrationDescriptorAuthoringService {
     const merged = mergeDescriptor(existing, parsed);
     if (hasCredentialRoutingChanges(parsed)) {
       const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-      if (isIntegrationConnected(active)) return connectedDescriptorConflict('updated');
+      if (hasIntegrationCredentials(active)) return connectedDescriptorConflict('updated');
     }
     // Use `merged` (not `parsed`): it carries `mergedProvider = existing.provider`
     // so encryptClientSecret's provider guard never misfires and the AAD binds
@@ -189,7 +189,7 @@ export class IntegrationDescriptorAuthoringService {
     const existing = await this.findOwned(id, auth.userId);
     if (!existing) return notFound();
     const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-    if (isIntegrationConnected(active)) return connectedDescriptorConflict('deleted');
+    if (hasIntegrationCredentials(active)) return connectedDescriptorConflict('deleted');
     const deleted = await this.options.descriptorStore.delete(id, auth.userId);
     if (!deleted) return notFound();
     // Postgres cascades via FK; this keeps in-memory backends equivalent.
@@ -486,6 +486,8 @@ function mergeDescriptor(
 }
 
 function hasCredentialRoutingChanges(parsed: ParsedDescriptorBody): boolean {
+  // Promotion selects which remote operations receive the stored credential,
+  // so changing it is a routing change even though the credential is unchanged.
   return parsed.authStrategy !== undefined
     || parsed.apiHosts !== undefined
     || parsed.oauth !== undefined

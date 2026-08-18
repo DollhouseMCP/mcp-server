@@ -10,6 +10,7 @@ import {
 import { integrationDescriptorClientSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import { InMemoryIntegrationDescriptorStore } from '../../../../src/web-console/stores/InMemoryIntegrationDescriptorStore.js';
+import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
 
 const VISIBLE_USER = '11111111-1111-4111-8111-111111111111';
 const FIXED_NOW = new Date('2026-06-24T00:00:00.000Z');
@@ -68,6 +69,10 @@ const credentials = (
 ): IntegrationDescriptorSeedCredentialResolver =>
   provider => map[provider] ?? { clientId: null, clientSecret: null };
 
+function loaderOptions(integrationStore = new InMemoryUserIntegrationStore()) {
+  return { now: () => FIXED_NOW, integrationStore };
+}
+
 describe('IntegrationDescriptorSeedLoader', () => {
   it('loads a curated OAuth descriptor, injecting clientId and encrypting the client secret', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
@@ -78,7 +83,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       encryption,
       credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
-      { now: () => FIXED_NOW },
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();
@@ -110,7 +115,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       newEncryption(),
       credentials({}),
-      { now: () => FIXED_NOW },
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();
@@ -123,26 +128,38 @@ describe('IntegrationDescriptorSeedLoader', () => {
   it('removes a previously persisted curated OAuth descriptor when credentials are withdrawn', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
     const encryption = newEncryption();
     const configured = new IntegrationDescriptorSeedLoader(
       dir,
       store,
       encryption,
       credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
-      { now: () => FIXED_NOW },
+      loaderOptions(integrationStore),
     );
     await configured.loadSeeds();
     await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.not.toBeNull();
+    await integrationStore.connect({
+      userId: VISIBLE_USER,
+      provider: 'examplecorp',
+      externalAccountLabel: 'visible-user',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['read'] },
+      accessTokenCiphertext: Buffer.from('encrypted-access'),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh'),
+      connectedAt: FIXED_NOW,
+    });
 
     const disabled = new IntegrationDescriptorSeedLoader(
       dir,
       store,
       encryption,
       credentials({}),
-      { now: () => FIXED_NOW },
+      loaderOptions(integrationStore),
     );
     await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
     await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
   });
 
   it('loads a curated static-API-key descriptor without deployment credentials', async () => {
@@ -153,7 +170,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       newEncryption(),
       credentials({}),
-      { now: () => FIXED_NOW },
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();
@@ -179,7 +196,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       newEncryption(),
       credentials({}),
-      { now: () => FIXED_NOW },
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();
@@ -202,7 +219,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       newEncryption(),
       credentials({}),
-      { now: () => FIXED_NOW },
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();
@@ -219,6 +236,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       newEncryption(),
       credentials({ github: { clientId: 'x', clientSecret: 'y' } }),
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();
@@ -238,7 +256,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       newEncryption(),
       credentials({ examplecorp: { clientId: 'id', clientSecret: 'secret' } }),
-      { now: () => FIXED_NOW },
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();
@@ -254,6 +272,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
       store,
       newEncryption(),
       credentials({}),
+      loaderOptions(),
     );
 
     const result = await loader.loadSeeds();

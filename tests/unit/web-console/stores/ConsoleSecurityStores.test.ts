@@ -520,6 +520,27 @@ describe('InMemoryUserIntegrationStore', () => {
     });
   });
 
+  it('revokes and clears every active credential for a withdrawn provider', async () => {
+    const store = new InMemoryUserIntegrationStore([
+      userIntegration({ provider: 'linear', authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] } }),
+      userIntegration({
+        id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4',
+        userId: SECOND_USER_ID,
+        provider: 'linear',
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      }),
+      userIntegration({
+        id: '55e22a52-dc56-4cd0-9d13-b2802524fbd5',
+        provider: 'github',
+      }),
+    ]);
+
+    await expect(store.revokeAllByProvider('linear', FIVE_MINUTES)).resolves.toBe(2);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(SECOND_USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({ status: 'connected' });
+  });
+
   it('validates integration records before storing them', () => {
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
       authorizedPermissions: {
