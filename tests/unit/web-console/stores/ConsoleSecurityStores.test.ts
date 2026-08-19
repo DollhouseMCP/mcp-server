@@ -677,6 +677,18 @@ describe('InMemoryIntegrationDescriptorStore', () => {
 
     const resolved = await store.findVisibleByProvider(USER_ID, 'shared');
     expect(resolved).toMatchObject({ ownership: 'curated', apiHosts: ['curated.example.com'] });
+    await expect(store.findCuratedByProvider('shared')).resolves.toMatchObject({
+      ownership: 'curated',
+      ownerUserId: null,
+      apiHosts: ['curated.example.com'],
+    });
+  });
+
+  it('does not resolve a same-provider BYO descriptor as curated', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    await store.upsert(oauthDescriptorInput({ provider: 'shared' }));
+
+    await expect(store.findCuratedByProvider('shared')).resolves.toBeNull();
   });
 
   it('rejects invalid pagination limits and cursors', async () => {

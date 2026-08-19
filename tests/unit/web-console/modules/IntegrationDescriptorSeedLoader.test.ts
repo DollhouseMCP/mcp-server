@@ -74,6 +74,44 @@ function loaderOptions(integrationStore = new InMemoryUserIntegrationStore()) {
   return { now: () => FIXED_NOW, integrationStore };
 }
 
+function byoExampleCorpDescriptor(apiHost: string) {
+  return {
+    provider: 'examplecorp',
+    ownership: 'byo' as const,
+    ownerUserId: VISIBLE_USER,
+    displayName: 'User-owned Example Corp',
+    category: 'Productivity',
+    authStrategy: 'static_api_key' as const,
+    apiHosts: [apiHost],
+    staticApiKey: {
+      injection: { location: 'header' as const, name: 'X-Api-Key', valuePrefix: null },
+    },
+    createdAt: FIXED_NOW,
+    updatedAt: FIXED_NOW,
+  };
+}
+
+function connectExampleCorp(
+  integrationStore: InMemoryUserIntegrationStore,
+  input: {
+    readonly accountLabel: string;
+    readonly scopes: readonly string[];
+    readonly accessToken: string;
+    readonly refreshToken?: string | null;
+  },
+) {
+  return integrationStore.connect({
+    userId: VISIBLE_USER,
+    provider: 'examplecorp',
+    externalAccountLabel: input.accountLabel,
+    externalInstallationId: null,
+    authorizedPermissions: { scopes: input.scopes },
+    accessTokenCiphertext: Buffer.from(input.accessToken),
+    refreshTokenCiphertext: input.refreshToken ? Buffer.from(input.refreshToken) : null,
+    connectedAt: FIXED_NOW,
+  });
+}
+
 describe('IntegrationDescriptorSeedLoader', () => {
   it('loads a curated OAuth descriptor, injecting clientId and encrypting the client secret', async () => {
     SecurityMonitor.clearAllEventsForTesting();
@@ -165,6 +203,74 @@ describe('IntegrationDescriptorSeedLoader', () => {
     );
     await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
     await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+  });
+
+  it('does not revoke a same-provider BYO integration when no curated descriptor exists', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
+    await store.upsert(byoExampleCorpDescriptor('api.examplecorp.test'));
+    await connectExampleCorp(integrationStore, {
+      accountLabel: 'user-owned',
+      scopes: [],
+      accessToken: 'encrypted-byo-key',
+    });
+
+    const loader = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      newEncryption(),
+      credentials({}),
+      loaderOptions(integrationStore),
+    );
+
+    await expect(loader.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      ownership: 'byo',
+      ownerUserId: VISIBLE_USER,
+    });
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('encrypted-byo-key'),
+    });
+  });
+
+  it('revokes credentials before a same-provider BYO route is revealed', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
+    const encryption = newEncryption();
+    const configured = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
+      loaderOptions(integrationStore),
+    );
+    await configured.loadSeeds();
+    await store.upsert(byoExampleCorpDescriptor('byo.examplecorp.test'));
+    await connectExampleCorp(integrationStore, {
+      accountLabel: 'curated-route-user',
+      scopes: ['read'],
+      accessToken: 'encrypted-curated-access',
+      refreshToken: 'encrypted-curated-refresh',
+    });
+
+    const disabled = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({}),
+      loaderOptions(integrationStore),
+    );
+
+    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      ownership: 'byo',
+      apiHosts: ['byo.examplecorp.test'],
+    });
     await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
   });
 

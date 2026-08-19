@@ -961,6 +961,22 @@ describe('PostgresIntegrationDescriptorStore', () => {
     await expect(store.findById(DESCRIPTOR_ID, 'not-a-uuid')).rejects.toThrow(ConsoleStoreValidationError);
   });
 
+  it('finds only deployment-owned curated descriptors by provider', async () => {
+    const chain = selectingChain([integrationDescriptorRow({
+      ownership: 'curated',
+      ownerUserId: null,
+    })]);
+    transaction.select = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.findCuratedByProvider('gmail')).resolves.toMatchObject({
+      provider: 'gmail',
+      ownership: 'curated',
+      ownerUserId: null,
+    });
+    expect(chain.limit).toHaveBeenCalledWith(1);
+  });
+
   it('deletes descriptors owner-scoped and reports whether a row was removed', async () => {
     transaction.delete = jest.fn(() => deletingChain([{ id: DESCRIPTOR_ID }]));
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);

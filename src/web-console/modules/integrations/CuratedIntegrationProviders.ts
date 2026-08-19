@@ -20,8 +20,10 @@ import type {
   IIntegrationDescriptorStore,
   IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
-import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
-import type { IUserIntegrationStore } from '../../stores/IUserIntegrationStore.js';
+import type {
+  IUserIntegrationStore,
+  UserIntegrationProvider,
+} from '../../stores/IUserIntegrationStore.js';
 import { ConfiguredOAuthIntegrationProvider } from './ConfiguredOAuthIntegrationProvider.js';
 import type { DnsLookup } from './IntegrationPublicHostGuard.js';
 import type { PinnedOutboundFactory } from './PinnedOutboundFactory.js';

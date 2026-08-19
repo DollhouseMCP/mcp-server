@@ -89,6 +89,19 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     return rows[0] ? fromDescriptorRow(rows[0]) : null;
   }
 
+  async findCuratedByProvider(
+    provider: UserIntegrationProvider,
+  ): Promise<IntegrationDescriptorRecord | null> {
+    const rows = await withSystemContext(this.db, tx =>
+      tx.select().from(integrationProviderDescriptors).where(and(
+        eq(integrationProviderDescriptors.provider, provider),
+        eq(integrationProviderDescriptors.ownership, 'curated'),
+        isNull(integrationProviderDescriptors.ownerUserId),
+      )).limit(1),
+    );
+    return rows[0] ? fromDescriptorRow(rows[0]) : null;
+  }
+
   async findById(id: string, userId: string): Promise<IntegrationDescriptorRecord | null> {
     assertUuid(id, 'id');
     assertUuid(userId, 'userId');

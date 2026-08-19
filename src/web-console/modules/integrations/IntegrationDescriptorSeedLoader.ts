@@ -168,22 +168,33 @@ export class IntegrationDescriptorSeedLoader {
 
     const input = this.toDescriptorInput(seed, provider);
     if (!input) {
-      const revoked = await this.integrationStore.revokeAllByProvider(
+      // Provider ids are shared by curated and user-owned descriptors. Curated
+      // records win runtime resolution, so their active provider credentials
+      // must be revoked before removal or they could become usable under a
+      // newly revealed same-name BYO route. Without a persisted curated record,
+      // however, the credentials belong to the BYO route and stay untouched.
+      const curated = await this.descriptorStore.findCuratedByProvider(
         provider as UserIntegrationProvider,
+      );
+      if (!curated) return null;
+
+      const revoked = await this.integrationStore.revokeAllByProvider(
+        curated.provider,
         this.now(),
       );
-      const removed = await this.descriptorStore.deleteCurated(provider as UserIntegrationProvider);
-      if (removed) {
-        SecurityMonitor.logSecurityEvent({
-          type: 'INTEGRATION_SECURITY_DECISION',
-          severity: 'MEDIUM',
-          source: 'IntegrationDescriptorSeedLoader.processSeedFile',
-          details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(provider)}`,
-        });
-        logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${safeIntegrationAuditProvider(provider)}' because deployment credentials are unavailable`, {
-          revokedIntegrations: revoked,
-        });
+      const removed = await this.descriptorStore.deleteCurated(curated.provider);
+      if (!removed) {
+        throw new Error('curated integration descriptor disappeared during credential withdrawal');
       }
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(curated.provider)}`,
+      });
+      logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${safeIntegrationAuditProvider(curated.provider)}' because deployment credentials are unavailable`, {
+        revokedIntegrations: revoked,
+      });
       return null;
     }
 
