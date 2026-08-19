@@ -13,13 +13,17 @@
  * @module web-console/modules/integrations/CuratedIntegrationProviders
  */
 
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { logger } from '../../../utils/logger.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type {
   IIntegrationDescriptorStore,
   IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
-import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import type {
+  IUserIntegrationStore,
+  UserIntegrationProvider,
+} from '../../stores/IUserIntegrationStore.js';
 import { ConfiguredOAuthIntegrationProvider } from './ConfiguredOAuthIntegrationProvider.js';
 import type { DnsLookup } from './IntegrationPublicHostGuard.js';
 import type { PinnedOutboundFactory } from './PinnedOutboundFactory.js';
@@ -29,6 +33,7 @@ import {
 } from './IntegrationDescriptorSeedLoader.js';
 import type { IIntegrationProvider } from './IntegrationProvider.js';
 import { integrationDescriptorClientSecretContext } from './IntegrationSecretContext.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import { StaticApiKeyIntegrationProvider } from './StaticApiKeyIntegrationProvider.js';
 
 const ENV_PREFIX = 'DOLLHOUSE_INTEGRATION_';
@@ -75,8 +80,14 @@ export function buildConfiguredIntegrationProviders(
   for (const descriptor of descriptors) {
     try {
       const provider = buildIntegrationProviderFromDescriptor(descriptor, secretEncryption, outbound);
-      if (provider) providers.push(provider);
+      if (provider) {
+        providers.push(provider);
+        auditProviderBuild(descriptor.provider, 'configured');
+      } else {
+        auditProviderBuild(descriptor.provider, 'unsupported');
+      }
     } catch (err) {
+      auditProviderBuild(descriptor.provider, 'failed');
       logger.error(
         `[CuratedIntegrationProviders] Skipping descriptor '${descriptor.provider}' — provider build failed`,
         { error: err instanceof Error ? err.message : String(err) },
@@ -108,8 +119,11 @@ export function createStoreIntegrationProviderResolver(params: {
     const descriptor = await params.descriptorStore.findVisibleByProvider(userId, providerId);
     if (!descriptor) return null;
     try {
-      return buildIntegrationProviderFromDescriptor(descriptor, params.secretEncryption, params.outbound ?? {});
+      const provider = buildIntegrationProviderFromDescriptor(descriptor, params.secretEncryption, params.outbound ?? {});
+      auditProviderBuild(descriptor.provider, provider ? 'configured' : 'unsupported');
+      return provider;
     } catch (err) {
+      auditProviderBuild(descriptor.provider, 'failed');
       logger.error(
         `[CuratedIntegrationProviders] Per-request provider build failed for '${descriptor.provider}'`,
         { error: err instanceof Error ? err.message : String(err) },
@@ -152,6 +166,7 @@ export function buildIntegrationProviderFromDescriptor(
 export interface LoadCuratedIntegrationProvidersParams {
   readonly seedDir: string | null | undefined;
   readonly descriptorStore: IIntegrationDescriptorStore;
+  readonly integrationStore: IUserIntegrationStore;
   readonly secretEncryption: ISecretEncryptionService;
   readonly now?: () => Date;
   /** Overridable for tests; defaults to reading deployment credentials from process.env. */
@@ -174,8 +189,20 @@ export async function loadCuratedIntegrationProviders(
     params.descriptorStore,
     params.secretEncryption,
     params.credentialResolver ?? createEnvIntegrationDescriptorCredentialResolver(),
-    params.now ? { now: params.now } : {},
+    {
+      integrationStore: params.integrationStore,
+      ...(params.now ? { now: params.now } : {}),
+    },
   );
   const { descriptors } = await loader.loadSeeds();
   return buildConfiguredIntegrationProviders(descriptors, params.secretEncryption, params.outbound ?? {});
+}
+
+function auditProviderBuild(provider: string, outcome: 'configured' | 'unsupported' | 'failed'): void {
+  SecurityMonitor.logSecurityEvent({
+    type: 'INTEGRATION_SECURITY_DECISION',
+    severity: outcome === 'configured' ? 'LOW' : 'MEDIUM',
+    source: 'CuratedIntegrationProviders',
+    details: `Integration provider build ${outcome} for provider ${safeIntegrationAuditProvider(provider)}`,
+  });
 }

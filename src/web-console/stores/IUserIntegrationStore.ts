@@ -27,6 +27,7 @@ export interface UserIntegrationRecord {
   readonly id: string;
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId?: string | null;
   readonly externalAccountLabel: string | null;
   readonly externalInstallationId: string | null;
   readonly authorizedPermissions: Readonly<Record<string, unknown>>;
@@ -52,6 +53,22 @@ export function isIntegrationConnected(
   return record?.status === 'connected' && record.revokedAt === null;
 }
 
+/** A configured credential may only be used by the descriptor that created it. */
+export function isIntegrationConnectedToDescriptor(
+  record: UserIntegrationRecord | null,
+  descriptorId: string,
+): record is UserIntegrationRecord {
+  return isIntegrationConnected(record) && record.integrationDescriptorId === descriptorId;
+}
+
+/** True while an unrevoked row still holds credential material requiring cleanup. */
+export function hasIntegrationCredentials(
+  record: UserIntegrationRecord | null,
+): record is UserIntegrationRecord {
+  return record?.revokedAt === null
+    && (record.accessTokenCiphertext !== null || record.refreshTokenCiphertext !== null);
+}
+
 export interface IUserIntegrationStore {
   listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
@@ -59,11 +76,13 @@ export interface IUserIntegrationStore {
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
+  revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number>;
 }
 
 export interface UserIntegrationConnectInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId?: string | null;
   readonly externalAccountLabel: string | null;
   readonly externalInstallationId: string | null;
   readonly authorizedPermissions: Readonly<Record<string, unknown>>;
@@ -76,6 +95,7 @@ export interface UserIntegrationConnectInput {
 export interface UserIntegrationRefreshInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId: string | null;
   readonly staleAccessTokenCiphertext: Buffer;
   readonly refreshedAt: Date;
   readonly refresh: (record: UserIntegrationRecord) => Promise<UserIntegrationRefreshDecision>;
@@ -108,6 +128,7 @@ export interface UserIntegrationDisconnectInput {
 export interface UserIntegrationErrorInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId?: string | null;
   readonly errorReason: UserIntegrationErrorReason;
   readonly occurredAt: Date;
 }
@@ -116,6 +137,9 @@ export function validateUserIntegrationRecord(record: UserIntegrationRecord): vo
   assertUuid(record.id, 'id');
   assertUuid(record.userId, 'userId');
   assertUserIntegrationProvider(record.provider);
+  if (record.integrationDescriptorId) {
+    assertUuid(record.integrationDescriptorId, 'integrationDescriptorId');
+  }
   if (!['connected', 'revoked', 'error'].includes(record.status)) {
     throw new ConsoleStoreValidationError(`unsupported integration status '${record.status}'`);
   }

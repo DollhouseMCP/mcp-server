@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import {
   InMemoryIntegrationDescriptorStore,
@@ -28,6 +29,24 @@ const PRIVATE_IP = ['10', '0', '0', '5'].join('.');
 const PUBLIC_IP = ['8', '8', '8', '8'].join('.');
 
 describe('IntegrationRemoteMcpBridge', () => {
+  it('rejects a connected credential bound to a different same-name descriptor', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const { bridge, contextTracker } = fixture({
+      integration: {
+        ...integration(encryption()),
+        integrationDescriptorId: '00000000-0000-4000-8000-000000000199',
+      },
+      clientFactory,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({ code: 'remote_mcp_not_connected', status: 409 });
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it('discovers only allowlisted remote MCP tools for connected visible integrations', async () => {
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn().mockResolvedValue({
@@ -105,6 +124,7 @@ describe('IntegrationRemoteMcpBridge', () => {
   });
 
   it('proxies calls with decrypted credentials and untrusted provenance', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const callTool = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] });
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn(),
@@ -130,6 +150,16 @@ describe('IntegrationRemoteMcpBridge', () => {
         handling: 'data_only_not_instructions',
       },
     });
+
+    await runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: { q: 'status' },
+    }));
+    const events = SecurityMonitor.getRecentEvents()
+      .filter(entry => entry.source === 'IntegrationRemoteMcpBridge' && entry.details.includes('tool_call allowed'));
+    expect(events).toHaveLength(2);
+    expect(events[0]?.details).toBe(events[1]?.details);
   });
 
   it('redacts bearer-token echoes throughout remote MCP call results', async () => {
@@ -162,6 +192,7 @@ describe('IntegrationRemoteMcpBridge', () => {
   });
 
   it('replaces credential-bearing remote MCP errors with a static failure', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn(),
       callTool: jest.fn().mockRejectedValue(new Error('Bearer remote-access-token was rejected')),
@@ -178,6 +209,10 @@ describe('IntegrationRemoteMcpBridge', () => {
       message: 'Remote MCP tool call failed.',
       status: 502,
     } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'IntegrationRemoteMcpBridge',
+      details: expect.stringContaining('tool_call remote_mcp_call_failed'),
+    }));
   });
 
   it('redacts bearer-token echoes from discovered tool metadata', async () => {
@@ -350,8 +385,8 @@ describe('IntegrationRemoteMcpBridge', () => {
         descriptor({ provider: 'remote-slow', id: '00000000-0000-4000-8000-000000000102' }),
       ],
       integrations: [
-        integration(encryption(), 'remote-down'),
-        integration(encryption(), 'remote-slow'),
+        integration(encryption(), 'remote-down', 'remote-access-token', '00000000-0000-4000-8000-000000000201'),
+        integration(encryption(), 'remote-slow', 'remote-access-token', '00000000-0000-4000-8000-000000000202'),
       ],
       clientFactory,
       timeoutMs: 1,
@@ -420,11 +455,17 @@ function fixture(options: {
   const secretEncryption = options.secretEncryption ?? encryption();
   const descriptorRecords = options.descriptors ?? [options.descriptor ?? descriptor()];
   const integrationRecords = options.integrations ?? [options.integration ?? integration(secretEncryption)];
+  const boundIntegrationRecords = integrationRecords.map(record => ({
+    ...record,
+    integrationDescriptorId: record.integrationDescriptorId
+      ?? descriptorRecords.find(candidate => candidate.provider === record.provider)?.id
+      ?? null,
+  }));
   return {
     contextTracker,
     bridge: new IntegrationRemoteMcpBridge({
       descriptorStore: new InMemoryIntegrationDescriptorStore(descriptorRecords),
-      integrationStore: options.integrationStore ?? new InMemoryUserIntegrationStore(integrationRecords),
+      integrationStore: options.integrationStore ?? new InMemoryUserIntegrationStore(boundIntegrationRecords),
       secretEncryption,
       contextTracker,
       discoveryGate: options.discoveryGate ?? (() => Promise.resolve(true)),
@@ -480,9 +521,10 @@ function integration(
   secretEncryption: AeadSecretEncryptionService,
   provider = REMOTE_DOCS,
   accessToken = 'remote-access-token',
+  id = INTEGRATION_ID,
 ): UserIntegrationRecord {
   return {
-    id: INTEGRATION_ID,
+    id,
     userId: USER_ID,
     provider,
     externalAccountLabel: 'alice@example.com',

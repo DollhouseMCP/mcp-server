@@ -30,6 +30,15 @@ import { readBoundedResponseText, ResponseBodyTooLargeError } from './BoundedRes
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
 const MAX_TOKEN_ENDPOINT_RESPONSE_BYTES = 256 * 1024;
+const RESERVED_AUTHORIZATION_PARAMS = new Set([
+  'client_id',
+  'code_challenge',
+  'code_challenge_method',
+  'redirect_uri',
+  'response_type',
+  'scope',
+  'state',
+]);
 
 export interface ConfiguredOAuthIntegrationProviderConfig {
   readonly descriptor: IntegrationDescriptorRecord;
@@ -49,6 +58,7 @@ interface TokenEndpointResponse {
 
 export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
+  readonly integrationDescriptorId;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'oauth2_authorization_code';
 
@@ -68,6 +78,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       displayName: config.descriptor.displayName,
       category: config.descriptor.category,
     };
+    this.integrationDescriptorId = config.descriptor.id;
     this.pinnedOutboundFactory = config.pinnedOutbound ?? createPinnedOutboundFactory();
     this.dnsLookupImpl = config.dnsLookup ?? dnsLookup;
     this.timeoutMs = config.requestTimeoutMs ?? DEFAULT_OUTBOUND_TIMEOUT_MS;
@@ -86,6 +97,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       url.searchParams.set('code_challenge_method', request.codeChallengeMethod);
     }
     for (const [key, value] of Object.entries(stringRecord(readRecord(oauth.tokenExchange.authorizationParams)))) {
+      if (RESERVED_AUTHORIZATION_PARAMS.has(key.toLowerCase())) continue;
       url.searchParams.set(key, value);
     }
     return url.toString();

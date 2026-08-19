@@ -72,6 +72,17 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
     return visible ? cloneIntegrationDescriptorRecord(visible) : null;
   }
 
+  async findCuratedByProvider(
+    provider: UserIntegrationProvider,
+  ): Promise<IntegrationDescriptorRecord | null> {
+    await Promise.resolve();
+    const record = [...this.records.values()].find(candidate =>
+      candidate.provider === provider &&
+      candidate.ownership === 'curated' &&
+      candidate.ownerUserId === null);
+    return record ? cloneIntegrationDescriptorRecord(record) : null;
+  }
+
   async findById(id: string, userId: string): Promise<IntegrationDescriptorRecord | null> {
     await Promise.resolve();
     assertUuid(id, 'id');
@@ -91,6 +102,15 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
       return false;
     }
     this.records.delete(id);
+    return true;
+  }
+
+  async deleteCurated(provider: UserIntegrationProvider): Promise<boolean> {
+    await Promise.resolve();
+    const record = [...this.records.values()].find(candidate =>
+      candidate.provider === provider && candidate.ownership === 'curated');
+    if (!record) return false;
+    this.records.delete(record.id);
     return true;
   }
 

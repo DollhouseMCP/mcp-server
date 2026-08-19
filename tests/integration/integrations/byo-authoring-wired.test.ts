@@ -130,6 +130,12 @@ describe('BYO authoring wired end-to-end', () => {
   });
 
   it('deletes the descriptor and fails the agent surface closed', async () => {
+    const disconnected = await harness.callConsoleRoute('DELETE', '/api/v1/me/integrations/:provider', {
+      params: { provider: BYO_PROVIDER },
+    });
+    expect(disconnected.status).toBe(200);
+    expect(body(disconnected)).toMatchObject({ status: 'disconnected' });
+
     const removed = await harness.callConsoleRoute('DELETE', `${DESCRIPTORS_PATH}/:id`, {
       params: { id: descriptorId },
     });

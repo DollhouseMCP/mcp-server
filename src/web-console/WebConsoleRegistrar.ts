@@ -603,6 +603,7 @@ export class WebConsoleRegistrar {
       ? await loadCuratedIntegrationProviders({
           seedDir: this.options.integrationDescriptorSeedDir,
           descriptorStore: stores.integrationDescriptorStore,
+          integrationStore: stores.integrationStore,
           secretEncryption,
           outbound: integrationProviderOutbound,
           ...(this.options.now ? { now: this.options.now } : {}),

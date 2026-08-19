@@ -35,6 +35,9 @@ const LOG_FILE = process.env.DOLLHOUSE_OAUTH_HELPER_LOG_FILE || join(DOLLHOUSE_H
 const FLOW_ID = process.env.DOLLHOUSE_OAUTH_HELPER_FLOW_ID || '';
 const TOKEN_URL = process.env.DOLLHOUSE_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token';
 const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
+const POST_HANDOFF_TEST_DELAY_MS = process.env.NODE_ENV === 'test'
+  ? Number.parseInt(process.env.DOLLHOUSE_OAUTH_HELPER_TEST_POST_HANDOFF_DELAY_MS || '0', 10)
+  : 0;
 
 const RESULT_MESSAGES = {
   success: 'OAuth helper completed successfully.',
@@ -320,6 +323,8 @@ async function writePidFile() {
   }
 }
 
+let handoffWritten = false;
+
 async function main() {
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
@@ -356,24 +361,28 @@ async function main() {
     await cleanupPidFile();
   });
   
-  process.on('SIGINT', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
+  const finishOnSignal = () => {
+    const status = handoffWritten ? 'success' : 'failed';
+    writeTerminalResultSync(status, attempts, handoffWritten ? 'success' : 'interrupted');
+    if (!handoffWritten) {
+      cleanupStateFileSync();
+    }
     cleanupPidFileSync();
-    process.exit(1);
-  });
+    process.exit(handoffWritten ? 0 : 1);
+  };
+
+  process.on('SIGINT', finishOnSignal);
   
-  process.on('SIGTERM', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
-    cleanupPidFileSync();
-    process.exit(1);
-  });
+  process.on('SIGTERM', finishOnSignal);
 
   async function finish(status, errorCode, exitCode) {
     clearInterval(heartbeatInterval);
     await writeTerminalResult(status, attempts, errorCode);
-    await cleanupStateFile();
+    // The server needs successful flow state to correlate and consume the
+    // encrypted token handoff. Failed flows have no handoff to import.
+    if (status !== 'success') {
+      await cleanupStateFile();
+    }
     await cleanupPidFile();
     process.exit(exitCode);
   }
@@ -425,6 +434,10 @@ async function main() {
         let stored = false;
         try {
           stored = await storeToken(response.access_token);
+          handoffWritten = stored;
+          if (handoffWritten && POST_HANDOFF_TEST_DELAY_MS > 0) {
+            await sleep(POST_HANDOFF_TEST_DELAY_MS);
+          }
         } catch {
           console.error('OAUTH_TOKEN_STORAGE_FAILED: Failed to store authentication token securely');
           return finish('failed', 'token_storage_failed', 1);
@@ -488,8 +501,10 @@ async function main() {
 main().catch(async (error) => {
   await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
-  await writeTerminalResult('failed', 0, 'fatal_error');
-  await cleanupStateFile();
+  await writeTerminalResult(handoffWritten ? 'success' : 'failed', 0, handoffWritten ? 'success' : 'fatal_error');
+  if (!handoffWritten) {
+    await cleanupStateFile();
+  }
   await cleanupPidFile();
-  process.exit(1);
+  process.exit(handoffWritten ? 0 : 1);
 });

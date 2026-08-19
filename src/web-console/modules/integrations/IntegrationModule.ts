@@ -274,6 +274,7 @@ function byoDescriptorRoutes(
   const authoring = new IntegrationDescriptorAuthoringService({
     descriptorStore: options.descriptorStore,
     specStore: options.openApiSpecStore,
+    integrationStore: options.integrationStore,
     secretEncryption: options.secretEncryption,
     reservedProviderIds,
     now: options.now,

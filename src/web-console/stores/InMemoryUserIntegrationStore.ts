@@ -49,6 +49,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       id: randomUUID(),
       userId: input.userId,
       provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId ?? null,
       externalAccountLabel: input.externalAccountLabel,
       externalInstallationId: input.externalInstallationId,
       authorizedPermissions: input.authorizedPermissions,
@@ -91,6 +92,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       id: randomUUID(),
       userId: input.userId,
       provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId ?? null,
       externalAccountLabel: null,
       externalInstallationId: null,
       authorizedPermissions: defaultAuthorizedPermissions(input.provider),
@@ -124,6 +126,26 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     return cloneUserIntegrationRecord(disconnected);
   }
 
+  async revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number> {
+    await Promise.resolve();
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    let revoked = 0;
+    for (const record of this.records.values()) {
+      if (record.integrationDescriptorId !== integrationDescriptorId || record.revokedAt !== null) continue;
+      this.records.set(record.id, cloneUserIntegrationRecord({
+        ...record,
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status: 'revoked',
+        errorReason: null,
+        revokedAt,
+      }));
+      this.activeProviderIndex.delete(activeProviderKey(record.userId, record.provider));
+      revoked++;
+    }
+    return revoked;
+  }
+
   set(record: UserIntegrationRecord): void {
     validateUserIntegrationRecord(record);
     const cloned = cloneUserIntegrationRecord(record);
@@ -154,7 +176,8 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   private async refreshLocked(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
     const activeId = this.activeProviderIndex.get(activeProviderKey(input.userId, input.provider));
     const active = activeId ? this.records.get(activeId) : null;
-    if (active?.status !== 'connected' || active.revokedAt !== null || !active.accessTokenCiphertext) {
+    if (active?.status !== 'connected' || active.revokedAt !== null || !active.accessTokenCiphertext
+        || (active.integrationDescriptorId ?? null) !== input.integrationDescriptorId) {
       return { kind: 'missing', record: null };
     }
     if (!active.accessTokenCiphertext.equals(input.staleAccessTokenCiphertext)) {

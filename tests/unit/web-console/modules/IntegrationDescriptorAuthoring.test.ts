@@ -1,4 +1,6 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
+
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 import {
   AeadSecretEncryptionService,
@@ -18,6 +20,7 @@ import {
 import { IntegrationDescriptorAuthoringService } from '../../../../src/web-console/modules/integrations/IntegrationDescriptorAuthoringService.js';
 import { createStoreIntegrationProviderResolver } from '../../../../src/web-console/modules/integrations/CuratedIntegrationProviders.js';
 import { integrationDescriptorClientSecretContext, integrationSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
+import type { ISecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
@@ -97,18 +100,23 @@ function fixture(options: {
   readonly descriptors?: readonly IntegrationDescriptorRecord[];
   readonly withEncryption?: boolean;
   readonly reservedProviderIds?: ReadonlySet<string>;
+  readonly secretEncryption?: ISecretEncryptionService;
 } = {}) {
   const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? []);
   const specStore = new InMemoryIntegrationOpenApiSpecStore();
-  const secretEncryption = options.withEncryption === false ? null : encryption();
+  const integrationStore = new InMemoryUserIntegrationStore();
+  const secretEncryption = options.withEncryption === false
+    ? null
+    : options.secretEncryption ?? encryption();
   const service = new IntegrationDescriptorAuthoringService({
     descriptorStore,
     specStore,
+    integrationStore,
     secretEncryption,
     ...(options.reservedProviderIds ? { reservedProviderIds: options.reservedProviderIds } : {}),
     now: () => NOW,
   });
-  return { service, descriptorStore, specStore, secretEncryption };
+  return { service, descriptorStore, specStore, integrationStore, secretEncryption };
 }
 
 function curatedRecord(provider: string, id: string): IntegrationDescriptorRecord {
@@ -138,6 +146,24 @@ function curatedRecord(provider: string, id: string): IntegrationDescriptorRecor
     createdAt: NOW,
     updatedAt: NOW,
   };
+}
+
+async function connectFixtureIntegration(
+  store: InMemoryUserIntegrationStore,
+  provider: string,
+  integrationDescriptorId: string,
+): Promise<void> {
+  await store.connect({
+    userId: USER_ID,
+    provider,
+    integrationDescriptorId,
+    externalAccountLabel: 'test account',
+    externalInstallationId: null,
+    authorizedPermissions: { scopes: [] },
+    accessTokenCiphertext: Buffer.from('encrypted-test-token'),
+    refreshTokenCiphertext: null,
+    connectedAt: NOW,
+  });
 }
 
 function bodyOf(result: { body?: unknown }): Record<string, unknown> {
@@ -255,6 +281,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 
   it('rejects provider ids colliding with any visible descriptor', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const { service } = fixture();
     await service.create(consoleRequest({ body: oauthBody() }));
 
@@ -292,6 +319,12 @@ describe('IntegrationDescriptorAuthoringService', () => {
     });
     const shadowing = await curatedService.create(consoleRequest({ body: oauthBody() }));
     expect(shadowing.status).toBe(409);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created denied_conflict for provider mycrm'),
+      }),
+    ]));
   });
 
   it('rejects coded strategies, reserved provider ids, and store-invalid descriptors with 422', async () => {
@@ -340,6 +373,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 
   it('rejects provider ids reserved by a built-in or curated boot-registry provider', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     // github is a bespoke registry provider with no descriptor; a BYO github
     // would route the deployment-brokered GitHub token to a chosen host.
     const { service } = fixture({ reservedProviderIds: new Set(['github', 'gmail']) });
@@ -356,6 +390,12 @@ describe('IntegrationDescriptorAuthoringService', () => {
     // The store also refuses github directly (belt), independent of the registry.
     const storeReserved = await service.create(consoleRequest({ body: oauthBody({ provider: 'github' }) }));
     expect([409, 422]).toContain(storeReserved.status);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created denied_reserved for provider github'),
+      }),
+    ]));
   });
 
   it('stores a rotated client secret when the PATCH body omits provider', async () => {
@@ -379,6 +419,85 @@ describe('IntegrationDescriptorAuthoringService', () => {
       ciphertext,
       integrationDescriptorClientSecretContext({ provider: MYCRM, ownerUserId: USER_ID }),
     ).toString('utf8')).toBe('rotated-secret-value');
+  });
+
+  it('requires disconnect before credential-routing changes or descriptor deletion', async () => {
+    const { service, integrationStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: staticKeyBody() })));
+    const descriptorId = created.id as string;
+    await connectFixtureIntegration(integrationStore, 'airtable', descriptorId);
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { display_name: 'Airtable Workspace' },
+    }))).resolves.toMatchObject({ status: 200 });
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.airtable.example'] },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_conflict' },
+    });
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { operation_promotion: { operations: ['records.list'] } },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_conflict' },
+    });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
+
+    await integrationStore.disconnect({ userId: USER_ID, provider: 'airtable', revokedAt: NOW });
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.airtable.example'] },
+    }))).resolves.toMatchObject({ status: 200 });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 204 });
+  });
+
+  it('allows descriptor maintenance when the provider has no usable credential', async () => {
+    const { service, integrationStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+    await integrationStore.recordError({
+      userId: USER_ID,
+      provider: MYCRM,
+      integrationDescriptorId: descriptorId,
+      errorReason: 'provider_unavailable',
+      occurredAt: NOW,
+    });
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.mycrm.example'] },
+    }))).resolves.toMatchObject({ status: 200 });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 204 });
+  });
+
+  it('blocks descriptor changes when refresh failed but encrypted credentials remain', async () => {
+    const { service, integrationStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+    await connectFixtureIntegration(integrationStore, MYCRM, descriptorId);
+    await integrationStore.refresh({
+      userId: USER_ID,
+      provider: MYCRM,
+      integrationDescriptorId: descriptorId,
+      staleAccessTokenCiphertext: Buffer.from('encrypted-test-token'),
+      refreshedAt: NOW,
+      refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'token_refresh_failed' }),
+    });
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.mycrm.example'] },
+    }))).resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
+    await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
+      .resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
   });
 
   it('rejects PATCH and DELETE by non-owner and on curated descriptors', async () => {
@@ -426,6 +545,71 @@ describe('IntegrationDescriptorAuthoringService', () => {
 
     expect(result.status).toBe(503);
     await expect(descriptorStore.listVisible(USER_ID)).resolves.toHaveLength(0);
+  });
+
+  it('audits create and update failures when client-secret encryption throws', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const encryptionFailure = new Error('test encryption failure');
+    const throwingEncryption: ISecretEncryptionService = {
+      encrypt: () => { throw encryptionFailure; },
+      decrypt: () => { throw new Error('not used'); },
+    };
+    const { service: createService, descriptorStore } = fixture({ secretEncryption: throwingEncryption });
+
+    await expect(createService.create(consoleRequest({ body: oauthBody() }))).rejects.toBe(encryptionFailure);
+    await expect(descriptorStore.listVisible(USER_ID)).resolves.toHaveLength(0);
+
+    const seeded = fixture();
+    const created = bodyOf(await seeded.service.create(consoleRequest({ body: oauthBody() })));
+    const failingUpdateService = new IntegrationDescriptorAuthoringService({
+      descriptorStore: seeded.descriptorStore,
+      specStore: seeded.specStore,
+      integrationStore: seeded.integrationStore,
+      secretEncryption: throwingEncryption,
+      now: () => NOW,
+    });
+    await expect(failingUpdateService.update(consoleRequest({
+      params: { id: created.id as string },
+      body: { oauth: { ...(oauthBody().oauth as Record<string, unknown>), client_secret: 'rotated-secret' } },
+    }))).rejects.toBe(encryptionFailure);
+
+    const events = SecurityMonitor.getRecentEvents();
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created failed for provider mycrm'),
+      }),
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('updated failed for provider mycrm'),
+      }),
+    ]));
+  });
+
+  it('audits descriptor lookup failures for every mutation route before propagating', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const lookupFailure = new Error('test descriptor lookup failure');
+    const { service, descriptorStore } = fixture();
+    jest.spyOn(descriptorStore, 'findById').mockRejectedValue(lookupFailure);
+
+    await expect(service.update(consoleRequest({
+      params: { id: UNKNOWN_ID },
+      body: { display_name: 'Renamed' },
+    }))).rejects.toBe(lookupFailure);
+    await expect(service.remove(consoleRequest({ params: { id: UNKNOWN_ID } }))).rejects.toBe(lookupFailure);
+    await expect(service.putSpec(consoleRequest({
+      params: { id: UNKNOWN_ID },
+      body: { spec: { openapi: '3.0.0', paths: {} } },
+    }))).rejects.toBe(lookupFailure);
+
+    const events = SecurityMonitor.getRecentEvents()
+      .filter(event => event.source === 'IntegrationDescriptorAuthoringService');
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ details: 'Integration descriptor updated failed for provider <invalid>' }),
+      expect.objectContaining({ details: 'Integration descriptor deleted failed for provider <invalid>' }),
+      expect.objectContaining({ details: 'Integration descriptor spec_updated failed for provider <invalid>' }),
+    ]));
+    expect(JSON.stringify(events)).not.toContain(lookupFailure.message);
   });
 
   it('reads descriptors by id only for the owner', async () => {
@@ -513,11 +697,13 @@ describe('IntegrationDescriptorAuthoringService', () => {
       listVisible: store.listVisible.bind(store),
       listVisiblePage: store.listVisiblePage.bind(store),
       delete: store.delete.bind(store),
+      deleteCurated: store.deleteCurated.bind(store),
       upsert: () => Promise.reject(uniqueViolation),
     } as unknown as InMemoryIntegrationDescriptorStore;
     const service = new IntegrationDescriptorAuthoringService({
       descriptorStore: racingStore,
       specStore: new InMemoryIntegrationOpenApiSpecStore(),
+      integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: encryption(),
       now: () => NOW,
     });
@@ -976,19 +1162,22 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
   it('refreshes through a store-resolved provider absent from the boot registry', async () => {
     const secretEncryption = encryption();
     const descriptorStore = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
     const authoring = new IntegrationDescriptorAuthoringService({
       descriptorStore,
       specStore: new InMemoryIntegrationOpenApiSpecStore(),
+      integrationStore,
       secretEncryption,
       now: () => NOW,
     });
     const created = bodyOf(await authoring.create(consoleRequest({ body: oauthBody() })));
     expect(created.provider).toBe(MYCRM);
 
-    const integrationStore = new InMemoryUserIntegrationStore([{
+    integrationStore.set({
       id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
       userId: USER_ID,
       provider: MYCRM,
+      integrationDescriptorId: created.id as string,
       externalAccountLabel: 'alice',
       externalInstallationId: null,
       authorizedPermissions: { scopes: ['crm.read'] },
@@ -1000,7 +1189,7 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
       connectedAt: NOW,
       lastSyncAt: null,
       revokedAt: null,
-    }]);
+    });
     const record = await integrationStore.findByProvider(USER_ID, MYCRM);
     if (!record?.accessTokenCiphertext) throw new Error('fixture integration missing');
 
@@ -1028,6 +1217,7 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
     const result = await refresh.refreshOnDemand({
       userId: USER_ID,
       provider: MYCRM,
+      integrationDescriptorId: created.id as string,
       staleAccessTokenCiphertext: record.accessTokenCiphertext,
     });
 

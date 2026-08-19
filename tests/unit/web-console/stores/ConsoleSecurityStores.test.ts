@@ -468,6 +468,7 @@ describe('InMemoryUserIntegrationStore', () => {
     const first = store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh,
@@ -475,6 +476,7 @@ describe('InMemoryUserIntegrationStore', () => {
     const second = store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh,
@@ -506,6 +508,7 @@ describe('InMemoryUserIntegrationStore', () => {
     await expect(store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh: () => Promise.resolve({ kind: 'failed' as const, errorReason: 'token_refresh_failed' }),
@@ -518,6 +521,32 @@ describe('InMemoryUserIntegrationStore', () => {
         refreshTokenCiphertext: Buffer.from('stale-refresh'),
       },
     });
+  });
+
+  it('revokes and clears only active credentials bound to a withdrawn descriptor', async () => {
+    const store = new InMemoryUserIntegrationStore([
+      userIntegration({
+        provider: 'linear',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      }),
+      userIntegration({
+        id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4',
+        userId: SECOND_USER_ID,
+        provider: 'linear',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      }),
+      userIntegration({
+        id: '55e22a52-dc56-4cd0-9d13-b2802524fbd5',
+        provider: 'github',
+      }),
+    ]);
+
+    await expect(store.revokeAllByDescriptor(DESCRIPTOR_ID, FIVE_MINUTES)).resolves.toBe(2);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(SECOND_USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({ status: 'connected' });
   });
 
   it('validates integration records before storing them', () => {
@@ -656,6 +685,18 @@ describe('InMemoryIntegrationDescriptorStore', () => {
 
     const resolved = await store.findVisibleByProvider(USER_ID, 'shared');
     expect(resolved).toMatchObject({ ownership: 'curated', apiHosts: ['curated.example.com'] });
+    await expect(store.findCuratedByProvider('shared')).resolves.toMatchObject({
+      ownership: 'curated',
+      ownerUserId: null,
+      apiHosts: ['curated.example.com'],
+    });
+  });
+
+  it('does not resolve a same-provider BYO descriptor as curated', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    await store.upsert(oauthDescriptorInput({ provider: 'shared' }));
+
+    await expect(store.findCuratedByProvider('shared')).resolves.toBeNull();
   });
 
   it('rejects invalid pagination limits and cursors', async () => {

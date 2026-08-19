@@ -106,6 +106,8 @@ export interface IIntegrationDescriptorStore {
   listVisible(userId: string): Promise<readonly IntegrationDescriptorRecord[]>;
   listVisiblePage(userId: string, page?: IntegrationDescriptorPageRequest): Promise<IntegrationDescriptorPage>;
   findVisibleByProvider(userId: string, provider: UserIntegrationProvider): Promise<IntegrationDescriptorRecord | null>;
+  /** Deployment-scoped lookup that never resolves a same-provider BYO descriptor. */
+  findCuratedByProvider(provider: UserIntegrationProvider): Promise<IntegrationDescriptorRecord | null>;
   /**
    * Owner-scoped id lookup for the BYO authoring plane: returns the
    * descriptor only when it is BYO and owned by `userId`. Curated
@@ -123,6 +125,8 @@ export interface IIntegrationDescriptorStore {
    * as defense-in-depth).
    */
   delete(id: string, ownerUserId: string): Promise<boolean>;
+  /** Remove a deployment-owned curated descriptor by provider id. */
+  deleteCurated(provider: UserIntegrationProvider): Promise<boolean>;
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
 }
 

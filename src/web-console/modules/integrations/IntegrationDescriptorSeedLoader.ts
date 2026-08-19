@@ -22,6 +22,7 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { logger } from '../../../utils/logger.js';
 import { canonicalizeIntegrationApiHosts } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
@@ -33,8 +34,9 @@ import {
   type IntegrationRefreshMode,
   validateIntegrationDescriptorInput,
 } from '../../stores/IIntegrationDescriptorStore.js';
-import type { UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import { integrationDescriptorClientSecretContext } from './IntegrationSecretContext.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
 const SEED_FILE_EXTENSION = '.json';
 
@@ -58,6 +60,7 @@ export type IntegrationDescriptorSeedCredentialResolver = (
 
 export interface IntegrationDescriptorSeedLoaderOptions {
   readonly now?: () => Date;
+  readonly integrationStore: IUserIntegrationStore;
 }
 
 export interface IntegrationDescriptorSeedResult {
@@ -70,15 +73,17 @@ export interface IntegrationDescriptorSeedResult {
 
 export class IntegrationDescriptorSeedLoader {
   private readonly now: () => Date;
+  private readonly integrationStore: IUserIntegrationStore;
 
   constructor(
     private readonly seedDir: string,
     private readonly descriptorStore: IIntegrationDescriptorStore,
     private readonly secretEncryption: ISecretEncryptionService,
     private readonly resolveCredentials: IntegrationDescriptorSeedCredentialResolver,
-    options: IntegrationDescriptorSeedLoaderOptions = {},
+    options: IntegrationDescriptorSeedLoaderOptions,
   ) {
     this.now = options.now ?? (() => new Date());
+    this.integrationStore = options.integrationStore;
   }
 
   /**
@@ -105,6 +110,12 @@ export class IntegrationDescriptorSeedLoader {
         else skipped++;
       } catch (err) {
         failed++;
+        SecurityMonitor.logSecurityEvent({
+          type: 'INTEGRATION_SECURITY_DECISION',
+          severity: 'MEDIUM',
+          source: 'IntegrationDescriptorSeedLoader.loadSeeds',
+          details: `Integration descriptor seed rejected for provider ${safeIntegrationAuditProvider(path.parse(file).name)}`,
+        });
         logger.error(`[IntegrationDescriptorSeedLoader] Failed to load descriptor seed: ${path.basename(file)}`, {
           error: err instanceof Error ? err.message : String(err),
         });
@@ -143,18 +154,59 @@ export class IntegrationDescriptorSeedLoader {
       throw new Error('descriptor seed is missing a string "provider"');
     }
     if (RESERVED_PROVIDER_IDS.has(provider)) {
-      logger.warn(`[IntegrationDescriptorSeedLoader] Skipping reserved provider id '${provider}'`, {
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: `Integration descriptor seed denied_reserved for provider ${safeIntegrationAuditProvider(provider)}`,
+      });
+      logger.warn(`[IntegrationDescriptorSeedLoader] Skipping reserved provider id '${safeIntegrationAuditProvider(provider)}'`, {
         file: path.basename(file),
       });
       return null;
     }
 
     const input = this.toDescriptorInput(seed, provider);
-    if (!input) return null;
+    if (!input) {
+      // Provider ids are shared by curated and user-owned descriptors. Curated
+      // records win runtime resolution, so their active provider credentials
+      // must be revoked before removal or they could become usable under a
+      // newly revealed same-name BYO route. Without a persisted curated record,
+      // however, the credentials belong to the BYO route and stay untouched.
+      const curated = await this.descriptorStore.findCuratedByProvider(
+        provider as UserIntegrationProvider,
+      );
+      if (!curated) return null;
+
+      const revoked = await this.integrationStore.revokeAllByDescriptor(
+        curated.id,
+        this.now(),
+      );
+      const removed = await this.descriptorStore.deleteCurated(curated.provider);
+      if (!removed) {
+        throw new Error('curated integration descriptor disappeared during credential withdrawal');
+      }
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(curated.provider)}`,
+      });
+      logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${safeIntegrationAuditProvider(curated.provider)}' because deployment credentials are unavailable`, {
+        revokedIntegrations: revoked,
+      });
+      return null;
+    }
 
     validateIntegrationDescriptorInput(input);
     const record = await this.descriptorStore.upsert(input);
-    logger.debug(`[IntegrationDescriptorSeedLoader] Loaded curated descriptor '${provider}'`, {
+    SecurityMonitor.logSecurityEvent({
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: 'LOW',
+      source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+      details: `Curated integration descriptor loaded for provider ${safeIntegrationAuditProvider(provider)}`,
+    });
+    logger.debug(`[IntegrationDescriptorSeedLoader] Loaded curated descriptor '${safeIntegrationAuditProvider(provider)}'`, {
       file: path.basename(file),
       authStrategy: input.authStrategy,
     });
@@ -190,7 +242,7 @@ export class IntegrationDescriptorSeedLoader {
       const credentials = this.resolveCredentials(provider);
       if (!credentials.clientId || !credentials.clientSecret) {
         logger.info(
-          `[IntegrationDescriptorSeedLoader] Skipping curated OAuth provider '${provider}' — deployment credentials not configured`,
+          `[IntegrationDescriptorSeedLoader] Skipping curated OAuth provider '${safeIntegrationAuditProvider(provider)}' — deployment credentials not configured`,
         );
         return null;
       }

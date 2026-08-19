@@ -509,7 +509,7 @@ function readRequiredString(value: unknown, field: string): string {
   if (typeof value !== 'string' || value.trim() === '') {
     throw new IntegrationRequestError('invalid_integration_request', `Missing required ${field}.`, 400);
   }
-  return value;
+  return value.trim();
 }
 
 function readOptionalRecord(value: unknown): Readonly<Record<string, unknown>> | undefined {

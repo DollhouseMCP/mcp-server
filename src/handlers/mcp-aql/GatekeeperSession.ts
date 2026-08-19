@@ -291,11 +291,13 @@ export class GatekeeperSession {
     this.touch();
 
     const key = this.getConfirmationKey(operation, elementType);
+    let resolvedKey = key;
     let confirmation = this.state.confirmations.get(key);
 
     // Fall back to unscoped confirmation when element-type-scoped key not found.
     // A session-wide confirmation for "create_element" covers "create_element:skill" etc.
     if (!confirmation && elementType) {
+      resolvedKey = operation;
       confirmation = this.state.confirmations.get(operation);
     }
 
@@ -308,11 +310,10 @@ export class GatekeeperSession {
 
     // For CONFIRM_SINGLE_USE, invalidate after first use
     if (confirmation.permissionLevel === 'CONFIRM_SINGLE_USE') {
-      const deleteKey = this.state.confirmations.has(key) ? key : operation;
-      this.state.confirmations.delete(deleteKey);
+      this.state.confirmations.delete(resolvedKey);
 
       if (this.confirmationStore) {
-        this.confirmationStore.deleteConfirmation(deleteKey);
+        this.confirmationStore.deleteConfirmation(resolvedKey);
         this.persistToStore();
       }
     }

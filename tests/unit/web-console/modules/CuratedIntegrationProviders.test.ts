@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import {
   buildConfiguredIntegrationProviders,
   createEnvIntegrationDescriptorCredentialResolver,
@@ -14,6 +15,7 @@ import {
   type IntegrationDescriptorCreateInput,
 } from '../../../../src/web-console/stores/IIntegrationDescriptorStore.js';
 import { InMemoryIntegrationDescriptorStore } from '../../../../src/web-console/stores/InMemoryIntegrationDescriptorStore.js';
+import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
 
 const VISIBLE_USER = '11111111-1111-4111-8111-111111111111';
 const NOW = new Date('2026-06-24T00:00:00.000Z');
@@ -104,6 +106,7 @@ afterEach(async () => {
 
 describe('buildConfiguredIntegrationProviders', () => {
   it('builds OAuth and static providers and skips coded descriptors', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const enc = newEncryption();
     const store = new InMemoryIntegrationDescriptorStore();
     await store.upsert(oauthInput(enc, 'the-secret'));
@@ -118,6 +121,16 @@ describe('buildConfiguredIntegrationProviders', () => {
     expect(byId.get('examplekey')?.credentialStrategy).toBe('static_api_key');
     expect(byId.has('codedprovider')).toBe(false);
     expect(providers).toHaveLength(2);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'CuratedIntegrationProviders',
+        details: expect.stringContaining('configured for provider examplecorp'),
+      }),
+      expect.objectContaining({
+        source: 'CuratedIntegrationProviders',
+        details: expect.stringContaining('unsupported for provider codedprovider'),
+      }),
+    ]));
   });
 
   it('skips a descriptor whose client secret cannot be decrypted (wrong key)', async () => {
@@ -137,6 +150,7 @@ describe('loadCuratedIntegrationProviders', () => {
     const providers = await loadCuratedIntegrationProviders({
       seedDir: undefined,
       descriptorStore: new InMemoryIntegrationDescriptorStore(),
+      integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: newEncryption(),
     });
     expect(providers).toEqual([]);
@@ -150,6 +164,7 @@ describe('loadCuratedIntegrationProviders', () => {
     const providers = await loadCuratedIntegrationProviders({
       seedDir: dir,
       descriptorStore: new InMemoryIntegrationDescriptorStore(),
+      integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: newEncryption(),
       now: () => NOW,
       credentialResolver: () => ({ clientId: 'cid', clientSecret: 'csecret' }),

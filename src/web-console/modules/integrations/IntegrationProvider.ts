@@ -74,6 +74,8 @@ export interface IntegrationProviderStatusProjection {
 
 export interface IIntegrationProvider {
   readonly descriptor: IntegrationProviderCatalogDescriptor;
+  /** Persisted descriptor that owns credentials created by this provider. */
+  readonly integrationDescriptorId?: string | null;
   readonly authorizationConfigured: boolean;
   readonly credentialStrategy: IntegrationCredentialStrategy;
   /**

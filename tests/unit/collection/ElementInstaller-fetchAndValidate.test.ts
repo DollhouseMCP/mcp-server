@@ -213,6 +213,18 @@ describe('ElementInstaller.installContent (all six element types)', () => {
     expect(written).toContain('hello world');
   });
 
+  it('canonicalizes an accepted .yml memory install to discoverable .yaml storage', async () => {
+    stubGithubFile(mockGitHubClient, MEMORY_YAML);
+    const result = await installer.installContent('library/memories/welcome-guide.yml');
+
+    expect(result.success).toBe(true);
+    expect(result.filename).toBe('welcome-guide.yaml');
+    await expect(fs.readFile(path.join(portfolioDir, 'welcome-guide.yaml'), 'utf-8'))
+      .resolves.toContain('entries:');
+    await expect(fs.access(path.join(portfolioDir, 'welcome-guide.yml')))
+      .rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('installs an ensemble through the markdown pipeline', async () => {
     stubGithubFile(mockGitHubClient, ENSEMBLE_MARKDOWN);
     const result = await installer.installContent('library/ensembles/review-team.md');
