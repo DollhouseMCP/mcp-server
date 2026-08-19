@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -272,6 +272,49 @@ describe('IntegrationDescriptorSeedLoader', () => {
       apiHosts: ['byo.examplecorp.test'],
     });
     await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+  });
+
+  it('reports a failure when the curated descriptor disappears during withdrawal', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
+    const encryption = newEncryption();
+    const configured = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
+      loaderOptions(integrationStore),
+    );
+    await configured.loadSeeds();
+    await connectExampleCorp(integrationStore, {
+      accountLabel: 'curated-route-user',
+      scopes: ['read'],
+      accessToken: 'encrypted-curated-access',
+      refreshToken: 'encrypted-curated-refresh',
+    });
+
+    const deleteCurated = store.deleteCurated.bind(store);
+    jest.spyOn(store, 'deleteCurated').mockImplementation(async provider => {
+      await deleteCurated(provider);
+      return false;
+    });
+    const disabled = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({}),
+      loaderOptions(integrationStore),
+    );
+
+    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 0, failed: 1 });
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'IntegrationDescriptorSeedLoader.loadSeeds',
+      details: 'Integration descriptor seed rejected for provider examplecorp',
+    }));
   });
 
   it('loads a curated static-API-key descriptor without deployment credentials', async () => {
