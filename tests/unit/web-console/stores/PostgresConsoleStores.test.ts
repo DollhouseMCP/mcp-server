@@ -828,6 +828,45 @@ describe('PostgresUserIntegrationStore', () => {
     expect(transaction.insert).toBeUndefined();
   });
 
+  it('atomically verifies a static credential descriptor before persisting it', async () => {
+    const descriptorRow = integrationDescriptorRow({
+      authStrategy: 'static_api_key',
+      oauth: null,
+      staticApiKey: { injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' } },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+    });
+    const descriptorLock = selectingChain([descriptorRow]);
+    transaction.select = jest.fn(() => descriptorLock);
+    transaction.update = jest.fn(() => returningChain([]));
+    transaction.insert = jest.fn(() => insertChain([userIntegrationRow({
+      provider: 'gmail',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [] },
+      refreshTokenCiphertext: null,
+    })]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.connectDescriptorCredential({
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: integrationDescriptorRoutingFingerprint(
+        descriptorRow as Parameters<typeof integrationDescriptorRoutingFingerprint>[0],
+      ),
+      connection: {
+        userId: USER_ID,
+        provider: 'gmail',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        externalAccountLabel: 'static credential',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: Buffer.from('encrypted-api-key'),
+        refreshTokenCiphertext: null,
+        connectedAt: NOW,
+      },
+    })).resolves.toMatchObject({ integrationDescriptorId: DESCRIPTOR_ID });
+    expect(descriptorLock.for).toHaveBeenCalledWith('key share');
+  });
+
   it('retains the descriptor binding while refreshing configured-provider credentials', async () => {
     const current = userIntegrationRow({
       provider: 'linear',

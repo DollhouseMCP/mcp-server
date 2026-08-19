@@ -10,6 +10,7 @@ import {
 import {
   cloneUserIntegrationRecord,
   type DescriptorCallbackConnectInput,
+  type DescriptorCredentialConnectInput,
   GITHUB_USER_INTEGRATION_PROVIDER,
   type IUserIntegrationStore,
   type UserIntegrationConnectInput,
@@ -63,26 +64,11 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
   async connectDescriptorCallback(
     input: DescriptorCallbackConnectInput,
   ): Promise<UserIntegrationRecord | null> {
+    validateDescriptorCredentialInput(input);
     assertHash(input.transactionIdHash, 'transactionIdHash');
-    assertUuid(input.descriptorId, 'descriptorId');
-    if (!/^[a-f0-9]{64}$/.test(input.descriptorFingerprint)) {
-      throw new ConsoleStoreValidationError('descriptorFingerprint must be a lowercase 256-bit hex fingerprint');
-    }
-    validateConnectInput(input.connection);
-    if (input.connection.integrationDescriptorId !== input.descriptorId) {
-      throw new ConsoleStoreValidationError(
-        'callback connection must use the expected integration descriptor',
-      );
-    }
 
     const row = await withSystemContext(this.db, async tx => {
-      const descriptors = await tx.select().from(integrationProviderDescriptors)
-        .where(eq(integrationProviderDescriptors.id, input.descriptorId))
-        .for('key share')
-        .limit(1);
-      const descriptor = descriptors[0] ? fromDescriptorRow(descriptors[0]) : null;
-      if (!descriptor
-          || integrationDescriptorRoutingFingerprint(descriptor) !== input.descriptorFingerprint) {
+      if (!await descriptorRevisionMatchesWithTx(tx, input)) {
         return null;
       }
 
@@ -103,6 +89,18 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       await tx.update(consoleLoginTransactions).set({
         expiresAt: consumed.consumedAt,
       }).where(eq(consoleLoginTransactions.idHash, input.transactionIdHash));
+      return connected[0] ?? null;
+    });
+    return row ? fromRow(row) : null;
+  }
+
+  async connectDescriptorCredential(
+    input: DescriptorCredentialConnectInput,
+  ): Promise<UserIntegrationRecord | null> {
+    validateDescriptorCredentialInput(input);
+    const row = await withSystemContext(this.db, async tx => {
+      if (!await descriptorRevisionMatchesWithTx(tx, input)) return null;
+      const connected = await connectWithTx(tx, input.connection);
       return connected[0] ?? null;
     });
     return row ? fromRow(row) : null;
@@ -273,6 +271,32 @@ async function connectWithTx(
     lastSyncAt: null,
     revokedAt: null,
   }).returning();
+}
+
+function validateDescriptorCredentialInput(input: DescriptorCredentialConnectInput): void {
+  assertUuid(input.descriptorId, 'descriptorId');
+  if (!/^[a-f0-9]{64}$/.test(input.descriptorFingerprint)) {
+    throw new ConsoleStoreValidationError('descriptorFingerprint must be a lowercase 256-bit hex fingerprint');
+  }
+  validateConnectInput(input.connection);
+  if (input.connection.integrationDescriptorId !== input.descriptorId) {
+    throw new ConsoleStoreValidationError(
+      'descriptor credential must use the expected integration descriptor',
+    );
+  }
+}
+
+async function descriptorRevisionMatchesWithTx(
+  tx: SystemTransaction,
+  input: DescriptorCredentialConnectInput,
+): Promise<boolean> {
+  const descriptors = await tx.select().from(integrationProviderDescriptors)
+    .where(eq(integrationProviderDescriptors.id, input.descriptorId))
+    .for('key share')
+    .limit(1);
+  const descriptor = descriptors[0] ? fromDescriptorRow(descriptors[0]) : null;
+  return descriptor !== null
+    && integrationDescriptorRoutingFingerprint(descriptor) === input.descriptorFingerprint;
 }
 
 function validateConnectInput(input: UserIntegrationConnectInput): void {

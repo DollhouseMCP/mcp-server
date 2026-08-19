@@ -32,11 +32,21 @@ const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const ADMIN_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb2';
 const DELETED_AT = new Date('2026-08-19T12:00:00.000Z');
 
-function captureTx(grantRows: readonly { id: string }[] = []) {
+function captureTx(
+  grantRows: readonly { id: string }[] = [],
+  accountAllowlistRows: readonly { kind: string; normalizedValue: string }[] = [],
+) {
   const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
   const updates: { readonly table: unknown; readonly values: unknown; readonly predicate: unknown }[] = [];
+  const inserts: { readonly table: unknown; readonly values: unknown }[] = [];
   const tx = {
-    select: () => ({ from: () => ({ where: () => Promise.resolve(grantRows) }) }),
+    select: () => ({
+      from: (table: unknown) => ({
+        where: () => Promise.resolve(
+          table === accountAllowlistEntries ? accountAllowlistRows : grantRows,
+        ),
+      }),
+    }),
     delete: (table: unknown) => ({
       where: (predicate: unknown) => {
         deletes.push({ table, predicate });
@@ -51,8 +61,14 @@ function captureTx(grantRows: readonly { id: string }[] = []) {
         },
       }),
     }),
+    insert: (table: unknown) => ({
+      values: (values: unknown) => {
+        inserts.push({ table, values });
+        return Promise.resolve();
+      },
+    }),
   };
-  return { tx: tx as unknown as DrizzleTx, deletes, updates };
+  return { tx: tx as unknown as DrizzleTx, deletes, updates, inserts };
 }
 
 describe('collectDeletionIdentity', () => {
@@ -145,7 +161,7 @@ describe('purgeUserScopedData', () => {
 
 describe('purgeNonCascadeUserIdentity', () => {
   it('purges auth_kv per subject, identity events by sub, and allowlist by matched identity', async () => {
-    const { tx, deletes, updates } = captureTx();
+    const { tx, deletes, updates, inserts } = captureTx();
 
     await purgeNonCascadeUserIdentity(tx, {
       subs: ['sub-1', 'sub-2'],
@@ -164,6 +180,27 @@ describe('purgeNonCascadeUserIdentity', () => {
         values: { revokedByUserId: ADMIN_ID, revokedAt: DELETED_AT },
       }),
     ]);
+    expect(inserts).toEqual([{
+      table: accountAllowlistEntries,
+      values: expect.arrayContaining([
+        expect.objectContaining({ kind: 'email', normalizedValue: 'a@b.com', revokedAt: DELETED_AT }),
+        expect.objectContaining({ kind: 'github_id', normalizedValue: '42', revokedAt: DELETED_AT }),
+        expect.objectContaining({ kind: 'github_username', normalizedValue: 'octo', revokedAt: DELETED_AT }),
+      ]),
+    }]);
+  });
+
+  it('does not duplicate a canonical deny tombstone that already exists', async () => {
+    const { tx, inserts } = captureTx([], [{ kind: 'email', normalizedValue: 'a@b.com' }]);
+
+    await purgeNonCascadeUserIdentity(tx, {
+      subs: ['sub-1'],
+      emails: ['a@b.com'],
+      githubIds: [],
+      githubLogins: [],
+    }, ADMIN_ID, DELETED_AT);
+
+    expect(inserts).toHaveLength(0);
   });
 
   it('also purges auth_kv rows linked to the account\'s grants by grantId', async () => {
@@ -181,7 +218,7 @@ describe('purgeNonCascadeUserIdentity', () => {
   });
 
   it('deletes nothing when the account has no resolvable identity', async () => {
-    const { tx, deletes, updates } = captureTx();
+    const { tx, deletes, updates, inserts } = captureTx();
     await purgeNonCascadeUserIdentity(
       tx,
       { subs: [], emails: [], githubIds: [], githubLogins: [] },
@@ -190,5 +227,6 @@ describe('purgeNonCascadeUserIdentity', () => {
     );
     expect(deletes).toHaveLength(0);
     expect(updates).toHaveLength(0);
+    expect(inserts).toHaveLength(0);
   });
 });

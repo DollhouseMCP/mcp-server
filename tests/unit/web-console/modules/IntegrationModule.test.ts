@@ -1310,6 +1310,33 @@ describe('IntegrationModule', () => {
     await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
   });
 
+  it('rejects static credential persistence when the descriptor changes concurrently', async () => {
+    const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
+    const connectDescriptorCredential = jest.fn(() => Promise.resolve(null));
+    const store = Object.assign(new InMemoryUserIntegrationStore(), { connectDescriptorCredential });
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [provider],
+      now: () => NOW,
+    });
+
+    await expect(findRoute(module.routes, AIRTABLE_CONNECT_PATH, 'POST').handler(consoleRequest({
+      body: { api_key: 'airtable-api-key-secret' },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_changed' },
+    });
+    expect(connectDescriptorCredential).toHaveBeenCalledWith(expect.objectContaining({
+      descriptorId: staticApiKeyDescriptorFixture().id,
+      descriptorFingerprint: provider.integrationDescriptorFingerprint,
+    }));
+    await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
+  });
+
   it.each([
     ['leading', String.fromCharCode(0xd800)],
     ['trailing', String.fromCharCode(0xdc00)],

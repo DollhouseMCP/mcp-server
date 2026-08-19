@@ -449,7 +449,7 @@ export class IntegrationService {
       : readApiKeyCredential(req.body);
     if ('error' in captured) return captured.error;
     const connectedAt = this.now();
-    const record = await this.options.store.connect({
+    const connection = {
       userId: auth.userId,
       provider: provider.descriptor.id,
       integrationDescriptorId: provider.integrationDescriptorId ?? null,
@@ -462,7 +462,17 @@ export class IntegrationService {
       ),
       refreshTokenCiphertext: null,
       connectedAt,
-    });
+    };
+    const record = provider.integrationDescriptorId
+        && provider.integrationDescriptorFingerprint
+        && this.options.store.connectDescriptorCredential
+      ? await this.options.store.connectDescriptorCredential({
+          descriptorId: provider.integrationDescriptorId,
+          descriptorFingerprint: provider.integrationDescriptorFingerprint,
+          connection,
+        })
+      : await this.options.store.connect(connection);
+    if (!record) return descriptorChangedConflict();
     return {
       status: 200,
       body: provider.projectStatus(record).body,
@@ -725,6 +735,19 @@ function badRequest(code: string, detail: string): ConsoleHandlerResult {
       status: 400,
       code,
       detail,
+    },
+  };
+}
+
+function descriptorChangedConflict(): ConsoleHandlerResult {
+  return {
+    status: 409,
+    body: {
+      type: 'about:blank',
+      title: 'Conflict',
+      status: 409,
+      code: 'integration_descriptor_changed',
+      detail: 'Integration configuration changed while the credential was being saved. Try again.',
     },
   };
 }

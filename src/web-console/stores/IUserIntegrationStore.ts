@@ -73,6 +73,8 @@ export interface IUserIntegrationStore {
   listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
+  /** Atomically persist a credential only while its descriptor revision is current. */
+  connectDescriptorCredential?(input: DescriptorCredentialConnectInput): Promise<UserIntegrationRecord | null>;
   /**
    * Atomically verify a descriptor-bound callback and persist its credentials.
    * PostgreSQL implements this to serialize callback completion with descriptor
@@ -100,6 +102,12 @@ export interface UserIntegrationConnectInput {
 
 export interface DescriptorCallbackConnectInput {
   readonly transactionIdHash: Buffer;
+  readonly descriptorId: string;
+  readonly descriptorFingerprint: string;
+  readonly connection: UserIntegrationConnectInput;
+}
+
+export interface DescriptorCredentialConnectInput {
   readonly descriptorId: string;
   readonly descriptorFingerprint: string;
   readonly connection: UserIntegrationConnectInput;

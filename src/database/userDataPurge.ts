@@ -258,5 +258,46 @@ export async function purgeNonCascadeUserIdentity(
       isNull(accountAllowlistEntries.revokedAt),
       or(...accountAllowlistMatches),
     ));
+
+    const existingRows = await tx.select({
+      kind: accountAllowlistEntries.kind,
+      normalizedValue: accountAllowlistEntries.normalizedValue,
+    }).from(accountAllowlistEntries).where(or(...accountAllowlistMatches));
+    const existing = new Set(existingRows.map(row => `${row.kind}:${row.normalizedValue}`));
+    const missingTombstones = canonicalDeletionAllowlistValues(identity)
+      .filter(entry => !existing.has(`${entry.kind}:${entry.normalizedValue}`));
+    if (missingTombstones.length > 0) {
+      await tx.insert(accountAllowlistEntries).values(missingTombstones.map(entry => ({
+        kind: entry.kind,
+        normalizedValue: entry.normalizedValue,
+        displayValue: entry.normalizedValue,
+        note: 'Deny tombstone created by account deletion',
+        createdByUserId: revokedByUserId,
+        createdAt: revokedAt,
+        revokedByUserId,
+        revokedAt,
+      })));
+    }
   }
+}
+
+function canonicalDeletionAllowlistValues(identity: DeletionIdentity): Array<{
+  readonly kind: 'email' | 'github_username' | 'github_id';
+  readonly normalizedValue: string;
+}> {
+  const unique = new Map<string, {
+    readonly kind: 'email' | 'github_username' | 'github_id';
+    readonly normalizedValue: string;
+  }>();
+  const add = (kind: 'email' | 'github_username' | 'github_id', values: readonly string[]): void => {
+    for (const value of values) {
+      const normalizedValue = normalizeAuthAllowlistValue(kind, value);
+      if (!normalizedValue || normalizedValue.length > 320) continue;
+      unique.set(`${kind}:${normalizedValue}`, { kind, normalizedValue });
+    }
+  };
+  add('email', identity.emails);
+  add('github_id', identity.githubIds);
+  add('github_username', identity.githubLogins);
+  return [...unique.values()];
 }
