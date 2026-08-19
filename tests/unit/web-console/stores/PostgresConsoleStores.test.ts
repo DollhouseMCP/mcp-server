@@ -2329,10 +2329,13 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     const bootstrapSelect = selectingForUpdateChain([]);
     const allowlistSelect = selectingForUpdateChain([{ id: ALLOWLIST_ID }]);
     const accountInsert = insertChain();
+    const auditInsert = insertChain();
     transaction.select = jest.fn()
       .mockReturnValueOnce(bootstrapSelect)
       .mockReturnValueOnce(allowlistSelect);
-    transaction.insert = jest.fn(() => accountInsert);
+    transaction.insert = jest.fn()
+      .mockReturnValueOnce(accountInsert)
+      .mockReturnValueOnce(auditInsert);
 
     await expect(store.provisionAccountIfAllowed({
       identity: {
@@ -2351,12 +2354,24 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
         updatedAt: NOW.getTime(),
       },
       required: true,
+      successAuditEvent: {
+        type: 'auth.social.identity_changed',
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        details: { previousEmail: 'old@example.test', newEmail: ALICE_EMAIL },
+        timestamp: NOW.getTime(),
+      },
     })).resolves.toEqual({ allowed: true });
 
     expect(withSystemContextMock).toHaveBeenCalledTimes(1);
     expect(bootstrapSelect.for).toHaveBeenCalledWith('update');
     expect(allowlistSelect.for).toHaveBeenCalledWith('update');
     expect(accountInsert.onConflictDoUpdate).toHaveBeenCalledTimes(1);
+    expect(auditInsert.values).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'auth.social.identity_changed',
+      sub: 'github_42',
+    }));
   });
 
   it('does not let empty-list fallback re-provision a revoked identity', async () => {

@@ -99,6 +99,17 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
 
       if (isBootstrapAdmin || matched || (!denied && !input.required && !hasAnyEntries)) {
         await upsertAuthAccountWithTx(tx, input.account);
+        if (input.successAuditEvent) {
+          const event = input.successAuditEvent;
+          await tx.insert(authIdentityEvents).values({
+            type: event.type,
+            sub: event.sub ?? null,
+            provider: event.provider ?? null,
+            externalSub: event.externalSub ?? null,
+            details: event.details ?? null,
+            timestamp: event.timestamp,
+          });
+        }
         return { allowed: true };
       }
 

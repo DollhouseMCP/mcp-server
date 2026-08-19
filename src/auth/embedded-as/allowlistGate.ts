@@ -41,6 +41,7 @@ import type {
   AuthAllowlistEntry,
   AllowlistMatchValues,
   IAuthStorageLayer,
+  IdentityAuditEvent,
   StoredAccount,
 } from './storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from './bootstrapAdmin.js';
@@ -98,6 +99,8 @@ export interface AtomicAccountProvisioningInput {
   readonly identity: AllowlistGateIdentity;
   readonly account: StoredAccount;
   readonly required: boolean;
+  /** Audit event committed only when the account provisioning decision succeeds. */
+  readonly successAuditEvent?: IdentityAuditEvent;
 }
 
 /**
@@ -184,6 +187,7 @@ export async function provisionAccountThroughAllowlistGate(
   identity: AllowlistGateIdentity,
   options: AllowlistGateOptions,
   account: StoredAccount,
+  successAuditEvent?: IdentityAuditEvent,
 ): Promise<AllowlistGateResult> {
   const authority = options.authority;
   if (authority?.provisionAccountIfAllowed) {
@@ -191,11 +195,15 @@ export async function provisionAccountThroughAllowlistGate(
       identity,
       account,
       required: options.required,
+      successAuditEvent,
     });
   }
 
   const gate = await checkAllowlistGate(identity, options);
-  if (gate.allowed) await options.storage.upsertAccount(account);
+  if (gate.allowed) {
+    if (successAuditEvent) await options.storage.recordIdentityEvent(successAuditEvent);
+    await options.storage.upsertAccount(account);
+  }
   return gate;
 }
 

@@ -299,14 +299,23 @@ describe('provisionAccountThroughAllowlistGate', () => {
       createdAt: 1,
       updatedAt: 1,
     };
+    const successAuditEvent = {
+      type: 'auth.social.identity_changed',
+      sub: account.sub,
+      timestamp: 1,
+    };
 
     await expect(provisionAccountThroughAllowlistGate(
       { sub: 'github_42', method: 'github', githubId: '42' },
       { storage, authority, required: true },
       account,
+      successAuditEvent,
     )).resolves.toEqual({ allowed: true });
 
-    expect(provisionAccountIfAllowed).toHaveBeenCalledWith(expect.objectContaining({ account }));
+    expect(provisionAccountIfAllowed).toHaveBeenCalledWith(expect.objectContaining({
+      account,
+      successAuditEvent,
+    }));
     await expect(storage.getAccount('github_42')).resolves.toBeNull();
   });
 
@@ -320,14 +329,22 @@ describe('provisionAccountThroughAllowlistGate', () => {
       createdAt: 1,
       updatedAt: 1,
     };
+    const successAuditEvent = {
+      type: 'auth.social.identity_changed',
+      sub: account.sub,
+      timestamp: 1,
+    };
 
     await expect(provisionAccountThroughAllowlistGate(
       { sub: 'github_42', method: 'github', githubId: '42' },
       { storage, authority: fixedAuthority({ entries: 1, matches: true }), required: true },
       account,
+      successAuditEvent,
     )).resolves.toEqual({ allowed: true });
 
     await expect(storage.getAccount('github_42')).resolves.toMatchObject(account);
+    await expect(storage.listIdentityEvents({ type: successAuditEvent.type }))
+      .resolves.toEqual([successAuditEvent]);
   });
 });
 

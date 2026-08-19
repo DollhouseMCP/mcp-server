@@ -44,7 +44,7 @@ import type {
 } from '../IAuthMethod.js';
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
 import { beginAdminStepUpProof, isAdminStepUpRequest, renderClientConsentForIdentity } from '../InteractionRouter.js';
-import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
+import type { IAuthStorageLayer, IdentityAuditEvent } from '../storage/IAuthStorageLayer.js';
 import {
   checkAllowlistGate,
   provisionAccountThroughAllowlistGate,
@@ -382,6 +382,7 @@ export class GithubSocialMethod implements IAuthMethod {
       String(profile.id),
     );
     const now = Date.now();
+    let identityChangeEvent: IdentityAuditEvent | undefined;
     // must-fix #21: emit identity-change audit if the email mapping moved.
     if (existing?.email && existing.email !== profile.verifiedPrimaryEmail) {
       // Check before revocation so a denied identity cannot trigger writes.
@@ -410,7 +411,7 @@ export class GithubSocialMethod implements IAuthMethod {
           revoked += 1;
         }
       }
-      await this.options.storage.recordIdentityEvent({
+      identityChangeEvent = {
         type: 'auth.social.identity_changed',
         sub: identity.sub,
         provider: GITHUB_PROVIDER,
@@ -421,7 +422,7 @@ export class GithubSocialMethod implements IAuthMethod {
           grantsRevoked: revoked,
         },
         timestamp: Date.now(),
-      });
+      };
     }
 
     const gate = await provisionAccountThroughAllowlistGate(
@@ -442,6 +443,7 @@ export class GithubSocialMethod implements IAuthMethod {
         createdAt: existing?.createdAt ?? now,
         updatedAt: now,
       },
+      identityChangeEvent,
     );
     if (!gate.allowed) {
       return { kind: 'denied', reason: gate.reason };
