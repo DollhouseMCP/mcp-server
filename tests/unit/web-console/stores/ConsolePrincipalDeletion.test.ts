@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 
 import { deleteConsolePrincipalWithTx } from '../../../../src/web-console/stores/PostgresConsoleAccountAdminStore.js';
 import {
+  accountAllowlistEntries,
   authKv,
   elements,
   portfolioSyncJobs,
@@ -29,8 +30,11 @@ interface SelectNode {
 // forcing the anonymize-tombstone branch. Both selects (users, auth_accounts) are served.
 function txMock({ hardDelete = false, transactionError }: { hardDelete?: boolean; transactionError?: unknown } = {}) {
   const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
+  const inserts: { readonly table: unknown; readonly values: unknown }[] = [];
   const from = (table: unknown): SelectNode => {
-    const rows = table === users ? [{ id: USER_ID, email: 'a@b.com' }] : ACCOUNTS;
+    const rows = table === users
+      ? [{ id: USER_ID, email: 'a@b.com' }]
+      : table === accountAllowlistEntries ? [] : ACCOUNTS;
     const node: SelectNode = {
       where: () => node,
       limit: () => node,
@@ -54,13 +58,19 @@ function txMock({ hardDelete = false, transactionError }: { hardDelete?: boolean
     update: () => ({
       set: () => ({ where: () => ({ returning: () => Promise.resolve([{ authzVersion: 5 }]) }) }),
     }),
+    insert: (table: unknown) => ({
+      values: (values: unknown) => {
+        inserts.push({ table, values });
+        return Promise.resolve();
+      },
+    }),
   };
-  return { tx: tx as unknown as DrizzleTx, deletes };
+  return { tx: tx as unknown as DrizzleTx, deletes, inserts };
 }
 
 describe('deleteConsolePrincipalWithTx', () => {
   it('anonymize-tombstones and erases the account content + non-FK identity, scoped to the user', async () => {
-    const { tx, deletes } = txMock();
+    const { tx, deletes, inserts } = txMock();
 
     const outcome = await deleteConsolePrincipalWithTx(tx, {
       userId: USER_ID,
@@ -76,6 +86,7 @@ describe('deleteConsolePrincipalWithTx', () => {
     expect(tables.indexOf(portfolioSyncJobs)).toBeLessThan(tables.indexOf(userIntegrations));
     // ...and the non-FK identity/credential tables are purged too (via purgeNonCascadeUserIdentity).
     expect(tables).toContain(authKv);
+    expect(inserts).toEqual([expect.objectContaining({ table: accountAllowlistEntries })]);
   });
 
   it('hard-deletes (users row removed) when nothing RESTRICT-references the user', async () => {
