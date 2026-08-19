@@ -21,6 +21,7 @@ import {
 } from './schema/index.js';
 import type { DrizzleTx } from './db-utils.js';
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
+import type { AuthAllowlistKind } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import { lockAuthPrincipalsWithTx } from './authPrincipalLock.js';
 
 /**
@@ -135,7 +136,7 @@ function githubLogin(account: DeletionIdentityAccount): string | null {
 
 function addDeletionAllowlistValues(
   values: Set<string>,
-  kind: 'email' | 'github_username' | 'github_id',
+  kind: AuthAllowlistKind,
   value: string,
 ): void {
   const normalized = normalizeAuthAllowlistValue(kind, value);
@@ -284,14 +285,14 @@ export async function purgeNonCascadeUserIdentity(
 }
 
 function canonicalDeletionAllowlistValues(identity: DeletionIdentity): Array<{
-  readonly kind: 'email' | 'github_username' | 'github_id';
+  readonly kind: AuthAllowlistKind;
   readonly normalizedValue: string;
 }> {
   const unique = new Map<string, {
-    readonly kind: 'email' | 'github_username' | 'github_id';
+    readonly kind: AuthAllowlistKind;
     readonly normalizedValue: string;
   }>();
-  const add = (kind: 'email' | 'github_username' | 'github_id', values: readonly string[]): void => {
+  const add = (kind: AuthAllowlistKind, values: readonly string[]): void => {
     for (const value of values) {
       const normalizedValue = normalizeAuthAllowlistValue(kind, value);
       if (!normalizedValue || normalizedValue.length > 320) continue;

@@ -9,7 +9,8 @@ export async function lockAuthPrincipalsWithTx(
   tx: DrizzleTx,
   subjects: readonly string[],
 ): Promise<void> {
-  const uniqueSubjects = [...new Set(subjects.filter(Boolean))].sort();
+  const uniqueSubjects = [...new Set(subjects.filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right, 'en'));
   for (const subject of uniqueSubjects) {
     await tx.execute(sql`
       SELECT pg_advisory_xact_lock(

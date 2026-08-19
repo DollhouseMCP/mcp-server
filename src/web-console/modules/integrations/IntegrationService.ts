@@ -38,6 +38,15 @@ const PKCE_VERIFIER_BYTES = 32;
 const PKCE_SECRET_CLASS = 'pkce_verifier';
 const INTEGRATION_PATH = '/api/v1/me/integrations';
 
+interface ConsumedProviderCallbackContext {
+  readonly req: ConsoleRequest;
+  readonly auth: ConsoleAuthenticatedContext;
+  readonly providerId: UserIntegrationProvider;
+  readonly transactionId: string;
+  readonly idHash: Buffer;
+  readonly transaction: ConsoleLoginTransaction;
+}
+
 export class IntegrationService {
   constructor(private readonly options: {
     readonly store: IUserIntegrationStore;
@@ -193,6 +202,33 @@ export class IntegrationService {
       return failedIntegrationCallback();
     }
     try {
+      return await this.completeConsumedProviderCallback({
+        req,
+        auth,
+        providerId,
+        transactionId,
+        idHash,
+        transaction,
+      }, code);
+    } finally {
+      try {
+        await deps.loginTransactions.completeConsumed(idHash);
+      } catch (error) {
+        // A stale consumed row only delays descriptor mutation until its
+        // ten-minute expiry; it must not replace the callback's real result.
+        logger.warn('Failed to release completed integration login transaction', {
+          provider: providerId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private async completeConsumedProviderCallback(
+    context: ConsumedProviderCallbackContext,
+    code: string,
+  ): Promise<ConsoleHandlerResult> {
+    const { req, auth, providerId, transactionId, idHash, transaction } = context;
     const invalidTransaction = await this.validateConsumedIntegrationTransaction(
       transaction,
       auth,
@@ -302,18 +338,6 @@ export class IntegrationService {
       redirectTo: transaction.returnTo ?? INTEGRATION_PATH,
       cookies: [{ operation: 'clear', name: CONSOLE_INTEGRATION_STATE_COOKIE }],
     };
-    } finally {
-      try {
-        await deps.loginTransactions.completeConsumed(idHash);
-      } catch (error) {
-        // A stale consumed row only delays descriptor mutation until its
-        // ten-minute expiry; it must not replace the callback's real result.
-        logger.warn('Failed to release completed integration login transaction', {
-          provider: providerId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
   }
 
   async disconnectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
