@@ -458,7 +458,10 @@ export async function deleteConsolePrincipalWithTx(
     tx,
     collectDeletionIdentity(existing[0]?.email ?? null, accounts),
     input.deletedByUserId,
-    input.deletedAt,
+    // The request timestamp can substantially predate this transaction because
+    // remote grant and runtime revocation happen first. Tombstone precedence
+    // must reflect when deletion actually reaches its serialized DB phase.
+    new Date(),
   );
 
   // Detach the account's own identity/credential/role surface first, so the

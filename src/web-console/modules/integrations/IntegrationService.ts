@@ -20,7 +20,10 @@ import type {
   ILoginTransactionStore,
 } from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
-import { isWellFormedUnicode } from '../../stores/ConsoleStoreValidation.js';
+import {
+  IntegrationDescriptorChangedError,
+  isWellFormedUnicode,
+} from '../../stores/ConsoleStoreValidation.js';
 import {
   serializeIntegrationList,
 } from './IntegrationDtos.js';
@@ -131,21 +134,28 @@ export class IntegrationService {
     );
     const contentsPermission = requestedContentsPermission(req.body);
     const redirectUri = this.providerCallbackUri(providerId);
-    await deps.loginTransactions.create({
-      idHash: deps.opaqueValues.hashOpaqueValue(transactionId),
-      flowKind: 'integration_link',
-      stateHash: deps.opaqueValues.hashOpaqueValue(state),
-      pkceVerifierEnc,
-      userId: auth.userId,
-      consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
-      requestedCapability: null,
-      integrationDescriptorId: deps.provider.integrationDescriptorId ?? null,
-      integrationDescriptorFingerprint: deps.provider.integrationDescriptorFingerprint ?? null,
-      returnTo: readBodyReturnTo(req.body),
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
-      consumedAt: null,
-    });
+    try {
+      await deps.loginTransactions.create({
+        idHash: deps.opaqueValues.hashOpaqueValue(transactionId),
+        flowKind: 'integration_link',
+        stateHash: deps.opaqueValues.hashOpaqueValue(state),
+        pkceVerifierEnc,
+        userId: auth.userId,
+        consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
+        requestedCapability: null,
+        integrationDescriptorId: deps.provider.integrationDescriptorId ?? null,
+        integrationDescriptorFingerprint: deps.provider.integrationDescriptorFingerprint ?? null,
+        returnTo: readBodyReturnTo(req.body),
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
+        consumedAt: null,
+      });
+    } catch (error) {
+      if (error instanceof IntegrationDescriptorChangedError) {
+        return descriptorChangedConflict();
+      }
+      throw error;
+    }
     logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration link flow started', {
       userId: auth.userId,
       contentsPermission,

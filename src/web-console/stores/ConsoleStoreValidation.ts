@@ -20,6 +20,14 @@ export class ConsoleStoreConflictError extends Error {
   }
 }
 
+/** A descriptor-bound write lost a race with descriptor rotation or deletion. */
+export class IntegrationDescriptorChangedError extends ConsoleStoreConflictError {
+  constructor(message: string) {
+    super(message);
+    this.name = 'IntegrationDescriptorChangedError';
+  }
+}
+
 export function isUniqueViolation(error: unknown): boolean {
   return hasPostgresErrorCode(error, '23505');
 }

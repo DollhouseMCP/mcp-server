@@ -72,6 +72,7 @@ function txMock({ hardDelete = false, transactionError }: { hardDelete?: boolean
 describe('deleteConsolePrincipalWithTx', () => {
   it('anonymize-tombstones and erases the account content + non-FK identity, scoped to the user', async () => {
     const { tx, deletes, inserts } = txMock();
+    const deletionTransactionStartedAt = Date.now();
 
     const outcome = await deleteConsolePrincipalWithTx(tx, {
       userId: USER_ID,
@@ -88,6 +89,9 @@ describe('deleteConsolePrincipalWithTx', () => {
     // ...and the non-FK identity/credential tables are purged too (via purgeNonCascadeUserIdentity).
     expect(tables).toContain(authKv);
     expect(inserts).toEqual([expect.objectContaining({ table: accountAllowlistEntries })]);
+    const tombstones = inserts[0]?.values as Array<{ revokedAt: Date }>;
+    expect(tombstones[0]?.revokedAt.getTime()).toBeGreaterThanOrEqual(deletionTransactionStartedAt);
+    expect(tombstones[0]?.revokedAt).not.toEqual(DELETED_AT);
   });
 
   it('hard-deletes (users row removed) when nothing RESTRICT-references the user', async () => {

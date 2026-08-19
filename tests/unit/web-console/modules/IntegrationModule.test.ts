@@ -7,6 +7,7 @@ import {
   HmacConsoleOpaqueValueService,
   InMemoryUserIntegrationStore,
   InMemoryLoginTransactionStore,
+  IntegrationDescriptorChangedError,
   CONSOLE_INTEGRATION_STATE_COOKIE,
   CONSOLE_LOGIN_STATE_COOKIE,
   IntegrationProviderRegistry,
@@ -570,6 +571,19 @@ describe('IntegrationModule', () => {
         error_reason: 'token_exchange_failed',
       },
     });
+  });
+
+  it('returns a retryable conflict when a descriptor changes while authorization starts', async () => {
+    const { module, loginTransactions } = writeModuleFixture();
+    jest.spyOn(loginTransactions, 'create').mockRejectedValueOnce(
+      new IntegrationDescriptorChangedError('integration descriptor changed while starting authorization'),
+    );
+
+    await expect(findRoute(module.routes, GITHUB_CONNECT_PATH, 'POST').handler(consoleRequest()))
+      .resolves.toMatchObject({
+        status: 409,
+        body: { code: 'integration_descriptor_changed' },
+      });
   });
 
   it('treats tampered PKCE verifier ciphertext as a rejected callback instead of throwing', async () => {

@@ -10,6 +10,7 @@ import type {
 import { cloneLoginTransaction, validateLoginTransaction } from './ILoginTransactionStore.js';
 import {
   ConsoleStoreConflictError,
+  IntegrationDescriptorChangedError,
   assertHash,
   isUniqueViolation,
 } from './ConsoleStoreValidation.js';
@@ -31,11 +32,13 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
             .for('key share')
             .limit(1);
           if (descriptors.length === 0) {
-            throw new ConsoleStoreConflictError('integration descriptor no longer exists');
+            throw new IntegrationDescriptorChangedError('integration descriptor no longer exists');
           }
           if (integrationDescriptorRoutingFingerprint(fromDescriptorRow(descriptors[0]))
               !== transaction.integrationDescriptorFingerprint) {
-            throw new ConsoleStoreConflictError('integration descriptor changed while starting authorization');
+            throw new IntegrationDescriptorChangedError(
+              'integration descriptor changed while starting authorization',
+            );
           }
         }
         await tx.insert(consoleLoginTransactions).values({

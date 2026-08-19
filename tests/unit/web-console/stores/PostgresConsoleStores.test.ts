@@ -72,7 +72,11 @@ const { PostgresConsoleIdentityResolver } = await import(
 );
 const { desc } = await import('drizzle-orm');
 const { accountFactors } = await import('../../../../src/database/schema/index.js');
-const { ConsoleStoreConflictError, ConsoleStoreValidationError } = await import(
+const {
+  ConsoleStoreConflictError,
+  ConsoleStoreValidationError,
+  IntegrationDescriptorChangedError,
+} = await import(
   '../../../../src/web-console/stores/ConsoleStoreValidation.js'
 );
 const { PortfolioSyncAlreadyPendingError } = await import(
@@ -706,7 +710,7 @@ describe('PostgresLoginTransactionStore', () => {
       integrationDescriptorFingerprint: integrationDescriptorRoutingFingerprint(
         integrationDescriptorRow() as Parameters<typeof integrationDescriptorRoutingFingerprint>[0],
       ),
-    })).rejects.toThrow('descriptor changed');
+    })).rejects.toThrow(IntegrationDescriptorChangedError);
     expect(chain.values).not.toHaveBeenCalled();
   });
 
