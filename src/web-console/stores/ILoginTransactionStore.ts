@@ -56,7 +56,7 @@ export function validateLoginTransaction(transaction: ConsoleLoginTransaction): 
     assertUuid(transaction.integrationDescriptorId, 'integrationDescriptorId');
     if (!/^[a-f0-9]{64}$/.test(transaction.integrationDescriptorFingerprint ?? '')) {
       throw new ConsoleStoreValidationError(
-        'integrationDescriptorFingerprint must be a lowercase SHA-256 digest for descriptor-bound transactions',
+        'integrationDescriptorFingerprint must be a lowercase 256-bit hex fingerprint for descriptor-bound transactions',
       );
     }
   } else if (transaction.integrationDescriptorFingerprint) {

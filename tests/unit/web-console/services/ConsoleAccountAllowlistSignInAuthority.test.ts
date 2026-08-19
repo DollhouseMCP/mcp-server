@@ -24,5 +24,22 @@ describe('ConsoleAccountAllowlistSignInAuthority', () => {
     await expect(authority.hasAnyEntries()).resolves.toBe(true);
     await expect(authority.listEntries()).resolves.toHaveLength(1);
     await expect(authority.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(true);
+
+    const [entry] = await store.listActive();
+    await store.remove({
+      id: entry.id,
+      revokedByUserId: USER_ID,
+      revokedAt: new Date('2026-05-30T01:00:00.000Z'),
+    });
+    await expect(authority.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(false);
+    await expect(authority.deniesIdentity?.({ email: 'alice@example.test' })).resolves.toBe(true);
+
+    await store.add({
+      kind: 'email',
+      value: 'Alice@Example.Test',
+      createdByUserId: USER_ID,
+      createdAt: new Date('2026-05-30T02:00:00.000Z'),
+    });
+    await expect(authority.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(true);
   });
 });

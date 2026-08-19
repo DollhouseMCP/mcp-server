@@ -2,7 +2,11 @@ import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
-import { consoleLoginTransactions, integrationProviderDescriptors } from '../../database/schema/index.js';
+import {
+  consoleLoginTransactions,
+  integrationProviderDescriptors,
+  userIntegrations,
+} from '../../database/schema/index.js';
 import {
   cloneIntegrationDescriptorRecord,
   decodeDescriptorPageCursor,
@@ -19,7 +23,7 @@ import {
   validateIntegrationDescriptorRecord,
 } from './IIntegrationDescriptorStore.js';
 import type { UserIntegrationProvider } from './IUserIntegrationStore.js';
-import { ConsoleStoreConflictError, assertUuid } from './ConsoleStoreValidation.js';
+import { assertUuid } from './ConsoleStoreValidation.js';
 import { integrationDescriptorRoutingFingerprint } from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
 
 export class PostgresIntegrationDescriptorStore implements IIntegrationDescriptorStore {
@@ -127,7 +131,7 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
           eq(integrationProviderDescriptors.ownerUserId, ownerUserId),
         )).for('update').limit(1);
       if (!existing[0]) return [];
-      await assertNoActiveDescriptorFlowWithTx(tx, id, new Date());
+      await invalidateDescriptorBindingsWithTx(tx, id, new Date());
       return tx.delete(integrationProviderDescriptors).where(and(
         eq(integrationProviderDescriptors.id, id),
         eq(integrationProviderDescriptors.ownership, 'byo'),
@@ -146,7 +150,7 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
           isNull(integrationProviderDescriptors.ownerUserId),
         )).for('update').limit(1);
       if (!existing[0]) return [];
-      await assertNoActiveDescriptorFlowWithTx(tx, existing[0].id, new Date());
+      await invalidateDescriptorBindingsWithTx(tx, existing[0].id, new Date());
       return tx.delete(integrationProviderDescriptors).where(and(
         eq(integrationProviderDescriptors.provider, provider),
         eq(integrationProviderDescriptors.ownership, 'curated'),
@@ -182,7 +186,7 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
         };
         if (integrationDescriptorRoutingFingerprint(current)
             !== integrationDescriptorRoutingFingerprint(proposed)) {
-          await assertNoActiveDescriptorFlowWithTx(tx, existing[0].id, new Date());
+          await invalidateDescriptorBindingsWithTx(tx, existing[0].id, input.updatedAt);
         }
         return tx.update(integrationProviderDescriptors)
           .set(values)
@@ -196,23 +200,28 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
   }
 }
 
-async function assertNoActiveDescriptorFlowWithTx(
+async function invalidateDescriptorBindingsWithTx(
   tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0],
   descriptorId: string,
-  now: Date,
+  revokedAt: Date,
 ): Promise<void> {
-  const active = await tx.select({ idHash: consoleLoginTransactions.idHash })
-    .from(consoleLoginTransactions)
-    .where(and(
-      eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
-      gt(consoleLoginTransactions.expiresAt, now),
-    ))
-    .limit(1);
-  if (active.length > 0) {
-    throw new ConsoleStoreConflictError(
-      'integration descriptor cannot change while an OAuth callback is pending',
-    );
-  }
+  // The descriptor row is already locked FOR UPDATE by every caller. Remove
+  // callbacks first, then clear credentials, so callback persistence can use
+  // the same descriptor -> transaction -> credential lock order without a
+  // deadlock or a stale credential write after rotation.
+  await tx.delete(consoleLoginTransactions).where(
+    eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
+  );
+  await tx.update(userIntegrations).set({
+    accessTokenCiphertext: null,
+    refreshTokenCiphertext: null,
+    status: 'revoked',
+    errorReason: null,
+    revokedAt,
+  }).where(and(
+    eq(userIntegrations.integrationDescriptorId, descriptorId),
+    isNull(userIntegrations.revokedAt),
+  ));
 }
 
 function descriptorIdentity(input: IntegrationDescriptorCreateInput) {
@@ -250,7 +259,7 @@ function toDescriptorValues(input: IntegrationDescriptorCreateInput, createdAt: 
   };
 }
 
-function fromDescriptorRow(row: typeof integrationProviderDescriptors.$inferSelect): IntegrationDescriptorRecord {
+export function fromDescriptorRow(row: typeof integrationProviderDescriptors.$inferSelect): IntegrationDescriptorRecord {
   const record: IntegrationDescriptorRecord = {
     id: row.id,
     provider: row.provider as UserIntegrationProvider,

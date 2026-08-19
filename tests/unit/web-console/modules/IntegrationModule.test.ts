@@ -1191,6 +1191,66 @@ describe('IntegrationModule', () => {
     ]);
   });
 
+  it('revokes exchanged credentials when descriptor rotation invalidates the consumed callback', async () => {
+    const fetchImpl = () => Promise.resolve(new Response(JSON.stringify({
+      access_token: 'gmail-access-token-secret',
+      refresh_token: 'gmail-refresh-token-secret',
+      email: 'alice@example.com',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const provider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      ...providerOutbound(fetchImpl),
+    });
+    const revoke = jest.spyOn(provider, 'revokeCredentials').mockResolvedValue();
+    const connectDescriptorCallback = jest.fn(() => Promise.resolve(null));
+    const store = Object.assign(new InMemoryUserIntegrationStore(), { connectDescriptorCallback });
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
+    const securityEventSink = new FixtureIntegrationSecurityEventSink();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [provider],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      securityEventSink,
+      now: () => NOW,
+    });
+    const started = await findRoute(module.routes, GMAIL_CONNECT_PATH, 'POST').handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    const result = await findRoute(module.routes, GMAIL_CALLBACK_PATH).handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }));
+
+    expect(result).toMatchObject({ status: 302, redirectTo: LIST_PATH });
+    expect(connectDescriptorCallback).toHaveBeenCalledWith(expect.objectContaining({
+      descriptorId: oauthDescriptorFixture().id,
+      descriptorFingerprint: provider.integrationDescriptorFingerprint,
+    }));
+    expect(revoke).toHaveBeenCalledWith({
+      accessToken: 'gmail-access-token-secret',
+      refreshToken: 'gmail-refresh-token-secret',
+      externalInstallationId: null,
+    });
+    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    expect(securityEventSink.events).toEqual([
+      expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),
+    ]);
+  });
+
   it('stores and revokes static API key credentials without OAuth', async () => {
     const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
     const store = new InMemoryUserIntegrationStore();

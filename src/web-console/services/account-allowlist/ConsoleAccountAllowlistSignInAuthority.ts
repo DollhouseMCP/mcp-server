@@ -24,6 +24,10 @@ export class ConsoleAccountAllowlistSignInAuthority implements SignInAllowlistAu
     return this.store.matchesIdentity(values);
   }
 
+  async deniesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    return this.store.deniesIdentity(values);
+  }
+
   async hasAnyEntries(): Promise<boolean> {
     return this.store.hasActiveEntries();
   }

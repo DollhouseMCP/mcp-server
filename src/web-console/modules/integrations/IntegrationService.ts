@@ -251,26 +251,41 @@ export class IntegrationService {
     }
 
     const connectedAt = this.now();
+    const connection = {
+      userId: auth.userId,
+      provider: providerId,
+      integrationDescriptorId: transaction.integrationDescriptorId ?? null,
+      externalAccountLabel: exchanged.accountLabel,
+      externalInstallationId: exchanged.externalInstallationId,
+      authorizedPermissions: exchanged.authorizedPermissions,
+      accessTokenCiphertext: currentDeps.secretEncryption.encrypt(
+        Buffer.from(exchanged.accessToken, 'utf8'),
+        integrationSecretContext('access_token', auth.userId, providerId),
+      ),
+      refreshTokenCiphertext: exchanged.refreshToken
+        ? currentDeps.secretEncryption.encrypt(
+          Buffer.from(exchanged.refreshToken, 'utf8'),
+          integrationSecretContext('refresh_token', auth.userId, providerId),
+        )
+        : null,
+      connectedAt,
+    };
     try {
-      await this.options.store.connect({
-        userId: auth.userId,
-        provider: providerId,
-        integrationDescriptorId: transaction.integrationDescriptorId ?? null,
-        externalAccountLabel: exchanged.accountLabel,
-        externalInstallationId: exchanged.externalInstallationId,
-        authorizedPermissions: exchanged.authorizedPermissions,
-        accessTokenCiphertext: currentDeps.secretEncryption.encrypt(
-          Buffer.from(exchanged.accessToken, 'utf8'),
-          integrationSecretContext('access_token', auth.userId, providerId),
-        ),
-        refreshTokenCiphertext: exchanged.refreshToken
-          ? currentDeps.secretEncryption.encrypt(
-            Buffer.from(exchanged.refreshToken, 'utf8'),
-            integrationSecretContext('refresh_token', auth.userId, providerId),
-          )
-          : null,
-        connectedAt,
-      });
+      const connected = transaction.integrationDescriptorId
+          && transaction.integrationDescriptorFingerprint
+          && this.options.store.connectDescriptorCallback
+        ? await this.options.store.connectDescriptorCallback({
+            transactionIdHash: idHash,
+            descriptorId: transaction.integrationDescriptorId,
+            descriptorFingerprint: transaction.integrationDescriptorFingerprint,
+            connection,
+          })
+        : await this.options.store.connect(connection);
+      if (!connected) {
+        await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
+        await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
+        return failedIntegrationCallback(transaction.returnTo ?? undefined);
+      }
     } catch {
       await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
       await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');

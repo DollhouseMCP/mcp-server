@@ -331,6 +331,24 @@ describe('provisionAccountThroughAllowlistGate', () => {
   });
 });
 
+describe('revoked identity tombstones', () => {
+  it('denies a matching revoked identity before permissive empty-list fallback', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const authority: SignInAllowlistAuthority = {
+      ...fixedAuthority({ entries: 0, matches: false }),
+      deniesIdentity: () => Promise.resolve(true),
+    };
+
+    await expect(checkAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority, required: false },
+    )).resolves.toEqual({
+      allowed: false,
+      reason: 'This identity is not on the sign-in allowlist.',
+    });
+  });
+});
+
 function fixedAuthority(options: {
   readonly entries: number;
   readonly matches: boolean;

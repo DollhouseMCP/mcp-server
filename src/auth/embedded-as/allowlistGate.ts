@@ -82,6 +82,8 @@ export interface AllowlistGateOptions {
 
 export interface SignInAllowlistAuthority {
   matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
+  /** A revoked matching identity is a durable deny tombstone unless re-added. */
+  deniesIdentity?(values: AllowlistMatchValues): Promise<boolean>;
   hasAnyEntries(): Promise<boolean>;
   listEntries(): Promise<AuthAllowlistEntry[]>;
   /**
@@ -144,6 +146,18 @@ export async function checkAllowlistGate(
   });
   if (matched) {
     return { allowed: true };
+  }
+
+  // A revoked match takes precedence over permissive empty-list fallback. An
+  // administrator can explicitly re-admit the identity by adding a new active
+  // entry, which is handled by rule 2 above.
+  if (await authority.deniesIdentity?.({
+    email: identity.email,
+    githubUsername: identity.githubUsername,
+    githubId: identity.githubId,
+  })) {
+    await recordDenied(storage, identity);
+    return { allowed: false, reason: 'This identity is not on the sign-in allowlist.' };
   }
 
   // Rule 3: REQUIRED=true with no match → DENY.

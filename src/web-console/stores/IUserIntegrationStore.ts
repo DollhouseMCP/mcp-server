@@ -73,6 +73,12 @@ export interface IUserIntegrationStore {
   listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
+  /**
+   * Atomically verify a descriptor-bound callback and persist its credentials.
+   * PostgreSQL implements this to serialize callback completion with descriptor
+   * rotation; stores without shared descriptor state may omit it.
+   */
+  connectDescriptorCallback?(input: DescriptorCallbackConnectInput): Promise<UserIntegrationRecord | null>;
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
@@ -90,6 +96,13 @@ export interface UserIntegrationConnectInput {
   readonly refreshTokenCiphertext: Buffer | null;
   readonly credentialKeyVersion?: string | null;
   readonly connectedAt: Date;
+}
+
+export interface DescriptorCallbackConnectInput {
+  readonly transactionIdHash: Buffer;
+  readonly descriptorId: string;
+  readonly descriptorFingerprint: string;
+  readonly connection: UserIntegrationConnectInput;
 }
 
 export interface UserIntegrationRefreshInput {

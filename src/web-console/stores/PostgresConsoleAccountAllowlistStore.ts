@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -60,6 +60,10 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
     return withSystemContext(this.db, tx => accountAllowlistMatchesIdentityWithTx(tx, values));
   }
 
+  async deniesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    return withSystemContext(this.db, tx => accountAllowlistDeniesIdentityWithTx(tx, values));
+  }
+
   async provisionAccountIfAllowed(
     input: AtomicAccountProvisioningInput,
   ): Promise<AllowlistGateResult> {
@@ -86,11 +90,14 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
       const matched = isBootstrapAdmin
         ? false
         : await accountAllowlistMatchesIdentityWithTx(tx, values, true);
+      const denied = isBootstrapAdmin || matched
+        ? false
+        : await accountAllowlistDeniesIdentityWithTx(tx, values);
       const hasAnyEntries = isBootstrapAdmin || matched || input.required
         ? true
         : await hasActiveAccountAllowlistEntriesWithTx(tx);
 
-      if (isBootstrapAdmin || matched || (!input.required && !hasAnyEntries)) {
+      if (isBootstrapAdmin || matched || (!denied && !input.required && !hasAnyEntries)) {
         await upsertAuthAccountWithTx(tx, input.account);
         return { allowed: true };
       }
@@ -122,6 +129,18 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
   }
 }
 
+export async function accountAllowlistDeniesIdentityWithTx(
+  tx: DrizzleTx,
+  values: AllowlistMatchValues,
+): Promise<boolean> {
+  const predicates = allowlistIdentityPredicates(values);
+  if (predicates.length === 0) return false;
+  const rows = await tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
+    .where(and(isNotNull(accountAllowlistEntries.revokedAt), or(...predicates)))
+    .limit(1);
+  return rows.length > 0;
+}
+
 export async function listActiveAccountAllowlistEntriesWithTx(
   tx: DrizzleTx,
 ): Promise<ConsoleAccountAllowlistEntry[]> {
@@ -143,6 +162,16 @@ export async function accountAllowlistMatchesIdentityWithTx(
   values: AllowlistMatchValues,
   lockMatch = false,
 ): Promise<boolean> {
+  const predicates = allowlistIdentityPredicates(values);
+  if (predicates.length === 0) return false;
+  const query = tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
+    .where(and(isNull(accountAllowlistEntries.revokedAt), or(...predicates)))
+    .limit(1);
+  const rows = lockMatch ? await query.for('update') : await query;
+  return rows.length > 0;
+}
+
+function allowlistIdentityPredicates(values: AllowlistMatchValues): SQL[] {
   const predicates: SQL[] = [];
   if (values.email) {
     const pred = activeAllowlistValuePredicate('email', values.email);
@@ -156,12 +185,7 @@ export async function accountAllowlistMatchesIdentityWithTx(
     const pred = activeAllowlistValuePredicate('github_id', values.githubId);
     if (pred) predicates.push(pred);
   }
-  if (predicates.length === 0) return false;
-  const query = tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
-    .where(and(isNull(accountAllowlistEntries.revokedAt), or(...predicates)))
-    .limit(1);
-  const rows = lockMatch ? await query.for('update') : await query;
-  return rows.length > 0;
+  return predicates;
 }
 
 async function recordAllowlistDenialWithTx(

@@ -34,6 +34,9 @@ const { PostgresUserIntegrationStore } = await import(
 const { PostgresIntegrationDescriptorStore } = await import(
   '../../../../src/web-console/stores/PostgresIntegrationDescriptorStore.js'
 );
+const { integrationDescriptorRoutingFingerprint } = await import(
+  '../../../../src/web-console/modules/integrations/IntegrationDescriptorRoutingFingerprint.js'
+);
 const { PostgresIntegrationOpenApiSpecStore } = await import(
   '../../../../src/web-console/stores/PostgresIntegrationOpenApiSpecStore.js'
 );
@@ -754,6 +757,77 @@ describe('PostgresUserIntegrationStore', () => {
     }));
   });
 
+  it('atomically verifies a consumed descriptor callback before persisting credentials', async () => {
+    const descriptorRow = integrationDescriptorRow();
+    const descriptorLock = selectingChain([descriptorRow]);
+    const callbackLock = selectingChain([{ idHash: hash(3), consumedAt: NOW }]);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(descriptorLock)
+      .mockReturnValueOnce(callbackLock);
+    const revokeExisting = returningChain([]);
+    const completeCallback = returningChain([]);
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(revokeExisting)
+      .mockReturnValueOnce(completeCallback);
+    transaction.insert = jest.fn(() => insertChain([userIntegrationRow({
+      provider: 'gmail',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+    })]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.connectDescriptorCallback({
+      transactionIdHash: hash(3),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: integrationDescriptorRoutingFingerprint(
+        integrationDescriptorRow() as Parameters<typeof integrationDescriptorRoutingFingerprint>[0],
+      ),
+      connection: {
+        userId: USER_ID,
+        provider: 'gmail',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        externalAccountLabel: 'alice@example.test',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: null,
+        connectedAt: NOW,
+      },
+    })).resolves.toMatchObject({
+      provider: 'gmail',
+      integrationDescriptorId: DESCRIPTOR_ID,
+    });
+    expect(descriptorLock.for).toHaveBeenCalledWith('key share');
+    expect(callbackLock.for).toHaveBeenCalledWith('update');
+    expect(completeCallback.set).toHaveBeenCalledWith({ expiresAt: NOW });
+  });
+
+  it('rejects descriptor callback persistence after routing changes', async () => {
+    const changedDescriptor = integrationDescriptorRow({ apiHosts: ['mail.example.test'] });
+    transaction.select = jest.fn(() => selectingChain([changedDescriptor]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.connectDescriptorCallback({
+      transactionIdHash: hash(3),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: integrationDescriptorRoutingFingerprint(
+        integrationDescriptorRow() as Parameters<typeof integrationDescriptorRoutingFingerprint>[0],
+      ),
+      connection: {
+        userId: USER_ID,
+        provider: 'gmail',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        externalAccountLabel: 'alice@example.test',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: null,
+        connectedAt: NOW,
+      },
+    })).resolves.toBeNull();
+    expect(transaction.insert).toBeUndefined();
+  });
+
   it('retains the descriptor binding while refreshing configured-provider credentials', async () => {
     const current = userIntegrationRow({
       provider: 'linear',
@@ -1046,19 +1120,31 @@ describe('PostgresIntegrationDescriptorStore', () => {
     });
   });
 
-  it('rejects descriptor mutation while a bound OAuth callback is active', async () => {
+  it('invalidates bound OAuth callbacks and credentials before routing mutation', async () => {
     const descriptorLock = selectingChain([integrationDescriptorRow()]);
-    const activeFlow = selectingChain([{ idHash: hash(3) }]);
-    transaction.select = jest.fn()
-      .mockReturnValueOnce(descriptorLock)
-      .mockReturnValueOnce(activeFlow);
-    transaction.update = jest.fn();
+    transaction.select = jest.fn(() => descriptorLock);
+    const invalidateCredentials = returningChain([]);
+    const updateDescriptor = returningChain([
+      integrationDescriptorRow({ apiHosts: ['mail.example.test'] }),
+    ]);
+    transaction.delete = jest.fn(() => deletingChain());
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(invalidateCredentials)
+      .mockReturnValueOnce(updateDescriptor);
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
 
     await expect(store.upsert(integrationDescriptorInput({ apiHosts: ['mail.example.test'] })))
-      .rejects.toThrow('cannot change while an OAuth callback is pending');
+      .resolves.toMatchObject({ apiHosts: ['mail.example.test'] });
     expect(descriptorLock.for).toHaveBeenCalledWith('update');
-    expect(transaction.update).not.toHaveBeenCalled();
+    expect(transaction.delete).toHaveBeenCalledTimes(1);
+    expect(invalidateCredentials.set).toHaveBeenCalledWith({
+      accessTokenCiphertext: null,
+      refreshTokenCiphertext: null,
+      status: 'revoked',
+      errorReason: null,
+      revokedAt: NOW,
+    });
+    expect(transaction.update).toHaveBeenCalledTimes(2);
   });
 
   it('permits display-only descriptor edits without consulting callback leases', async () => {
@@ -1113,12 +1199,14 @@ describe('PostgresIntegrationDescriptorStore', () => {
 
   it('deletes descriptors owner-scoped and reports whether a row was removed', async () => {
     transaction.select = jest.fn()
-      .mockReturnValueOnce(selectingChain([{ id: DESCRIPTOR_ID }]))
-      .mockReturnValueOnce(selectingChain([]));
+      .mockReturnValueOnce(selectingChain([{ id: DESCRIPTOR_ID }]));
     transaction.delete = jest.fn(() => deletingChain([{ id: DESCRIPTOR_ID }]));
+    transaction.update = jest.fn(() => returningChain([]));
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
 
     await expect(store.delete(DESCRIPTOR_ID, USER_ID)).resolves.toBe(true);
+    expect(transaction.delete).toHaveBeenCalledTimes(2);
+    expect(transaction.update).toHaveBeenCalledTimes(1);
 
     transaction.select = jest.fn(() => selectingChain([]));
     transaction.delete = jest.fn(() => deletingChain([]));
@@ -2230,6 +2318,48 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     expect(bootstrapSelect.for).toHaveBeenCalledWith('update');
     expect(allowlistSelect.for).toHaveBeenCalledWith('update');
     expect(accountInsert.onConflictDoUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let empty-list fallback re-provision a revoked identity', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingForUpdateChain([]))
+      .mockReturnValueOnce(selectingForUpdateChain([]))
+      .mockReturnValueOnce(selectingChain([{ id: ALLOWLIST_ID }]))
+      .mockReturnValueOnce(selectingChain([]));
+    const inserts: ReturnType<typeof insertChain>[] = [];
+    transaction.insert = jest.fn(() => {
+      const chain = insertChain();
+      inserts.push(chain);
+      return chain;
+    });
+    transaction.transaction = jest.fn((callback: (tx: typeof transaction) => Promise<unknown>) =>
+      callback(transaction));
+
+    await expect(store.provisionAccountIfAllowed({
+      identity: {
+        sub: 'github_42',
+        method: 'github',
+        email: ALICE_EMAIL,
+        githubId: '42',
+      },
+      account: {
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: ALICE_EMAIL,
+        emailVerified: true,
+        createdAt: NOW.getTime(),
+        updatedAt: NOW.getTime(),
+      },
+      required: false,
+    })).resolves.toEqual({
+      allowed: false,
+      reason: 'This identity is not on the sign-in allowlist.',
+    });
+
+    expect(inserts).toHaveLength(1);
+    expect(inserts[0]?.onConflictDoUpdate).not.toHaveBeenCalled();
   });
 
   it('normalizes inserted allowlist values and maps duplicate active entries to conflicts', async () => {

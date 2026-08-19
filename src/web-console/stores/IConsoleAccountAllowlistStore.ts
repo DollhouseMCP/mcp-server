@@ -48,6 +48,7 @@ export interface IConsoleAccountAllowlistStore {
   listActive(): Promise<ConsoleAccountAllowlistEntry[]>;
   hasActiveEntries(): Promise<boolean>;
   matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
+  deniesIdentity(values: AllowlistMatchValues): Promise<boolean>;
   findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null>;
   add(input: AllowlistAddInput): Promise<ConsoleAccountAllowlistEntry>;
   update(input: AllowlistUpdateInput): Promise<ConsoleAccountAllowlistEntry | null>;

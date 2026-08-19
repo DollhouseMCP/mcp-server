@@ -55,6 +55,20 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
     return false;
   }
 
+  async deniesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    await Promise.resolve();
+    for (const entry of this.entries.values()) {
+      if (!entry.revokedAt) continue;
+      if (entry.kind === 'email' && values.email &&
+        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.email)) return true;
+      if (entry.kind === 'github_username' && values.githubUsername &&
+        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubUsername)) return true;
+      if (entry.kind === 'github_id' && values.githubId &&
+        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubId)) return true;
+    }
+    return false;
+  }
+
   async findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null> {
     await Promise.resolve();
     const entry = this.entries.get(id);
