@@ -135,6 +135,7 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   requestedCapability: text('requested_capability'),
   integrationDescriptorId: uuid('integration_descriptor_id')
     .references(() => integrationProviderDescriptors.id, { onDelete: 'cascade' }),
+  integrationDescriptorFingerprint: text('integration_descriptor_fingerprint'),
   returnTo: text('return_to'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -142,6 +143,11 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
 }, (table) => [
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
   index('idx_console_login_transactions_descriptor').on(table.integrationDescriptorId),
+  check('console_login_transactions_descriptor_fingerprint_check', sql`
+    (${table.integrationDescriptorId} IS NULL AND ${table.integrationDescriptorFingerprint} IS NULL)
+    OR (${table.integrationDescriptorId} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} ~ '^[a-f0-9]{64}$')
+  `),
 ]);
 
 export type UserIntegrationProvider = string & { readonly __brand: 'UserIntegrationProvider' };

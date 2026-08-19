@@ -76,6 +76,8 @@ export interface IIntegrationProvider {
   readonly descriptor: IntegrationProviderCatalogDescriptor;
   /** Persisted descriptor that owns credentials created by this provider. */
   readonly integrationDescriptorId?: string | null;
+  /** Routing-sensitive digest of the persisted descriptor. */
+  readonly integrationDescriptorFingerprint?: string | null;
   readonly authorizationConfigured: boolean;
   readonly credentialStrategy: IntegrationCredentialStrategy;
   /**

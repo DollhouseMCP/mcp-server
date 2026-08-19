@@ -330,6 +330,13 @@
       "when": 1779085400000,
       "tag": "0046_bind_integrations_to_descriptors",
       "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1779085500000,
+      "tag": "0047_bind_oauth_flows_to_descriptor_routing",
+      "breakpoints": true
     }
   ]
 }

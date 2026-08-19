@@ -103,6 +103,7 @@ export interface PrincipalProfileUpdateInput {
 
 export interface PrincipalDeletionInput {
   readonly userId: string;
+  readonly deletedByUserId: string;
   readonly deletedAt: Date;
 }
 
@@ -274,6 +275,7 @@ export function validatePrincipalAuthzVersionBumpInput(input: PrincipalAuthzVers
 
 export function validatePrincipalDeletionInput(input: PrincipalDeletionInput): void {
   assertUuid(input.userId, 'userId');
+  assertUuid(input.deletedByUserId, 'deletedByUserId');
 }
 
 export function validateIdentitySub(sub: string, name = 'sub'): void {

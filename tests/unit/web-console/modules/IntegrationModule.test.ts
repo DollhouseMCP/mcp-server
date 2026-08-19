@@ -778,7 +778,10 @@ describe('IntegrationModule', () => {
     const state = authorizeUrl.searchParams.get('state');
     if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
     await expect(loginTransactions.findByIdHash(opaqueValues.hashOpaqueValue(transactionId)))
-      .resolves.toMatchObject({ integrationDescriptorId: oauthDescriptorFixture().id });
+      .resolves.toMatchObject({
+        integrationDescriptorId: oauthDescriptorFixture().id,
+        integrationDescriptorFingerprint: provider.integrationDescriptorFingerprint,
+      });
 
     const result = await callback.handler(consoleRequest({
       headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
@@ -876,6 +879,67 @@ describe('IntegrationModule', () => {
     expect(result).toMatchObject({ status: 302, redirectTo: LIST_PATH });
     expect(originalFetch).not.toHaveBeenCalled();
     expect(replacementFetch).not.toHaveBeenCalled();
+    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    expect(securityEventSink.events).toEqual([
+      expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),
+    ]);
+  });
+
+  it('rejects a callback when routing changes on the descriptor that started OAuth', async () => {
+    const originalFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const changedFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const original = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(originalFetch),
+    });
+    const changed = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture({ apiHosts: ['mail.example.com'] }),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(changedFetch),
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const originalModule = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption,
+      configuredProviders: [original],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      now: () => NOW,
+    });
+    const securityEventSink = new FixtureIntegrationSecurityEventSink();
+    const changedModule = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption,
+      configuredProviders: [changed],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      securityEventSink,
+      now: () => NOW,
+    });
+    const started = await findRoute(originalModule.routes, GMAIL_CONNECT_PATH, 'POST')
+      .handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    const result = await findRoute(changedModule.routes, GMAIL_CALLBACK_PATH).handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }));
+
+    expect(result).toMatchObject({ status: 302, redirectTo: LIST_PATH });
+    expect(originalFetch).not.toHaveBeenCalled();
+    expect(changedFetch).not.toHaveBeenCalled();
     await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
     expect(securityEventSink.events).toEqual([
       expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),

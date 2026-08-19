@@ -1,5 +1,6 @@
-import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
+  accountAllowlistEntries,
   approvalAuditEvents,
   authAllowlist,
   authIdentityEvents,
@@ -169,11 +170,18 @@ export function collectDeletionIdentity(
  * therefore reached by neither the hard-delete cascade nor {@link purgeUserScopedData}. Called
  * on BOTH deletion paths. `auth_kv` holds the OIDC grants/tokens (email/profile in the payload,
  * keyed by the subject as `accountId`); `auth_identity_events` is the account's own auth-event
- * log; `auth_allowlist` is the pre-approval entry (a direct identifier + re-onboarding vector).
+ * log; `auth_allowlist` is the legacy pre-approval entry (a direct identifier + re-onboarding
+ * vector). Matching active `account_allowlist_entries` are revoked, not deleted, so the current
+ * sign-in authority cannot recreate the account while its administrative history remains intact.
  * `security_audit_events` is intentionally NOT purged here — it is the operator security-audit
  * sink and is retained (see docs).
  */
-export async function purgeNonCascadeUserIdentity(tx: DrizzleTx, identity: DeletionIdentity): Promise<void> {
+export async function purgeNonCascadeUserIdentity(
+  tx: DrizzleTx,
+  identity: DeletionIdentity,
+  revokedByUserId: string,
+  revokedAt: Date,
+): Promise<void> {
   for (const sub of identity.subs) {
     // OIDC storage: a Grant carries the subject as payload.accountId, while tokens/sessions/codes
     // are linked to it via payload.grantId (this mirrors the adapter's own revokeByGrantId). Purge
@@ -203,5 +211,35 @@ export async function purgeNonCascadeUserIdentity(tx: DrizzleTx, identity: Delet
   ].filter((clause): clause is NonNullable<typeof clause> => clause !== undefined);
   if (allowlistMatches.length > 0) {
     await tx.delete(authAllowlist).where(or(...allowlistMatches));
+  }
+
+  const accountAllowlistMatches = [
+    identity.emails.length > 0
+      ? and(
+        eq(accountAllowlistEntries.kind, 'email'),
+        inArray(accountAllowlistEntries.normalizedValue, [...identity.emails]),
+      )
+      : undefined,
+    identity.githubIds.length > 0
+      ? and(
+        eq(accountAllowlistEntries.kind, 'github_id'),
+        inArray(accountAllowlistEntries.normalizedValue, [...identity.githubIds]),
+      )
+      : undefined,
+    identity.githubLogins.length > 0
+      ? and(
+        eq(accountAllowlistEntries.kind, 'github_username'),
+        inArray(accountAllowlistEntries.normalizedValue, [...identity.githubLogins]),
+      )
+      : undefined,
+  ].filter((clause): clause is NonNullable<typeof clause> => clause !== undefined);
+  if (accountAllowlistMatches.length > 0) {
+    await tx.update(accountAllowlistEntries).set({
+      revokedByUserId,
+      revokedAt,
+    }).where(and(
+      isNull(accountAllowlistEntries.revokedAt),
+      or(...accountAllowlistMatches),
+    ));
   }
 }

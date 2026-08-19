@@ -128,6 +128,7 @@ export class IntegrationService {
       consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
       requestedCapability: null,
       integrationDescriptorId: deps.provider.integrationDescriptorId ?? null,
+      integrationDescriptorFingerprint: deps.provider.integrationDescriptorFingerprint ?? null,
       returnTo: readBodyReturnTo(req.body),
       createdAt: now,
       expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
@@ -199,6 +200,11 @@ export class IntegrationService {
     }
     if ((transaction.integrationDescriptorId ?? null) !==
         (deps.provider.integrationDescriptorId ?? null)) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
+    if ((transaction.integrationDescriptorFingerprint ?? null) !==
+        (deps.provider.integrationDescriptorFingerprint ?? null)) {
       await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }

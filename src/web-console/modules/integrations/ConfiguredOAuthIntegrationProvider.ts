@@ -27,6 +27,7 @@ import {
   IntegrationApiHostValidationError,
 } from '../../security/IntegrationApiHosts.js';
 import { readBoundedResponseText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
+import { integrationDescriptorRoutingFingerprint } from './IntegrationDescriptorRoutingFingerprint.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
 const MAX_TOKEN_ENDPOINT_RESPONSE_BYTES = 256 * 1024;
@@ -59,6 +60,7 @@ interface TokenEndpointResponse {
 export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
   readonly integrationDescriptorId;
+  readonly integrationDescriptorFingerprint;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'oauth2_authorization_code';
 
@@ -79,6 +81,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       category: config.descriptor.category,
     };
     this.integrationDescriptorId = config.descriptor.id;
+    this.integrationDescriptorFingerprint = integrationDescriptorRoutingFingerprint(config.descriptor);
     this.pinnedOutboundFactory = config.pinnedOutbound ?? createPinnedOutboundFactory();
     this.dnsLookupImpl = config.dnsLookup ?? dnsLookup;
     this.timeoutMs = config.requestTimeoutMs ?? DEFAULT_OUTBOUND_TIMEOUT_MS;

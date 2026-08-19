@@ -21,6 +21,8 @@ export interface ConsoleLoginTransaction {
   readonly requestedCapability: ConsoleCapability | null;
   /** Descriptor that initiated an integration flow; null for coded providers. */
   readonly integrationDescriptorId?: string | null;
+  /** Routing-sensitive descriptor digest captured when the flow began. */
+  readonly integrationDescriptorFingerprint?: string | null;
   readonly returnTo: string | null;
   readonly createdAt: Date;
   readonly expiresAt: Date;
@@ -50,11 +52,20 @@ export function validateLoginTransaction(transaction: ConsoleLoginTransaction): 
   }
   if (transaction.integrationDescriptorId) {
     assertUuid(transaction.integrationDescriptorId, 'integrationDescriptorId');
+    if (!/^[a-f0-9]{64}$/.test(transaction.integrationDescriptorFingerprint ?? '')) {
+      throw new ConsoleStoreValidationError(
+        'integrationDescriptorFingerprint must be a lowercase SHA-256 digest for descriptor-bound transactions',
+      );
+    }
+  } else if (transaction.integrationDescriptorFingerprint) {
+    throw new ConsoleStoreValidationError(
+      'integrationDescriptorFingerprint requires integrationDescriptorId',
+    );
   }
 
   if (transaction.flowKind === 'login') {
     if (transaction.userId || transaction.consoleSessionIdHash || transaction.requestedCapability
-        || transaction.integrationDescriptorId) {
+        || transaction.integrationDescriptorId || transaction.integrationDescriptorFingerprint) {
       throw new ConsoleStoreValidationError('login transaction cannot be bound to an existing principal or session');
     }
     return;

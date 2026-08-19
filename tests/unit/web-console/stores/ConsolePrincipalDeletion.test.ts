@@ -12,6 +12,7 @@ import {
 import type { DrizzleTx } from '../../../../src/database/db-utils.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const ADMIN_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb2';
 const DELETED_AT = new Date('2026-07-07T12:00:00.000Z');
 const ACCOUNTS = [
   { sub: 'sub-1', provider: 'github', externalSub: '42', email: 'a@b.com', rawProfile: { login: 'octo' } },
@@ -61,7 +62,11 @@ describe('deleteConsolePrincipalWithTx', () => {
   it('anonymize-tombstones and erases the account content + non-FK identity, scoped to the user', async () => {
     const { tx, deletes } = txMock();
 
-    const outcome = await deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT });
+    const outcome = await deleteConsolePrincipalWithTx(tx, {
+      userId: USER_ID,
+      deletedByUserId: ADMIN_ID,
+      deletedAt: DELETED_AT,
+    });
 
     expect(outcome).toMatchObject({ userId: USER_ID, outcome: 'anonymized' });
     const tables = deletes.map(d => d.table);
@@ -76,7 +81,11 @@ describe('deleteConsolePrincipalWithTx', () => {
   it('hard-deletes (users row removed) when nothing RESTRICT-references the user', async () => {
     const { tx } = txMock({ hardDelete: true });
 
-    const outcome = await deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT });
+    const outcome = await deleteConsolePrincipalWithTx(tx, {
+      userId: USER_ID,
+      deletedByUserId: ADMIN_ID,
+      deletedAt: DELETED_AT,
+    });
 
     expect(outcome).toMatchObject({ userId: USER_ID, outcome: 'deleted' });
   });
@@ -84,7 +93,11 @@ describe('deleteConsolePrincipalWithTx', () => {
   it('propagates a non-FK error from the hard-delete attempt (the whole tx then rolls back)', async () => {
     const { tx } = txMock({ transactionError: { code: '40001' } }); // serialization failure, not 23503
 
-    await expect(deleteConsolePrincipalWithTx(tx, { userId: USER_ID, deletedAt: DELETED_AT }))
+    await expect(deleteConsolePrincipalWithTx(tx, {
+      userId: USER_ID,
+      deletedByUserId: ADMIN_ID,
+      deletedAt: DELETED_AT,
+    }))
       .rejects.toMatchObject({ code: '40001' });
   });
 });

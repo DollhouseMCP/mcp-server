@@ -83,6 +83,7 @@ const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
 const SPEC_ID = '1f518305-ae82-4fe2-a696-dfdd2d4d4025';
 const SPEC_HASH = 'a'.repeat(64);
+const DESCRIPTOR_FINGERPRINT = 'b'.repeat(64);
 const PRIMARY_SUB = 'github_user-7';
 const AUDIT_KEY_ID = 'audit-key-test';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
@@ -660,11 +661,13 @@ describe('PostgresLoginTransactionStore', () => {
       userId: USER_ID,
       consoleSessionIdHash: hash(5),
       integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
     };
 
     await expect(store.create(bound)).resolves.toBeUndefined();
     expect(chain.values).toHaveBeenCalledWith(expect.objectContaining({
       integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
     }));
   });
 

@@ -30,6 +30,7 @@ const READ_ISSUES_SCOPE = 'read:issues';
 const STALE_ACCESS_TOKEN = 'stale-access';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
+const DESCRIPTOR_FINGERPRINT = 'b'.repeat(64);
 const SPEC_HASH = 'a'.repeat(64);
 const FACTOR_ID = 'cd8f6d0e-7294-42bc-9e01-094890a820a8';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
@@ -384,6 +385,19 @@ describe('InMemoryLoginTransactionStore', () => {
       .rejects.toThrow('expire within 10 minutes');
     await expect(store.create(loginTransaction({ pkceVerifierEnc: Buffer.alloc(0) })))
       .rejects.toThrow('encrypted ciphertext');
+    await expect(store.create(loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+    }))).rejects.toThrow('integrationDescriptorFingerprint');
+    await expect(store.create(loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+    }))).resolves.toBeUndefined();
   });
 
   it('removes expired and consumed transient transactions', async () => {
