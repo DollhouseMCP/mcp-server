@@ -86,7 +86,6 @@ const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
 const SPEC_ID = '1f518305-ae82-4fe2-a696-dfdd2d4d4025';
 const SPEC_HASH = 'a'.repeat(64);
-const DESCRIPTOR_FINGERPRINT = 'b'.repeat(64);
 const PRIMARY_SUB = 'github_user-7';
 const AUDIT_KEY_ID = 'audit-key-test';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
@@ -376,6 +375,7 @@ function selectingForUpdateChain(rows: unknown[]) {
   const chain: Record<string, jest.Mock> = {};
   chain.from = jest.fn(() => chain);
   chain.where = jest.fn(() => chain);
+  chain.orderBy = jest.fn(() => chain);
   chain.limit = jest.fn(() => chain);
   chain.for = jest.fn(() => Promise.resolve(rows));
   return chain;
@@ -518,7 +518,7 @@ function allowlistRow(overrides: Partial<{
 
 beforeEach(() => {
   withSystemContextMock.mockClear();
-  transaction = {};
+  transaction = { execute: jest.fn(() => Promise.resolve([])) };
 });
 
 describe('PostgresConsoleSessionStore', () => {
@@ -665,7 +665,7 @@ describe('PostgresConsoleSessionStore', () => {
 describe('PostgresLoginTransactionStore', () => {
   it('persists the descriptor binding for configured-provider callbacks', async () => {
     const chain = insertChain();
-    const descriptorLock = selectingChain([{ id: DESCRIPTOR_ID }]);
+    const descriptorLock = selectingChain([integrationDescriptorRow()]);
     transaction.select = jest.fn(() => descriptorLock);
     transaction.insert = jest.fn(() => chain);
     const store = new PostgresLoginTransactionStore({} as DatabaseInstance);
@@ -675,15 +675,39 @@ describe('PostgresLoginTransactionStore', () => {
       userId: USER_ID,
       consoleSessionIdHash: hash(5),
       integrationDescriptorId: DESCRIPTOR_ID,
-      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      integrationDescriptorFingerprint: integrationDescriptorRoutingFingerprint(
+        integrationDescriptorRow() as Parameters<typeof integrationDescriptorRoutingFingerprint>[0],
+      ),
     };
 
     await expect(store.create(bound)).resolves.toBeUndefined();
     expect(chain.values).toHaveBeenCalledWith(expect.objectContaining({
       integrationDescriptorId: DESCRIPTOR_ID,
-      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      integrationDescriptorFingerprint: bound.integrationDescriptorFingerprint,
     }));
     expect(descriptorLock.for).toHaveBeenCalledWith('key share');
+  });
+
+  it('rejects a descriptor-bound flow when routing changes before the row lock is acquired', async () => {
+    const chain = insertChain();
+    const descriptorLock = selectingChain([
+      integrationDescriptorRow({ apiHosts: ['mail.example.test'] }),
+    ]);
+    transaction.select = jest.fn(() => descriptorLock);
+    transaction.insert = jest.fn(() => chain);
+    const store = new PostgresLoginTransactionStore({} as DatabaseInstance);
+
+    await expect(store.create({
+      ...loginTransaction(),
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: integrationDescriptorRoutingFingerprint(
+        integrationDescriptorRow() as Parameters<typeof integrationDescriptorRoutingFingerprint>[0],
+      ),
+    })).rejects.toThrow('descriptor changed');
+    expect(chain.values).not.toHaveBeenCalled();
   });
 
   it('normalizes duplicate transaction inserts to a store conflict', async () => {
@@ -2315,7 +2339,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
     transaction.select = jest.fn()
       .mockReturnValueOnce(selectingChain([{ id: ALLOWLIST_ID }]))
-      .mockReturnValueOnce(selectingChain([{ id: ALLOWLIST_ID }]))
+      .mockReturnValueOnce(selectingChain([{ createdAt: NOW }]))
       .mockReturnValueOnce(selectingChain([]));
 
     await expect(store.hasActiveEntries()).resolves.toBe(true);
@@ -2327,12 +2351,14 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
   it('locks the authoritative allowlist match through account provisioning', async () => {
     const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
     const bootstrapSelect = selectingForUpdateChain([]);
-    const allowlistSelect = selectingForUpdateChain([{ id: ALLOWLIST_ID }]);
+    const allowlistSelect = selectingForUpdateChain([{ createdAt: NOW }]);
+    const tombstoneSelect = selectingForUpdateChain([]);
     const accountInsert = insertChain();
     const auditInsert = insertChain();
     transaction.select = jest.fn()
       .mockReturnValueOnce(bootstrapSelect)
-      .mockReturnValueOnce(allowlistSelect);
+      .mockReturnValueOnce(allowlistSelect)
+      .mockReturnValueOnce(tombstoneSelect);
     transaction.insert = jest.fn()
       .mockReturnValueOnce(accountInsert)
       .mockReturnValueOnce(auditInsert);
@@ -2365,8 +2391,10 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     })).resolves.toEqual({ allowed: true });
 
     expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(transaction.execute).toHaveBeenCalledTimes(1);
     expect(bootstrapSelect.for).toHaveBeenCalledWith('update');
     expect(allowlistSelect.for).toHaveBeenCalledWith('update');
+    expect(tombstoneSelect.for).toHaveBeenCalledWith('update');
     expect(accountInsert.onConflictDoUpdate).toHaveBeenCalledTimes(1);
     expect(auditInsert.values).toHaveBeenCalledWith(expect.objectContaining({
       type: 'auth.social.identity_changed',
@@ -2379,8 +2407,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     transaction.select = jest.fn()
       .mockReturnValueOnce(selectingForUpdateChain([]))
       .mockReturnValueOnce(selectingForUpdateChain([]))
-      .mockReturnValueOnce(selectingChain([{ id: ALLOWLIST_ID }]))
-      .mockReturnValueOnce(selectingChain([]));
+      .mockReturnValueOnce(selectingForUpdateChain([{ revokedAt: NOW }]));
     const inserts: ReturnType<typeof insertChain>[] = [];
     transaction.insert = jest.fn(() => {
       const chain = insertChain();
@@ -2414,6 +2441,42 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
 
     expect(inserts).toHaveLength(1);
     expect(inserts[0]?.onConflictDoUpdate).not.toHaveBeenCalled();
+  });
+
+  it('lets a newer stable-identity tombstone override an older active alias', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingForUpdateChain([]))
+      .mockReturnValueOnce(selectingForUpdateChain([{ createdAt: BEFORE_NOW }]))
+      .mockReturnValueOnce(selectingForUpdateChain([{ revokedAt: NOW }]));
+    const denialAudit = insertChain();
+    transaction.insert = jest.fn(() => denialAudit);
+    transaction.transaction = jest.fn((callback: (tx: typeof transaction) => Promise<unknown>) =>
+      callback(transaction));
+
+    await expect(store.provisionAccountIfAllowed({
+      identity: {
+        sub: 'github_42',
+        method: 'github',
+        email: ALICE_EMAIL,
+        githubUsername: 'new-alias',
+        githubId: '42',
+      },
+      account: {
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: ALICE_EMAIL,
+        emailVerified: true,
+        createdAt: NOW.getTime(),
+        updatedAt: NOW.getTime(),
+      },
+      required: false,
+    })).resolves.toEqual({
+      allowed: false,
+      reason: 'This identity is not on the sign-in allowlist.',
+    });
+    expect(denialAudit.onConflictDoUpdate).not.toHaveBeenCalled();
   });
 
   it('normalizes inserted allowlist values and maps duplicate active entries to conflicts', async () => {

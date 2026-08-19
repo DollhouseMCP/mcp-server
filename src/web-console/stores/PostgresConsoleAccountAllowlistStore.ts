@@ -1,8 +1,9 @@
-import { and, asc, eq, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, isNotNull, isNull, or, sql, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
+import { lockAuthPrincipalsWithTx } from '../../database/authPrincipalLock.js';
 import { accountAllowlistEntries } from '../../database/schema/index.js';
 import { authIdentityEvents, authKv } from '../../database/schema/auth.js';
 import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
@@ -68,6 +69,7 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
     input: AtomicAccountProvisioningInput,
   ): Promise<AllowlistGateResult> {
     return withSystemContext(this.db, async tx => {
+      await lockAuthPrincipalsWithTx(tx, [input.identity.sub]);
       const bootstrapRows = await tx.select({ payload: authKv.payload }).from(authKv)
         .where(and(eq(authKv.model, 'AuthBootstrap'), eq(authKv.id, 'state')))
         .limit(1)
@@ -87,17 +89,16 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
         githubUsername: input.identity.githubUsername,
         githubId: input.identity.githubId,
       };
-      const matched = isBootstrapAdmin
-        ? false
-        : await accountAllowlistMatchesIdentityWithTx(tx, values, true);
-      const denied = isBootstrapAdmin || matched
-        ? false
-        : await accountAllowlistDeniesIdentityWithTx(tx, values);
-      const hasAnyEntries = isBootstrapAdmin || matched || input.required
+      const decision = isBootstrapAdmin
+        ? { matched: false, denied: false }
+        : await accountAllowlistIdentityDecisionWithTx(tx, values, true);
+      const hasAnyEntries = isBootstrapAdmin || decision.matched || decision.denied || input.required
         ? true
         : await hasActiveAccountAllowlistEntriesWithTx(tx);
 
-      if (isBootstrapAdmin || matched || (!denied && !input.required && !hasAnyEntries)) {
+      if (isBootstrapAdmin || (!decision.denied && (
+        decision.matched || (!input.required && !hasAnyEntries)
+      ))) {
         await upsertAuthAccountWithTx(tx, input.account);
         if (input.successAuditEvent) {
           const event = input.successAuditEvent;
@@ -144,12 +145,7 @@ export async function accountAllowlistDeniesIdentityWithTx(
   tx: DrizzleTx,
   values: AllowlistMatchValues,
 ): Promise<boolean> {
-  const predicates = allowlistIdentityPredicates(values);
-  if (predicates.length === 0) return false;
-  const rows = await tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
-    .where(and(isNotNull(accountAllowlistEntries.revokedAt), or(...predicates)))
-    .limit(1);
-  return rows.length > 0;
+  return (await accountAllowlistIdentityDecisionWithTx(tx, values)).denied;
 }
 
 export async function listActiveAccountAllowlistEntriesWithTx(
@@ -173,13 +169,51 @@ export async function accountAllowlistMatchesIdentityWithTx(
   values: AllowlistMatchValues,
   lockMatch = false,
 ): Promise<boolean> {
+  return (await latestActiveIdentityGrantWithTx(tx, values, lockMatch)) !== null;
+}
+
+async function accountAllowlistIdentityDecisionWithTx(
+  tx: DrizzleTx,
+  values: AllowlistMatchValues,
+  lockRows = false,
+): Promise<{ readonly matched: boolean; readonly denied: boolean }> {
+  const activeCreatedAt = await latestActiveIdentityGrantWithTx(tx, values, lockRows);
+  const tombstoneRevokedAt = await latestIdentityTombstoneWithTx(tx, values, lockRows);
+  return {
+    matched: activeCreatedAt !== null,
+    denied: tombstoneRevokedAt !== null
+      && (activeCreatedAt === null || tombstoneRevokedAt >= activeCreatedAt),
+  };
+}
+
+async function latestActiveIdentityGrantWithTx(
+  tx: DrizzleTx,
+  values: AllowlistMatchValues,
+  lockRow = false,
+): Promise<number | null> {
   const predicates = allowlistIdentityPredicates(values);
-  if (predicates.length === 0) return false;
-  const query = tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
+  if (predicates.length === 0) return null;
+  const query = tx.select({ createdAt: accountAllowlistEntries.createdAt }).from(accountAllowlistEntries)
     .where(and(isNull(accountAllowlistEntries.revokedAt), or(...predicates)))
+    .orderBy(desc(accountAllowlistEntries.createdAt))
     .limit(1);
-  const rows = lockMatch ? await query.for('update') : await query;
-  return rows.length > 0;
+  const rows = lockRow ? await query.for('update') : await query;
+  return rows[0]?.createdAt?.getTime() ?? null;
+}
+
+async function latestIdentityTombstoneWithTx(
+  tx: DrizzleTx,
+  values: AllowlistMatchValues,
+  lockRow = false,
+): Promise<number | null> {
+  const predicates = allowlistIdentityPredicates(values);
+  if (predicates.length === 0) return null;
+  const query = tx.select({ revokedAt: accountAllowlistEntries.revokedAt }).from(accountAllowlistEntries)
+    .where(and(isNotNull(accountAllowlistEntries.revokedAt), or(...predicates)))
+    .orderBy(desc(accountAllowlistEntries.revokedAt))
+    .limit(1);
+  const rows = lockRow ? await query.for('update') : await query;
+  return rows[0]?.revokedAt?.getTime() ?? null;
 }
 
 function allowlistIdentityPredicates(values: AllowlistMatchValues): SQL[] {

@@ -21,6 +21,7 @@ import {
 } from './schema/index.js';
 import type { DrizzleTx } from './db-utils.js';
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
+import { lockAuthPrincipalsWithTx } from './authPrincipalLock.js';
 
 /**
  * The complete set of user-owned tables that `ON DELETE CASCADE` off `users.id`, expressed
@@ -189,6 +190,7 @@ export async function purgeNonCascadeUserIdentity(
   revokedByUserId: string,
   revokedAt: Date,
 ): Promise<void> {
+  await lockAuthPrincipalsWithTx(tx, identity.subs);
   for (const sub of identity.subs) {
     // The bootstrap claim is an authorization grant keyed outside the user
     // tables. Clear it atomically with principal deletion so the deleted

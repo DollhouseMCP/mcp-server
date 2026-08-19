@@ -141,26 +141,23 @@ export async function checkAllowlistGate(
     return { allowed: true };
   }
 
-  // Rule 2: any-kind match wins.
-  const matched = await authority.matchesIdentity({
+  const matchValues = {
     email: identity.email,
     githubUsername: identity.githubUsername,
     githubId: identity.githubId,
-  });
-  if (matched) {
-    return { allowed: true };
-  }
+  };
 
-  // A revoked match takes precedence over permissive empty-list fallback. An
-  // administrator can explicitly re-admit the identity by adding a new active
-  // entry, which is handled by rule 2 above.
-  if (await authority.deniesIdentity?.({
-    email: identity.email,
-    githubUsername: identity.githubUsername,
-    githubId: identity.githubId,
-  })) {
+  // A deletion tombstone takes precedence over active aliases that predate it.
+  // Durable authorities return false here only when an administrator has
+  // explicitly created a newer active entry after deletion.
+  if (await authority.deniesIdentity?.(matchValues)) {
     await recordDenied(storage, identity);
     return { allowed: false, reason: 'This identity is not on the sign-in allowlist.' };
+  }
+
+  // Rule 2: any-kind current match wins.
+  if (await authority.matchesIdentity(matchValues)) {
+    return { allowed: true };
   }
 
   // Rule 3: REQUIRED=true with no match → DENY.

@@ -14,6 +14,8 @@ import {
   isUniqueViolation,
 } from './ConsoleStoreValidation.js';
 import type { ConsoleCapability } from '../platform/ConsolePlatformTypes.js';
+import { integrationDescriptorRoutingFingerprint } from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
+import { fromDescriptorRow } from './PostgresIntegrationDescriptorStore.js';
 
 export class PostgresLoginTransactionStore implements ILoginTransactionStore {
   constructor(private readonly db: DatabaseInstance) {}
@@ -23,13 +25,17 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
     try {
       await withSystemContext(this.db, async tx => {
         if (transaction.integrationDescriptorId) {
-          const descriptors = await tx.select({ id: integrationProviderDescriptors.id })
+          const descriptors = await tx.select()
             .from(integrationProviderDescriptors)
             .where(eq(integrationProviderDescriptors.id, transaction.integrationDescriptorId))
             .for('key share')
             .limit(1);
           if (descriptors.length === 0) {
             throw new ConsoleStoreConflictError('integration descriptor no longer exists');
+          }
+          if (integrationDescriptorRoutingFingerprint(fromDescriptorRow(descriptors[0]))
+              !== transaction.integrationDescriptorFingerprint) {
+            throw new ConsoleStoreConflictError('integration descriptor changed while starting authorization');
           }
         }
         await tx.insert(consoleLoginTransactions).values({

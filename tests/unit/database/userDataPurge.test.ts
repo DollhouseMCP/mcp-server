@@ -39,7 +39,12 @@ function captureTx(
   const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
   const updates: { readonly table: unknown; readonly values: unknown; readonly predicate: unknown }[] = [];
   const inserts: { readonly table: unknown; readonly values: unknown }[] = [];
+  const executes: unknown[] = [];
   const tx = {
+    execute: (statement: unknown) => {
+      executes.push(statement);
+      return Promise.resolve([]);
+    },
     select: () => ({
       from: (table: unknown) => ({
         where: () => Promise.resolve(
@@ -68,7 +73,7 @@ function captureTx(
       },
     }),
   };
-  return { tx: tx as unknown as DrizzleTx, deletes, updates, inserts };
+  return { tx: tx as unknown as DrizzleTx, deletes, updates, inserts, executes };
 }
 
 describe('collectDeletionIdentity', () => {
@@ -161,7 +166,7 @@ describe('purgeUserScopedData', () => {
 
 describe('purgeNonCascadeUserIdentity', () => {
   it('purges auth_kv per subject, identity events by sub, and allowlist by matched identity', async () => {
-    const { tx, deletes, updates, inserts } = captureTx();
+    const { tx, deletes, updates, inserts, executes } = captureTx();
 
     await purgeNonCascadeUserIdentity(tx, {
       subs: ['sub-1', 'sub-2'],
@@ -188,6 +193,7 @@ describe('purgeNonCascadeUserIdentity', () => {
         expect.objectContaining({ kind: 'github_username', normalizedValue: 'octo', revokedAt: DELETED_AT }),
       ]),
     }]);
+    expect(executes).toHaveLength(2);
   });
 
   it('does not duplicate a canonical deny tombstone that already exists', async () => {
@@ -218,7 +224,7 @@ describe('purgeNonCascadeUserIdentity', () => {
   });
 
   it('deletes nothing when the account has no resolvable identity', async () => {
-    const { tx, deletes, updates, inserts } = captureTx();
+    const { tx, deletes, updates, inserts, executes } = captureTx();
     await purgeNonCascadeUserIdentity(
       tx,
       { subs: [], emails: [], githubIds: [], githubLogins: [] },
@@ -228,5 +234,6 @@ describe('purgeNonCascadeUserIdentity', () => {
     expect(deletes).toHaveLength(0);
     expect(updates).toHaveLength(0);
     expect(inserts).toHaveLength(0);
+    expect(executes).toHaveLength(0);
   });
 });

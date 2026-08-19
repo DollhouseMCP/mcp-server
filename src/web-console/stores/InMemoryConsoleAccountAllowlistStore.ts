@@ -57,16 +57,24 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
 
   async deniesIdentity(values: AllowlistMatchValues): Promise<boolean> {
     await Promise.resolve();
+    let newestActiveAt = Number.NEGATIVE_INFINITY;
+    let newestRevokedAt = Number.NEGATIVE_INFINITY;
     for (const entry of this.entries.values()) {
-      if (!entry.revokedAt) continue;
-      if (entry.kind === 'email' && values.email &&
-        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.email)) return true;
-      if (entry.kind === 'github_username' && values.githubUsername &&
-        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubUsername)) return true;
-      if (entry.kind === 'github_id' && values.githubId &&
-        storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubId)) return true;
+      const matches = (entry.kind === 'email' && values.email &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.email))
+        || (entry.kind === 'github_username' && values.githubUsername &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubUsername))
+        || (entry.kind === 'github_id' && values.githubId &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubId));
+      if (!matches) continue;
+      if (entry.revokedAt) {
+        newestRevokedAt = Math.max(newestRevokedAt, entry.revokedAt.getTime());
+      } else {
+        newestActiveAt = Math.max(newestActiveAt, entry.createdAt.getTime());
+      }
     }
-    return false;
+    return newestRevokedAt !== Number.NEGATIVE_INFINITY
+      && newestRevokedAt >= newestActiveAt;
   }
 
   async findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null> {

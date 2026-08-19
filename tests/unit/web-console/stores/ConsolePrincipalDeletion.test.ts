@@ -44,6 +44,7 @@ function txMock({ hardDelete = false, transactionError }: { hardDelete?: boolean
     return node;
   };
   const tx = {
+    execute: () => Promise.resolve([]),
     select: () => ({ from }),
     delete: (table: unknown) => ({
       where: (predicate: unknown) => {
