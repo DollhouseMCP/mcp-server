@@ -2,8 +2,6 @@ import { createHmac } from 'node:crypto';
 
 import type { IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 
-const ROUTING_FINGERPRINT_DOMAIN_KEY = 'dollhouse-integration-descriptor-routing-v1';
-
 /**
  * Digest only the descriptor fields that decide where and how credentials are
  * obtained or sent. Display-only edits deliberately do not invalidate a flow.
@@ -22,10 +20,9 @@ export function integrationDescriptorRoutingFingerprint(
     credentialKeyVersion: descriptor.credentialKeyVersion,
   };
   // This is a change-detection MAC over configuration (including already
-  // encrypted credential material), not a password verifier. Domain-separated
-  // HMAC also keeps static analysis from mistaking the digest for password
-  // storage while retaining a compact deterministic revision identifier.
-  return createHmac('sha256', ROUTING_FINGERPRINT_DOMAIN_KEY)
+  // encrypted credential material), not a password verifier. The descriptor's
+  // public UUID is a per-record domain separator, not a secret key.
+  return createHmac('sha256', descriptor.id)
     .update(canonicalJson(payload))
     .digest('hex');
 }

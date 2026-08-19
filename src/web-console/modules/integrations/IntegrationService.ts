@@ -15,7 +15,10 @@ import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentica
 import { normalizeConsoleReturnPath } from '../../platform/ConsoleReturnPaths.js';
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
-import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
+import type {
+  ConsoleLoginTransaction,
+  ILoginTransactionStore,
+} from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
 import { isWellFormedUnicode } from '../../stores/ConsoleStoreValidation.js';
 import {
@@ -190,16 +193,12 @@ export class IntegrationService {
       return failedIntegrationCallback();
     }
     try {
-    if (transaction.userId !== auth.userId) {
-      await this.recordCallbackRejected(providerId, auth.userId, 'user_mismatch');
-      return failedIntegrationCallback(transaction.returnTo ?? undefined);
-    }
-    if (!transaction.consoleSessionIdHash ||
-        !buffersEqual(transaction.consoleSessionIdHash, auth.sessionIdHash)) {
-      await this.recordCallbackRejected(providerId, auth.userId, 'session_mismatch');
-      return failedIntegrationCallback(transaction.returnTo ?? undefined);
-    }
-
+    const invalidTransaction = await this.validateConsumedIntegrationTransaction(
+      transaction,
+      auth,
+      providerId,
+    );
+    if (invalidTransaction) return invalidTransaction;
     // The provider resolved before consume is sufficient only for the
     // transaction-store dependencies. Re-resolve after the one-time state is
     // consumed so descriptor updates cannot leave this callback comparing and
@@ -210,13 +209,7 @@ export class IntegrationService {
       await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
-    if ((transaction.integrationDescriptorId ?? null) !==
-        (currentDeps.provider.integrationDescriptorId ?? null)) {
-      await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
-      return failedIntegrationCallback(transaction.returnTo ?? undefined);
-    }
-    if ((transaction.integrationDescriptorFingerprint ?? null) !==
-        (currentDeps.provider.integrationDescriptorFingerprint ?? null)) {
+    if (!this.descriptorBindingMatches(transaction, currentDeps.provider)) {
       await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
@@ -499,6 +492,33 @@ export class IntegrationService {
     if (!existing) return 'missing';
     if (existing.consumedAt) return 'consumed';
     return existing.expiresAt <= now ? 'expired' : 'consumed';
+  }
+
+  private async validateConsumedIntegrationTransaction(
+    transaction: ConsoleLoginTransaction,
+    auth: ConsoleAuthenticatedContext,
+    providerId: UserIntegrationProvider,
+  ): Promise<ConsoleHandlerResult | null> {
+    if (transaction.userId !== auth.userId) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'user_mismatch');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
+    if (!transaction.consoleSessionIdHash
+        || !buffersEqual(transaction.consoleSessionIdHash, auth.sessionIdHash)) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'session_mismatch');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
+    return null;
+  }
+
+  private descriptorBindingMatches(
+    transaction: ConsoleLoginTransaction,
+    provider: IIntegrationProvider,
+  ): boolean {
+    return (transaction.integrationDescriptorId ?? null)
+        === (provider.integrationDescriptorId ?? null)
+      && (transaction.integrationDescriptorFingerprint ?? null)
+        === (provider.integrationDescriptorFingerprint ?? null);
   }
 
   private async recordCallbackRejected(
