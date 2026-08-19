@@ -509,6 +509,7 @@ function integration(scopes: readonly string[]): UserIntegrationRecord {
     id: INTEGRATION_ID,
     userId: USER_ID,
     provider: 'gmail',
+    integrationDescriptorId: DESCRIPTOR_ID,
     externalAccountLabel: 'alice@example.com',
     externalInstallationId: null,
     authorizedPermissions: { scopes },

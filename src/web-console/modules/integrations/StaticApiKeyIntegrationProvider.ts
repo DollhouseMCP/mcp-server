@@ -12,6 +12,7 @@ import { serializeConfiguredIntegrationStatus } from './IntegrationDtos.js';
 
 export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
+  readonly integrationDescriptorId;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'static_api_key';
   readonly staticApiKeyInjection;
@@ -25,6 +26,7 @@ export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
       displayName: record.displayName,
       category: record.category,
     };
+    this.integrationDescriptorId = record.id;
     this.staticApiKeyInjection = record.staticApiKey.injection;
   }
 

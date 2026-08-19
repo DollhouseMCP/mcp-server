@@ -49,6 +49,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       id: randomUUID(),
       userId: input.userId,
       provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId ?? null,
       externalAccountLabel: input.externalAccountLabel,
       externalInstallationId: input.externalInstallationId,
       authorizedPermissions: input.authorizedPermissions,
@@ -91,6 +92,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       id: randomUUID(),
       userId: input.userId,
       provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId ?? null,
       externalAccountLabel: null,
       externalInstallationId: null,
       authorizedPermissions: defaultAuthorizedPermissions(input.provider),
@@ -173,7 +175,8 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   private async refreshLocked(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
     const activeId = this.activeProviderIndex.get(activeProviderKey(input.userId, input.provider));
     const active = activeId ? this.records.get(activeId) : null;
-    if (active?.status !== 'connected' || active.revokedAt !== null || !active.accessTokenCiphertext) {
+    if (active?.status !== 'connected' || active.revokedAt !== null || !active.accessTokenCiphertext
+        || (active.integrationDescriptorId ?? null) !== input.integrationDescriptorId) {
       return { kind: 'missing', record: null };
     }
     if (!active.accessTokenCiphertext.equals(input.staleAccessTokenCiphertext)) {

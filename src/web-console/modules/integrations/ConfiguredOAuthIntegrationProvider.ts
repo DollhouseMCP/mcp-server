@@ -58,6 +58,7 @@ interface TokenEndpointResponse {
 
 export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
+  readonly integrationDescriptorId;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'oauth2_authorization_code';
 
@@ -77,6 +78,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       displayName: config.descriptor.displayName,
       category: config.descriptor.category,
     };
+    this.integrationDescriptorId = config.descriptor.id;
     this.pinnedOutboundFactory = config.pinnedOutbound ?? createPinnedOutboundFactory();
     this.dnsLookupImpl = config.dnsLookup ?? dnsLookup;
     this.timeoutMs = config.requestTimeoutMs ?? DEFAULT_OUTBOUND_TIMEOUT_MS;

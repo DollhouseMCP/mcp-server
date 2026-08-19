@@ -29,6 +29,24 @@ const PRIVATE_IP = ['10', '0', '0', '5'].join('.');
 const PUBLIC_IP = ['8', '8', '8', '8'].join('.');
 
 describe('IntegrationRemoteMcpBridge', () => {
+  it('rejects a connected credential bound to a different same-name descriptor', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const { bridge, contextTracker } = fixture({
+      integration: {
+        ...integration(encryption()),
+        integrationDescriptorId: '00000000-0000-4000-8000-000000000199',
+      },
+      clientFactory,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({ code: 'remote_mcp_not_connected', status: 409 });
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it('discovers only allowlisted remote MCP tools for connected visible integrations', async () => {
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn().mockResolvedValue({
@@ -367,8 +385,8 @@ describe('IntegrationRemoteMcpBridge', () => {
         descriptor({ provider: 'remote-slow', id: '00000000-0000-4000-8000-000000000102' }),
       ],
       integrations: [
-        integration(encryption(), 'remote-down'),
-        integration(encryption(), 'remote-slow'),
+        integration(encryption(), 'remote-down', 'remote-access-token', '00000000-0000-4000-8000-000000000201'),
+        integration(encryption(), 'remote-slow', 'remote-access-token', '00000000-0000-4000-8000-000000000202'),
       ],
       clientFactory,
       timeoutMs: 1,
@@ -437,11 +455,17 @@ function fixture(options: {
   const secretEncryption = options.secretEncryption ?? encryption();
   const descriptorRecords = options.descriptors ?? [options.descriptor ?? descriptor()];
   const integrationRecords = options.integrations ?? [options.integration ?? integration(secretEncryption)];
+  const boundIntegrationRecords = integrationRecords.map(record => ({
+    ...record,
+    integrationDescriptorId: record.integrationDescriptorId
+      ?? descriptorRecords.find(candidate => candidate.provider === record.provider)?.id
+      ?? null,
+  }));
   return {
     contextTracker,
     bridge: new IntegrationRemoteMcpBridge({
       descriptorStore: new InMemoryIntegrationDescriptorStore(descriptorRecords),
-      integrationStore: options.integrationStore ?? new InMemoryUserIntegrationStore(integrationRecords),
+      integrationStore: options.integrationStore ?? new InMemoryUserIntegrationStore(boundIntegrationRecords),
       secretEncryption,
       contextTracker,
       discoveryGate: options.discoveryGate ?? (() => Promise.resolve(true)),
@@ -497,9 +521,10 @@ function integration(
   secretEncryption: AeadSecretEncryptionService,
   provider = REMOTE_DOCS,
   accessToken = 'remote-access-token',
+  id = INTEGRATION_ID,
 ): UserIntegrationRecord {
   return {
-    id: INTEGRATION_ID,
+    id,
     userId: USER_ID,
     provider,
     externalAccountLabel: 'alice@example.com',

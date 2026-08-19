@@ -61,6 +61,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       return tx.insert(userIntegrations).values({
         userId: input.userId,
         provider: input.provider,
+        integrationDescriptorId: input.integrationDescriptorId ?? null,
         externalAccountLabel: input.externalAccountLabel,
         externalInstallationId: input.externalInstallationId,
         authorizedPermissions: input.authorizedPermissions,
@@ -80,12 +81,16 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
 
   async refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
     assertUuid(input.userId, 'userId');
+    if (input.integrationDescriptorId) {
+      assertUuid(input.integrationDescriptorId, 'integrationDescriptorId');
+    }
     const rows = await withSystemContext(this.db, async tx => {
       const lockedRows: (typeof userIntegrations.$inferSelect)[] = await tx.execute(sql`
         SELECT
           id,
           user_id AS "userId",
           provider,
+          integration_descriptor_id AS "integrationDescriptorId",
           external_account_label AS "externalAccountLabel",
           external_installation_id AS "externalInstallationId",
           authorized_permissions AS "authorizedPermissions",
@@ -100,6 +105,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         FROM user_integrations
         WHERE user_id = ${input.userId}
           AND provider = ${input.provider}
+          AND integration_descriptor_id IS NOT DISTINCT FROM ${input.integrationDescriptorId}
           AND revoked_at IS NULL
         FOR UPDATE
         LIMIT 1
@@ -153,6 +159,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       return tx.insert(userIntegrations).values({
         userId: input.userId,
         provider: input.provider,
+        integrationDescriptorId: input.integrationDescriptorId ?? null,
         externalAccountLabel: null,
         externalInstallationId: null,
         authorizedPermissions: defaultAuthorizedPermissions(input.provider),
@@ -210,6 +217,7 @@ function validateConnectInput(input: UserIntegrationConnectInput): void {
     id: '00000000-0000-4000-8000-000000000000',
     userId: input.userId,
     provider: input.provider,
+    integrationDescriptorId: input.integrationDescriptorId ?? null,
     externalAccountLabel: input.externalAccountLabel,
     externalInstallationId: input.externalInstallationId,
     authorizedPermissions: input.authorizedPermissions,
@@ -239,6 +247,7 @@ function fromRow(row: typeof userIntegrations.$inferSelect): UserIntegrationReco
     id: row.id,
     userId: row.userId,
     provider: row.provider,
+    integrationDescriptorId: row.integrationDescriptorId,
     externalAccountLabel: row.externalAccountLabel,
     externalInstallationId: row.externalInstallationId,
     authorizedPermissions: asJsonRecord(row.authorizedPermissions),

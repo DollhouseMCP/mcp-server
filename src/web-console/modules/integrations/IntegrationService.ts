@@ -90,7 +90,7 @@ export class IntegrationService {
     const record = await this.options.store.findByProvider(auth.userId, providerId);
     return {
       status: 200,
-      body: provider.projectStatus(record).body,
+      body: provider.projectStatus(this.recordOwnedByProvider(provider, record) ? record : null).body,
     };
   }
 
@@ -127,6 +127,7 @@ export class IntegrationService {
       userId: auth.userId,
       consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
       requestedCapability: null,
+      integrationDescriptorId: deps.provider.integrationDescriptorId ?? null,
       returnTo: readBodyReturnTo(req.body),
       createdAt: now,
       expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
@@ -196,6 +197,11 @@ export class IntegrationService {
       await this.recordCallbackRejected(providerId, auth.userId, 'session_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
+    if ((transaction.integrationDescriptorId ?? null) !==
+        (deps.provider.integrationDescriptorId ?? null)) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
 
     let pkceVerifier;
     try {
@@ -216,12 +222,17 @@ export class IntegrationService {
         providerCallbackParams: stringQueryParams(req.query),
       });
     } catch {
-      await this.options.store.recordError({
-        userId: auth.userId,
-        provider: providerId,
-        errorReason: 'token_exchange_failed',
-        occurredAt: this.now(),
-      });
+      try {
+        await this.options.store.recordError({
+          userId: auth.userId,
+          provider: providerId,
+          integrationDescriptorId: transaction.integrationDescriptorId ?? null,
+          errorReason: 'token_exchange_failed',
+          occurredAt: this.now(),
+        });
+      } catch {
+        await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
+      }
       logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration token exchange failed', {
         userId: auth.userId,
       });
@@ -229,24 +240,31 @@ export class IntegrationService {
     }
 
     const connectedAt = this.now();
-    await this.options.store.connect({
-      userId: auth.userId,
-      provider: providerId,
-      externalAccountLabel: exchanged.accountLabel,
-      externalInstallationId: exchanged.externalInstallationId,
-      authorizedPermissions: exchanged.authorizedPermissions,
-      accessTokenCiphertext: deps.secretEncryption.encrypt(
-        Buffer.from(exchanged.accessToken, 'utf8'),
-        integrationSecretContext('access_token', auth.userId, providerId),
-      ),
-      refreshTokenCiphertext: exchanged.refreshToken
-        ? deps.secretEncryption.encrypt(
-          Buffer.from(exchanged.refreshToken, 'utf8'),
-          integrationSecretContext('refresh_token', auth.userId, providerId),
-        )
-        : null,
-      connectedAt,
-    });
+    try {
+      await this.options.store.connect({
+        userId: auth.userId,
+        provider: providerId,
+        integrationDescriptorId: transaction.integrationDescriptorId ?? null,
+        externalAccountLabel: exchanged.accountLabel,
+        externalInstallationId: exchanged.externalInstallationId,
+        authorizedPermissions: exchanged.authorizedPermissions,
+        accessTokenCiphertext: deps.secretEncryption.encrypt(
+          Buffer.from(exchanged.accessToken, 'utf8'),
+          integrationSecretContext('access_token', auth.userId, providerId),
+        ),
+        refreshTokenCiphertext: exchanged.refreshToken
+          ? deps.secretEncryption.encrypt(
+            Buffer.from(exchanged.refreshToken, 'utf8'),
+            integrationSecretContext('refresh_token', auth.userId, providerId),
+          )
+          : null,
+        connectedAt,
+      });
+    } catch {
+      await this.revokeExchangedCredentials(deps.provider, exchanged);
+      await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
     logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration connected', {
       userId: auth.userId,
       provider: providerId,
@@ -271,11 +289,14 @@ export class IntegrationService {
     if (!deps) return serviceUnavailable(`${providerId} integration disconnect is not configured.`);
     const active = await this.options.store.findByProvider(auth.userId, providerId);
     if (active) {
-      const revoked = await this.revokeRemoteCredentials(deps, auth, active);
+      const revoked = this.recordOwnedByProvider(deps.provider, active)
+        ? await this.revokeRemoteCredentials(deps, auth, active)
+        : true;
       if (!revoked) {
         const errorRecord = await this.options.store.recordError({
           userId: auth.userId,
           provider: providerId,
+          integrationDescriptorId: active.integrationDescriptorId ?? null,
           errorReason: 'revocation_failed',
           occurredAt: this.now(),
         });
@@ -338,6 +359,14 @@ export class IntegrationService {
     }
   }
 
+  private recordOwnedByProvider(
+    provider: IIntegrationProvider,
+    record: Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>,
+  ): boolean {
+    return (record?.integrationDescriptorId ?? null) ===
+      (provider.integrationDescriptorId ?? null);
+  }
+
   /** Boot-time registry first, then the per-request store-backed fallback. */
   private async resolveProviderFor(
     userId: string,
@@ -385,6 +414,7 @@ export class IntegrationService {
     const record = await this.options.store.connect({
       userId: auth.userId,
       provider: provider.descriptor.id,
+      integrationDescriptorId: provider.integrationDescriptorId ?? null,
       externalAccountLabel: readBodyAccountLabel(req.body) ?? captured.defaultAccountLabel,
       externalInstallationId: null,
       authorizedPermissions: { scopes: [] },
@@ -412,6 +442,22 @@ export class IntegrationService {
       secretEncryption: this.options.secretEncryption,
       provider,
     };
+  }
+
+  private async revokeExchangedCredentials(
+    provider: IIntegrationProvider,
+    exchanged: Awaited<ReturnType<IIntegrationProvider['exchangeAuthorizationCode']>>,
+  ): Promise<void> {
+    try {
+      await provider.revokeCredentials({
+        accessToken: exchanged.accessToken,
+        refreshToken: exchanged.refreshToken ?? null,
+        externalInstallationId: exchanged.externalInstallationId,
+      });
+    } catch {
+      // The local credential write failed closed. Remote revocation is best-effort
+      // and must not revive or expose the rejected callback.
+    }
   }
 
   private async classifyMissingTransaction(

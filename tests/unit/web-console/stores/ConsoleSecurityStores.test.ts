@@ -468,6 +468,7 @@ describe('InMemoryUserIntegrationStore', () => {
     const first = store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh,
@@ -475,6 +476,7 @@ describe('InMemoryUserIntegrationStore', () => {
     const second = store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh,
@@ -506,6 +508,7 @@ describe('InMemoryUserIntegrationStore', () => {
     await expect(store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
       refreshedAt: FIVE_MINUTES,
       refresh: () => Promise.resolve({ kind: 'failed' as const, errorReason: 'token_refresh_failed' }),

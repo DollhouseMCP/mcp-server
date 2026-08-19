@@ -19,6 +19,8 @@ export interface ConsoleLoginTransaction {
   readonly userId: string | null;
   readonly consoleSessionIdHash: Buffer | null;
   readonly requestedCapability: ConsoleCapability | null;
+  /** Descriptor that initiated an integration flow; null for coded providers. */
+  readonly integrationDescriptorId?: string | null;
   readonly returnTo: string | null;
   readonly createdAt: Date;
   readonly expiresAt: Date;
@@ -46,9 +48,13 @@ export function validateLoginTransaction(transaction: ConsoleLoginTransaction): 
         || transaction.returnTo.includes('\\'))) {
     throw new ConsoleStoreValidationError('returnTo must be a relative application path');
   }
+  if (transaction.integrationDescriptorId) {
+    assertUuid(transaction.integrationDescriptorId, 'integrationDescriptorId');
+  }
 
   if (transaction.flowKind === 'login') {
-    if (transaction.userId || transaction.consoleSessionIdHash || transaction.requestedCapability) {
+    if (transaction.userId || transaction.consoleSessionIdHash || transaction.requestedCapability
+        || transaction.integrationDescriptorId) {
       throw new ConsoleStoreValidationError('login transaction cannot be bound to an existing principal or session');
     }
     return;
@@ -64,8 +70,10 @@ export function validateLoginTransaction(transaction: ConsoleLoginTransaction): 
       throw new ConsoleStoreValidationError('step_up transaction requires an administrative capability');
     }
     assertCapability(transaction.requestedCapability, 'requestedCapability');
-  } else if (transaction.requestedCapability) {
-    throw new ConsoleStoreValidationError('integration_link transaction cannot request an administrative capability');
+  } else {
+    if (transaction.requestedCapability) {
+      throw new ConsoleStoreValidationError('integration_link transaction cannot request an administrative capability');
+    }
   }
 }
 

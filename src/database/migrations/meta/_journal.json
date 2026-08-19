@@ -323,6 +323,13 @@
       "when": 1779085300000,
       "tag": "0045_normalize_allowlist_identities",
       "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1779085400000,
+      "tag": "0046_bind_integrations_to_descriptors",
+      "breakpoints": true
     }
   ]
 }

@@ -6,7 +6,7 @@ import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
-import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
@@ -173,7 +173,7 @@ export class IntegrationRequestGateway {
       });
       throw error;
     }
-    if (!isIntegrationConnected(record)) {
+    if (!isIntegrationConnectedToDescriptor(record, descriptor.id)) {
       await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'credential_not_connected');
       throw new IntegrationRequestError('integration_not_connected', 'Integration is not connected.', 409);
     }
@@ -184,7 +184,16 @@ export class IntegrationRequestGateway {
       return this.finish(provider, session.userId, session.sessionId, method, url, first, false);
     }
 
-    const refresh = await this.refreshAudited(this.options.tokenRefresh, session.userId, session.sessionId, provider, method, url, record.accessTokenCiphertext);
+    const refresh = await this.refreshAudited(
+      this.options.tokenRefresh,
+      session.userId,
+      session.sessionId,
+      provider,
+      descriptor.id,
+      method,
+      url,
+      record.accessTokenCiphertext,
+    );
     if (refresh.kind !== 'refreshed' && refresh.kind !== 'reused') {
       await this.auditCredentialError(provider, session.userId, session.sessionId, method, url, 'refresh_failed');
       throw new IntegrationRequestError('integration_token_refresh_failed', 'Integration token refresh failed.', 502);
@@ -261,6 +270,7 @@ export class IntegrationRequestGateway {
     userId: string,
     sessionId: string | null,
     provider: UserIntegrationProvider,
+    integrationDescriptorId: string,
     method: string,
     url: URL,
     staleAccessTokenCiphertext: Buffer,
@@ -269,6 +279,7 @@ export class IntegrationRequestGateway {
       return await tokenRefresh.refreshOnDemand({
         userId,
         provider,
+        integrationDescriptorId,
         staleAccessTokenCiphertext,
       });
     } catch (error) {

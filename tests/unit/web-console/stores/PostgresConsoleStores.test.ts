@@ -650,6 +650,24 @@ describe('PostgresConsoleSessionStore', () => {
 });
 
 describe('PostgresLoginTransactionStore', () => {
+  it('persists the descriptor binding for configured-provider callbacks', async () => {
+    const chain = insertChain();
+    transaction.insert = jest.fn(() => chain);
+    const store = new PostgresLoginTransactionStore({} as DatabaseInstance);
+    const bound: ConsoleLoginTransaction = {
+      ...loginTransaction(),
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+    };
+
+    await expect(store.create(bound)).resolves.toBeUndefined();
+    expect(chain.values).toHaveBeenCalledWith(expect.objectContaining({
+      integrationDescriptorId: DESCRIPTOR_ID,
+    }));
+  });
+
   it('normalizes duplicate transaction inserts to a store conflict', async () => {
     const conflict = Object.assign(new Error('duplicate'), { code: '23505' });
     transaction.insert = jest.fn(() => ({
@@ -683,6 +701,68 @@ describe('PostgresLoginTransactionStore', () => {
 });
 
 describe('PostgresUserIntegrationStore', () => {
+  it('persists the descriptor binding with configured-provider credentials', async () => {
+    const inserted = userIntegrationRow({
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+    });
+    const insert = insertChain([inserted]);
+    transaction.update = jest.fn(() => returningChain([]));
+    transaction.insert = jest.fn(() => insert);
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.connect({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      externalAccountLabel: 'alice',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+      refreshTokenCiphertext: null,
+      connectedAt: NOW,
+    })).resolves.toMatchObject({ integrationDescriptorId: DESCRIPTOR_ID });
+    expect(insert.values).toHaveBeenCalledWith(expect.objectContaining({
+      integrationDescriptorId: DESCRIPTOR_ID,
+    }));
+  });
+
+  it('retains the descriptor binding while refreshing configured-provider credentials', async () => {
+    const current = userIntegrationRow({
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+    });
+    transaction.execute = jest.fn(() => Promise.resolve([current]));
+    const refreshed = userIntegrationRow({
+      ...current,
+      accessTokenCiphertext: Buffer.from('refreshed-access-token'),
+    });
+    transaction.update = jest.fn(() => returningChain([refreshed]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      staleAccessTokenCiphertext: current.accessTokenCiphertext ?? Buffer.alloc(0),
+      refreshedAt: NOW,
+      refresh: record => {
+        expect(record.integrationDescriptorId).toBe(DESCRIPTOR_ID);
+        return Promise.resolve({
+          kind: 'refreshed',
+          accessTokenCiphertext: Buffer.from('refreshed-access-token'),
+          refreshTokenCiphertext: record.refreshTokenCiphertext,
+        });
+      },
+    })).resolves.toMatchObject({
+      kind: 'refreshed',
+      record: { integrationDescriptorId: DESCRIPTOR_ID },
+    });
+  });
+
   it('lists active user integrations and clones credential ciphertext', async () => {
     const row = userIntegrationRow();
     const chain = selectingChain([row]);
@@ -792,6 +872,7 @@ describe('PostgresUserIntegrationStore', () => {
     await expect(store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from('stale-access'),
       refreshedAt: FIVE_MINUTES,
       refresh: () => Promise.resolve({
@@ -824,6 +905,7 @@ describe('PostgresUserIntegrationStore', () => {
     await expect(store.refresh({
       userId: USER_ID,
       provider: 'linear',
+      integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from('stale-access'),
       refreshedAt: FIVE_MINUTES,
       refresh: () => Promise.reject(new Error('refresh should not run')),

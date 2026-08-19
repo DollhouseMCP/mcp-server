@@ -151,10 +151,12 @@ function curatedRecord(provider: string, id: string): IntegrationDescriptorRecor
 async function connectFixtureIntegration(
   store: InMemoryUserIntegrationStore,
   provider: string,
+  integrationDescriptorId: string,
 ): Promise<void> {
   await store.connect({
     userId: USER_ID,
     provider,
+    integrationDescriptorId,
     externalAccountLabel: 'test account',
     externalInstallationId: null,
     authorizedPermissions: { scopes: [] },
@@ -423,7 +425,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
     const { service, integrationStore } = fixture();
     const created = bodyOf(await service.create(consoleRequest({ body: staticKeyBody() })));
     const descriptorId = created.id as string;
-    await connectFixtureIntegration(integrationStore, 'airtable');
+    await connectFixtureIntegration(integrationStore, 'airtable', descriptorId);
 
     await expect(service.update(consoleRequest({
       params: { id: descriptorId },
@@ -463,6 +465,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
     await integrationStore.recordError({
       userId: USER_ID,
       provider: MYCRM,
+      integrationDescriptorId: descriptorId,
       errorReason: 'provider_unavailable',
       occurredAt: NOW,
     });
@@ -479,10 +482,11 @@ describe('IntegrationDescriptorAuthoringService', () => {
     const { service, integrationStore } = fixture();
     const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
     const descriptorId = created.id as string;
-    await connectFixtureIntegration(integrationStore, MYCRM);
+    await connectFixtureIntegration(integrationStore, MYCRM, descriptorId);
     await integrationStore.refresh({
       userId: USER_ID,
       provider: MYCRM,
+      integrationDescriptorId: descriptorId,
       staleAccessTokenCiphertext: Buffer.from('encrypted-test-token'),
       refreshedAt: NOW,
       refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'token_refresh_failed' }),
@@ -1173,6 +1177,7 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
       id: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
       userId: USER_ID,
       provider: MYCRM,
+      integrationDescriptorId: created.id as string,
       externalAccountLabel: 'alice',
       externalInstallationId: null,
       authorizedPermissions: { scopes: ['crm.read'] },
@@ -1212,6 +1217,7 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
     const result = await refresh.refreshOnDemand({
       userId: USER_ID,
       provider: MYCRM,
+      integrationDescriptorId: created.id as string,
       staleAccessTokenCiphertext: record.accessTokenCiphertext,
     });
 

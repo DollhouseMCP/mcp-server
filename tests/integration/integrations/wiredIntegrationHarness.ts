@@ -274,6 +274,7 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
   await userStore.connect({
     userId,
     provider: PROVIDER,
+    integrationDescriptorId: descriptor.id,
     externalAccountLabel: 'wired@example.com',
     externalInstallationId: null,
     authorizedPermissions: { scopes: ['things.read', 'things.write'] },
@@ -361,6 +362,7 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
       await userStore.connect({
         userId,
         provider,
+        integrationDescriptorId: byo.id,
         externalAccountLabel: 'byo@example.com',
         externalInstallationId: null,
         authorizedPermissions: { scopes: ['things.read'] },

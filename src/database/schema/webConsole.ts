@@ -133,12 +133,15 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
   consoleSessionIdHash: bytea('console_session_id_hash'),
   requestedCapability: text('requested_capability'),
+  integrationDescriptorId: uuid('integration_descriptor_id')
+    .references(() => integrationProviderDescriptors.id, { onDelete: 'cascade' }),
   returnTo: text('return_to'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
 }, (table) => [
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
+  index('idx_console_login_transactions_descriptor').on(table.integrationDescriptorId),
 ]);
 
 export type UserIntegrationProvider = string & { readonly __brand: 'UserIntegrationProvider' };
@@ -156,6 +159,8 @@ export const userIntegrations = pgTable('user_integrations', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   provider: text('provider').$type<UserIntegrationProvider>().notNull(),
+  integrationDescriptorId: uuid('integration_descriptor_id')
+    .references(() => integrationProviderDescriptors.id, { onDelete: 'set null' }),
   externalAccountLabel: text('external_account_label'),
   externalInstallationId: text('external_installation_id'),
   authorizedPermissions: jsonb('authorized_permissions').notNull().default({
@@ -240,11 +245,17 @@ export const userIntegrations = pgTable('user_integrations', {
         ))
       OR (${table.status} <> 'error' AND ${table.errorReason} IS NULL)
     )
+    AND (
+      ${table.provider} = 'github'
+      OR ${table.integrationDescriptorId} IS NOT NULL
+      OR ${table.revokedAt} IS NOT NULL
+    )
   `),
   uniqueIndex('idx_user_integrations_active_provider_unique')
     .on(table.userId, table.provider)
     .where(sql`${table.revokedAt} IS NULL`),
   index('idx_user_integrations_user').on(table.userId, table.revokedAt),
+  index('idx_user_integrations_descriptor').on(table.integrationDescriptorId),
 ]);
 
 export const integrationProviderDescriptors = pgTable('integration_provider_descriptors', {

@@ -26,6 +26,7 @@ export interface IntegrationTokenRefreshServiceOptions {
 export interface IntegrationTokenRefreshInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly integrationDescriptorId: string | null;
   readonly staleAccessTokenCiphertext: Buffer;
 }
 
@@ -45,11 +46,15 @@ export class IntegrationTokenRefreshService {
     const provider = this.options.providers.get(input.provider)
       ?? await this.options.resolveProvider?.(input.userId, input.provider)
       ?? null;
+    if ((provider?.integrationDescriptorId ?? null) !== input.integrationDescriptorId) {
+      return this.auditResult(input.provider, { kind: 'missing', record: null });
+    }
     const refreshCredentials = provider?.refreshCredentials?.bind(provider);
     if (!refreshCredentials) {
       const result = await this.options.store.refresh({
         userId: input.userId,
         provider: input.provider,
+        integrationDescriptorId: input.integrationDescriptorId,
         staleAccessTokenCiphertext: input.staleAccessTokenCiphertext,
         refreshedAt: this.now(),
         refresh: () => Promise.resolve({
@@ -62,6 +67,7 @@ export class IntegrationTokenRefreshService {
     const result = await this.options.store.refresh({
       userId: input.userId,
       provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId,
       staleAccessTokenCiphertext: input.staleAccessTokenCiphertext,
       refreshedAt: this.now(),
       refresh: async record => {

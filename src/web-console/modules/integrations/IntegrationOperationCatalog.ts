@@ -9,7 +9,7 @@ import {
   canonicalizePortfolioElementName,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
-import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
 
 const HTTP_METHODS = new Set(['get', 'post', 'put', 'patch', 'delete']);
 const MAX_SKILL_BYTES = 12 * 1024;
@@ -166,7 +166,7 @@ export class IntegrationOperationCatalog {
     }
     const { normalizedSpec, specHash } = prepareOpenApiSpecForDescriptor(input.spec, context.descriptor);
     const now = this.now();
-    const granted = await this.resolveGrantedScopes(context.userId, context.descriptor.provider);
+    const granted = await this.resolveGrantedScopes(context.userId, context.descriptor);
     const operations = deriveOperations(context.descriptor, normalizedSpec, granted);
     await this.options.specStore.upsert({
       descriptorId: context.descriptor.id,
@@ -243,7 +243,7 @@ export class IntegrationOperationCatalog {
       if (promotedIds.size === 0) continue;
       const spec = await this.options.specStore.findByDescriptorId(descriptor.id);
       if (!spec) continue;
-      const grantedScopes = await this.resolveGrantedScopesForPromotion(session, descriptor.provider);
+      const grantedScopes = await this.resolveGrantedScopesForPromotion(session, descriptor);
       if (!grantedScopes) continue;
       const operations = deriveOperationDetails(descriptor, spec.spec, grantedScopes);
       for (const operation of operations) {
@@ -285,7 +285,7 @@ export class IntegrationOperationCatalog {
         404,
       );
     }
-    const grantedScopes = await this.resolveGrantedScopes(context.userId, context.descriptor.provider);
+    const grantedScopes = await this.resolveGrantedScopes(context.userId, context.descriptor);
     return {
       descriptor: context.descriptor,
       spec,
@@ -316,9 +316,12 @@ export class IntegrationOperationCatalog {
     return { userId: session.userId, descriptor };
   }
 
-  private async resolveGrantedScopes(userId: string, provider: string): Promise<ReadonlySet<string>> {
-    const integration = await this.options.integrationStore.findByProvider(userId, provider as UserIntegrationProvider);
-    if (!isIntegrationConnected(integration)) {
+  private async resolveGrantedScopes(
+    userId: string,
+    descriptor: IntegrationDescriptorRecord,
+  ): Promise<ReadonlySet<string>> {
+    const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
+    if (!isIntegrationConnectedToDescriptor(integration, descriptor.id)) {
       throw new IntegrationOperationCatalogError(
         'integration_operation_connection_required',
         'Integration operation discovery requires a connected integration credential.',
@@ -328,9 +331,12 @@ export class IntegrationOperationCatalog {
     return grantedScopes(integration);
   }
 
-  private async resolveGrantedScopesForPromotion(userId: string, provider: string): Promise<ReadonlySet<string> | null> {
-    const integration = await this.options.integrationStore.findByProvider(userId, provider as UserIntegrationProvider);
-    return isIntegrationConnected(integration) ? grantedScopes(integration) : null;
+  private async resolveGrantedScopesForPromotion(
+    userId: string,
+    descriptor: IntegrationDescriptorRecord,
+  ): Promise<ReadonlySet<string> | null> {
+    const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
+    return isIntegrationConnectedToDescriptor(integration, descriptor.id) ? grantedScopes(integration) : null;
   }
 
   private async writeGeneratedSkill(

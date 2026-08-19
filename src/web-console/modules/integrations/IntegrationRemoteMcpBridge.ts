@@ -10,7 +10,7 @@ import { logger } from '../../../utils/logger.js';
 import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
-import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
+import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import {
@@ -165,7 +165,7 @@ export class IntegrationRemoteMcpBridge {
       return [];
     }
     const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
-    if (!isIntegrationConnected(integration)) {
+    if (!isIntegrationConnectedToDescriptor(integration, descriptor.id)) {
       this.auditRemote(descriptor.provider, 'discovery', 'not_connected');
       return [];
     }
@@ -219,7 +219,7 @@ export class IntegrationRemoteMcpBridge {
         throw new IntegrationRemoteMcpBridgeError('remote_mcp_tool_not_allowed', 'Remote MCP tool is not allowlisted for this integration.', 403);
       }
       const integration = await this.options.integrationStore.findByProvider(session.userId, descriptor.provider);
-      if (!isIntegrationConnected(integration)) {
+      if (!isIntegrationConnectedToDescriptor(integration, descriptor.id)) {
         throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
       }
       const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);

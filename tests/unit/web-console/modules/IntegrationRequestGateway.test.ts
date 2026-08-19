@@ -42,6 +42,23 @@ function requestBodyString(init: Parameters<typeof fetch>[1]): string | null {
 }
 
 describe('IntegrationRequestGateway', () => {
+  it('rejects a connected credential bound to a different same-name descriptor', async () => {
+    const fetch = jest.fn<PinnedFetch>();
+    const { gateway, contextTracker } = gatewayFixture({
+      records: [integrationRecord({
+        integrationDescriptorId: '00000000-0000-4000-8000-000000000199',
+      })],
+      fetch,
+    });
+
+    await expect(runAsUser(contextTracker, () => gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+    }))).rejects.toMatchObject({ code: 'integration_not_connected', status: 409 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('audits descriptor lookup failures without persisting untrusted input', async () => {
     SecurityMonitor.clearAllEventsForTesting();
     const untrustedProvider = 'sk_live_12345678901234567890';
@@ -2310,15 +2327,22 @@ function gatewayFixture(options: {
 } = {}) {
   const contextTracker = new ContextTracker();
   const secretEncryption = encryption();
-  const integrationStore = new InMemoryUserIntegrationStore(options.records ?? [
+  const descriptorRecords = options.descriptors ?? [oauthDescriptor()];
+  const records = options.records ?? [
     integrationRecord({
       provider: 'gmail' as UserIntegrationProvider,
       authorizedPermissions: { scopes: ['gmail.readonly'] },
       accessTokenCiphertext: encrypt('gmail-access-token', 'gmail'),
       refreshTokenCiphertext: encrypt('gmail-refresh-token', 'gmail', 'refresh_token'),
     }),
-  ]);
-  const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? [oauthDescriptor()]);
+  ];
+  const integrationStore = new InMemoryUserIntegrationStore(records.map(record => ({
+    ...record,
+    integrationDescriptorId: record.integrationDescriptorId
+      ?? descriptorRecords.find(descriptor => descriptor.provider === record.provider)?.id
+      ?? null,
+  })));
+  const descriptorStore = new InMemoryIntegrationDescriptorStore(descriptorRecords);
   const providers = options.providers ?? IntegrationProviderRegistry.empty();
   const audit = new FixtureAuditSink();
   // Adapt the plain fetch stub into the pinned-outbound seam, recording each pin
