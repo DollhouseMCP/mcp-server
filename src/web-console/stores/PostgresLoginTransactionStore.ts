@@ -1,4 +1,4 @@
-import { and, eq, gt, isNotNull, isNull, lte, or } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lte } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -108,10 +108,12 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
 
   async sweepExpired(before: Date = new Date()): Promise<number> {
     const rows = await withSystemContext(this.db, tx =>
-      tx.delete(consoleLoginTransactions).where(or(
-        lte(consoleLoginTransactions.expiresAt, before),
-        lte(consoleLoginTransactions.consumedAt, before),
-      )).returning({ idHash: consoleLoginTransactions.idHash }),
+      // An in-flight callback is consumed but still owns its row until either
+      // completeConsumed() advances expiresAt to consumedAt or its original
+      // authorization deadline passes.
+      tx.delete(consoleLoginTransactions)
+        .where(lte(consoleLoginTransactions.expiresAt, before))
+        .returning({ idHash: consoleLoginTransactions.idHash }),
     );
     return rows.length;
   }

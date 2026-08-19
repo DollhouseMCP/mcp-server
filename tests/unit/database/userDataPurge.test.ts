@@ -196,7 +196,7 @@ describe('purgeNonCascadeUserIdentity', () => {
     expect(executes).toHaveLength(2);
   });
 
-  it('does not duplicate a canonical deny tombstone that already exists', async () => {
+  it('writes a current deny tombstone even when a historical row exists', async () => {
     const { tx, inserts } = captureTx([], [{ kind: 'email', normalizedValue: 'a@b.com' }]);
 
     await purgeNonCascadeUserIdentity(tx, {
@@ -206,7 +206,14 @@ describe('purgeNonCascadeUserIdentity', () => {
       githubLogins: [],
     }, ADMIN_ID, DELETED_AT);
 
-    expect(inserts).toHaveLength(0);
+    expect(inserts).toEqual([{
+      table: accountAllowlistEntries,
+      values: [expect.objectContaining({
+        kind: 'email',
+        normalizedValue: 'a@b.com',
+        revokedAt: DELETED_AT,
+      })],
+    }]);
   });
 
   it('also purges auth_kv rows linked to the account\'s grants by grantId', async () => {

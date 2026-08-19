@@ -69,7 +69,10 @@ export class InMemoryLoginTransactionStore implements ILoginTransactionStore {
     await Promise.resolve();
     let deleted = 0;
     for (const [key, transaction] of this.transactions) {
-      if (transaction.expiresAt <= before || transaction.consumedAt) {
+      // Consumed callbacks remain live while their external token exchange is
+      // in flight. completeConsumed() moves expiresAt back to consumedAt so a
+      // completed row is eligible for the next sweep.
+      if (transaction.expiresAt <= before) {
         this.transactions.delete(key);
         deleted += 1;
       }

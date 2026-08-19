@@ -70,8 +70,8 @@ const { PostgresAccountAdminMutationTransactionRunner } = await import(
 const { PostgresConsoleIdentityResolver } = await import(
   '../../../../src/web-console/identity/PostgresConsoleIdentityResolver.js'
 );
-const { desc } = await import('drizzle-orm');
-const { accountFactors } = await import('../../../../src/database/schema/index.js');
+const { desc, lte } = await import('drizzle-orm');
+const { accountFactors, consoleLoginTransactions } = await import('../../../../src/database/schema/index.js');
 const {
   ConsoleStoreConflictError,
   ConsoleStoreValidationError,
@@ -750,10 +750,12 @@ describe('PostgresLoginTransactionStore', () => {
   });
 
   it('deletes consumed or expired transient transaction rows', async () => {
-    transaction.delete = jest.fn(() => returningChain([{ idHash: hash(3) }]));
+    const chain = returningChain([{ idHash: hash(3) }]);
+    transaction.delete = jest.fn(() => chain);
     const store = new PostgresLoginTransactionStore({} as DatabaseInstance);
 
     await expect(store.sweepExpired(FIVE_MINUTES)).resolves.toBe(1);
+    expect(chain.where).toHaveBeenCalledWith(lte(consoleLoginTransactions.expiresAt, FIVE_MINUTES));
   });
 });
 

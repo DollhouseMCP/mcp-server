@@ -262,15 +262,13 @@ export async function purgeNonCascadeUserIdentity(
       or(...accountAllowlistMatches),
     ));
 
-    const existingRows = await tx.select({
-      kind: accountAllowlistEntries.kind,
-      normalizedValue: accountAllowlistEntries.normalizedValue,
-    }).from(accountAllowlistEntries).where(or(...accountAllowlistMatches));
-    const existing = new Set(existingRows.map(row => `${row.kind}:${row.normalizedValue}`));
-    const missingTombstones = canonicalDeletionAllowlistValues(identity)
-      .filter(entry => !existing.has(`${entry.kind}:${entry.normalizedValue}`));
-    if (missingTombstones.length > 0) {
-      await tx.insert(accountAllowlistEntries).values(missingTombstones.map(entry => ({
+    // Always append a fresh revoked row. Historical revoked rows are
+    // intentionally non-unique, and a read-before-insert deduplication would
+    // let a concurrent active add appear after the UPDATE and suppress the
+    // tombstone that must take precedence for this deletion.
+    const tombstones = canonicalDeletionAllowlistValues(identity);
+    if (tombstones.length > 0) {
+      await tx.insert(accountAllowlistEntries).values(tombstones.map(entry => ({
         kind: entry.kind,
         normalizedValue: entry.normalizedValue,
         displayValue: entry.normalizedValue,

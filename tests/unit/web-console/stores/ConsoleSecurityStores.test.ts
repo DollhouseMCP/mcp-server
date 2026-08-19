@@ -412,13 +412,16 @@ describe('InMemoryLoginTransactionStore', () => {
     }))).resolves.toBeUndefined();
   });
 
-  it('removes expired and consumed transient transactions', async () => {
+  it('retains in-flight consumed transactions until completion or expiry', async () => {
     const store = new InMemoryLoginTransactionStore();
     await store.create(loginTransaction());
     await store.create(loginTransaction({ idHash: hash(6) }));
     await store.consume(hash(6), hash(4), FOUR_MINUTES);
 
-    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(2);
+    expect(await store.sweepExpired(FOUR_MINUTES)).toBe(0);
+    await store.completeConsumed(hash(6));
+    expect(await store.sweepExpired(FOUR_MINUTES)).toBe(1);
+    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(1);
   });
 });
 
