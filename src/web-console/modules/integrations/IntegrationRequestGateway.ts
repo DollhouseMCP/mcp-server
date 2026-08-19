@@ -125,7 +125,21 @@ export class IntegrationRequestGateway {
     const session = this.options.contextTracker.requireSessionContext('IntegrationRequestGateway');
     const provider = normalizeProvider(input.provider);
     const method = normalizeMethod(input.method);
-    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider);
+    let descriptor: IntegrationDescriptorRecord | null;
+    try {
+      descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider);
+    } catch (error) {
+      await this.auditLookupFailure({
+        provider: 'unresolved',
+        userId: session.userId,
+        sessionId: session.sessionId,
+        method,
+        host: null,
+        path: null,
+        reason: 'descriptor_lookup_failed',
+      });
+      throw error;
+    }
     if (!descriptor) {
       await this.auditDenied('unresolved', session.userId, session.sessionId, method, null, null, 'descriptor_not_found');
       throw new IntegrationRequestError('integration_descriptor_not_found', 'Integration descriptor was not found.', 404);
@@ -144,7 +158,21 @@ export class IntegrationRequestGateway {
       await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'rate_limited');
       throw new IntegrationRequestError('integration_request_rate_limited', 'Integration request rate limit exceeded.', 429);
     }
-    const record = await this.options.integrationStore.findByProvider(session.userId, provider);
+    let record: UserIntegrationRecord | null;
+    try {
+      record = await this.options.integrationStore.findByProvider(session.userId, provider);
+    } catch (error) {
+      await this.auditLookupFailure({
+        provider: descriptor.provider,
+        userId: session.userId,
+        sessionId: session.sessionId,
+        method,
+        host: url.hostname,
+        path: url.pathname,
+        reason: 'credential_lookup_failed',
+      });
+      throw error;
+    }
     if (!isIntegrationConnected(record)) {
       await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'credential_not_connected');
       throw new IntegrationRequestError('integration_not_connected', 'Integration is not connected.', 409);
@@ -464,6 +492,24 @@ export class IntegrationRequestGateway {
       status: null,
       reason,
       refreshed,
+      occurredAt: new Date(),
+    });
+  }
+
+  private async auditLookupFailure(event: {
+    readonly provider: string;
+    readonly userId: string;
+    readonly sessionId: string | null;
+    readonly method: string;
+    readonly host: string | null;
+    readonly path: string | null;
+    readonly reason: string;
+  }): Promise<void> {
+    await this.audit({
+      ...event,
+      result: 'upstream_error',
+      status: null,
+      refreshed: false,
       occurredAt: new Date(),
     });
   }

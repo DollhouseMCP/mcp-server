@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 
 import {
   AeadSecretEncryptionService,
@@ -17,6 +17,7 @@ import {
 // its own unit tests import the class module directly.
 import { IntegrationRequestGateway } from '../../../../src/web-console/modules/integrations/IntegrationRequestGateway.js';
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import type { IRateLimitStore } from '../../../../src/auth/embedded-as/storage/IRateLimitStore.js';
 import type { OutboundPin, PinnedFetch } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
@@ -41,6 +42,57 @@ function requestBodyString(init: Parameters<typeof fetch>[1]): string | null {
 }
 
 describe('IntegrationRequestGateway', () => {
+  it('audits descriptor lookup failures without persisting untrusted input', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const untrustedProvider = 'sk_live_12345678901234567890';
+    const storeFailure = new Error('descriptor database secret details');
+    const fixture = gatewayFixture();
+    jest.spyOn(fixture.descriptorStore, 'findVisibleByProvider').mockRejectedValue(storeFailure);
+
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.request({
+      provider: untrustedProvider,
+      method: 'GET',
+      path: '/anything',
+    }))).rejects.toBe(storeFailure);
+
+    expect(fixture.audit.events).toEqual([
+      expect.objectContaining({
+        provider: 'unresolved',
+        result: 'upstream_error',
+        reason: 'descriptor_lookup_failed',
+        host: null,
+        path: null,
+      }),
+    ]);
+    const serializedEvents = JSON.stringify(SecurityMonitor.getRecentEvents());
+    expect(serializedEvents).not.toContain(untrustedProvider);
+    expect(serializedEvents).not.toContain(storeFailure.message);
+  });
+
+  it('audits credential lookup failures with confirmed request provenance', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const storeFailure = new Error('credential database secret details');
+    const fixture = gatewayFixture();
+    jest.spyOn(fixture.integrationStore, 'findByProvider').mockRejectedValue(storeFailure);
+
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/messages',
+    }))).rejects.toBe(storeFailure);
+
+    expect(fixture.audit.events).toEqual([
+      expect.objectContaining({
+        provider: 'gmail',
+        result: 'upstream_error',
+        reason: 'credential_lookup_failed',
+        host: GMAIL_HOST,
+        path: '/gmail/v1/users/me/messages',
+      }),
+    ]);
+    expect(JSON.stringify(SecurityMonitor.getRecentEvents())).not.toContain(storeFailure.message);
+  });
+
   it('does not persist unresolved provider input in descriptor-not-found audit events', async () => {
     const untrustedProvider = 'sk_live_12345678901234567890';
     const gateway = gatewayFixture();
@@ -2297,7 +2349,7 @@ function gatewayFixture(options: {
     rateLimitStore: options.rateLimitStore,
     rateLimit: options.rateLimit,
   });
-  return { gateway, contextTracker, audit, pins };
+  return { gateway, contextTracker, audit, pins, descriptorStore, integrationStore };
 }
 
 function runAsUser<T>(contextTracker: ContextTracker, fn: () => Promise<T>): Promise<T> {
