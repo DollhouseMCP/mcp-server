@@ -68,6 +68,9 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   revokedByUserId: uuid('revoked_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  authorityOrder: bigint('authority_order', { mode: 'number' })
+    .notNull()
+    .default(sql`nextval('account_allowlist_authority_order_seq')`),
 }, (table) => [
   check('account_allowlist_entries_kind_check', sql`${table.kind} IN ('email', 'github_username', 'github_id')`),
   check('account_allowlist_entries_shape_check', sql`
@@ -84,6 +87,7 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   uniqueIndex('idx_account_allowlist_entries_active_unique')
     .on(table.kind, table.normalizedValue)
     .where(sql`${table.revokedAt} IS NULL`),
+  uniqueIndex('idx_account_allowlist_entries_authority_order').on(table.authorityOrder),
   index('idx_account_allowlist_entries_created').on(table.createdAt),
 ]);
 

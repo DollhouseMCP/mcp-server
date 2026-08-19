@@ -257,6 +257,7 @@ export async function purgeNonCascadeUserIdentity(
     await tx.update(accountAllowlistEntries).set({
       revokedByUserId,
       revokedAt,
+      authorityOrder: sql`nextval('account_allowlist_authority_order_seq')`,
     }).where(and(
       isNull(accountAllowlistEntries.revokedAt),
       or(...accountAllowlistMatches),

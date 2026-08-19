@@ -177,12 +177,12 @@ async function accountAllowlistIdentityDecisionWithTx(
   values: AllowlistMatchValues,
   lockRows = false,
 ): Promise<{ readonly matched: boolean; readonly denied: boolean }> {
-  const activeCreatedAt = await latestActiveIdentityGrantWithTx(tx, values, lockRows);
-  const tombstoneRevokedAt = await latestIdentityTombstoneWithTx(tx, values, lockRows);
+  const activeAuthorityOrder = await latestActiveIdentityGrantWithTx(tx, values, lockRows);
+  const tombstoneAuthorityOrder = await latestIdentityTombstoneWithTx(tx, values, lockRows);
   return {
-    matched: activeCreatedAt !== null,
-    denied: tombstoneRevokedAt !== null
-      && (activeCreatedAt === null || tombstoneRevokedAt >= activeCreatedAt),
+    matched: activeAuthorityOrder !== null,
+    denied: tombstoneAuthorityOrder !== null
+      && (activeAuthorityOrder === null || tombstoneAuthorityOrder >= activeAuthorityOrder),
   };
 }
 
@@ -193,12 +193,12 @@ async function latestActiveIdentityGrantWithTx(
 ): Promise<number | null> {
   const predicates = allowlistIdentityPredicates(values);
   if (predicates.length === 0) return null;
-  const query = tx.select({ createdAt: accountAllowlistEntries.createdAt }).from(accountAllowlistEntries)
+  const query = tx.select({ authorityOrder: accountAllowlistEntries.authorityOrder }).from(accountAllowlistEntries)
     .where(and(isNull(accountAllowlistEntries.revokedAt), or(...predicates)))
-    .orderBy(desc(accountAllowlistEntries.createdAt))
+    .orderBy(desc(accountAllowlistEntries.authorityOrder))
     .limit(1);
   const rows = lockRow ? await query.for('update') : await query;
-  return rows[0]?.createdAt?.getTime() ?? null;
+  return rows[0]?.authorityOrder ?? null;
 }
 
 async function latestIdentityTombstoneWithTx(
@@ -208,12 +208,12 @@ async function latestIdentityTombstoneWithTx(
 ): Promise<number | null> {
   const predicates = allowlistIdentityPredicates(values);
   if (predicates.length === 0) return null;
-  const query = tx.select({ revokedAt: accountAllowlistEntries.revokedAt }).from(accountAllowlistEntries)
+  const query = tx.select({ authorityOrder: accountAllowlistEntries.authorityOrder }).from(accountAllowlistEntries)
     .where(and(isNotNull(accountAllowlistEntries.revokedAt), or(...predicates)))
-    .orderBy(desc(accountAllowlistEntries.revokedAt))
+    .orderBy(desc(accountAllowlistEntries.authorityOrder))
     .limit(1);
   const rows = lockRow ? await query.for('update') : await query;
-  return rows[0]?.revokedAt?.getTime() ?? null;
+  return rows[0]?.authorityOrder ?? null;
 }
 
 function allowlistIdentityPredicates(values: AllowlistMatchValues): SQL[] {
@@ -325,6 +325,7 @@ export async function removeAccountAllowlistEntryWithTx(
     .set({
       revokedByUserId: input.revokedByUserId,
       revokedAt: input.revokedAt,
+      authorityOrder: sql`nextval('account_allowlist_authority_order_seq')`,
     })
     .where(and(eq(accountAllowlistEntries.id, input.id), isNull(accountAllowlistEntries.revokedAt)))
     .returning();

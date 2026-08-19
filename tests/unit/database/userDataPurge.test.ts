@@ -182,7 +182,11 @@ describe('purgeNonCascadeUserIdentity', () => {
     expect(updates).toEqual([
       expect.objectContaining({
         table: accountAllowlistEntries,
-        values: { revokedByUserId: ADMIN_ID, revokedAt: DELETED_AT },
+        values: expect.objectContaining({
+          revokedByUserId: ADMIN_ID,
+          revokedAt: DELETED_AT,
+          authorityOrder: expect.anything(),
+        }),
       }),
     ]);
     expect(inserts).toEqual([{

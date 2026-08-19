@@ -505,6 +505,7 @@ function allowlistRow(overrides: Partial<{
   createdAt: Date;
   revokedByUserId: string | null;
   revokedAt: Date | null;
+  authorityOrder: number;
 }> = {}) {
   return {
     id: ALLOWLIST_ID,
@@ -516,6 +517,7 @@ function allowlistRow(overrides: Partial<{
     createdAt: FIVE_MINUTES,
     revokedByUserId: null,
     revokedAt: null,
+    authorityOrder: 1,
     ...overrides,
   };
 }
@@ -2345,7 +2347,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
     transaction.select = jest.fn()
       .mockReturnValueOnce(selectingChain([{ id: ALLOWLIST_ID }]))
-      .mockReturnValueOnce(selectingChain([{ createdAt: NOW }]))
+      .mockReturnValueOnce(selectingChain([{ authorityOrder: 1 }]))
       .mockReturnValueOnce(selectingChain([]));
 
     await expect(store.hasActiveEntries()).resolves.toBe(true);
@@ -2357,7 +2359,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
   it('locks the authoritative allowlist match through account provisioning', async () => {
     const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
     const bootstrapSelect = selectingForUpdateChain([]);
-    const allowlistSelect = selectingForUpdateChain([{ createdAt: NOW }]);
+    const allowlistSelect = selectingForUpdateChain([{ authorityOrder: 1 }]);
     const tombstoneSelect = selectingForUpdateChain([]);
     const accountInsert = insertChain();
     const auditInsert = insertChain();
@@ -2413,7 +2415,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     transaction.select = jest.fn()
       .mockReturnValueOnce(selectingForUpdateChain([]))
       .mockReturnValueOnce(selectingForUpdateChain([]))
-      .mockReturnValueOnce(selectingForUpdateChain([{ revokedAt: NOW }]));
+      .mockReturnValueOnce(selectingForUpdateChain([{ authorityOrder: 2 }]));
     const inserts: ReturnType<typeof insertChain>[] = [];
     transaction.insert = jest.fn(() => {
       const chain = insertChain();
@@ -2453,8 +2455,8 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
     transaction.select = jest.fn()
       .mockReturnValueOnce(selectingForUpdateChain([]))
-      .mockReturnValueOnce(selectingForUpdateChain([{ createdAt: BEFORE_NOW }]))
-      .mockReturnValueOnce(selectingForUpdateChain([{ revokedAt: NOW }]));
+      .mockReturnValueOnce(selectingForUpdateChain([{ authorityOrder: 4 }]))
+      .mockReturnValueOnce(selectingForUpdateChain([{ authorityOrder: 5 }]));
     const denialAudit = insertChain();
     transaction.insert = jest.fn(() => denialAudit);
     transaction.transaction = jest.fn((callback: (tx: typeof transaction) => Promise<unknown>) =>
@@ -2548,10 +2550,11 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
       revokedByUserId: SECOND_USER_ID,
       revokedAt: THIRTY_MINUTES,
     });
-    expect(remove.set).toHaveBeenCalledWith({
+    expect(remove.set).toHaveBeenCalledWith(expect.objectContaining({
       revokedByUserId: SECOND_USER_ID,
       revokedAt: THIRTY_MINUTES,
-    });
+      authorityOrder: expect.anything(),
+    }));
   });
 });
 

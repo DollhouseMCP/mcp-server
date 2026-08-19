@@ -337,6 +337,13 @@
       "when": 1779085500000,
       "tag": "0047_bind_oauth_flows_to_descriptor_routing",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1779085600000,
+      "tag": "0048_allowlist_authority_order",
+      "breakpoints": true
     }
   ]
 }
