@@ -13,5 +13,6 @@ ALTER TABLE "console_login_transactions"
   CHECK (
     ("integration_descriptor_id" IS NULL AND "integration_descriptor_fingerprint" IS NULL)
     OR ("integration_descriptor_id" IS NOT NULL
+      AND "integration_descriptor_fingerprint" IS NOT NULL
       AND "integration_descriptor_fingerprint" ~ '^[a-f0-9]{64}$')
   );

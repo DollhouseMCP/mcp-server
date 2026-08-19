@@ -369,6 +369,15 @@ function selectingChain(rows: unknown[]) {
   return chain;
 }
 
+function selectingForUpdateChain(rows: unknown[]) {
+  const chain: Record<string, jest.Mock> = {};
+  chain.from = jest.fn(() => chain);
+  chain.where = jest.fn(() => chain);
+  chain.limit = jest.fn(() => chain);
+  chain.for = jest.fn(() => Promise.resolve(rows));
+  return chain;
+}
+
 function selectingOrderedChain(rows: unknown[]) {
   const chain: Record<string, jest.Mock> = {};
   chain.from = jest.fn(() => chain);
@@ -2142,6 +2151,41 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     await expect(store.matchesIdentity({ email: 'Alice@Example.Test' })).resolves.toBe(true);
     await expect(store.matchesIdentity({ githubId: '123' })).resolves.toBe(false);
     expect(transaction.select).toHaveBeenCalledTimes(3);
+  });
+
+  it('locks the authoritative allowlist match through account provisioning', async () => {
+    const store = new PostgresConsoleAccountAllowlistStore({} as DatabaseInstance);
+    const bootstrapSelect = selectingForUpdateChain([]);
+    const allowlistSelect = selectingForUpdateChain([{ id: ALLOWLIST_ID }]);
+    const accountInsert = insertChain();
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(bootstrapSelect)
+      .mockReturnValueOnce(allowlistSelect);
+    transaction.insert = jest.fn(() => accountInsert);
+
+    await expect(store.provisionAccountIfAllowed({
+      identity: {
+        sub: 'github_42',
+        method: 'github',
+        email: ALICE_EMAIL,
+        githubId: '42',
+      },
+      account: {
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: ALICE_EMAIL,
+        emailVerified: true,
+        createdAt: NOW.getTime(),
+        updatedAt: NOW.getTime(),
+      },
+      required: true,
+    })).resolves.toEqual({ allowed: true });
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(bootstrapSelect.for).toHaveBeenCalledWith('update');
+    expect(allowlistSelect.for).toHaveBeenCalledWith('update');
+    expect(accountInsert.onConflictDoUpdate).toHaveBeenCalledTimes(1);
   });
 
   it('normalizes inserted allowlist values and maps duplicate active entries to conflicts', async () => {

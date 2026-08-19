@@ -41,6 +41,7 @@ import type {
   AuthAllowlistEntry,
   AllowlistMatchValues,
   IAuthStorageLayer,
+  StoredAccount,
 } from './storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from './bootstrapAdmin.js';
 
@@ -83,6 +84,18 @@ export interface SignInAllowlistAuthority {
   matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
   hasAnyEntries(): Promise<boolean>;
   listEntries(): Promise<AuthAllowlistEntry[]>;
+  /**
+   * Optional durable-backend fast path that evaluates the gate and writes the
+   * account in one transaction. PostgreSQL uses this to serialize account
+   * provisioning with allowlist revocation during principal deletion.
+   */
+  provisionAccountIfAllowed?(input: AtomicAccountProvisioningInput): Promise<AllowlistGateResult>;
+}
+
+export interface AtomicAccountProvisioningInput {
+  readonly identity: AllowlistGateIdentity;
+  readonly account: StoredAccount;
+  readonly required: boolean;
 }
 
 /**
@@ -150,6 +163,26 @@ export async function checkAllowlistGate(
       ? 'Sign-in allowlist is required and this identity is not on it.'
       : 'This identity is not on the sign-in allowlist.',
   };
+}
+
+/** Evaluate the sign-in gate and persist the account without a revocation gap. */
+export async function provisionAccountThroughAllowlistGate(
+  identity: AllowlistGateIdentity,
+  options: AllowlistGateOptions,
+  account: StoredAccount,
+): Promise<AllowlistGateResult> {
+  const authority = options.authority;
+  if (authority?.provisionAccountIfAllowed) {
+    return authority.provisionAccountIfAllowed({
+      identity,
+      account,
+      required: options.required,
+    });
+  }
+
+  const gate = await checkAllowlistGate(identity, options);
+  if (gate.allowed) await options.storage.upsertAccount(account);
+  return gate;
 }
 
 function legacyStorageAuthority(storage: IAuthStorageLayer): SignInAllowlistAuthority {

@@ -142,7 +142,8 @@ describe('purgeNonCascadeUserIdentity', () => {
       githubLogins: ['octo'],
     }, ADMIN_ID, DELETED_AT);
 
-    expect(deletes.filter(d => d.table === authKv)).toHaveLength(2); // one accountId delete per sub (no grants)
+    // Each subject clears a matching bootstrap claim and its account-linked K/V rows.
+    expect(deletes.filter(d => d.table === authKv)).toHaveLength(4);
     expect(deletes.filter(d => d.table === authIdentityEvents)).toHaveLength(1);
     expect(deletes.filter(d => d.table === authAllowlist)).toHaveLength(1);
     expect(updates).toEqual([
@@ -163,8 +164,8 @@ describe('purgeNonCascadeUserIdentity', () => {
       DELETED_AT,
     );
 
-    // one subject → two grant-linked deletes (by grantId) + one accountId delete.
-    expect(deletes.filter(d => d.table === authKv)).toHaveLength(3);
+    // one subject → bootstrap claim + two grant-linked deletes + one accountId delete.
+    expect(deletes.filter(d => d.table === authKv)).toHaveLength(4);
   });
 
   it('deletes nothing when the account has no resolvable identity', async () => {

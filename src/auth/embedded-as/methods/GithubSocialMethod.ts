@@ -45,7 +45,11 @@ import type {
 import { renderInteractionBindingError, verifyInteractionCookieMatches } from '../interactionCookieBinding.js';
 import { beginAdminStepUpProof, isAdminStepUpRequest, renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
+import {
+  provisionAccountThroughAllowlistGate,
+  renderAllowlistDeniedPage,
+  type SignInAllowlistAuthority,
+} from '../allowlistGate.js';
 import {
   GITHUB_API_EMAILS_URL,
   GITHUB_API_USER_URL,
@@ -363,20 +367,37 @@ export class GithubSocialMethod implements IAuthMethod {
     // sign-in leaves no persistent state (no account row, no grant-revoke
     // side effects, no identity-change audit). Bootstrap admin always
     // passes via checkAllowlistGate's rule 1.
-    const gate = await checkAllowlistGate(
-      {
-        sub: identity.sub,
-        method: 'github',
-        email: profile.verifiedPrimaryEmail,
-        githubUsername: profile.login,
-        githubId: String(profile.id),
-        provider: GITHUB_PROVIDER,
-        externalSub: String(profile.id),
-      },
+    const gateIdentity = {
+      sub: identity.sub,
+      method: 'github' as const,
+      email: profile.verifiedPrimaryEmail,
+      githubUsername: profile.login,
+      githubId: String(profile.id),
+      provider: GITHUB_PROVIDER,
+      externalSub: String(profile.id),
+    };
+    const existing = await this.options.storage.findAccountByExternalId(
+      GITHUB_PROVIDER,
+      String(profile.id),
+    );
+    const now = Date.now();
+    const gate = await provisionAccountThroughAllowlistGate(
+      gateIdentity,
       {
         storage: this.options.storage,
         authority: this.options.signInAllowlistAuthority,
         required: this.options.allowlistRequired ?? false,
+      },
+      {
+        sub: identity.sub,
+        provider: GITHUB_PROVIDER,
+        externalSub: String(profile.id),
+        email: profile.verifiedPrimaryEmail,
+        emailVerified: true,
+        displayName: identity.displayName,
+        rawProfile: profile.raw,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
       },
     );
     if (!gate.allowed) {
@@ -384,10 +405,6 @@ export class GithubSocialMethod implements IAuthMethod {
     }
 
     // must-fix #21: emit identity-change audit if the email mapping moved.
-    const existing = await this.options.storage.findAccountByExternalId(
-      GITHUB_PROVIDER,
-      String(profile.id),
-    );
     if (existing?.email && existing.email !== profile.verifiedPrimaryEmail) {
       // H14: when the upstream identity-to-email mapping moves, revoke
       // any active grants for this sub. Without this, refresh tokens
@@ -427,19 +444,6 @@ export class GithubSocialMethod implements IAuthMethod {
     // see bootstrapAdmin.ts for the upsert/setRoles split.
     // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
     // (linked on first login), not stamped onto the auth account.
-    const now = Date.now();
-    await this.options.storage.upsertAccount({
-      sub: identity.sub,
-      provider: GITHUB_PROVIDER,
-      externalSub: String(profile.id),
-      email: profile.verifiedPrimaryEmail,
-      emailVerified: true,
-      displayName: identity.displayName,
-      rawProfile: profile.raw,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
-
     return { kind: 'ok', interactionId: input.state, identity };
   }
 

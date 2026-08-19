@@ -4,7 +4,14 @@ import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
 import { accountAllowlistEntries } from '../../database/schema/index.js';
+import { authIdentityEvents, authKv } from '../../database/schema/auth.js';
 import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
+import { upsertAuthAccountWithTx } from '../../auth/embedded-as/storage/PostgresAuthStorageLayer.js';
+import type {
+  AtomicAccountProvisioningInput,
+  AllowlistGateResult,
+} from '../../auth/embedded-as/allowlistGate.js';
+import { logger } from '../../utils/logger.js';
 import {
   ConsoleStoreConflictError,
   isUniqueViolation,
@@ -53,6 +60,51 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
     return withSystemContext(this.db, tx => accountAllowlistMatchesIdentityWithTx(tx, values));
   }
 
+  async provisionAccountIfAllowed(
+    input: AtomicAccountProvisioningInput,
+  ): Promise<AllowlistGateResult> {
+    return withSystemContext(this.db, async tx => {
+      const bootstrapRows = await tx.select({ payload: authKv.payload }).from(authKv)
+        .where(and(eq(authKv.model, 'AuthBootstrap'), eq(authKv.id, 'state')))
+        .limit(1)
+        .for('update');
+      const bootstrap = bootstrapRows[0]?.payload;
+      const bootstrapRecord = bootstrap && typeof bootstrap === 'object' && !Array.isArray(bootstrap)
+        ? bootstrap as Record<string, unknown>
+        : null;
+      const isBootstrapAdmin = Boolean(
+        bootstrapRecord?.completed === true
+        && bootstrapRecord.adminSub === input.identity.sub
+        && bootstrapRecord.adminMethod === input.identity.method,
+      );
+
+      const values: AllowlistMatchValues = {
+        email: input.identity.email,
+        githubUsername: input.identity.githubUsername,
+        githubId: input.identity.githubId,
+      };
+      const matched = isBootstrapAdmin
+        ? false
+        : await accountAllowlistMatchesIdentityWithTx(tx, values, true);
+      const hasAnyEntries = isBootstrapAdmin || matched || input.required
+        ? true
+        : await hasActiveAccountAllowlistEntriesWithTx(tx);
+
+      if (isBootstrapAdmin || matched || (!input.required && !hasAnyEntries)) {
+        await upsertAuthAccountWithTx(tx, input.account);
+        return { allowed: true };
+      }
+
+      await recordAllowlistDenialWithTx(tx, input);
+      return {
+        allowed: false,
+        reason: input.required
+          ? 'Sign-in allowlist is required and this identity is not on it.'
+          : 'This identity is not on the sign-in allowlist.',
+      };
+    });
+  }
+
   async findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null> {
     return withSystemContext(this.db, tx => findActiveAccountAllowlistEntryWithTx(tx, id));
   }
@@ -89,6 +141,7 @@ export async function hasActiveAccountAllowlistEntriesWithTx(tx: DrizzleTx): Pro
 export async function accountAllowlistMatchesIdentityWithTx(
   tx: DrizzleTx,
   values: AllowlistMatchValues,
+  lockMatch = false,
 ): Promise<boolean> {
   const predicates: SQL[] = [];
   if (values.email) {
@@ -104,10 +157,38 @@ export async function accountAllowlistMatchesIdentityWithTx(
     if (pred) predicates.push(pred);
   }
   if (predicates.length === 0) return false;
-  const rows = await tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
+  const query = tx.select({ id: accountAllowlistEntries.id }).from(accountAllowlistEntries)
     .where(and(isNull(accountAllowlistEntries.revokedAt), or(...predicates)))
     .limit(1);
+  const rows = lockMatch ? await query.for('update') : await query;
   return rows.length > 0;
+}
+
+async function recordAllowlistDenialWithTx(
+  tx: DrizzleTx,
+  input: AtomicAccountProvisioningInput,
+): Promise<void> {
+  const details: Record<string, unknown> = { method: input.identity.method };
+  if (input.identity.email !== undefined) details.email = input.identity.email;
+  if (input.identity.githubUsername !== undefined) details.githubUsername = input.identity.githubUsername;
+  try {
+    await tx.transaction(async savepoint => {
+      await savepoint.insert(authIdentityEvents).values({
+        type: 'auth.allowlist_denied',
+        sub: input.identity.sub,
+        provider: input.identity.provider ?? null,
+        externalSub: input.identity.externalSub ?? null,
+        details,
+        timestamp: Date.now(),
+      });
+    });
+  } catch (error) {
+    logger.warn('[allowlistGate] audit event emit failed', {
+      error: error instanceof Error ? error.message : String(error),
+      method: input.identity.method,
+      sub: input.identity.sub,
+    });
+  }
 }
 
 export async function findActiveAccountAllowlistEntryWithTx(

@@ -146,6 +146,7 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   check('console_login_transactions_descriptor_fingerprint_check', sql`
     (${table.integrationDescriptorId} IS NULL AND ${table.integrationDescriptorFingerprint} IS NULL)
     OR (${table.integrationDescriptorId} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} IS NOT NULL
       AND ${table.integrationDescriptorFingerprint} ~ '^[a-f0-9]{64}$')
   `),
 ]);

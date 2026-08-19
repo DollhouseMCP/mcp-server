@@ -198,20 +198,31 @@ export class IntegrationService {
       await this.recordCallbackRejected(providerId, auth.userId, 'session_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
+
+    // The provider resolved before consume is sufficient only for the
+    // transaction-store dependencies. Re-resolve after the one-time state is
+    // consumed so descriptor updates cannot leave this callback comparing and
+    // exchanging against the stale provider snapshot loaded at request entry.
+    const currentProvider = await this.resolveProviderFor(auth.userId, providerId);
+    const currentDeps = this.writeDependencies(currentProvider);
+    if (!currentDeps) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
     if ((transaction.integrationDescriptorId ?? null) !==
-        (deps.provider.integrationDescriptorId ?? null)) {
+        (currentDeps.provider.integrationDescriptorId ?? null)) {
       await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
     if ((transaction.integrationDescriptorFingerprint ?? null) !==
-        (deps.provider.integrationDescriptorFingerprint ?? null)) {
+        (currentDeps.provider.integrationDescriptorFingerprint ?? null)) {
       await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
 
     let pkceVerifier;
     try {
-      pkceVerifier = deps.secretEncryption.decrypt(
+      pkceVerifier = currentDeps.secretEncryption.decrypt(
         transaction.pkceVerifierEnc,
         pkceContext(transactionId),
       ).toString('utf8');
@@ -221,7 +232,7 @@ export class IntegrationService {
     }
     let exchanged;
     try {
-      exchanged = await deps.provider.exchangeAuthorizationCode({
+      exchanged = await currentDeps.provider.exchangeAuthorizationCode({
         code,
         codeVerifier: pkceVerifier,
         redirectUri: this.providerCallbackUri(providerId),
@@ -254,12 +265,12 @@ export class IntegrationService {
         externalAccountLabel: exchanged.accountLabel,
         externalInstallationId: exchanged.externalInstallationId,
         authorizedPermissions: exchanged.authorizedPermissions,
-        accessTokenCiphertext: deps.secretEncryption.encrypt(
+        accessTokenCiphertext: currentDeps.secretEncryption.encrypt(
           Buffer.from(exchanged.accessToken, 'utf8'),
           integrationSecretContext('access_token', auth.userId, providerId),
         ),
         refreshTokenCiphertext: exchanged.refreshToken
-          ? deps.secretEncryption.encrypt(
+          ? currentDeps.secretEncryption.encrypt(
             Buffer.from(exchanged.refreshToken, 'utf8'),
             integrationSecretContext('refresh_token', auth.userId, providerId),
           )
@@ -267,7 +278,7 @@ export class IntegrationService {
         connectedAt,
       });
     } catch {
-      await this.revokeExchangedCredentials(deps.provider, exchanged);
+      await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
       await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }

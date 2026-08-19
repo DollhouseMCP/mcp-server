@@ -13,9 +13,10 @@
  * identity values for operator diagnostics.
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import {
   checkAllowlistGate,
+  provisionAccountThroughAllowlistGate,
   renderAllowlistDeniedPage,
   withSignInAllowlistAuthority,
   type SignInAllowlistAuthority,
@@ -278,6 +279,55 @@ describe('checkAllowlistGate — decision matrix', () => {
       );
       expect(result.allowed).toBe(false);
     });
+  });
+});
+
+describe('provisionAccountThroughAllowlistGate', () => {
+  it('delegates gate evaluation and persistence to an atomic authority when available', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const provisionAccountIfAllowed = jest.fn<SignInAllowlistAuthority['provisionAccountIfAllowed']>()
+      .mockResolvedValue({ allowed: true });
+    const authority: SignInAllowlistAuthority = {
+      ...fixedAuthority({ entries: 1, matches: true }),
+      provisionAccountIfAllowed,
+    };
+    const account = {
+      sub: 'github_42',
+      provider: 'github',
+      externalSub: '42',
+      emailVerified: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    await expect(provisionAccountThroughAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority, required: true },
+      account,
+    )).resolves.toEqual({ allowed: true });
+
+    expect(provisionAccountIfAllowed).toHaveBeenCalledWith(expect.objectContaining({ account }));
+    await expect(storage.getAccount('github_42')).resolves.toBeNull();
+  });
+
+  it('retains the gate-then-upsert fallback for non-transactional authorities', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const account = {
+      sub: 'github_42',
+      provider: 'github',
+      externalSub: '42',
+      emailVerified: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    await expect(provisionAccountThroughAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority: fixedAuthority({ entries: 1, matches: true }), required: true },
+      account,
+    )).resolves.toEqual({ allowed: true });
+
+    await expect(storage.getAccount('github_42')).resolves.toMatchObject(account);
   });
 });
 

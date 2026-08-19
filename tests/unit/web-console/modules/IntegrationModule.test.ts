@@ -946,6 +946,63 @@ describe('IntegrationModule', () => {
     ]);
   });
 
+  it('re-resolves a store-backed descriptor after consuming callback state', async () => {
+    const originalFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const changedFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const original = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(originalFetch),
+    });
+    const changed = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture({ apiHosts: ['mail.example.com'] }),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(changedFetch),
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const securityEventSink = new FixtureIntegrationSecurityEventSink();
+    const resolveProvider = jest.fn()
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(changed);
+    const service = new IntegrationService({
+      store,
+      providers: IntegrationProviderRegistry.empty(),
+      resolveProvider,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption,
+      publicBaseUrl: PUBLIC_BASE_URL,
+      securityEventSink,
+      now: () => NOW,
+    });
+    const providerId = 'gmail' as Parameters<IntegrationService['connectProvider']>[1];
+    const started = await service.connectProvider(consoleRequest(), providerId);
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    const result = await service.completeProviderCallback(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }), providerId);
+
+    expect(result).toMatchObject({ status: 302, redirectTo: LIST_PATH });
+    expect(resolveProvider).toHaveBeenCalledTimes(3);
+    expect(originalFetch).not.toHaveBeenCalled();
+    expect(changedFetch).not.toHaveBeenCalled();
+    expect(securityEventSink.events).toEqual([
+      expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),
+    ]);
+  });
+
   it('does not send an old refresh token to a replacement same-name descriptor', async () => {
     const fetchImpl = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
     const replacement = new ConfiguredOAuthIntegrationProvider({

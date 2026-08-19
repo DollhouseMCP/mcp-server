@@ -183,6 +183,16 @@ export async function purgeNonCascadeUserIdentity(
   revokedAt: Date,
 ): Promise<void> {
   for (const sub of identity.subs) {
+    // The bootstrap claim is an authorization grant keyed outside the user
+    // tables. Clear it atomically with principal deletion so the deleted
+    // bootstrap identity cannot pass the allowlist gate and recreate itself.
+    await tx.delete(authKv).where(and(
+      eq(authKv.model, 'AuthBootstrap'),
+      eq(authKv.id, 'state'),
+      sql`${authKv.payload}->>'adminSub' = ${sub}`,
+    ));
+  }
+  for (const sub of identity.subs) {
     // OIDC storage: a Grant carries the subject as payload.accountId, while tokens/sessions/codes
     // are linked to it via payload.grantId (this mirrors the adapter's own revokeByGrantId). Purge
     // both, so no token or session survives even if it does not itself carry accountId. Pre-auth

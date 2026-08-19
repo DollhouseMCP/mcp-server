@@ -20,6 +20,7 @@ describe('integration descriptor routing migration', () => {
     expect(expireFlows).toBeGreaterThan(addColumn);
     expect(constraint).toBeGreaterThan(expireFlows);
     expect(migrationSql).toContain('WHERE "integration_descriptor_id" IS NOT NULL');
+    expect(migrationSql).toContain('"integration_descriptor_fingerprint" IS NOT NULL');
     expect(migrationSql).toContain("'^[a-f0-9]{64}$'");
   });
 });
