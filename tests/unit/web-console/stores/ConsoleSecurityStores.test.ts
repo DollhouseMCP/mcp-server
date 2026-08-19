@@ -371,6 +371,18 @@ describe('InMemoryLoginTransactionStore', () => {
     expect(await store.consume(hash(3), hash(4), FOUR_MINUTES)).toBeNull();
   });
 
+  it('completes consumed state while retaining it for replay classification', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    await store.create(loginTransaction());
+    await store.consume(hash(3), hash(4), FOUR_MINUTES);
+
+    await expect(store.completeConsumed(hash(3))).resolves.toBe(true);
+    await expect(store.findByIdHash(hash(3))).resolves.toMatchObject({
+      consumedAt: FOUR_MINUTES,
+      expiresAt: FOUR_MINUTES,
+    });
+  });
+
   it('requires bound elevated flows and a short relative return target', async () => {
     const store = new InMemoryLoginTransactionStore();
     await expect(store.create(loginTransaction({

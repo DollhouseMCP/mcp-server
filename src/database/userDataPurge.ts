@@ -120,7 +120,14 @@ function githubLogin(account: DeletionIdentityAccount): string | null {
   if (account.provider !== 'github' || !account.rawProfile || typeof account.rawProfile !== 'object') {
     return null;
   }
-  const login = (account.rawProfile as { readonly login?: unknown }).login;
+  const rawProfile = account.rawProfile as {
+    readonly login?: unknown;
+    readonly user?: { readonly login?: unknown };
+  };
+  // Current GitHub profiles persist the explicitly projected upstream user
+  // under rawProfile.user. Retain the legacy top-level fallback for accounts
+  // written before that projection was introduced.
+  const login = rawProfile.user?.login ?? rawProfile.login;
   if (typeof login !== 'string') return null;
   return login;
 }

@@ -189,6 +189,7 @@ export class IntegrationService {
       );
       return failedIntegrationCallback();
     }
+    try {
     if (transaction.userId !== auth.userId) {
       await this.recordCallbackRejected(providerId, auth.userId, 'user_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
@@ -293,6 +294,18 @@ export class IntegrationService {
       redirectTo: transaction.returnTo ?? INTEGRATION_PATH,
       cookies: [{ operation: 'clear', name: CONSOLE_INTEGRATION_STATE_COOKIE }],
     };
+    } finally {
+      try {
+        await deps.loginTransactions.completeConsumed(idHash);
+      } catch (error) {
+        // A stale consumed row only delays descriptor mutation until its
+        // ten-minute expiry; it must not replace the callback's real result.
+        logger.warn('Failed to release completed integration login transaction', {
+          provider: providerId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
   }
 
   async disconnectGitHub(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
@@ -484,8 +497,8 @@ export class IntegrationService {
   ): Promise<IntegrationCallbackRejectedReason> {
     const existing = await loginTransactions.findByIdHash(idHash);
     if (!existing) return 'missing';
-    if (existing.expiresAt <= now) return 'expired';
-    return 'consumed';
+    if (existing.consumedAt) return 'consumed';
+    return existing.expiresAt <= now ? 'expired' : 'consumed';
   }
 
   private async recordCallbackRejected(

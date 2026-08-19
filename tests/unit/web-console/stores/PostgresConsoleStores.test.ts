@@ -662,6 +662,8 @@ describe('PostgresConsoleSessionStore', () => {
 describe('PostgresLoginTransactionStore', () => {
   it('persists the descriptor binding for configured-provider callbacks', async () => {
     const chain = insertChain();
+    const descriptorLock = selectingChain([{ id: DESCRIPTOR_ID }]);
+    transaction.select = jest.fn(() => descriptorLock);
     transaction.insert = jest.fn(() => chain);
     const store = new PostgresLoginTransactionStore({} as DatabaseInstance);
     const bound: ConsoleLoginTransaction = {
@@ -678,6 +680,7 @@ describe('PostgresLoginTransactionStore', () => {
       integrationDescriptorId: DESCRIPTOR_ID,
       integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
     }));
+    expect(descriptorLock.for).toHaveBeenCalledWith('key share');
   });
 
   it('normalizes duplicate transaction inserts to a store conflict', async () => {
@@ -702,6 +705,17 @@ describe('PostgresLoginTransactionStore', () => {
 
     expect(row.stateHash).toEqual(hash(4));
     expect(row.pkceVerifierEnc).toEqual(Buffer.from('ciphertext'));
+  });
+
+  it('marks a consumed callback complete without losing replay diagnostics', async () => {
+    const chain = returningChain([{ idHash: hash(3) }]);
+    transaction.update = jest.fn(() => chain);
+    const store = new PostgresLoginTransactionStore({} as DatabaseInstance);
+
+    await expect(store.completeConsumed(hash(3))).resolves.toBe(true);
+    expect(chain.set).toHaveBeenCalledWith({
+      expiresAt: expect.anything(),
+    });
   });
 
   it('deletes consumed or expired transient transaction rows', async () => {
@@ -1032,6 +1046,32 @@ describe('PostgresIntegrationDescriptorStore', () => {
     });
   });
 
+  it('rejects descriptor mutation while a bound OAuth callback is active', async () => {
+    const descriptorLock = selectingChain([integrationDescriptorRow()]);
+    const activeFlow = selectingChain([{ idHash: hash(3) }]);
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(descriptorLock)
+      .mockReturnValueOnce(activeFlow);
+    transaction.update = jest.fn();
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({ apiHosts: ['mail.example.test'] })))
+      .rejects.toThrow('cannot change while an OAuth callback is pending');
+    expect(descriptorLock.for).toHaveBeenCalledWith('update');
+    expect(transaction.update).not.toHaveBeenCalled();
+  });
+
+  it('permits display-only descriptor edits without consulting callback leases', async () => {
+    const updated = integrationDescriptorRow({ displayName: 'Updated Gmail' });
+    transaction.select = jest.fn(() => selectingChain([integrationDescriptorRow()]));
+    transaction.update = jest.fn(() => returningChain([updated]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({ displayName: 'Updated Gmail' })))
+      .resolves.toMatchObject({ displayName: 'Updated Gmail' });
+    expect(transaction.select).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects descriptor inputs before writing', async () => {
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
 
@@ -1072,11 +1112,15 @@ describe('PostgresIntegrationDescriptorStore', () => {
   });
 
   it('deletes descriptors owner-scoped and reports whether a row was removed', async () => {
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([{ id: DESCRIPTOR_ID }]))
+      .mockReturnValueOnce(selectingChain([]));
     transaction.delete = jest.fn(() => deletingChain([{ id: DESCRIPTOR_ID }]));
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
 
     await expect(store.delete(DESCRIPTOR_ID, USER_ID)).resolves.toBe(true);
 
+    transaction.select = jest.fn(() => selectingChain([]));
     transaction.delete = jest.fn(() => deletingChain([]));
     await expect(store.delete(DESCRIPTOR_ID, USER_ID)).resolves.toBe(false);
     await expect(store.delete('not-a-uuid', USER_ID)).rejects.toThrow(ConsoleStoreValidationError);

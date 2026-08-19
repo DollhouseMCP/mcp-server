@@ -1,8 +1,8 @@
-import { and, eq, gt, isNull, lte, or } from 'drizzle-orm';
+import { and, eq, gt, isNotNull, isNull, lte, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
-import { consoleLoginTransactions } from '../../database/schema/index.js';
+import { consoleLoginTransactions, integrationProviderDescriptors } from '../../database/schema/index.js';
 import type {
   ConsoleLoginTransaction,
   ILoginTransactionStore,
@@ -21,8 +21,18 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
   async create(transaction: ConsoleLoginTransaction): Promise<void> {
     validateLoginTransaction(transaction);
     try {
-      await withSystemContext(this.db, tx =>
-        tx.insert(consoleLoginTransactions).values({
+      await withSystemContext(this.db, async tx => {
+        if (transaction.integrationDescriptorId) {
+          const descriptors = await tx.select({ id: integrationProviderDescriptors.id })
+            .from(integrationProviderDescriptors)
+            .where(eq(integrationProviderDescriptors.id, transaction.integrationDescriptorId))
+            .for('key share')
+            .limit(1);
+          if (descriptors.length === 0) {
+            throw new ConsoleStoreConflictError('integration descriptor no longer exists');
+          }
+        }
+        await tx.insert(consoleLoginTransactions).values({
           idHash: transaction.idHash,
           flowKind: transaction.flowKind,
           stateHash: transaction.stateHash,
@@ -36,8 +46,8 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
           createdAt: transaction.createdAt,
           expiresAt: transaction.expiresAt,
           consumedAt: transaction.consumedAt,
-        }),
-      );
+        });
+      });
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConsoleStoreConflictError('login transaction id hash already exists');
@@ -72,6 +82,19 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
       ).limit(1),
     );
     return rows[0] ? fromRow(rows[0]) : null;
+  }
+
+  async completeConsumed(idHash: Buffer): Promise<boolean> {
+    assertHash(idHash, 'idHash');
+    const rows = await withSystemContext(this.db, tx =>
+      tx.update(consoleLoginTransactions).set({
+        expiresAt: consoleLoginTransactions.consumedAt,
+      }).where(and(
+        eq(consoleLoginTransactions.idHash, idHash),
+        isNotNull(consoleLoginTransactions.consumedAt),
+      )).returning({ idHash: consoleLoginTransactions.idHash }),
+    );
+    return rows.length > 0;
   }
 
   async sweepExpired(before: Date = new Date()): Promise<number> {

@@ -52,6 +52,19 @@ export class InMemoryLoginTransactionStore implements ILoginTransactionStore {
     return transaction ? cloneLoginTransaction(transaction) : null;
   }
 
+  async completeConsumed(idHash: Buffer): Promise<boolean> {
+    await Promise.resolve();
+    assertHash(idHash, 'idHash');
+    const key = hashKey(idHash);
+    const transaction = this.transactions.get(key);
+    if (!transaction?.consumedAt) return false;
+    this.transactions.set(key, cloneLoginTransaction({
+      ...transaction,
+      expiresAt: transaction.consumedAt,
+    }));
+    return true;
+  }
+
   async sweepExpired(before: Date = new Date()): Promise<number> {
     await Promise.resolve();
     let deleted = 0;

@@ -33,6 +33,8 @@ export interface ILoginTransactionStore {
   create(transaction: ConsoleLoginTransaction): Promise<void>;
   findByIdHash(idHash: Buffer): Promise<ConsoleLoginTransaction | null>;
   consume(idHash: Buffer, stateHash: Buffer, consumedAt?: Date): Promise<ConsoleLoginTransaction | null>;
+  /** Mark an already-consumed transaction complete while retaining replay diagnostics. */
+  completeConsumed(idHash: Buffer): Promise<boolean>;
   sweepExpired(before?: Date): Promise<number>;
 }
 

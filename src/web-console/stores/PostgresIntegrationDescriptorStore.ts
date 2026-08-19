@@ -2,7 +2,7 @@ import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
-import { integrationProviderDescriptors } from '../../database/schema/index.js';
+import { consoleLoginTransactions, integrationProviderDescriptors } from '../../database/schema/index.js';
 import {
   cloneIntegrationDescriptorRecord,
   decodeDescriptorPageCursor,
@@ -19,7 +19,8 @@ import {
   validateIntegrationDescriptorRecord,
 } from './IIntegrationDescriptorStore.js';
 import type { UserIntegrationProvider } from './IUserIntegrationStore.js';
-import { assertUuid } from './ConsoleStoreValidation.js';
+import { ConsoleStoreConflictError, assertUuid } from './ConsoleStoreValidation.js';
+import { integrationDescriptorRoutingFingerprint } from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
 
 export class PostgresIntegrationDescriptorStore implements IIntegrationDescriptorStore {
   constructor(private readonly db: DatabaseInstance) {}
@@ -118,33 +119,71 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
   async delete(id: string, ownerUserId: string): Promise<boolean> {
     assertUuid(id, 'id');
     assertUuid(ownerUserId, 'ownerUserId');
-    const rows = await withSystemContext(this.db, tx =>
-      tx.delete(integrationProviderDescriptors).where(and(
+    const rows = await withSystemContext(this.db, async tx => {
+      const existing = await tx.select({ id: integrationProviderDescriptors.id })
+        .from(integrationProviderDescriptors).where(and(
+          eq(integrationProviderDescriptors.id, id),
+          eq(integrationProviderDescriptors.ownership, 'byo'),
+          eq(integrationProviderDescriptors.ownerUserId, ownerUserId),
+        )).for('update').limit(1);
+      if (!existing[0]) return [];
+      await assertNoActiveDescriptorFlowWithTx(tx, id, new Date());
+      return tx.delete(integrationProviderDescriptors).where(and(
         eq(integrationProviderDescriptors.id, id),
         eq(integrationProviderDescriptors.ownership, 'byo'),
         eq(integrationProviderDescriptors.ownerUserId, ownerUserId),
-      )).returning({ id: integrationProviderDescriptors.id }),
-    );
+      )).returning({ id: integrationProviderDescriptors.id });
+    });
     return rows.length > 0;
   }
 
   async deleteCurated(provider: UserIntegrationProvider): Promise<boolean> {
-    const rows = await withSystemContext(this.db, tx =>
-      tx.delete(integrationProviderDescriptors).where(and(
+    const rows = await withSystemContext(this.db, async tx => {
+      const existing = await tx.select({ id: integrationProviderDescriptors.id })
+        .from(integrationProviderDescriptors).where(and(
+          eq(integrationProviderDescriptors.provider, provider),
+          eq(integrationProviderDescriptors.ownership, 'curated'),
+          isNull(integrationProviderDescriptors.ownerUserId),
+        )).for('update').limit(1);
+      if (!existing[0]) return [];
+      await assertNoActiveDescriptorFlowWithTx(tx, existing[0].id, new Date());
+      return tx.delete(integrationProviderDescriptors).where(and(
         eq(integrationProviderDescriptors.provider, provider),
         eq(integrationProviderDescriptors.ownership, 'curated'),
         isNull(integrationProviderDescriptors.ownerUserId),
-      )).returning({ id: integrationProviderDescriptors.id }),
-    );
+      )).returning({ id: integrationProviderDescriptors.id });
+    });
     return rows.length > 0;
   }
 
   async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
     const rows = await withSystemContext(this.db, async tx => {
-      const existing = await tx.select().from(integrationProviderDescriptors).where(descriptorIdentity(input)).limit(1);
+      const existing = await tx.select().from(integrationProviderDescriptors)
+        .where(descriptorIdentity(input)).for('update').limit(1);
       const values = toDescriptorValues(input, existing[0]?.createdAt ?? input.createdAt);
       if (existing[0]) {
+        const current = fromDescriptorRow(existing[0]);
+        const proposed: IntegrationDescriptorRecord = {
+          ...current,
+          provider: input.provider,
+          ownership: input.ownership,
+          ownerUserId: input.ownerUserId,
+          displayName: input.displayName,
+          category: input.category,
+          authStrategy: input.authStrategy,
+          apiHosts: [...input.apiHosts],
+          oauth: input.oauth ?? null,
+          staticApiKey: input.staticApiKey ?? null,
+          clientSecretCiphertext: input.clientSecretCiphertext ?? null,
+          credentialKeyVersion: input.credentialKeyVersion ?? null,
+          operationPromotion: input.operationPromotion ?? {},
+          updatedAt: input.updatedAt,
+        };
+        if (integrationDescriptorRoutingFingerprint(current)
+            !== integrationDescriptorRoutingFingerprint(proposed)) {
+          await assertNoActiveDescriptorFlowWithTx(tx, existing[0].id, new Date());
+        }
         return tx.update(integrationProviderDescriptors)
           .set(values)
           .where(eq(integrationProviderDescriptors.id, existing[0].id))
@@ -154,6 +193,25 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     });
     if (!rows[0]) throw new Error('PostgreSQL did not return integration descriptor row');
     return fromDescriptorRow(rows[0]);
+  }
+}
+
+async function assertNoActiveDescriptorFlowWithTx(
+  tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0],
+  descriptorId: string,
+  now: Date,
+): Promise<void> {
+  const active = await tx.select({ idHash: consoleLoginTransactions.idHash })
+    .from(consoleLoginTransactions)
+    .where(and(
+      eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
+      gt(consoleLoginTransactions.expiresAt, now),
+    ))
+    .limit(1);
+  if (active.length > 0) {
+    throw new ConsoleStoreConflictError(
+      'integration descriptor cannot change while an OAuth callback is pending',
+    );
   }
 }
 

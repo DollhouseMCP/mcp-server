@@ -75,6 +75,18 @@ describe('collectDeletionIdentity', () => {
     expect(identity).toEqual({ subs: ['s'], emails: [], githubIds: [], githubLogins: [] });
   });
 
+  it('reads the projected GitHub username persisted under rawProfile.user', () => {
+    const identity = collectDeletionIdentity(null, [{
+      sub: 'github_42',
+      provider: 'github',
+      externalSub: '42',
+      email: null,
+      rawProfile: { user: { id: 42, login: 'Insomnolence', name: 'Todd' } },
+    }]);
+
+    expect(identity.githubLogins).toEqual(['insomnolence']);
+  });
+
   it('uses allowlist canonicalization for deletion identities', () => {
     const identity = collectDeletionIdentity(' Cafe\u0301@Example.com ', [
       {

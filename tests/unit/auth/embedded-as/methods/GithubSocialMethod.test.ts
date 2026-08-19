@@ -306,6 +306,38 @@ describe('GithubSocialMethod', () => {
       expect(events[0].details).toMatchObject({ grantsRevoked: 2 });
     });
 
+    it('keeps the old email durable when identity-change grant revocation fails', async () => {
+      await storage.upsertAccount({
+        sub: 'github_42',
+        provider: 'github',
+        externalSub: '42',
+        email: 'old@example.com',
+        emailVerified: true,
+        displayName: 'Octo Cat',
+        createdAt: 1000,
+        updatedAt: 1000,
+      });
+      await storage.genericSet('Grant', 'g-affected', { accountId: 'github_42', clientId: 'c1' });
+      jest.spyOn(storage, 'genericRevokeByGrantId').mockRejectedValueOnce(new Error('revocation failed'));
+      const { fetch } = makeFetchMock({
+        'github.com/login/oauth/access_token': () => jsonResponse({ access_token: 'gho' }),
+        'api.github.com/user/emails': () => jsonResponse([
+          { email: 'new@example.com', verified: true, primary: true },
+        ]),
+        'api.github.com/user': () => jsonResponse({ id: 42, login: 'octocat', name: 'Octo Cat' }),
+      });
+      const method = new GithubSocialMethod({
+        clientId: 'c', clientSecret: 's',
+        callbackUrl: CALLBACK_URL,
+        storage, fetchImpl: fetch,
+      });
+
+      await expect(method.processCallback({ code: 'c', state: 'i' })).rejects.toThrow('revocation failed');
+      await expect(storage.findAccountByExternalId('github', '42')).resolves.toMatchObject({
+        email: 'old@example.com',
+      });
+    });
+
     it('does NOT emit identity_changed when the email is unchanged', async () => {
       await storage.upsertAccount({
         sub: 'github_42',

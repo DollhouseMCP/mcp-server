@@ -46,6 +46,7 @@ import { renderInteractionBindingError, verifyInteractionCookieMatches } from '.
 import { beginAdminStepUpProof, isAdminStepUpRequest, renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import {
+  checkAllowlistGate,
   provisionAccountThroughAllowlistGate,
   renderAllowlistDeniedPage,
   type SignInAllowlistAuthority,
@@ -381,31 +382,19 @@ export class GithubSocialMethod implements IAuthMethod {
       String(profile.id),
     );
     const now = Date.now();
-    const gate = await provisionAccountThroughAllowlistGate(
-      gateIdentity,
-      {
+    // must-fix #21: emit identity-change audit if the email mapping moved.
+    if (existing?.email && existing.email !== profile.verifiedPrimaryEmail) {
+      // Check before revocation so a denied identity cannot trigger writes.
+      // The atomic provisioning path below checks again after revocation to
+      // close a concurrent deletion/revocation race.
+      const preliminaryGate = await checkAllowlistGate(gateIdentity, {
         storage: this.options.storage,
         authority: this.options.signInAllowlistAuthority,
         required: this.options.allowlistRequired ?? false,
-      },
-      {
-        sub: identity.sub,
-        provider: GITHUB_PROVIDER,
-        externalSub: String(profile.id),
-        email: profile.verifiedPrimaryEmail,
-        emailVerified: true,
-        displayName: identity.displayName,
-        rawProfile: profile.raw,
-        createdAt: existing?.createdAt ?? now,
-        updatedAt: now,
-      },
-    );
-    if (!gate.allowed) {
-      return { kind: 'denied', reason: gate.reason };
-    }
-
-    // must-fix #21: emit identity-change audit if the email mapping moved.
-    if (existing?.email && existing.email !== profile.verifiedPrimaryEmail) {
+      });
+      if (!preliminaryGate.allowed) {
+        return { kind: 'denied', reason: preliminaryGate.reason };
+      }
       // H14: when the upstream identity-to-email mapping moves, revoke
       // any active grants for this sub. Without this, refresh tokens
       // issued before the change keep working until natural TTL expiry
@@ -433,6 +422,29 @@ export class GithubSocialMethod implements IAuthMethod {
         },
         timestamp: Date.now(),
       });
+    }
+
+    const gate = await provisionAccountThroughAllowlistGate(
+      gateIdentity,
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
+      {
+        sub: identity.sub,
+        provider: GITHUB_PROVIDER,
+        externalSub: String(profile.id),
+        email: profile.verifiedPrimaryEmail,
+        emailVerified: true,
+        displayName: identity.displayName,
+        rawProfile: profile.raw,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    );
+    if (!gate.allowed) {
+      return { kind: 'denied', reason: gate.reason };
     }
 
     // Bootstrap admin claim (must-fix #22): the admin-bootstrap CLI
