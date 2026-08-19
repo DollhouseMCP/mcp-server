@@ -1,3 +1,4 @@
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import {
   type IntegrationRequestGateway,
   type IntegrationRequestInput,
@@ -26,6 +27,7 @@ import {
   type RemoteMcpCallResult,
   type RemoteMcpTool,
 } from './IntegrationRemoteMcpBridge.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
 /**
  * Policy-authorized facades over the integration execution authorities.
@@ -200,17 +202,20 @@ async function authorizeOrDeny(
   try {
     policy = await policyEnforcer.authorize(input);
   } catch (error) {
+    auditAuthorization('unavailable');
     if (error instanceof IntegrationPolicyUnavailableError) {
       return { authorized: false, denial: { ok: false, error: POLICY_UNAVAILABLE_ERROR } };
     }
     throw error;
   }
   if (policy.allowed) {
+    auditAuthorization('allowed');
     return {
       authorized: true,
       ...(policy.approvalContext ? { approvalContext: policy.approvalContext } : {}),
     };
   }
+  auditAuthorization(policy.approvalRequest ? 'approval_required' : 'denied');
   return {
     authorized: false,
     denial: {
@@ -220,6 +225,17 @@ async function authorizeOrDeny(
       ...(policy.policyContext === undefined ? {} : { policyContext: policy.policyContext }),
     },
   };
+}
+
+function auditAuthorization(outcome: 'allowed' | 'denied' | 'approval_required' | 'unavailable'): void {
+  SecurityMonitor.logSecurityEvent({
+    type: 'INTEGRATION_SECURITY_DECISION',
+    severity: outcome === 'allowed' ? 'LOW' : 'MEDIUM',
+    source: 'AuthorizedIntegrationGateway',
+    // This facade runs before descriptor resolution, so provider is still raw
+    // caller input and must never be echoed into the audit event.
+    details: `Authorized integration decision ${outcome} for provider ${safeIntegrationAuditProvider('<unresolved>')}`,
+  });
 }
 
 function policyArguments(value: unknown): Readonly<Record<string, unknown>> {

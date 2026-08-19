@@ -26,6 +26,100 @@ describe('SecurityMonitor', () => {
   });
 
   describe('logSecurityEvent', () => {
+    it('replays startup events when the unified listener requests the backlog', () => {
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'startup-seed-loader',
+        details: 'Seed rejected before log hooks were wired',
+      });
+      const listener = jest.fn();
+
+      const unsubscribe = SecurityMonitor.addLogListener(listener, { replayExisting: true });
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'runtime-request',
+        details: 'Runtime integration request allowed',
+      });
+
+      expect(listener).toHaveBeenCalledTimes(2);
+      expect(listener.mock.calls[0]?.[0]).toMatchObject({ source: 'startup-seed-loader' });
+      expect(listener.mock.calls[0]?.[1]).toEqual({ replayed: true });
+      expect(listener.mock.calls[1]?.[0]).toMatchObject({ source: 'runtime-request' });
+      expect(listener.mock.calls[1]?.[1]).toEqual({ replayed: false });
+      unsubscribe();
+    });
+
+    it('captures request attribution before a security event enters the replay backlog', () => {
+      const contextTracker = {
+        getCorrelationId: jest.fn(() => 'REQUEST-CORRELATION'),
+        getSessionContext: jest.fn(() => ({
+          userId: 'request-user',
+          sessionId: 'request-session',
+        })),
+      };
+      const attributionProvider = jest.fn(() => contextTracker);
+      const monitor = new SecurityMonitor(attributionProvider);
+      expect(attributionProvider).not.toHaveBeenCalled();
+      monitor.instanceLogSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'runtime-request',
+        details: 'Request completed before log hooks were wired',
+      });
+      expect(attributionProvider).toHaveBeenCalledTimes(1);
+      const listener = jest.fn();
+
+      monitor.instanceAddLogListener(listener, { replayExisting: true });
+
+      expect(listener).toHaveBeenCalledWith(expect.objectContaining({
+        correlationId: 'REQUEST-CORRELATION',
+        userId: 'request-user',
+        sessionId: 'request-session',
+      }), { replayed: true });
+    });
+
+    it('records security events when optional request attribution is unavailable', () => {
+      const monitor = new SecurityMonitor(() => {
+        throw new Error('disposed context tracker');
+      });
+
+      expect(() => monitor.instanceLogSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'runtime-request',
+        details: 'Request completed after attribution teardown',
+      })).not.toThrow();
+
+      expect(monitor.instanceGetRecentEvents()).toEqual([
+        expect.objectContaining({
+          source: 'runtime-request',
+          details: 'Request completed after attribution teardown',
+        }),
+      ]);
+    });
+
+    it('does not clear a newer DI monitor when an older container is disposed', () => {
+      const olderMonitor = new SecurityMonitor();
+      const newerMonitor = new SecurityMonitor();
+      SecurityMonitor.setInstance(olderMonitor);
+      SecurityMonitor.setInstance(newerMonitor);
+
+      SecurityMonitor.clearInstance(olderMonitor);
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'LOW',
+        source: 'newer-container',
+        details: 'Newer monitor remains active',
+      });
+
+      expect(olderMonitor.instanceGetRecentEvents()).toHaveLength(0);
+      expect(newerMonitor.instanceGetRecentEvents()).toEqual([
+        expect.objectContaining({ source: 'newer-container' }),
+      ]);
+    });
+
     it('should store critical events in memory', () => {
       SecurityMonitor.logSecurityEvent({
         type: 'CONTENT_INJECTION_ATTEMPT',
@@ -353,6 +447,20 @@ describe('SecurityMonitor', () => {
 
       const events = SecurityMonitor.getRecentEvents();
       expect(events).toHaveLength(2);
+    });
+
+    it('should retain repeated integration security decisions', () => {
+      const event = {
+        type: 'INTEGRATION_SECURITY_DECISION' as const,
+        severity: 'MEDIUM' as const,
+        source: 'integration-test',
+        details: 'Identical decision details',
+      };
+
+      SecurityMonitor.logSecurityEvent(event);
+      SecurityMonitor.logSecurityEvent(event);
+
+      expect(SecurityMonitor.getRecentEvents()).toHaveLength(2);
     });
 
     it('should handle high-volume repeated events without memory growth', () => {

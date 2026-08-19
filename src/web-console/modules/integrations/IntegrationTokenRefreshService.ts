@@ -1,10 +1,12 @@
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
+import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import type {
   IUserIntegrationStore,
   UserIntegrationProvider,
   UserIntegrationRefreshResult,
 } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 import type { IntegrationProviderResolver } from './CuratedIntegrationProviders.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 
@@ -31,12 +33,21 @@ export class IntegrationTokenRefreshService {
   constructor(private readonly options: IntegrationTokenRefreshServiceOptions) {}
 
   async refreshOnDemand(input: IntegrationTokenRefreshInput): Promise<UserIntegrationRefreshResult> {
+    try {
+      return await this.executeRefreshOnDemand(input);
+    } catch (error) {
+      this.auditOutcome(input.provider, 'failed');
+      throw error;
+    }
+  }
+
+  private async executeRefreshOnDemand(input: IntegrationTokenRefreshInput): Promise<UserIntegrationRefreshResult> {
     const provider = this.options.providers.get(input.provider)
       ?? await this.options.resolveProvider?.(input.userId, input.provider)
       ?? null;
     const refreshCredentials = provider?.refreshCredentials?.bind(provider);
     if (!refreshCredentials) {
-      return this.options.store.refresh({
+      const result = await this.options.store.refresh({
         userId: input.userId,
         provider: input.provider,
         staleAccessTokenCiphertext: input.staleAccessTokenCiphertext,
@@ -46,8 +57,9 @@ export class IntegrationTokenRefreshService {
           errorReason: 'provider_unavailable' as const,
         }),
       });
+      return this.auditResult(input.provider, result);
     }
-    return this.options.store.refresh({
+    const result = await this.options.store.refresh({
       userId: input.userId,
       provider: input.provider,
       staleAccessTokenCiphertext: input.staleAccessTokenCiphertext,
@@ -89,6 +101,27 @@ export class IntegrationTokenRefreshService {
           return { kind: 'failed', errorReason: 'token_refresh_failed' };
         }
       },
+    });
+    return this.auditResult(input.provider, result);
+  }
+
+  private auditResult(
+    provider: UserIntegrationProvider,
+    result: UserIntegrationRefreshResult,
+  ): UserIntegrationRefreshResult {
+    this.auditOutcome(provider, result.kind);
+    return result;
+  }
+
+  private auditOutcome(
+    provider: UserIntegrationProvider,
+    outcome: UserIntegrationRefreshResult['kind'],
+  ): void {
+    SecurityMonitor.logSecurityEvent({
+      type: 'INTEGRATION_SECURITY_DECISION',
+      severity: outcome === 'refreshed' || outcome === 'reused' ? 'LOW' : 'MEDIUM',
+      source: 'IntegrationTokenRefreshService.refreshOnDemand',
+      details: `Integration token refresh ${outcome} for provider ${safeIntegrationAuditProvider(provider)}`,
     });
   }
 

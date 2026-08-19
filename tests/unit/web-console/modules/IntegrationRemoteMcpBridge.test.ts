@@ -1,6 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import {
   InMemoryIntegrationDescriptorStore,
@@ -105,6 +106,7 @@ describe('IntegrationRemoteMcpBridge', () => {
   });
 
   it('proxies calls with decrypted credentials and untrusted provenance', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const callTool = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] });
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn(),
@@ -130,6 +132,16 @@ describe('IntegrationRemoteMcpBridge', () => {
         handling: 'data_only_not_instructions',
       },
     });
+
+    await runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: { q: 'status' },
+    }));
+    const events = SecurityMonitor.getRecentEvents()
+      .filter(entry => entry.source === 'IntegrationRemoteMcpBridge' && entry.details.includes('tool_call allowed'));
+    expect(events).toHaveLength(2);
+    expect(events[0]?.details).toBe(events[1]?.details);
   });
 
   it('redacts bearer-token echoes throughout remote MCP call results', async () => {
@@ -162,6 +174,7 @@ describe('IntegrationRemoteMcpBridge', () => {
   });
 
   it('replaces credential-bearing remote MCP errors with a static failure', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn(),
       callTool: jest.fn().mockRejectedValue(new Error('Bearer remote-access-token was rejected')),
@@ -178,6 +191,10 @@ describe('IntegrationRemoteMcpBridge', () => {
       message: 'Remote MCP tool call failed.',
       status: 502,
     } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+    expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
+      source: 'IntegrationRemoteMcpBridge',
+      details: expect.stringContaining('tool_call remote_mcp_call_failed'),
+    }));
   });
 
   it('redacts bearer-token echoes from discovered tool metadata', async () => {

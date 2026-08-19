@@ -3,6 +3,7 @@ import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import {
   buildConfiguredIntegrationProviders,
   createEnvIntegrationDescriptorCredentialResolver,
@@ -105,6 +106,7 @@ afterEach(async () => {
 
 describe('buildConfiguredIntegrationProviders', () => {
   it('builds OAuth and static providers and skips coded descriptors', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const enc = newEncryption();
     const store = new InMemoryIntegrationDescriptorStore();
     await store.upsert(oauthInput(enc, 'the-secret'));
@@ -119,6 +121,16 @@ describe('buildConfiguredIntegrationProviders', () => {
     expect(byId.get('examplekey')?.credentialStrategy).toBe('static_api_key');
     expect(byId.has('codedprovider')).toBe(false);
     expect(providers).toHaveLength(2);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'CuratedIntegrationProviders',
+        details: expect.stringContaining('configured for provider examplecorp'),
+      }),
+      expect.objectContaining({
+        source: 'CuratedIntegrationProviders',
+        details: expect.stringContaining('unsupported for provider codedprovider'),
+      }),
+    ]));
   });
 
   it('skips a descriptor whose client secret cannot be decrypted (wrong key)', async () => {

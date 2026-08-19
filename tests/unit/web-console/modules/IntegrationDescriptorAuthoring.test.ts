@@ -1,4 +1,6 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
+
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 import {
   AeadSecretEncryptionService,
@@ -18,6 +20,7 @@ import {
 import { IntegrationDescriptorAuthoringService } from '../../../../src/web-console/modules/integrations/IntegrationDescriptorAuthoringService.js';
 import { createStoreIntegrationProviderResolver } from '../../../../src/web-console/modules/integrations/CuratedIntegrationProviders.js';
 import { integrationDescriptorClientSecretContext, integrationSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
+import type { ISecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
@@ -97,11 +100,14 @@ function fixture(options: {
   readonly descriptors?: readonly IntegrationDescriptorRecord[];
   readonly withEncryption?: boolean;
   readonly reservedProviderIds?: ReadonlySet<string>;
+  readonly secretEncryption?: ISecretEncryptionService;
 } = {}) {
   const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? []);
   const specStore = new InMemoryIntegrationOpenApiSpecStore();
   const integrationStore = new InMemoryUserIntegrationStore();
-  const secretEncryption = options.withEncryption === false ? null : encryption();
+  const secretEncryption = options.withEncryption === false
+    ? null
+    : options.secretEncryption ?? encryption();
   const service = new IntegrationDescriptorAuthoringService({
     descriptorStore,
     specStore,
@@ -273,6 +279,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 
   it('rejects provider ids colliding with any visible descriptor', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     const { service } = fixture();
     await service.create(consoleRequest({ body: oauthBody() }));
 
@@ -310,6 +317,12 @@ describe('IntegrationDescriptorAuthoringService', () => {
     });
     const shadowing = await curatedService.create(consoleRequest({ body: oauthBody() }));
     expect(shadowing.status).toBe(409);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created denied_conflict for provider mycrm'),
+      }),
+    ]));
   });
 
   it('rejects coded strategies, reserved provider ids, and store-invalid descriptors with 422', async () => {
@@ -358,6 +371,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 
   it('rejects provider ids reserved by a built-in or curated boot-registry provider', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
     // github is a bespoke registry provider with no descriptor; a BYO github
     // would route the deployment-brokered GitHub token to a chosen host.
     const { service } = fixture({ reservedProviderIds: new Set(['github', 'gmail']) });
@@ -374,6 +388,12 @@ describe('IntegrationDescriptorAuthoringService', () => {
     // The store also refuses github directly (belt), independent of the registry.
     const storeReserved = await service.create(consoleRequest({ body: oauthBody({ provider: 'github' }) }));
     expect([409, 422]).toContain(storeReserved.status);
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created denied_reserved for provider github'),
+      }),
+    ]));
   });
 
   it('stores a rotated client secret when the PATCH body omits provider', async () => {
@@ -521,6 +541,71 @@ describe('IntegrationDescriptorAuthoringService', () => {
 
     expect(result.status).toBe(503);
     await expect(descriptorStore.listVisible(USER_ID)).resolves.toHaveLength(0);
+  });
+
+  it('audits create and update failures when client-secret encryption throws', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const encryptionFailure = new Error('test encryption failure');
+    const throwingEncryption: ISecretEncryptionService = {
+      encrypt: () => { throw encryptionFailure; },
+      decrypt: () => { throw new Error('not used'); },
+    };
+    const { service: createService, descriptorStore } = fixture({ secretEncryption: throwingEncryption });
+
+    await expect(createService.create(consoleRequest({ body: oauthBody() }))).rejects.toBe(encryptionFailure);
+    await expect(descriptorStore.listVisible(USER_ID)).resolves.toHaveLength(0);
+
+    const seeded = fixture();
+    const created = bodyOf(await seeded.service.create(consoleRequest({ body: oauthBody() })));
+    const failingUpdateService = new IntegrationDescriptorAuthoringService({
+      descriptorStore: seeded.descriptorStore,
+      specStore: seeded.specStore,
+      integrationStore: seeded.integrationStore,
+      secretEncryption: throwingEncryption,
+      now: () => NOW,
+    });
+    await expect(failingUpdateService.update(consoleRequest({
+      params: { id: created.id as string },
+      body: { oauth: { ...(oauthBody().oauth as Record<string, unknown>), client_secret: 'rotated-secret' } },
+    }))).rejects.toBe(encryptionFailure);
+
+    const events = SecurityMonitor.getRecentEvents();
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('created failed for provider mycrm'),
+      }),
+      expect.objectContaining({
+        source: 'IntegrationDescriptorAuthoringService',
+        details: expect.stringContaining('updated failed for provider mycrm'),
+      }),
+    ]));
+  });
+
+  it('audits descriptor lookup failures for every mutation route before propagating', async () => {
+    SecurityMonitor.clearAllEventsForTesting();
+    const lookupFailure = new Error('test descriptor lookup failure');
+    const { service, descriptorStore } = fixture();
+    jest.spyOn(descriptorStore, 'findById').mockRejectedValue(lookupFailure);
+
+    await expect(service.update(consoleRequest({
+      params: { id: UNKNOWN_ID },
+      body: { display_name: 'Renamed' },
+    }))).rejects.toBe(lookupFailure);
+    await expect(service.remove(consoleRequest({ params: { id: UNKNOWN_ID } }))).rejects.toBe(lookupFailure);
+    await expect(service.putSpec(consoleRequest({
+      params: { id: UNKNOWN_ID },
+      body: { spec: { openapi: '3.0.0', paths: {} } },
+    }))).rejects.toBe(lookupFailure);
+
+    const events = SecurityMonitor.getRecentEvents()
+      .filter(event => event.source === 'IntegrationDescriptorAuthoringService');
+    expect(events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ details: 'Integration descriptor updated failed for provider <invalid>' }),
+      expect.objectContaining({ details: 'Integration descriptor deleted failed for provider <invalid>' }),
+      expect.objectContaining({ details: 'Integration descriptor spec_updated failed for provider <invalid>' }),
+    ]));
+    expect(JSON.stringify(events)).not.toContain(lookupFailure.message);
   });
 
   it('reads descriptors by id only for the owner', async () => {

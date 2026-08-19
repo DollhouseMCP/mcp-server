@@ -63,9 +63,12 @@ function bindingPatternReadsHttpInput(
     if (element.dotDotDotToken) {
       return false;
     }
-    const propertyName = element.propertyName
-      ? propertyNameText(ts, element.propertyName)
-      : ts.isIdentifier(element.name) ? element.name.text : undefined;
+    let propertyName: string | undefined;
+    if (element.propertyName) {
+      propertyName = propertyNameText(ts, element.propertyName);
+    } else if (ts.isIdentifier(element.name)) {
+      propertyName = element.name.text;
+    }
     return propertyName !== undefined && HTTP_INPUT_PROPERTIES.has(propertyName);
   });
 }
@@ -113,7 +116,9 @@ function nodeReadsHttpInput(ts: TypeScriptApi, node: TsNode): boolean {
 function hasHttpInputAccess(content: string): boolean {
   const ts = loadTypeScript();
   if (!ts) {
-    return /\b(?:req|request)\s*(?:\??\.\s*(?:body|query|params)\b|\??\.\s*\[\s*(['"])(?:body|query|params)\1\s*\])/.test(content);
+    const readsProperty = /\b(?:req|request)\s*\??\.\s*(?:body|query|params)\b/.test(content);
+    const readsBracket = /\b(?:req|request)\s*\??\.\s*\[\s*['"](?:body|query|params)['"]\s*\]/.test(content);
+    return readsProperty || readsBracket;
   }
 
   const source = ts.createSourceFile('security-audit-input.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
@@ -126,6 +131,394 @@ function hasHttpInputAccess(content: string): boolean {
     if (!found) {
       ts.forEachChild(node, visit);
     }
+  };
+  visit(source);
+  return found;
+}
+
+function objectHasStaticToolName(ts: TypeScriptApi, node: import('typescript').ObjectLiteralExpression): boolean {
+  return node.properties.some(property => ts.isPropertyAssignment(property)
+    && propertyNameText(ts, property.name) === 'name'
+    && ts.isStringLiteralLike(unwrapExpression(ts, property.initializer)));
+}
+
+function objectHasCallableHandle(
+  ts: TypeScriptApi,
+  node: import('typescript').ObjectLiteralExpression,
+  callableIdentifiers: ReadonlySet<string>,
+  callableNamespaces: ReadonlySet<string>,
+  callableMembers: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  return node.properties.some(property => {
+    if (ts.isMethodDeclaration(property)) {
+      return propertyNameText(ts, property.name) === 'handle';
+    }
+    if (!ts.isPropertyAssignment(property) || propertyNameText(ts, property.name) !== 'handle') {
+      return false;
+    }
+    return isCallableHandleExpression(
+      ts,
+      property.initializer,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    );
+  });
+}
+
+function isCallableHandleExpression(
+  ts: TypeScriptApi,
+  expression: TsExpression,
+  callableIdentifiers: ReadonlySet<string>,
+  callableNamespaces: ReadonlySet<string>,
+  callableMembers: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  const candidate = unwrapExpression(ts, expression);
+  if (ts.isArrowFunction(candidate) || ts.isFunctionExpression(candidate) || ts.isCallExpression(candidate)) {
+    return true;
+  }
+  if (ts.isIdentifier(candidate)) {
+    return callableIdentifiers.has(candidate.text);
+  }
+  if (ts.isPropertyAccessExpression(candidate)) {
+    if (isInstanceMethodReceiver(ts, candidate.expression)) return true;
+    return ts.isIdentifier(candidate.expression) && (
+      callableNamespaces.has(candidate.expression.text)
+      || callableMembers.get(candidate.expression.text)?.has(candidate.name.text) === true
+    );
+  }
+  if (ts.isElementAccessExpression(candidate)
+    && candidate.argumentExpression
+    && ts.isStringLiteralLike(candidate.argumentExpression)) {
+    if (isInstanceMethodReceiver(ts, candidate.expression)) return true;
+    return ts.isIdentifier(candidate.expression) && (
+      callableNamespaces.has(candidate.expression.text)
+      || callableMembers.get(candidate.expression.text)?.has(candidate.argumentExpression.text) === true
+    );
+  }
+  if (ts.isConditionalExpression(candidate)) {
+    return isCallableHandleExpression(
+      ts,
+      candidate.whenTrue,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    ) || isCallableHandleExpression(
+      ts,
+      candidate.whenFalse,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    );
+  }
+  if (ts.isBinaryExpression(candidate) && isConditionalHandlerOperator(ts, candidate.operatorToken.kind)) {
+    return isCallableHandleExpression(
+      ts,
+      candidate.left,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    ) || isCallableHandleExpression(
+      ts,
+      candidate.right,
+      callableIdentifiers,
+      callableNamespaces,
+      callableMembers,
+    );
+  }
+  return false;
+}
+
+function isInstanceMethodReceiver(ts: TypeScriptApi, expression: TsExpression): boolean {
+  let candidate = unwrapExpression(ts, expression);
+  while (ts.isPropertyAccessExpression(candidate) || ts.isElementAccessExpression(candidate)) {
+    candidate = unwrapExpression(ts, candidate.expression);
+  }
+  return candidate.kind === ts.SyntaxKind.ThisKeyword || candidate.kind === ts.SyntaxKind.SuperKeyword;
+}
+
+function isConditionalHandlerOperator(ts: TypeScriptApi, kind: import('typescript').SyntaxKind): boolean {
+  return kind === ts.SyntaxKind.AmpersandAmpersandToken
+    || kind === ts.SyntaxKind.BarBarToken
+    || kind === ts.SyntaxKind.QuestionQuestionToken;
+}
+
+function collectObjectCallableMembers(
+  ts: TypeScriptApi,
+  object: import('typescript').ObjectLiteralExpression,
+): {
+  readonly direct: ReadonlySet<string>;
+  readonly pending: readonly { readonly memberName: string; readonly initializer: TsExpression }[];
+} {
+  const members = new Set<string>();
+  const pending: Array<{ readonly memberName: string; readonly initializer: TsExpression }> = [];
+  for (const property of object.properties) {
+    if (ts.isMethodDeclaration(property)) {
+      const name = propertyNameText(ts, property.name);
+      if (name) members.add(name);
+    } else if (ts.isShorthandPropertyAssignment(property)) {
+      pending.push({ memberName: property.name.text, initializer: property.name });
+    } else if (ts.isPropertyAssignment(property)) {
+      const initializer = unwrapExpression(ts, property.initializer);
+      const name = propertyNameText(ts, property.name);
+      if (name && (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer))) {
+        members.add(name);
+      } else if (name) {
+        pending.push({ memberName: name, initializer });
+      }
+    }
+  }
+  return { direct: members, pending };
+}
+
+type CallableAlias = { readonly name: string; readonly initializer: TsExpression };
+type CallableMemberAlias = {
+  readonly objectName: string;
+  readonly memberName: string;
+  readonly initializer: TsExpression;
+};
+interface CallableCollection {
+  readonly callable: Set<string>;
+  readonly namespaces: Set<string>;
+  readonly members: Map<string, Set<string>>;
+  readonly aliases: CallableAlias[];
+  readonly memberAliases: CallableMemberAlias[];
+}
+
+function collectCallableBinding(
+  ts: TypeScriptApi,
+  name: string,
+  initializerExpression: TsExpression,
+  collection: CallableCollection,
+): void {
+  const initializer = unwrapExpression(ts, initializerExpression);
+  if (ts.isArrowFunction(initializer) || ts.isFunctionExpression(initializer)) {
+    collection.callable.add(name);
+    return;
+  }
+  if (ts.isCallExpression(initializer)) {
+    // Without inter-module type resolution a factory may return either the
+    // handler itself or an object containing handler methods. Preserve both
+    // conservative interpretations for security-audit coverage.
+    collection.callable.add(name);
+    collection.namespaces.add(name);
+    return;
+  }
+  if (ts.isNewExpression(initializer)) {
+    // The scanner does not resolve class declarations or imported types. A
+    // constructed instance can expose callable prototype methods, so treat
+    // its members conservatively in the same way as a namespace import.
+    collection.namespaces.add(name);
+    return;
+  }
+  if (!ts.isObjectLiteralExpression(initializer)) {
+    collection.aliases.push({ name, initializer });
+    return;
+  }
+
+  const callableObjectMembers = collectObjectCallableMembers(ts, initializer);
+  if (callableObjectMembers.direct.size > 0) {
+    collection.members.set(name, new Set(callableObjectMembers.direct));
+  }
+  for (const member of callableObjectMembers.pending) {
+    collection.memberAliases.push({ objectName: name, ...member });
+  }
+}
+
+function collectCallableVariable(
+  ts: TypeScriptApi,
+  node: import('typescript').VariableDeclaration,
+  collection: CallableCollection,
+): void {
+  if (!ts.isIdentifier(node.name) || !node.initializer) return;
+  collectCallableBinding(ts, node.name.text, node.initializer, collection);
+}
+
+function callableMemberAssignmentTarget(
+  ts: TypeScriptApi,
+  expression: TsExpression,
+): { readonly objectName: string; readonly memberName: string } | null {
+  if (ts.isPropertyAccessExpression(expression) && ts.isIdentifier(expression.expression)) {
+    return { objectName: expression.expression.text, memberName: expression.name.text };
+  }
+  if (ts.isElementAccessExpression(expression)
+    && ts.isIdentifier(expression.expression)
+    && expression.argumentExpression
+    && ts.isStringLiteralLike(expression.argumentExpression)) {
+    return { objectName: expression.expression.text, memberName: expression.argumentExpression.text };
+  }
+  return null;
+}
+
+function collectCallableAssignment(
+  ts: TypeScriptApi,
+  node: import('typescript').BinaryExpression,
+  collection: CallableCollection,
+): void {
+  if (node.operatorToken.kind !== ts.SyntaxKind.EqualsToken) return;
+  const left = unwrapExpression(ts, node.left);
+  if (ts.isIdentifier(left)) {
+    collectCallableBinding(ts, left.text, node.right, collection);
+    return;
+  }
+  const target = callableMemberAssignmentTarget(ts, left);
+  if (target) {
+    collection.memberAliases.push({ ...target, initializer: unwrapExpression(ts, node.right) });
+  }
+}
+
+function importedCallableName(ts: TypeScriptApi, node: TsNode): string | undefined {
+  if (ts.isImportClause(node)) return node.name?.text;
+  if (ts.isImportSpecifier(node)) return node.name.text;
+  return undefined;
+}
+
+function collectCallableNode(
+  ts: TypeScriptApi,
+  node: TsNode,
+  collection: CallableCollection,
+): void {
+  if (ts.isFunctionDeclaration(node) && node.name) {
+    collection.callable.add(node.name.text);
+    return;
+  }
+  if (ts.isClassDeclaration(node) && node.name) {
+    collection.namespaces.add(node.name.text);
+    return;
+  }
+  const importedName = importedCallableName(ts, node);
+  if (importedName) {
+    // Default imports are opaque without resolving another module. Treat
+    // them conservatively when assigned to a tool's handle property.
+    collection.callable.add(importedName);
+    collection.namespaces.add(importedName);
+    return;
+  }
+  if (ts.isNamespaceImport(node)) collection.namespaces.add(node.name.text);
+  if (ts.isVariableDeclaration(node)) collectCallableVariable(ts, node, collection);
+  if (ts.isBinaryExpression(node)) collectCallableAssignment(ts, node, collection);
+}
+
+function resolveCallableAlias(
+  ts: TypeScriptApi,
+  alias: CallableAlias,
+  collection: CallableCollection,
+): boolean {
+  let changed = false;
+  const initializer = unwrapExpression(ts, alias.initializer);
+  if (ts.isIdentifier(initializer)
+    && collection.namespaces.has(initializer.text)
+    && !collection.namespaces.has(alias.name)) {
+    collection.namespaces.add(alias.name);
+    changed = true;
+  }
+  if (!collection.callable.has(alias.name) && isCallableHandleExpression(
+    ts,
+    alias.initializer,
+    collection.callable,
+    collection.namespaces,
+    collection.members,
+  )) {
+    collection.callable.add(alias.name);
+    changed = true;
+  }
+  return changed;
+}
+
+function resolveCallableMemberAlias(
+  ts: TypeScriptApi,
+  memberAlias: CallableMemberAlias,
+  collection: CallableCollection,
+): boolean {
+  const objectMembers = collection.members.get(memberAlias.objectName) ?? new Set<string>();
+  if (objectMembers.has(memberAlias.memberName) || !isCallableHandleExpression(
+    ts,
+    memberAlias.initializer,
+    collection.callable,
+    collection.namespaces,
+    collection.members,
+  )) {
+    return false;
+  }
+  objectMembers.add(memberAlias.memberName);
+  collection.members.set(memberAlias.objectName, objectMembers);
+  return true;
+}
+
+function resolveCallableAliases(
+  ts: TypeScriptApi,
+  collection: CallableCollection,
+): void {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const alias of collection.aliases) {
+      changed = resolveCallableAlias(ts, alias, collection) || changed;
+    }
+    for (const memberAlias of collection.memberAliases) {
+      changed = resolveCallableMemberAlias(ts, memberAlias, collection) || changed;
+    }
+  }
+}
+
+function collectCallableIdentifiers(
+  ts: TypeScriptApi,
+  source: import('typescript').SourceFile,
+): {
+  readonly identifiers: ReadonlySet<string>;
+  readonly namespaces: ReadonlySet<string>;
+  readonly members: ReadonlyMap<string, ReadonlySet<string>>;
+} {
+  const collection: CallableCollection = {
+    callable: new Set<string>(),
+    namespaces: new Set<string>(),
+    members: new Map<string, Set<string>>(),
+    aliases: [],
+    memberAliases: [],
+  };
+  const visit = (node: TsNode): void => {
+    collectCallableNode(ts, node, collection);
+    ts.forEachChild(node, visit);
+  };
+  visit(source);
+  resolveCallableAliases(ts, collection);
+  return {
+    identifiers: collection.callable,
+    namespaces: collection.namespaces,
+    members: collection.members,
+  };
+}
+
+function hasMcpToolHandler(content: string): boolean {
+  const ts = loadTypeScript();
+  if (!ts) {
+    const lines = content.split('\n');
+    return lines.some((line, index) => {
+      if (!/\bname\s*:/.test(line)) return false;
+      // The fallback is deliberately bounded; production scans load TypeScript
+      // and use object-local AST analysis below.
+      return lines.slice(index, index + 20).some(candidate => /\bhandle\s*[:(]/.test(candidate));
+    });
+  }
+
+  const source = ts.createSourceFile('security-audit-tools.tsx', content, ts.ScriptTarget.Latest, false, ts.ScriptKind.TSX);
+  const callableBindings = collectCallableIdentifiers(ts, source);
+  let found = false;
+  const visit = (node: TsNode): void => {
+    if (found) return;
+    if (ts.isObjectLiteralExpression(node)
+      && objectHasStaticToolName(ts, node)
+      && objectHasCallableHandle(
+        ts,
+        node,
+        callableBindings.identifiers,
+        callableBindings.namespaces,
+        callableBindings.members,
+      )) {
+      found = true;
+      return;
+    }
+    ts.forEachChild(node, visit);
   };
   visit(source);
   return found;
@@ -293,10 +686,9 @@ export class SecurityRules {
         check: (content, _context) => {
           const findings: SecurityFinding[] = [];
           // Check for MCP tool handlers without rate limiting
-          const toolPattern = /name:\s*["']([^"']+)["'].*handle:/gs;
           const hasRateLimit = /rateLimiter|checkRateLimit|tokenBucket/i.test(content);
           
-          if (toolPattern.test(content) && !hasRateLimit) {
+          if (hasMcpToolHandler(content) && !hasRateLimit) {
             findings.push({
               ruleId: 'DMCP-SEC-003',
               severity: 'medium' as const,
