@@ -31,7 +31,14 @@ function canonicalJson(value: unknown): string {
   }
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`;
   const record = value as Readonly<Record<string, unknown>>;
-  return `{${Object.keys(record).sort()
+  return `{${Object.keys(record).sort(compareCanonicalJsonKeys)
     .map(key => `${JSON.stringify(key)}:${canonicalJson(record[key])}`)
     .join(',')}}`;
+}
+
+function compareCanonicalJsonKeys(left: string, right: string): number {
+  if (left === right) return 0;
+  // Code-unit order is locale-independent, so every deployment hashes the
+  // same descriptor identically regardless of its host's ICU configuration.
+  return left < right ? -1 : 1;
 }
