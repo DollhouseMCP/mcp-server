@@ -76,7 +76,7 @@ export interface IUserIntegrationStore {
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
   recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
-  revokeAllByProvider(provider: UserIntegrationProvider, revokedAt: Date): Promise<number>;
+  revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number>;
 }
 
 export interface UserIntegrationConnectInput {

@@ -195,7 +195,8 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     return rows[0] ? fromRow(rows[0]) : null;
   }
 
-  async revokeAllByProvider(provider: UserIntegrationProvider, revokedAt: Date): Promise<number> {
+  async revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number> {
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
     const rows = await withSystemContext(this.db, tx =>
       tx.update(userIntegrations).set({
         accessTokenCiphertext: null,
@@ -204,7 +205,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         errorReason: null,
         revokedAt,
       }).where(and(
-        eq(userIntegrations.provider, provider),
+        eq(userIntegrations.integrationDescriptorId, integrationDescriptorId),
         isNull(userIntegrations.revokedAt),
       )).returning({ id: userIntegrations.id }),
     );

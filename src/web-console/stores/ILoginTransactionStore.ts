@@ -70,10 +70,8 @@ export function validateLoginTransaction(transaction: ConsoleLoginTransaction): 
       throw new ConsoleStoreValidationError('step_up transaction requires an administrative capability');
     }
     assertCapability(transaction.requestedCapability, 'requestedCapability');
-  } else {
-    if (transaction.requestedCapability) {
-      throw new ConsoleStoreValidationError('integration_link transaction cannot request an administrative capability');
-    }
+  } else if (transaction.requestedCapability) {
+    throw new ConsoleStoreValidationError('integration_link transaction cannot request an administrative capability');
   }
 }
 

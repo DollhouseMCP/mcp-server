@@ -178,8 +178,8 @@ export class IntegrationDescriptorSeedLoader {
       );
       if (!curated) return null;
 
-      const revoked = await this.integrationStore.revokeAllByProvider(
-        curated.provider,
+      const revoked = await this.integrationStore.revokeAllByDescriptor(
+        curated.id,
         this.now(),
       );
       const removed = await this.descriptorStore.deleteCurated(curated.provider);

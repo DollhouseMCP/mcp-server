@@ -94,6 +94,7 @@ function byoExampleCorpDescriptor(apiHost: string) {
 function connectExampleCorp(
   integrationStore: InMemoryUserIntegrationStore,
   input: {
+    readonly descriptorId: string;
     readonly accountLabel: string;
     readonly scopes: readonly string[];
     readonly accessToken: string;
@@ -103,6 +104,7 @@ function connectExampleCorp(
   return integrationStore.connect({
     userId: VISIBLE_USER,
     provider: 'examplecorp',
+    integrationDescriptorId: input.descriptorId,
     externalAccountLabel: input.accountLabel,
     externalInstallationId: null,
     authorizedPermissions: { scopes: input.scopes },
@@ -181,11 +183,14 @@ describe('IntegrationDescriptorSeedLoader', () => {
       credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
       loaderOptions(integrationStore),
     );
-    await configured.loadSeeds();
+    const configuredResult = await configured.loadSeeds();
+    const curated = configuredResult.descriptors[0];
+    if (!curated) throw new Error('expected configured curated descriptor');
     await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.not.toBeNull();
     await integrationStore.connect({
       userId: VISIBLE_USER,
       provider: 'examplecorp',
+      integrationDescriptorId: curated.id,
       externalAccountLabel: 'visible-user',
       externalInstallationId: null,
       authorizedPermissions: { scopes: ['read'] },
@@ -210,8 +215,9 @@ describe('IntegrationDescriptorSeedLoader', () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const integrationStore = new InMemoryUserIntegrationStore();
-    await store.upsert(byoExampleCorpDescriptor('api.examplecorp.test'));
+    const byo = await store.upsert(byoExampleCorpDescriptor('api.examplecorp.test'));
     await connectExampleCorp(integrationStore, {
+      descriptorId: byo.id,
       accountLabel: 'user-owned',
       scopes: [],
       accessToken: 'encrypted-byo-key',
@@ -236,6 +242,49 @@ describe('IntegrationDescriptorSeedLoader', () => {
     });
   });
 
+  it('preserves same-provider BYO credentials when withdrawing a curated descriptor', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
+    const encryption = newEncryption();
+    const byo = await store.upsert(byoExampleCorpDescriptor('byo.examplecorp.test'));
+    await connectExampleCorp(integrationStore, {
+      descriptorId: byo.id,
+      accountLabel: 'user-owned',
+      scopes: [],
+      accessToken: 'encrypted-byo-key',
+    });
+
+    const configured = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
+      loaderOptions(integrationStore),
+    );
+    await configured.loadSeeds();
+
+    const disabled = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({}),
+      loaderOptions(integrationStore),
+    );
+
+    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      id: byo.id,
+      ownership: 'byo',
+    });
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      integrationDescriptorId: byo.id,
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('encrypted-byo-key'),
+    });
+  });
+
   it('revokes credentials before a same-provider BYO route is revealed', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
@@ -248,9 +297,12 @@ describe('IntegrationDescriptorSeedLoader', () => {
       credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
       loaderOptions(integrationStore),
     );
-    await configured.loadSeeds();
+    const configuredResult = await configured.loadSeeds();
+    const curated = configuredResult.descriptors[0];
+    if (!curated) throw new Error('expected configured curated descriptor');
     await store.upsert(byoExampleCorpDescriptor('byo.examplecorp.test'));
     await connectExampleCorp(integrationStore, {
+      descriptorId: curated.id,
       accountLabel: 'curated-route-user',
       scopes: ['read'],
       accessToken: 'encrypted-curated-access',
@@ -287,8 +339,11 @@ describe('IntegrationDescriptorSeedLoader', () => {
       credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
       loaderOptions(integrationStore),
     );
-    await configured.loadSeeds();
+    const configuredResult = await configured.loadSeeds();
+    const curated = configuredResult.descriptors[0];
+    if (!curated) throw new Error('expected configured curated descriptor');
     await connectExampleCorp(integrationStore, {
+      descriptorId: curated.id,
       accountLabel: 'curated-route-user',
       scopes: ['read'],
       accessToken: 'encrypted-curated-access',
