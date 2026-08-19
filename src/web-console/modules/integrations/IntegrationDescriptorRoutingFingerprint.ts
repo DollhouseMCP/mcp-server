@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { hkdfSync } from 'node:crypto';
 
 import type { IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 
@@ -19,12 +19,17 @@ export function integrationDescriptorRoutingFingerprint(
     clientSecretCiphertext: descriptor.clientSecretCiphertext?.toString('base64') ?? null,
     credentialKeyVersion: descriptor.credentialKeyVersion,
   };
-  // This is a change-detection MAC over configuration (including already
-  // encrypted credential material), not a password verifier. The descriptor's
-  // public UUID is a per-record domain separator, not a secret key.
-  return createHmac('sha256', descriptor.id)
-    .update(canonicalJson(payload))
-    .digest('hex');
+  // This is deterministic change detection over configuration (including
+  // already encrypted credential material), not a password verifier. HKDF
+  // keeps the descriptor UUID as a public per-record salt and avoids treating
+  // any literal as a credential or secret key.
+  return Buffer.from(hkdfSync(
+    'sha256',
+    canonicalJson(payload),
+    descriptor.id,
+    Buffer.alloc(0),
+    32,
+  )).toString('hex');
 }
 
 function canonicalJson(value: unknown): string {
