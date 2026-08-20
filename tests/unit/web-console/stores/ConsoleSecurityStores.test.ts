@@ -436,6 +436,14 @@ describe('InMemoryLoginTransactionStore', () => {
     await store.completeConsumed(hash(3));
     expect(await store.sweepExpired(consumedAt)).toBe(1);
   });
+
+  it('rejects consumed transactions whose completion lease exceeds five minutes', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    await expect(store.create(loginTransaction({
+      consumedAt: FOUR_MINUTES,
+      expiresAt: new Date('2026-05-26T12:09:00.001Z'),
+    }))).rejects.toThrow('invalid completion lease');
+  });
 });
 
 describe('InMemoryUserIntegrationStore', () => {

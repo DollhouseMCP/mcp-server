@@ -13,6 +13,7 @@ export type ConsoleLoginFlowKind = 'login' | 'step_up' | 'integration_link';
 
 /** Maximum time a one-time-consumed callback may remain in flight before cleanup. */
 export const CONSUMED_TRANSACTION_COMPLETION_LEASE_MS = 5 * 60 * 1000;
+const MAX_LOGIN_TRANSACTION_LIFETIME_MS = 10 * 60 * 1000;
 
 export interface ConsoleLoginTransaction {
   readonly idHash: Buffer;
@@ -41,22 +42,30 @@ export interface ILoginTransactionStore {
   sweepExpired(before?: Date): Promise<number>;
 }
 
+function validateLoginTransactionTiming(transaction: ConsoleLoginTransaction): void {
+  if (transaction.consumedAt) {
+    const lifetimeMs = transaction.consumedAt.getTime() - transaction.createdAt.getTime();
+    const completionLeaseMs = transaction.expiresAt.getTime() - transaction.consumedAt.getTime();
+    if (lifetimeMs < 0
+        || lifetimeMs > MAX_LOGIN_TRANSACTION_LIFETIME_MS
+        || completionLeaseMs < 0
+        || completionLeaseMs > CONSUMED_TRANSACTION_COMPLETION_LEASE_MS) {
+      throw new ConsoleStoreValidationError('consumed login transaction has an invalid completion lease');
+    }
+    return;
+  }
+
+  const lifetimeMs = transaction.expiresAt.getTime() - transaction.createdAt.getTime();
+  if (lifetimeMs <= 0 || lifetimeMs > MAX_LOGIN_TRANSACTION_LIFETIME_MS) {
+    throw new ConsoleStoreValidationError('login transaction must expire within 10 minutes');
+  }
+}
+
 export function validateLoginTransaction(transaction: ConsoleLoginTransaction): void {
   assertHash(transaction.idHash, 'idHash');
   assertHash(transaction.stateHash, 'stateHash');
   assertNonEmptyBuffer(transaction.pkceVerifierEnc, 'pkceVerifierEnc');
-  if (transaction.consumedAt) {
-    if (transaction.consumedAt < transaction.createdAt
-        || transaction.consumedAt.getTime() - transaction.createdAt.getTime() > 10 * 60 * 1000
-        || transaction.expiresAt < transaction.consumedAt
-        || transaction.expiresAt.getTime() - transaction.consumedAt.getTime()
-          > CONSUMED_TRANSACTION_COMPLETION_LEASE_MS) {
-      throw new ConsoleStoreValidationError('consumed login transaction has an invalid completion lease');
-    }
-  } else if (transaction.expiresAt <= transaction.createdAt
-      || transaction.expiresAt.getTime() - transaction.createdAt.getTime() > 10 * 60 * 1000) {
-    throw new ConsoleStoreValidationError('login transaction must expire within 10 minutes');
-  }
+  validateLoginTransactionTiming(transaction);
   if (transaction.returnTo !== null
       && (!transaction.returnTo.startsWith('/')
         || transaction.returnTo.startsWith('//')
