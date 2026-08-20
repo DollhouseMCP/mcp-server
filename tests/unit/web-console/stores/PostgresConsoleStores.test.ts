@@ -72,6 +72,9 @@ const { PostgresConsoleIdentityResolver } = await import(
 );
 const { desc, lte } = await import('drizzle-orm');
 const { accountFactors, consoleLoginTransactions } = await import('../../../../src/database/schema/index.js');
+const { CONSUMED_TRANSACTION_COMPLETION_LEASE_MS } = await import(
+  '../../../../src/web-console/stores/ILoginTransactionStore.js'
+);
 const {
   ConsoleStoreConflictError,
   ConsoleStoreValidationError,
@@ -738,6 +741,10 @@ describe('PostgresLoginTransactionStore', () => {
 
     expect(row.stateHash).toEqual(hash(4));
     expect(row.pkceVerifierEnc).toEqual(Buffer.from('ciphertext'));
+    expect(chain.set).toHaveBeenCalledWith({
+      consumedAt: FOUR_MINUTES,
+      expiresAt: new Date(FOUR_MINUTES.getTime() + CONSUMED_TRANSACTION_COMPLETION_LEASE_MS),
+    });
   });
 
   it('marks a consumed callback complete without losing replay diagnostics', async () => {

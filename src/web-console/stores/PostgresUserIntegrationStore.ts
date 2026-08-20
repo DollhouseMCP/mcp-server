@@ -80,7 +80,10 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         eq(consoleLoginTransactions.integrationDescriptorId, input.descriptorId),
         eq(consoleLoginTransactions.integrationDescriptorFingerprint, input.descriptorFingerprint),
         isNotNull(consoleLoginTransactions.consumedAt),
-        gt(consoleLoginTransactions.expiresAt, input.connection.connectedAt),
+        // consume() first proves the original deadline, then replaces it with
+        // a bounded completion lease. Compare database times so a valid token
+        // exchange may finish after the original authorization deadline.
+        gt(consoleLoginTransactions.expiresAt, consoleLoginTransactions.consumedAt),
       )).for('update').limit(1);
       const consumed = transactions[0];
       if (!consumed?.consumedAt) return null;

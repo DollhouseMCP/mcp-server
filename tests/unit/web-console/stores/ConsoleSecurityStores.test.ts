@@ -423,6 +423,19 @@ describe('InMemoryLoginTransactionStore', () => {
     expect(await store.sweepExpired(FOUR_MINUTES)).toBe(1);
     expect(await store.sweepExpired(FIVE_MINUTES)).toBe(1);
   });
+
+  it('retains a callback consumed just before its original deadline through the completion lease', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    const consumedAt = new Date(FIVE_MINUTES.getTime() - 1);
+    await store.create(loginTransaction());
+
+    const consumed = await store.consume(hash(3), hash(4), consumedAt);
+
+    expect(consumed?.expiresAt.getTime()).toBeGreaterThan(FIVE_MINUTES.getTime());
+    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(0);
+    await store.completeConsumed(hash(3));
+    expect(await store.sweepExpired(consumedAt)).toBe(1);
+  });
 });
 
 describe('InMemoryUserIntegrationStore', () => {

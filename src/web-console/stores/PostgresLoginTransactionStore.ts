@@ -7,7 +7,11 @@ import type {
   ConsoleLoginTransaction,
   ILoginTransactionStore,
 } from './ILoginTransactionStore.js';
-import { cloneLoginTransaction, validateLoginTransaction } from './ILoginTransactionStore.js';
+import {
+  cloneLoginTransaction,
+  CONSUMED_TRANSACTION_COMPLETION_LEASE_MS,
+  validateLoginTransaction,
+} from './ILoginTransactionStore.js';
 import {
   ConsoleStoreConflictError,
   IntegrationDescriptorChangedError,
@@ -72,8 +76,14 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
   ): Promise<ConsoleLoginTransaction | null> {
     assertHash(idHash, 'idHash');
     assertHash(stateHash, 'stateHash');
+    const completionLeaseExpiresAt = new Date(
+      consumedAt.getTime() + CONSUMED_TRANSACTION_COMPLETION_LEASE_MS,
+    );
     const rows = await withSystemContext(this.db, tx =>
-      tx.update(consoleLoginTransactions).set({ consumedAt }).where(and(
+      tx.update(consoleLoginTransactions).set({
+        consumedAt,
+        expiresAt: completionLeaseExpiresAt,
+      }).where(and(
         eq(consoleLoginTransactions.idHash, idHash),
         eq(consoleLoginTransactions.stateHash, stateHash),
         isNull(consoleLoginTransactions.consumedAt),
@@ -108,9 +118,8 @@ export class PostgresLoginTransactionStore implements ILoginTransactionStore {
 
   async sweepExpired(before: Date = new Date()): Promise<number> {
     const rows = await withSystemContext(this.db, tx =>
-      // An in-flight callback is consumed but still owns its row until either
-      // completeConsumed() advances expiresAt to consumedAt or its original
-      // authorization deadline passes.
+      // An in-flight callback owns its row through the bounded completion lease.
+      // completeConsumed() moves expiresAt back to consumedAt for prompt cleanup.
       tx.delete(consoleLoginTransactions)
         .where(lte(consoleLoginTransactions.expiresAt, before))
         .returning({ idHash: consoleLoginTransactions.idHash }),

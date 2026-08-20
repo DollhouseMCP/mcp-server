@@ -11,6 +11,9 @@ import {
 
 export type ConsoleLoginFlowKind = 'login' | 'step_up' | 'integration_link';
 
+/** Maximum time a one-time-consumed callback may remain in flight before cleanup. */
+export const CONSUMED_TRANSACTION_COMPLETION_LEASE_MS = 5 * 60 * 1000;
+
 export interface ConsoleLoginTransaction {
   readonly idHash: Buffer;
   readonly flowKind: ConsoleLoginFlowKind;
@@ -42,7 +45,15 @@ export function validateLoginTransaction(transaction: ConsoleLoginTransaction): 
   assertHash(transaction.idHash, 'idHash');
   assertHash(transaction.stateHash, 'stateHash');
   assertNonEmptyBuffer(transaction.pkceVerifierEnc, 'pkceVerifierEnc');
-  if (transaction.expiresAt <= transaction.createdAt
+  if (transaction.consumedAt) {
+    if (transaction.consumedAt < transaction.createdAt
+        || transaction.consumedAt.getTime() - transaction.createdAt.getTime() > 10 * 60 * 1000
+        || transaction.expiresAt < transaction.consumedAt
+        || transaction.expiresAt.getTime() - transaction.consumedAt.getTime()
+          > CONSUMED_TRANSACTION_COMPLETION_LEASE_MS) {
+      throw new ConsoleStoreValidationError('consumed login transaction has an invalid completion lease');
+    }
+  } else if (transaction.expiresAt <= transaction.createdAt
       || transaction.expiresAt.getTime() - transaction.createdAt.getTime() > 10 * 60 * 1000) {
     throw new ConsoleStoreValidationError('login transaction must expire within 10 minutes');
   }

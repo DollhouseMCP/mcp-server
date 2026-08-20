@@ -10,6 +10,7 @@ import type {
 } from './ILoginTransactionStore.js';
 import {
   cloneLoginTransaction,
+  CONSUMED_TRANSACTION_COMPLETION_LEASE_MS,
   validateLoginTransaction,
 } from './ILoginTransactionStore.js';
 
@@ -40,7 +41,11 @@ export class InMemoryLoginTransactionStore implements ILoginTransactionStore {
         || !buffersEqual(transaction.stateHash, stateHash)) {
       return null;
     }
-    const consumed = cloneLoginTransaction({ ...transaction, consumedAt });
+    const consumed = cloneLoginTransaction({
+      ...transaction,
+      consumedAt,
+      expiresAt: new Date(consumedAt.getTime() + CONSUMED_TRANSACTION_COMPLETION_LEASE_MS),
+    });
     this.transactions.set(key, consumed);
     return cloneLoginTransaction(consumed);
   }
@@ -69,9 +74,8 @@ export class InMemoryLoginTransactionStore implements ILoginTransactionStore {
     await Promise.resolve();
     let deleted = 0;
     for (const [key, transaction] of this.transactions) {
-      // Consumed callbacks remain live while their external token exchange is
-      // in flight. completeConsumed() moves expiresAt back to consumedAt so a
-      // completed row is eligible for the next sweep.
+      // Consumed callbacks remain live through their bounded completion lease.
+      // completeConsumed() makes a completed row eligible for the next sweep.
       if (transaction.expiresAt <= before) {
         this.transactions.delete(key);
         deleted += 1;
