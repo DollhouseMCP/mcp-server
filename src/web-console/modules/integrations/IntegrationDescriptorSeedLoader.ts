@@ -19,6 +19,7 @@
  * @module web-console/modules/integrations/IntegrationDescriptorSeedLoader
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -166,16 +167,16 @@ export class IntegrationDescriptorSeedLoader {
       return null;
     }
 
-    const input = this.toDescriptorInput(seed, provider);
+    const curated = await this.descriptorStore.findCuratedByProvider(
+      provider as UserIntegrationProvider,
+    );
+    const input = this.toDescriptorInput(seed, provider, curated);
     if (!input) {
       // Provider ids are shared by curated and user-owned descriptors. Curated
       // records win runtime resolution, so their active provider credentials
       // must be revoked before removal or they could become usable under a
       // newly revealed same-name BYO route. Without a persisted curated record,
       // however, the credentials belong to the BYO route and stay untouched.
-      const curated = await this.descriptorStore.findCuratedByProvider(
-        provider as UserIntegrationProvider,
-      );
       if (!curated) return null;
 
       const revoked = await this.integrationStore.revokeAllByDescriptor(
@@ -222,6 +223,7 @@ export class IntegrationDescriptorSeedLoader {
   private toDescriptorInput(
     seed: unknown,
     provider: string,
+    existing: IntegrationDescriptorRecord | null,
   ): IntegrationDescriptorCreateInput | null {
     const timestamp = this.now();
     const authStrategy = readString(seed, 'authStrategy') ?? '';
@@ -247,6 +249,11 @@ export class IntegrationDescriptorSeedLoader {
         return null;
       }
       const oauthSeed = readRecord(seed, 'oauth');
+      const encryptedSecret = this.resolveClientSecret(
+        provider,
+        credentials.clientSecret,
+        existing,
+      );
       return {
         ...base,
         authStrategy: 'oauth2_authorization_code',
@@ -261,11 +268,8 @@ export class IntegrationDescriptorSeedLoader {
           tokenExchange: readRecord(oauthSeed, 'tokenExchange'),
           accountLabel: readRecord(oauthSeed, 'accountLabel'),
         },
-        clientSecretCiphertext: this.secretEncryption.encrypt(
-          Buffer.from(credentials.clientSecret, 'utf8'),
-          integrationDescriptorClientSecretContext({ provider, ownerUserId: null }),
-        ),
-        credentialKeyVersion: null,
+        clientSecretCiphertext: encryptedSecret.ciphertext,
+        credentialKeyVersion: encryptedSecret.keyVersion,
       };
     }
 
@@ -287,6 +291,44 @@ export class IntegrationDescriptorSeedLoader {
 
     // Unknown/coded strategies are assembled as-is and rejected by validation if invalid.
     return { ...base, authStrategy: authStrategy as IntegrationDescriptorCreateInput['authStrategy'] };
+  }
+
+  private resolveClientSecret(
+    provider: string,
+    configuredSecret: string,
+    existing: IntegrationDescriptorRecord | null,
+  ): { readonly ciphertext: Buffer; readonly keyVersion: string | null } {
+    const context = integrationDescriptorClientSecretContext({ provider, ownerUserId: null });
+    const configuredPlaintext = Buffer.from(configuredSecret, 'utf8');
+    try {
+      if (existing?.authStrategy === 'oauth2_authorization_code'
+          && existing.clientSecretCiphertext) {
+        let existingPlaintext: Buffer | null = null;
+        try {
+          existingPlaintext = this.secretEncryption.decrypt(existing.clientSecretCiphertext, context);
+          if (existingPlaintext.length === configuredPlaintext.length
+              && timingSafeEqual(existingPlaintext, configuredPlaintext)) {
+            return {
+              ciphertext: Buffer.from(existing.clientSecretCiphertext),
+              keyVersion: existing.credentialKeyVersion,
+            };
+          }
+        } catch {
+          // An unreadable stored secret cannot be treated as unchanged. Rewrap
+          // from the deployment credential and let the store invalidate its
+          // existing descriptor bindings.
+        } finally {
+          existingPlaintext?.fill(0);
+        }
+      }
+
+      return {
+        ciphertext: this.secretEncryption.encrypt(configuredPlaintext, context),
+        keyVersion: null,
+      };
+    } finally {
+      configuredPlaintext.fill(0);
+    }
   }
 }
 
