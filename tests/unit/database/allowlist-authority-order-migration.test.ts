@@ -2,6 +2,7 @@ import { describe, expect, it } from '@jest/globals';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { accountAllowlistAuthorityOrderSequence } from '../../../src/database/schema/webConsole.js';
 
 const testDir = path.dirname(fileURLToPath(import.meta.url));
 const migrationPath = path.resolve(
@@ -11,6 +12,11 @@ const migrationPath = path.resolve(
 const migrationSql = fs.readFileSync(migrationPath, 'utf8').replaceAll('\r\n', '\n');
 
 describe('allowlist authority ordering migration', () => {
+  it('declares the database-issued sequence in the Drizzle schema', () => {
+    expect(accountAllowlistAuthorityOrderSequence.seqName)
+      .toBe('account_allowlist_authority_order_seq');
+  });
+
   it('backfills history before requiring database-issued authority order', () => {
     const addColumn = migrationSql.indexOf('ADD COLUMN IF NOT EXISTS "authority_order"');
     const backfill = migrationSql.indexOf('row_number() OVER');

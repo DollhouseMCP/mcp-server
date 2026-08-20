@@ -18,6 +18,7 @@ import {
   uniqueIndex,
   primaryKey,
   check,
+  pgSequence,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
@@ -32,6 +33,10 @@ export type ConsoleAdminRole =
   | 'operator'
   | 'auditor'
   | 'security_admin';
+
+export const accountAllowlistAuthorityOrderSequence = pgSequence(
+  'account_allowlist_authority_order_seq',
+);
 
 export const userAdminRoles = pgTable('user_admin_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
