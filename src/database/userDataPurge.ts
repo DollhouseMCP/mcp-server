@@ -22,6 +22,7 @@ import {
 import type { DrizzleTx } from './db-utils.js';
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
 import type { AuthAllowlistKind } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
+import { normalizeAllowlistValue } from '../web-console/stores/IConsoleAccountAllowlistStore.js';
 import {
   lockAuthAllowlistIdentitiesWithTx,
   lockAuthPrincipalsWithTx,
@@ -119,6 +120,12 @@ export interface DeletionIdentity {
   readonly emails: readonly string[];
   readonly githubIds: readonly string[];
   readonly githubLogins: readonly string[];
+  readonly accountAllowlistIdentities: readonly DeletionAccountAllowlistIdentity[];
+}
+
+interface DeletionAccountAllowlistIdentity {
+  readonly kind: AuthAllowlistKind;
+  readonly normalizedValue: string;
 }
 
 function githubLogin(account: DeletionIdentityAccount): string | null {
@@ -150,30 +157,52 @@ function addDeletionAllowlistValues(
   values.add(value.toLowerCase());
 }
 
+function addAccountDeletionAllowlistValue(
+  values: Map<string, DeletionAccountAllowlistIdentity>,
+  kind: AuthAllowlistKind,
+  value: string,
+): void {
+  const normalizedValue = normalizeAllowlistValue(kind, value);
+  if (!normalizedValue || normalizedValue.length > 320) return;
+  values.set(`${kind}:${normalizedValue}`, { kind, normalizedValue });
+}
+
 /** Collect the identity match values from the account's own row + its federated logins. */
 export function collectDeletionIdentity(
   userEmail: string | null,
   accounts: readonly DeletionIdentityAccount[],
 ): DeletionIdentity {
   const emails = new Set<string>();
-  if (userEmail) addDeletionAllowlistValues(emails, 'email', userEmail);
+  const accountAllowlistIdentities = new Map<string, DeletionAccountAllowlistIdentity>();
+  if (userEmail) {
+    addDeletionAllowlistValues(emails, 'email', userEmail);
+    addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'email', userEmail);
+  }
   const subs = new Set<string>();
   const githubIds = new Set<string>();
   const githubLogins = new Set<string>();
   for (const account of accounts) {
     subs.add(account.sub);
-    if (account.email) addDeletionAllowlistValues(emails, 'email', account.email);
+    if (account.email) {
+      addDeletionAllowlistValues(emails, 'email', account.email);
+      addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'email', account.email);
+    }
     if (account.provider === 'github' && account.externalSub) {
       addDeletionAllowlistValues(githubIds, 'github_id', account.externalSub);
+      addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'github_id', account.externalSub);
     }
     const login = githubLogin(account);
-    if (login) addDeletionAllowlistValues(githubLogins, 'github_username', login);
+    if (login) {
+      addDeletionAllowlistValues(githubLogins, 'github_username', login);
+      addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'github_username', login);
+    }
   }
   return {
     subs: [...subs],
     emails: [...emails],
     githubIds: [...githubIds],
     githubLogins: [...githubLogins],
+    accountAllowlistIdentities: [...accountAllowlistIdentities.values()],
   };
 }
 
@@ -195,7 +224,7 @@ export async function purgeNonCascadeUserIdentity(
   revokedAt: Date,
 ): Promise<void> {
   await lockAuthPrincipalsWithTx(tx, identity.subs);
-  const tombstones = canonicalDeletionAllowlistValues(identity);
+  const tombstones = identity.accountAllowlistIdentities;
   await lockAuthAllowlistIdentitiesWithTx(tx, tombstones);
   for (const sub of identity.subs) {
     // The bootstrap claim is an authorization grant keyed outside the user
@@ -238,26 +267,10 @@ export async function purgeNonCascadeUserIdentity(
     await tx.delete(authAllowlist).where(or(...allowlistMatches));
   }
 
-  const accountAllowlistMatches = [
-    identity.emails.length > 0
-      ? and(
-        eq(accountAllowlistEntries.kind, 'email'),
-        inArray(accountAllowlistEntries.normalizedValue, [...identity.emails]),
-      )
-      : undefined,
-    identity.githubIds.length > 0
-      ? and(
-        eq(accountAllowlistEntries.kind, 'github_id'),
-        inArray(accountAllowlistEntries.normalizedValue, [...identity.githubIds]),
-      )
-      : undefined,
-    identity.githubLogins.length > 0
-      ? and(
-        eq(accountAllowlistEntries.kind, 'github_username'),
-        inArray(accountAllowlistEntries.normalizedValue, [...identity.githubLogins]),
-      )
-      : undefined,
-  ].filter((clause): clause is NonNullable<typeof clause> => clause !== undefined);
+  const accountAllowlistMatches = tombstones.map(entry => and(
+    eq(accountAllowlistEntries.kind, entry.kind),
+    eq(accountAllowlistEntries.normalizedValue, entry.normalizedValue),
+  ));
   if (accountAllowlistMatches.length > 0) {
     await tx.update(accountAllowlistEntries).set({
       revokedByUserId,
@@ -284,25 +297,4 @@ export async function purgeNonCascadeUserIdentity(
       })));
     }
   }
-}
-
-function canonicalDeletionAllowlistValues(identity: DeletionIdentity): Array<{
-  readonly kind: AuthAllowlistKind;
-  readonly normalizedValue: string;
-}> {
-  const unique = new Map<string, {
-    readonly kind: AuthAllowlistKind;
-    readonly normalizedValue: string;
-  }>();
-  const add = (kind: AuthAllowlistKind, values: readonly string[]): void => {
-    for (const value of values) {
-      const normalizedValue = normalizeAuthAllowlistValue(kind, value);
-      if (!normalizedValue || normalizedValue.length > 320) continue;
-      unique.set(`${kind}:${normalizedValue}`, { kind, normalizedValue });
-    }
-  };
-  add('email', identity.emails);
-  add('github_id', identity.githubIds);
-  add('github_username', identity.githubLogins);
-  return [...unique.values()];
 }

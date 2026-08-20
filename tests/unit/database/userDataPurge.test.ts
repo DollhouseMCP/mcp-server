@@ -93,7 +93,13 @@ describe('collectDeletionIdentity', () => {
     const identity = collectDeletionIdentity(null, [
       { sub: 's', provider: 'local', externalSub: 'x', email: null, rawProfile: null },
     ]);
-    expect(identity).toEqual({ subs: ['s'], emails: [], githubIds: [], githubLogins: [] });
+    expect(identity).toEqual({
+      subs: ['s'],
+      emails: [],
+      githubIds: [],
+      githubLogins: [],
+      accountAllowlistIdentities: [],
+    });
   });
 
   it('reads the projected GitHub username persisted under rawProfile.user', () => {
@@ -128,6 +134,12 @@ describe('collectDeletionIdentity', () => {
       'oct\u00f3cat',
       ' octo\u0301cat ',
     ]);
+    expect(identity.accountAllowlistIdentities).toEqual([
+      { kind: 'email', normalizedValue: 'caf\u00e9@example.com' },
+      { kind: 'email', normalizedValue: 'caf\u00c9@example.com' },
+      { kind: 'github_id', normalizedValue: '184286' },
+      { kind: 'github_username', normalizedValue: 'oct\u00f3cat' },
+    ]);
   });
 
   it('retains a legacy NFD spelling so deletion removes pre-canonicalization rows', () => {
@@ -136,6 +148,15 @@ describe('collectDeletionIdentity', () => {
     expect(identity.emails).toEqual([
       'caf\u00e9@example.com',
       'cafe\u0301@example.com',
+    ]);
+  });
+
+  it('preserves non-ASCII email case in console allowlist deletion keys', () => {
+    const identity = collectDeletionIdentity('CAF\u00c9@EXAMPLE.COM', []);
+
+    expect(identity.emails).toContain('caf\u00e9@example.com');
+    expect(identity.accountAllowlistIdentities).toEqual([
+      { kind: 'email', normalizedValue: 'caf\u00c9@example.com' },
     ]);
   });
 });
@@ -165,6 +186,26 @@ describe('purgeUserScopedData', () => {
 });
 
 describe('purgeNonCascadeUserIdentity', () => {
+  it('writes non-ASCII email tombstones with the console normalization rule', async () => {
+    const { tx, inserts } = captureTx();
+
+    await purgeNonCascadeUserIdentity(
+      tx,
+      collectDeletionIdentity('CAF\u00c9@EXAMPLE.COM', []),
+      ADMIN_ID,
+      DELETED_AT,
+    );
+
+    expect(inserts).toEqual([{
+      table: accountAllowlistEntries,
+      values: [expect.objectContaining({
+        kind: 'email',
+        normalizedValue: 'caf\u00c9@example.com',
+        revokedAt: DELETED_AT,
+      })],
+    }]);
+  });
+
   it('purges auth_kv per subject, identity events by sub, and allowlist by matched identity', async () => {
     const { tx, deletes, updates, inserts, executes } = captureTx();
 
@@ -173,6 +214,11 @@ describe('purgeNonCascadeUserIdentity', () => {
       emails: ['a@b.com'],
       githubIds: ['42'],
       githubLogins: ['octo'],
+      accountAllowlistIdentities: [
+        { kind: 'email', normalizedValue: 'a@b.com' },
+        { kind: 'github_id', normalizedValue: '42' },
+        { kind: 'github_username', normalizedValue: 'octo' },
+      ],
     }, ADMIN_ID, DELETED_AT);
 
     // Each subject clears a matching bootstrap claim and its account-linked K/V rows.
@@ -209,6 +255,7 @@ describe('purgeNonCascadeUserIdentity', () => {
       emails: ['a@b.com'],
       githubIds: [],
       githubLogins: [],
+      accountAllowlistIdentities: [{ kind: 'email', normalizedValue: 'a@b.com' }],
     }, ADMIN_ID, DELETED_AT);
 
     expect(inserts).toEqual([{
@@ -226,7 +273,7 @@ describe('purgeNonCascadeUserIdentity', () => {
 
     await purgeNonCascadeUserIdentity(
       tx,
-      { subs: ['sub-1'], emails: [], githubIds: [], githubLogins: [] },
+      { subs: ['sub-1'], emails: [], githubIds: [], githubLogins: [], accountAllowlistIdentities: [] },
       ADMIN_ID,
       DELETED_AT,
     );
@@ -239,7 +286,7 @@ describe('purgeNonCascadeUserIdentity', () => {
     const { tx, deletes, updates, inserts, executes } = captureTx();
     await purgeNonCascadeUserIdentity(
       tx,
-      { subs: [], emails: [], githubIds: [], githubLogins: [] },
+      { subs: [], emails: [], githubIds: [], githubLogins: [], accountAllowlistIdentities: [] },
       ADMIN_ID,
       DELETED_AT,
     );
