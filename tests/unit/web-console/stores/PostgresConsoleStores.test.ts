@@ -2399,7 +2399,8 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
     })).resolves.toEqual({ allowed: true });
 
     expect(withSystemContextMock).toHaveBeenCalledTimes(1);
-    expect(transaction.execute).toHaveBeenCalledTimes(1);
+    // One subject lock plus locks for the email and stable GitHub id.
+    expect(transaction.execute).toHaveBeenCalledTimes(3);
     expect(bootstrapSelect.for).toHaveBeenCalledWith('update');
     expect(allowlistSelect.for).toHaveBeenCalledWith('update');
     expect(tombstoneSelect.for).toHaveBeenCalledWith('update');
@@ -2507,6 +2508,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
       normalizedValue: ALICE_EMAIL,
       displayValue: ALICE_DISPLAY_EMAIL,
     }));
+    expect(transaction.execute).toHaveBeenCalledTimes(1);
 
     transaction.insert = jest.fn(() => ({
       values: jest.fn(() => ({
@@ -2541,6 +2543,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
       revokedByUserId: SECOND_USER_ID,
       revokedAt: THIRTY_MINUTES,
     })]);
+    transaction.select = jest.fn(() => selectingChain([allowlistRow()]));
     transaction.update = jest.fn(() => remove);
     await expect(store.remove({
       id: ALLOWLIST_ID,
@@ -2555,6 +2558,7 @@ describe('PostgresConsoleAccountAllowlistStore', () => {
       revokedAt: THIRTY_MINUTES,
       authorityOrder: expect.anything(),
     }));
+    expect(transaction.execute).toHaveBeenCalledTimes(1);
   });
 });
 

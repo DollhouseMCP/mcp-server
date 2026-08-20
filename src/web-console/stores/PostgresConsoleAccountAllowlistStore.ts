@@ -3,7 +3,11 @@ import { and, asc, desc, eq, isNotNull, isNull, or, sql, type SQL } from 'drizzl
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import type { DrizzleTx } from '../../database/db-utils.js';
-import { lockAuthPrincipalsWithTx } from '../../database/authPrincipalLock.js';
+import {
+  lockAuthAllowlistIdentitiesWithTx,
+  lockAuthPrincipalsWithTx,
+  type AuthAllowlistLockIdentity,
+} from '../../database/authPrincipalLock.js';
 import { accountAllowlistEntries } from '../../database/schema/index.js';
 import { authIdentityEvents, authKv } from '../../database/schema/auth.js';
 import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
@@ -70,6 +74,11 @@ export class PostgresConsoleAccountAllowlistStore implements IConsoleAccountAllo
   ): Promise<AllowlistGateResult> {
     return withSystemContext(this.db, async tx => {
       await lockAuthPrincipalsWithTx(tx, [input.identity.sub]);
+      await lockAuthAllowlistIdentitiesWithTx(tx, allowlistLockIdentities({
+        email: input.identity.email,
+        githubUsername: input.identity.githubUsername,
+        githubId: input.identity.githubId,
+      }));
       const bootstrapRows = await tx.select({ payload: authKv.payload }).from(authKv)
         .where(and(eq(authKv.model, 'AuthBootstrap'), eq(authKv.id, 'state')))
         .limit(1)
@@ -285,10 +294,12 @@ export async function addAccountAllowlistEntryWithTx(
   input: AllowlistAddInput,
 ): Promise<ConsoleAccountAllowlistEntry> {
   validateAllowlistAddInput(input);
+  const normalizedValue = normalizeAllowlistValue(input.kind, input.value);
+  await lockAuthAllowlistIdentitiesWithTx(tx, [{ kind: input.kind, normalizedValue }]);
   try {
     const rows = await tx.insert(accountAllowlistEntries).values({
       kind: input.kind,
-      normalizedValue: normalizeAllowlistValue(input.kind, input.value),
+      normalizedValue,
       displayValue: normalizeAllowlistDisplayValue(input.value),
       note: input.note ?? null,
       createdByUserId: input.createdByUserId,
@@ -321,6 +332,14 @@ export async function removeAccountAllowlistEntryWithTx(
   input: AllowlistRemoveInput,
 ): Promise<ConsoleAccountAllowlistEntry | null> {
   validateAllowlistRemoveInput(input);
+  const existing = await tx.select({
+    kind: accountAllowlistEntries.kind,
+    normalizedValue: accountAllowlistEntries.normalizedValue,
+  }).from(accountAllowlistEntries)
+    .where(and(eq(accountAllowlistEntries.id, input.id), isNull(accountAllowlistEntries.revokedAt)))
+    .limit(1);
+  if (!existing[0]) return null;
+  await lockAuthAllowlistIdentitiesWithTx(tx, [existing[0]]);
   const rows = await tx.update(accountAllowlistEntries)
     .set({
       revokedByUserId: input.revokedByUserId,
@@ -330,6 +349,22 @@ export async function removeAccountAllowlistEntryWithTx(
     .where(and(eq(accountAllowlistEntries.id, input.id), isNull(accountAllowlistEntries.revokedAt)))
     .returning();
   return rows[0] ? fromAllowlistRow(rows[0]) : null;
+}
+
+function allowlistLockIdentities(values: AllowlistMatchValues): AuthAllowlistLockIdentity[] {
+  const identities: AuthAllowlistLockIdentity[] = [];
+  const add = (
+    kind: ConsoleAccountAllowlistEntry['kind'],
+    value: string | undefined,
+  ): void => {
+    if (!value) return;
+    const normalizedValue = normalizeAllowlistValue(kind, value);
+    if (normalizedValue) identities.push({ kind, normalizedValue });
+  };
+  add('email', values.email);
+  add('github_username', values.githubUsername);
+  add('github_id', values.githubId);
+  return identities;
 }
 
 function fromAllowlistRow(row: typeof accountAllowlistEntries.$inferSelect): ConsoleAccountAllowlistEntry {

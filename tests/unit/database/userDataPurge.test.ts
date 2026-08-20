@@ -197,7 +197,8 @@ describe('purgeNonCascadeUserIdentity', () => {
         expect.objectContaining({ kind: 'github_username', normalizedValue: 'octo', revokedAt: DELETED_AT }),
       ]),
     }]);
-    expect(executes).toHaveLength(2);
+    // Two subject locks plus one lock for each canonical allowlist identity.
+    expect(executes).toHaveLength(5);
   });
 
   it('writes a current deny tombstone even when a historical row exists', async () => {

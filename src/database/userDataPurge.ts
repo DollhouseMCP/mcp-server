@@ -22,7 +22,10 @@ import {
 import type { DrizzleTx } from './db-utils.js';
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
 import type { AuthAllowlistKind } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
-import { lockAuthPrincipalsWithTx } from './authPrincipalLock.js';
+import {
+  lockAuthAllowlistIdentitiesWithTx,
+  lockAuthPrincipalsWithTx,
+} from './authPrincipalLock.js';
 
 /**
  * The complete set of user-owned tables that `ON DELETE CASCADE` off `users.id`, expressed
@@ -192,6 +195,8 @@ export async function purgeNonCascadeUserIdentity(
   revokedAt: Date,
 ): Promise<void> {
   await lockAuthPrincipalsWithTx(tx, identity.subs);
+  const tombstones = canonicalDeletionAllowlistValues(identity);
+  await lockAuthAllowlistIdentitiesWithTx(tx, tombstones);
   for (const sub of identity.subs) {
     // The bootstrap claim is an authorization grant keyed outside the user
     // tables. Clear it atomically with principal deletion so the deleted
@@ -264,10 +269,8 @@ export async function purgeNonCascadeUserIdentity(
     ));
 
     // Always append a fresh revoked row. Historical revoked rows are
-    // intentionally non-unique, and a read-before-insert deduplication would
-    // let a concurrent active add appear after the UPDATE and suppress the
-    // tombstone that must take precedence for this deletion.
-    const tombstones = canonicalDeletionAllowlistValues(identity);
+    // intentionally non-unique. The shared identity lock above makes this
+    // tombstone and a concurrent explicit re-add commit in authority order.
     if (tombstones.length > 0) {
       await tx.insert(accountAllowlistEntries).values(tombstones.map(entry => ({
         kind: entry.kind,
