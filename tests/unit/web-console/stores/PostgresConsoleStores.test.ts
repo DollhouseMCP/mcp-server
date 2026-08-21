@@ -806,7 +806,7 @@ describe('PostgresUserIntegrationStore', () => {
       .mockReturnValueOnce(descriptorLock)
       .mockReturnValueOnce(callbackLock);
     const revokeExisting = returningChain([]);
-    const completeCallback = returningChain([]);
+    const completeCallback = returningChain([{ idHash: hash(3) }]);
     transaction.update = jest.fn()
       .mockReturnValueOnce(revokeExisting)
       .mockReturnValueOnce(completeCallback);
@@ -841,6 +841,43 @@ describe('PostgresUserIntegrationStore', () => {
     expect(descriptorLock.for).toHaveBeenCalledWith('key share');
     expect(callbackLock.for).toHaveBeenCalledWith('update');
     expect(completeCallback.set).toHaveBeenCalledWith({ expiresAt: NOW });
+    expect(collectStrings(callbackLock.where.mock.calls[0]?.[0])).toContain(' > statement_timestamp()');
+    expect(collectStrings(completeCallback.where.mock.calls[0]?.[0])).toContain(' > statement_timestamp()');
+  });
+
+  it('rolls back descriptor callback credentials if the completion lease expires before the final write', async () => {
+    const descriptorRow = integrationDescriptorRow();
+    transaction.select = jest.fn()
+      .mockReturnValueOnce(selectingChain([descriptorRow]))
+      .mockReturnValueOnce(selectingChain([{ idHash: hash(3), consumedAt: NOW }]));
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(returningChain([]))
+      .mockReturnValueOnce(returningChain([]));
+    transaction.insert = jest.fn(() => insertChain([userIntegrationRow({
+      provider: 'gmail',
+      integrationDescriptorId: DESCRIPTOR_ID,
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+    })]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.connectDescriptorCallback({
+      transactionIdHash: hash(3),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: integrationDescriptorRoutingFingerprint(
+        descriptorRow as Parameters<typeof integrationDescriptorRoutingFingerprint>[0],
+      ),
+      connection: {
+        userId: USER_ID,
+        provider: 'gmail',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        externalAccountLabel: 'alice@example.test',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: null,
+        connectedAt: NOW,
+      },
+    })).resolves.toBeNull();
   });
 
   it('rejects descriptor callback persistence after routing changes', async () => {

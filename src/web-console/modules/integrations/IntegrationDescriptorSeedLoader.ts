@@ -364,7 +364,10 @@ export class IntegrationDescriptorSeedLoader {
               && timingSafeEqual(existingPlaintext, configuredPlaintext)) {
             return {
               ciphertext: Buffer.from(existing.clientSecretCiphertext),
-              revision,
+              // The opaque-value HMAC key has its own lifecycle. Once plaintext
+              // equality is proven, preserve the logical secret revision so an
+              // unrelated HMAC-key rotation cannot revoke user integrations.
+              revision: existing.clientSecretRevision ?? revision,
               keyVersion: existing.credentialKeyVersion,
               initializeRevision: existing.clientSecretRevision === null,
             };

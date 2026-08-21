@@ -28,6 +28,13 @@ import { fromDescriptorRow } from './PostgresIntegrationDescriptorStore.js';
 
 type SystemTransaction = Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0];
 
+class DescriptorCallbackCompletionLeaseExpiredError extends Error {
+  constructor() {
+    super('descriptor callback completion lease expired');
+    this.name = 'DescriptorCallbackCompletionLeaseExpiredError';
+  }
+}
+
 export class PostgresUserIntegrationStore implements IUserIntegrationStore {
   constructor(private readonly db: DatabaseInstance) {}
 
@@ -67,33 +74,49 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     validateDescriptorCredentialInput(input);
     assertHash(input.transactionIdHash, 'transactionIdHash');
 
-    const row = await withSystemContext(this.db, async tx => {
-      if (!await descriptorRevisionMatchesWithTx(tx, input)) {
-        return null;
-      }
+    let row: (typeof userIntegrations.$inferSelect) | null;
+    try {
+      row = await withSystemContext(this.db, async tx => {
+        if (!await descriptorRevisionMatchesWithTx(tx, input)) {
+          return null;
+        }
 
-      const transactions = await tx.select({
-        idHash: consoleLoginTransactions.idHash,
-        consumedAt: consoleLoginTransactions.consumedAt,
-      }).from(consoleLoginTransactions).where(and(
-        eq(consoleLoginTransactions.idHash, input.transactionIdHash),
-        eq(consoleLoginTransactions.integrationDescriptorId, input.descriptorId),
-        eq(consoleLoginTransactions.integrationDescriptorFingerprint, input.descriptorFingerprint),
-        isNotNull(consoleLoginTransactions.consumedAt),
-        // consume() first proves the original deadline, then replaces it with
-        // a bounded completion lease. Compare database times so a valid token
-        // exchange may finish after the original authorization deadline.
-        gt(consoleLoginTransactions.expiresAt, consoleLoginTransactions.consumedAt),
-      )).for('update').limit(1);
-      const consumed = transactions[0];
-      if (!consumed?.consumedAt) return null;
+        const transactions = await tx.select({
+          idHash: consoleLoginTransactions.idHash,
+          consumedAt: consoleLoginTransactions.consumedAt,
+        }).from(consoleLoginTransactions).where(and(
+          eq(consoleLoginTransactions.idHash, input.transactionIdHash),
+          eq(consoleLoginTransactions.integrationDescriptorId, input.descriptorId),
+          eq(consoleLoginTransactions.integrationDescriptorFingerprint, input.descriptorFingerprint),
+          isNotNull(consoleLoginTransactions.consumedAt),
+          // consume() first proves the original deadline, then replaces it with
+          // a bounded completion lease. Compare database times so a valid token
+          // exchange may finish after the original authorization deadline.
+          gt(consoleLoginTransactions.expiresAt, consoleLoginTransactions.consumedAt),
+          sql`${consoleLoginTransactions.expiresAt} > statement_timestamp()`,
+        )).for('update').limit(1);
+        const consumed = transactions[0];
+        if (!consumed?.consumedAt) return null;
 
-      const connected = await connectWithTx(tx, input.connection);
-      await tx.update(consoleLoginTransactions).set({
-        expiresAt: consumed.consumedAt,
-      }).where(eq(consoleLoginTransactions.idHash, input.transactionIdHash));
-      return connected[0] ?? null;
-    });
+        const connected = await connectWithTx(tx, input.connection);
+        const completed = await tx.update(consoleLoginTransactions).set({
+          expiresAt: consumed.consumedAt,
+        }).where(and(
+          eq(consoleLoginTransactions.idHash, input.transactionIdHash),
+          gt(consoleLoginTransactions.expiresAt, consoleLoginTransactions.consumedAt),
+          // Re-check at the final write. Throwing rolls back connectWithTx if
+          // the lease expired while credential persistence was waiting.
+          sql`${consoleLoginTransactions.expiresAt} > statement_timestamp()`,
+        )).returning({ idHash: consoleLoginTransactions.idHash });
+        if (completed.length === 0) {
+          throw new DescriptorCallbackCompletionLeaseExpiredError();
+        }
+        return connected[0] ?? null;
+      });
+    } catch (error) {
+      if (error instanceof DescriptorCallbackCompletionLeaseExpiredError) return null;
+      throw error;
+    }
     return row ? fromRow(row) : null;
   }
 

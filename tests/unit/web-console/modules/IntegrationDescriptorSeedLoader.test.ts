@@ -191,6 +191,52 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(second?.credentialKeyVersion).toBe('preserved-key-version');
   });
 
+  it('preserves the logical revision when only the opaque HMAC key rotates', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const configuredCredentials = credentials({
+      examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+    });
+    const first = (await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      configuredCredentials,
+      loaderOptions(),
+    ).loadSeeds()).descriptors[0];
+    if (!first?.clientSecretCiphertext) throw new Error('expected first encrypted client secret');
+
+    const rotatedHasher = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 20));
+    const second = (await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      configuredCredentials,
+      {
+        ...loaderOptions(),
+        secretRevisionHasher: rotatedHasher,
+      },
+    ).loadSeeds()).descriptors[0];
+
+    expect(second?.clientSecretCiphertext).toEqual(first.clientSecretCiphertext);
+    expect(second?.clientSecretRevision).toBe(first.clientSecretRevision);
+
+    const changed = (await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      credentials({
+        examplecorp: { clientId: 'deployment-client-id', clientSecret: 'rotated-secret' },
+      }),
+      {
+        ...loaderOptions(),
+        secretRevisionHasher: rotatedHasher,
+      },
+    ).loadSeeds()).descriptors[0];
+    expect(changed?.clientSecretRevision).not.toBe(second?.clientSecretRevision);
+  });
+
   it('rotates curated OAuth ciphertext when the configured secret changes', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
