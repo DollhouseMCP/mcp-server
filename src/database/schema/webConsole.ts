@@ -286,6 +286,7 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
   oauth: jsonb('oauth').$type<Record<string, unknown> | null>(),
   staticApiKey: jsonb('static_api_key').$type<Record<string, unknown> | null>(),
   clientSecretCiphertext: bytea('client_secret_ciphertext'),
+  clientSecretRevision: uuid('client_secret_revision'),
   credentialKeyVersion: text('credential_key_version'),
   operationPromotion: jsonb('operation_promotion').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
@@ -307,6 +308,7 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
       btrim(${table.credentialKeyVersion}) <> ''
       AND char_length(${table.credentialKeyVersion}) <= 128
     ))
+    AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.clientSecretRevision} IS NULL)
     AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.credentialKeyVersion} IS NULL)
     AND (
       (${table.ownership} = 'curated' AND ${table.ownerUserId} IS NULL)

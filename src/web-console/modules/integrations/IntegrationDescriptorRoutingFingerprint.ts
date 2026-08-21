@@ -16,13 +16,14 @@ export function integrationDescriptorRoutingFingerprint(
     oauth: descriptor.oauth,
     staticApiKey: descriptor.staticApiKey,
     operationPromotion: descriptor.operationPromotion,
-    clientSecretCiphertext: descriptor.clientSecretCiphertext?.toString('base64') ?? null,
-    credentialKeyVersion: descriptor.credentialKeyVersion,
+    // A logical revision changes when the OAuth secret changes. The encrypted
+    // envelope and its key metadata may change during an at-rest key rewrap
+    // without changing where or how credentials are obtained.
+    clientSecretRevision: descriptor.clientSecretRevision,
   };
-  // This is deterministic change detection over configuration (including
-  // already encrypted credential material), not a password verifier. HKDF
-  // keeps the descriptor UUID as a public per-record salt and avoids treating
-  // any literal as a credential or secret key.
+  // This is deterministic change detection over configuration, not a password
+  // verifier. HKDF keeps the descriptor UUID as a public per-record salt and
+  // avoids treating any literal as a credential or secret key.
   return Buffer.from(hkdfSync(
     'sha256',
     canonicalJson(payload),

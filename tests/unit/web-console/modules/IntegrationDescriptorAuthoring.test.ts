@@ -141,6 +141,7 @@ function curatedRecord(provider: string, id: string): IntegrationDescriptorRecor
     },
     staticApiKey: null,
     clientSecretCiphertext: null,
+    clientSecretRevision: null,
     credentialKeyVersion: null,
     operationPromotion: {},
     createdAt: NOW,
@@ -187,6 +188,8 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(JSON.stringify(body)).not.toContain(CLIENT_SECRET);
     expect(body.client_secret).toBeUndefined();
     expect(body.clientSecretCiphertext).toBeUndefined();
+    expect(body.clientSecretRevision).toBeUndefined();
+    expect(body.client_secret_revision).toBeUndefined();
     expect(body.credential_key_version).toBeUndefined();
     expect(body.owner_user_id).toBeUndefined();
 
@@ -194,6 +197,10 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(stored?.ownerUserId).toBe(USER_ID);
     const ciphertext = stored?.clientSecretCiphertext;
     if (!ciphertext) throw new Error('expected stored client secret ciphertext');
+    expect(stored?.clientSecretRevision).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(JSON.stringify(body)).not.toContain(stored?.clientSecretRevision);
     const decrypted = secretEncryption?.decrypt(
       ciphertext,
       integrationDescriptorClientSecretContext({ provider: MYCRM, ownerUserId: USER_ID }),
@@ -311,6 +318,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
         },
         staticApiKey: null,
         clientSecretCiphertext: null,
+        clientSecretRevision: null,
         credentialKeyVersion: null,
         operationPromotion: {},
         createdAt: NOW,
@@ -401,6 +409,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   it('stores a rotated client secret when the PATCH body omits provider', async () => {
     const { service, descriptorStore, secretEncryption } = fixture();
     const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const original = await descriptorStore.findById(created.id as string, USER_ID);
 
     const oauthWithNewSecret = { ...(oauthBody().oauth as Record<string, unknown>), client_secret: 'rotated-secret-value' };
     const updated = await service.update(consoleRequest({
@@ -419,6 +428,21 @@ describe('IntegrationDescriptorAuthoringService', () => {
       ciphertext,
       integrationDescriptorClientSecretContext({ provider: MYCRM, ownerUserId: USER_ID }),
     ).toString('utf8')).toBe('rotated-secret-value');
+    expect(stored?.clientSecretRevision).not.toBe(original?.clientSecretRevision);
+  });
+
+  it('preserves the logical client-secret revision on non-secret PATCHes', async () => {
+    const { service, descriptorStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const before = await descriptorStore.findById(created.id as string, USER_ID);
+
+    await expect(service.update(consoleRequest({
+      params: { id: created.id as string },
+      body: { display_name: 'My CRM renamed' },
+    }))).resolves.toMatchObject({ status: 200 });
+
+    const after = await descriptorStore.findById(created.id as string, USER_ID);
+    expect(after?.clientSecretRevision).toBe(before?.clientSecretRevision);
   });
 
   it('requires disconnect before credential-routing changes or descriptor deletion', async () => {
@@ -536,6 +560,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(first.has_client_secret).toBe(true);
     expect(first.client_secret).toBeUndefined();
     expect(first.clientSecretCiphertext).toBeUndefined();
+    expect(first.clientSecretRevision).toBeUndefined();
   });
 
   it('fails closed when a client secret is supplied without encryption configured', async () => {
@@ -730,7 +755,7 @@ describe('IntegrationDescriptorAuthoringService', () => {
   });
 
   it('rejects provider renames and applies explicit secret removal', async () => {
-    const { service } = fixture();
+    const { service, descriptorStore } = fixture();
     const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
 
     const renamed = await service.update(consoleRequest({
@@ -747,6 +772,10 @@ describe('IntegrationDescriptorAuthoringService', () => {
     }));
     expect(removed.status).toBe(200);
     expect(bodyOf(removed)).toMatchObject({ has_client_secret: false });
+    await expect(descriptorStore.findById(created.id as string, USER_ID)).resolves.toMatchObject({
+      clientSecretCiphertext: null,
+      clientSecretRevision: null,
+    });
   });
 
   it('drops the stored secret when switching strategy away from OAuth', async () => {

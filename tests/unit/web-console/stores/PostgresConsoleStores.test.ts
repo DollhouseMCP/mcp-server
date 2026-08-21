@@ -204,6 +204,7 @@ function integrationDescriptorRow(overrides: Partial<Record<string, unknown>> = 
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'integration-key-v1',
     operationPromotion: { operations: ['gmail.users.messages.list'] },
     createdAt: NOW,
@@ -233,6 +234,7 @@ function integrationDescriptorInput(overrides: Partial<Parameters<InstanceType<t
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'integration-key-v1',
     operationPromotion: { operations: ['gmail.users.messages.list'] },
     createdAt: NOW,
@@ -873,6 +875,7 @@ describe('PostgresUserIntegrationStore', () => {
       oauth: null,
       staticApiKey: { injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' } },
       clientSecretCiphertext: null,
+      clientSecretRevision: null,
       credentialKeyVersion: null,
     });
     const descriptorLock = selectingChain([descriptorRow]);
@@ -1234,6 +1237,45 @@ describe('PostgresIntegrationDescriptorStore', () => {
     await expect(store.upsert(integrationDescriptorInput({ displayName: 'Updated Gmail' })))
       .resolves.toMatchObject({ displayName: 'Updated Gmail' });
     expect(transaction.select).toHaveBeenCalledTimes(1);
+  });
+
+  it('permits at-rest client-secret rewraps without invalidating descriptor bindings', async () => {
+    const updated = integrationDescriptorRow({
+      clientSecretCiphertext: Buffer.from('rewrapped-client-secret'),
+      credentialKeyVersion: 'integration-key-v2',
+    });
+    transaction.select = jest.fn(() => selectingChain([integrationDescriptorRow()]));
+    transaction.update = jest.fn(() => returningChain([updated]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({
+      clientSecretCiphertext: Buffer.from('rewrapped-client-secret'),
+      credentialKeyVersion: 'integration-key-v2',
+    }))).resolves.toMatchObject({ credentialKeyVersion: 'integration-key-v2' });
+    expect(transaction.delete).toBeUndefined();
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('invalidates descriptor bindings when the logical client-secret revision changes', async () => {
+    const descriptorLock = selectingChain([integrationDescriptorRow()]);
+    transaction.select = jest.fn(() => descriptorLock);
+    const invalidateCredentials = returningChain([]);
+    const updateDescriptor = returningChain([
+      integrationDescriptorRow({ clientSecretRevision: '00000000-0000-4000-8000-000000000202' }),
+    ]);
+    transaction.delete = jest.fn(() => deletingChain());
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(invalidateCredentials)
+      .mockReturnValueOnce(updateDescriptor);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({
+      clientSecretRevision: '00000000-0000-4000-8000-000000000202',
+    }))).resolves.toMatchObject({
+      clientSecretRevision: '00000000-0000-4000-8000-000000000202',
+    });
+    expect(transaction.delete).toHaveBeenCalledTimes(1);
+    expect(transaction.update).toHaveBeenCalledTimes(2);
   });
 
   it('rejects descriptor inputs before writing', async () => {

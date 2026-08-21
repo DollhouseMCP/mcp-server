@@ -19,7 +19,7 @@
  * @module web-console/modules/integrations/IntegrationDescriptorSeedLoader
  */
 
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -269,6 +269,7 @@ export class IntegrationDescriptorSeedLoader {
           accountLabel: readRecord(oauthSeed, 'accountLabel'),
         },
         clientSecretCiphertext: encryptedSecret.ciphertext,
+        clientSecretRevision: encryptedSecret.revision,
         credentialKeyVersion: encryptedSecret.keyVersion,
       };
     }
@@ -297,7 +298,11 @@ export class IntegrationDescriptorSeedLoader {
     provider: string,
     configuredSecret: string,
     existing: IntegrationDescriptorRecord | null,
-  ): { readonly ciphertext: Buffer; readonly keyVersion: string | null } {
+  ): {
+    readonly ciphertext: Buffer;
+    readonly revision: string | null;
+    readonly keyVersion: string | null;
+  } {
     const context = integrationDescriptorClientSecretContext({ provider, ownerUserId: null });
     const configuredPlaintext = Buffer.from(configuredSecret, 'utf8');
     try {
@@ -306,24 +311,46 @@ export class IntegrationDescriptorSeedLoader {
         let existingPlaintext: Buffer | null = null;
         try {
           existingPlaintext = this.secretEncryption.decrypt(existing.clientSecretCiphertext, context);
+        } catch {
+          // A retired or unavailable at-rest key makes the old envelope
+          // unreadable. Rewrap the deployment credential, but retain the
+          // logical revision: envelope rotation is not an OAuth secret change.
+          SecurityMonitor.logSecurityEvent({
+            type: 'INTEGRATION_SECURITY_DECISION',
+            severity: 'MEDIUM',
+            source: 'IntegrationDescriptorSeedLoader.resolveClientSecret',
+            details: `Curated integration client secret rewrapped for provider ${safeIntegrationAuditProvider(provider)}`,
+          });
+          logger.warn(`[IntegrationDescriptorSeedLoader] Rewrapped unreadable client-secret envelope for provider '${safeIntegrationAuditProvider(provider)}'`);
+          return {
+            ciphertext: this.secretEncryption.encrypt(configuredPlaintext, context),
+            revision: existing.clientSecretRevision,
+            keyVersion: null,
+          };
+        }
+        try {
           if (existingPlaintext.length === configuredPlaintext.length
               && timingSafeEqual(existingPlaintext, configuredPlaintext)) {
             return {
               ciphertext: Buffer.from(existing.clientSecretCiphertext),
+              revision: existing.clientSecretRevision,
               keyVersion: existing.credentialKeyVersion,
             };
           }
-        } catch {
-          // An unreadable stored secret cannot be treated as unchanged. Rewrap
-          // from the deployment credential and let the store invalidate its
-          // existing descriptor bindings.
         } finally {
           existingPlaintext?.fill(0);
         }
+
+        return {
+          ciphertext: this.secretEncryption.encrypt(configuredPlaintext, context),
+          revision: randomUUID(),
+          keyVersion: null,
+        };
       }
 
       return {
         ciphertext: this.secretEncryption.encrypt(configuredPlaintext, context),
+        revision: randomUUID(),
         keyVersion: null,
       };
     } finally {

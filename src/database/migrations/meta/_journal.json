@@ -344,6 +344,13 @@
       "when": 1779085600000,
       "tag": "0048_allowlist_authority_order",
       "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1779085700000,
+      "tag": "0049_integration_descriptor_secret_revision",
+      "breakpoints": true
     }
   ]
 }

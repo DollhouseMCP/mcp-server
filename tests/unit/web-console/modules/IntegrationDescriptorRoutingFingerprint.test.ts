@@ -10,7 +10,7 @@ const ROUTING_CHANGES: ReadonlyArray<readonly [string, Partial<IntegrationDescri
     oauth: { ...descriptor().oauth!, tokenUrl: 'https://accounts.example/oauth/v2/token' },
   }],
   ['operation promotion', { operationPromotion: { enabled: ['messages.send'] } }],
-  ['client secret ciphertext', { clientSecretCiphertext: Buffer.from('rotated-client-secret') }],
+  ['client secret revision', { clientSecretRevision: '00000000-0000-4000-8000-000000000202' }],
 ];
 
 function descriptor(overrides: Partial<IntegrationDescriptorRecord> = {}): IntegrationDescriptorRecord {
@@ -35,6 +35,7 @@ function descriptor(overrides: Partial<IntegrationDescriptorRecord> = {}): Integ
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'integration-key-v1',
     operationPromotion: { enabled: ['messages.list'] },
     createdAt: NOW,
@@ -63,5 +64,15 @@ describe('integrationDescriptorRoutingFingerprint', () => {
   it.each(ROUTING_CHANGES)('changes when %s changes', (_label, overrides) => {
     expect(integrationDescriptorRoutingFingerprint(descriptor(overrides)))
       .not.toBe(integrationDescriptorRoutingFingerprint(descriptor()));
+  });
+
+  it('ignores at-rest ciphertext and encryption-key rewraps', () => {
+    const rewrapped = descriptor({
+      clientSecretCiphertext: Buffer.from('different-randomized-envelope'),
+      credentialKeyVersion: 'integration-key-v2',
+    });
+
+    expect(integrationDescriptorRoutingFingerprint(rewrapped))
+      .toBe(integrationDescriptorRoutingFingerprint(descriptor()));
   });
 });

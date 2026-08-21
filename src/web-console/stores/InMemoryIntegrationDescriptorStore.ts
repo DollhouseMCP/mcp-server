@@ -133,6 +133,7 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
       oauth: input.oauth ?? null,
       staticApiKey: input.staticApiKey ?? null,
       clientSecretCiphertext: input.clientSecretCiphertext ?? null,
+      clientSecretRevision: input.clientSecretRevision ?? null,
       credentialKeyVersion: input.credentialKeyVersion ?? null,
       operationPromotion: input.operationPromotion ?? {},
       createdAt: existing?.createdAt ?? input.createdAt,

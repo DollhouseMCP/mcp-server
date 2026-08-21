@@ -504,6 +504,7 @@ function descriptor(overrides: Partial<IntegrationDescriptorRecord> = {}): Integ
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'v1',
     operationPromotion: {
       remoteMcp: {

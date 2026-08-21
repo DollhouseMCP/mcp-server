@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto';
+
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { containsUnsafeDisplayUnicode } from '../../../security/validators/displayText.js';
@@ -138,7 +140,14 @@ export class IntegrationDescriptorAuthoringService {
         return encryptionUnavailable();
       }
       const now = this.now();
-      const record = await this.options.descriptorStore.upsert(buildCreateInput(parsed, auth.userId, secret, now, now));
+      const record = await this.options.descriptorStore.upsert(buildCreateInput(
+        parsed,
+        auth.userId,
+        secret,
+        clientSecretRevision(parsed, null),
+        now,
+        now,
+      ));
       auditDescriptorDecision(record.provider, 'created', 'allowed');
       return { status: 201, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
@@ -209,7 +218,14 @@ export class IntegrationDescriptorAuthoringService {
         return encryptionUnavailable();
       }
       const record = await this.options.descriptorStore.upsert(
-        buildCreateInput(merged, auth.userId, secret, existing.createdAt, this.now()),
+        buildCreateInput(
+          merged,
+          auth.userId,
+          secret,
+          clientSecretRevision(merged, existing),
+          existing.createdAt,
+          this.now(),
+        ),
       );
       auditDescriptorDecision(record.provider, 'updated', 'allowed');
       return { status: 200, body: serializeIntegrationDescriptor(record) };
@@ -590,6 +606,7 @@ function buildCreateInput(
   parsed: ParsedDescriptorBody,
   ownerUserId: string,
   clientSecretCiphertext: Buffer | null,
+  clientSecretRevisionValue: string | null,
   createdAt: Date,
   updatedAt: Date,
 ): IntegrationDescriptorCreateInput {
@@ -604,11 +621,22 @@ function buildCreateInput(
     oauth: parsed.oauth ?? null,
     staticApiKey: parsed.staticApiKey ?? null,
     clientSecretCiphertext,
+    clientSecretRevision: clientSecretRevisionValue,
     credentialKeyVersion: null,
     operationPromotion: parsed.operationPromotion ?? {},
     createdAt,
     updatedAt,
   };
+}
+
+function clientSecretRevision(
+  parsed: ParsedDescriptorBody,
+  existing: IntegrationDescriptorRecord | null,
+): string | null {
+  if (parsed.authStrategy !== 'oauth2_authorization_code') return null;
+  if (parsed.clientSecret === undefined) return existing?.clientSecretRevision ?? null;
+  if (parsed.clientSecret === null) return null;
+  return randomUUID();
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

@@ -35,6 +35,8 @@ export interface IntegrationDescriptorRecord {
   readonly oauth: IntegrationOAuthDescriptor | null;
   readonly staticApiKey: IntegrationStaticApiKeyDescriptor | null;
   readonly clientSecretCiphertext: Buffer | null;
+  /** Opaque logical revision; stable across at-rest ciphertext rewraps. */
+  readonly clientSecretRevision: string | null;
   readonly credentialKeyVersion: string | null;
   readonly operationPromotion: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
@@ -76,6 +78,7 @@ export interface IntegrationDescriptorCreateInput {
   readonly oauth?: IntegrationOAuthDescriptor | null;
   readonly staticApiKey?: IntegrationStaticApiKeyDescriptor | null;
   readonly clientSecretCiphertext?: Buffer | null;
+  readonly clientSecretRevision?: string | null;
   readonly credentialKeyVersion?: string | null;
   readonly operationPromotion?: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
@@ -211,6 +214,7 @@ export function validateIntegrationDescriptorInput(input: IntegrationDescriptorC
     oauth: input.oauth ?? null,
     staticApiKey: input.staticApiKey ?? null,
     clientSecretCiphertext: input.clientSecretCiphertext ?? null,
+    clientSecretRevision: input.clientSecretRevision ?? null,
     credentialKeyVersion: input.credentialKeyVersion ?? null,
     operationPromotion: input.operationPromotion ?? {},
     createdAt: input.createdAt,
@@ -272,7 +276,11 @@ function validateIntegrationDescriptorShape(
   assertDisplayString(record.category, 'category', 80);
   validateAuthStrategy(record, allowLegacyPrivateSuffixes);
   validateApiHosts(record.apiHosts, allowLegacyPrivateSuffixes);
-  validateOptionalCredential(record.clientSecretCiphertext, record.credentialKeyVersion);
+  validateOptionalCredential(
+    record.clientSecretCiphertext,
+    record.clientSecretRevision,
+    record.credentialKeyVersion,
+  );
   validateJsonRecord(record.operationPromotion, 'operationPromotion', 8192);
   if (record.updatedAt < record.createdAt) {
     throw new ConsoleStoreValidationError('updatedAt must be at or after createdAt');
@@ -364,11 +372,18 @@ function validateApiHosts(hosts: readonly string[], allowLegacyPrivateSuffixes: 
   }
 }
 
-function validateOptionalCredential(ciphertext: Buffer | null, keyVersion: string | null): void {
+function validateOptionalCredential(
+  ciphertext: Buffer | null,
+  revision: string | null,
+  keyVersion: string | null,
+): void {
   if (ciphertext) assertNonEmptyBuffer(ciphertext, 'clientSecretCiphertext');
+  if (revision !== null) assertUuid(revision, 'clientSecretRevision');
   assertNullableDisplayString(keyVersion, 'credentialKeyVersion', 128);
-  if (!ciphertext && keyVersion) {
-    throw new ConsoleStoreValidationError('credentialKeyVersion requires clientSecretCiphertext');
+  if (!ciphertext && (revision || keyVersion)) {
+    throw new ConsoleStoreValidationError(
+      'clientSecretRevision and credentialKeyVersion require clientSecretCiphertext',
+    );
   }
 }
 

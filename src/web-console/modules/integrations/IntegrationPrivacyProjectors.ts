@@ -83,7 +83,8 @@ export function projectConfiguredIntegrationStatus(value: unknown): ConfiguredIn
 /**
  * Allowlist projection for descriptor DTOs. Rebuilds every field explicitly
  * so a serializer regression can never leak clientSecretCiphertext,
- * credentialKeyVersion, or any other non-allowlisted property to the browser.
+ * clientSecretRevision, credentialKeyVersion, or any other non-allowlisted
+ * property to the browser.
  */
 export function projectIntegrationDescriptor(value: unknown): IntegrationDescriptorDto {
   const input = asRecord(value);
