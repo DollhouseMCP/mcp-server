@@ -13,9 +13,10 @@
  * identity values for operator diagnostics.
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import {
   checkAllowlistGate,
+  provisionAccountThroughAllowlistGate,
   renderAllowlistDeniedPage,
   withSignInAllowlistAuthority,
   type SignInAllowlistAuthority,
@@ -277,6 +278,90 @@ describe('checkAllowlistGate — decision matrix', () => {
         { storage, required: true },
       );
       expect(result.allowed).toBe(false);
+    });
+  });
+});
+
+describe('provisionAccountThroughAllowlistGate', () => {
+  it('delegates gate evaluation and persistence to an atomic authority when available', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const provisionAccountIfAllowed = jest.fn<SignInAllowlistAuthority['provisionAccountIfAllowed']>()
+      .mockResolvedValue({ allowed: true });
+    const authority: SignInAllowlistAuthority = {
+      ...fixedAuthority({ entries: 1, matches: true }),
+      provisionAccountIfAllowed,
+    };
+    const account = {
+      sub: 'github_42',
+      provider: 'github',
+      externalSub: '42',
+      emailVerified: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const successAuditEvent = {
+      type: 'auth.social.identity_changed',
+      sub: account.sub,
+      timestamp: 1,
+    };
+
+    await expect(provisionAccountThroughAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority, required: true },
+      account,
+      successAuditEvent,
+    )).resolves.toEqual({ allowed: true });
+
+    expect(provisionAccountIfAllowed).toHaveBeenCalledWith(expect.objectContaining({
+      account,
+      successAuditEvent,
+    }));
+    await expect(storage.getAccount('github_42')).resolves.toBeNull();
+  });
+
+  it('retains the gate-then-upsert fallback for non-transactional authorities', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const account = {
+      sub: 'github_42',
+      provider: 'github',
+      externalSub: '42',
+      emailVerified: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const successAuditEvent = {
+      type: 'auth.social.identity_changed',
+      sub: account.sub,
+      timestamp: 1,
+    };
+
+    await expect(provisionAccountThroughAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority: fixedAuthority({ entries: 1, matches: true }), required: true },
+      account,
+      successAuditEvent,
+    )).resolves.toEqual({ allowed: true });
+
+    await expect(storage.getAccount('github_42')).resolves.toMatchObject(account);
+    await expect(storage.listIdentityEvents({ type: successAuditEvent.type }))
+      .resolves.toEqual([successAuditEvent]);
+  });
+});
+
+describe('revoked identity tombstones', () => {
+  it('denies a matching revoked identity before permissive empty-list fallback', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const authority: SignInAllowlistAuthority = {
+      ...fixedAuthority({ entries: 0, matches: false }),
+      deniesIdentity: () => Promise.resolve(true),
+    };
+
+    await expect(checkAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority, required: false },
+    )).resolves.toEqual({
+      allowed: false,
+      reason: 'This identity is not on the sign-in allowlist.',
     });
   });
 });

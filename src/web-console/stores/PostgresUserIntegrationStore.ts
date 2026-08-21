@@ -1,10 +1,16 @@
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, gt, isNotNull, isNull, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
-import { userIntegrations } from '../../database/schema/index.js';
+import {
+  consoleLoginTransactions,
+  integrationProviderDescriptors,
+  userIntegrations,
+} from '../../database/schema/index.js';
 import {
   cloneUserIntegrationRecord,
+  type DescriptorCallbackConnectInput,
+  type DescriptorCredentialConnectInput,
   GITHUB_USER_INTEGRATION_PROVIDER,
   type IUserIntegrationStore,
   type UserIntegrationConnectInput,
@@ -16,7 +22,18 @@ import {
   type UserIntegrationRecord,
   validateUserIntegrationRecord,
 } from './IUserIntegrationStore.js';
-import { assertUuid } from './ConsoleStoreValidation.js';
+import { ConsoleStoreValidationError, assertHash, assertUuid } from './ConsoleStoreValidation.js';
+import { integrationDescriptorRoutingFingerprint } from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
+import { fromDescriptorRow } from './PostgresIntegrationDescriptorStore.js';
+
+type SystemTransaction = Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0];
+
+class DescriptorCallbackCompletionLeaseExpiredError extends Error {
+  constructor() {
+    super('descriptor callback completion lease expired');
+    this.name = 'DescriptorCallbackCompletionLeaseExpiredError';
+  }
+}
 
 export class PostgresUserIntegrationStore implements IUserIntegrationStore {
   constructor(private readonly db: DatabaseInstance) {}
@@ -46,37 +63,73 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
 
   async connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord> {
     validateConnectInput(input);
-    const rows = await withSystemContext(this.db, async tx => {
-      await tx.update(userIntegrations).set({
-        accessTokenCiphertext: null,
-        refreshTokenCiphertext: null,
-        status: 'revoked',
-        errorReason: null,
-        revokedAt: input.connectedAt,
-      }).where(and(
-        eq(userIntegrations.userId, input.userId),
-        eq(userIntegrations.provider, input.provider),
-        isNull(userIntegrations.revokedAt),
-      ));
-      return tx.insert(userIntegrations).values({
-        userId: input.userId,
-        provider: input.provider,
-        integrationDescriptorId: input.integrationDescriptorId ?? null,
-        externalAccountLabel: input.externalAccountLabel,
-        externalInstallationId: input.externalInstallationId,
-        authorizedPermissions: input.authorizedPermissions,
-        accessTokenCiphertext: input.accessTokenCiphertext,
-        refreshTokenCiphertext: input.refreshTokenCiphertext,
-        credentialKeyVersion: input.credentialKeyVersion ?? null,
-        status: 'connected',
-        errorReason: null,
-        connectedAt: input.connectedAt,
-        lastSyncAt: null,
-        revokedAt: null,
-      }).returning();
-    });
+    const rows = await withSystemContext(this.db, tx => connectWithTx(tx, input));
     if (!rows[0]) throw new Error('PostgreSQL did not return inserted user integration row');
     return fromRow(rows[0]);
+  }
+
+  async connectDescriptorCallback(
+    input: DescriptorCallbackConnectInput,
+  ): Promise<UserIntegrationRecord | null> {
+    validateDescriptorCredentialInput(input);
+    assertHash(input.transactionIdHash, 'transactionIdHash');
+
+    let row: (typeof userIntegrations.$inferSelect) | null;
+    try {
+      row = await withSystemContext(this.db, async tx => {
+        if (!await descriptorRevisionMatchesWithTx(tx, input)) {
+          return null;
+        }
+
+        const transactions = await tx.select({
+          idHash: consoleLoginTransactions.idHash,
+          consumedAt: consoleLoginTransactions.consumedAt,
+        }).from(consoleLoginTransactions).where(and(
+          eq(consoleLoginTransactions.idHash, input.transactionIdHash),
+          eq(consoleLoginTransactions.integrationDescriptorId, input.descriptorId),
+          eq(consoleLoginTransactions.integrationDescriptorFingerprint, input.descriptorFingerprint),
+          isNotNull(consoleLoginTransactions.consumedAt),
+          // consume() first proves the original deadline, then replaces it with
+          // a bounded completion lease. Compare database times so a valid token
+          // exchange may finish after the original authorization deadline.
+          gt(consoleLoginTransactions.expiresAt, consoleLoginTransactions.consumedAt),
+          sql`${consoleLoginTransactions.expiresAt} > statement_timestamp()`,
+        )).for('update').limit(1);
+        const consumed = transactions[0];
+        if (!consumed?.consumedAt) return null;
+
+        const connected = await connectWithTx(tx, input.connection);
+        const completed = await tx.update(consoleLoginTransactions).set({
+          expiresAt: consumed.consumedAt,
+        }).where(and(
+          eq(consoleLoginTransactions.idHash, input.transactionIdHash),
+          gt(consoleLoginTransactions.expiresAt, consoleLoginTransactions.consumedAt),
+          // Re-check at the final write. Throwing rolls back connectWithTx if
+          // the lease expired while credential persistence was waiting.
+          sql`${consoleLoginTransactions.expiresAt} > statement_timestamp()`,
+        )).returning({ idHash: consoleLoginTransactions.idHash });
+        if (completed.length === 0) {
+          throw new DescriptorCallbackCompletionLeaseExpiredError();
+        }
+        return connected[0] ?? null;
+      });
+    } catch (error) {
+      if (error instanceof DescriptorCallbackCompletionLeaseExpiredError) return null;
+      throw error;
+    }
+    return row ? fromRow(row) : null;
+  }
+
+  async connectDescriptorCredential(
+    input: DescriptorCredentialConnectInput,
+  ): Promise<UserIntegrationRecord | null> {
+    validateDescriptorCredentialInput(input);
+    const row = await withSystemContext(this.db, async tx => {
+      if (!await descriptorRevisionMatchesWithTx(tx, input)) return null;
+      const connected = await connectWithTx(tx, input.connection);
+      return connected[0] ?? null;
+    });
+    return row ? fromRow(row) : null;
   }
 
   async refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
@@ -211,6 +264,65 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     );
     return rows.length;
   }
+}
+
+async function connectWithTx(
+  tx: SystemTransaction,
+  input: UserIntegrationConnectInput,
+): Promise<(typeof userIntegrations.$inferSelect)[]> {
+  await tx.update(userIntegrations).set({
+    accessTokenCiphertext: null,
+    refreshTokenCiphertext: null,
+    status: 'revoked',
+    errorReason: null,
+    revokedAt: input.connectedAt,
+  }).where(and(
+    eq(userIntegrations.userId, input.userId),
+    eq(userIntegrations.provider, input.provider),
+    isNull(userIntegrations.revokedAt),
+  ));
+  return tx.insert(userIntegrations).values({
+    userId: input.userId,
+    provider: input.provider,
+    integrationDescriptorId: input.integrationDescriptorId ?? null,
+    externalAccountLabel: input.externalAccountLabel,
+    externalInstallationId: input.externalInstallationId,
+    authorizedPermissions: input.authorizedPermissions,
+    accessTokenCiphertext: input.accessTokenCiphertext,
+    refreshTokenCiphertext: input.refreshTokenCiphertext,
+    credentialKeyVersion: input.credentialKeyVersion ?? null,
+    status: 'connected',
+    errorReason: null,
+    connectedAt: input.connectedAt,
+    lastSyncAt: null,
+    revokedAt: null,
+  }).returning();
+}
+
+function validateDescriptorCredentialInput(input: DescriptorCredentialConnectInput): void {
+  assertUuid(input.descriptorId, 'descriptorId');
+  if (!/^[a-f0-9]{64}$/.test(input.descriptorFingerprint)) {
+    throw new ConsoleStoreValidationError('descriptorFingerprint must be a lowercase 256-bit hex fingerprint');
+  }
+  validateConnectInput(input.connection);
+  if (input.connection.integrationDescriptorId !== input.descriptorId) {
+    throw new ConsoleStoreValidationError(
+      'descriptor credential must use the expected integration descriptor',
+    );
+  }
+}
+
+async function descriptorRevisionMatchesWithTx(
+  tx: SystemTransaction,
+  input: DescriptorCredentialConnectInput,
+): Promise<boolean> {
+  const descriptors = await tx.select().from(integrationProviderDescriptors)
+    .where(eq(integrationProviderDescriptors.id, input.descriptorId))
+    .for('key share')
+    .limit(1);
+  const descriptor = descriptors[0] ? fromDescriptorRow(descriptors[0]) : null;
+  return descriptor !== null
+    && integrationDescriptorRoutingFingerprint(descriptor) === input.descriptorFingerprint;
 }
 
 function validateConnectInput(input: UserIntegrationConnectInput): void {

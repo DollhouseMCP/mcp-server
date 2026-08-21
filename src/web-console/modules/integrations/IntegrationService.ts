@@ -15,9 +15,15 @@ import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentica
 import { normalizeConsoleReturnPath } from '../../platform/ConsoleReturnPaths.js';
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
-import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
+import type {
+  ConsoleLoginTransaction,
+  ILoginTransactionStore,
+} from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
-import { isWellFormedUnicode } from '../../stores/ConsoleStoreValidation.js';
+import {
+  IntegrationDescriptorChangedError,
+  isWellFormedUnicode,
+} from '../../stores/ConsoleStoreValidation.js';
 import {
   serializeIntegrationList,
 } from './IntegrationDtos.js';
@@ -34,6 +40,15 @@ const INTEGRATION_TRANSACTION_TTL_MS = 10 * 60 * 1000;
 const PKCE_VERIFIER_BYTES = 32;
 const PKCE_SECRET_CLASS = 'pkce_verifier';
 const INTEGRATION_PATH = '/api/v1/me/integrations';
+
+interface ConsumedProviderCallbackContext {
+  readonly req: ConsoleRequest;
+  readonly auth: ConsoleAuthenticatedContext;
+  readonly providerId: UserIntegrationProvider;
+  readonly transactionId: string;
+  readonly idHash: Buffer;
+  readonly transaction: ConsoleLoginTransaction;
+}
 
 export class IntegrationService {
   constructor(private readonly options: {
@@ -119,20 +134,28 @@ export class IntegrationService {
     );
     const contentsPermission = requestedContentsPermission(req.body);
     const redirectUri = this.providerCallbackUri(providerId);
-    await deps.loginTransactions.create({
-      idHash: deps.opaqueValues.hashOpaqueValue(transactionId),
-      flowKind: 'integration_link',
-      stateHash: deps.opaqueValues.hashOpaqueValue(state),
-      pkceVerifierEnc,
-      userId: auth.userId,
-      consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
-      requestedCapability: null,
-      integrationDescriptorId: deps.provider.integrationDescriptorId ?? null,
-      returnTo: readBodyReturnTo(req.body),
-      createdAt: now,
-      expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
-      consumedAt: null,
-    });
+    try {
+      await deps.loginTransactions.create({
+        idHash: deps.opaqueValues.hashOpaqueValue(transactionId),
+        flowKind: 'integration_link',
+        stateHash: deps.opaqueValues.hashOpaqueValue(state),
+        pkceVerifierEnc,
+        userId: auth.userId,
+        consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
+        requestedCapability: null,
+        integrationDescriptorId: deps.provider.integrationDescriptorId ?? null,
+        integrationDescriptorFingerprint: deps.provider.integrationDescriptorFingerprint ?? null,
+        returnTo: readBodyReturnTo(req.body),
+        createdAt: now,
+        expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
+        consumedAt: null,
+      });
+    } catch (error) {
+      if (error instanceof IntegrationDescriptorChangedError) {
+        return descriptorChangedConflict();
+      }
+      throw error;
+    }
     logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration link flow started', {
       userId: auth.userId,
       contentsPermission,
@@ -188,24 +211,58 @@ export class IntegrationService {
       );
       return failedIntegrationCallback();
     }
-    if (transaction.userId !== auth.userId) {
-      await this.recordCallbackRejected(providerId, auth.userId, 'user_mismatch');
+    try {
+      return await this.completeConsumedProviderCallback({
+        req,
+        auth,
+        providerId,
+        transactionId,
+        idHash,
+        transaction,
+      }, code);
+    } finally {
+      try {
+        await deps.loginTransactions.completeConsumed(idHash);
+      } catch (error) {
+        // A stale consumed row only delays descriptor mutation until its
+        // ten-minute expiry; it must not replace the callback's real result.
+        logger.warn('Failed to release completed integration login transaction', {
+          provider: providerId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
+  private async completeConsumedProviderCallback(
+    context: ConsumedProviderCallbackContext,
+    code: string,
+  ): Promise<ConsoleHandlerResult> {
+    const { req, auth, providerId, transactionId, idHash, transaction } = context;
+    const invalidTransaction = await this.validateConsumedIntegrationTransaction(
+      transaction,
+      auth,
+      providerId,
+    );
+    if (invalidTransaction) return invalidTransaction;
+    // The provider resolved before consume is sufficient only for the
+    // transaction-store dependencies. Re-resolve after the one-time state is
+    // consumed so descriptor updates cannot leave this callback comparing and
+    // exchanging against the stale provider snapshot loaded at request entry.
+    const currentProvider = await this.resolveProviderFor(auth.userId, providerId);
+    const currentDeps = this.writeDependencies(currentProvider);
+    if (!currentDeps) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
-    if (!transaction.consoleSessionIdHash ||
-        !buffersEqual(transaction.consoleSessionIdHash, auth.sessionIdHash)) {
-      await this.recordCallbackRejected(providerId, auth.userId, 'session_mismatch');
-      return failedIntegrationCallback(transaction.returnTo ?? undefined);
-    }
-    if ((transaction.integrationDescriptorId ?? null) !==
-        (deps.provider.integrationDescriptorId ?? null)) {
+    if (!this.descriptorBindingMatches(transaction, currentDeps.provider)) {
       await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
 
     let pkceVerifier;
     try {
-      pkceVerifier = deps.secretEncryption.decrypt(
+      pkceVerifier = currentDeps.secretEncryption.decrypt(
         transaction.pkceVerifierEnc,
         pkceContext(transactionId),
       ).toString('utf8');
@@ -215,7 +272,7 @@ export class IntegrationService {
     }
     let exchanged;
     try {
-      exchanged = await deps.provider.exchangeAuthorizationCode({
+      exchanged = await currentDeps.provider.exchangeAuthorizationCode({
         code,
         codeVerifier: pkceVerifier,
         redirectUri: this.providerCallbackUri(providerId),
@@ -240,28 +297,43 @@ export class IntegrationService {
     }
 
     const connectedAt = this.now();
+    const connection = {
+      userId: auth.userId,
+      provider: providerId,
+      integrationDescriptorId: transaction.integrationDescriptorId ?? null,
+      externalAccountLabel: exchanged.accountLabel,
+      externalInstallationId: exchanged.externalInstallationId,
+      authorizedPermissions: exchanged.authorizedPermissions,
+      accessTokenCiphertext: currentDeps.secretEncryption.encrypt(
+        Buffer.from(exchanged.accessToken, 'utf8'),
+        integrationSecretContext('access_token', auth.userId, providerId),
+      ),
+      refreshTokenCiphertext: exchanged.refreshToken
+        ? currentDeps.secretEncryption.encrypt(
+          Buffer.from(exchanged.refreshToken, 'utf8'),
+          integrationSecretContext('refresh_token', auth.userId, providerId),
+        )
+        : null,
+      connectedAt,
+    };
     try {
-      await this.options.store.connect({
-        userId: auth.userId,
-        provider: providerId,
-        integrationDescriptorId: transaction.integrationDescriptorId ?? null,
-        externalAccountLabel: exchanged.accountLabel,
-        externalInstallationId: exchanged.externalInstallationId,
-        authorizedPermissions: exchanged.authorizedPermissions,
-        accessTokenCiphertext: deps.secretEncryption.encrypt(
-          Buffer.from(exchanged.accessToken, 'utf8'),
-          integrationSecretContext('access_token', auth.userId, providerId),
-        ),
-        refreshTokenCiphertext: exchanged.refreshToken
-          ? deps.secretEncryption.encrypt(
-            Buffer.from(exchanged.refreshToken, 'utf8'),
-            integrationSecretContext('refresh_token', auth.userId, providerId),
-          )
-          : null,
-        connectedAt,
-      });
+      const connected = transaction.integrationDescriptorId
+          && transaction.integrationDescriptorFingerprint
+          && this.options.store.connectDescriptorCallback
+        ? await this.options.store.connectDescriptorCallback({
+            transactionIdHash: idHash,
+            descriptorId: transaction.integrationDescriptorId,
+            descriptorFingerprint: transaction.integrationDescriptorFingerprint,
+            connection,
+          })
+        : await this.options.store.connect(connection);
+      if (!connected) {
+        await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
+        await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
+        return failedIntegrationCallback(transaction.returnTo ?? undefined);
+      }
     } catch {
-      await this.revokeExchangedCredentials(deps.provider, exchanged);
+      await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
       await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
@@ -411,7 +483,7 @@ export class IntegrationService {
       : readApiKeyCredential(req.body);
     if ('error' in captured) return captured.error;
     const connectedAt = this.now();
-    const record = await this.options.store.connect({
+    const connection = {
       userId: auth.userId,
       provider: provider.descriptor.id,
       integrationDescriptorId: provider.integrationDescriptorId ?? null,
@@ -424,7 +496,17 @@ export class IntegrationService {
       ),
       refreshTokenCiphertext: null,
       connectedAt,
-    });
+    };
+    const record = provider.integrationDescriptorId
+        && provider.integrationDescriptorFingerprint
+        && this.options.store.connectDescriptorCredential
+      ? await this.options.store.connectDescriptorCredential({
+          descriptorId: provider.integrationDescriptorId,
+          descriptorFingerprint: provider.integrationDescriptorFingerprint,
+          connection,
+        })
+      : await this.options.store.connect(connection);
+    if (!record) return descriptorChangedConflict();
     return {
       status: 200,
       body: provider.projectStatus(record).body,
@@ -467,8 +549,35 @@ export class IntegrationService {
   ): Promise<IntegrationCallbackRejectedReason> {
     const existing = await loginTransactions.findByIdHash(idHash);
     if (!existing) return 'missing';
-    if (existing.expiresAt <= now) return 'expired';
-    return 'consumed';
+    if (existing.consumedAt) return 'consumed';
+    return existing.expiresAt <= now ? 'expired' : 'consumed';
+  }
+
+  private async validateConsumedIntegrationTransaction(
+    transaction: ConsoleLoginTransaction,
+    auth: ConsoleAuthenticatedContext,
+    providerId: UserIntegrationProvider,
+  ): Promise<ConsoleHandlerResult | null> {
+    if (transaction.userId !== auth.userId) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'user_mismatch');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
+    if (!transaction.consoleSessionIdHash
+        || !buffersEqual(transaction.consoleSessionIdHash, auth.sessionIdHash)) {
+      await this.recordCallbackRejected(providerId, auth.userId, 'session_mismatch');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
+    return null;
+  }
+
+  private descriptorBindingMatches(
+    transaction: ConsoleLoginTransaction,
+    provider: IIntegrationProvider,
+  ): boolean {
+    return (transaction.integrationDescriptorId ?? null)
+        === (provider.integrationDescriptorId ?? null)
+      && (transaction.integrationDescriptorFingerprint ?? null)
+        === (provider.integrationDescriptorFingerprint ?? null);
   }
 
   private async recordCallbackRejected(
@@ -660,6 +769,19 @@ function badRequest(code: string, detail: string): ConsoleHandlerResult {
       status: 400,
       code,
       detail,
+    },
+  };
+}
+
+function descriptorChangedConflict(): ConsoleHandlerResult {
+  return {
+    status: 409,
+    body: {
+      type: 'about:blank',
+      title: 'Conflict',
+      status: 409,
+      code: 'integration_descriptor_changed',
+      detail: 'Integration configuration changed while the credential was being saved. Try again.',
     },
   };
 }

@@ -605,6 +605,7 @@ export class WebConsoleRegistrar {
           descriptorStore: stores.integrationDescriptorStore,
           integrationStore: stores.integrationStore,
           secretEncryption,
+          secretRevisionHasher: opaqueValues,
           outbound: integrationProviderOutbound,
           ...(this.options.now ? { now: this.options.now } : {}),
         })

@@ -1,5 +1,6 @@
-import { and, eq, inArray, or, sql } from 'drizzle-orm';
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
+  accountAllowlistEntries,
   approvalAuditEvents,
   authAllowlist,
   authIdentityEvents,
@@ -20,6 +21,12 @@ import {
 } from './schema/index.js';
 import type { DrizzleTx } from './db-utils.js';
 import { normalizeAuthAllowlistValue } from '../auth/embedded-as/allowlistIdentity.js';
+import type { AuthAllowlistKind } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
+import { normalizeAllowlistValue } from '../web-console/stores/IConsoleAccountAllowlistStore.js';
+import {
+  lockAuthAllowlistIdentitiesWithTx,
+  lockAuthPrincipalsWithTx,
+} from './authPrincipalLock.js';
 
 /**
  * The complete set of user-owned tables that `ON DELETE CASCADE` off `users.id`, expressed
@@ -113,20 +120,33 @@ export interface DeletionIdentity {
   readonly emails: readonly string[];
   readonly githubIds: readonly string[];
   readonly githubLogins: readonly string[];
+  readonly accountAllowlistIdentities: readonly DeletionAccountAllowlistIdentity[];
+}
+
+interface DeletionAccountAllowlistIdentity {
+  readonly kind: AuthAllowlistKind;
+  readonly normalizedValue: string;
 }
 
 function githubLogin(account: DeletionIdentityAccount): string | null {
   if (account.provider !== 'github' || !account.rawProfile || typeof account.rawProfile !== 'object') {
     return null;
   }
-  const login = (account.rawProfile as { readonly login?: unknown }).login;
+  const rawProfile = account.rawProfile as {
+    readonly login?: unknown;
+    readonly user?: { readonly login?: unknown };
+  };
+  // Current GitHub profiles persist the explicitly projected upstream user
+  // under rawProfile.user. Retain the legacy top-level fallback for accounts
+  // written before that projection was introduced.
+  const login = rawProfile.user?.login ?? rawProfile.login;
   if (typeof login !== 'string') return null;
   return login;
 }
 
 function addDeletionAllowlistValues(
   values: Set<string>,
-  kind: 'email' | 'github_username' | 'github_id',
+  kind: AuthAllowlistKind,
   value: string,
 ): void {
   const normalized = normalizeAuthAllowlistValue(kind, value);
@@ -137,30 +157,52 @@ function addDeletionAllowlistValues(
   values.add(value.toLowerCase());
 }
 
+function addAccountDeletionAllowlistValue(
+  values: Map<string, DeletionAccountAllowlistIdentity>,
+  kind: AuthAllowlistKind,
+  value: string,
+): void {
+  const normalizedValue = normalizeAllowlistValue(kind, value);
+  if (!normalizedValue || normalizedValue.length > 320) return;
+  values.set(`${kind}:${normalizedValue}`, { kind, normalizedValue });
+}
+
 /** Collect the identity match values from the account's own row + its federated logins. */
 export function collectDeletionIdentity(
   userEmail: string | null,
   accounts: readonly DeletionIdentityAccount[],
 ): DeletionIdentity {
   const emails = new Set<string>();
-  if (userEmail) addDeletionAllowlistValues(emails, 'email', userEmail);
+  const accountAllowlistIdentities = new Map<string, DeletionAccountAllowlistIdentity>();
+  if (userEmail) {
+    addDeletionAllowlistValues(emails, 'email', userEmail);
+    addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'email', userEmail);
+  }
   const subs = new Set<string>();
   const githubIds = new Set<string>();
   const githubLogins = new Set<string>();
   for (const account of accounts) {
     subs.add(account.sub);
-    if (account.email) addDeletionAllowlistValues(emails, 'email', account.email);
+    if (account.email) {
+      addDeletionAllowlistValues(emails, 'email', account.email);
+      addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'email', account.email);
+    }
     if (account.provider === 'github' && account.externalSub) {
       addDeletionAllowlistValues(githubIds, 'github_id', account.externalSub);
+      addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'github_id', account.externalSub);
     }
     const login = githubLogin(account);
-    if (login) addDeletionAllowlistValues(githubLogins, 'github_username', login);
+    if (login) {
+      addDeletionAllowlistValues(githubLogins, 'github_username', login);
+      addAccountDeletionAllowlistValue(accountAllowlistIdentities, 'github_username', login);
+    }
   }
   return {
     subs: [...subs],
     emails: [...emails],
     githubIds: [...githubIds],
     githubLogins: [...githubLogins],
+    accountAllowlistIdentities: [...accountAllowlistIdentities.values()],
   };
 }
 
@@ -169,11 +211,31 @@ export function collectDeletionIdentity(
  * therefore reached by neither the hard-delete cascade nor {@link purgeUserScopedData}. Called
  * on BOTH deletion paths. `auth_kv` holds the OIDC grants/tokens (email/profile in the payload,
  * keyed by the subject as `accountId`); `auth_identity_events` is the account's own auth-event
- * log; `auth_allowlist` is the pre-approval entry (a direct identifier + re-onboarding vector).
+ * log; `auth_allowlist` is the legacy pre-approval entry (a direct identifier + re-onboarding
+ * vector). Matching active `account_allowlist_entries` are revoked, not deleted, so the current
+ * sign-in authority cannot recreate the account while its administrative history remains intact.
  * `security_audit_events` is intentionally NOT purged here — it is the operator security-audit
  * sink and is retained (see docs).
  */
-export async function purgeNonCascadeUserIdentity(tx: DrizzleTx, identity: DeletionIdentity): Promise<void> {
+export async function purgeNonCascadeUserIdentity(
+  tx: DrizzleTx,
+  identity: DeletionIdentity,
+  revokedByUserId: string,
+  revokedAt: Date,
+): Promise<void> {
+  await lockAuthPrincipalsWithTx(tx, identity.subs);
+  const tombstones = identity.accountAllowlistIdentities;
+  await lockAuthAllowlistIdentitiesWithTx(tx, tombstones);
+  for (const sub of identity.subs) {
+    // The bootstrap claim is an authorization grant keyed outside the user
+    // tables. Clear it atomically with principal deletion so the deleted
+    // bootstrap identity cannot pass the allowlist gate and recreate itself.
+    await tx.delete(authKv).where(and(
+      eq(authKv.model, 'AuthBootstrap'),
+      eq(authKv.id, 'state'),
+      sql`${authKv.payload}->>'adminSub' = ${sub}`,
+    ));
+  }
   for (const sub of identity.subs) {
     // OIDC storage: a Grant carries the subject as payload.accountId, while tokens/sessions/codes
     // are linked to it via payload.grantId (this mirrors the adapter's own revokeByGrantId). Purge
@@ -203,5 +265,36 @@ export async function purgeNonCascadeUserIdentity(tx: DrizzleTx, identity: Delet
   ].filter((clause): clause is NonNullable<typeof clause> => clause !== undefined);
   if (allowlistMatches.length > 0) {
     await tx.delete(authAllowlist).where(or(...allowlistMatches));
+  }
+
+  const accountAllowlistMatches = tombstones.map(entry => and(
+    eq(accountAllowlistEntries.kind, entry.kind),
+    eq(accountAllowlistEntries.normalizedValue, entry.normalizedValue),
+  ));
+  if (accountAllowlistMatches.length > 0) {
+    await tx.update(accountAllowlistEntries).set({
+      revokedByUserId,
+      revokedAt,
+      authorityOrder: sql`nextval('account_allowlist_authority_order_seq')`,
+    }).where(and(
+      isNull(accountAllowlistEntries.revokedAt),
+      or(...accountAllowlistMatches),
+    ));
+
+    // Always append a fresh revoked row. Historical revoked rows are
+    // intentionally non-unique. The shared identity lock above makes this
+    // tombstone and a concurrent explicit re-add commit in authority order.
+    if (tombstones.length > 0) {
+      await tx.insert(accountAllowlistEntries).values(tombstones.map(entry => ({
+        kind: entry.kind,
+        normalizedValue: entry.normalizedValue,
+        displayValue: entry.normalizedValue,
+        note: 'Deny tombstone created by account deletion',
+        createdByUserId: revokedByUserId,
+        createdAt: revokedAt,
+        revokedByUserId,
+        revokedAt,
+      })));
+    }
   }
 }

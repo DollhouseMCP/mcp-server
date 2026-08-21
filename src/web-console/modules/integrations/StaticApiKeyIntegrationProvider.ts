@@ -9,10 +9,12 @@ import type {
   IntegrationTokenExchangeResult,
 } from './IntegrationProvider.js';
 import { serializeConfiguredIntegrationStatus } from './IntegrationDtos.js';
+import { integrationDescriptorRoutingFingerprint } from './IntegrationDescriptorRoutingFingerprint.js';
 
 export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
   readonly descriptor;
   readonly integrationDescriptorId;
+  readonly integrationDescriptorFingerprint;
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'static_api_key';
   readonly staticApiKeyInjection;
@@ -27,6 +29,7 @@ export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
       category: record.category,
     };
     this.integrationDescriptorId = record.id;
+    this.integrationDescriptorFingerprint = integrationDescriptorRoutingFingerprint(record);
     this.staticApiKeyInjection = record.staticApiKey.injection;
   }
 

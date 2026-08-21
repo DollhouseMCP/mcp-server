@@ -15,6 +15,7 @@
 
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { logger } from '../../../utils/logger.js';
+import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type {
   IIntegrationDescriptorStore,
@@ -168,6 +169,7 @@ export interface LoadCuratedIntegrationProvidersParams {
   readonly descriptorStore: IIntegrationDescriptorStore;
   readonly integrationStore: IUserIntegrationStore;
   readonly secretEncryption: ISecretEncryptionService;
+  readonly secretRevisionHasher: Pick<IConsoleOpaqueValueService, 'hashOpaqueValue'>;
   readonly now?: () => Date;
   /** Overridable for tests; defaults to reading deployment credentials from process.env. */
   readonly credentialResolver?: IntegrationDescriptorSeedCredentialResolver;
@@ -191,6 +193,7 @@ export async function loadCuratedIntegrationProviders(
     params.credentialResolver ?? createEnvIntegrationDescriptorCredentialResolver(),
     {
       integrationStore: params.integrationStore,
+      secretRevisionHasher: params.secretRevisionHasher,
       ...(params.now ? { now: params.now } : {}),
     },
   );

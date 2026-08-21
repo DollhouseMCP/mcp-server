@@ -30,6 +30,7 @@ const READ_ISSUES_SCOPE = 'read:issues';
 const STALE_ACCESS_TOKEN = 'stale-access';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
 const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
+const DESCRIPTOR_FINGERPRINT = 'b'.repeat(64);
 const SPEC_HASH = 'a'.repeat(64);
 const FACTOR_ID = 'cd8f6d0e-7294-42bc-9e01-094890a820a8';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
@@ -132,6 +133,7 @@ function oauthDescriptorInput(overrides: Partial<Parameters<InMemoryIntegrationD
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'integration-key-v1',
     operationPromotion: { operations: ['gmail.users.messages.list'] },
     createdAt: NOW,
@@ -370,6 +372,18 @@ describe('InMemoryLoginTransactionStore', () => {
     expect(await store.consume(hash(3), hash(4), FOUR_MINUTES)).toBeNull();
   });
 
+  it('completes consumed state while retaining it for replay classification', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    await store.create(loginTransaction());
+    await store.consume(hash(3), hash(4), FOUR_MINUTES);
+
+    await expect(store.completeConsumed(hash(3))).resolves.toBe(true);
+    await expect(store.findByIdHash(hash(3))).resolves.toMatchObject({
+      consumedAt: FOUR_MINUTES,
+      expiresAt: FOUR_MINUTES,
+    });
+  });
+
   it('requires bound elevated flows and a short relative return target', async () => {
     const store = new InMemoryLoginTransactionStore();
     await expect(store.create(loginTransaction({
@@ -384,15 +398,52 @@ describe('InMemoryLoginTransactionStore', () => {
       .rejects.toThrow('expire within 10 minutes');
     await expect(store.create(loginTransaction({ pkceVerifierEnc: Buffer.alloc(0) })))
       .rejects.toThrow('encrypted ciphertext');
+    await expect(store.create(loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+    }))).rejects.toThrow('integrationDescriptorFingerprint');
+    await expect(store.create(loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+    }))).resolves.toBeUndefined();
   });
 
-  it('removes expired and consumed transient transactions', async () => {
+  it('retains in-flight consumed transactions until completion or expiry', async () => {
     const store = new InMemoryLoginTransactionStore();
     await store.create(loginTransaction());
     await store.create(loginTransaction({ idHash: hash(6) }));
     await store.consume(hash(6), hash(4), FOUR_MINUTES);
 
-    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(2);
+    expect(await store.sweepExpired(FOUR_MINUTES)).toBe(0);
+    await store.completeConsumed(hash(6));
+    expect(await store.sweepExpired(FOUR_MINUTES)).toBe(1);
+    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(1);
+  });
+
+  it('retains a callback consumed just before its original deadline through the completion lease', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    const consumedAt = new Date(FIVE_MINUTES.getTime() - 1);
+    await store.create(loginTransaction());
+
+    const consumed = await store.consume(hash(3), hash(4), consumedAt);
+
+    expect(consumed?.expiresAt.getTime()).toBeGreaterThan(FIVE_MINUTES.getTime());
+    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(0);
+    await store.completeConsumed(hash(3));
+    expect(await store.sweepExpired(consumedAt)).toBe(1);
+  });
+
+  it('rejects consumed transactions whose completion lease exceeds five minutes', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    await expect(store.create(loginTransaction({
+      consumedAt: FOUR_MINUTES,
+      expiresAt: new Date('2026-05-26T12:09:00.001Z'),
+    }))).rejects.toThrow('invalid completion lease');
   });
 });
 

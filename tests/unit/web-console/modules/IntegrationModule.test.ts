@@ -7,6 +7,7 @@ import {
   HmacConsoleOpaqueValueService,
   InMemoryUserIntegrationStore,
   InMemoryLoginTransactionStore,
+  IntegrationDescriptorChangedError,
   CONSOLE_INTEGRATION_STATE_COOKIE,
   CONSOLE_LOGIN_STATE_COOKIE,
   IntegrationProviderRegistry,
@@ -572,6 +573,19 @@ describe('IntegrationModule', () => {
     });
   });
 
+  it('returns a retryable conflict when a descriptor changes while authorization starts', async () => {
+    const { module, loginTransactions } = writeModuleFixture();
+    jest.spyOn(loginTransactions, 'create').mockRejectedValueOnce(
+      new IntegrationDescriptorChangedError('integration descriptor changed while starting authorization'),
+    );
+
+    await expect(findRoute(module.routes, GITHUB_CONNECT_PATH, 'POST').handler(consoleRequest()))
+      .resolves.toMatchObject({
+        status: 409,
+        body: { code: 'integration_descriptor_changed' },
+      });
+  });
+
   it('treats tampered PKCE verifier ciphertext as a rejected callback instead of throwing', async () => {
     const { module, store, loginTransactions, opaqueValues, secretEncryption, securityEventSink } = writeModuleFixture();
     const callback = findRoute(module.routes, GITHUB_CALLBACK_PATH);
@@ -778,7 +792,10 @@ describe('IntegrationModule', () => {
     const state = authorizeUrl.searchParams.get('state');
     if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
     await expect(loginTransactions.findByIdHash(opaqueValues.hashOpaqueValue(transactionId)))
-      .resolves.toMatchObject({ integrationDescriptorId: oauthDescriptorFixture().id });
+      .resolves.toMatchObject({
+        integrationDescriptorId: oauthDescriptorFixture().id,
+        integrationDescriptorFingerprint: provider.integrationDescriptorFingerprint,
+      });
 
     const result = await callback.handler(consoleRequest({
       headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
@@ -877,6 +894,124 @@ describe('IntegrationModule', () => {
     expect(originalFetch).not.toHaveBeenCalled();
     expect(replacementFetch).not.toHaveBeenCalled();
     await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    expect(securityEventSink.events).toEqual([
+      expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),
+    ]);
+  });
+
+  it('rejects a callback when routing changes on the descriptor that started OAuth', async () => {
+    const originalFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const changedFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const original = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(originalFetch),
+    });
+    const changed = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture({ apiHosts: ['mail.example.com'] }),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(changedFetch),
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const originalModule = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption,
+      configuredProviders: [original],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      now: () => NOW,
+    });
+    const securityEventSink = new FixtureIntegrationSecurityEventSink();
+    const changedModule = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption,
+      configuredProviders: [changed],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      securityEventSink,
+      now: () => NOW,
+    });
+    const started = await findRoute(originalModule.routes, GMAIL_CONNECT_PATH, 'POST')
+      .handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    const result = await findRoute(changedModule.routes, GMAIL_CALLBACK_PATH).handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }));
+
+    expect(result).toMatchObject({ status: 302, redirectTo: LIST_PATH });
+    expect(originalFetch).not.toHaveBeenCalled();
+    expect(changedFetch).not.toHaveBeenCalled();
+    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    expect(securityEventSink.events).toEqual([
+      expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),
+    ]);
+  });
+
+  it('re-resolves a store-backed descriptor after consuming callback state', async () => {
+    const originalFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const changedFetch = jest.fn<() => Promise<Response>>(() => Promise.reject(new Error('not reached')));
+    const original = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(originalFetch),
+    });
+    const changed = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture({ apiHosts: ['mail.example.com'] }),
+      clientSecret: 'original-client-secret',
+      ...providerOutbound(changedFetch),
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const securityEventSink = new FixtureIntegrationSecurityEventSink();
+    const resolveProvider = jest.fn()
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(original)
+      .mockResolvedValueOnce(changed);
+    const service = new IntegrationService({
+      store,
+      providers: IntegrationProviderRegistry.empty(),
+      resolveProvider,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption,
+      publicBaseUrl: PUBLIC_BASE_URL,
+      securityEventSink,
+      now: () => NOW,
+    });
+    const providerId = 'gmail' as Parameters<IntegrationService['connectProvider']>[1];
+    const started = await service.connectProvider(consoleRequest(), providerId);
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    const result = await service.completeProviderCallback(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }), providerId);
+
+    expect(result).toMatchObject({ status: 302, redirectTo: LIST_PATH });
+    expect(resolveProvider).toHaveBeenCalledTimes(3);
+    expect(originalFetch).not.toHaveBeenCalled();
+    expect(changedFetch).not.toHaveBeenCalled();
     expect(securityEventSink.events).toEqual([
       expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),
     ]);
@@ -1070,6 +1205,66 @@ describe('IntegrationModule', () => {
     ]);
   });
 
+  it('revokes exchanged credentials when descriptor rotation invalidates the consumed callback', async () => {
+    const fetchImpl = () => Promise.resolve(new Response(JSON.stringify({
+      access_token: 'gmail-access-token-secret',
+      refresh_token: 'gmail-refresh-token-secret',
+      email: 'alice@example.com',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    const provider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      ...providerOutbound(fetchImpl),
+    });
+    const revoke = jest.spyOn(provider, 'revokeCredentials').mockResolvedValue();
+    const connectDescriptorCallback = jest.fn(() => Promise.resolve(null));
+    const store = Object.assign(new InMemoryUserIntegrationStore(), { connectDescriptorCallback });
+    const loginTransactions = new InMemoryLoginTransactionStore();
+    const opaqueValues = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8));
+    const securityEventSink = new FixtureIntegrationSecurityEventSink();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions,
+      opaqueValues,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [provider],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      securityEventSink,
+      now: () => NOW,
+    });
+    const started = await findRoute(module.routes, GMAIL_CONNECT_PATH, 'POST').handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const authorizeUrl = new URL(String((started.body as { authorize_url: string }).authorize_url));
+    const state = authorizeUrl.searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    const result = await findRoute(module.routes, GMAIL_CALLBACK_PATH).handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }));
+
+    expect(result).toMatchObject({ status: 302, redirectTo: LIST_PATH });
+    expect(connectDescriptorCallback).toHaveBeenCalledWith(expect.objectContaining({
+      descriptorId: oauthDescriptorFixture().id,
+      descriptorFingerprint: provider.integrationDescriptorFingerprint,
+    }));
+    expect(revoke).toHaveBeenCalledWith({
+      accessToken: 'gmail-access-token-secret',
+      refreshToken: 'gmail-refresh-token-secret',
+      externalInstallationId: null,
+    });
+    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    expect(securityEventSink.events).toEqual([
+      expect.objectContaining({ provider: 'gmail', reason: 'descriptor_mismatch' }),
+    ]);
+  });
+
   it('stores and revokes static API key credentials without OAuth', async () => {
     const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
     const store = new InMemoryUserIntegrationStore();
@@ -1126,6 +1321,33 @@ describe('IntegrationModule', () => {
         scopes: [],
       },
     });
+    await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
+  });
+
+  it('rejects static credential persistence when the descriptor changes concurrently', async () => {
+    const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
+    const connectDescriptorCredential = jest.fn(() => Promise.resolve(null));
+    const store = Object.assign(new InMemoryUserIntegrationStore(), { connectDescriptorCredential });
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [provider],
+      now: () => NOW,
+    });
+
+    await expect(findRoute(module.routes, AIRTABLE_CONNECT_PATH, 'POST').handler(consoleRequest({
+      body: { api_key: 'airtable-api-key-secret' },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_changed' },
+    });
+    expect(connectDescriptorCredential).toHaveBeenCalledWith(expect.objectContaining({
+      descriptorId: staticApiKeyDescriptorFixture().id,
+      descriptorFingerprint: provider.integrationDescriptorFingerprint,
+    }));
     await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
   });
 
@@ -1324,6 +1546,7 @@ function oauthDescriptorFixture(
     },
     staticApiKey: null,
     clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
     credentialKeyVersion: 'integration-key-v1',
     operationPromotion: {},
     createdAt: NOW,
@@ -1351,6 +1574,7 @@ function staticApiKeyDescriptorFixture(): IntegrationDescriptorRecord {
       },
     },
     clientSecretCiphertext: null,
+    clientSecretRevision: null,
     credentialKeyVersion: null,
     operationPromotion: {},
     createdAt: NOW,

@@ -55,6 +55,28 @@ export class InMemoryConsoleAccountAllowlistStore implements IConsoleAccountAllo
     return false;
   }
 
+  async deniesIdentity(values: AllowlistMatchValues): Promise<boolean> {
+    await Promise.resolve();
+    let newestActiveAt = Number.NEGATIVE_INFINITY;
+    let newestRevokedAt = Number.NEGATIVE_INFINITY;
+    for (const entry of this.entries.values()) {
+      const matches = (entry.kind === 'email' && values.email &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.email))
+        || (entry.kind === 'github_username' && values.githubUsername &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubUsername))
+        || (entry.kind === 'github_id' && values.githubId &&
+          storedConsoleAllowlistValueMatches(entry.kind, entry.displayValue, values.githubId));
+      if (!matches) continue;
+      if (entry.revokedAt) {
+        newestRevokedAt = Math.max(newestRevokedAt, entry.revokedAt.getTime());
+      } else {
+        newestActiveAt = Math.max(newestActiveAt, entry.createdAt.getTime());
+      }
+    }
+    return newestRevokedAt !== Number.NEGATIVE_INFINITY
+      && newestRevokedAt >= newestActiveAt;
+  }
+
   async findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null> {
     await Promise.resolve();
     const entry = this.entries.get(id);

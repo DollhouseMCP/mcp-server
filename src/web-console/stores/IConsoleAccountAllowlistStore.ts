@@ -1,5 +1,9 @@
 import type { AuthAllowlistKind } from '../../database/schema/index.js';
 import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
+import type {
+  AtomicAccountProvisioningInput,
+  AllowlistGateResult,
+} from '../../auth/embedded-as/allowlistGate.js';
 import {
   assertUuid,
   cloneDate,
@@ -44,10 +48,14 @@ export interface IConsoleAccountAllowlistStore {
   listActive(): Promise<ConsoleAccountAllowlistEntry[]>;
   hasActiveEntries(): Promise<boolean>;
   matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
+  deniesIdentity(values: AllowlistMatchValues): Promise<boolean>;
   findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null>;
   add(input: AllowlistAddInput): Promise<ConsoleAccountAllowlistEntry>;
   update(input: AllowlistUpdateInput): Promise<ConsoleAccountAllowlistEntry | null>;
   remove(input: AllowlistRemoveInput): Promise<ConsoleAccountAllowlistEntry | null>;
+  provisionAccountIfAllowed?(
+    input: AtomicAccountProvisioningInput,
+  ): Promise<AllowlistGateResult>;
 }
 
 export const CONSOLE_ACCOUNT_ALLOWLIST_KINDS = ['email', 'github_username', 'github_id'] as const;

@@ -454,7 +454,15 @@ export async function deleteConsolePrincipalWithTx(
     email: authAccounts.email,
     rawProfile: authAccounts.rawProfile,
   }).from(authAccounts).where(eq(authAccounts.userId, input.userId));
-  await purgeNonCascadeUserIdentity(tx, collectDeletionIdentity(existing[0]?.email ?? null, accounts));
+  await purgeNonCascadeUserIdentity(
+    tx,
+    collectDeletionIdentity(existing[0]?.email ?? null, accounts),
+    input.deletedByUserId,
+    // The request timestamp can substantially predate this transaction because
+    // remote grant and runtime revocation happen first. Tombstone precedence
+    // must reflect when deletion actually reaches its serialized DB phase.
+    new Date(),
+  );
 
   // Detach the account's own identity/credential/role surface first, so the
   // login stops working on either branch and so these rows don't themselves

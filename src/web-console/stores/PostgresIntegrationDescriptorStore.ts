@@ -2,7 +2,11 @@ import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
-import { integrationProviderDescriptors } from '../../database/schema/index.js';
+import {
+  consoleLoginTransactions,
+  integrationProviderDescriptors,
+  userIntegrations,
+} from '../../database/schema/index.js';
 import {
   cloneIntegrationDescriptorRecord,
   decodeDescriptorPageCursor,
@@ -13,6 +17,7 @@ import {
   type IntegrationDescriptorPage,
   type IntegrationDescriptorPageRequest,
   type IntegrationDescriptorRecord,
+  type IntegrationDescriptorUpsertOptions,
   type IntegrationOAuthDescriptor,
   type IntegrationStaticApiKeyDescriptor,
   validateIntegrationDescriptorInput,
@@ -20,6 +25,7 @@ import {
 } from './IIntegrationDescriptorStore.js';
 import type { UserIntegrationProvider } from './IUserIntegrationStore.js';
 import { assertUuid } from './ConsoleStoreValidation.js';
+import { integrationDescriptorRoutingFingerprint } from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
 
 export class PostgresIntegrationDescriptorStore implements IIntegrationDescriptorStore {
   constructor(private readonly db: DatabaseInstance) {}
@@ -118,33 +124,83 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
   async delete(id: string, ownerUserId: string): Promise<boolean> {
     assertUuid(id, 'id');
     assertUuid(ownerUserId, 'ownerUserId');
-    const rows = await withSystemContext(this.db, tx =>
-      tx.delete(integrationProviderDescriptors).where(and(
+    const rows = await withSystemContext(this.db, async tx => {
+      const existing = await tx.select({ id: integrationProviderDescriptors.id })
+        .from(integrationProviderDescriptors).where(and(
+          eq(integrationProviderDescriptors.id, id),
+          eq(integrationProviderDescriptors.ownership, 'byo'),
+          eq(integrationProviderDescriptors.ownerUserId, ownerUserId),
+        )).for('update').limit(1);
+      if (!existing[0]) return [];
+      await invalidateDescriptorBindingsWithTx(tx, id, new Date());
+      return tx.delete(integrationProviderDescriptors).where(and(
         eq(integrationProviderDescriptors.id, id),
         eq(integrationProviderDescriptors.ownership, 'byo'),
         eq(integrationProviderDescriptors.ownerUserId, ownerUserId),
-      )).returning({ id: integrationProviderDescriptors.id }),
-    );
+      )).returning({ id: integrationProviderDescriptors.id });
+    });
     return rows.length > 0;
   }
 
   async deleteCurated(provider: UserIntegrationProvider): Promise<boolean> {
-    const rows = await withSystemContext(this.db, tx =>
-      tx.delete(integrationProviderDescriptors).where(and(
+    const rows = await withSystemContext(this.db, async tx => {
+      const existing = await tx.select({ id: integrationProviderDescriptors.id })
+        .from(integrationProviderDescriptors).where(and(
+          eq(integrationProviderDescriptors.provider, provider),
+          eq(integrationProviderDescriptors.ownership, 'curated'),
+          isNull(integrationProviderDescriptors.ownerUserId),
+        )).for('update').limit(1);
+      if (!existing[0]) return [];
+      await invalidateDescriptorBindingsWithTx(tx, existing[0].id, new Date());
+      return tx.delete(integrationProviderDescriptors).where(and(
         eq(integrationProviderDescriptors.provider, provider),
         eq(integrationProviderDescriptors.ownership, 'curated'),
         isNull(integrationProviderDescriptors.ownerUserId),
-      )).returning({ id: integrationProviderDescriptors.id }),
-    );
+      )).returning({ id: integrationProviderDescriptors.id });
+    });
     return rows.length > 0;
   }
 
-  async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
+  async upsert(
+    input: IntegrationDescriptorCreateInput,
+    options: IntegrationDescriptorUpsertOptions = {},
+  ): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
     const rows = await withSystemContext(this.db, async tx => {
-      const existing = await tx.select().from(integrationProviderDescriptors).where(descriptorIdentity(input)).limit(1);
+      const existing = await tx.select().from(integrationProviderDescriptors)
+        .where(descriptorIdentity(input)).for('update').limit(1);
       const values = toDescriptorValues(input, existing[0]?.createdAt ?? input.createdAt);
       if (existing[0]) {
+        const current = fromDescriptorRow(existing[0]);
+        const proposed: IntegrationDescriptorRecord = {
+          ...current,
+          provider: input.provider,
+          ownership: input.ownership,
+          ownerUserId: input.ownerUserId,
+          displayName: input.displayName,
+          category: input.category,
+          authStrategy: input.authStrategy,
+          apiHosts: [...input.apiHosts],
+          oauth: input.oauth ?? null,
+          staticApiKey: input.staticApiKey ?? null,
+          clientSecretCiphertext: input.clientSecretCiphertext ?? null,
+          clientSecretRevision: input.clientSecretRevision ?? null,
+          credentialKeyVersion: input.credentialKeyVersion ?? null,
+          operationPromotion: input.operationPromotion ?? {},
+          updatedAt: input.updatedAt,
+        };
+        const currentFingerprint = integrationDescriptorRoutingFingerprint(current);
+        const proposedFingerprint = integrationDescriptorRoutingFingerprint(proposed);
+        const initializesOnlyRevision = options.initializeClientSecretRevision === true
+          && current.clientSecretRevision === null
+          && proposed.clientSecretRevision !== null
+          && currentFingerprint === integrationDescriptorRoutingFingerprint({
+            ...proposed,
+            clientSecretRevision: null,
+          });
+        if (currentFingerprint !== proposedFingerprint && !initializesOnlyRevision) {
+          await invalidateDescriptorBindingsWithTx(tx, existing[0].id, input.updatedAt);
+        }
         return tx.update(integrationProviderDescriptors)
           .set(values)
           .where(eq(integrationProviderDescriptors.id, existing[0].id))
@@ -155,6 +211,30 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     if (!rows[0]) throw new Error('PostgreSQL did not return integration descriptor row');
     return fromDescriptorRow(rows[0]);
   }
+}
+
+async function invalidateDescriptorBindingsWithTx(
+  tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0],
+  descriptorId: string,
+  revokedAt: Date,
+): Promise<void> {
+  // The descriptor row is already locked FOR UPDATE by every caller. Remove
+  // callbacks first, then clear credentials, so callback persistence can use
+  // the same descriptor -> transaction -> credential lock order without a
+  // deadlock or a stale credential write after rotation.
+  await tx.delete(consoleLoginTransactions).where(
+    eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
+  );
+  await tx.update(userIntegrations).set({
+    accessTokenCiphertext: null,
+    refreshTokenCiphertext: null,
+    status: 'revoked',
+    errorReason: null,
+    revokedAt,
+  }).where(and(
+    eq(userIntegrations.integrationDescriptorId, descriptorId),
+    isNull(userIntegrations.revokedAt),
+  ));
 }
 
 function descriptorIdentity(input: IntegrationDescriptorCreateInput) {
@@ -185,6 +265,7 @@ function toDescriptorValues(input: IntegrationDescriptorCreateInput, createdAt: 
     oauth: input.oauth ? cloneJsonValue(input.oauth) : null,
     staticApiKey: input.staticApiKey ? cloneJsonValue(input.staticApiKey) : null,
     clientSecretCiphertext: input.clientSecretCiphertext ? Buffer.from(input.clientSecretCiphertext) : null,
+    clientSecretRevision: input.clientSecretRevision ?? null,
     credentialKeyVersion: input.credentialKeyVersion ?? null,
     operationPromotion: cloneJsonValue(input.operationPromotion ?? {}),
     createdAt,
@@ -192,7 +273,7 @@ function toDescriptorValues(input: IntegrationDescriptorCreateInput, createdAt: 
   };
 }
 
-function fromDescriptorRow(row: typeof integrationProviderDescriptors.$inferSelect): IntegrationDescriptorRecord {
+export function fromDescriptorRow(row: typeof integrationProviderDescriptors.$inferSelect): IntegrationDescriptorRecord {
   const record: IntegrationDescriptorRecord = {
     id: row.id,
     provider: row.provider as UserIntegrationProvider,
@@ -205,6 +286,7 @@ function fromDescriptorRow(row: typeof integrationProviderDescriptors.$inferSele
     oauth: asNullableOAuth(row.oauth),
     staticApiKey: asNullableStaticApiKey(row.staticApiKey),
     clientSecretCiphertext: row.clientSecretCiphertext,
+    clientSecretRevision: row.clientSecretRevision,
     credentialKeyVersion: row.credentialKeyVersion,
     operationPromotion: asJsonRecord(row.operationPromotion),
     createdAt: row.createdAt,

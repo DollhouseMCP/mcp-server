@@ -169,7 +169,7 @@ function normalizeScopes(value: Readonly<Record<string, unknown>> | undefined): 
 
 /**
  * Display-safe descriptor DTO (allowlist). Credential material —
- * clientSecretCiphertext, credentialKeyVersion, or any plaintext secret —
+ * clientSecretCiphertext, clientSecretRevision, credentialKeyVersion, or any plaintext secret —
  * must never appear here; the browser only learns whether a secret is stored.
  */
 export interface IntegrationDescriptorDto {

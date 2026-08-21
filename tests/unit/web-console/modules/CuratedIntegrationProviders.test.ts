@@ -10,6 +10,7 @@ import {
   loadCuratedIntegrationProviders,
 } from '../../../../src/web-console/modules/integrations/CuratedIntegrationProviders.js';
 import { integrationDescriptorClientSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
+import { HmacConsoleOpaqueValueService } from '../../../../src/web-console/security/ConsoleOpaqueValues.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import {
   type IntegrationDescriptorCreateInput,
@@ -19,6 +20,7 @@ import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores
 
 const VISIBLE_USER = '11111111-1111-4111-8111-111111111111';
 const NOW = new Date('2026-06-24T00:00:00.000Z');
+const secretRevisionHasher = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 19));
 
 function newEncryption(): AeadSecretEncryptionService {
   return new AeadSecretEncryptionService({ keyId: 'test-key', key: Buffer.alloc(32, 7) });
@@ -152,6 +154,7 @@ describe('loadCuratedIntegrationProviders', () => {
       descriptorStore: new InMemoryIntegrationDescriptorStore(),
       integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: newEncryption(),
+      secretRevisionHasher,
     });
     expect(providers).toEqual([]);
   });
@@ -166,6 +169,7 @@ describe('loadCuratedIntegrationProviders', () => {
       descriptorStore: new InMemoryIntegrationDescriptorStore(),
       integrationStore: new InMemoryUserIntegrationStore(),
       secretEncryption: newEncryption(),
+      secretRevisionHasher,
       now: () => NOW,
       credentialResolver: () => ({ clientId: 'cid', clientSecret: 'csecret' }),
     });

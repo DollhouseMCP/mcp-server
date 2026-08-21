@@ -19,22 +19,26 @@
  * @module web-console/modules/integrations/IntegrationDescriptorSeedLoader
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import { logger } from '../../../utils/logger.js';
 import { canonicalizeIntegrationApiHosts } from '../../security/IntegrationApiHosts.js';
+import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import {
   type IIntegrationDescriptorStore,
   type IntegrationDescriptorCreateInput,
   type IntegrationDescriptorRecord,
+  type IntegrationDescriptorUpsertOptions,
   type IntegrationPkceMode,
   type IntegrationRefreshMode,
   validateIntegrationDescriptorInput,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import { deriveIntegrationClientSecretRevision } from './IntegrationClientSecretRevision.js';
 import { integrationDescriptorClientSecretContext } from './IntegrationSecretContext.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
@@ -61,6 +65,12 @@ export type IntegrationDescriptorSeedCredentialResolver = (
 export interface IntegrationDescriptorSeedLoaderOptions {
   readonly now?: () => Date;
   readonly integrationStore: IUserIntegrationStore;
+  readonly secretRevisionHasher: Pick<IConsoleOpaqueValueService, 'hashOpaqueValue'>;
+}
+
+interface PreparedDescriptorInput {
+  readonly input: IntegrationDescriptorCreateInput;
+  readonly upsertOptions?: IntegrationDescriptorUpsertOptions;
 }
 
 export interface IntegrationDescriptorSeedResult {
@@ -74,6 +84,7 @@ export interface IntegrationDescriptorSeedResult {
 export class IntegrationDescriptorSeedLoader {
   private readonly now: () => Date;
   private readonly integrationStore: IUserIntegrationStore;
+  private readonly secretRevisionHasher: Pick<IConsoleOpaqueValueService, 'hashOpaqueValue'>;
 
   constructor(
     private readonly seedDir: string,
@@ -84,6 +95,7 @@ export class IntegrationDescriptorSeedLoader {
   ) {
     this.now = options.now ?? (() => new Date());
     this.integrationStore = options.integrationStore;
+    this.secretRevisionHasher = options.secretRevisionHasher;
   }
 
   /**
@@ -166,16 +178,16 @@ export class IntegrationDescriptorSeedLoader {
       return null;
     }
 
-    const input = this.toDescriptorInput(seed, provider);
-    if (!input) {
+    const curated = await this.descriptorStore.findCuratedByProvider(
+      provider as UserIntegrationProvider,
+    );
+    const prepared = this.toDescriptorInput(seed, provider, curated);
+    if (!prepared) {
       // Provider ids are shared by curated and user-owned descriptors. Curated
       // records win runtime resolution, so their active provider credentials
       // must be revoked before removal or they could become usable under a
       // newly revealed same-name BYO route. Without a persisted curated record,
       // however, the credentials belong to the BYO route and stay untouched.
-      const curated = await this.descriptorStore.findCuratedByProvider(
-        provider as UserIntegrationProvider,
-      );
       if (!curated) return null;
 
       const revoked = await this.integrationStore.revokeAllByDescriptor(
@@ -198,8 +210,9 @@ export class IntegrationDescriptorSeedLoader {
       return null;
     }
 
+    const { input, upsertOptions } = prepared;
     validateIntegrationDescriptorInput(input);
-    const record = await this.descriptorStore.upsert(input);
+    const record = await this.descriptorStore.upsert(input, upsertOptions);
     SecurityMonitor.logSecurityEvent({
       type: 'INTEGRATION_SECURITY_DECISION',
       severity: 'LOW',
@@ -222,7 +235,8 @@ export class IntegrationDescriptorSeedLoader {
   private toDescriptorInput(
     seed: unknown,
     provider: string,
-  ): IntegrationDescriptorCreateInput | null {
+    existing: IntegrationDescriptorRecord | null,
+  ): PreparedDescriptorInput | null {
     const timestamp = this.now();
     const authStrategy = readString(seed, 'authStrategy') ?? '';
     const base = {
@@ -247,25 +261,33 @@ export class IntegrationDescriptorSeedLoader {
         return null;
       }
       const oauthSeed = readRecord(seed, 'oauth');
+      const encryptedSecret = this.resolveClientSecret(
+        provider,
+        credentials.clientSecret,
+        existing,
+      );
       return {
-        ...base,
-        authStrategy: 'oauth2_authorization_code',
-        oauth: {
-          // clientId is deployment identity (env), never the data file.
-          clientId: credentials.clientId,
-          authorizationUrl: readStringField(oauthSeed, 'authorizationUrl'),
-          tokenUrl: readStringField(oauthSeed, 'tokenUrl'),
-          scopes: readStringArrayField(oauthSeed, 'scopes'),
-          pkce: readStringField(oauthSeed, 'pkce') as IntegrationPkceMode,
-          refresh: readStringField(oauthSeed, 'refresh') as IntegrationRefreshMode,
-          tokenExchange: readRecord(oauthSeed, 'tokenExchange'),
-          accountLabel: readRecord(oauthSeed, 'accountLabel'),
+        input: {
+          ...base,
+          authStrategy: 'oauth2_authorization_code',
+          oauth: {
+            // clientId is deployment identity (env), never the data file.
+            clientId: credentials.clientId,
+            authorizationUrl: readStringField(oauthSeed, 'authorizationUrl'),
+            tokenUrl: readStringField(oauthSeed, 'tokenUrl'),
+            scopes: readStringArrayField(oauthSeed, 'scopes'),
+            pkce: readStringField(oauthSeed, 'pkce') as IntegrationPkceMode,
+            refresh: readStringField(oauthSeed, 'refresh') as IntegrationRefreshMode,
+            tokenExchange: readRecord(oauthSeed, 'tokenExchange'),
+            accountLabel: readRecord(oauthSeed, 'accountLabel'),
+          },
+          clientSecretCiphertext: encryptedSecret.ciphertext,
+          clientSecretRevision: encryptedSecret.revision,
+          credentialKeyVersion: encryptedSecret.keyVersion,
         },
-        clientSecretCiphertext: this.secretEncryption.encrypt(
-          Buffer.from(credentials.clientSecret, 'utf8'),
-          integrationDescriptorClientSecretContext({ provider, ownerUserId: null }),
-        ),
-        credentialKeyVersion: null,
+        ...(encryptedSecret.initializeRevision
+          ? { upsertOptions: { initializeClientSecretRevision: true } }
+          : {}),
       };
     }
 
@@ -273,20 +295,104 @@ export class IntegrationDescriptorSeedLoader {
       const staticSeed = readRecord(seed, 'staticApiKey');
       const injection = readRecord(staticSeed, 'injection');
       return {
-        ...base,
-        authStrategy: 'static_api_key',
-        staticApiKey: {
-          injection: {
-            location: readStringField(injection, 'location') as 'header' | 'query',
-            name: readStringField(injection, 'name'),
-            valuePrefix: readNullableStringField(injection, 'valuePrefix'),
+        input: {
+          ...base,
+          authStrategy: 'static_api_key',
+          staticApiKey: {
+            injection: {
+              location: readStringField(injection, 'location') as 'header' | 'query',
+              name: readStringField(injection, 'name'),
+              valuePrefix: readNullableStringField(injection, 'valuePrefix'),
+            },
           },
         },
       };
     }
 
     // Unknown/coded strategies are assembled as-is and rejected by validation if invalid.
-    return { ...base, authStrategy: authStrategy as IntegrationDescriptorCreateInput['authStrategy'] };
+    return {
+      input: {
+        ...base,
+        authStrategy: authStrategy as IntegrationDescriptorCreateInput['authStrategy'],
+      },
+    };
+  }
+
+  private resolveClientSecret(
+    provider: string,
+    configuredSecret: string,
+    existing: IntegrationDescriptorRecord | null,
+  ): {
+    readonly ciphertext: Buffer;
+    readonly revision: string;
+    readonly keyVersion: string | null;
+    readonly initializeRevision: boolean;
+  } {
+    const context = integrationDescriptorClientSecretContext({ provider, ownerUserId: null });
+    const revision = deriveIntegrationClientSecretRevision(
+      this.secretRevisionHasher,
+      provider,
+      configuredSecret,
+    );
+    const configuredPlaintext = Buffer.from(configuredSecret, 'utf8');
+    try {
+      if (existing?.authStrategy === 'oauth2_authorization_code'
+          && existing.clientSecretCiphertext) {
+        let existingPlaintext: Buffer | null = null;
+        try {
+          existingPlaintext = this.secretEncryption.decrypt(existing.clientSecretCiphertext, context);
+        } catch {
+          // A retired or unavailable at-rest key makes the old envelope
+          // unreadable. Rewrap the deployment credential, but retain the
+          // logical revision: envelope rotation is not an OAuth secret change.
+          SecurityMonitor.logSecurityEvent({
+            type: 'INTEGRATION_SECURITY_DECISION',
+            severity: 'MEDIUM',
+            source: 'IntegrationDescriptorSeedLoader.resolveClientSecret',
+            details: `Curated integration client secret rewrapped for provider ${safeIntegrationAuditProvider(provider)}`,
+          });
+          logger.warn(`[IntegrationDescriptorSeedLoader] Rewrapped unreadable client-secret envelope for provider '${safeIntegrationAuditProvider(provider)}'`);
+          return {
+            ciphertext: this.secretEncryption.encrypt(configuredPlaintext, context),
+            revision,
+            keyVersion: null,
+            initializeRevision: false,
+          };
+        }
+        try {
+          if (existingPlaintext.length === configuredPlaintext.length
+              && timingSafeEqual(existingPlaintext, configuredPlaintext)) {
+            return {
+              ciphertext: Buffer.from(existing.clientSecretCiphertext),
+              // The opaque-value HMAC key has its own lifecycle. Once plaintext
+              // equality is proven, preserve the logical secret revision so an
+              // unrelated HMAC-key rotation cannot revoke user integrations.
+              revision: existing.clientSecretRevision ?? revision,
+              keyVersion: existing.credentialKeyVersion,
+              initializeRevision: existing.clientSecretRevision === null,
+            };
+          }
+        } finally {
+          existingPlaintext?.fill(0);
+        }
+
+        return {
+          ciphertext: this.secretEncryption.encrypt(configuredPlaintext, context),
+          revision,
+          keyVersion: null,
+          initializeRevision: false,
+        };
+      }
+
+      return {
+        ciphertext: this.secretEncryption.encrypt(configuredPlaintext, context),
+        revision,
+        keyVersion: null,
+        initializeRevision: false,
+      };
+    } finally {
+      configuredPlaintext.fill(0);
+    }
   }
 }
 

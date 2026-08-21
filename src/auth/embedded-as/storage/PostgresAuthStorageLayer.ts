@@ -28,6 +28,7 @@
 
 import { and, eq, gte, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { DatabaseInstance } from '../../../database/connection.js';
+import type { DrizzleTx } from '../../../database/db-utils.js';
 import { withSystemContext } from '../../../database/admin.js';
 import {
   authAccounts,
@@ -100,22 +101,8 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async upsertAccount(account: StoredAccount): Promise<void> {
-    const row = storedAccountToRow(account);
     await withSystemContext(this.db, async (tx) => {
-      await tx.insert(authAccounts).values(row).onConflictDoUpdate({
-        target: [authAccounts.provider, authAccounts.externalSub],
-        set: {
-          sub: row.sub,
-          userId: sql`COALESCE(${authAccounts.userId}, excluded.user_id)`,
-          email: row.email,
-          emailVerified: row.emailVerified,
-          displayName: row.displayName,
-          rawProfile: row.rawProfile,
-          passwordHash: row.passwordHash,
-          lastAuthAt: row.lastAuthAt,
-          updatedAt: row.updatedAt,
-        },
-      });
+      await upsertAuthAccountWithTx(tx, account);
     });
   }
 
@@ -510,6 +497,25 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     );
     return rows.length > 0;
   }
+}
+
+/** Transaction-aware account upsert shared with the authoritative sign-in gate. */
+export async function upsertAuthAccountWithTx(tx: DrizzleTx, account: StoredAccount): Promise<void> {
+  const row = storedAccountToRow(account);
+  await tx.insert(authAccounts).values(row).onConflictDoUpdate({
+    target: [authAccounts.provider, authAccounts.externalSub],
+    set: {
+      sub: row.sub,
+      userId: sql`COALESCE(${authAccounts.userId}, excluded.user_id)`,
+      email: row.email,
+      emailVerified: row.emailVerified,
+      displayName: row.displayName,
+      rawProfile: row.rawProfile,
+      passwordHash: row.passwordHash,
+      lastAuthAt: row.lastAuthAt,
+      updatedAt: row.updatedAt,
+    },
+  });
 }
 
 function notExpired(): SQL {

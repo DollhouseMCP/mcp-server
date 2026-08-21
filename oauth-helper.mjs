@@ -38,6 +38,7 @@ const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
 const POST_HANDOFF_TEST_DELAY_MS = process.env.NODE_ENV === 'test'
   ? Number.parseInt(process.env.DOLLHOUSE_OAUTH_HELPER_TEST_POST_HANDOFF_DELAY_MS || '0', 10)
   : 0;
+const FLOW_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const RESULT_MESSAGES = {
   success: 'OAuth helper completed successfully.',
@@ -325,6 +326,18 @@ async function writePidFile() {
 
 let handoffWritten = false;
 
+function hasCommittedHandoffSync() {
+  if (handoffWritten) return true;
+  if (!FLOW_ID_RE.test(FLOW_ID)) return false;
+  try {
+    const handoffPath = join(AUTH_DIR, `oauth-helper-token-${FLOW_ID}.enc`);
+    const stat = fsSync.statSync(handoffPath);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
@@ -362,13 +375,16 @@ async function main() {
   });
   
   const finishOnSignal = () => {
-    const status = handoffWritten ? 'success' : 'failed';
-    writeTerminalResultSync(status, attempts, handoffWritten ? 'success' : 'interrupted');
-    if (!handoffWritten) {
+    // The final rename can become visible immediately before the await continuation
+    // updates `handoffWritten`. Treat that durable, flow-bound file as committed.
+    const handoffCommitted = hasCommittedHandoffSync();
+    const status = handoffCommitted ? 'success' : 'failed';
+    writeTerminalResultSync(status, attempts, handoffCommitted ? 'success' : 'interrupted');
+    if (!handoffCommitted) {
       cleanupStateFileSync();
     }
     cleanupPidFileSync();
-    process.exit(handoffWritten ? 0 : 1);
+    process.exit(handoffCommitted ? 0 : 1);
   };
 
   process.on('SIGINT', finishOnSignal);
@@ -501,10 +517,11 @@ async function main() {
 main().catch(async (error) => {
   await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
-  await writeTerminalResult(handoffWritten ? 'success' : 'failed', 0, handoffWritten ? 'success' : 'fatal_error');
-  if (!handoffWritten) {
+  const handoffCommitted = hasCommittedHandoffSync();
+  await writeTerminalResult(handoffCommitted ? 'success' : 'failed', 0, handoffCommitted ? 'success' : 'fatal_error');
+  if (!handoffCommitted) {
     await cleanupStateFile();
   }
   await cleanupPidFile();
-  process.exit(handoffWritten ? 0 : 1);
+  process.exit(handoffCommitted ? 0 : 1);
 });

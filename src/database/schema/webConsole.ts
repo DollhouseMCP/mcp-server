@@ -18,6 +18,7 @@ import {
   uniqueIndex,
   primaryKey,
   check,
+  pgSequence,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
@@ -32,6 +33,10 @@ export type ConsoleAdminRole =
   | 'operator'
   | 'auditor'
   | 'security_admin';
+
+export const accountAllowlistAuthorityOrderSequence = pgSequence(
+  'account_allowlist_authority_order_seq',
+);
 
 export const userAdminRoles = pgTable('user_admin_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -68,6 +73,9 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   revokedByUserId: uuid('revoked_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  authorityOrder: bigint('authority_order', { mode: 'number' })
+    .notNull()
+    .default(sql`nextval('account_allowlist_authority_order_seq')`),
 }, (table) => [
   check('account_allowlist_entries_kind_check', sql`${table.kind} IN ('email', 'github_username', 'github_id')`),
   check('account_allowlist_entries_shape_check', sql`
@@ -84,6 +92,7 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   uniqueIndex('idx_account_allowlist_entries_active_unique')
     .on(table.kind, table.normalizedValue)
     .where(sql`${table.revokedAt} IS NULL`),
+  uniqueIndex('idx_account_allowlist_entries_authority_order').on(table.authorityOrder),
   index('idx_account_allowlist_entries_created').on(table.createdAt),
 ]);
 
@@ -135,6 +144,7 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   requestedCapability: text('requested_capability'),
   integrationDescriptorId: uuid('integration_descriptor_id')
     .references(() => integrationProviderDescriptors.id, { onDelete: 'cascade' }),
+  integrationDescriptorFingerprint: text('integration_descriptor_fingerprint'),
   returnTo: text('return_to'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
@@ -142,6 +152,12 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
 }, (table) => [
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
   index('idx_console_login_transactions_descriptor').on(table.integrationDescriptorId),
+  check('console_login_transactions_descriptor_fingerprint_check', sql`
+    (${table.integrationDescriptorId} IS NULL AND ${table.integrationDescriptorFingerprint} IS NULL)
+    OR (${table.integrationDescriptorId} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} ~ '^[a-f0-9]{64}$')
+  `),
 ]);
 
 export type UserIntegrationProvider = string & { readonly __brand: 'UserIntegrationProvider' };
@@ -270,6 +286,7 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
   oauth: jsonb('oauth').$type<Record<string, unknown> | null>(),
   staticApiKey: jsonb('static_api_key').$type<Record<string, unknown> | null>(),
   clientSecretCiphertext: bytea('client_secret_ciphertext'),
+  clientSecretRevision: uuid('client_secret_revision'),
   credentialKeyVersion: text('credential_key_version'),
   operationPromotion: jsonb('operation_promotion').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
@@ -291,6 +308,7 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
       btrim(${table.credentialKeyVersion}) <> ''
       AND char_length(${table.credentialKeyVersion}) <= 128
     ))
+    AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.clientSecretRevision} IS NULL)
     AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.credentialKeyVersion} IS NULL)
     AND (
       (${table.ownership} = 'curated' AND ${table.ownerUserId} IS NULL)
