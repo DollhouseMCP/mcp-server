@@ -12,6 +12,7 @@ import {
   type IntegrationDescriptorPage,
   type IntegrationDescriptorPageRequest,
   type IntegrationDescriptorRecord,
+  type IntegrationDescriptorUpsertOptions,
   validateIntegrationDescriptorInput,
   validateIntegrationDescriptorRecord,
 } from './IIntegrationDescriptorStore.js';
@@ -114,7 +115,10 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
     return true;
   }
 
-  async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
+  async upsert(
+    input: IntegrationDescriptorCreateInput,
+    _options: IntegrationDescriptorUpsertOptions = {},
+  ): Promise<IntegrationDescriptorRecord> {
     await Promise.resolve();
     validateIntegrationDescriptorInput(input);
     const existing = [...this.records.values()].find(record =>

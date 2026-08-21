@@ -11,7 +11,12 @@ WITH ordered AS (
   SELECT
     "id",
     row_number() OVER (
-      ORDER BY GREATEST("created_at", COALESCE("revoked_at", "created_at")), "id"
+      -- Preserve the database's current authority state during upgrade: every
+      -- historical tombstone sorts before every currently active re-add. This
+      -- avoids reconstructing causal precedence from replica-local clocks.
+      ORDER BY ("revoked_at" IS NULL),
+        GREATEST("created_at", COALESCE("revoked_at", "created_at")),
+        "id"
     ) AS authority_order
   FROM "account_allowlist_entries"
   WHERE "authority_order" IS NULL

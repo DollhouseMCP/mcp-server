@@ -17,6 +17,7 @@ import {
   type IntegrationDescriptorPage,
   type IntegrationDescriptorPageRequest,
   type IntegrationDescriptorRecord,
+  type IntegrationDescriptorUpsertOptions,
   type IntegrationOAuthDescriptor,
   type IntegrationStaticApiKeyDescriptor,
   validateIntegrationDescriptorInput,
@@ -160,7 +161,10 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     return rows.length > 0;
   }
 
-  async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
+  async upsert(
+    input: IntegrationDescriptorCreateInput,
+    options: IntegrationDescriptorUpsertOptions = {},
+  ): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
     const rows = await withSystemContext(this.db, async tx => {
       const existing = await tx.select().from(integrationProviderDescriptors)
@@ -185,8 +189,16 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
           operationPromotion: input.operationPromotion ?? {},
           updatedAt: input.updatedAt,
         };
-        if (integrationDescriptorRoutingFingerprint(current)
-            !== integrationDescriptorRoutingFingerprint(proposed)) {
+        const currentFingerprint = integrationDescriptorRoutingFingerprint(current);
+        const proposedFingerprint = integrationDescriptorRoutingFingerprint(proposed);
+        const initializesOnlyRevision = options.initializeClientSecretRevision === true
+          && current.clientSecretRevision === null
+          && proposed.clientSecretRevision !== null
+          && currentFingerprint === integrationDescriptorRoutingFingerprint({
+            ...proposed,
+            clientSecretRevision: null,
+          });
+        if (currentFingerprint !== proposedFingerprint && !initializesOnlyRevision) {
           await invalidateDescriptorBindingsWithTx(tx, existing[0].id, input.updatedAt);
         }
         return tx.update(integrationProviderDescriptors)

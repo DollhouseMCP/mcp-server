@@ -85,6 +85,15 @@ export interface IntegrationDescriptorCreateInput {
   readonly updatedAt: Date;
 }
 
+export interface IntegrationDescriptorUpsertOptions {
+  /**
+   * Permit a proven-equal legacy secret to gain its first logical revision
+   * without revoking descriptor bindings. Stores must verify that no other
+   * routing-sensitive field changed before honoring this option.
+   */
+  readonly initializeClientSecretRevision?: boolean;
+}
+
 export const INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT = 100;
 
 export interface IntegrationDescriptorPageRequest {
@@ -130,7 +139,10 @@ export interface IIntegrationDescriptorStore {
   delete(id: string, ownerUserId: string): Promise<boolean>;
   /** Remove a deployment-owned curated descriptor by provider id. */
   deleteCurated(provider: UserIntegrationProvider): Promise<boolean>;
-  upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
+  upsert(
+    input: IntegrationDescriptorCreateInput,
+    options?: IntegrationDescriptorUpsertOptions,
+  ): Promise<IntegrationDescriptorRecord>;
 }
 
 export function resolveDescriptorPageLimit(limit: number | undefined): number {

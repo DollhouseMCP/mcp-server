@@ -9,12 +9,14 @@ import {
   type IntegrationDescriptorSeedCredentialResolver,
 } from '../../../../src/web-console/modules/integrations/IntegrationDescriptorSeedLoader.js';
 import { integrationDescriptorClientSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
+import { HmacConsoleOpaqueValueService } from '../../../../src/web-console/security/ConsoleOpaqueValues.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import { InMemoryIntegrationDescriptorStore } from '../../../../src/web-console/stores/InMemoryIntegrationDescriptorStore.js';
 import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
 
 const VISIBLE_USER = '11111111-1111-4111-8111-111111111111';
 const FIXED_NOW = new Date('2026-06-24T00:00:00.000Z');
+const secretRevisionHasher = new HmacConsoleOpaqueValueService(Buffer.alloc(32, 19));
 
 const OAUTH_SEED = {
   provider: 'examplecorp',
@@ -71,7 +73,7 @@ const credentials = (
   provider => map[provider] ?? { clientId: null, clientSecret: null };
 
 function loaderOptions(integrationStore = new InMemoryUserIntegrationStore()) {
-  return { now: () => FIXED_NOW, integrationStore };
+  return { now: () => FIXED_NOW, integrationStore, secretRevisionHasher };
 }
 
 function byoExampleCorpDescriptor(apiHost: string) {
@@ -141,7 +143,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(record.ownerUserId).toBeNull();
     expect(record.oauth?.clientId).toBe('deployment-client-id');
     expect(record.clientSecretRevision).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
     );
 
     // The stored ciphertext must decrypt under the curated client-secret context.
@@ -253,7 +255,39 @@ describe('IntegrationDescriptorSeedLoader', () => {
     ).loadSeeds()).descriptors[0];
 
     expect(rotated?.clientSecretRevision).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it('initializes a proven-equal legacy revision without requesting binding invalidation', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const configuredCredentials = credentials({
+      examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+    });
+    const first = (await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      configuredCredentials,
+      loaderOptions(),
+    ).loadSeeds()).descriptors[0];
+    if (!first) throw new Error('expected first descriptor');
+    store.set({ ...first, clientSecretRevision: null });
+    const upsert = jest.spyOn(store, 'upsert');
+
+    await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      encryption,
+      configuredCredentials,
+      loaderOptions(),
+    ).loadSeeds();
+
+    expect(upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ clientSecretRevision: expect.any(String) }),
+      { initializeClientSecretRevision: true },
     );
   });
 
@@ -305,7 +339,41 @@ describe('IntegrationDescriptorSeedLoader', () => {
     }));
   });
 
-  it('preserves a legacy null revision while rewrapping unreadable ciphertext', async () => {
+  it('rotates the logical revision when the secret changes after its old envelope key is retired', async () => {
+    const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const oldEncryption = new AeadSecretEncryptionService({
+      keyId: 'old-key',
+      key: Buffer.alloc(32, 7),
+    });
+    const first = (await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      oldEncryption,
+      credentials({
+        examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+      }),
+      loaderOptions(),
+    ).loadSeeds()).descriptors[0];
+    if (!first) throw new Error('expected first descriptor');
+
+    const replacement = (await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      new AeadSecretEncryptionService({
+        keyId: 'replacement-key',
+        key: Buffer.alloc(32, 8),
+      }),
+      credentials({
+        examplecorp: { clientId: 'deployment-client-id', clientSecret: 'rotated-secret' },
+      }),
+      loaderOptions(),
+    ).loadSeeds()).descriptors[0];
+
+    expect(replacement?.clientSecretRevision).not.toBe(first.clientSecretRevision);
+  });
+
+  it('conservatively initializes a legacy revision while rewrapping unreadable ciphertext', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const configuredCredentials = credentials({
@@ -337,7 +405,9 @@ describe('IntegrationDescriptorSeedLoader', () => {
       loaderOptions(),
     ).loadSeeds()).descriptors[0];
 
-    expect(replacement?.clientSecretRevision).toBeNull();
+    expect(replacement?.clientSecretRevision).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
     expect(replacement?.clientSecretCiphertext).not.toEqual(first.clientSecretCiphertext);
   });
 

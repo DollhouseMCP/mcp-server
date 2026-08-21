@@ -1256,6 +1256,49 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(transaction.update).toHaveBeenCalledTimes(1);
   });
 
+  it('initializes only a proven-equal legacy secret revision without invalidating bindings', async () => {
+    const legacy = integrationDescriptorRow({ clientSecretRevision: null });
+    const initializedRevision = '00000000-0000-8000-8000-000000000202';
+    transaction.select = jest.fn(() => selectingChain([legacy]));
+    transaction.update = jest.fn(() => returningChain([
+      integrationDescriptorRow({ clientSecretRevision: initializedRevision }),
+    ]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(
+      integrationDescriptorInput({ clientSecretRevision: initializedRevision }),
+      { initializeClientSecretRevision: true },
+    )).resolves.toMatchObject({ clientSecretRevision: initializedRevision });
+    expect(transaction.delete).toBeUndefined();
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let revision initialization suppress another routing change', async () => {
+    const legacy = integrationDescriptorRow({ clientSecretRevision: null });
+    const initializedRevision = '00000000-0000-8000-8000-000000000202';
+    transaction.select = jest.fn(() => selectingChain([legacy]));
+    transaction.delete = jest.fn(() => deletingChain());
+    transaction.update = jest.fn()
+      .mockReturnValueOnce(returningChain([]))
+      .mockReturnValueOnce(returningChain([
+        integrationDescriptorRow({
+          apiHosts: ['rotated.example.com'],
+          clientSecretRevision: initializedRevision,
+        }),
+      ]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(
+      integrationDescriptorInput({
+        apiHosts: ['rotated.example.com'],
+        clientSecretRevision: initializedRevision,
+      }),
+      { initializeClientSecretRevision: true },
+    )).resolves.toMatchObject({ clientSecretRevision: initializedRevision });
+    expect(transaction.delete).toHaveBeenCalledTimes(1);
+    expect(transaction.update).toHaveBeenCalledTimes(2);
+  });
+
   it('invalidates descriptor bindings when the logical client-secret revision changes', async () => {
     const descriptorLock = selectingChain([integrationDescriptorRow()]);
     transaction.select = jest.fn(() => descriptorLock);

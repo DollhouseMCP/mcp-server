@@ -27,6 +27,7 @@ describe('allowlist authority ordering migration', () => {
     expect(backfill).toBeGreaterThan(addColumn);
     expect(defaultValue).toBeGreaterThan(backfill);
     expect(notNull).toBeGreaterThan(defaultValue);
+    expect(migrationSql).toContain('ORDER BY ("revoked_at" IS NULL)');
     expect(migrationSql).toContain('GREATEST("created_at", COALESCE("revoked_at", "created_at"))');
     expect(migrationSql).toContain('CREATE UNIQUE INDEX IF NOT EXISTS "idx_account_allowlist_entries_authority_order"');
   });
