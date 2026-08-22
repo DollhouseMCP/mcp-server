@@ -20,6 +20,10 @@ import type {
   ISigningKeyStore,
   SigningKey,
 } from '../../storage/signingKeys/ISigningKeyStore.js';
+import {
+  readAuthorizationGeneration,
+  signingKeyCanVerify,
+} from '../../storage/signingKeys/signingKeyLifecycle.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 
 export const ALGORITHM = 'ES256';
@@ -34,6 +38,7 @@ export interface EmbeddedASInitializedState {
   keyset: SigningKeyset;
   publicSigningKey: CryptoKey;
   privateSigningKey: CryptoKey;
+  authorizationGenerationFingerprint?: string;
 }
 
 export class EmbeddedASTokens {
@@ -70,28 +75,43 @@ export class EmbeddedASTokens {
   }
 
   async issue(sub: string, options?: IssueOptions): Promise<string> {
-    const { keyset, privateSigningKey } = this.signingKeyStore
-      ? await this.loadActiveSigningStateFromStore()
-      : await this.ensureInitialized();
     const ttl = options?.ttlSeconds ?? DEFAULT_ACCESS_TOKEN_TTL_SECONDS;
     const scope = options?.scopes?.join(' ') || 'mcp';
+    const initialized = await this.ensureInitialized();
+      const sign = (keyset: SigningKeyset, privateSigningKey: CryptoKey) => new SignJWT({
+        azp: DEFAULT_CLIENT_ID,
+        scope,
+        name: options?.displayName ?? sub,
+        ...(options?.authzVersion !== undefined
+          ? { dollhouse_authz_version: options.authzVersion }
+          : {}),
+      })
+        .setProtectedHeader({ alg: ALGORITHM, kid: keyset.kid, typ: 'at+jwt' })
+        .setIssuer(this.getIssuer())
+        .setAudience(this.getResource())
+        .setSubject(sub)
+        .setIssuedAt()
+        .setExpirationTime(`${ttl}s`)
+        .sign(privateSigningKey);
 
-    return new SignJWT({
-      azp: DEFAULT_CLIENT_ID,
-      scope,
-      name: options?.displayName ?? sub,
-    })
-      .setProtectedHeader({ alg: ALGORITHM, kid: keyset.kid, typ: 'at+jwt' })
-      .setIssuer(this.getIssuer())
-      .setAudience(this.getResource())
-      .setSubject(sub)
-      .setIssuedAt()
-      .setExpirationTime(`${ttl}s`)
-      .sign(privateSigningKey);
+    if (!this.signingKeyStore) {
+      return sign(initialized.keyset, initialized.privateSigningKey);
+    }
+
+    return this.signingKeyStore.withActiveKey('jwks', async active => {
+      assertAuthorizationGenerationMatches(
+        active,
+        initialized.authorizationGenerationFingerprint,
+      );
+      const keyset = signingKeyToKeyset(active);
+      const { privateSigningKey } = await importSigningKeys(keyset);
+      // Signing deliberately completes inside withActiveKey so retirement or
+      // an authorization-mode transition cannot overtake credential minting.
+      return sign(keyset, privateSigningKey);
+    });
   }
 
   private async validateWithStore(token: string): Promise<AuthResult> {
-    await this.ensureInitialized();
     try {
       const protectedHeader = decodeProtectedHeader(token);
       if (!protectedHeader.kid) {
@@ -101,7 +121,7 @@ export class EmbeddedASTokens {
         );
       }
       const key = await requiredSigningKeyStore(this.signingKeyStore).getByKid(protectedHeader.kid);
-      if (!(key?.kind === 'jwks' && key.retiredAt === undefined)) {
+      if (!(key?.kind === 'jwks' && signingKeyCanVerify(key))) {
         return logEmbeddedTokenValidationResult(
           { ok: false, reason: 'unknown key id' },
           'EmbeddedASTokens.validateWithStore',
@@ -128,19 +148,20 @@ export class EmbeddedASTokens {
     }
   }
 
-  private async loadActiveSigningStateFromStore(): Promise<EmbeddedASInitializedState> {
-    await this.ensureInitialized();
-    const active = await requiredSigningKeyStore(this.signingKeyStore).getActive('jwks');
-    if (!active || active.retiredAt !== undefined) {
-      throw new Error('No active JWKS signing key is available for token issuance');
-    }
-    const keyset = signingKeyToKeyset(active);
-    const { publicSigningKey, privateSigningKey } = await importSigningKeys(keyset);
-    return {
-      keyset,
-      publicSigningKey,
-      privateSigningKey,
-    };
+}
+
+export function assertAuthorizationGenerationMatches(
+  key: SigningKey,
+  expectedGenerationFingerprint: string | undefined,
+): void {
+  if (!expectedGenerationFingerprint) return;
+  const marker = readAuthorizationGeneration(key.payload);
+  // Keys created before generation markers shipped remain usable. Once a key
+  // carries a marker, however, it is authoritative and must match this replica.
+  if (marker && marker.generationFingerprint !== expectedGenerationFingerprint) {
+    throw new Error(
+      'Active JWKS authorization generation does not match this replica configuration',
+    );
   }
 }
 
@@ -150,7 +171,7 @@ export async function loadPublicSigningJwksFromStore(
   const keys = await store.listByKind('jwks');
   return {
     keys: keys
-      .filter(key => key.kind === 'jwks' && key.retiredAt === undefined)
+      .filter(key => key.kind === 'jwks' && signingKeyCanVerify(key))
       .map(key => stripPrivate(signingKeyToKeyset(key).jwks.keys[0])),
   };
 }
@@ -166,6 +187,11 @@ function claimsFromPayload(payload: Record<string, unknown>): AuthClaims {
       ? payload.roles.filter((r): r is string => typeof r === 'string')
       : undefined,
     exp: typeof payload.exp === 'number' ? payload.exp : undefined,
+    iat: typeof payload.iat === 'number' ? payload.iat : undefined,
+    authzVersion: Number.isSafeInteger(payload.dollhouse_authz_version)
+        && Number(payload.dollhouse_authz_version) > 0
+      ? Number(payload.dollhouse_authz_version)
+      : undefined,
   };
 }
 

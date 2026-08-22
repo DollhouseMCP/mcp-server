@@ -311,6 +311,7 @@ function record(overrides: Partial<ConsoleSessionRecord> = {}): ConsoleSessionRe
     idHash: OPAQUE_VALUES.hashOpaqueValue(SESSION_VALUE),
     userId: USER_ID,
     authSub: AUTH_SUB,
+    authzVersion: 2,
     csrfTokenHash: OPAQUE_VALUES.hashOpaqueValue(CSRF_VALUE),
     grantedCapabilities: [SELF_CAPABILITY],
     elevation: null,
@@ -332,11 +333,13 @@ async function buildApp(
     userId: USER_ID,
     disabledAt: null,
     authzVersion: 2,
+    roles: ['auditor'],
   }]),
   reportInternalError?: (error: unknown, correlationId: string) => void,
   protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null = protectedCorrelationLimiter(),
   authPolicyStore = new InMemoryConsoleAuthPolicyStore(),
   nowProvider: () => Date = () => NOW,
+  bodyLimitBytes = 1024 * 1024,
 ) {
   const sessionStore = new InMemoryConsoleSessionStore();
   const runtimeStore = new InMemoryRuntimeSessionControlStore();
@@ -369,7 +372,6 @@ async function buildApp(
   fixtureModules(onChange, onAdminMutation, onProtectedCorrelation).forEach(module => registry.register(module));
   const adminAuditWriter = new InMemoryAdminAuditWriter();
   const app = express();
-  app.use(express.json());
   app.use(assembleSecuredConsoleRouter(registry, {
     sessionStore,
     identityResolver: resolver,
@@ -381,6 +383,7 @@ async function buildApp(
     authPolicyStore,
     protectedCorrelationRateLimiter,
     idleTimeoutMs: 60 * 60 * 1000,
+    bodyLimitBytes,
     now: nowProvider,
     reportInternalError,
   }));
@@ -587,7 +590,7 @@ describe('secured console router authentication', () => {
   });
 
   it('authenticates protected routes before walking JSON request bodies', async () => {
-    const { app } = await buildApp();
+    const { app } = await buildApp(null, undefined, undefined, protectedCorrelationLimiter(), undefined, undefined, 64);
 
     const response = await request(app).post(CHANGE_PATH)
       .set('Content-Type', 'application/json')
@@ -595,6 +598,29 @@ describe('secured console router authentication', () => {
 
     expect(response.status).toBe(401);
     expect(response.body.code).toBe('unauthenticated');
+  });
+
+  it('bounds JSON parsing after protected-route authentication succeeds', async () => {
+    const { app } = await buildApp(
+      record(),
+      undefined,
+      undefined,
+      protectedCorrelationLimiter(),
+      undefined,
+      undefined,
+      64,
+    );
+
+    const response = await request(app).post(CHANGE_PATH)
+      .set('Cookie', csrfCookies())
+      .set(CSRF_HEADER, CSRF_VALUE)
+      .set('Origin', ORIGIN)
+      .set(CONSOLE_REQUEST_HEADER, '1')
+      .set(IDEMPOTENCY_HEADER, IDEMPOTENCY_KEY)
+      .send({ padding: 'x'.repeat(1024) });
+
+    expect(response.status).toBe(413);
+    expect(response.body.code).toBe('request_body_too_large');
   });
 
   it('fails closed when the login subject maps to a disabled principal', async () => {
@@ -610,6 +636,24 @@ describe('secured console router authentication', () => {
 
     expect(response.status).toBe(401);
     expect(response.body.code).toBe('unauthenticated');
+  });
+
+  it('fails closed without touching a session from an older authorization generation', async () => {
+    const resolver = new InMemoryConsoleIdentityResolver([{
+      sub: AUTH_SUB,
+      userId: USER_ID,
+      disabledAt: null,
+      authzVersion: 3,
+      roles: ['auditor'],
+    }]);
+    const { app, sessionStore } = await buildApp(record({ authzVersion: 2 }), resolver);
+    const touch = jest.spyOn(sessionStore, 'touch');
+
+    const response = await request(app).get(CONTEXT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+    expect(touch).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -932,8 +976,43 @@ describe('secured console router browser protections', () => {
 });
 
 describe('secured console router elevation', () => {
-  it('returns step-up instructions when an admin route has no elevation', async () => {
-    const { app } = await buildApp();
+  it('invalidates the browser session immediately when live roles change', async () => {
+    const resolver = new InMemoryConsoleIdentityResolver([{
+      sub: AUTH_SUB,
+      userId: USER_ID,
+      disabledAt: null,
+      authzVersion: 3,
+      roles: [],
+    }]);
+    const authPolicyStore = new InMemoryConsoleAuthPolicyStore();
+    const loadPolicy = jest.spyOn(authPolicyStore, 'load');
+    const { app } = await buildApp(
+      elevatedAuditSession(),
+      resolver,
+      undefined,
+      protectedCorrelationLimiter(),
+      authPolicyStore,
+    );
+
+    const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
+
+    expect(response.status).toBe(401);
+    expect(response.body.code).toBe('unauthenticated');
+    expect(loadPolicy).not.toHaveBeenCalled();
+  });
+
+  it('returns step-up instructions when an admin capability lacks valid elevation', async () => {
+    const { app } = await buildApp(record({
+      createdAt: SESSION_CREATED,
+      grantedCapabilities: [SELF_CAPABILITY, AUDIT_CAPABILITY],
+      elevation: {
+        capabilities: [AUDIT_CAPABILITY],
+        expiresAt: new Date('2026-05-26T11:59:00.000Z'),
+        acr: ADMIN_ACR,
+        amr: ['otp'],
+        authTime: RECENT_AUTH_TIME,
+      },
+    }));
     const response = await request(app).get(ADMIN_AUDIT_PATH).set('Cookie', sessionCookie());
 
     expect(response.status).toBe(401);
@@ -996,14 +1075,17 @@ describe('secured console router elevation', () => {
     expect(response.text).not.toContain('"rawPrivate"');
   });
 
-  it('audit-writes an administrative idempotency replay without executing twice', async () => {
+  it('keeps kernel-audited administrative mutations mounted', async () => {
     const { app, adminAuditWriter, onAdminMutation } = await buildApp(elevatedAuditSession());
 
     expect((await adminMutationRequest(app).send({ request: true })).status).toBe(200);
     expect((await adminMutationRequest(app).send({ request: true })).status).toBe(200);
 
     expect(onAdminMutation).toHaveBeenCalledTimes(1);
-    expect(adminAuditWriter.getEvents().map(event => event.result)).toEqual(['approved', 'replayed']);
+    expect(adminAuditWriter.getEvents()).toEqual([
+      expect.objectContaining({ operation: 'admin.audit.mutate', result: 'approved' }),
+      expect.objectContaining({ operation: 'admin.audit.mutate', result: 'replayed' }),
+    ]);
   });
 
   it('leaves approved handler-transaction audit to the handler but audits idempotency replay', async () => {
@@ -1024,16 +1106,15 @@ describe('secured console router elevation', () => {
 
   it('audit-writes rejected and in-progress administrative idempotency attempts', async () => {
     const first = await buildApp(elevatedAuditSession());
-    expect((await adminMutationRequest(first.app).send({ request: true })).status).toBe(200);
-    expect((await adminMutationRequest(first.app).send({ request: false })).status).toBe(422);
+    expect((await adminTransactionMutationRequest(first.app).send({ request: true })).status).toBe(200);
+    expect((await adminTransactionMutationRequest(first.app).send({ request: false })).status).toBe(422);
     expect(first.adminAuditWriter.getEvents()).toEqual([
-      expect.objectContaining({ result: 'approved', errorCode: null }),
       expect.objectContaining({ result: 'rejected', errorCode: 'idempotency_key_mismatch' }),
     ]);
 
     const pending = await buildApp(elevatedAuditSession());
     jest.spyOn(pending.idempotencyStore, 'claim').mockResolvedValue({ kind: 'in_progress' });
-    expect((await adminMutationRequest(pending.app).send({ request: true })).status).toBe(409);
+    expect((await adminTransactionMutationRequest(pending.app).send({ request: true })).status).toBe(409);
     expect(pending.onAdminMutation).not.toHaveBeenCalled();
     expect(pending.adminAuditWriter.getEvents()).toEqual([
       expect.objectContaining({ result: 'conflict', errorCode: 'conflict' }),

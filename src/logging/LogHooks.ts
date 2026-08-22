@@ -58,6 +58,23 @@ function getRequestAttribution(tracker: RequestContextProvider | null): {
   };
 }
 
+function getCapturedSecurityAttribution(entry: {
+  correlationId?: string;
+  userId?: string;
+  sessionId?: string;
+}): {
+  correlationId?: string;
+  userId?: string;
+  sessionId?: string;
+} | null {
+  const attribution = {
+    ...(entry.correlationId ? { correlationId: entry.correlationId } : {}),
+    ...(entry.userId ? { userId: entry.userId } : {}),
+    ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
+  };
+  return Object.keys(attribution).length > 0 ? attribution : null;
+}
+
 // ---------------------------------------------------------------------------
 // Exported factory for TriggerMetricsTracker (created outside DI container)
 // ---------------------------------------------------------------------------
@@ -150,7 +167,8 @@ export function wireLogHooks(
 
   // --- SecurityMonitor (security, static) ---------------------------------
   {
-    const unsub = SecurityMonitor.addLogListener((logEntry) => {
+    const unsub = SecurityMonitor.addLogListener((logEntry, delivery) => {
+      const capturedAttribution = getCapturedSecurityAttribution(logEntry);
       const entry: UnifiedLogEntry = {
         id: logManager.generateId(),
         timestamp: logEntry.timestamp,
@@ -164,10 +182,13 @@ export function wireLogHooks(
           severity: logEntry.severity,
           sourceComponent: logEntry.source,
         },
-        ...getRequestAttribution(contextTracker),
+        // SecurityMonitor captures attribution when the event occurs. That
+        // preserves request identity across delayed listener setup without
+        // assigning the registration context to true startup events.
+        ...(capturedAttribution ?? (delivery.replayed ? {} : getRequestAttribution(contextTracker))),
       };
       logManager.log(entry);
-    });
+    }, { replayExisting: true });
     cleanups.push(unsub);
   }
 

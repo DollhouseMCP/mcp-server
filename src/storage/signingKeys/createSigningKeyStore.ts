@@ -66,7 +66,12 @@ export async function createSigningKeyStore(
       }
       const { PostgresSigningKeyStore } = await import('./PostgresSigningKeyStore.js');
       logger.info('[SigningKeyStore] backend=postgres');
-      return new PostgresSigningKeyStore({ db: options.database });
+      const store = new PostgresSigningKeyStore({ db: options.database });
+      if (env.DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP) {
+        const rewrapped = await store.rewrapPayloadsUnderExclusiveLock();
+        logger.info('[SigningKeyStore] explicit signing-key payload rewrap completed', { rewrapped });
+      }
+      return store;
     }
   }
 }

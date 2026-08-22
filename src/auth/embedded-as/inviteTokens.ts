@@ -36,7 +36,11 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual } from 'node:crypt
 import { env } from '../../config/env.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
 import { logger } from '../../utils/logger.js';
-import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
+import type {
+  ISigningKeyStore,
+  SigningKeyWrite,
+} from '../../storage/signingKeys/ISigningKeyStore.js';
+import { signingKeyCanVerify } from '../../storage/signingKeys/signingKeyLifecycle.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
 
 const DEFAULT_TTL_MS = 15 * 60 * 1000; // 15 min
@@ -86,6 +90,10 @@ export type ConsumeResult =
   | { ok: true; payload: InviteTokenPayload }
   | { ok: false; reason: 'invalid' | 'expired' | 'already-consumed' | 'rate-exceeded' };
 
+interface InviteIssueLifecycleGuard {
+  run<T>(input: IssueInviteInput, deliver: (token: string) => Promise<T>): Promise<T>;
+}
+
 /**
  * Token store. Holds the HMAC secret; consumed-jti durability is delegated
  * to IAuthStorageLayer (`ConsumedInvite` model). One instance per AS
@@ -93,7 +101,9 @@ export type ConsumeResult =
  */
 export class InviteTokenStore {
   private readonly secret: Buffer;
+  private readonly verificationSecrets: readonly Buffer[];
   private readonly storage: IAuthStorageLayer | undefined;
+  private readonly issueLifecycleGuard: InviteIssueLifecycleGuard | undefined;
 
   /**
    * @param secret  Raw HMAC key (≥32 bytes recommended). Caller is responsible
@@ -106,12 +116,19 @@ export class InviteTokenStore {
    *                consumes them) and may construct without storage; the
    *                running AS always wires storage in via AuthProviderFactory.
    */
-  constructor(secret: Buffer, storage?: IAuthStorageLayer) {
+  constructor(
+    secret: Buffer,
+    storage?: IAuthStorageLayer,
+    verificationSecrets: readonly Buffer[] = [],
+    issueLifecycleGuard?: InviteIssueLifecycleGuard,
+  ) {
     if (secret.length < 16) {
       throw new Error('InviteTokenStore requires a secret of at least 16 bytes');
     }
     this.secret = secret;
+    this.verificationSecrets = [secret, ...verificationSecrets].map(value => Buffer.from(value));
     this.storage = storage;
+    this.issueLifecycleGuard = issueLifecycleGuard;
   }
 
   /**
@@ -133,6 +150,15 @@ export class InviteTokenStore {
     return `${payloadEncoded}.${signature}`;
   }
 
+  /** Sign and complete delivery while the issuing key is lifecycle-fenced. */
+  async issueAndDeliver<T>(
+    input: IssueInviteInput,
+    deliver: (token: string) => Promise<T>,
+  ): Promise<T> {
+    if (this.issueLifecycleGuard) return this.issueLifecycleGuard.run(input, deliver);
+    return deliver(this.issue(input));
+  }
+
   /**
    * Verify the signature + expiry without consuming. Used by the GET handler
    * for the anti-pre-fetch confirmation page (must-fix #1).
@@ -146,8 +172,9 @@ export class InviteTokenStore {
     if (parts.length !== 2) return { ok: false, reason: 'invalid' };
     const [payloadEncoded, signature] = parts;
 
-    const expectedSig = sign(this.secret, payloadEncoded);
-    if (!constantTimeStrEq(signature, expectedSig)) {
+    const validSignature = this.verificationSecrets.some(secret =>
+      constantTimeStrEq(signature, sign(secret, payloadEncoded)));
+    if (!validSignature) {
       return { ok: false, reason: 'invalid' };
     }
 
@@ -243,11 +270,7 @@ export function loadOrGenerateInviteSecret(
   // runtime (which no longer reaches the env.X capture).
   const envSecret = options?.envSecret ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET;
   if (envSecret && envSecret.length > 0) {
-    const buf = Buffer.from(envSecret, 'hex');
-    if (buf.length < 16) {
-      throw new Error('DOLLHOUSE_INVITE_TOKEN_SECRET must decode to at least 16 bytes (hex)');
-    }
-    return buf;
+    return decodeInviteSecretHex(envSecret);
   }
 
   const target = filePath ?? defaultInviteSecretFilePath();
@@ -276,6 +299,25 @@ export function loadOrGenerateInviteSecret(
 }
 
 /**
+ * Remove a filesystem-managed invite/magic-link key during an authorization
+ * mode change. An operator-managed environment secret is never modified; the
+ * mode-fingerprint gate requires the operator to rotate it explicitly.
+ */
+export function rotateInviteSecret(
+  filePath?: string,
+  options?: { envSecret?: string },
+): void {
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET;
+  if (envSecret) return;
+  const target = filePath ?? defaultInviteSecretFilePath();
+  try {
+    fs.unlinkSync(target);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+}
+
+/**
  * Store-backed equivalent of `loadOrGenerateInviteSecret`. Reads the active
  * 'invite' kind from the signing-key store; generates and rotates a fresh
  * secret when none exists. The env override keeps highest precedence so
@@ -285,13 +327,24 @@ export async function loadOrGenerateInviteSecretViaStore(
   store: ISigningKeyStore,
   options?: { envSecret?: string },
 ): Promise<Buffer> {
+  return (await loadOrGenerateInviteSigningKeyViaStore(store, options)).secret;
+}
+
+export interface ActiveInviteSigningKey {
+  readonly kid: string;
+  readonly secret: Buffer;
+  readonly source: 'environment' | 'store';
+}
+
+/** Load one concrete active invite key so transaction callers can fence its kid. */
+export async function loadOrGenerateInviteSigningKeyViaStore(
+  store: ISigningKeyStore,
+  options?: { envSecret?: string },
+): Promise<ActiveInviteSigningKey> {
   const envSecret = options?.envSecret ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET;
   if (envSecret && envSecret.length > 0) {
-    const buf = Buffer.from(envSecret, 'hex');
-    if (buf.length < 16) {
-      throw new Error('DOLLHOUSE_INVITE_TOKEN_SECRET must decode to at least 16 bytes (hex)');
-    }
-    return buf;
+    const buf = decodeInviteSecretHex(envSecret);
+    return { kid: 'environment-override', secret: buf, source: 'environment' };
   }
 
   const active = await store.getActive('invite');
@@ -299,7 +352,7 @@ export async function loadOrGenerateInviteSecretViaStore(
     const stored = active.payload as { secret?: unknown };
     if (typeof stored.secret === 'string' && stored.secret.length > 0) {
       const buf = Buffer.from(stored.secret, 'base64');
-      if (buf.length >= 16) return buf;
+      if (buf.length >= 16) return { kid: active.kid, secret: buf, source: 'store' };
       logger.warn(
         '[inviteTokens] active invite secret in store is shorter than 16 bytes; regenerating. ' +
         'Any previously-issued invite tokens signed with the prior key will be invalidated.',
@@ -307,13 +360,94 @@ export async function loadOrGenerateInviteSecretViaStore(
     }
   }
 
+  if (!active && (await store.listByKind('invite')).length > 0) {
+    throw new Error('No active invite signing key is available; rotate a replacement explicitly');
+  }
+
+  const write = createFreshInviteSigningKeyWrite();
+  await store.rotate(write);
+  return {
+    kid: write.kid,
+    secret: Buffer.from(write.payload.secret as string, 'base64'),
+    source: 'store',
+  };
+}
+
+/** Generate a fresh invite/magic-link key before an atomic mode transition. */
+export function createFreshInviteSigningKeyWrite(): SigningKeyWrite {
   const fresh = randomBytes(32);
-  await store.rotate({
+  return {
     kid: `invite-${randomUUID()}`,
     kind: 'invite',
     payload: { secret: fresh.toString('base64'), length: fresh.length },
+  };
+}
+
+/** Build an issuing store with every still-valid rotated secret available for verification. */
+export async function loadInviteTokenStoreViaStore(
+  store: ISigningKeyStore,
+  storage?: IAuthStorageLayer,
+  options?: { envSecret?: string },
+): Promise<InviteTokenStore> {
+  const envSecret = options?.envSecret ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET;
+  if (envSecret) {
+    return new InviteTokenStore(
+      await loadOrGenerateInviteSecretViaStore(store, { envSecret }),
+      storage,
+    );
+  }
+
+  const activeBinding = await loadOrGenerateInviteSigningKeyViaStore(store);
+  const verificationSecrets = (await store.listByKind('invite'))
+    .filter(key => key.kid !== activeBinding.kid && signingKeyCanVerify(key))
+    .map(key => key.payload.secret)
+    .filter((secret): secret is string => typeof secret === 'string')
+    .map(secret => Buffer.from(secret, 'base64'))
+    .filter(secret => secret.length >= 16);
+  return new InviteTokenStore(activeBinding.secret, storage, verificationSecrets, {
+    run: <T>(input: IssueInviteInput, deliver: (token: string) => Promise<T>) =>
+      issueAndDeliverWithActiveStoreKey(store, input, deliver),
   });
-  return fresh;
+}
+
+async function issueAndDeliverWithActiveStoreKey<T>(
+  store: ISigningKeyStore,
+  input: IssueInviteInput,
+  deliver: (token: string) => Promise<T>,
+): Promise<T> {
+  const maxAttempts = 3;
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      return await store.withActiveKey('invite', async key => {
+        const encoded = key.payload.secret;
+        if (typeof encoded !== 'string') throw new Error('Active invite signing key has no secret');
+        const secret = Buffer.from(encoded, 'base64');
+        if (secret.length < 16) throw new Error('Active invite signing key is shorter than 16 bytes');
+        const token = new InviteTokenStore(secret).issue(input);
+        return deliver(token);
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts || !isRetryableSigningLifecycleConflict(error)) throw error;
+    }
+  }
+  throw lastError;
+}
+
+function isRetryableSigningLifecycleConflict(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return /active.*(?:invite|signing key)|signing key.*active|generation changed/iu.test(message);
+}
+
+function decodeInviteSecretHex(value: string): Buffer {
+  if (!/^(?:[0-9a-fA-F]{2}){16,}$/u.test(value)) {
+    throw new Error(
+      'DOLLHOUSE_INVITE_TOKEN_SECRET must be an even-length hexadecimal string ' +
+      'that decodes to at least 16 bytes (32 hex characters)',
+    );
+  }
+  return Buffer.from(value, 'hex');
 }
 
 function base64UrlEncode(value: string): string {

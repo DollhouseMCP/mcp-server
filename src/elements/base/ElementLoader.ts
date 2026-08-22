@@ -20,6 +20,7 @@ import { type IStorageLayer, type IWritableStorageLayer, isWritableStorageLayer 
 import type { InvalidElementRecord } from './BaseElementManager.js';
 import type { ElementCache } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
+import { recordElementPersistenceRevision } from './ElementPersistenceRevision.js';
 
 /** Partial type alias for the static ELEMENT_TYPE_TO_CONTEXT map passed in from the base class. */
 export type ElementTypeToContext = Partial<Record<ElementType, 'persona' | 'skill' | 'template' | 'agent' | 'memory'>>;
@@ -123,6 +124,8 @@ export class ElementLoader<T extends IElement> {
         await this.host.afterLoad(element, relativePath, parsed);
       }
 
+      recordElementPersistenceRevision(element, { relativePath, rawContent: content });
+
       this.cache.cacheElement(element, relativePath);
 
       this.invalidElements.delete(relativePath);
@@ -208,6 +211,7 @@ export class ElementLoader<T extends IElement> {
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);
     const element = this.host.createElement(metadata, parsed.content);
+    recordElementPersistenceRevision(element, { relativePath, rawContent: raw });
     this.cache.cacheElement(element, relativePath);
     return element;
   }
@@ -224,6 +228,7 @@ export class ElementLoader<T extends IElement> {
     this.host.migrateMetadataDefaults(parsed.data, relativePath);
     const metadata = await this.host.parseMetadata(parsed.data);
     const element = this.host.createElement(metadata, parsed.content);
+    recordElementPersistenceRevision(element, { relativePath, rawContent: raw });
     this.cache.cacheElement(element, relativePath);
     return element;
   }

@@ -16,7 +16,8 @@
 
 import { env } from '../../config/env.js';
 import { getPortfolioRepositoryName } from '../../config/portfolioConfig.js';
-import { APICache, CollectionCache } from '../../cache/index.js';
+import type { APICache} from '../../cache/index.js';
+import { CollectionCache } from '../../cache/index.js';
 import {
   GitHubClient,
   CollectionBrowser,
@@ -30,6 +31,9 @@ import { GitHubRateLimiter } from '../../utils/GitHubRateLimiter.js';
 import { PortfolioRepoManager } from '../../portfolio/PortfolioRepoManager.js';
 import { GitHubPortfolioIndexer } from '../../portfolio/GitHubPortfolioIndexer.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
+import type { ISharedCacheStore } from '../../storage/sharedCache/ISharedCacheStore.js';
+import type { PathService } from '../../paths/PathService.js';
+import type { ContextTracker } from '../../security/encryption/ContextTracker.js';
 
 export class CollectionServiceRegistrar {
   public register(container: DiContainerFacade): void {
@@ -63,11 +67,8 @@ export class CollectionServiceRegistrar {
     container.register('CollectionIndexManager', () => new CollectionIndexManager({
       fileOperations: container.resolve('FileOperationsService'),
       indexUrl: env.DOLLHOUSE_COLLECTION_URL,
-      cacheDir: container.hasRegistration('PathService')
-        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('cache')
-        : undefined,
       cache: container.hasRegistration('SharedCacheStore')
-        ? container.resolve<import('../../storage/sharedCache/ISharedCacheStore.js').ISharedCacheStore>('SharedCacheStore')
+        ? container.resolve<ISharedCacheStore>('SharedCacheStore')
         : undefined,
     }));
 
@@ -86,10 +87,18 @@ export class CollectionServiceRegistrar {
       container.resolve('CollectionIndexCache')
     ));
 
+    // Backend honesty: when SharedCacheStore is registered (DB/hosted mode),
+    // inject it so the browse cache routes through the store backend instead of
+    // the filesystem — mirrors the CollectionIndexManager wiring above. Falls
+    // back to the filesystem path when the store isn't registered (e.g. unit-test
+    // containers that skip the full bootstrap).
     container.register('CollectionCache', () => new CollectionCache({
       fileOperations: container.resolve('FileOperationsService'),
       cacheDir: container.hasRegistration('PathService')
-        ? container.resolve<import('../../paths/PathService.js').PathService>('PathService').resolveDataDir('cache')
+        ? container.resolve<PathService>('PathService').resolveDataDir('cache')
+        : undefined,
+      sharedCache: container.hasRegistration('SharedCacheStore')
+        ? container.resolve<ISharedCacheStore>('SharedCacheStore')
         : undefined,
     }));
 
@@ -119,7 +128,7 @@ export class CollectionServiceRegistrar {
 
     container.register('GitHubPortfolioIndexer', () => new GitHubPortfolioIndexer(
       container.resolve('PortfolioRepoManager'),
-      () => container.resolve<import('../../security/encryption/ContextTracker.js').ContextTracker>('ContextTracker')
+      () => container.resolve<ContextTracker>('ContextTracker')
         .getSessionContext()?.userId ?? 'system',
     ));
   }

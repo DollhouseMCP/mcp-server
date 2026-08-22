@@ -4,16 +4,22 @@
  * Faithful port of the legacy console's collection/portfolio browser look:
  * the same card template, the singular-type → --family colour lanes, the
  * source toggle (All / Collection / Portfolio), search, type filters, sort,
- * Cards/List, pagination. Data comes from the new /api/v1/me/portfolio*.
+ * Cards/List, pagination. Portfolio data comes from /api/v1/me/portfolio*;
+ * Collection data from /api/v1/collection/* (browse) with install writing to
+ * /api/v1/me/portfolio/from-collection.
  *
- * Collection is deferred — the toggle is present but disabled until the new
- * backend grows a collection surface; today everything is local portfolio.
- * Rich card fields (description/author/category) populate once the list DTO is
- * enriched; the template omits whatever's absent, exactly like the legacy.
+ * Collection is lazy-loaded the first time its source tab is opened. The source
+ * control is absent when the route manifest omits collection browsing; a
+ * degraded upstream shows the source's own message rather than a misleading
+ * "empty collection".
  */
 
-import { get } from './api.js';
+import { get, post } from './api.js';
+import { noConsoleRoute } from './console-meta.js';
+import { createPortfolioAuthoring } from './portfolio-authoring.js';
 import { renderElementDetail } from './portfolio-detail.js';
+import { createRequestOwner } from './polling.js';
+import { escapeHtml } from './ui-utils.js';
 
 // Plural API type → singular CSS/display type (drives the --family colour lanes
 // in styles.css: .element-card[data-type="persona"], etc.).
@@ -30,30 +36,68 @@ const PAGE_SIZE = 24;
 
 const state = {
   elements: [],
-  counts: {},
   type: 'all',       // plural API type, or 'all'
-  source: 'all',     // all | collection | portfolio (collection deferred)
+  source: 'all',     // all | collection | portfolio
   search: '',
   sort: 'date-desc',
   view: 'grid',
   page: 1,
+  // Collection browse cache (lazy-loaded on first switch to the Collection tab).
+  // status: idle | loading | ok | degraded | unavailable | error
+  // installEnabled mirrors the list DTO's install_enabled: browse-only servers
+  // don't register the install route, so no Install affordances should render.
+  collection: { status: 'idle', detail: '', elements: [], installEnabled: true },
+  // Catalog paths installed this session, so their cards can flip to "Installed".
+  installed: new Set(),
+  summary: null,
 };
 
 let host;
 let notify = () => {};
+let hasRoute = noConsoleRoute;
+let authoring;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
+  hasRoute = ctx.hasRoute || hasRoute;
+  authoring = createPortfolioAuthoring({
+    host,
+    hasRoute,
+    notify,
+    refresh: refreshPortfolio,
+    requestMaxBytes: ctx.limits?.portfolioRequestMaxBytes,
+  });
+  state.collection.installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
   host.innerHTML = template();
+  const collectionAvailable = hasRoute('GET', '/collection/elements');
+  host.querySelector('#pf-source').hidden = !collectionAvailable;
+  if (!collectionAvailable) state.source = 'portfolio';
   wireControls();
-  await load();
+  await Promise.all([
+    load(),
+    collectionAvailable ? loadCollection() : Promise.resolve(),
+  ]);
 }
 
 /* ── Markup ─────────────────────────────────────────────────────────────── */
 
 function template() {
   return `
+  <div data-portfolio-browser>
+  <div class="portfolio-command-bar">
+    <span class="portfolio-summary" id="pf-summary" aria-live="polite">Portfolio</span>
+    <div class="portfolio-command-actions">
+      ${authoring.capabilities.sync ? '<button class="btn btn-ghost" id="pf-sync" type="button">Sync with GitHub</button>' : ''}
+      ${authoring.capabilities.create ? `
+        <button class="portfolio-start-action" id="pf-create" type="button">
+          <strong>Create new</strong><span>Build an element with guided fields</span>
+        </button>
+        <button class="portfolio-start-action" id="pf-import" type="button">
+          <strong>Import file</strong><span>Review and add a local element file</span>
+        </button>` : ''}
+    </div>
+  </div>
   <div class="browse-controls">
     <div class="search-wrapper">
       <label for="pf-search" class="sr-only">Search elements</label>
@@ -72,7 +116,7 @@ function template() {
     <fieldset class="source-toggle" id="pf-source">
       <legend class="sr-only">Filter by source</legend>
       <button class="source-btn active" data-source="all" aria-pressed="true">All</button>
-      <button class="source-btn" data-source="collection" aria-pressed="false" disabled title="Collection browsing is coming soon">Collection</button>
+      <button class="source-btn" data-source="collection" aria-pressed="false" title="Browse the community collection">Collection</button>
       <button class="source-btn" data-source="portfolio" aria-pressed="false">Portfolio</button>
     </fieldset>
     <label for="pf-sort" class="sr-only">Sort by</label>
@@ -97,7 +141,9 @@ function template() {
     <button class="pagination-btn" id="pf-prev" type="button">&#8249; Prev</button>
     <span class="pagination-info" id="pf-pageinfo"></span>
     <button class="pagination-btn" id="pf-next" type="button">Next &#8250;</button>
-  </nav>`;
+  </nav>
+  </div>
+  <section class="portfolio-workspace" data-portfolio-authoring hidden aria-label="Portfolio authoring"></section>`;
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
@@ -105,16 +151,18 @@ function template() {
 async function load() {
   const grid = host.querySelector('#pf-grid');
   grid.innerHTML = '<li class="panel-placeholder">Loading portfolio…</li>';
-  const [summary, list] = await Promise.all([get('/me/portfolio'), get('/me/portfolio/elements')]);
+  const [list, summary] = await Promise.all([
+    get('/me/portfolio/elements'),
+    hasRoute('GET', '/me/portfolio') ? get('/me/portfolio') : Promise.resolve(null),
+  ]);
   if (list.status !== 200) {
     grid.innerHTML = `<li class="panel-placeholder">Couldn't load your portfolio (status ${list.status}).</li>`;
     return;
   }
   // Local portfolio elements are flagged so the LOCAL badge + Portfolio source filter work.
   state.elements = (list.body?.elements ?? []).filter(Boolean).map(el => ({ ...el, _local: true }));
-  state.counts = summary.status === 200 ? (summary.body?.counts_by_type ?? {}) : {};
-  renderTypeFilters();
-  render();
+  state.summary = summary?.status === 200 ? summary.body : null;
+  paint();
   // The list DTO is lean; hydrate the rich card fields (description/author/
   // category) from each element's full detail — the legacy did the same. No
   // backend change: GET /me/portfolio/elements/:type/:name returns metadata.
@@ -136,6 +184,7 @@ async function hydrateDetails() {
           const m = res.body.metadata ?? {};
           el.metadata = m;                 // keep the full stored frontmatter
           el.content = res.body.content;   // for the detail view (next increment)
+          el._etag = res.etag;
           el.description = str(m.description);
           el.author = str(m.author);
           el.category = str(m.category);
@@ -150,26 +199,155 @@ async function hydrateDetails() {
 
 function str(v) { return typeof v === 'string' && v.trim() ? v : undefined; }
 
+/* ── Collection browse ──────────────────────────────────────────────────── */
+
+const COLLECTION_PAGE_SIZE = 100; // server cap; the catalog is small
+const COLLECTION_MAX_PAGES = 20;  // safety bound on the page walk
+
+// Lazy-load the whole catalog once, then filter/sort/search client-side like the
+// portfolio does. Re-entrancy guarded by the 'loading' status.
+async function loadCollection() {
+  if (state.collection.status === 'loading') return;
+  state.collection.status = 'loading';
+  paint();
+
+  const elements = [];
+  let installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
+  let page = 1;
+  try {
+    for (; page <= COLLECTION_MAX_PAGES; page++) {
+      const res = await get(`/collection/elements?page=${page}&page_size=${COLLECTION_PAGE_SIZE}`);
+      if (res.status === 404) { state.collection.status = 'unavailable'; paint(); return; }
+      if (res.status !== 200 || !res.body) { state.collection.status = 'error'; paint(); return; }
+      const body = res.body;
+      installEnabled = resolveInstallAvailability(installEnabled, body.install_enabled);
+      for (const el of (body.elements ?? []).filter(Boolean)) elements.push(mapCollectionElement(el));
+      if (body.source_status === 'degraded') {
+        state.collection = { status: 'degraded', detail: str(body.source_detail) ?? '', elements, installEnabled };
+        paint();
+        return;
+      }
+      if (!body.has_more) break;
+      if (page === COLLECTION_MAX_PAGES) {
+        state.collection = {
+          status: 'degraded',
+          detail: `Only the first ${elements.length} collection elements could be loaded.`,
+          elements,
+          installEnabled,
+        };
+        paint();
+        return;
+      }
+    }
+    state.collection = { status: 'ok', detail: '', elements, installEnabled };
+  } catch {
+    state.collection.status = 'error';
+  }
+  paint();
+}
+
+function resolveInstallAvailability(routeAvailable, advertisedAvailability) {
+  // install_enabled is deployment-wide and should match on every page. Retain
+  // a false value defensively if an inconsistent response is ever observed.
+  return routeAvailable && advertisedAvailability !== false;
+}
+
+// Map a collection list DTO to the shared card shape. Collection elements are
+// keyed by `path` (the install input) and carry source:'collection' so the card
+// renders a COLLECTION badge + Install action instead of LOCAL + download.
+function mapCollectionElement(el) {
+  return {
+    type: el.type,
+    name: el.name,
+    display_name: str(el.display_name),
+    description: str(el.description),
+    author: str(el.author),
+    version: str(el.version),
+    tags: Array.isArray(el.tags) ? el.tags : [],
+    path: el.path,
+    source: 'collection',
+  };
+}
+
 /* ── Rendering ──────────────────────────────────────────────────────────── */
 
+// Repaint both the type-filter counts and the grid (use when the source or the
+// underlying element set changed; plain render() suffices for search/sort/view).
+function paint() { renderSummary(); renderTypeFilters(); render(); }
+
+function renderSummary() {
+  const summary = host.querySelector('#pf-summary');
+  if (!summary) return;
+  if (state.source === 'portfolio') {
+    const total = state.summary?.total_elements;
+    summary.textContent = Number.isSafeInteger(total)
+      ? elementCount(total, 'portfolio')
+      : 'Your portfolio';
+    return;
+  }
+  if (state.source === 'collection') {
+    summary.textContent = collectionSummary();
+    return;
+  }
+  summary.textContent = allSourcesSummary();
+}
+
+function elementCount(total, qualifier = '') {
+  const prefix = qualifier ? `${qualifier} ` : '';
+  return `${total} ${prefix}element${total === 1 ? '' : 's'}`;
+}
+
+function collectionSummary() {
+  const { status, elements, detail } = state.collection;
+  if (status === 'idle' || status === 'loading') return 'Loading collection…';
+  if (status === 'error' || status === 'unavailable') return 'Collection unavailable';
+  if (status === 'degraded') {
+    return `${elementCount(elements.length, 'available collection')} · ${detail || 'Collection may be incomplete'}`;
+  }
+  return elementCount(elements.length, 'collection');
+}
+
+function allSourcesSummary() {
+  const { status, detail } = state.collection;
+  if (status === 'idle' || status === 'loading') {
+    return `${elementCount(state.elements.length, 'portfolio')} · Loading collection…`;
+  }
+  if (status === 'error' || status === 'unavailable') {
+    return `${elementCount(state.elements.length, 'portfolio')} · Collection unavailable`;
+  }
+  const total = sourceElements().length;
+  if (status === 'degraded') {
+    return `${elementCount(total, 'available')} · ${detail || 'Collection may be incomplete'}`;
+  }
+  return elementCount(total, 'total');
+}
+
 function renderTypeFilters() {
-  const total = state.elements.length;
+  // Counts follow the active source. All combines the complete catalog and the
+  // user's portfolio rather than acting as a second Portfolio filter.
+  const items = sourceElements();
+  const counts = {};
+  for (const el of items) counts[el.type] = (counts[el.type] ?? 0) + 1;
   const chip = (key, label, singular, count) =>
     `<button class="type-filter${state.type === key ? ' active' : ''}" data-key="${key}"
        ${singular ? `data-type="${singular}"` : ''} aria-pressed="${state.type === key}">
        ${label} <span class="filter-count">${count}</span>
      </button>`;
-  const chips = [chip('all', 'All', '', total)];
-  for (const t of TYPES) chips.push(chip(t, TYPE_META[t].label, TYPE_META[t].singular, state.counts[t] ?? 0));
+  const chips = [chip('all', 'All', '', items.length)];
+  for (const t of TYPES) chips.push(chip(t, TYPE_META[t].label, TYPE_META[t].singular, counts[t] ?? 0));
   host.querySelector('#pf-type-filters').innerHTML =
     '<legend class="sr-only">Filter by element type</legend>' + chips.join('');
 }
 
+function sourceElements() {
+  if (state.source === 'collection') return state.collection.elements;
+  if (state.source === 'portfolio') return state.elements;
+  return [...state.collection.elements, ...state.elements];
+}
+
 function visibleElements() {
   const q = state.search.trim().toLowerCase();
-  let items = state.elements.filter(el => state.type === 'all' || el.type === state.type);
-  if (state.source === 'collection') items = []; // deferred
-  // (source 'portfolio' and 'all' are identical today — everything is local)
+  let items = [...sourceElements()].filter(el => state.type === 'all' || el.type === state.type);
   if (q) {
     items = items.filter(el =>
       (el.name || '').toLowerCase().includes(q) ||
@@ -197,10 +375,13 @@ function render() {
   const start = (state.page - 1) * PAGE_SIZE;
   const pageItems = items.slice(start, start + PAGE_SIZE);
 
-  if (state.source === 'collection') {
-    grid.innerHTML = '<li class="panel-placeholder">Collection browsing is coming soon — the new backend doesn’t expose the community collection yet.</li>';
+  const collectionPlaceholder = state.source === 'collection' ? collectionStatusPlaceholder() : null;
+  if (collectionPlaceholder) {
+    grid.innerHTML = collectionPlaceholder;
   } else if (items.length === 0) {
-    grid.innerHTML = '<li class="panel-placeholder">No elements yet. Create one to get started.</li>';
+    grid.innerHTML = state.source === 'collection'
+      ? '<li class="panel-placeholder">No collection elements match your filters.</li>'
+      : '<li class="panel-placeholder">No elements yet. Create one to get started.</li>';
   } else {
     grid.innerHTML = pageItems.map(card).join('');
   }
@@ -211,7 +392,7 @@ function render() {
   host.querySelector('#pf-announcer').textContent = `${countText}, page ${state.page} of ${pages}`;
 
   const pag = host.querySelector('#pf-pagination');
-  pag.hidden = pages <= 1 || state.source === 'collection';
+  pag.hidden = pages <= 1 || Boolean(collectionPlaceholder);
   host.querySelector('#pf-pageinfo').textContent = `Page ${state.page} of ${pages}`;
   host.querySelector('#pf-prev').disabled = state.page <= 1;
   host.querySelector('#pf-next').disabled = state.page >= pages;
@@ -223,14 +404,18 @@ function card(el) {
   const label = capitalize(TYPE_META[el.type]?.singular ?? el.type);
   const stale = el.validation_status && el.validation_status !== 'valid';
   const tagItems = (el.tags || []).slice(0, 5).map(t => `<li class="tag">${escapeHtml(t)}</li>`).join('');
+  const isCollection = el.source === 'collection';
+  const actions = isCollection ? installAction(el) : portfolioCardActions(el);
   return `
   <article class="element-card" data-type="${escapeAttr(singular)}" data-key="${escapeAttr(el.type)}" data-name="${escapeAttr(el.name)}"
+    ${isCollection && el.path ? `data-path="${escapeAttr(el.path)}"` : ''}
     role="listitem" tabindex="0" aria-label="View ${escapeHtml(title(el))}">
     <div class="card-header">
       <h3 class="card-title">${escapeHtml(title(el))}</h3>
       <div class="card-badges">
         <span class="type-badge" data-type="${escapeAttr(singular)}">${escapeHtml(label)}</span>
         ${el._local ? '<span class="source-badge">LOCAL</span>' : ''}
+        ${isCollection ? '<span class="source-badge source-badge-collection">COLLECTION</span>' : ''}
         ${stale ? `<span class="unavailable-badge">${escapeHtml(el.validation_status)}</span>` : ''}
       </div>
       <span class="card-expand-icon" aria-hidden="true">&#9662;</span>
@@ -240,19 +425,62 @@ function card(el) {
     <footer class="card-footer">
       <div class="card-meta">
         ${el.author ? `<span class="meta-author">${escapeHtml(el.author)}</span>` : ''}
-        ${typeof el.version === 'number' ? `<span class="meta-version">v${el.version}</span>` : ''}
+        ${versionMeta(el.version)}
         ${el.category ? `<span class="meta-category">${escapeHtml(el.category)}</span>` : ''}
         ${el.updated_at ? `<span class="meta-date">${formatDate(el.updated_at)}</span>` : ''}
       </div>
-      <div class="card-actions">
-        <button class="card-download-btn" data-action="download" aria-label="Download ${escapeHtml(title(el))}" title="Download">&#10515;</button>
-      </div>
+      ${actions}
       ${el.tags?.length
         ? `<ul class="card-tags" aria-label="Tags">${tagItems}</ul>`
         : ''}
     </footer>
     <div class="card-inline-detail"></div>
   </article>`;
+}
+
+function portfolioCardActions(el) {
+  const edit = authoring.capabilities.edit
+    ? `<button class="card-download-btn" data-action="edit" aria-label="Edit ${escapeHtml(title(el))}" title="Edit">Edit</button>`
+    : '';
+  return `<div class="card-actions portfolio-card-edit">${edit}<button class="card-download-btn" data-action="download" aria-label="Download ${escapeHtml(title(el))}" title="Download">&#10515;</button></div>`;
+}
+
+// Version label for both the portfolio's numeric version and the collection's
+// string version (e.g. "1.2.0"); empty when there's no usable version.
+function versionText(version) {
+  if (typeof version === 'number') return `v${version}`;
+  if (typeof version === 'string' && version.trim()) return `v${version}`;
+  return '';
+}
+
+function versionMeta(version) {
+  const text = versionText(version);
+  return text ? `<span class="meta-version">${escapeHtml(text)}</span>` : '';
+}
+
+// Install action for collection cards. Always visible (unlike the list-only
+// download action) since installing is the primary collection interaction —
+// except on browse-only servers, where the install route doesn't exist.
+function installAction(el) {
+  if (!state.collection.installEnabled) return '';
+  if (state.installed.has(el.path)) {
+    return '<div class="card-install-wrap"><button class="card-install-btn" data-action="install" disabled aria-disabled="true">Installed ✓</button></div>';
+  }
+  return `<div class="card-install-wrap"><button class="card-install-btn" data-action="install" aria-label="Install ${escapeHtml(title(el))} into your portfolio">Install</button></div>`;
+}
+
+// A non-card placeholder for the Collection tab when there are no browsable
+// cards to show: loading, server-disabled, upstream-degraded, or error. Returns
+// null when cards should render normally.
+function collectionStatusPlaceholder() {
+  const { status, detail } = state.collection;
+  if (status === 'loading') return '<li class="panel-placeholder">Loading the community collection…</li>';
+  if (status === 'unavailable') return '<li class="panel-placeholder">Collection browsing isn’t enabled on this server.</li>';
+  if (status === 'error') return '<li class="panel-placeholder">Couldn’t reach the community collection. Try again in a moment.</li>';
+  if (status === 'degraded' && state.collection.elements.length === 0) {
+    return `<li class="panel-placeholder">${escapeHtml(detail || 'The community collection is temporarily unavailable.')}</li>`;
+  }
+  return null;
 }
 
 function renderComponentSummary(el) {
@@ -266,10 +494,23 @@ function renderComponentSummary(el) {
 /* ── Controls ───────────────────────────────────────────────────────────── */
 
 function wireControls() {
+  host.querySelector('#pf-create')?.addEventListener('click', () => authoring.openCreate());
+  host.querySelector('#pf-import')?.addEventListener('click', () => authoring.openImport());
+  host.querySelector('#pf-sync')?.addEventListener('click', () => authoring.openSync());
   host.querySelector('#pf-search').addEventListener('input', (e) => { state.search = e.target.value; state.page = 1; render(); });
   host.querySelector('#pf-sort').addEventListener('change', (e) => { state.sort = e.target.value; render(); });
   host.querySelector('#pf-view').addEventListener('click', (e) => toggleGroup(e, '.view-btn', '#pf-view', v => { state.view = v; }));
-  host.querySelector('#pf-source').addEventListener('click', (e) => toggleGroup(e, '.source-btn', '#pf-source', v => { state.source = v; state.page = 1; }));
+  host.querySelector('#pf-source').addEventListener('click', (e) => toggleGroup(e, '.source-btn', '#pf-source', v => {
+    state.source = v; state.page = 1;
+    renderSummary();
+    renderTypeFilters(); // counts follow the active source
+    // Lazy-load the catalog the first time the Collection tab is opened, and
+    // re-try when the last attempt failed or came back empty-degraded —
+    // otherwise a transient blip would brick the tab for the whole session.
+    const cst = state.collection.status;
+    if ((v === 'all' || v === 'collection') && (cst === 'idle' || cst === 'error' ||
+        (cst === 'degraded' && state.collection.elements.length === 0))) loadCollection();
+  }));
   host.querySelector('#pf-type-filters').addEventListener('click', (e) => {
     const btn = e.target.closest('.type-filter'); if (!btn) return;
     state.type = btn.dataset.key; state.page = 1;
@@ -280,10 +521,18 @@ function wireControls() {
   host.querySelector('#pf-grid').addEventListener('click', (e) => {
     const cardEl = e.target.closest('.element-card'); if (!cardEl) return;
     const list = visibleElements();
-    const idx = list.findIndex(el => el.type === cardEl.dataset.key && el.name === cardEl.dataset.name);
+    // Collection cards resolve by catalog path — the only key unique across
+    // categorized catalogs (names are file stems, unique per directory only).
+    const idx = cardEl.dataset.path
+      ? list.findIndex(el => el.path === cardEl.dataset.path)
+      : list.findIndex(el => el.type === cardEl.dataset.key && el.name === cardEl.dataset.name);
     if (idx < 0) return;
+    const installBtn = e.target.closest('[data-action="install"]');
+    if (installBtn) { e.stopPropagation(); installCard(list[idx], installBtn); return; }   // install without opening
     const dlBtn = e.target.closest('[data-action="download"]');
     if (dlBtn) { e.stopPropagation(); downloadCard(list[idx], dlBtn); return; }   // download without opening
+    const editBtn = e.target.closest('[data-action="edit"]');
+    if (editBtn) { e.stopPropagation(); editCard(list[idx], editBtn); return; }
     openModal(list, idx);
   });
 }
@@ -312,6 +561,9 @@ function ensureModal() {
         <button class="modal-close" id="pf-modal-close" aria-label="Close">&#x2715;</button>
       </header>
       <div class="modal-toolbar">
+        <button class="modal-action-btn modal-install-btn" data-act="install" hidden>&#8681; Install</button>
+        <button class="modal-action-btn modal-edit-btn" data-act="edit" hidden>Edit</button>
+        <button class="modal-action-btn modal-delete-btn portfolio-danger" data-act="delete" hidden>Delete</button>
         <button class="modal-action-btn" data-act="render">&#8644; Raw</button>
         <button class="modal-action-btn" data-act="copy">&#9112; Copy</button>
         <button class="modal-action-btn" data-act="download">&#10515; Download</button>
@@ -324,20 +576,25 @@ function ensureModal() {
       <div class="modal-body" id="pf-modal-body" tabindex="-1"></div>
     </div>`;
   document.body.appendChild(dlg);
-  dlg.addEventListener('click', (e) => { if (e.target === dlg) close(); });        // backdrop click
-  dlg.querySelector('#pf-modal-close').addEventListener('click', close);
+  dlg.addEventListener('click', (e) => { if (e.target === dlg) closeDetailModal(); });        // backdrop click
+  dlg.querySelector('#pf-modal-close').addEventListener('click', closeDetailModal);
   dlg.querySelector('.modal-toolbar').addEventListener('click', onToolbar);
-  function close() { dlg.close(); document.body.classList.remove('modal-open'); }
 }
 
 let modalList = [];
 let modalIdx = -1;
 let modalEl = null;
 let modalContent = '';
+let modalPreviousFocus = null;
+const modalLoadOwner = createRequestOwner();
 
 async function openModal(list, idx) {
   ensureModal();
-  modalList = list; modalIdx = idx; modalEl = list[idx];
+  const requestedElement = list[idx];
+  const requestClaim = modalLoadOwner.claim();
+  modalList = list; modalIdx = idx; modalEl = requestedElement;
+  modalContent = '';
+  modalPreviousFocus = document.activeElement;
   const dlg = document.getElementById('pf-modal');
   const body = dlg.querySelector('#pf-modal-body');
   setHeader(modalEl);
@@ -347,12 +604,22 @@ async function openModal(list, idx) {
   body.focus();
 
   // Fetch the full element (metadata + content) — the legacy did the same on open.
-  const res = await get(`/me/portfolio/elements/${encodeURIComponent(modalEl.type)}/${encodeURIComponent(modalEl.name)}`);
+  // Collection elements come from the catalog endpoint; portfolio from /me.
+  let res;
+  try {
+    res = await get(detailPath(requestedElement));
+  } catch {
+    if (modalLoadOwner.owns(requestClaim) && dlg.open) {
+      body.innerHTML = '<p class="panel-placeholder">Couldn\'t reach the server for this element.</p>';
+    }
+    return;
+  }
+  if (!modalLoadOwner.owns(requestClaim) || !dlg.open) return;
   if (res.status !== 200 || !res.body) {
     body.innerHTML = `<p class="panel-placeholder">Couldn't load this element (status ${res.status}).</p>`;
     return;
   }
-  modalEl = { ...modalEl, ...res.body, metadata: res.body.metadata ?? {} };
+  modalEl = { ...requestedElement, ...res.body, metadata: res.body.metadata ?? {}, _etag: res.etag };
   modalContent = typeof res.body.content === 'string' ? res.body.content : '';
   setHeader(modalEl);
   renderModalBody();
@@ -365,8 +632,23 @@ function setHeader(el) {
   dlg.querySelector('#pf-modal-title').textContent = title(el);
   dlg.querySelector('#pf-modal-type').textContent = label;
   dlg.querySelector('#pf-modal-author').textContent = el.author || el.metadata?.author ? `by ${el.author || el.metadata.author}` : '';
-  dlg.querySelector('#pf-modal-version').textContent = typeof el.version === 'number' ? `v${el.version}` : '';
+  dlg.querySelector('#pf-modal-version').textContent = versionText(el.version);
   dlg.querySelector('#pf-modal-date').textContent = el.updated_at ? formatDate(el.updated_at) : '';
+
+  // The Install action shows only for collection elements, and reflects whether
+  // this session has already installed it.
+  const installBtn = dlg.querySelector('.modal-install-btn');
+  const isCollection = el.source === 'collection' && state.collection.installEnabled;
+  installBtn.hidden = !isCollection;
+  if (isCollection) {
+    const done = state.installed.has(el.path);
+    installBtn.disabled = done;
+    installBtn.textContent = done ? 'Installed ✓' : '⭳ Install';
+  }
+  const local = el.source !== 'collection';
+  const safelyLoaded = Boolean(el._etag);
+  dlg.querySelector('.modal-edit-btn').hidden = !local || !safelyLoaded || !authoring.capabilities.edit;
+  dlg.querySelector('.modal-delete-btn').hidden = !local || !safelyLoaded || !authoring.capabilities.delete;
 }
 
 function renderModalBody() {
@@ -413,10 +695,11 @@ function rawSource(el) {
 }
 
 function downloadElement(el) {
-  const blob = new Blob([rawSource(el)], { type: 'text/markdown' });
+  const isMemory = el.type === 'memories';
+  const blob = new Blob([rawSource(el)], { type: isMemory ? 'application/yaml' : 'text/markdown' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `${el.name}.md`;
+  a.download = `${el.name}${isMemory ? '.yaml' : '.md'}`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
@@ -430,6 +713,7 @@ async function ensureLoaded(el) {
   if (res.status === 200 && res.body) {
     el.metadata = res.body.metadata ?? {};
     el.content = typeof res.body.content === 'string' ? res.body.content : '';
+    el._etag = res.etag;
   }
   return el;
 }
@@ -447,6 +731,85 @@ async function downloadCard(el, btn) {
   }
 }
 
+/* ── Install (collection → portfolio) ───────────────────────────────────── */
+
+// Core install: POST /me/portfolio/from-collection (api.js attaches CSRF +
+// Idempotency-Key). A 201 (created) or 409 (already present) both leave the user
+// with the element, so both count as "installed"; on either, refresh the
+// portfolio in the background so the Portfolio tab reflects it. Returns true when
+// the element is now in the portfolio.
+async function performInstall(el) {
+  let res;
+  try {
+    res = await post('/me/portfolio/from-collection', { body: { path: el.path } });
+  } catch {
+    // fetch() rejects on network-level failures (drop, restart mid-request) —
+    // the slowest console call must not strand the button at "Installing…".
+    notify(`Couldn't install “${title(el)}” — network error. Try again.`, 'error');
+    return false;
+  }
+  if (res.status === 201 || res.status === 409) {
+    state.installed.add(el.path);
+    notify(res.status === 409
+      ? `“${title(el)}” is already in your portfolio.`
+      : `Installed “${title(el)}” into your portfolio.`, 'success');
+    refreshPortfolio();
+    return true;
+  }
+  const detail = res.body && typeof res.body.detail === 'string' ? res.body.detail : `status ${res.status}`;
+  notify(`Couldn't install “${title(el)}” — ${detail}`, 'error');
+  return false;
+}
+
+// Install from a collection card's button.
+async function installCard(el, btn) {
+  if (btn.disabled) return;
+  const prev = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Installing…';
+  const ok = await performInstall(el);
+  if (ok) {
+    btn.textContent = 'Installed ✓';
+    btn.setAttribute('aria-disabled', 'true');
+  } else {
+    btn.disabled = false;
+    btn.textContent = prev;
+  }
+}
+
+// Install from the detail modal's toolbar button; also flips the underlying
+// card (which is still in the grid behind the modal).
+async function installFromModal(btn) {
+  if (btn.disabled || !modalEl?.path) return;
+  btn.disabled = true;
+  btn.textContent = 'Installing…';
+  const ok = await performInstall(modalEl);
+  if (ok) {
+    btn.textContent = 'Installed ✓';
+    if (state.source === 'collection') render();
+  } else {
+    btn.disabled = false;
+    btn.textContent = '⭳ Install';
+  }
+}
+
+// Quiet background refresh of the portfolio after an install, so switching to
+// the Portfolio tab shows the new element without a jarring full "Loading…".
+async function refreshPortfolio() {
+  try {
+    const [list, summary] = await Promise.all([
+      get('/me/portfolio/elements'),
+      hasRoute('GET', '/me/portfolio') ? get('/me/portfolio') : Promise.resolve(null),
+    ]);
+    if (list.status !== 200) return;
+    state.elements = (list.body?.elements ?? []).filter(Boolean).map(el => ({ ...el, _local: true }));
+    state.summary = summary?.status === 200 ? summary.body : state.summary;
+    renderSummary();
+    if (state.source !== 'collection') paint();
+    hydrateDetails();
+  } catch { /* leave the current portfolio view; the next full load will catch up */ }
+}
+
 function onToolbar(e) {
   const btn = e.target.closest('[data-act]'); if (!btn) return;
   const act = btn.dataset.act;
@@ -458,11 +821,47 @@ function onToolbar(e) {
     navigator.clipboard?.writeText(rawSource(modalEl)).then(() => notify('Copied to clipboard.', 'success'));
   } else if (act === 'download') {
     downloadElement(modalEl);
+  } else if (act === 'install') {
+    installFromModal(btn);
+  } else if (act === 'edit') {
+    const element = modalEl;
+    closeDetailModal();
+    authoring.openEdit(element);
+  } else if (act === 'delete') {
+    const element = modalEl;
+    closeDetailModal();
+    authoring.deleteElement(element);
   } else if (act === 'prev' && modalIdx > 0) {
     openModal(modalList, modalIdx - 1);
   } else if (act === 'next' && modalIdx < modalList.length - 1) {
     openModal(modalList, modalIdx + 1);
   }
+}
+
+async function editCard(element, button) {
+  const prior = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Loading…';
+  try {
+    await ensureLoaded(element);
+    if (!element._etag) {
+      notify('This element could not be opened for safe editing.', 'error');
+      return;
+    }
+    authoring.openEdit(element);
+  } finally {
+    button.disabled = false;
+    button.textContent = prior;
+  }
+}
+
+function closeDetailModal() {
+  modalLoadOwner.invalidate();
+  const dialog = document.getElementById('pf-modal');
+  if (dialog?.open) dialog.close();
+  document.body.classList.remove('modal-open');
+  if (modalPreviousFocus instanceof HTMLElement && modalPreviousFocus.isConnected) modalPreviousFocus.focus();
+  modalPreviousFocus = null;
 }
 
 function toggleGroup(e, btnSel, groupSel, apply) {
@@ -479,8 +878,14 @@ function toggleGroup(e, btnSel, groupSel, apply) {
 
 function title(el) { return el.display_name || el.name || '(unnamed)'; }
 function capitalize(s) { return s ? s.charAt(0).toUpperCase() + s.slice(1) : s; }
-function escapeHtml(s) {
-  return String(s ?? '').replaceAll(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// Detail endpoint for an element — the public catalog for collection elements,
+// the user's portfolio otherwise.
+function detailPath(el) {
+  const type = encodeURIComponent(el.type);
+  const name = encodeURIComponent(el.name);
+  return el.source === 'collection'
+    ? `/collection/elements/${type}/${name}`
+    : `/me/portfolio/elements/${type}/${name}`;
 }
 function escapeAttr(s) { return escapeHtml(s); }
 function formatDate(iso) {

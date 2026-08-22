@@ -1,11 +1,10 @@
-import type { CliApprovalRecord } from '../../../handlers/mcp-aql/GatekeeperTypes.js';
 import type { ConsoleHandlerResult, ConsoleRequest } from '../../platform/ConsolePlatformTypes.js';
 import { requireConsoleRequestContext } from '../../platform/ConsoleRequestContext.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
 import type { ConsoleApprovalScope, ConsoleApprovalStatus, SessionApprovalDto, SessionApprovalListDto } from './ApprovalDtos.js';
 import type { ISessionApprovalEventSink } from './ApprovalEvents.js';
-import type { SessionApprovalStore } from './ApprovalStore.js';
+import type { ConsoleApprovalRecord, SessionApprovalStore } from './ApprovalStore.js';
 import { toCliApprovalScope } from './ApprovalStore.js';
 
 const DEFAULT_APPROVAL_TTL_MS = 300_000;
@@ -48,7 +47,7 @@ export class ApprovalService {
     }
 
     const decidedAt = this.now().toISOString();
-    const updated: CliApprovalRecord = decision === 'approved'
+    const updated: ConsoleApprovalRecord = decision === 'approved'
       ? {
         ...record,
         approvedAt: decidedAt,
@@ -64,11 +63,11 @@ export class ApprovalService {
   }
 
   private async isOwnedActiveSession(userId: string, sessionId: string): Promise<boolean> {
-    const session = await this.options.runtimeStore.findPresence(sessionId, this.now());
+    const session = await this.options.runtimeStore.findPresence(sessionId, this.runtimeStoreNow());
     return session?.userId === userId;
   }
 
-  private statusOf(record: CliApprovalRecord): ConsoleApprovalStatus {
+  private statusOf(record: ConsoleApprovalRecord): ConsoleApprovalStatus {
     if (record.cancelledAt) return 'cancelled_session_terminated';
     if (record.deniedAt) return 'denied';
     if (record.approvedAt) return 'approved';
@@ -77,7 +76,7 @@ export class ApprovalService {
     return 'pending';
   }
 
-  private toDto(sessionId: string, record: CliApprovalRecord): SessionApprovalDto {
+  private toDto(sessionId: string, record: ConsoleApprovalRecord): SessionApprovalDto {
     const status = this.statusOf(record);
     return {
       approval_id: record.requestId,
@@ -98,14 +97,14 @@ export class ApprovalService {
     };
   }
 
-  private expiresAt(record: CliApprovalRecord): Date {
+  private expiresAt(record: ConsoleApprovalRecord): Date {
     return new Date(new Date(record.requestedAt).getTime() + (record.ttlMs ?? DEFAULT_APPROVAL_TTL_MS));
   }
 
   private async recordEvent(
     userId: string,
     sessionId: string,
-    record: CliApprovalRecord,
+    record: ConsoleApprovalRecord,
     decision: 'approved' | 'denied',
     scope: ConsoleApprovalScope,
     correlationId: string,
@@ -127,6 +126,10 @@ export class ApprovalService {
 
   private now(): Date {
     return this.options.now?.() ?? new Date();
+  }
+
+  private runtimeStoreNow(): Date | undefined {
+    return this.options.now?.();
   }
 }
 

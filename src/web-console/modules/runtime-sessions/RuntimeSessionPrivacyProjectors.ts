@@ -1,11 +1,18 @@
+import type { ConsolePageInfo } from '../../platform/ConsolePlatformTypes.js';
 import type {
   RuntimeSessionAccountDto,
   RuntimeSessionOperationalDto,
+  RuntimeSessionOperationalListDto,
   RuntimeSessionRevokeAllDto,
   RuntimeSessionSelfDto,
   RuntimeTerminationAcceptedDto,
+  RuntimeTerminationCommandStatusDto,
 } from './RuntimeSessionDtos.js';
 import { isRuntimeTerminationReason } from '../../services/runtime/IRuntimeSessionControlStore.js';
+
+const COMMAND_STATUS_VALUES = new Set<RuntimeTerminationCommandStatusDto['status']>([
+  'pending', 'terminated', 'already_absent', 'failed',
+]);
 
 export function projectRuntimeSessionSelf(value: unknown): RuntimeSessionSelfDto {
   const record = objectValue(value);
@@ -17,12 +24,15 @@ export function projectRuntimeSessionSelf(value: unknown): RuntimeSessionSelfDto
     last_active_at: stringField(record, 'last_active_at'),
     request_count: numberField(record, 'request_count'),
     error_count: numberField(record, 'error_count'),
-    status: 'active',
+    status: runtimeSessionStatusField(record),
   };
 }
 
-export function projectRuntimeSessionSelfList(value: unknown): RuntimeSessionSelfDto[] {
-  return arrayValue(value).map(item => projectRuntimeSessionSelf(item));
+// List envelopes: the snapshot family (`{sessions: [...]}`) — never a bare
+// array, so the shape can grow (e.g. a reserved `pagination` member) without
+// breaking consumers.
+export function projectRuntimeSessionSelfList(value: unknown): { sessions: RuntimeSessionSelfDto[] } {
+  return { sessions: arrayValue(objectValue(value).sessions).map(item => projectRuntimeSessionSelf(item)) };
 }
 
 export function projectRuntimeSessionAccount(value: unknown): RuntimeSessionAccountDto {
@@ -32,12 +42,12 @@ export function projectRuntimeSessionAccount(value: unknown): RuntimeSessionAcco
     transport: 'streamable-http',
     created_at: stringField(record, 'created_at'),
     last_active_at: stringField(record, 'last_active_at'),
-    status: 'active',
+    status: runtimeSessionStatusField(record),
   };
 }
 
-export function projectRuntimeSessionAccountList(value: unknown): RuntimeSessionAccountDto[] {
-  return arrayValue(value).map(item => projectRuntimeSessionAccount(item));
+export function projectRuntimeSessionAccountList(value: unknown): { sessions: RuntimeSessionAccountDto[] } {
+  return { sessions: arrayValue(objectValue(value).sessions).map(item => projectRuntimeSessionAccount(item)) };
 }
 
 export function projectRuntimeSessionOperational(value: unknown): RuntimeSessionOperationalDto {
@@ -53,8 +63,42 @@ export function projectRuntimeSessionOperational(value: unknown): RuntimeSession
   };
 }
 
-export function projectRuntimeSessionOperationalList(value: unknown): RuntimeSessionOperationalDto[] {
-  return arrayValue(value).map(item => projectRuntimeSessionOperational(item));
+// Family-B cursor page (cross-user aggregate scales with the session population).
+export function projectRuntimeSessionOperationalList(value: unknown): RuntimeSessionOperationalListDto {
+  const record = objectValue(value);
+  return {
+    items: arrayValue(record.items).map(item => projectRuntimeSessionOperational(item)),
+    page: projectConsolePageInfo(record.page),
+  };
+}
+
+export function projectRuntimeCommandStatus(value: unknown): RuntimeTerminationCommandStatusDto {
+  const record = objectValue(value);
+  const status = record.status;
+  const projectedStatus = typeof status === 'string' && COMMAND_STATUS_VALUES.has(status as RuntimeTerminationCommandStatusDto['status'])
+    ? status as RuntimeTerminationCommandStatusDto['status']
+    : 'pending';
+  return {
+    command_id: stringField(record, 'command_id'),
+    status: projectedStatus,
+    acknowledged_at: nullableStringField(record, 'acknowledged_at'),
+    replica_id: nullableStringField(record, 'replica_id'),
+    error_code: nullableStringField(record, 'error_code'),
+  };
+}
+
+function projectConsolePageInfo(value: unknown): ConsolePageInfo {
+  const page = objectValue(value);
+  return {
+    limit: numberField(page, 'limit'),
+    cursor: nullableStringField(page, 'cursor'),
+    next_cursor: nullableStringField(page, 'next_cursor'),
+  };
+}
+
+function nullableStringField(record: Record<string, unknown>, key: string): string | null {
+  const value = record[key];
+  return typeof value === 'string' ? value : null;
 }
 
 export function projectRuntimeTermination(value: unknown): RuntimeTerminationAcceptedDto {
@@ -93,6 +137,11 @@ function stringField(record: Record<string, unknown>, key: string): string {
 function numberField(record: Record<string, unknown>, key: string): number {
   const value = record[key];
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function runtimeSessionStatusField(record: Record<string, unknown>): RuntimeSessionSelfDto['status'] {
+  if (record.status === 'active' || record.status === 'closing') return record.status;
+  throw new Error('Runtime session projection received an unknown status');
 }
 
 function clientInfoField(record: Record<string, unknown>): RuntimeSessionSelfDto['client_info'] {

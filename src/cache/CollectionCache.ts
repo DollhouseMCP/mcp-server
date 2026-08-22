@@ -4,8 +4,8 @@
 
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
-import { SecurityMonitor } from '../security/securityMonitor.js';
-import { IFileOperationsService } from '../services/FileOperationsService.js';
+import type { IFileOperationsService } from '../services/FileOperationsService.js';
+import type { ISharedCacheStore } from '../storage/sharedCache/ISharedCacheStore.js';
 import { resolveDataDirectory } from '../paths/resolveDataDirectory.js';
 
 export interface CollectionItem {
@@ -28,6 +28,7 @@ export interface CollectionCacheConfig {
   cacheDir?: string;
   /** Legacy home/base directory whose cache subdirectory should be derived. */
   baseDir?: string;
+  sharedCache?: ISharedCacheStore;
 }
 
 /**
@@ -38,23 +39,49 @@ export class CollectionCache {
   private cacheFile: string;
   private readonly CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours for collection cache
 
+  // Single shared-cache key for the whole browse cache (one entry: {items}).
+  // Distinct from CollectionIndexManager's 'collection-index' and
+  // CollectionIndexCache's 'collection-index-cache' keys.
+  private static readonly SHARED_CACHE_KEY = 'collection-browse-cache';
+
   // File operations service for secure file I/O
   private readonly fileOperations: IFileOperationsService;
 
+  // Backend-honesty seam. When injected (DB/hosted mode), all persistence
+  // routes through the shared cache store instead of the filesystem, so DB-mode
+  // deployments never write the browse cache to disk. When null (CLI/local),
+  // the legacy filesystem path below is used unchanged.
+  private readonly sharedCache: ISharedCacheStore | null;
+
   constructor(config: CollectionCacheConfig);
-  constructor(fileOperations: IFileOperationsService, baseDir?: string);
+  constructor(fileOperations: IFileOperationsService, baseDir?: string, sharedCache?: ISharedCacheStore);
   constructor(
     configOrFileOperations: CollectionCacheConfig | IFileOperationsService,
     legacyBaseDir?: string,
+    legacySharedCache?: ISharedCacheStore,
   ) {
-    const config = 'fileOperations' in configOrFileOperations
+    const config: CollectionCacheConfig = 'fileOperations' in configOrFileOperations
       ? configOrFileOperations
-      : { fileOperations: configOrFileOperations, baseDir: legacyBaseDir };
+      : {
+          fileOperations: configOrFileOperations,
+          baseDir: legacyBaseDir,
+          sharedCache: legacySharedCache,
+        };
     this.fileOperations = config.fileOperations;
-    this.cacheDir = this.resolveCacheDir(config.cacheDir, config.baseDir);
-    this.cacheFile = path.join(this.cacheDir, 'collection-cache.json');
+    this.sharedCache = config.sharedCache ?? null;
+    this.cacheDir = path.resolve(this.resolveCacheDir(config.cacheDir, config.baseDir));
+    if (this.cacheDir.includes('\0')) {
+      throw new Error('Collection cache directory contains a null byte');
+    }
+    this.cacheFile = path.resolve(this.cacheDir, 'collection-cache.json');
+    if (path.dirname(this.cacheFile) !== this.cacheDir) {
+      throw new Error('Collection cache file must remain inside the configured cache directory');
+    }
 
-    logger.debug('CollectionCache initialized', { cacheFile: this.cacheFile });
+    logger.debug('CollectionCache initialized', {
+      cacheFile: this.cacheFile,
+      backend: this.sharedCache ? 'shared' : 'filesystem',
+    });
   }
 
   private resolveCacheDir(exactCacheDir?: string, legacyBaseDir?: string): string {
@@ -90,20 +117,11 @@ export class CollectionCache {
    * Load collection data from persistent cache
    */
   async loadCache(): Promise<CollectionCacheEntry | null> {
-    try {
-      // Validate cache file path (basic security check)
-      if (this.cacheFile.includes('..') || this.cacheFile.includes('\0')) {
-        // SECURITY FIX: Add audit logging for path traversal attempt detection
-        SecurityMonitor.logSecurityEvent({
-          type: 'PATH_TRAVERSAL_ATTEMPT',
-          severity: 'HIGH',
-          source: 'CollectionCache.loadCache',
-          details: `Potential path traversal attempt detected in cache file path: ${this.cacheFile.substring(0, 100)}`
-        });
-        logger.warn('Invalid cache file path, skipping cache load');
-        return null;
-      }
+    if (this.sharedCache) {
+      return this.loadFromSharedCache(this.sharedCache);
+    }
 
+    try {
       const data = await this.fileOperations.readFile(this.cacheFile, {
         source: 'CollectionCache.loadCache',
         maxSize: 50 * 1024 * 1024 // 50MB for collection cache
@@ -130,6 +148,11 @@ export class CollectionCache {
    * Save collection data to persistent cache
    */
   async saveCache(items: CollectionItem[], etag?: string): Promise<void> {
+    if (this.sharedCache) {
+      await this.saveToSharedCache(this.sharedCache, items, etag);
+      return;
+    }
+
     try {
       await this.ensureCacheDir();
 
@@ -213,6 +236,16 @@ export class CollectionCache {
    * Clear the cache
    */
   async clearCache(): Promise<void> {
+    if (this.sharedCache) {
+      try {
+        await this.sharedCache.delete(CollectionCache.SHARED_CACHE_KEY);
+        logger.debug('Collection cache cleared (shared cache store)');
+      } catch (error) {
+        logger.debug(`Failed to clear collection cache from shared store: ${error}`);
+      }
+      return;
+    }
+
     try {
       await this.fileOperations.deleteFile(this.cacheFile, undefined, {
         source: 'CollectionCache.clearCache'
@@ -222,6 +255,54 @@ export class CollectionCache {
       if ((error as any).code !== 'ENOENT') {
         logger.debug(`Failed to clear collection cache: ${error}`);
       }
+    }
+  }
+
+  /**
+   * Load the browse cache from the shared cache store (backend-honest path).
+   * Mirrors the filesystem loadCache contract: returns null when absent or
+   * past its TTL so callers refresh from GitHub.
+   */
+  private async loadFromSharedCache(store: ISharedCacheStore): Promise<CollectionCacheEntry | null> {
+    try {
+      const entry = await store.get(CollectionCache.SHARED_CACHE_KEY);
+      if (!entry) {
+        return null;
+      }
+
+      // Honor the TTL the same way the filesystem path does.
+      if (typeof entry.expiresAt === 'number' && Date.now() > entry.expiresAt) {
+        logger.debug('Collection cache expired (shared store), will refresh from GitHub');
+        return null;
+      }
+
+      const payload = entry.payload as { items?: CollectionItem[] } | null;
+      const items = Array.isArray(payload?.items) ? payload.items : [];
+      logger.debug(`Loaded ${items.length} items from collection cache (shared store)`);
+      return { items, timestamp: entry.fetchedAt, etag: entry.etag };
+    } catch (error) {
+      logger.debug(`Failed to load collection cache from shared store: ${error}`);
+      return null;
+    }
+  }
+
+  /**
+   * Persist the browse cache to the shared cache store (backend-honest path).
+   * Swallows errors like the filesystem path — caching failures must not break
+   * browsing.
+   */
+  private async saveToSharedCache(store: ISharedCacheStore, items: CollectionItem[], etag?: string): Promise<void> {
+    try {
+      await store.set({
+        cacheKey: CollectionCache.SHARED_CACHE_KEY,
+        payload: { items },
+        etag,
+        expiresAt: Date.now() + this.CACHE_TTL_MS
+      });
+      logger.debug(`Saved ${items.length} items to collection cache (shared store)`);
+    } catch (error) {
+      logger.error(`Failed to save collection cache to shared store: ${error}`);
+      // Don't throw - caching failures shouldn't break functionality
     }
   }
   

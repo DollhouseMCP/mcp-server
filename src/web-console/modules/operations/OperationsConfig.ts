@@ -126,7 +126,10 @@ export class OperatorConfigurationService {
     };
   }
 
-  async updateConfig(input: OperatorConfigUpdateInput): Promise<ConsoleHandlerResult> {
+  async updateConfig(
+    input: OperatorConfigUpdateInput,
+    store: IOperatorConfigStore = this.store,
+  ): Promise<ConsoleHandlerResult> {
     const definition = this.findDefinition(input.key);
     if (!definition) return configProblem(404, 'not_found', 'Operator configuration key was not found.');
     if (definition.mutability === 'read_only') {
@@ -136,7 +139,7 @@ export class OperatorConfigurationService {
       return configProblem(428, 'precondition_required', 'If-Match is required for operator configuration mutations.');
     }
 
-    const loaded = await this.store.load();
+    const loaded = await store.load();
     const current = this.toDto(loaded, definition);
     if (input.ifMatch !== current.etag) {
       return configProblem(412, 'precondition_failed', 'If-Match does not match the current operator configuration ETag.');
@@ -160,7 +163,7 @@ export class OperatorConfigurationService {
       pendingRestart,
     });
     try {
-      await this.store.save(next, { expectedUpdatedAt: loaded.updatedAt });
+      await store.save(next, { expectedUpdatedAt: loaded.updatedAt });
     } catch (error) {
       if (error instanceof OperatorConfigConflictError) {
         return configProblem(412, 'precondition_failed', 'Operator configuration changed while this request was being applied.');
@@ -168,7 +171,7 @@ export class OperatorConfigurationService {
       throw error;
     }
 
-    const saved = await this.store.load();
+    const saved = await store.load();
     const dto = this.toDto(saved, definition);
     return {
       status: 200,
@@ -191,7 +194,7 @@ export class OperatorConfigurationService {
       sensitivity: definition.sensitivity,
       mutability: definition.mutability,
       value_schema: definition.schema,
-      effective_at: metadata.pendingRestart ? null : metadata.effectiveAt ?? effectiveAt(config),
+      effective_at: metadata.pendingRestart ? null : metadata.effectiveAt,
       pending_restart: metadata.pendingRestart,
       etag: settingEtag(config, definition),
     };
@@ -291,7 +294,6 @@ function settingEtag(config: OperatorConfig, definition: OperatorConfigSettingDe
     sensitivity: definition.sensitivity,
     configured: definition.sensitivity === 'secret_write_only' ? isConfiguredSecret(value) : undefined,
     value: definition.sensitivity === 'secret_write_only' ? undefined : value,
-    updatedAt: config.updatedAt,
     metadata: configMetadata(config, definition.key),
   };
   const digest = createHash('sha256').update(canonicalJson(payload)).digest('base64url').slice(0, 32);
@@ -325,10 +327,6 @@ function setConfigMetadata(
     : {};
   root[key] = metadata;
   config.defaultsConfig[CONFIG_METADATA_KEY] = root;
-}
-
-function effectiveAt(config: OperatorConfig): string | null {
-  return config.updatedAt > 0 ? new Date(config.updatedAt).toISOString() : null;
 }
 
 function isConfiguredSecret(value: unknown): boolean {

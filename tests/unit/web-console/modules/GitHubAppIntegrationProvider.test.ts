@@ -70,6 +70,7 @@ describe('GitHubAppIntegrationProvider', () => {
       CONFIG.tokenUrl,
       expect.objectContaining({
         method: 'POST',
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           Accept: 'application/json',
           'Content-Type': 'application/x-www-form-urlencoded',
@@ -80,6 +81,7 @@ describe('GitHubAppIntegrationProvider', () => {
       2,
       'https://api.github.example/user',
       expect.objectContaining({
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({ Authorization: 'Bearer github-access-token' }),
       }),
     );
@@ -87,6 +89,7 @@ describe('GitHubAppIntegrationProvider', () => {
       3,
       'https://api.github.example/user/installations',
       expect.objectContaining({
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({ Authorization: 'Bearer github-access-token' }),
       }),
     );
@@ -109,6 +112,48 @@ describe('GitHubAppIntegrationProvider', () => {
     });
   });
 
+  it('preserves minted credentials for cleanup when post-exchange discovery fails', async () => {
+    const fetchMock = jest.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({
+        access_token: 'github-access-token',
+        refresh_token: 'github-refresh-token',
+      }))
+      .mockResolvedValueOnce(jsonResponse({ message: 'unavailable' }, 503))
+      .mockResolvedValueOnce(jsonResponse({ installations: [] }));
+    const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });
+
+    await expect(provider.exchangeAuthorizationCode({
+      code: 'provider-code',
+      codeVerifier: 'pkce-verifier',
+      redirectUri: 'https://console.example/callback',
+    })).rejects.toMatchObject({
+      accessToken: 'github-access-token',
+      refreshToken: 'github-refresh-token',
+    });
+  });
+
+  it('preserves minted credentials when the requested installation is absent', async () => {
+    const fetchMock = jest.fn<typeof fetch>()
+      .mockResolvedValueOnce(jsonResponse({
+        access_token: 'github-access-token',
+        refresh_token: 'github-refresh-token',
+      }))
+      .mockResolvedValueOnce(jsonResponse({ login: 'alice' }))
+      .mockResolvedValueOnce(jsonResponse({ installations: [] }));
+    const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });
+
+    await expect(provider.exchangeAuthorizationCode({
+      code: 'provider-code',
+      codeVerifier: 'pkce-verifier',
+      redirectUri: 'https://console.example/callback',
+      installationId: 'missing-installation',
+    })).rejects.toMatchObject({
+      accessToken: 'github-access-token',
+      refreshToken: 'github-refresh-token',
+      cause: expect.objectContaining({ message: 'github_integration_installation_lookup_failed' }),
+    });
+  });
+
   it('revokes an access-token grant with GitHub application credentials', async () => {
     const fetchMock = jest.fn<typeof fetch>().mockResolvedValueOnce(new Response(null, { status: 204 }));
     const provider = new GitHubAppIntegrationProvider({ ...CONFIG, fetch: fetchMock });
@@ -123,6 +168,7 @@ describe('GitHubAppIntegrationProvider', () => {
       'https://api.github.example/applications/Iv1.test-client/grant',
       expect.objectContaining({
         method: 'DELETE',
+        signal: expect.any(AbortSignal),
         headers: expect.objectContaining({
           Authorization: basicAuthorization(CONFIG.clientId, CONFIG.clientSecret),
           'Content-Type': 'application/json',
@@ -143,6 +189,14 @@ describe('GitHubAppIntegrationProvider', () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('rejects invalid request timeout configuration', () => {
+    expect(() => new GitHubAppIntegrationProvider({
+      ...CONFIG,
+      requestTimeoutMs: 0,
+      fetch: jest.fn<typeof fetch>(),
+    })).toThrow('requestTimeoutMs must be a positive integer');
   });
 });
 

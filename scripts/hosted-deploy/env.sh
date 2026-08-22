@@ -73,43 +73,29 @@ ensure_legacy_env_readable() {
 upsert_env_value() {
   local key="$1"
   local value="$2"
-  local tmp
+  local tmp line current_key replaced
+  [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "invalid environment key: ${key}"
+  if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+    die "environment value for ${key} must not contain a newline"
+  fi
   tmp="$(mktemp)"
-  awk -v key="${key}" -v value="${value}" '
-    BEGIN { replaced = 0 }
-    $0 ~ "^" key "=" {
-      print key "=" value
-      replaced = 1
-      next
-    }
-    { print }
-    END {
-      if (replaced == 0) {
-        print key "=" value
-      }
-    }
-  ' "${ENV_FILE}" > "${tmp}"
+  replaced=false
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    current_key="${line%%=*}"
+    if [[ "${current_key}" == "${key}" ]]; then
+      if [[ "${replaced}" == "false" ]]; then
+        printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
+        replaced=true
+      fi
+      continue
+    fi
+    printf '%s\n' "${line}" >> "${tmp}"
+  done < "${ENV_FILE}"
+  if [[ "${replaced}" == "false" ]]; then
+    printf '%s=%s\n' "${key}" "${value}" >> "${tmp}"
+  fi
   install -m 0600 "${tmp}" "${ENV_FILE}"
   rm -f "${tmp}"
-
-  return 0
-}
-
-ensure_env_file() {
-  ENV_FILE_CREATED=false
-  if [[ ! -f "${ENV_FILE}" ]]; then
-    ENV_FILE_CREATED=true
-    if [[ "${IMPORT_LEGACY_ENV}" == "true" && -f "${LEGACY_ENV_FILE}" ]]; then
-      ensure_legacy_env_readable
-      log "creating ${ENV_FILE}; selected values will be imported from ${LEGACY_ENV_FILE}"
-      install -m 0600 /dev/null "${ENV_FILE}"
-    else
-      log "creating ${ENV_FILE}"
-      install -m 0600 /dev/null "${ENV_FILE}"
-    fi
-  else
-    chmod 0600 "${ENV_FILE}"
-  fi
 
   return 0
 }
@@ -130,6 +116,10 @@ DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET
 DOLLHOUSE_GITHUB_CLIENT_ID
 DOLLHOUSE_GITHUB_CLIENT_SECRET
 DOLLHOUSE_MASTER_ENCRYPTION_KEY
+DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID
+DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED
+DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP
+DOLLHOUSE_AUTH_GENERATION
 EOF
   else
     cat <<'EOF'
@@ -169,9 +159,6 @@ sync_legacy_env_values() {
   if (( imported_count > 0 )); then
     log "imported ${imported_count} existing secret/config key(s) from ${LEGACY_ENV_FILE}: ${imported_keys}"
   fi
-  date -u +%Y-%m-%dT%H:%M:%SZ > "${LEGACY_IMPORT_MARKER}"
-  chmod 0600 "${LEGACY_IMPORT_MARKER}"
-
   return 0
 }
 
@@ -214,6 +201,189 @@ maybe_set_env_from_process() {
   return 0
 }
 
+process_variable_is_set() {
+  local key="$1"
+  declare -p "${key}" >/dev/null 2>&1
+}
+
+validate_auth_generation() {
+  local value="$1"
+  local max_safe_integer='9007199254740991'
+  if [[ ! "${value}" =~ ^[1-9][0-9]*$ ]] || \
+    ((${#value} > ${#max_safe_integer})) || \
+    { ((${#value} == ${#max_safe_integer})) && ((10#${value} > 10#${max_safe_integer})); }; then
+    die "DOLLHOUSE_AUTH_GENERATION must be a positive safe integer"
+  fi
+}
+
+trim_ascii_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
+}
+
+validate_master_key_id() {
+  local value="$1"
+  local label="$2"
+  local byte_length
+
+  [[ "${value}" =~ ^[A-Za-z0-9._:-]+$ ]] || \
+    die "${label} must be nonempty and use only ASCII letters, digits, '.', '_', ':', or '-'"
+  byte_length="$(LC_ALL=C printf '%s' "${value}" | wc -c | tr -d '[:space:]')"
+  (( byte_length <= 255 )) || die "${label} must be at most 255 UTF-8 bytes"
+}
+
+validate_master_key_base64() {
+  local value="$1"
+  local label="$2"
+  local decoded_bytes
+
+  [[ "${value}" =~ ^[A-Za-z0-9+/]{43}=$ ]] || \
+    die "${label} must be a base64-encoded 32-byte key"
+  if ! decoded_bytes="$(printf '%s' "${value}" | openssl base64 -d -A 2>/dev/null | wc -c | tr -d '[:space:]')"; then
+    die "${label} must be valid base64"
+  fi
+  [[ "${decoded_bytes}" == "32" ]] || die "${label} must decode to exactly 32 bytes"
+}
+
+validate_retired_master_keys() {
+  local value="$1"
+  local active_key_id="$2"
+  local entry key_id encoded seen
+  local -a entries
+
+  [[ -n "${value}" ]] || return 0
+  seen=""
+  IFS=',' read -r -a entries <<< "${value}"
+  for entry in "${entries[@]}"; do
+    entry="$(trim_ascii_whitespace "${entry}")"
+    [[ "${entry}" == *=* ]] || \
+      die "DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED entries must be 'keyId=base64key'"
+    key_id="$(trim_ascii_whitespace "${entry%%=*}")"
+    encoded="$(trim_ascii_whitespace "${entry#*=}")"
+    validate_master_key_id "${key_id}" "retained master-key ID"
+    validate_master_key_base64 "${encoded}" "retained master key '${key_id}'"
+    [[ "${key_id}" != "${active_key_id}" ]] || \
+      die "DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED must not contain the active key ID '${active_key_id}'"
+    case $'\n'"${seen}"$'\n' in
+      *$'\n'"${key_id}"$'\n'*) die "retained master-key ID '${key_id}' is duplicated" ;;
+    esac
+    seen="${seen}${seen:+$'\n'}${key_id}"
+  done
+}
+
+retired_master_keys_contains() {
+  local value="$1"
+  local expected_key_id="$2"
+  local expected_key="$3"
+  local entry key_id encoded
+  local -a entries
+
+  [[ -n "${value}" ]] || return 1
+  IFS=',' read -r -a entries <<< "${value}"
+  for entry in "${entries[@]}"; do
+    entry="$(trim_ascii_whitespace "${entry}")"
+    key_id="$(trim_ascii_whitespace "${entry%%=*}")"
+    encoded="$(trim_ascii_whitespace "${entry#*=}")"
+    if [[ "${key_id}" == "${expected_key_id}" && "${encoded}" == "${expected_key}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+apply_auth_generation_from_process() {
+  local key="DOLLHOUSE_AUTH_GENERATION"
+  process_variable_is_set "${key}" || return 0
+
+  local requested="${!key}"
+  [[ -n "${requested}" ]] || return 0
+  validate_auth_generation "${requested}"
+
+  local persisted
+  persisted="$(env_value "${key}")"
+  if [[ -n "${persisted}" ]]; then
+    validate_auth_generation "${persisted}"
+    if (( requested < persisted )); then
+      die "DOLLHOUSE_AUTH_GENERATION cannot move backwards from ${persisted} to ${requested}"
+    fi
+    (( requested == persisted )) && return 0
+  fi
+  upsert_env_value "${key}" "${requested}"
+}
+
+apply_master_encryption_controls_from_process() {
+  local persisted_key persisted_key_id persisted_retired
+  local target_key target_key_id target_retired rewrap
+  local key_supplied id_supplied retired_supplied key_changed id_changed
+
+  persisted_key="$(env_value DOLLHOUSE_MASTER_ENCRYPTION_KEY)"
+  persisted_key_id="$(env_value DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID)"
+  persisted_retired="$(env_value DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED)"
+  [[ -n "${persisted_key_id}" ]] || persisted_key_id="master-v1"
+
+  key_supplied=false
+  id_supplied=false
+  retired_supplied=false
+  process_variable_is_set DOLLHOUSE_MASTER_ENCRYPTION_KEY && key_supplied=true
+  process_variable_is_set DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID && id_supplied=true
+  process_variable_is_set DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED && retired_supplied=true
+
+  if [[ "${key_supplied}" == "true" ]]; then
+    target_key="${DOLLHOUSE_MASTER_ENCRYPTION_KEY}"
+  elif [[ -n "${persisted_key}" ]]; then
+    target_key="${persisted_key}"
+  else
+    target_key="$(random_base64 32)"
+  fi
+  if [[ "${id_supplied}" == "true" ]]; then
+    target_key_id="${DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID}"
+  else
+    target_key_id="${persisted_key_id}"
+  fi
+  if [[ "${retired_supplied}" == "true" ]]; then
+    target_retired="${DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED}"
+  else
+    target_retired="${persisted_retired}"
+  fi
+
+  validate_master_key_id "${target_key_id}" "DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID"
+  validate_master_key_base64 "${target_key}" "DOLLHOUSE_MASTER_ENCRYPTION_KEY"
+  validate_retired_master_keys "${target_retired}" "${target_key_id}"
+
+  if [[ -n "${persisted_key}" ]]; then
+    validate_master_key_id "${persisted_key_id}" "persisted DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID"
+    validate_master_key_base64 "${persisted_key}" "persisted DOLLHOUSE_MASTER_ENCRYPTION_KEY"
+    key_changed=false
+    id_changed=false
+    [[ "${target_key}" == "${persisted_key}" ]] || key_changed=true
+    [[ "${target_key_id}" == "${persisted_key_id}" ]] || id_changed=true
+    if [[ "${key_changed}" != "${id_changed}" ]]; then
+      die "DOLLHOUSE_MASTER_ENCRYPTION_KEY and DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID must rotate together"
+    fi
+    if [[ "${key_changed}" == "true" ]] && \
+      ! retired_master_keys_contains "${target_retired}" "${persisted_key_id}" "${persisted_key}"; then
+      die "master-key rotation requires the previous key '${persisted_key_id}' in DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED"
+    fi
+  fi
+
+  if process_variable_is_set DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP; then
+    rewrap="${DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP}"
+    [[ "${rewrap}" == "true" || "${rewrap}" == "false" ]] || \
+      die "DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP must be true or false"
+    upsert_env_value DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP "${rewrap}"
+  fi
+
+  # The complete envelope-key state is written to the staging file only after
+  # every supplied value and transition invariant has passed validation.
+  upsert_env_value DOLLHOUSE_MASTER_ENCRYPTION_KEY "${target_key}"
+  upsert_env_value DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID "${target_key_id}"
+  if [[ "${retired_supplied}" == "true" || -n "${persisted_retired}" ]]; then
+    upsert_env_value DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED "${target_retired}"
+  fi
+}
+
 prompt_env_if_missing() {
   local key="$1"
   local label="$2"
@@ -229,7 +399,7 @@ prompt_env_if_missing() {
     return 0
   fi
   if [[ ! -t 0 ]]; then
-    warn "${key} is not set; add it to ${ENV_FILE} before GitHub OAuth sign-in"
+    warn "${key} is not set; add it to ${ENV_FILE_DISPLAY_PATH:-${ENV_FILE}} before GitHub OAuth sign-in"
     return 0
   fi
 
@@ -260,8 +430,7 @@ auth_methods_include() {
   return 1
 }
 
-write_env_defaults() {
-  ensure_env_file
+write_env_defaults_to_staged_file() {
   sync_legacy_env_values
   upsert_env_value DOLLHOUSE_HOSTED_INSTANCE_NAME "${INSTANCE_NAME}"
   upsert_env_value DOLLHOUSE_HOSTED_IMAGE_TAG "${IMAGE_TAG}"
@@ -288,12 +457,13 @@ write_env_defaults() {
   ensure_env_secret DOLLHOUSE_COOKIE_SIGNING_SECRET 32
   ensure_env_secret DOLLHOUSE_INVITE_TOKEN_SECRET 32
   ensure_env_secret DOLLHOUSE_AUDIT_HMAC_SECRET 32
-  ensure_env_secret_base64 DOLLHOUSE_MASTER_ENCRYPTION_KEY 32
   maybe_set_env_from_process DOLLHOUSE_AUTH_ISSUER
   maybe_set_env_from_process DOLLHOUSE_AUTH_AUDIENCE
   maybe_set_env_from_process DOLLHOUSE_AUTH_JWKS_URI
   maybe_set_env_from_process DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP
   maybe_set_env_from_process DOLLHOUSE_AUTH_ALLOWLIST_SEED_FILE
+  apply_auth_generation_from_process
+  apply_master_encryption_controls_from_process
   if [[ "${AUTH_PROVIDER}" == "embedded" ]] && auth_methods_include github; then
     prompt_env_if_missing DOLLHOUSE_AUTH_GITHUB_CLIENT_ID "GitHub OAuth client ID" false
     prompt_env_if_missing DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET "GitHub OAuth client secret" true
@@ -302,11 +472,72 @@ write_env_defaults() {
   return 0
 }
 
+write_env_defaults() {
+  local target_env_file staged_env_file target_was_created mark_legacy_import
+  target_env_file="${ENV_FILE}"
+  target_was_created=false
+  mark_legacy_import=false
+  [[ -f "${target_env_file}" ]] || target_was_created=true
+
+  if [[ "${IMPORT_LEGACY_ENV}" == "true" && -f "${LEGACY_ENV_FILE}" && ! -f "${LEGACY_IMPORT_MARKER}" ]]; then
+    ensure_legacy_env_readable
+    mark_legacy_import=true
+  fi
+
+  staged_env_file="$(mktemp "${target_env_file}.staged.XXXXXX")"
+  if [[ -f "${target_env_file}" ]]; then
+    install -m 0600 "${target_env_file}" "${staged_env_file}"
+  else
+    install -m 0600 /dev/null "${staged_env_file}"
+    if [[ "${mark_legacy_import}" == "true" ]]; then
+      log "creating ${target_env_file}; selected values will be imported from ${LEGACY_ENV_FILE}"
+    else
+      log "creating ${target_env_file}"
+    fi
+  fi
+
+  if ! (
+    set -e
+    ENV_FILE="${staged_env_file}"
+    ENV_FILE_DISPLAY_PATH="${target_env_file}"
+    ENV_FILE_CREATED="${target_was_created}"
+    write_env_defaults_to_staged_file
+  ); then
+    rm -f "${staged_env_file}"
+    return 1
+  fi
+
+  chmod 0600 "${staged_env_file}"
+  mv -f "${staged_env_file}" "${target_env_file}"
+  ENV_FILE="${target_env_file}"
+  if [[ "${mark_legacy_import}" == "true" ]]; then
+    date -u +%Y-%m-%dT%H:%M:%SZ > "${LEGACY_IMPORT_MARKER}"
+    chmod 0600 "${LEGACY_IMPORT_MARKER}"
+  fi
+
+  return 0
+}
+
 load_env_file() {
-  set -a
-  # shellcheck disable=SC1090
-  . "${ENV_FILE}"
-  set +a
+  local line key value loaded_key
+  # The empty sentinel keeps `${loaded_keys[@]}` nounset-safe on macOS Bash 3.2.
+  local loaded_keys=('')
+  if ! cmp -s "${ENV_FILE}" <(LC_ALL=C tr -d '\000' < "${ENV_FILE}"); then
+    die "${ENV_FILE} contains a NUL byte"
+  fi
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -z "${line}" || "${line}" == \#* ]] && continue
+    [[ "${line}" == *=* ]] || die "invalid environment record in ${ENV_FILE}"
+    key="${line%%=*}"
+    value="${line#*=}"
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || die "invalid environment key in ${ENV_FILE}: ${key}"
+    for loaded_key in "${loaded_keys[@]}"; do
+      [[ "${loaded_key}" != "${key}" ]] || die "duplicate environment key in ${ENV_FILE}: ${key}"
+    done
+    loaded_keys+=("${key}")
+    printf -v "${key}" '%s' "${value}"
+    export "${key?}"
+  done < "${ENV_FILE}"
 
   return 0
 }

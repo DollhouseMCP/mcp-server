@@ -3,17 +3,49 @@ import express from 'express';
 import request from 'supertest';
 
 import type { DiContainerFacade } from '../../../src/di/DiContainerFacade.js';
-import { InMemorySigningKeyStore } from '../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 import { InMemoryUserConfigStore } from '../../../src/storage/userConfig/InMemoryUserConfigStore.js';
 
 const CONSOLE_SELF_CAPABILITY = 'console:self';
 const SHARED_HOSTED_PROFILE = 'shared-hosted';
 const TEST_PUBLIC_BASE_URL = 'https://console.example.test';
+const FIXED_NOW_ISO = '2026-05-26T12:00:00.000Z';
+
+class TestPostgresSigningKeyStore {
+  constructor(readonly db: unknown) {}
+
+  createPostgresTransactionAdapter(database: unknown) {
+    if (database !== this.db) throw new Error('database mismatch');
+    return {
+      getByKid: jest.fn(),
+      rotate: jest.fn(),
+      retire: jest.fn(),
+      delete: jest.fn(),
+    };
+  }
+}
+
+class TestPostgresConsoleAuthPolicyStore {
+  constructor(readonly db: unknown) {}
+}
+
+jest.unstable_mockModule('../../../src/storage/signingKeys/PostgresSigningKeyStore.js', () => ({
+  deleteSigningKeyWithTx: jest.fn(),
+  getSigningKeyByKidWithTx: jest.fn(),
+  PostgresSigningKeyStore: TestPostgresSigningKeyStore,
+  retireSigningKeyWithTx: jest.fn(),
+  rotateSigningKeyWithTx: jest.fn(),
+}));
+jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleAuthPolicyStore.js', () => ({
+  loadConsoleAuthPolicyWithTx: jest.fn(),
+  PostgresConsoleAuthPolicyStore: TestPostgresConsoleAuthPolicyStore,
+  saveConsoleAuthPolicyWithTx: jest.fn(),
+}));
 
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleSessionStore.js', () => ({
   PostgresConsoleSessionStore: class PostgresConsoleSessionStore {
     constructor(readonly database: unknown) {}
   },
+  revokeConsoleSessionsForUserWithTx: jest.fn(() => Promise.resolve(0)),
 }));
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresLoginTransactionStore.js', () => ({
   PostgresLoginTransactionStore: class PostgresLoginTransactionStore {
@@ -31,6 +63,7 @@ jest.unstable_mockModule('../../../src/web-console/stores/PostgresIdempotencySto
   },
 }));
 jest.unstable_mockModule('../../../src/web-console/stores/PostgresConsoleFactorStore.js', () => ({
+  disableActiveTotpWithTx: jest.fn(),
   PostgresConsoleFactorStore: class PostgresConsoleFactorStore {
     constructor(readonly database: unknown) {}
   },
@@ -118,6 +151,23 @@ function productionAdapter<T>(): T {
   return new ProductionAdapter() as T;
 }
 
+function loginTransactionAdapter<T>(): T {
+  return {
+    fenceIntegrationAuthorizationsByDescriptor: () => Promise.resolve(true),
+  } as T;
+}
+
+function postgresSigningKeyStore(database: unknown): TestPostgresSigningKeyStore {
+  return new TestPostgresSigningKeyStore(database);
+}
+
+function seedPostgresSigningKeyStore(container: TestContainer): void {
+  container.seed(
+    'SigningKeyStore',
+    postgresSigningKeyStore(container.resolve('SystemDatabaseInstance')),
+  );
+}
+
 function seedCanonicalPortfolioManagers(container: TestContainer): void {
   container.seed('UserIdResolver', () => '018f3d47-73ae-7f10-a0de-0742618d4fb1');
   for (const serviceName of [
@@ -193,7 +243,7 @@ describe('WebConsoleRegistrar', () => {
     const composition = await new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 11),
       reportCleanupError,
-      now: () => new Date('2026-05-26T12:00:00.000Z'),
+      now: () => new Date(FIXED_NOW_ISO),
     }).bootstrapAndRegister(container);
 
     expect(composition).toMatchObject({
@@ -364,6 +414,126 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container);
 
     expect(composition.portfolioStore).toBe(portfolioStore);
+  });
+
+  it('omits the collection catalog module unless collection routes are enabled', async () => {
+    const container = new TestContainer();
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 21),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    expect(
+      composition.registry.createRouteManifest().routes.some(route => route.moduleId === 'collection'),
+    ).toBe(false);
+  });
+
+  it('registers the collection catalog module from the collection engine services when enabled', async () => {
+    const container = new TestContainer();
+    container.seed('CollectionIndexManager', { getIndex: jest.fn() });
+    container.seed('CollectionSearch', { searchCollectionWithOptions: jest.fn() });
+    container.seed('PersonaDetails', { getCollectionContent: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 22),
+      enableCollectionRoutes: true,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    const collectionRoutes = composition.registry.createRouteManifest().routes
+      .filter(route => route.moduleId === 'collection');
+    // Browse-only: portfolio write flag is off, so no install route.
+    expect(collectionRoutes.map(route => route.path)).toEqual([
+      '/api/v1/collection/elements',
+      '/api/v1/collection/elements/:type/:name',
+    ]);
+    for (const route of collectionRoutes) {
+      expect(route.requiredCapability).toBe(CONSOLE_SELF_CAPABILITY);
+      expect(route.privacyClass).toBe('public_catalog');
+      expect(route.rateLimit).toBe('collection_fetch');
+    }
+  });
+
+  it('warns when collection routes are enabled with a process-local rate-limit backend', async () => {
+    // Default DOLLHOUSE_RATE_LIMIT_BACKEND is "memory" (process-local), so the
+    // collection-fetch deployment budget is per-replica — the registrar must
+    // warn operators to switch to a shared backend.
+    const { logger } = await import('../../../src/utils/logger.js');
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const container = new TestContainer();
+      container.seed('CollectionIndexManager', { getIndex: jest.fn() });
+      container.seed('CollectionSearch', { searchCollectionWithOptions: jest.fn() });
+      container.seed('PersonaDetails', { getCollectionContent: jest.fn() });
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+      await new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 23),
+        enableCollectionRoutes: true,
+        registerCleanup: false,
+      }).bootstrapAndRegister(container);
+
+      const warned = warn.mock.calls.some(call =>
+        typeof call[0] === 'string' && call[0].includes('DOLLHOUSE_RATE_LIMIT_BACKEND'));
+      expect(warned).toBe(true);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('does not emit the rate-limit-backend warning when collection routes are disabled', async () => {
+    const { logger } = await import('../../../src/utils/logger.js');
+    const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+    try {
+      const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+      await new WebConsoleRegistrar({
+        opaqueValueHmacKey: Buffer.alloc(32, 25),
+        registerCleanup: false,
+      }).bootstrapAndRegister(new TestContainer());
+
+      const warned = warn.mock.calls.some(call =>
+        typeof call[0] === 'string' && call[0].includes('DOLLHOUSE_RATE_LIMIT_BACKEND'));
+      expect(warned).toBe(false);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('adds the install route only when collection AND portfolio write flags are both enabled', async () => {
+    const container = new TestContainer();
+    container.seed('CollectionIndexManager', { getIndex: jest.fn() });
+    container.seed('CollectionSearch', { searchCollectionWithOptions: jest.fn() });
+    container.seed('PersonaDetails', { getCollectionContent: jest.fn() });
+    container.seed('ElementInstaller', { fetchAndValidate: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 24),
+      enableCollectionRoutes: true,
+      enablePortfolioWriteRoutes: true,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    const install = composition.registry.createRouteManifest().routes
+      .find(route => route.moduleId === 'collection' && route.method === 'POST');
+    expect(install?.path).toBe('/api/v1/me/portfolio/from-collection');
+    expect(install?.privacyClass).toBe('self_private');
+    expect(install?.idempotency).toBe('required');
+    expect(install?.rateLimit).toBe('collection_fetch');
+  });
+
+  it('fails fast when collection routes are enabled without the collection engine services', async () => {
+    const container = new TestContainer();
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 23),
+      enableCollectionRoutes: true,
+      registerCleanup: false,
+    }).bootstrapAndRegister(container)).rejects.toThrow(/CollectionIndexManager/);
   });
 
   it('registers protected correlation rate limiting only with explicit shared dependencies', async () => {
@@ -591,7 +761,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
-    container.seed('SigningKeyStore', productionAdapter());
+    seedPostgresSigningKeyStore(container);
     container.seed('RateLimitStore', productionAdapter());
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     container.seed('WebConsoleAccountAllowlistAuthorityCutoverComplete', true);
@@ -642,7 +812,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
-    container.seed('SigningKeyStore', productionAdapter());
+    seedPostgresSigningKeyStore(container);
     container.seed('RateLimitStore', productionAdapter());
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
@@ -716,10 +886,10 @@ describe('WebConsoleRegistrar', () => {
 
   it('serves representative public, self, and admin paths through the dormant mounted router', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
-    container.seed('SigningKeyStore', productionAdapter());
+    seedPostgresSigningKeyStore(container);
     container.seed('RateLimitStore', productionAdapter());
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
@@ -757,7 +927,7 @@ describe('WebConsoleRegistrar', () => {
       approvalAuditQuery: productionAdapter(),
       authenticationAuditQuery: productionAdapter(),
       registerCleanup: false,
-      now: () => new Date('2026-05-26T12:00:00.000Z'),
+      now: () => new Date(FIXED_NOW_ISO),
     }).bootstrapAndRegister(container);
 
     const app = express();
@@ -769,7 +939,7 @@ describe('WebConsoleRegistrar', () => {
       body: {
         status: 'ok',
         ready: true,
-        checked_at: '2026-05-26T12:00:00.000Z',
+        checked_at: FIXED_NOW_ISO,
       },
     });
     await expect(request(app).get('/api/v1/me/profile')).resolves.toMatchObject({
@@ -782,12 +952,74 @@ describe('WebConsoleRegistrar', () => {
     });
   });
 
-  it('uses the deployment-derived replica id when hosted/shared startup omits an explicit one', async () => {
+  it('reports readiness as degraded when the database liveness probe fails', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    // The real `SELECT 1` liveness probe now fails closed instead of the
+    // representative-paths fixture's always-succeeding stub.
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockRejectedValue(new Error('db down')) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
-    container.seed('SigningKeyStore', productionAdapter());
+    seedPostgresSigningKeyStore(container);
+    container.seed('RateLimitStore', productionAdapter());
+    container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
+    container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      activationProfile: SHARED_HOSTED_PROFILE,
+      enableApiV1Mount: true,
+      productionReadiness: {
+        databaseVerificationReady: true,
+        portfolioSyncWorkerReady: true,
+      },
+      securityInvalidationReplicaId: 'replica-a',
+      opaqueValueHmacKey: Buffer.alloc(32, 37),
+      protectedCorrelationSelectorHmacKey: Buffer.alloc(32, 38),
+      secretEncryptionKey: {
+        keyId: 'prod-key',
+        key: Buffer.alloc(32, 39),
+      },
+      authStorage: productionAdapter(),
+      oauthGrantRevocationService: productionAdapter(),
+      consoleOAuthClient: productionAdapter(),
+      accountInviteIssuer: productionAdapter(),
+      githubIntegrationProvider: productionAdapter(),
+      publicBaseUrl: TEST_PUBLIC_BASE_URL,
+      portfolioStore: productionAdapter(),
+      approvalStore: productionAdapter(),
+      approvalEventSink: productionAdapter(),
+      executionReader: productionAdapter(),
+      gatekeeperReader: productionAdapter(),
+      telemetryQuery: productionAdapter(),
+      ownedActivityQuery: productionAdapter(),
+      ownedMetricQuery: productionAdapter(),
+      approvalAuditQuery: productionAdapter(),
+      authenticationAuditQuery: productionAdapter(),
+      registerCleanup: false,
+      now: () => new Date(FIXED_NOW_ISO),
+    }).bootstrapAndRegister(container);
+
+    const app = express();
+    app.use(composition.apiV1Mount?.router ?? express.Router());
+    composition.apiV1Mount?.markMounted();
+
+    await expect(request(app).get('/api/v1/health/ready')).resolves.toMatchObject({
+      status: 503,
+      body: {
+        status: 'not_ready',
+        ready: false,
+        checked_at: FIXED_NOW_ISO,
+      },
+    });
+  });
+
+  it('uses the deployment-derived replica id when hosted/shared startup omits an explicit one', async () => {
+    const container = new TestContainer();
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', productionAdapter());
+    seedPostgresSigningKeyStore(container);
     container.seed('RateLimitStore', productionAdapter());
     container.seed('WebConsoleSessionActivationStateAdapter', productionAdapter());
     container.seed('WebConsoleSessionActivationEventSink', productionAdapter());
@@ -847,7 +1079,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', productionAdapter());
-    container.seed('SigningKeyStore', productionAdapter());
+    seedPostgresSigningKeyStore(container);
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     seedCanonicalPortfolioManagers(container);
 
@@ -873,7 +1105,7 @@ describe('WebConsoleRegistrar', () => {
     }).bootstrapAndRegister(container);
 
     const registeredIds = new Set(composition.registry.createRouteManifest().routes.map(route => route.moduleId));
-    expect([...registeredIds].sort((a, b) => a.localeCompare(b))).toEqual(['auth', 'health']);
+    expect([...registeredIds].sort((a, b) => a.localeCompare(b))).toEqual(['auth', 'consoleMeta', 'health']);
     expect(composition.apiV1Mount).toBeNull();
     expect(composition.routesMounted).toBe(false);
   });
@@ -1129,6 +1361,7 @@ describe('WebConsoleRegistrar', () => {
       createAccountAdminModule,
       createActivationModule,
       createAuditModule,
+      createCollectionModule,
       createExecutionModule,
       createIntegrationModule,
       createOperationsModule,
@@ -1175,6 +1408,7 @@ describe('WebConsoleRegistrar', () => {
     registry.register(createRuntimeSessionModule({
       runtimeStore,
       accountAdminStore: productionAdapter(),
+      transactionRunner: productionAdapter(),
     }));
     registry.register(createSecurityAdminModule({
       signingKeyStore: productionAdapter(),
@@ -1192,7 +1426,7 @@ describe('WebConsoleRegistrar', () => {
     }));
     registry.register(createIntegrationModule({
       integrationStore: productionAdapter(),
-      loginTransactions: productionAdapter(),
+      loginTransactions: loginTransactionAdapter(),
       opaqueValues: productionAdapter(),
       secretEncryption: productionAdapter(),
       githubProvider: productionAdapter(),
@@ -1214,11 +1448,17 @@ describe('WebConsoleRegistrar', () => {
       },
       telemetry: new InMemoryConsoleTelemetryQuery(),
       operatorConfigStore: productionAdapter(),
+      transactionRunner: productionAdapter(),
     }));
     registry.register(createPortfolioModule({
       portfolioStore,
       integrationStore: productionAdapter(),
       syncJobStore: new InMemoryPortfolioSyncJobStore(),
+    }));
+    registry.register(createCollectionModule({
+      index: productionAdapter(),
+      search: productionAdapter(),
+      details: productionAdapter(),
     }));
     registry.register(createSessionTelemetryModule({
       runtimeStore,
@@ -1234,7 +1474,7 @@ describe('WebConsoleRegistrar', () => {
         accountAdminStore: productionAdapter(),
         accountAllowlistStore: productionAdapter(),
         sessionStore: productionAdapter(),
-        loginTransactionStore: productionAdapter(),
+        loginTransactionStore: loginTransactionAdapter(),
         idempotencyStore: productionAdapter(),
         factorStore: productionAdapter(),
         securityInvalidationStore: productionAdapter(),
@@ -1246,6 +1486,7 @@ describe('WebConsoleRegistrar', () => {
         oauthGrantRevocationService: productionAdapter(),
         protectedCorrelationRateLimiter: productionAdapter(),
         protectedCorrelationRateLimitStore: productionAdapter(),
+        collectionFetchRateLimiter: productionAdapter(),
         adminAuditQuery: productionAdapter(),
         approvalAuditQuery: productionAdapter(),
         authenticationAuditQuery: productionAdapter(),
@@ -1391,7 +1632,7 @@ describe('WebConsoleRegistrar', () => {
     container.seed('SystemDatabaseInstance', database);
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
-    container.seed('SigningKeyStore', new InMemorySigningKeyStore());
+    seedPostgresSigningKeyStore(container);
     const lifecycle = { registerPeriodicTask: jest.fn() };
     container.seed('LifecycleService', lifecycle);
     seedCanonicalPortfolioManagers(container);
@@ -1432,9 +1673,52 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.authenticationAuditQuery.constructor.name).toBe('PostgresAuthenticationAuditQuery');
   });
 
+  it('rejects PostgreSQL custom mutation stores without a matching transaction runner', async () => {
+    const container = new TestContainer();
+    const database = {};
+    container.seed('SystemDatabaseInstance', database);
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
+    seedPostgresSigningKeyStore(container);
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    seedCanonicalPortfolioManagers(container);
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 20),
+      authPolicyStore: productionAdapter(),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container)).rejects.toThrow(
+      'custom signing-key or auth-policy stores require a matching ' +
+      'WebConsoleAccountAdminMutationTransactionRunner registration',
+    );
+  });
+
+  it('uses an injected PostgreSQL mutation runner with custom stores', async () => {
+    const container = new TestContainer();
+    const database = {};
+    const customRunner = productionAdapter();
+    container.seed('SystemDatabaseInstance', database);
+    container.seed('AuditHmacResolver', { resolve: jest.fn() });
+    container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
+    container.seed('WebConsoleAccountAdminMutationTransactionRunner', customRunner);
+    container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
+    seedCanonicalPortfolioManagers(container);
+    const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 21),
+      signingKeyStore: productionAdapter(),
+      authPolicyStore: productionAdapter(),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    expect(composition.accountAdminMutationTransactionRunner).toBe(customRunner);
+  });
+
   it('fails clearly when PostgreSQL self-service settings lacks UserConfigStore', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     seedCanonicalPortfolioManagers(container);
@@ -1448,7 +1732,7 @@ describe('WebConsoleRegistrar', () => {
 
   it('fails clearly when PostgreSQL storage lacks durable admin audit HMAC resolution', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     seedCanonicalPortfolioManagers(container);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
@@ -1461,10 +1745,10 @@ describe('WebConsoleRegistrar', () => {
 
   it('fails clearly when a database is configured but the element managers are unregistered', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
-    container.seed('SigningKeyStore', new InMemorySigningKeyStore());
+    seedPostgresSigningKeyStore(container);
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
@@ -1479,10 +1763,10 @@ describe('WebConsoleRegistrar', () => {
 
   it('fails clearly when a database is configured and the manager-backed portfolio store is disabled', async () => {
     const container = new TestContainer();
-    container.seed('SystemDatabaseInstance', {});
+    container.seed('SystemDatabaseInstance', { execute: jest.fn().mockResolvedValue([]) });
     container.seed('AuditHmacResolver', { resolve: jest.fn() });
     container.seed('UserConfigStore', { load: jest.fn(), save: jest.fn() });
-    container.seed('SigningKeyStore', new InMemorySigningKeyStore());
+    seedPostgresSigningKeyStore(container);
     container.seed('LifecycleService', { registerPeriodicTask: jest.fn() });
     seedCanonicalPortfolioManagers(container);
     const { WebConsoleRegistrar } = await import('../../../src/web-console/index.js');

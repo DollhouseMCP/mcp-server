@@ -206,10 +206,7 @@ describe('Memory addEntry Transport Regression', () => {
       }))
     );
 
-    for (const result of results) {
-      expect(result.success).toBe(true);
-      expect(result.error).toBeUndefined();
-    }
+    expect(results.filter(result => !result.success || result.error !== undefined)).toEqual([]);
 
     const details = await callToolJson(client, 'mcp_aql_read', {
       operation: 'get_element_details',

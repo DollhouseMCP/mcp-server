@@ -281,6 +281,132 @@
       "when": 1779070000000,
       "tag": "0039_add_users_deleted_at",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1779075000000,
+      "tag": "0040_web_console_integration_provider_generalization",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1779080000000,
+      "tag": "0041_web_console_integration_descriptors",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1779085000000,
+      "tag": "0042_web_console_integration_token_refresh",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1779085100000,
+      "tag": "0043_drop_portfolio_sync_cancelled_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1779085200000,
+      "tag": "0044_web_console_list_keyset_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1779085300000,
+      "tag": "0045_normalize_allowlist_identities",
+      "breakpoints": true
+    },
+    {
+      "idx": 46,
+      "version": "7",
+      "when": 1779085400000,
+      "tag": "0046_bind_integrations_to_descriptors",
+      "breakpoints": true
+    },
+    {
+      "idx": 47,
+      "version": "7",
+      "when": 1779085500000,
+      "tag": "0047_bind_oauth_flows_to_descriptor_routing",
+      "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1779085600000,
+      "tag": "0048_allowlist_authority_order",
+      "breakpoints": true
+    },
+    {
+      "idx": 49,
+      "version": "7",
+      "when": 1779085700000,
+      "tag": "0049_integration_descriptor_secret_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 50,
+      "version": "7",
+      "when": 1779085800000,
+      "tag": "0050_integration_descriptor_seed_revision",
+      "breakpoints": true
+    },
+    {
+      "idx": 51,
+      "version": "7",
+      "when": 1779085900000,
+      "tag": "0051_integration_concurrency_fences",
+      "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "7",
+      "when": 1779086000000,
+      "tag": "0052_curated_provider_deployment_state",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "7",
+      "when": 1787331600000,
+      "tag": "0053_agent_replacement_journal",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "7",
+      "when": 1787420800000,
+      "tag": "0054_auth_subject_revocation_fences",
+      "breakpoints": true
+    },
+    {
+      "idx": 55,
+      "version": "7",
+      "when": 1787507200000,
+      "tag": "0055_elements_canonical_name_uniqueness",
+      "breakpoints": true
+    },
+    {
+      "idx": 56,
+      "version": "7",
+      "when": 1787593600000,
+      "tag": "0056_console_session_authz_generation",
+      "breakpoints": true
+    },
+    {
+      "idx": 57,
+      "version": "7",
+      "when": 1787680000000,
+      "tag": "0057_integration_credential_cleanup_pending",
+      "breakpoints": true
     }
   ]
 }

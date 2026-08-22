@@ -38,10 +38,12 @@ services:
       - /app/tmp:noexec,nosuid,size=50M,mode=1777
       - /app/logs:noexec,nosuid,size=50M,mode=1777
 
-    # Expose the MCP HTTP endpoint.
+    # Expose the MCP HTTP endpoint on loopback by default. Set
+    # DOLLHOUSE_HTTP_PUBLISH_ADDRESS=0.0.0.0 only when authentication and the
+    # surrounding network policy are intentionally configured for remote use.
     # If you change DOLLHOUSE_HTTP_PORT, update this mapping to match.
     ports:
-      - "3000:3000"
+      - "${DOLLHOUSE_HTTP_PUBLISH_ADDRESS:-127.0.0.1}:3000:3000"
 
     environment:
       - NODE_ENV=production
@@ -50,11 +52,14 @@ services:
       # Bind to all interfaces (required for Docker container networking)
       - DOLLHOUSE_HTTP_HOST=0.0.0.0
       - DOLLHOUSE_HTTP_PORT=3000
-      # DNS rebinding protection — add your domain if exposing externally
-      - DOLLHOUSE_HTTP_ALLOWED_HOSTS=localhost,127.0.0.1
+      # DNS rebinding protection — set this to the public hostname when exposing remotely
+      - DOLLHOUSE_HTTP_ALLOWED_HOSTS=${DOLLHOUSE_HTTP_ALLOWED_HOSTS:-localhost,127.0.0.1}
       # Session management
       - DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS=900000
       - DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS=300
+      - DOLLHOUSE_HTTP_BODY_LIMIT_BYTES=${DOLLHOUSE_HTTP_BODY_LIMIT_BYTES:-1048576}
+      - DOLLHOUSE_AUTH_GENERATION=${DOLLHOUSE_AUTH_GENERATION:-}
+      - DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=${DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP:-false}
       # Security and storage
       - DOLLHOUSE_SECURITY_MODE=strict
       - DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio

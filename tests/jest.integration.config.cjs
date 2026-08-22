@@ -24,6 +24,7 @@ const config = {
   // Integration test specific settings
   testMatch: ['<rootDir>/tests/integration/**/*.test.ts'],
   moduleDirectories: ['node_modules', '<rootDir>'],
+  modulePathIgnorePatterns: ['<rootDir>/dist/'],
 
   // Longer timeout for integration tests
   testTimeout: 30000,

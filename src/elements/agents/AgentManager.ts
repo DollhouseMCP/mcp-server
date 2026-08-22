@@ -3,7 +3,9 @@
  * Manages agent CRUD operations, metadata sanitization, and state persistence.
  */
 
-import * as path from 'path';
+import * as path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { isDeepStrictEqual } from 'node:util';
 
 import { Agent } from './Agent.js';
 import {
@@ -19,7 +21,7 @@ import {
   normalizeResilienceKeys,
   normalizeGoalKeys,
 } from './constants.js';
-import {
+import type {
   AgentMetadata,
   AgentState,
   ExecuteAgentResult,
@@ -27,9 +29,12 @@ import {
   AgentGoalParameter,
   AgentMetadataV2,
   AgentGoal,
-  DEFAULT_SAFETY_CONFIG,
   ExecutionContext,
   AutonomyDirective,
+  DangerZoneBlocker,
+} from './types.js';
+import {
+  DEFAULT_SAFETY_CONFIG
 } from './types.js';
 import { getGatheredData, type GatheredData } from './gatheredData.js';
 import { evaluateAutonomy } from './autonomyEvaluator.js';
@@ -44,10 +49,22 @@ import {
   createDangerZoneOperation,
   createExecutionContext,
 } from './safetyTierService.js';
-import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
-import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import type { ElementManagerDeps } from '../base/BaseElementManager.js';
+import { BaseElementManager } from '../base/BaseElementManager.js';
+import { getElementPersistenceRevision } from '../base/ElementPersistenceRevision.js';
+import {
+  isCompareAndSwapStorageLayer,
+  isWritableStorageLayer,
+} from '../../storage/IStorageLayer.js';
 import { AGENT_STATE_MAX_YAML_SIZE, FileAgentStateStore } from '../../storage/FileAgentStateStore.js';
-import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
+import type { AgentStateKey, IAgentStateStore } from '../../storage/IAgentStateStore.js';
+import {
+  AgentSnapshotReplacementJournal,
+  canonicalAgentMutationIdentity,
+  type IAgentSnapshotReplacementJournal,
+  type AgentSnapshotReplacementJournalEntry,
+  type AgentSnapshotReplacementRecord,
+} from './AgentSnapshotReplacementJournal.js';
 
 /**
  * Minimal interface for an element manager resolved by name.
@@ -68,10 +85,11 @@ export interface ResolvedElementManager {
 export interface AgentManagerDeps extends ElementManagerDeps {
   baseDir: string;
   stateStore?: IAgentStateStore;
+  replacementJournal?: IAgentSnapshotReplacementJournal;
   /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
   elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
-  dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  dangerZoneEnforcer?: DangerZoneBlocker;
   /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
   verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 }
@@ -85,19 +103,22 @@ import { InputNormalizer } from '../../security/InputNormalizer.js';
 import { SafeRegex } from '../../security/dosProtection.js';
 import { logger } from '../../utils/logger.js';
 import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
-import { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
-import { ValidationService } from '../../services/validation/ValidationService.js';
-import { SerializationService } from '../../services/SerializationService.js';
-import { MetadataService } from '../../services/MetadataService.js';
+import type { TriggerValidationService } from '../../services/validation/TriggerValidationService.js';
+import type { ValidationService } from '../../services/validation/ValidationService.js';
+import type { SerializationService } from '../../services/SerializationService.js';
+import type { MetadataService } from '../../services/MetadataService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
+import { afterAgentReplacementCommit } from '../../storage/AgentReplacementTransactionContext.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
-const MAX_YAML_SIZE = AGENT_STATE_MAX_YAML_SIZE;
-const MAX_FILE_SIZE = 100 * 1024;
+const MAX_AGENT_STATE_YAML_SIZE = AGENT_STATE_MAX_YAML_SIZE;
+const PROCESS_AGENT_STATE_OPERATION_LOCK = new AsyncKeyedLock();
+const PROCESS_AGENT_REPLACEMENT_RECOVERY_LOCK = new AsyncKeyedLock();
+const PROCESS_AGENT_LOCK_CONTEXT = new AsyncLocalStorage<ReadonlySet<string>>();
 
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
@@ -128,6 +149,8 @@ interface ActivationResult {
   activationWarnings: Array<{ elementType: string; elementName: string; error: string }>;
 }
 
+type AgentStepOutcome = 'success' | 'failure' | 'partial';
+
 interface ExecutionGenerationEntry {
   token: object;
   activeExecutions: number;
@@ -139,6 +162,17 @@ export interface ExecutionGenerationObservation {
   release: () => void;
 }
 
+function cloneAgentState(state: Readonly<AgentState>, stateVersion: number): AgentState {
+  return {
+    ...structuredClone(state),
+    stateVersion,
+  };
+}
+
+function statesMatch(left: AgentState | null, right: AgentState | null): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateCache: Map<string, AgentState> = new Map();
   private readonly stateStore: IAgentStateStore;
@@ -146,19 +180,21 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly recoverySourceAgents = new WeakMap<Agent, Agent>();
   private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   // Covers direct/legacy manager entry points that bypass AgentExecutionHandler.
-  private readonly stateOperationLock = new AsyncKeyedLock();
-  private triggerValidationService: TriggerValidationService;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
-  private metadataService: MetadataService;
+  private readonly stateOperationLock = PROCESS_AGENT_STATE_OPERATION_LOCK;
+  private readonly replacementRecoveryLock = PROCESS_AGENT_REPLACEMENT_RECOVERY_LOCK;
+  private readonly triggerValidationService: TriggerValidationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
+  private readonly metadataService: MetadataService;
   // Fallback for tests/callers that don't inject the registry
   private readonly _localActiveAgentNames: Set<string> = new Set();
 
   // Issue #1948: Instance-injected dependencies (replaces static resolvers)
   private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
-  private _dangerZoneEnforcer?: import('./types.js').DangerZoneBlocker;
+  private _dangerZoneEnforcer?: DangerZoneBlocker;
   private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
   private static warnedDbModeOrphanedStateFiles = false;
+  private readonly replacementJournal: IAgentSnapshotReplacementJournal;
 
   constructor(deps: AgentManagerDeps) {
     const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
@@ -187,6 +223,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.serializationService = deps.serializationService;
     this.metadataService = deps.metadataService;
     this.stateStore = deps.stateStore || this.createDefaultStateStore(deps);
+    if (isWritableStorageLayer(this.storageLayer) && !deps.replacementJournal) {
+      throw new Error('Database agent storage requires a durable database replacement journal');
+    }
+    this.replacementJournal = deps.replacementJournal || this.createDefaultReplacementJournal();
     // Issue #1948: Instance-injected dependencies (replaces static resolvers)
     this._elementManagerResolver = deps.elementManagerResolver;
     this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
@@ -201,6 +241,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     return path.join(this.elementDir, STATE_DIRECTORY);
   }
 
+  private get replacementJournalDir(): string {
+    return path.join(this.stateDir, '.replacements');
+  }
+
   private createDefaultStateStore(deps: AgentManagerDeps): IAgentStateStore {
     return new FileAgentStateStore({
       stateDir: () => this.stateDir,
@@ -208,8 +252,12 @@ export class AgentManager extends BaseElementManager<Agent> {
       fileOperations: deps.fileOperationsService,
       serializationService: deps.serializationService,
       stateCache: this.stateCache,
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: MAX_AGENT_STATE_YAML_SIZE,
     });
+  }
+
+  private createDefaultReplacementJournal(): IAgentSnapshotReplacementJournal {
+    return new AgentSnapshotReplacementJournal(() => this.replacementJournalDir);
   }
 
   /** Issue #1946: Per-session activation state via base class helper. */
@@ -230,7 +278,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /** Issue #1948: Set DangerZoneEnforcer on this instance. */
-  setDangerZoneEnforcerInstance(enforcer: import('./types.js').DangerZoneBlocker): void {
+  setDangerZoneEnforcerInstance(enforcer: DangerZoneBlocker): void {
     this._dangerZoneEnforcer = enforcer;
   }
 
@@ -248,6 +296,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   async initialize(): Promise<void> {
     await this.fileOperations.createDirectory(this.elementDir);
     await this.fileOperations.createDirectory(this.stateDir);
+    await this.replacementJournal.initialize();
+    await this.recoverPendingSnapshotReplacements();
     logger.info('AgentManager initialized', { path: this.elementDir });
   }
 
@@ -303,10 +353,10 @@ export class AgentManager extends BaseElementManager<Agent> {
 
       // Issue #613: Check metadata name uniqueness (not just filename)
       const existingAgents = await this.list();
-      const duplicate = existingAgents.find(a =>
+      const duplicateExists = existingAgents.some(a =>
         a.metadata.name.toLowerCase() === sanitizedInput.name.toLowerCase()
       );
-      if (duplicate) {
+      if (duplicateExists) {
         return {
           success: false,
           message: `Agent '${sanitizedInput.name}' already exists`
@@ -376,7 +426,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (!validationResult.isValid) {
       return AgentManager.createFailure(`Validation failed: ${validationResult.errors.join(', ')}`);
     }
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Agent creation warnings: ${validationResult.warnings.join(', ')}`);
     }
     return null;
@@ -393,7 +443,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     );
     return {
       name: sanitizeInput(UnicodeValidator.normalize(name).normalizedContent, 100),
-      description: sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_YAML_LENGTH),
+      description: sanitizeInput(UnicodeValidator.normalize(description).normalizedContent, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH),
       instructions: contentValidation.sanitizedContent || '',
     };
   }
@@ -412,9 +462,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent.extensions = {
       ...agent.extensions,
       specializations: normalizedMetadata.specializations ?? agent.extensions?.specializations ?? [],
-      decisionFramework: normalizedMetadata.decisionFramework ?? agent.extensions?.decisionFramework,
+      decisionFramework: (normalizedMetadata as Record<string, unknown>).decisionFramework ??
+        (agent.extensions as Record<string, unknown>).decisionFramework,
       riskTolerance: normalizedMetadata.riskTolerance ?? agent.extensions?.riskTolerance,
-      learningEnabled: normalizedMetadata.learningEnabled ?? agent.extensions?.learningEnabled,
+      learningEnabled: (normalizedMetadata as Record<string, unknown>).learningEnabled ??
+        (agent.extensions as Record<string, unknown>).learningEnabled,
     };
     agent.instructions = sanitizedInput.instructions;
     agent.extensions.instructions = sanitizedInput.instructions;
@@ -513,12 +565,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       );
 
       // Pass 2: slug match (handles dashes, underscores, casing differences)
-      if (!match) {
-        match = agents.find((a) => {
-          const slug = this.normalizeFilename(a.metadata.name);
-          return slug === searchSlug || slug === searchLower;
-        });
-      }
+      match ??= agents.find((a) => {
+        const slug = this.normalizeFilename(a.metadata.name);
+        return slug === searchSlug || slug === searchLower;
+      });
 
       if (match) {
         logger.warn(
@@ -543,9 +593,23 @@ export class AgentManager extends BaseElementManager<Agent> {
     content?: string
   ): Promise<boolean> {
     const sanitizedName = sanitizeInput(name, 100);
+    return this.runSerializedAgentStateOperation(
+      sanitizedName,
+      async () => {
+        await this.recoverPendingSnapshotReplacements(sanitizedName);
+        return this.updateUnlocked(sanitizedName, updates, content);
+      },
+    );
+  }
+
+  private async updateUnlocked(
+    sanitizedName: string,
+    updates: Partial<AgentMetadata>,
+    content?: string,
+  ): Promise<boolean> {
     const agent = await this.read(sanitizedName);
     if (!agent) {
-      logger.warn(`Agent not found for update: ${name}`);
+      logger.warn(`Agent not found for update: ${sanitizedName}`);
       return false;
     }
 
@@ -561,7 +625,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Agent update warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -616,7 +680,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       };
     }
 
-    await this.save(agent, this.getFilename(sanitizedName));
+    await this.saveUnlocked(agent, this.getFilename(sanitizedName));
     logger.info(`Agent updated: ${sanitizedName}`);
     return true;
   }
@@ -646,7 +710,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Import an agent from serialized content.
    */
-  async importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<Agent> {
+  importElement(data: string, format: 'json' | 'yaml' | 'markdown' = 'markdown'): Promise<Agent> {
     if (format === 'json') {
       const parsed = this.serializationService.parseJson(data, {
         source: 'AgentManager.importElement'
@@ -659,22 +723,27 @@ export class AgentManager extends BaseElementManager<Agent> {
         ...agent.extensions,
         instructions: parsed.instructions || ''
       };
-      return agent;
+      return Promise.resolve(agent);
     }
 
     // Use SerializationService for frontmatter parsing
     const result = this.serializationService.parseFrontmatter(data, {
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
       validateContent: false,
       source: 'AgentManager.importElement'
     });
 
     const agent = new Agent(result.data as AgentMetadata, this.metadataService);
+    const metadataInstructions = typeof result.data.instructions === 'string'
+      ? result.data.instructions
+      : undefined;
+    agent.instructions = metadataInstructions ?? result.content.trim();
+    agent.content = metadataInstructions ? result.content.trim() : '';
     agent.extensions = {
       ...agent.extensions,
-      instructions: result.content.trim()
+      instructions: agent.instructions
     };
-    return agent;
+    return Promise.resolve(agent);
   }
 
   /**
@@ -697,6 +766,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * work (path normalization, size guard, state hydration) runs around it.
    */
   override async load(filePath: string): Promise<Agent> {
+    await this.recoverPendingSnapshotReplacements(this.stripExtension(filePath));
     const sanitizedInput = sanitizeInput(filePath, 255);
 
     // DB mode: the storage layer indexes by UUID, not filesystem path. Pass the
@@ -731,11 +801,11 @@ export class AgentManager extends BaseElementManager<Agent> {
    * diagnostic we want to preserve for operators and callers.
    */
   protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
-    if (content.length > MAX_FILE_SIZE) {
-      throw new Error(`Agent file exceeds maximum size of ${MAX_FILE_SIZE} bytes`);
+    if (content.length > SECURITY_LIMITS.MAX_FILE_SIZE) {
+      throw new Error(`Agent file exceeds maximum size of ${SECURITY_LIMITS.MAX_FILE_SIZE} bytes`);
     }
     const result = this.serializationService.parseFrontmatter(content, {
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
       validateContent: false,
       source: 'AgentManager.parseContent',
     });
@@ -778,6 +848,20 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Override BaseElementManager.save to persist state when required.
    */
   override async save(agent: Agent, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+    await this.runSerializedAgentStateOperation(
+      agent.metadata.name,
+      async () => {
+        await this.recoverPendingSnapshotReplacements(agent.metadata.name);
+        await this.saveUnlocked(agent, filePath, options);
+      },
+    );
+  }
+
+  private async saveUnlocked(
+    agent: Agent,
+    filePath: string,
+    options?: { exclusive?: boolean },
+  ): Promise<void> {
     // In DB mode, filePath is a UUID — pass it through unchanged. Appending
     // `.md` would break storage-layer lookups which index by UUID, not path.
     // In file mode, normalize to a `<name>.md` filename for on-disk storage.
@@ -795,10 +879,555 @@ export class AgentManager extends BaseElementManager<Agent> {
         ? agent.metadata.name
         : this.stripExtension(sanitizedPath);
       const newVersion = await this.saveAgentState(agent, stateName, agent.getState());
-      agent[COMMIT_PERSISTED_VERSION](newVersion);  // Sync agent's internal version (Issue #123 fix)
-      agent.markStatePersisted();
-      this.hydratedAgents.add(agent);
+      const commitState = () => {
+        agent[COMMIT_PERSISTED_VERSION](newVersion);
+        agent.markStatePersisted();
+        this.hydratedAgents.add(agent);
+      };
+      if (!afterAgentReplacementCommit(commitState)) commitState();
     }
+  }
+
+  /**
+   * Replace an agent definition and make the sidecar state match the imported
+   * snapshot. Ordinary save intentionally leaves clean runtime state alone;
+   * snapshot replacement must instead remove omitted state or force an included
+   * state snapshot through the optimistic state-store contract.
+   */
+  async replaceFromSnapshot(
+    agent: Agent,
+    filePath: string,
+    options: { readonly stateIncluded: boolean; readonly expected?: Agent },
+  ): Promise<void> {
+    await this.runSerializedAgentStateOperation(agent.metadata.name, async () => {
+      await this.recoverPendingSnapshotReplacements(agent.metadata.name);
+      const isDb = isWritableStorageLayer(this.storageLayer);
+      const sanitizedPath = isDb
+        ? sanitizeInput(filePath, 255)
+        : this.normalizeAgentFilePath(filePath);
+      const previousAgent = await this.read(agent.metadata.name);
+      if (!previousAgent) {
+        throw new ElementNotFoundError(this.getElementLabel(), agent.metadata.name);
+      }
+
+      const stateName = isDb ? previousAgent.metadata.name : this.stripExtension(sanitizedPath);
+      const stateKey = {
+        name: stateName,
+        agentElementId: this.getAgentElementId(previousAgent, stateName),
+        sessionId: isDb
+          ? this.contextTracker?.getSessionContext()?.sessionId
+          : undefined,
+      };
+      const persistencePath = isDb ? stateKey.agentElementId : sanitizedPath;
+      const previousState = await this.stateStore.load(stateKey, { strict: true });
+      const expectedVersion = previousState?.stateVersion ?? 0;
+      const intendedState = options.stateIncluded
+        ? cloneAgentState(agent.getState(), expectedVersion)
+        : null;
+      const previousDefinition = await this.readExactDefinition(persistencePath, isDb);
+      if (options.expected) {
+        const expectedRevision = getElementPersistenceRevision(options.expected);
+        const expectedMatches = expectedRevision
+          ? expectedRevision.rawContent === previousDefinition
+          : options.expected.serializeToJSON() === previousAgent.serializeToJSON();
+        if (!expectedMatches) {
+          throw new Error(`Agent definition changed concurrently while replacing '${agent.metadata.name}'`);
+        }
+      }
+      const intendedDefinition = await this.serializeElement(agent);
+      const journal = await this.replacementJournal.create({
+        agentName: agent.metadata.name,
+        filePath: persistencePath,
+        isDatabaseMode: isDb,
+        stateKey,
+        stateIncluded: options.stateIncluded,
+        previousAgentJson: previousAgent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition,
+        intendedDefinition,
+        previousState,
+        intendedState,
+      });
+      let definitionWriteAttempted = false;
+      let appliedState: AgentState | null | undefined;
+
+      try {
+        const stateMutation = await this.replacementJournal.runWhileOwned(journal, async () => {
+          if (!options.stateIncluded) {
+            await this.stateStore.delete(stateKey, {
+              expectedVersion,
+              requireExisting: previousState !== null,
+            });
+            return { appliedState: null, persistedVersion: 0 } as const;
+          } else {
+            if (!intendedState) {
+              throw new Error('Agent snapshot replacement is missing its intended state');
+            }
+            const replacementState = cloneAgentState(intendedState, expectedVersion);
+            const persistedVersion = await this.stateStore.save(
+              stateKey,
+              replacementState,
+              expectedVersion,
+              { preserveSessionCount: true },
+            );
+            return {
+              appliedState: cloneAgentState(replacementState, persistedVersion),
+              persistedVersion,
+            } as const;
+          }
+        });
+        if (isDb) {
+          afterAgentReplacementCommit(() => {
+            agent[COMMIT_PERSISTED_VERSION](stateMutation.persistedVersion);
+          });
+        } else {
+          appliedState = stateMutation.appliedState;
+          agent[COMMIT_PERSISTED_VERSION](stateMutation.persistedVersion);
+        }
+
+        const definitionReplaced = await this.replacementJournal.runWhileOwned(journal, async () => {
+          if (!isDb) definitionWriteAttempted = true;
+          return this.compareAndSwapDefinition(
+            persistencePath,
+            previousDefinition,
+            intendedDefinition,
+            agent,
+            isDb,
+          );
+        });
+        if (!definitionReplaced) {
+          throw new Error(`Agent definition changed concurrently while replacing '${agent.metadata.name}'`);
+        }
+
+        await this.replacementJournal.assertOwnership(journal);
+        const finalizeAgent = () => {
+          agent.markStatePersisted();
+          this.hydratedAgents.add(agent);
+        };
+        if (!afterAgentReplacementCommit(finalizeAgent)) finalizeAgent();
+        await this.replacementJournal.remove(journal.journalPath, journal.record.leaseToken);
+      } catch (error) {
+        if (isDb) throw error;
+        const rollbackErrors: unknown[] = [];
+        if (definitionWriteAttempted) {
+          try {
+            const restored = await this.replacementJournal.runWhileOwned(journal, () =>
+              this.compareAndSwapDefinition(
+                persistencePath,
+                intendedDefinition,
+                previousDefinition,
+                previousAgent,
+                isDb,
+              )
+            );
+            if (!restored) {
+              throw new Error(
+                `Agent definition changed concurrently while rolling back '${agent.metadata.name}'`,
+              );
+            }
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (appliedState !== undefined) {
+          const stateToRestoreFrom = appliedState;
+          try {
+            const restoredState = await this.replacementJournal.runWhileOwned(journal, () =>
+              this.restoreAgentStateSnapshot(
+                stateKey,
+                previousState,
+                stateToRestoreFrom,
+              )
+            );
+            this.applyRestoredAgentState(previousAgent, restoredState);
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          await this.releaseReplacementOwnership(
+            journal,
+            [error, ...rollbackErrors],
+            `Agent snapshot replacement rollback failed for '${agent.metadata.name}'`,
+          );
+          throw new AggregateError(
+            [error, ...rollbackErrors],
+            `Agent snapshot replacement rollback failed for '${agent.metadata.name}'`,
+          );
+        }
+        try {
+          await this.replacementJournal.remove(journal.journalPath, journal.record.leaseToken);
+        } catch (journalError) {
+          await this.releaseReplacementOwnership(
+            journal,
+            [error, journalError],
+            `Agent snapshot replacement journal cleanup failed for '${agent.metadata.name}'`,
+          );
+          throw new AggregateError(
+            [error, journalError],
+            `Agent snapshot replacement journal cleanup failed for '${agent.metadata.name}'`,
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  private async recoverPendingSnapshotReplacements(blockedAgentName?: string): Promise<void> {
+    const entries = await this.replacementRecoveryLock.runExclusive(
+      this.replacementJournalDir,
+      () => this.replacementJournal.list(),
+    );
+    for (const entry of entries) {
+      const matchesBlockedAgent = blockedAgentName === undefined || this.replacementEntryMatchesAgent(
+        entry,
+        blockedAgentName,
+      );
+      if (!matchesBlockedAgent) continue;
+      const claimedEntry = await this.replacementJournal.claimForRecovery(entry);
+      if (!claimedEntry) {
+        if (blockedAgentName !== undefined) {
+          throw new Error(
+            `Agent snapshot replacement is still active for '${entry.record.agentName}'`,
+          );
+        }
+        continue;
+      }
+      await this.runSerializedAgentStateOperation(
+        claimedEntry.record.agentName,
+        async () => {
+          try {
+            await this.replacementJournal.assertOwnership(claimedEntry);
+            await this.recoverSnapshotReplacement(claimedEntry);
+          } catch (error) {
+            if (blockedAgentName !== undefined) {
+              await this.releaseReplacementOwnership(
+                claimedEntry,
+                [error],
+                `Agent snapshot replacement recovery failed for '${claimedEntry.record.agentName}'`,
+              );
+              throw error;
+            }
+            if (this.isTerminalReplacementRecoveryError(error)) {
+              await this.replacementJournal.quarantine(
+                claimedEntry,
+                error instanceof Error ? error.message : String(error),
+              );
+              logger.error('Quarantined unrecoverable agent snapshot replacement', {
+                agentName: claimedEntry.record.agentName,
+                operationId: claimedEntry.record.operationId,
+                error,
+              });
+            } else {
+              await this.releaseReplacementOwnership(
+                claimedEntry,
+                [error],
+                `Deferred agent snapshot replacement recovery failed for '${claimedEntry.record.agentName}'`,
+              );
+              logger.warn('Deferred failed agent snapshot replacement recovery', {
+                agentName: claimedEntry.record.agentName,
+                operationId: claimedEntry.record.operationId,
+                error,
+              });
+            }
+          }
+        },
+      );
+    }
+  }
+
+  private async releaseReplacementOwnership(
+    entry: AgentSnapshotReplacementJournalEntry,
+    causes: readonly unknown[],
+    message: string,
+  ): Promise<void> {
+    try {
+      await this.replacementJournal.releaseOwnership(entry);
+    } catch (releaseError) {
+      throw new AggregateError(
+        [...causes, releaseError],
+        `${message}; durable ownership release failed`,
+      );
+    }
+  }
+
+  private async recoverSnapshotReplacement(
+    entry: AgentSnapshotReplacementJournalEntry,
+  ): Promise<void> {
+    await this.replacementJournal.runWhileOwned(entry, () =>
+      this.recoverSnapshotReplacementWhileOwned(entry)
+    );
+    await this.replacementJournal.assertOwnership(entry);
+    await this.replacementJournal.remove(entry.journalPath, entry.record.leaseToken);
+    logger.warn('Recovered interrupted agent snapshot replacement', {
+      agentName: entry.record.agentName,
+      operationId: entry.record.operationId,
+    });
+  }
+
+  private async recoverSnapshotReplacementWhileOwned(
+    entry: AgentSnapshotReplacementJournalEntry,
+  ): Promise<void> {
+    const { record } = entry;
+    const isDb = isWritableStorageLayer(this.storageLayer);
+    if (record.isDatabaseMode !== isDb) {
+      throw new Error(
+        `Cannot recover agent replacement '${record.agentName}' after storage mode changed`,
+      );
+    }
+
+    const expectedPath = isDb
+      ? sanitizeInput(record.filePath, 255)
+      : this.normalizeAgentFilePath(record.filePath);
+    if (expectedPath !== record.filePath) {
+      throw new Error(`Agent replacement journal has an invalid path for '${record.agentName}'`);
+    }
+    if (
+      !record.stateKey.name ||
+      !record.stateKey.agentElementId ||
+      record.stateKey.agentElementId.length > 255 ||
+      record.stateIncluded !== (record.intendedState !== null)
+    ) {
+      throw new Error(`Agent replacement journal has invalid state identity for '${record.agentName}'`);
+    }
+
+    const previousAgent = this.deserializeJournalAgent(record.previousAgentJson, record.agentName);
+    this.deserializeJournalAgent(record.intendedAgentJson, record.agentName);
+    const previousState = this.deserializeJournalState(
+      record.previousAgentJson,
+      record.previousState,
+      record.agentName,
+    );
+    const intendedState = this.deserializeJournalState(
+      record.intendedAgentJson,
+      record.intendedState,
+      record.agentName,
+    );
+
+    const currentDefinition = await this.readExactDefinition(record.filePath, isDb);
+    const definitionIsPrevious = currentDefinition === record.previousDefinition;
+    const definitionIsIntended = currentDefinition === record.intendedDefinition;
+    if (!definitionIsPrevious && !definitionIsIntended) {
+      throw new Error(
+        `Agent definition changed outside pending replacement '${record.agentName}'`,
+      );
+    }
+
+    const currentState = await this.stateStore.load(record.stateKey, { strict: true });
+    const stateIsPrevious = this.agentStatePayloadsMatch(currentState, previousState);
+    const stateIsIntended = this.agentStatePayloadsMatch(currentState, intendedState);
+    if (!stateIsPrevious && !stateIsIntended) {
+      throw new Error(
+        `Agent state changed outside pending replacement '${record.agentName}'`,
+      );
+    }
+
+    if (!definitionIsPrevious) {
+      const restored = await this.compareAndSwapDefinition(
+        record.filePath,
+        record.intendedDefinition,
+        record.previousDefinition,
+        previousAgent,
+        isDb,
+      );
+      if (!restored) {
+        throw new Error(`Agent definition changed during recovery '${record.agentName}'`);
+      }
+    }
+    if (!stateIsPrevious) {
+      await this.restoreJournaledAgentState(record, previousState, currentState);
+    }
+
+  }
+
+  private replacementEntryMatchesAgent(
+    entry: AgentSnapshotReplacementJournalEntry,
+    agentName: string,
+  ): boolean {
+    return this.canonicalizeExecutionName(entry.record.agentName) ===
+      this.canonicalizeExecutionName(agentName) || entry.record.filePath === agentName;
+  }
+
+  private isTerminalReplacementRecoveryError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    return [
+      'after storage mode changed',
+      'journal has an invalid',
+      'journal identity mismatch',
+      'definition changed outside pending replacement',
+      'state changed outside pending replacement',
+    ].some(fragment => error.message.includes(fragment));
+  }
+
+  private deserializeJournalAgent(serialized: string, expectedName: string): Agent {
+    const parsed: unknown = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`Agent replacement journal has invalid agent data for '${expectedName}'`);
+    }
+    const metadata = (parsed as { metadata?: unknown }).metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      throw new Error(`Agent replacement journal has invalid metadata for '${expectedName}'`);
+    }
+    const agent = new Agent(metadata as AgentMetadata, this.metadataService);
+    agent.deserialize(serialized);
+    if (agent.metadata.name !== expectedName) {
+      throw new Error(`Agent replacement journal identity mismatch for '${expectedName}'`);
+    }
+    return agent;
+  }
+
+  private async readExactDefinition(filePath: string, isDb: boolean): Promise<string> {
+    if (isDb) {
+      if (!isWritableStorageLayer(this.storageLayer)) {
+        throw new Error('Database agent storage is not writable');
+      }
+      return this.storageLayer.readContent(filePath);
+    }
+    return this.fileOperations.readFile(
+      this.resolveAbsolutePath(filePath),
+      { encoding: 'utf-8' },
+    );
+  }
+
+  private async compareAndSwapDefinition(
+    filePath: string,
+    expectedContent: string,
+    replacementContent: string,
+    agent: Agent,
+    isDb: boolean,
+  ): Promise<boolean> {
+    this.validateSerializedContent(replacementContent);
+    if (isDb) {
+      if (!isCompareAndSwapStorageLayer(this.storageLayer)) {
+        throw new Error('Database agent storage does not support atomic content replacement');
+      }
+      const replaced = await this.storageLayer.compareAndSwapContent(
+        this.elementType,
+        filePath,
+        agent.metadata.name,
+        expectedContent,
+        replacementContent,
+        {
+          author: agent.metadata.author ?? '',
+          version: agent.metadata.version ?? '1.0.0',
+          description: agent.metadata.description,
+          tags: agent.metadata.tags ?? [],
+        },
+      );
+      if (replaced) {
+        const updateCache = () => this.cacheElement(agent, filePath);
+        if (!afterAgentReplacementCommit(updateCache)) updateCache();
+      }
+      return replaced;
+    }
+
+    const absolutePath = this.resolveAbsolutePath(filePath);
+    return this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+      const current = await this.fileOperations.readFile(absolutePath, { encoding: 'utf-8' });
+      if (current !== expectedContent) return false;
+      await this.fileOperations.writeFile(absolutePath, replacementContent, {
+        encoding: 'utf-8',
+        durable: true,
+      });
+      this.cacheElement(agent, filePath);
+      await this.storageLayer.notifySaved(filePath, absolutePath);
+      return true;
+    });
+  }
+
+  private deserializeJournalState(
+    serializedAgent: string,
+    state: AgentState | null,
+    expectedName: string,
+  ): AgentState | null {
+    if (!state) return null;
+    const parsed = JSON.parse(serializedAgent) as Record<string, unknown>;
+    parsed.state = state;
+    return this.deserializeJournalAgent(JSON.stringify(parsed), expectedName).getState();
+  }
+
+  private agentStatePayloadsMatch(
+    left: AgentState | null,
+    right: AgentState | null,
+  ): boolean {
+    if (!left || !right) return left === right;
+    return isDeepStrictEqual(
+      this.statePayloadForRecovery(left),
+      this.statePayloadForRecovery(right),
+    );
+  }
+
+  private statePayloadForRecovery(state: AgentState): Record<string, unknown> {
+    const cloned = structuredClone(state) as unknown as Record<string, unknown>;
+    delete cloned.stateVersion;
+    return cloned;
+  }
+
+  private async restoreJournaledAgentState(
+    record: AgentSnapshotReplacementRecord,
+    previousState: AgentState | null,
+    currentState: AgentState | null,
+  ): Promise<void> {
+    if (!previousState) {
+      if (currentState) {
+        await this.stateStore.delete(record.stateKey, {
+          expectedVersion: currentState.stateVersion,
+          requireExisting: true,
+        });
+      }
+      return;
+    }
+    const expectedVersion = currentState?.stateVersion ?? 0;
+    const rollbackState = cloneAgentState(previousState, expectedVersion);
+    await this.stateStore.save(record.stateKey, rollbackState, expectedVersion, {
+      requireExisting: currentState !== null,
+      preserveSessionCount: true,
+    });
+  }
+
+  private async restoreAgentStateSnapshot(
+    key: AgentStateKey,
+    previousState: AgentState | null,
+    appliedState: AgentState | null,
+  ): Promise<AgentState | null> {
+    const currentState = await this.stateStore.load(key, { strict: true });
+    const appliedVersionStillCurrent = appliedState === null
+      ? currentState === null
+      : currentState?.stateVersion === appliedState.stateVersion;
+    if (!appliedVersionStillCurrent) {
+      throw new Error(`Agent state changed concurrently while replacing '${key.name}'`);
+    }
+    if (statesMatch(currentState, previousState)) return currentState;
+
+    if (!previousState) {
+      if (currentState) {
+        await this.stateStore.delete(key, {
+          expectedVersion: currentState.stateVersion,
+          requireExisting: true,
+        });
+      }
+      return null;
+    }
+
+    const expectedVersion = currentState?.stateVersion ?? 0;
+    const rollbackState = cloneAgentState(previousState, expectedVersion);
+    const persistedVersion = await this.stateStore.save(key, rollbackState, expectedVersion, {
+      requireExisting: currentState !== null,
+      preserveSessionCount: true,
+    });
+    return cloneAgentState(rollbackState, persistedVersion);
+  }
+
+  private applyRestoredAgentState(agent: Agent, restoredState: AgentState | null): void {
+    const state = restoredState ?? {
+      goals: [],
+      decisions: [],
+      context: {},
+      lastActive: new Date(),
+      sessionCount: 0,
+      stateVersion: 0,
+    };
+    this.applyPersistedAgentState(agent, state);
   }
 
   /**
@@ -813,6 +1442,13 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @throws Error if agent not found or save fails
    */
   async persistState(name: string): Promise<boolean> {
+    return this.runSerializedAgentStateOperation(name, async () => {
+      await this.recoverPendingSnapshotReplacements(name);
+      return this.persistStateUnlocked(name);
+    });
+  }
+
+  private async persistStateUnlocked(name: string): Promise<boolean> {
     const agent = await this.read(name);
     if (!agent) {
       throw new Error(`Agent not found: ${name}`);
@@ -823,9 +1459,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     const newVersion = await this.saveAgentState(agent, name, agent.getState());
-    agent[COMMIT_PERSISTED_VERSION](newVersion);
-    agent.markStatePersisted();
-    this.hydratedAgents.add(agent);
+    const commitState = () => {
+      agent[COMMIT_PERSISTED_VERSION](newVersion);
+      agent.markStatePersisted();
+      this.hydratedAgents.add(agent);
+    };
+    if (!afterAgentReplacementCommit(commitState)) commitState();
     return true;
   }
 
@@ -836,6 +1475,33 @@ export class AgentManager extends BaseElementManager<Agent> {
    * the normalized filename used for state file creation/loading.
    */
   override async delete(filePath: string): Promise<void> {
+    const operationName = await this.resolveAgentMutationName(filePath);
+    await this.runSerializedAgentStateOperation(
+      operationName,
+      async () => {
+        await this.recoverPendingSnapshotReplacements(operationName);
+        await this.deleteUnlocked(filePath, operationName);
+      },
+    );
+  }
+
+  private async resolveAgentMutationName(identifier: string): Promise<string> {
+    const sanitizedIdentifier = sanitizeInput(identifier, 255);
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return this.stripExtension(sanitizedIdentifier);
+    }
+    let indexedName = this.storageLayer.getNameById?.(sanitizedIdentifier);
+    if (!indexedName) {
+      indexedName = await this.storageLayer.resolveNameById(sanitizedIdentifier);
+    }
+    if (!indexedName && !this.storageLayer.hasCompletedScan()) {
+      await this.storageLayer.scan();
+      indexedName = this.storageLayer.getNameById?.(sanitizedIdentifier);
+    }
+    return indexedName ?? this.stripExtension(sanitizedIdentifier);
+  }
+
+  private async deleteUnlocked(filePath: string, resolvedName?: string): Promise<void> {
     // DB mode: filePath is a UUID, don't force `.md` extension.
     const isDb = isWritableStorageLayer(this.storageLayer);
     const sanitizedPath = isDb
@@ -843,12 +1509,24 @@ export class AgentManager extends BaseElementManager<Agent> {
       : this.normalizeAgentFilePath(filePath);
     // State-file name derives from the agent's logical name in DB mode, or
     // from the stripped filename in file mode.
-    const existing = await this.load(sanitizedPath).catch(() => null);
+    // DB callers may still supply the canonical filename used by the portfolio
+    // adapter. Resolve it by logical name so we can recover elements.id before
+    // deleting the associated UUID-keyed state rows.
+    const lookupPath = isDb ? (resolvedName ?? this.stripExtension(sanitizedPath)) : sanitizedPath;
+    const existing = isDb
+      ? await this.findByName(lookupPath).catch(() => null)
+      : await this.load(lookupPath).catch(() => null);
     const name = isDb
-      ? existing?.metadata.name ?? sanitizedPath
+      ? existing?.metadata.name ?? resolvedName ?? sanitizedPath
       : this.stripExtension(sanitizedPath);
-    const agentElementId = isDb ? sanitizedPath : existing?.id ?? sanitizedPath;
-    await super.delete(sanitizedPath);
+    // Agent.id is a logical runtime identifier, not necessarily elements.id.
+    // The DB storage index maps the resolved metadata name to the actual UUID
+    // path used by the elements and agent_states foreign-key columns.
+    const indexedElementId = isDb
+      ? this.storageLayer.getPathByName(name)
+      : undefined;
+    const agentElementId = indexedElementId ?? existing?.id ?? sanitizedPath;
+    await super.delete(isDb ? agentElementId : sanitizedPath);
 
     await this.stateStore.delete({ name, agentElementId });
   }
@@ -1090,8 +1768,8 @@ export class AgentManager extends BaseElementManager<Agent> {
           author: agent.metadata.author,
           safetyTier: result.safetyTier,
           riskScore: safetyTierResult?.riskScore,
-          parameterKeys: Object.keys(parameters || {}),
-          goalCount: metadata.goal?.parameters?.length || 0,
+          parameterKeys: Object.keys(parameters),
+          goalCount: (metadata.goal as Partial<AgentGoalConfig>).parameters?.length ?? 0,
         }
       });
 
@@ -1108,13 +1786,35 @@ export class AgentManager extends BaseElementManager<Agent> {
     name: string,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const operationKey = this.getAgentStateOperationKey(name);
-    return this.stateOperationLock.runExclusive(operationKey, operation);
+    const canonicalName = this.canonicalizeExecutionName(name);
+    const operationKey = this.getAgentStateOperationKey(canonicalName);
+    const heldLocks = PROCESS_AGENT_LOCK_CONTEXT.getStore();
+    if (heldLocks?.has(operationKey)) return operation();
+    return this.stateOperationLock.runExclusive(operationKey, () =>
+      PROCESS_AGENT_LOCK_CONTEXT.run(
+        new Set([...(heldLocks ?? []), operationKey]),
+        () => this.replacementJournal.runWithAgentMutationGate(canonicalName, operation),
+      ),
+    );
   }
 
   private getAgentStateOperationKey(name: string): string {
     const userId = this.contextTracker?.getSessionContext()?.userId ?? 'local-user';
     return `${userId}:${this.canonicalizeExecutionName(name)}`;
+  }
+
+  /**
+   * Agent definitions are user-scoped, but DB-backed runtime state is scoped
+   * to an individual transport session. Keep each session's hydrated Agent
+   * instance separate while preserving the existing shared cache in file mode.
+   */
+  protected override getCacheNamespace(): string {
+    const userNamespace = super.getCacheNamespace();
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return userNamespace;
+    }
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId ?? 'no-session';
+    return `${userNamespace}:agent-session:${sessionId}`;
   }
 
   observeExecutionGeneration(name: string): ExecutionGenerationObservation {
@@ -1171,7 +1871,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   /** Canonical identity shared by agent lookup and execution lifecycle state. */
   public canonicalizeExecutionName(name: string): string {
-    return this.normalizeFilename(name) || 'unnamed';
+    return canonicalAgentMutationIdentity(name);
   }
 
   private getExecutionGenerationKey(name: string): string {
@@ -1186,7 +1886,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     const metadata = agent.metadata as AgentMetadataV2;
-    if (metadata.goal?.template) {
+    const goal = (metadata as Partial<AgentMetadataV2>).goal;
+    if (goal?.template) {
       return agent;
     }
     await this.convertLegacyAgentForExecution(agent, name, metadata);
@@ -1255,7 +1956,11 @@ export class AgentManager extends BaseElementManager<Agent> {
     if (!cyclePath) {
       return;
     }
-    const cycleStart = cyclePath.indexOf(cyclePath[cyclePath.length - 1]);
+    const cycleEnd = cyclePath.at(-1);
+    if (cycleEnd === undefined) {
+      return;
+    }
+    const cycleStart = cyclePath.indexOf(cycleEnd);
     const cycle = cyclePath.slice(cycleStart);
     throw new Error(AgentManager.formatCircularActivationError(cycle));
   }
@@ -1436,9 +2141,9 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private validateParameterSecurity(parameters: Record<string, unknown>): void {
     // 1. Prototype pollution check — reject dangerous keys
-    const FORBIDDEN_KEYS = ['__proto__', 'constructor', 'prototype'];
+    const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
     for (const key of Object.keys(parameters)) {
-      if (FORBIDDEN_KEYS.includes(key)) {
+      if (FORBIDDEN_KEYS.has(key)) {
         SecurityMonitor.logSecurityEvent({
           type: 'TOKEN_VALIDATION_FAILURE',
           severity: 'HIGH',
@@ -1488,7 +2193,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       operationName?: 'execute_agent' | 'continue_execution';
     } = {}
   ): void {
-    const paramDefs = goalConfig.parameters || [];
+    const paramDefs = (goalConfig as Partial<AgentGoalConfig>).parameters ?? [];
     this.assertRequiredParametersPresent(paramDefs, parameters, context);
     for (const [key, value] of Object.entries(parameters)) {
       this.validateProvidedParameter(key, value, paramDefs);
@@ -1532,10 +2237,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     const actualType = typeof value;
-    if (
-      (paramDef.type === 'string' || paramDef.type === 'number' || paramDef.type === 'boolean') &&
-      paramDef.type !== actualType
-    ) {
+    if (paramDef.type !== actualType) {
       throw new Error(`Parameter '${key}' must be a ${paramDef.type}, got ${actualType}`);
     }
     this.warnForOversizedStringParameter(key, value, actualType);
@@ -1608,7 +2310,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     for (const [key, value] of Object.entries(parameters)) {
       // Escape key to prevent regex metacharacters from causing ReDoS (Issue #103)
       const escapedKey = SafeRegex.escape(key);
-      rendered = rendered.replace(new RegExp(`\\{${escapedKey}\\}`, 'g'), String(value));
+      rendered = rendered.replaceAll(new RegExp(String.raw`\{${escapedKey}\}`, 'g'), String(value));
     }
 
     // Cap rendered goal length to prevent oversized payloads
@@ -1630,7 +2332,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @private
    */
   private detectUnmatchedPlaceholders(rendered: string): string[] {
-    const placeholderPattern = /\{([a-zA-Z_][a-zA-Z0-9_]*)\}/g;
+    const placeholderPattern = /\{([a-zA-Z_]\w*)\}/g;
     const unmatched: string[] = [];
     let match: RegExpExecArray | null;
     while ((match = placeholderPattern.exec(rendered)) !== null) {
@@ -1644,7 +2346,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Used by both the static pre-flight check and the runtime chain check.
    */
   private static formatCircularActivationError(cyclePath: string[]): string {
-    const agentName = cyclePath[cyclePath.length - 1];
+    const agentName = cyclePath.at(-1);
     return (
       `Circular agent activation detected (cycle of ${cyclePath.length - 1}): ` +
       `${cyclePath.join(' → ')}. ` +
@@ -2056,7 +2758,10 @@ export class AgentManager extends BaseElementManager<Agent> {
   ): Promise<number> {
     const agent = typeof agentOrName === 'string' ? null : agentOrName;
     const name = typeof agentOrName === 'string' ? agentOrName : nameOrState as string;
-    const state = typeof agentOrName === 'string' ? nameOrState as AgentState : maybeState!;
+    const state = typeof agentOrName === 'string' ? nameOrState as AgentState : maybeState;
+    if (!state) {
+      throw new Error('Agent state is required when saving state for an agent instance');
+    }
     return this.stateStore.save(
       { name, agentElementId: agent ? this.getAgentElementId(agent, name) : name },
       state,
@@ -2089,9 +2794,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       agentElementId: this.getAgentElementId(agent, name),
     });
     if (!state) {
-      if (isWritableStorageLayer(this.storageLayer)) {
-        agent[COMMIT_PERSISTED_VERSION](0);
-      }
+      // IAgentStateStore reserves version 0 for a first save in every backend.
+      // File-mode agents historically initialize at 1 in memory, so normalize
+      // an absent sidecar before the first mutation just as database mode does.
+      agent[COMMIT_PERSISTED_VERSION](0);
       this.hydratedAgents.add(agent);
       return;
     }
@@ -2234,12 +2940,12 @@ export class AgentManager extends BaseElementManager<Agent> {
       fileOperations: this.fileOperations,
       serializationService: this.serializationService,
       stateCache: this.stateCache,
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: MAX_AGENT_STATE_YAML_SIZE,
     });
     await defaultFileStore.warnIfOrphanedStateFiles();
   }
 
-  protected override async parseMetadata(data: any): Promise<AgentMetadata> {
+  protected override parseMetadata(data: any): Promise<AgentMetadata> {
     const metadata = { ...data };
     this.normalizeAndValidateMetadataHeader(metadata);
     this.validateMetadataTextFields(metadata);
@@ -2255,7 +2961,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.validateResilienceMetadata(metadata, agentName);
     this.validateTagsMetadata(metadata, agentName);
 
-    return metadata as AgentMetadata;
+    return Promise.resolve(metadata as AgentMetadata);
   }
 
   private normalizeAndValidateMetadataHeader(metadata: Record<string, any>): void {
@@ -2281,7 +2987,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     if (metadata.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadata.description, {
-        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });
@@ -2303,10 +3009,10 @@ export class AgentManager extends BaseElementManager<Agent> {
         maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH,
         allowSpaces: true
       });
-      if (!result.isValid) {
+      if (!result.isValid || result.sanitizedValue === undefined) {
         throw new Error(`Invalid specialization "${value}": ${result.errors?.join(', ')}`);
       }
-      validatedSpecializations.push(result.sanitizedValue!);
+      validatedSpecializations.push(result.sanitizedValue);
     }
     metadata.specializations = validatedSpecializations;
   }
@@ -2549,7 +3255,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     return agent;
   }
 
-  protected override async serializeElement(agent: Agent): Promise<string> {
+  protected override serializeElement(agent: Agent): Promise<string> {
     const metadata = this.buildBaseSerializedMetadata(agent);
     const metadataV2 = agent.metadata as AgentMetadataV2;
     this.addSerializedV2Metadata(metadata, metadataV2);
@@ -2565,13 +3271,13 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
     const body = agent.content || this.buildDefaultBody(agent);
 
-    return this.serializationService.createFrontmatter(metadata, body, {
+    return Promise.resolve(this.serializationService.createFrontmatter(metadata, body, {
       method: 'manual',
       schema: 'json',  // Use JSON schema to preserve booleans/numbers in v2 metadata
       cleanMetadata: true,
       cleaningStrategy: 'remove-both',  // Remove both null and undefined
       sortKeys: true
-    });
+    }));
   }
 
   private buildBaseSerializedMetadata(agent: Agent): Record<string, unknown> {
@@ -2592,7 +3298,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     metadata: Record<string, unknown>,
     metadataV2: AgentMetadataV2
   ): void {
-    if (metadataV2.goal) metadata.goal = metadataV2.goal;
+    const goal = (metadataV2 as unknown as Record<string, unknown>).goal;
+    if (goal) metadata.goal = goal;
     if (metadataV2.activates) metadata.activates = metadataV2.activates;
     if (metadataV2.tools) metadata.tools = metadataV2.tools;
     if (metadataV2.systemPrompt) metadata.systemPrompt = metadataV2.systemPrompt;
@@ -2605,13 +3312,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     metadata: Record<string, unknown>,
     metadataV2: AgentMetadataV2
   ): void {
-    if (metadataV2.goal) {
+    const legacyMetadata = metadataV2 as unknown as Record<string, unknown>;
+    if (legacyMetadata.goal) {
       return;
     }
-    if (metadataV2.decisionFramework) metadata.decisionFramework = metadataV2.decisionFramework;
-    if (metadataV2.riskTolerance) metadata.riskTolerance = metadataV2.riskTolerance;
-    if (metadataV2.learningEnabled !== undefined) metadata.learningEnabled = metadataV2.learningEnabled;
-    if (metadataV2.maxConcurrentGoals !== undefined) metadata.maxConcurrentGoals = metadataV2.maxConcurrentGoals;
+    if (legacyMetadata.decisionFramework) metadata.decisionFramework = legacyMetadata.decisionFramework;
+    if (legacyMetadata.riskTolerance) metadata.riskTolerance = legacyMetadata.riskTolerance;
+    if (legacyMetadata.learningEnabled !== undefined) metadata.learningEnabled = legacyMetadata.learningEnabled;
+    if (legacyMetadata.maxConcurrentGoals !== undefined) metadata.maxConcurrentGoals = legacyMetadata.maxConcurrentGoals;
   }
 
   private addSerializedCommonMetadata(
@@ -2623,22 +3331,22 @@ export class AgentManager extends BaseElementManager<Agent> {
       metadata.tags = metadataV2.tags;
     }
     if (metadataV2.triggers) metadata.triggers = metadataV2.triggers;
-    if (metadataV2.ruleEngineConfig !== undefined) metadata.ruleEngineConfig = metadataV2.ruleEngineConfig;
+    const legacyRuleEngineConfig = (metadataV2 as unknown as Record<string, unknown>).ruleEngineConfig;
+    if (legacyRuleEngineConfig !== undefined) metadata.ruleEngineConfig = legacyRuleEngineConfig;
   }
 
   private buildDefaultInstructions(agent: Agent): string {
     const nameHeader = agent.metadata.name ? `# ${agent.metadata.name}\n\n` : '';
-    const description = agent.metadata.description ?? '';
+    const description = agent.metadata.description;
     return `${nameHeader}${description}`.trim();
   }
 
   private buildDefaultBody(agent: Agent): string {
-    const name = (agent.metadata.name ?? '').trim();
-    const description = (agent.metadata.description ?? '').trim();
-    const lines: string[] = [];
-    if (name) {
-      lines.push(`# ${name}`);
-      lines.push('');
+    const name = agent.metadata.name.trim();
+    const description = agent.metadata.description.trim();
+      const lines: string[] = [];
+      if (name) {
+        lines.push(`# ${name}`, '');
     }
     if (description) {
       lines.push(description);
@@ -2681,17 +3389,19 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateTools(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
-    if (metadata.tools === undefined) {
+    const tools = (metadata as Record<string, unknown>).tools;
+    if (tools === undefined) {
       return;
     }
-    if (typeof metadata.tools !== 'object' || Array.isArray(metadata.tools) || metadata.tools === null) {
+    if (typeof tools !== 'object' || Array.isArray(tools) || tools === null) {
       errors.push('tools must be an object with allowed/denied arrays');
       return;
     }
-    if (!Array.isArray(metadata.tools.allowed)) {
+    const toolConfig = tools as Record<string, unknown>;
+    if (!Array.isArray(toolConfig.allowed)) {
       errors.push('tools.allowed is required and must be an array of strings');
     }
-    if (metadata.tools.denied !== undefined && !Array.isArray(metadata.tools.denied)) {
+    if (toolConfig.denied !== undefined && !Array.isArray(toolConfig.denied)) {
       errors.push('tools.denied must be an array of strings');
     }
   }
@@ -2713,15 +3423,16 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateAutonomy(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
-    if (metadata.autonomy === undefined) {
+    const autonomy = (metadata as Record<string, unknown>).autonomy;
+    if (autonomy === undefined) {
       return;
     }
-    if (typeof metadata.autonomy !== 'object' || Array.isArray(metadata.autonomy) || metadata.autonomy === null) {
+    if (typeof autonomy !== 'object' || Array.isArray(autonomy) || autonomy === null) {
       errors.push('autonomy must be an object');
       return;
     }
 
-    const a = metadata.autonomy as Record<string, unknown>;
+    const a = autonomy as Record<string, unknown>;
     normalizeAutonomyKeys(a);
     this.addEnumValidationError(a, 'riskTolerance', RISK_TOLERANCE_LEVELS, 'autonomy.riskTolerance', errors);
     this.addTypeValidationError(a, 'maxAutonomousSteps', 'number', 'autonomy.maxAutonomousSteps', errors);
@@ -2730,15 +3441,16 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateResilience(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
-    if (metadata.resilience === undefined) {
+    const resilience = (metadata as Record<string, unknown>).resilience;
+    if (resilience === undefined) {
       return;
     }
-    if (typeof metadata.resilience !== 'object' || Array.isArray(metadata.resilience) || metadata.resilience === null) {
+    if (typeof resilience !== 'object' || Array.isArray(resilience) || resilience === null) {
       errors.push('resilience must be an object');
       return;
     }
 
-    const r = metadata.resilience as Record<string, unknown>;
+    const r = resilience as Record<string, unknown>;
     normalizeResilienceKeys(r);
     this.addEnumValidationError(r, 'onStepLimitReached', STEP_LIMIT_ACTIONS, 'resilience.onStepLimitReached', errors);
     this.addEnumValidationError(r, 'onExecutionFailure', EXECUTION_FAILURE_ACTIONS, 'resilience.onExecutionFailure', errors);
@@ -2749,9 +3461,10 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   private validateCreateActivates(metadata: Partial<AgentMetadataV2>, errors: string[]): void {
+    const activates = (metadata as Record<string, unknown>).activates;
     if (
-      metadata.activates !== undefined &&
-      (typeof metadata.activates !== 'object' || Array.isArray(metadata.activates) || metadata.activates === null)
+      activates !== undefined &&
+      (typeof activates !== 'object' || Array.isArray(activates) || activates === null)
     ) {
       errors.push('activates must be an object with skills/personas/memories/templates/ensembles arrays');
     }
@@ -2895,7 +3608,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     /** Internal lifecycle owner selected by AgentExecutionHandler. */
     goalId?: string;
     stepDescription: string;
-    outcome: "success" | "failure" | "partial";
+    outcome: AgentStepOutcome;
     /** Optional findings or results from this step */
     findings?: string;
     confidence?: number;
@@ -2916,7 +3629,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       reasoning: string;
       framework: string;
       confidence: number;
-      outcome: "success" | "failure" | "partial";
+      outcome: AgentStepOutcome;
     };
     state: {
       goalCount: number;
@@ -2983,9 +3696,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     // 8. Evaluate autonomy - should we continue or pause?
     // Issue #402: Pass DI-injected DangerZoneEnforcer via context
     // Issue #447: Apply runtime maxAutonomousSteps override if provided
-    const autonomyConfig = params.maxStepsOverride !== undefined
-      ? { ...agentMetadata.autonomy, maxAutonomousSteps: params.maxStepsOverride }
-      : agentMetadata.autonomy;
+    const autonomyConfig = params.maxStepsOverride === undefined
+      ? agentMetadata.autonomy
+      : { ...agentMetadata.autonomy, maxAutonomousSteps: params.maxStepsOverride };
 
     const autonomyDirective = evaluateAutonomy({
       agentName: params.agentName,
@@ -3036,7 +3749,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   async completeAgentGoal(params: {
     agentName: string;
     goalId?: string;
-    outcome: "success" | "failure" | "partial";
+    outcome: AgentStepOutcome;
     summary: string;
   }) {
     return this.runSerializedAgentStateOperation(
@@ -3151,7 +3864,13 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();
-    const completedGoal = updatedState.goals.find(g => g.id === goal.id)!;
+    const completedGoal = updatedState.goals.find(g => g.id === goal.id);
+    if (!completedGoal) {
+      throw new Error(`Completed goal '${goal.id}' is missing from agent state`);
+    }
+    if (!completedGoal.completedAt) {
+      throw new Error(`Completed goal '${goal.id}' is missing its completion timestamp`);
+    }
 
     return {
       success: true,
@@ -3161,7 +3880,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         description: completedGoal.description,
         status: completedGoal.status as "completed" | "failed",
         createdAt: completedGoal.createdAt.toISOString(),
-        completedAt: completedGoal.completedAt!.toISOString(),
+        completedAt: completedGoal.completedAt.toISOString(),
         estimatedEffort: completedGoal.estimatedEffort,
         actualEffort: completedGoal.actualEffort
       },

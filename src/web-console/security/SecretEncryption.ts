@@ -4,6 +4,7 @@ import {
   randomBytes,
 } from 'node:crypto';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
+import { isValidEnvelopeKeyId } from '../../security/envelopeKeyId.js';
 
 const ALGORITHM = 'aes-256-gcm';
 const ALGORITHM_ID = 1;
@@ -119,8 +120,11 @@ function validateContext(context: SecretEncryptionContext): void {
 }
 
 function validateKey(key: AeadSecretKey): void {
-  if (key.keyId.trim() === '' || key.key.length !== 32) {
-    throw new Error('Secret encryption keys require a key ID and exactly 32 bytes');
+  if (!isValidEnvelopeKeyId(key.keyId) || key.key.length !== 32) {
+    throw new Error(
+      'Secret encryption keys require exactly 32 bytes of key material and a nonempty key ID ' +
+      "of at most 255 UTF-8 bytes; key IDs must use only ASCII letters, digits, '.', '_', ':', or '-'",
+    );
   }
 }
 

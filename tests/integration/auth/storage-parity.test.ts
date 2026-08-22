@@ -15,6 +15,8 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { sql } from 'drizzle-orm';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { FilesystemAuthStorageLayer } from '../../../src/auth/embedded-as/storage/FilesystemAuthStorageLayer.js';
@@ -22,8 +24,76 @@ import { PostgresAuthStorageLayer } from '../../../src/auth/embedded-as/storage/
 import { withSystemContext } from '../../../src/database/admin.js';
 import type { IAuthStorageLayer, StoredAccount } from '../../../src/auth/embedded-as/storage/IAuthStorageLayer.js';
 import { closeTestDb, getTestAdminDb, isDatabaseAvailable } from '../database/test-db-helpers.js';
+import { crashFilesystemGuardOwner } from '../../helpers/crashFilesystemGuardOwner.js';
 
 const ALICE_EMAIL = 'alice@example.com';
+
+interface FilesystemAuthChildInput {
+  readonly rootDir: string;
+  readonly barrierPath: string;
+  readonly operation: 'insert' | 'cas' | 'consume' | 'audit';
+  readonly payload: unknown;
+}
+
+async function runFilesystemAuthChild(input: FilesystemAuthChildInput): Promise<unknown> {
+  const moduleUrl = pathToFileURL(path.join(
+    process.cwd(),
+    'src/auth/embedded-as/storage/FilesystemAuthStorageLayer.ts',
+  )).href;
+  const childSource = `
+    import fs from 'node:fs/promises';
+    import { FilesystemAuthStorageLayer } from ${JSON.stringify(moduleUrl)};
+    const input = JSON.parse(process.env.DOLLHOUSE_AUTH_CHILD_INPUT);
+    while (true) {
+      try { await fs.access(input.barrierPath); break; }
+      catch { await new Promise(resolve => setTimeout(resolve, 5)); }
+    }
+    const storage = new FilesystemAuthStorageLayer({ rootDir: input.rootDir });
+    let result;
+    if (input.operation === 'insert') {
+      result = await storage.genericInsertIfAbsent('AuthModeFingerprint', 'current', input.payload);
+    } else if (input.operation === 'cas') {
+      result = await storage.genericCompareAndSet(
+        'AuthModeFingerprint', 'current', { generation: 'base' }, input.payload,
+      );
+    } else if (input.operation === 'consume') {
+      result = await storage.genericConsume('AuthorizationCode', 'cross-process-consume');
+    } else {
+      await storage.recordIdentityEvent(input.payload);
+      result = true;
+    }
+    process.stdout.write('DOLLHOUSE_RESULT:' + JSON.stringify(result));
+  `;
+
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', childSource], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        DOLLHOUSE_AUTH_CHILD_INPUT: JSON.stringify(input),
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', chunk => { stdout += String(chunk); });
+    child.stderr.on('data', chunk => { stderr += String(chunk); });
+    child.once('error', reject);
+    child.once('close', code => {
+      if (code !== 0) {
+        reject(new Error(`Filesystem auth child exited ${code}: ${stderr}`));
+        return;
+      }
+      const marker = 'DOLLHOUSE_RESULT:';
+      const markerIndex = stdout.lastIndexOf(marker);
+      if (markerIndex < 0) {
+        reject(new Error(`Filesystem auth child omitted its result: ${stdout}`));
+        return;
+      }
+      resolve(JSON.parse(stdout.slice(markerIndex + marker.length)) as unknown);
+    });
+  });
+}
 
 function makeAccount(overrides: Partial<StoredAccount> = {}): StoredAccount {
   return {
@@ -303,6 +373,26 @@ function runContractSuite(
       expect(await storage.genericGet('ConsumedInvite', 'jti-1')).toEqual({ consumed: true });
     });
 
+    it('genericCompareAndSet replaces only the exact previously-read payload', async () => {
+      const original = { generation: 1, nested: { value: 'before' } };
+      await storage.genericSet('AuthModeFingerprint', 'cas-current', original);
+
+      await expect(storage.genericCompareAndSet(
+        'AuthModeFingerprint',
+        'cas-current',
+        original,
+        { generation: 2 },
+      )).resolves.toBe(true);
+      await expect(storage.genericCompareAndSet(
+        'AuthModeFingerprint',
+        'cas-current',
+        original,
+        { generation: 3 },
+      )).resolves.toBe(false);
+      await expect(storage.genericGet('AuthModeFingerprint', 'cas-current'))
+        .resolves.toEqual({ generation: 2 });
+    });
+
     it('genericInsertIfAbsent: second insert with same key returns false (does not overwrite)', async () => {
       await storage.genericInsertIfAbsent('ConsumedInvite', 'jti-2', { consumed: true, by: 'first' });
       const second = await storage.genericInsertIfAbsent(
@@ -549,6 +639,29 @@ function runContractSuite(
       expect(results.filter((r) => r === true).length).toBe(1);
     });
 
+    it('filesystem genericConsume permits exactly one winner across processes', async () => {
+      if (!(storage instanceof FilesystemAuthStorageLayer)) return;
+
+      await storage.genericSet(
+        'AuthorizationCode',
+        'cross-process-consume',
+        { grantId: 'g-cross-process' },
+      );
+      const rootDir = storage.rootDir;
+      const barrierPath = path.join(rootDir, 'consume-start');
+      const children = Array.from({ length: 4 }, () => runFilesystemAuthChild({
+        rootDir,
+        barrierPath,
+        operation: 'consume',
+        payload: null,
+      }));
+      await fs.writeFile(barrierPath, 'go', { mode: 0o600 });
+
+      const results = await Promise.all(children);
+      expect(results.filter(result => result === true)).toHaveLength(1);
+      expect(results.filter(result => result === false)).toHaveLength(3);
+    });
+
     it('genericInsertIfAbsent against a non-expiring existing row rejects', async () => {
       // No TTL on the existing row (expiresInSec omitted); the new
       // insert with a 60s TTL must still be rejected because the
@@ -577,6 +690,19 @@ function runContractSuite(
         type: 'auth.test.duplicate',
       });
       expect(found.length).toBe(2);
+    });
+
+    it('deduplicates a retried event carrying the same durable event id', async () => {
+      const event = {
+        eventId: '734056c5-bbca-49a7-a12f-6486d3318469',
+        type: 'auth.mode_switch_invalidation' as const,
+        timestamp: Date.now(),
+      };
+      await storage.recordIdentityEvent(event);
+      await storage.recordIdentityEvent(event);
+      const found = await storage.listIdentityEvents({ type: event.type });
+      expect(found).toHaveLength(1);
+      expect(found[0]?.eventId).toBe(event.eventId);
     });
   });
 
@@ -708,6 +834,20 @@ function runContractSuite(
       expect(await storage.allowlistMatchesIdentity({ email: 'bob@example.com' })).toBe(false);
     });
 
+    it('matchesIdentity() preserves distinct Unicode email principals', async () => {
+      const cyrillicAlice = '\u0430lice@example.com';
+      await storage.allowlistAdd({ kind: 'email', value: cyrillicAlice });
+
+      expect(await storage.allowlistMatchesIdentity({ email: cyrillicAlice })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ email: ALICE_EMAIL })).toBe(false);
+    });
+
+    it('matchesIdentity() accepts canonically equivalent Unicode email encodings', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'jose\u0301@example.com' });
+
+      expect(await storage.allowlistMatchesIdentity({ email: 'jos\u00e9@example.com' })).toBe(true);
+    });
+
     it('matchesIdentity() matches by github_username (case-insensitive input)', async () => {
       await storage.allowlistAdd({ kind: 'github_username', value: 'insomnolence' });
       expect(await storage.allowlistMatchesIdentity({ githubUsername: 'insomnolence' })).toBe(true);
@@ -837,6 +977,7 @@ describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
       if (pgAvailable) await reset();
     },
   );
+
 });
 
 // ── Filesystem-only durability tests ───────────────────────────────────
@@ -878,6 +1019,151 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
 
     const b = new FilesystemAuthStorageLayer({ rootDir: dir });
     expect(await b.genericGet('Grant', 'g-persist')).toEqual({ accountId: 'github_42' });
+  });
+
+  it('serializes conflicting fingerprint inserts across operating-system processes', async () => {
+    const barrierPath = path.join(dir, 'insert-barrier');
+    const contenders = [
+      runFilesystemAuthChild({
+        rootDir: dir,
+        barrierPath,
+        operation: 'insert',
+        payload: { generation: 'one' },
+      }),
+      runFilesystemAuthChild({
+        rootDir: dir,
+        barrierPath,
+        operation: 'insert',
+        payload: { generation: 'two' },
+      }),
+    ];
+    await fs.writeFile(barrierPath, 'go');
+
+    const results = await Promise.all(contenders);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const persisted = await new FilesystemAuthStorageLayer({ rootDir: dir })
+      .genericGet('AuthModeFingerprint', 'current');
+    expect([{ generation: 'one' }, { generation: 'two' }]).toContainEqual(persisted);
+    const fingerprintDir = path.join(dir, 'kv', 'AuthModeFingerprint');
+    if (process.platform !== 'win32') {
+      expect((await fs.stat(path.join(fingerprintDir, 'current.json'))).mode & 0o777).toBe(0o600);
+    }
+    expect((await fs.readdir(fingerprintDir)).filter(name => name.includes('.lock'))).toEqual([]);
+  });
+
+  it('serializes conflicting fingerprint compare-and-set across operating-system processes', async () => {
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+    await storage.genericInsertIfAbsent('AuthModeFingerprint', 'current', { generation: 'base' });
+    const barrierPath = path.join(dir, 'cas-barrier');
+    const contenders = [
+      runFilesystemAuthChild({
+        rootDir: dir,
+        barrierPath,
+        operation: 'cas',
+        payload: { generation: 'one' },
+      }),
+      runFilesystemAuthChild({
+        rootDir: dir,
+        barrierPath,
+        operation: 'cas',
+        payload: { generation: 'two' },
+      }),
+    ];
+    await fs.writeFile(barrierPath, 'go');
+
+    const results = await Promise.all(contenders);
+    expect(results.filter(Boolean)).toHaveLength(1);
+    expect([{ generation: 'one' }, { generation: 'two' }]).toContainEqual(
+      await storage.genericGet('AuthModeFingerprint', 'current'),
+    );
+  });
+
+  it('recovers the fingerprint guard after its operating-system process is killed', async () => {
+    if (process.platform === 'win32') return;
+    const guardPath = path.join(
+      dir,
+      'kv',
+      'AuthModeFingerprint',
+      'current.json.lock',
+    );
+    await crashFilesystemGuardOwner(guardPath);
+
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+    await expect(storage.genericInsertIfAbsent(
+      'AuthModeFingerprint',
+      'current',
+      { generation: 'after-owner-crash' },
+    )).resolves.toBe(true);
+    await expect(storage.genericGet('AuthModeFingerprint', 'current'))
+      .resolves.toEqual({ generation: 'after-owner-crash' });
+    await expect(fs.access(guardPath)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('deduplicates a mode-transition audit event across operating-system processes', async () => {
+    const barrierPath = path.join(dir, 'audit-barrier');
+    const event = {
+      eventId: 'mode-transition-cross-process',
+      type: 'auth.mode_switch_invalidation',
+      timestamp: Date.now(),
+    };
+    const contenders = [
+      runFilesystemAuthChild({ rootDir: dir, barrierPath, operation: 'audit', payload: event }),
+      runFilesystemAuthChild({ rootDir: dir, barrierPath, operation: 'audit', payload: event }),
+    ];
+    await fs.writeFile(barrierPath, 'go');
+    await Promise.all(contenders);
+
+    const events = await new FilesystemAuthStorageLayer({ rootDir: dir })
+      .listIdentityEvents({ type: event.type });
+    expect(events.filter(candidate => candidate.eventId === event.eventId)).toHaveLength(1);
+  });
+
+  it('matches and deduplicates a decomposed Unicode value from a legacy file', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([{
+      id: 'legacy-nfd',
+      kind: 'email',
+      value: 'jose\u0301@example.com',
+      note: null,
+      createdBy: null,
+      createdAt: new Date().toISOString(),
+    }]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: 'jos\u00e9@example.com',
+    })).resolves.toBe(true);
+    await expect(storage.allowlistAdd({
+      kind: 'email',
+      value: 'jos\u00e9@example.com',
+    })).rejects.toThrow('already exists');
+
+    await storage.allowlistUpdate('legacy-nfd', { note: 'canonicalized' });
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(dir, 'allowlist.json'), 'utf8'),
+    ) as Array<{ value: string }>;
+    expect(persisted[0].value).toBe('jos\u00e9@example.com');
+  });
+
+  it('fails closed when legacy file entries collide after canonicalization', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([
+      {
+        id: 'legacy-nfd',
+        kind: 'email',
+        value: 'jose\u0301@example.com',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'canonical-nfc',
+        kind: 'email',
+        value: 'jos\u00e9@example.com',
+        createdAt: new Date().toISOString(),
+      },
+    ]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: 'jos\u00e9@example.com',
+    })).rejects.toThrow('allowlist normalization collision');
   });
 
   it('cycle-16: bootstrap state survives across instances', async () => {

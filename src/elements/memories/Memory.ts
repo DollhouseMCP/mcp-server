@@ -76,11 +76,24 @@ function sanitizeMemoryContent(content: string, maxLength: number): string {
   const cleaned = purify.sanitize(normalized);
   
   // Remove only control characters and null bytes
-  return cleaned
+  const sanitized = cleaned
     // eslint-disable-next-line no-control-regex -- Intentionally removing control chars except \t \n \r for sanitization
     .replaceAll(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, '') // NOSONAR
-    .substring(0, maxLength)
     .trim();
+  return truncateUtf8(sanitized, maxLength);
+}
+
+function truncateUtf8(content: string, maxBytes: number): string {
+  if (Buffer.byteLength(content, 'utf8') <= maxBytes) return content;
+  let byteCount = 0;
+  let result = '';
+  for (const character of content) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (byteCount + characterBytes > maxBytes) break;
+    result += character;
+    byteCount += characterBytes;
+  }
+  return result;
 }
 
 export interface MemoryMetadata extends IElementMetadata {
@@ -139,7 +152,7 @@ export interface MemorySearchOptions {
  *
  * Planned Sharding Architecture:
  * 1. Shard memories across multiple files based on hash(memoryId) % shardCount
- * 2. Each shard file <256KB for optimal YAML parsing
+ * 2. Each persisted memory file stays within the 10 MiB element ceiling
  * 3. Memory references stored separately from content (like git objects)
  * 4. Large binary content (PDFs, images) stored as external references
  *
@@ -863,7 +876,7 @@ export class Memory extends BaseElement implements IElement {
     const tagFrequency = new Map<string, number>();
 
     for (const entry of this.entries.values()) {
-      totalSize += entry.content.length;
+      totalSize += Buffer.byteLength(entry.content, 'utf8');
 
       // FIX #1069: Ensure timestamp is a valid Date object for comparison
       // When entries are edited, timestamps might be strings

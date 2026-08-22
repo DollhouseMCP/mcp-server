@@ -79,7 +79,7 @@ describe('Memory addEntry persistence (#2329)', () => {
   }
 
   // ~17KB of plain prose per entry — several of these push the serialized YAML
-  // past the old hidden 64KB cap while staying under MAX_ENTRY_SIZE (100KB).
+  // past the old hidden 64KB cap while staying under MAX_ENTRY_SIZE.
   const bigEntry = (marker: string) =>
     `${marker} ` + 'research finding lorem ipsum dolor sit amet consectetur adipiscing elit '.repeat(240);
 
@@ -128,14 +128,26 @@ describe('Memory addEntry persistence (#2329)', () => {
   it('returns an error and rolls back the entry when the memory cannot be persisted', async () => {
     await createMemory('overflow-2329');
 
-    // ~90KB per entry: two fit under MAX_YAML_SIZE (256KB), the third does not.
-    const hugeEntry = (marker: string) =>
-      `${marker} ` + 'oversized entry content padding words repeated for scale '.repeat(1550);
+    // Fill with entries below MAX_ENTRY_SIZE until aggregate YAML crosses the
+    // independently larger MAX_YAML_SIZE ceiling.
+    const hugeEntry = (marker: string) => `${marker} ${'x'.repeat(350 * 1024)}`;
+    const accepted: string[] = [];
+    let rejectedMarker = '';
+    let overflowResult: Awaited<ReturnType<typeof addEntry>> | null = null;
+    for (let index = 1; index <= 40; index += 1) {
+      const marker = `huge-${index}`;
+      const result = await addEntry('overflow-2329', hugeEntry(marker));
+      if (!result.success) {
+        rejectedMarker = marker;
+        overflowResult = result;
+        break;
+      }
+      accepted.push(marker);
+    }
 
-    expect((await addEntry('overflow-2329', hugeEntry('huge-1'))).success).toBe(true);
-    expect((await addEntry('overflow-2329', hugeEntry('huge-2'))).success).toBe(true);
-
-    const overflowResult = await addEntry('overflow-2329', hugeEntry('huge-3'));
+    expect(accepted.length).toBeGreaterThanOrEqual(2);
+    expect(overflowResult).not.toBeNull();
+    if (!overflowResult) throw new Error('expected aggregate memory size rejection');
     expect(overflowResult.success).toBe(false);
     if (!overflowResult.success) {
       expect(overflowResult.error).toContain('NOT saved');
@@ -148,42 +160,35 @@ describe('Memory addEntry persistence (#2329)', () => {
     const filePath = await findMemoryFile('overflow-2329');
     const raw = await fs.readFile(filePath, 'utf-8');
     expect(raw.length).toBeLessThanOrEqual(MEMORY_CONSTANTS.MAX_YAML_SIZE);
-    expect(raw).toContain('huge-1');
-    expect(raw).toContain('huge-2');
-    expect(raw).not.toContain('huge-3');
-  });
+    expect(raw).toContain(accepted[0]);
+    expect(raw).toContain(accepted.at(-1));
+    expect(raw).not.toContain(rejectedMarker);
+  }, 30_000);
 
-  it('surfaces a failed deferred save on the next addEntry and recovers', async () => {
+  it('does not acknowledge a failed file save and recovers on the next request', async () => {
     await createMemory('flaky-disk-2329');
 
-    expect((await addEntry('flaky-disk-2329', 'first entry before failure')).success).toBe(true);
-
-    // Simulate a one-off disk failure on the deferred save.
     const saveSpy = jest.spyOn(memoryManager, 'save')
       .mockRejectedValueOnce(new Error('EIO: simulated disk failure'));
-    await mcpAqlHandler.flushPendingSaves();
-    expect(saveSpy).toHaveBeenCalled();
+    const failed = await addEntry('flaky-disk-2329', 'entry rejected on disk failure');
+    expect(failed.success).toBe(false);
+    if (!failed.success) expect(failed.error).toContain('NOT saved');
 
-    // Next addEntry must first retry the failed save (succeeds now that the
-    // mock is consumed), then proceed normally.
-    const result = await addEntry('flaky-disk-2329', 'second entry after recovery');
+    const result = await addEntry('flaky-disk-2329', 'entry after recovery');
     expect(result.success).toBe(true);
 
-    await mcpAqlHandler.flushPendingSaves();
     const filePath = await findMemoryFile('flaky-disk-2329');
     const raw = await fs.readFile(filePath, 'utf-8');
-    expect(raw).toContain('first entry before failure');
-    expect(raw).toContain('second entry after recovery');
+    expect(raw).not.toContain('entry rejected on disk failure');
+    expect(raw).toContain('entry after recovery');
+    expect(saveSpy).toHaveBeenCalledTimes(2);
   });
 
-  it('does not resurrect a deleted memory from the failure ledger (Codex P2)', async () => {
+  it('does not resurrect a deleted memory after a rejected synchronous save', async () => {
     await createMemory('doomed-2329');
-    expect((await addEntry('doomed-2329', 'entry that will fail to save')).success).toBe(true);
-
-    // Deferred save fails once → failure ledger holds the in-RAM instance.
     jest.spyOn(memoryManager, 'save')
       .mockRejectedValueOnce(new Error('EIO: simulated disk failure'));
-    await mcpAqlHandler.flushPendingSaves();
+    expect((await addEntry('doomed-2329', 'entry that will fail to save')).success).toBe(false);
     jest.restoreAllMocks();
 
     // Delete the memory — must also drop the ledger entry.
@@ -200,21 +205,82 @@ describe('Memory addEntry persistence (#2329)', () => {
     expect(files.filter(f => String(f).includes('doomed-2329'))).toHaveLength(0);
   });
 
-  it('reports an error when both the deferred save and the retry fail', async () => {
+  it('reports an error immediately while a persistent disk failure remains', async () => {
     await createMemory('dead-disk-2329');
-
-    expect((await addEntry('dead-disk-2329', 'entry before persistent failure')).success).toBe(true);
-
-    // Persistent failure: deferred save fails AND the retry fails.
     jest.spyOn(memoryManager, 'save')
       .mockRejectedValue(new Error('EIO: simulated persistent disk failure'));
-    await mcpAqlHandler.flushPendingSaves();
 
     const result = await addEntry('dead-disk-2329', 'entry that must be rejected');
     expect(result.success).toBe(false);
     if (!result.success) {
       expect(result.error).toContain('NOT saved');
-      expect(result.error).toContain('save failure');
+      expect(result.error).toContain('simulated persistent disk failure');
+    }
+  });
+
+  it('serializes concurrent manager instances without losing either entry', async () => {
+    await createMemory('shared-file-race-2329');
+    const secondContainer = new DollhouseContainer();
+    const secondServer = new DollhouseMCPServer(secondContainer);
+    await secondServer.listPersonas();
+    preConfirmAllOperations(secondContainer);
+    const secondHandler = secondContainer.resolve<MCPAQLHandler>('mcpAqlHandler');
+    try {
+      const [first, second] = await Promise.all([
+        addEntry('shared-file-race-2329', 'entry from first manager'),
+        secondHandler.handleCreate({
+          operation: 'addEntry',
+          params: {
+            element_name: 'shared-file-race-2329',
+            content: 'entry from second manager',
+          },
+        }),
+      ]);
+      expect(first.success).toBe(true);
+      expect(second.success).toBe(true);
+      const raw = await fs.readFile(await findMemoryFile('shared-file-race-2329'), 'utf8');
+      expect(raw).toContain('entry from first manager');
+      expect(raw).toContain('entry from second manager');
+    } finally {
+      await secondServer.dispose();
+    }
+  });
+
+  it('orders a competing delete after an in-flight durable add without resurrection', async () => {
+    await createMemory('shared-file-delete-race-2329');
+    const secondContainer = new DollhouseContainer();
+    const secondServer = new DollhouseMCPServer(secondContainer);
+    await secondServer.listPersonas();
+    preConfirmAllOperations(secondContainer);
+    const secondHandler = secondContainer.resolve<MCPAQLHandler>('mcpAqlHandler');
+    const originalSave = memoryManager.save.bind(memoryManager);
+    let signalSaveStarted!: () => void;
+    const saveStarted = new Promise<void>(resolve => { signalSaveStarted = resolve; });
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>(resolve => { releaseSave = resolve; });
+    jest.spyOn(memoryManager, 'save').mockImplementation(async (...args) => {
+      signalSaveStarted();
+      await saveGate;
+      return originalSave(...args);
+    });
+    try {
+      const add = addEntry('shared-file-delete-race-2329', 'durable before delete');
+      await saveStarted;
+      const deletion = secondHandler.handleDelete({
+        operation: 'delete_element',
+        params: {
+          element_name: 'shared-file-delete-race-2329',
+          element_type: 'memories',
+        },
+      });
+      releaseSave();
+      expect((await add).success).toBe(true);
+      expect((await deletion).success).toBe(true);
+      await mcpAqlHandler.flushPendingSaves();
+      const files = await fs.readdir(path.join(env.testDir, 'memories'), { recursive: true });
+      expect(files.some(file => String(file).includes('shared-file-delete-race-2329'))).toBe(false);
+    } finally {
+      await secondServer.dispose();
     }
   });
 });

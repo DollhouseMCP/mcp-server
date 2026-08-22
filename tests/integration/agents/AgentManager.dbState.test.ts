@@ -1,3 +1,6 @@
+/// <reference types="node" />
+
+import { afterAll, afterEach, beforeAll, describe, expect, it } from '@jest/globals';
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -18,8 +21,10 @@ import { ValidationService } from '../../../src/services/validation/ValidationSe
 import { createSessionIdResolver, createUserIdResolver } from '../../../src/database/UserContext.js';
 import { withUserRead } from '../../../src/database/rls.js';
 import { DatabaseAgentStateStore } from '../../../src/storage/DatabaseAgentStateStore.js';
+import { DatabaseAgentSnapshotReplacementJournal } from '../../../src/storage/DatabaseAgentSnapshotReplacementJournal.js';
 import { DatabaseStorageLayerFactory } from '../../../src/storage/DatabaseStorageLayerFactory.js';
 import { agentStates } from '../../../src/database/schema/agents.js';
+import { elements } from '../../../src/database/schema/elements.js';
 import {
   cleanupAllTestData,
   cleanupTestAgentStates,
@@ -30,6 +35,40 @@ import {
 } from '../database/test-db-helpers.js';
 
 let dbAvailable = false;
+
+function createDbAgentManager(tempDir: string, tracker: ContextTracker): AgentManager {
+  const fileLockManager = new FileLockManager();
+  const fileOperations = new FileOperationsService(fileLockManager);
+  const metadataService = new MetadataService();
+  const portfolioManager = new PortfolioManager(fileOperations, { baseDir: tempDir });
+  const validationRegistry = new ValidationRegistry(
+    new ValidationService(),
+    new TriggerValidationService(),
+    metadataService,
+  );
+  const userIdResolver = createUserIdResolver(tracker);
+  const sessionIdResolver = createSessionIdResolver(tracker);
+
+  return new AgentManager({
+    portfolioManager,
+    fileLockManager,
+    baseDir: tempDir,
+    fileOperationsService: fileOperations,
+    validationRegistry,
+    serializationService: new SerializationService(),
+    metadataService,
+    eventDispatcher: new ElementEventDispatcher(),
+    storageLayerFactory: new DatabaseStorageLayerFactory(getTestDb(), userIdResolver),
+    stateStore: new DatabaseAgentStateStore(getTestDb(), userIdResolver, sessionIdResolver),
+    replacementJournal: new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(),
+      userIdResolver,
+      sessionIdResolver,
+    ),
+    contextTracker: tracker,
+    getCurrentUserId: userIdResolver,
+  });
+}
 
 beforeAll(async () => {
   dbAvailable = await isDatabaseAvailable();
@@ -57,35 +96,6 @@ describe('AgentManager DB-backed runtime state', () => {
     const userId = await ensureTestUser();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-state-'));
     const tracker = new ContextTracker();
-    const userIdResolver = createUserIdResolver(tracker);
-    const sessionIdResolver = createSessionIdResolver(tracker);
-
-    const createManager = (): AgentManager => {
-      const fileLockManager = new FileLockManager();
-      const fileOperations = new FileOperationsService(fileLockManager);
-      const metadataService = new MetadataService();
-      const portfolioManager = new PortfolioManager(fileOperations, { baseDir: tempDir });
-      const validationRegistry = new ValidationRegistry(
-        new ValidationService(),
-        new TriggerValidationService(),
-        metadataService,
-      );
-
-      return new AgentManager({
-        portfolioManager,
-        fileLockManager,
-        baseDir: tempDir,
-        fileOperationsService: fileOperations,
-        validationRegistry,
-        serializationService: new SerializationService(),
-        metadataService,
-        eventDispatcher: new ElementEventDispatcher(),
-        storageLayerFactory: new DatabaseStorageLayerFactory(getTestDb(), userIdResolver),
-        stateStore: new DatabaseAgentStateStore(getTestDb(), userIdResolver, sessionIdResolver),
-        contextTracker: tracker,
-        getCurrentUserId: userIdResolver,
-      });
-    };
 
     const session = {
       userId,
@@ -98,7 +108,7 @@ describe('AgentManager DB-backed runtime state', () => {
 
     try {
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
-        const manager = createManager();
+        const manager = createDbAgentManager(tempDir, tracker);
         const created = await manager.create(
           'db-state-agent',
           'Persists runtime state in Postgres',
@@ -134,7 +144,7 @@ describe('AgentManager DB-backed runtime state', () => {
           ]),
         );
 
-        const reloadedManager = createManager();
+        const reloadedManager = createDbAgentManager(tempDir, tracker);
         const reloaded = await reloadedManager.getAgentState({
           agentName: 'db-state-agent',
           includeDecisionHistory: true,
@@ -173,41 +183,129 @@ describe('AgentManager DB-backed runtime state', () => {
     }
   });
 
+  it('deletes DB-backed agents and their UUID-keyed runtime state by canonical filename', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-delete-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-delete-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const manager = createDbAgentManager(tempDir, tracker);
+        const created = await manager.create(
+          'db-delete-agent',
+          'Deletes its runtime state with the element',
+          'Use the provided objective as the active goal.',
+          {
+            goal: {
+              template: '{objective}',
+              parameters: [{ name: 'objective', type: 'string', required: true }],
+            },
+          },
+        );
+        expect(created.success).toBe(true);
+        await manager.executeAgent('db-delete-agent', { objective: 'delete me' });
+
+        const beforeDelete = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(beforeDelete).toHaveLength(1);
+
+        await manager.delete('db-delete-agent.md');
+
+        expect(await manager.read('db-delete-agent')).toBeNull();
+        const afterDelete = await withUserRead(getTestDb(), userId, (tx) =>
+          tx
+            .select({ agentId: agentStates.agentId })
+            .from(agentStates)
+            .where(eq(agentStates.userId, userId))
+        );
+        expect(afterDelete).toEqual([]);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('authoritatively resolves UUID deletion when a second replica has a stale completed index', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-stale-delete-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-stale-delete-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const staleReplica = createDbAgentManager(tempDir, tracker);
+        await staleReplica.list();
+
+        const writerReplica = createDbAgentManager(tempDir, tracker);
+        const created = await writerReplica.create(
+          'cross-replica-delete-agent',
+          'Created after the deleting replica completed its index scan',
+          'Use the provided objective as the active goal.',
+          {
+            goal: {
+              template: '{objective}',
+              parameters: [{ name: 'objective', type: 'string', required: true }],
+            },
+          },
+        );
+        expect(created.success).toBe(true);
+        await writerReplica.executeAgent('cross-replica-delete-agent', { objective: 'delete atomically' });
+
+        const beforeDelete = await withUserRead(getTestDb(), userId, (tx) => tx
+          .select({ id: elements.id })
+          .from(elements)
+          .where(eq(elements.name, 'cross-replica-delete-agent')));
+        expect(beforeDelete).toHaveLength(1);
+        const elementId = beforeDelete[0]?.id;
+        if (!elementId) throw new Error('Expected persisted agent UUID');
+
+        await staleReplica.delete(elementId);
+
+        const remainingDefinitions = await withUserRead(getTestDb(), userId, (tx) => tx
+          .select({ id: elements.id })
+          .from(elements)
+          .where(eq(elements.id, elementId)));
+        const remainingState = await withUserRead(getTestDb(), userId, (tx) => tx
+          .select({ agentId: agentStates.agentId })
+          .from(agentStates)
+          .where(eq(agentStates.agentId, elementId)));
+        expect(remainingDefinitions).toEqual([]);
+        expect(remainingState).toEqual([]);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it('isolates agent state between concurrent sessions for the same user and agent', async () => {
     if (!dbAvailable) return;
 
     const userId = await ensureTestUser();
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-state-isolation-'));
     const tracker = new ContextTracker();
-    const userIdResolver = createUserIdResolver(tracker);
-    const sessionIdResolver = createSessionIdResolver(tracker);
-
-    const createManager = (): AgentManager => {
-      const fileLockManager = new FileLockManager();
-      const fileOperations = new FileOperationsService(fileLockManager);
-      const metadataService = new MetadataService();
-      const portfolioManager = new PortfolioManager(fileOperations, { baseDir: tempDir });
-      const validationRegistry = new ValidationRegistry(
-        new ValidationService(),
-        new TriggerValidationService(),
-        metadataService,
-      );
-
-      return new AgentManager({
-        portfolioManager,
-        fileLockManager,
-        baseDir: tempDir,
-        fileOperationsService: fileOperations,
-        validationRegistry,
-        serializationService: new SerializationService(),
-        metadataService,
-        eventDispatcher: new ElementEventDispatcher(),
-        storageLayerFactory: new DatabaseStorageLayerFactory(getTestDb(), userIdResolver),
-        stateStore: new DatabaseAgentStateStore(getTestDb(), userIdResolver, sessionIdResolver),
-        contextTracker: tracker,
-        getCurrentUserId: userIdResolver,
-      });
-    };
 
     const sessionAlpha = {
       userId,
@@ -227,8 +325,10 @@ describe('AgentManager DB-backed runtime state', () => {
     };
 
     try {
+      // Production HTTP sessions share the root AgentManager. Reuse one here
+      // so this test catches session state leaking through its element cache.
+      const manager = createDbAgentManager(tempDir, tracker);
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createManager();
         const created = await manager.create(
           'shared-state-agent',
           'Persists isolated runtime state in Postgres',
@@ -245,7 +345,6 @@ describe('AgentManager DB-backed runtime state', () => {
       });
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionBeta }, async () => {
-        const manager = createManager();
         await manager.executeAgent('shared-state-agent', { objective: 'goal from beta' });
       });
 
@@ -272,7 +371,6 @@ describe('AgentManager DB-backed runtime state', () => {
       );
 
       await tracker.runAsync({ type: 'test', timestamp: Date.now(), session: sessionAlpha }, async () => {
-        const manager = createManager();
         const state = await manager.getAgentState({ agentName: 'shared-state-agent' });
         expect(state.state.goals).toEqual(
           expect.arrayContaining([expect.objectContaining({ description: 'goal from alpha' })]),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -14,6 +14,7 @@ import {
   WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS,
   type WebConsoleReplacementLiveCheckId,
 } from '../../../src/web-console/WebConsoleReplacementReadiness.js';
+import { logger } from '../../../src/utils/logger.js';
 
 const KEY_1 = Buffer.alloc(32, 1).toString('base64');
 const KEY_2 = Buffer.alloc(32, 2).toString('base64');
@@ -27,11 +28,14 @@ function env(overrides: Partial<WebConsoleHttpBootstrapEnv> = {}): WebConsoleHtt
     DOLLHOUSE_HTTP_HOST: '0.0.0.0',
     DOLLHOUSE_AUTH_METHODS: ['local-password'],
     GITHUB_REPOSITORY: 'custom-portfolio',
+    GITHUB_TOKEN: undefined,
+    DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED: false,
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME: 'dollhouse_prod',
     DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER: 'dollhouse_admin',
     DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: KEY_1,
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY: KEY_2,
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID: 'console-key-v1',
+    DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: undefined,
     DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: KEY_3,
     DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: '/deployment/replacement-readiness.json',
     DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID: undefined,
@@ -79,7 +83,35 @@ describe('WebConsoleHttpBootstrap', () => {
       keyId: 'console-key-v1',
       key: Buffer.alloc(32, 2),
     });
+    expect(options?.retainedSecretEncryptionKeys).toEqual([]);
     expect(options?.protectedCorrelationSelectorHmacKey).toEqual(Buffer.alloc(32, 3));
+  });
+
+  it('passes a validated retained AEAD key ring to the hosted registrar', () => {
+    const options = resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED:
+        `console-key-v0=${KEY_1},console-key-v0-legacy=${KEY_3}`,
+    }));
+
+    expect(options?.retainedSecretEncryptionKeys).toEqual([
+      { keyId: 'console-key-v0', key: Buffer.alloc(32, 1) },
+      { keyId: 'console-key-v0-legacy', key: Buffer.alloc(32, 3) },
+    ]);
+  });
+
+  it('rejects malformed, duplicate, and active retained AEAD key IDs', () => {
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: 'missing-separator',
+    }))).toThrow("must be 'keyId=base64key'");
+
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED:
+        `console-key-v0=${KEY_1},console-key-v0=${KEY_3}`,
+    }))).toThrow("duplicate or active key ID 'console-key-v0'");
+
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: `console-key-v1=${KEY_1}`,
+    }))).toThrow("duplicate or active key ID 'console-key-v1'");
   });
 
   it('fails clearly when required hosted mount keys are missing or malformed', () => {
@@ -102,6 +134,58 @@ describe('WebConsoleHttpBootstrap', () => {
     expect(() => resolveWebConsoleHttpBootstrapOptions(env({
       DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY: undefined,
     }))).toThrow('DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY must be set');
+  });
+
+  describe('collection browse GITHUB_TOKEN warning', () => {
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('warns when collection browse is enabled on a non-loopback bind without GITHUB_TOKEN', () => {
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      resolveWebConsoleHttpBootstrapOptions(env({
+        DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED: true,
+      }));
+
+      expect(warn).toHaveBeenCalledTimes(1);
+      const message = warn.mock.calls[0][0];
+      expect(message).toContain('DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED=true');
+      expect(message).toContain('GITHUB_TOKEN');
+      expect(message).toContain('zero-scope');
+    });
+
+    it('stays silent when GITHUB_TOKEN is configured', () => {
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      resolveWebConsoleHttpBootstrapOptions(env({
+        DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED: true,
+        GITHUB_TOKEN: 'ghp_zero_scope_token',
+      }));
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('stays silent on a loopback bind', () => {
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      resolveWebConsoleHttpBootstrapOptions(env({
+        DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED: true,
+        DOLLHOUSE_HTTP_HOST: '127.0.0.1',
+      }));
+
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it('stays silent when collection browse is disabled', () => {
+      const warn = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      resolveWebConsoleHttpBootstrapOptions(env({
+        DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED: false,
+      }));
+
+      expect(warn).not.toHaveBeenCalled();
+    });
   });
 
   it('requires selected-deployment replacement evidence to pass before activation', async () => {

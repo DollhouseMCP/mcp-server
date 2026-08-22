@@ -8,7 +8,7 @@
  * @since v2.2.0 — Phase 4, Step 4.1
  */
 
-import { pgTable, uuid, varchar, timestamp, jsonb, bigint, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, uuid, varchar, timestamp, jsonb, bigint, index, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 
 export const users = pgTable('users', {
@@ -23,12 +23,17 @@ export const users = pgTable('users', {
   // a live account; deleted rows are excluded from the account directory.
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   authzVersion: bigint('authz_version', { mode: 'number' }).notNull().default(1),
+  /** Last security-authority mutation; bearer tokens at/before this instant are stale. */
+  authzChangedAt: timestamp('authz_changed_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   accountCorrelationId: uuid('account_correlation_id').notNull().defaultRandom(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 }, (table) => [
   uniqueIndex('idx_users_username').on(table.username),
   uniqueIndex('idx_users_account_correlation_id').on(table.accountCorrelationId),
+  // Keyset pagination for the cross-tenant users directory (Family B): `(created_at, id)`
+  // over live accounts only, matching `ORDER BY created_at ASC, id ASC` + `(created_at, id) > cursor`.
+  index('idx_users_created_at_id_active').on(table.createdAt, table.id).where(sql`deleted_at IS NULL`),
 ]);
 
 // Identity fields (username, email, displayName) live exclusively in the

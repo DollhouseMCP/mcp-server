@@ -1,10 +1,12 @@
 /**
  * Regression: ContentValidator.validateMetadata must apply per-field
  * length limits. Identity fields (name, category, author, version,
- * tags) keep the strict 1KB cap; long-form fields (instructions,
- * content, description) get a higher limit so non-trivial collection
- * personas actually install. Description uses the YAML/frontmatter
- * limit because it carries substantive LLM-authored text.
+ * tags) keep the strict 1KB cap; the long-form content fields
+ * (instructions, content) get a much higher limit so non-trivial
+ * collection personas actually install. The element `description` has
+ * its own dedicated cap (MAX_DESCRIPTION_LENGTH) — a short summary
+ * field; substantive long-form text belongs in instructions/content or
+ * nested documentation fields, not the top-level description.
  *
  * Caught during Phase 4.5 PoC verification on 2026-05-12 — installing
  * `dollhouse-expert` from the public collection failed because the
@@ -59,7 +61,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       ).toBeUndefined();
     });
 
-    it('rejects instructions only when over MAX_CONTENT_LENGTH (500KB)', () => {
+    it('rejects instructions only when over MAX_CONTENT_LENGTH (10 MiB)', () => {
       const metadata = {
         name: 'huge-persona',
         instructions: 'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 10),
@@ -82,12 +84,12 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       ).toBeUndefined();
     });
 
-    it('accepts description well over the short metadata limit', () => {
+    it('accepts description at MAX_DESCRIPTION_LENGTH', () => {
       const metadata = {
         name: 'realistic-persona',
-        // 5KB of description text — far over the 1KB metadata cap but
-        // well under MAX_YAML_LENGTH. LLM-authored descriptions need this.
-        description: 'a'.repeat(5_000),
+        // Description has its own dedicated cap (MAX_DESCRIPTION_LENGTH);
+        // a description right at the cap must not trip the length check.
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH),
       };
       const result = ContentValidator.validateMetadata(metadata);
       expect(
@@ -95,16 +97,16 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       ).toBeUndefined();
     });
 
-    it('rejects description only when over MAX_YAML_LENGTH', () => {
+    it('rejects description over MAX_DESCRIPTION_LENGTH', () => {
       const metadata = {
         name: 'huge-description-persona',
-        description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 10),
+        description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 10),
       };
       const result = ContentValidator.validateMetadata(metadata);
       expect(result.isValid).toBe(false);
       const lenError = result.detectedPatterns?.find(p => p.startsWith('description:') && p.includes('exceeds maximum length'));
       expect(lenError).toBeDefined();
-      expect(lenError).toContain(String(SECURITY_LIMITS.MAX_YAML_LENGTH));
+      expect(lenError).toContain(String(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH));
     });
   });
 

@@ -189,6 +189,22 @@ describe('MemoryLogSink', () => {
       expect(result.entries[0].id).toBe('A');
     });
 
+    test('keyset boundary is deterministic for entries sharing a timestamp', () => {
+      sink.write(makeEntry({ id: 'A' }));
+      sink.write(makeEntry({ id: 'C' }));
+      sink.write(makeEntry({ id: 'B' }));
+
+      const first = sink.query({ limit: 2 });
+      const second = sink.query({
+        beforeTimestamp: first.entries[1].timestamp,
+        beforeId: first.entries[1].id,
+        limit: 2,
+      });
+
+      expect(first.entries.map(entry => entry.id)).toEqual(['C', 'B']);
+      expect(second.entries.map(entry => entry.id)).toEqual(['A']);
+    });
+
     test('correlationId filter returns only matching entries', () => {
       sink.write(makeEntry({ id: 'A', correlationId: 'REQ-123' }));
       sink.write(makeEntry({ id: 'B', correlationId: 'REQ-456' }));

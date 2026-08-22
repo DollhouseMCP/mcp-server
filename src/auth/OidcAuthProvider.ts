@@ -18,7 +18,12 @@
 import { jwtVerify, createRemoteJWKSet, errors as joseErrors } from 'jose';
 import type { JWTVerifyGetKey } from 'jose';
 import { logger } from '../utils/logger.js';
-import type { IAuthProvider, AuthResult, AuthClaims } from './IAuthProvider.js';
+import {
+  OIDC_AUTH_TOKEN_CLOCK_SKEW_SECONDS,
+  type IAuthProvider,
+  type AuthResult,
+  type AuthClaims,
+} from './IAuthProvider.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 
 export interface OidcAuthProviderOptions {
@@ -50,19 +55,17 @@ export interface OidcAuthProviderOptions {
   jwksGetter?: JWTVerifyGetKey;
 
   /**
-   * Cycle 19 / security-#6: when true, require RFC 9068 `typ: at+jwt`
-   * on incoming JWTs. Defaults to `false` because many managed IdPs
-   * (Auth0, Okta, Keycloak depending on config, AWS Cognito) do NOT
-   * stamp `typ` on access tokens, and hard-requiring it would break
-   * those deployments.
+   * Require RFC 9068 `typ: at+jwt` on incoming JWTs. Defaults to `true` so an
+   * ID token cannot be accepted at the resource-server boundary. Some managed IdPs
+   * (Auth0, Okta, Keycloak depending on config, AWS Cognito) do not stamp
+   * `typ`; those deployments may explicitly opt out while they
+   * migrate, and receive a startup warning when the issuer is non-local.
    *
    * The hardening matters because the same issuer can mint both
    * `id_token` and access-token JWTs with overlapping `aud` and a
    * `scope` claim. Without this check, an id_token carrying `mcp`
    * scope (some configs surface scopes in id_tokens) would satisfy
-   * the resource-server check despite never being intended as an
-   * access token. Operators whose IdP stamps `typ: at+jwt` on access
-   * tokens should set this true to close the gap.
+   * the resource-server check despite never being intended as an access token.
    *
    * The peer EmbeddedAuthorizationServer always enforces this — it
    * controls its own issuance and stamps `typ: at+jwt` on every
@@ -94,16 +97,29 @@ export class OidcAuthProvider implements IAuthProvider {
   private readonly requireAccessTokenTyp: boolean;
 
   constructor(options: OidcAuthProviderOptions) {
+    const issuerUrl = secureOidcUrl(options.issuer, 'OIDC issuer');
     this.issuer = options.issuer;
     this.audience = options.audience;
-    this.name = `oidc:${new URL(options.issuer).hostname}`;
+    this.name = `oidc:${issuerUrl.hostname}`;
     this.algorithms = options.algorithms ?? DEFAULT_OIDC_ALGORITHMS;
-    this.requireAccessTokenTyp = options.requireAccessTokenTyp ?? false;
+    this.requireAccessTokenTyp = options.requireAccessTokenTyp ?? true;
 
-    const jwksUri = options.jwksUri
-      ?? new URL('.well-known/jwks.json', options.issuer).toString();
+    const issuerHostname = issuerUrl.hostname;
+    if (!this.requireAccessTokenTyp && !isLoopbackHostname(issuerHostname)) {
+      logger.warn(
+        '[OidcAuthProvider] Access-token typ enforcement is disabled for a non-local issuer; ' +
+        'enable requireAccessTokenTyp when the identity provider emits RFC 9068 at+jwt tokens',
+        { issuer: this.issuer }
+      );
+    }
 
-    this.jwks = options.jwksGetter ?? createRemoteJWKSet(new URL(jwksUri));
+    const jwksUrl = secureOidcUrl(
+      options.jwksUri ?? new URL('.well-known/jwks.json', issuerUrl).toString(),
+      'OIDC JWKS endpoint',
+    );
+    const jwksUri = jwksUrl.toString();
+
+    this.jwks = options.jwksGetter ?? createRemoteJWKSet(jwksUrl);
 
     logger.info(`[OidcAuthProvider] Configured for issuer ${this.issuer}`, {
       audience: this.audience,
@@ -120,9 +136,8 @@ export class OidcAuthProvider implements IAuthProvider {
       // is permissive (any alg the JWKS keys support); explicit allowlist
       // refuses `none`/HMAC even if the upstream JWKS were ever
       // compromised in a way that included symmetric keys.
-      // Cycle 19 / security-#6: opt-in RFC 9068 typ enforcement — default
-      // off for compat with IdPs that don't stamp typ; on closes the
-      // id-token-as-access-token gap.
+      // RFC 9068 typ enforcement is secure-by-default. Operators must make an
+      // explicit compatibility choice to accept providers that omit it.
       const { payload } = await jwtVerify(token, this.jwks, {
         issuer: this.issuer,
         audience: this.audience,
@@ -152,6 +167,18 @@ export class OidcAuthProvider implements IAuthProvider {
   }
 }
 
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
+}
+
+function secureOidcUrl(raw: string, label: string): URL {
+  const url = new URL(raw);
+  if (url.username || url.password) throw new Error(`${label} must not contain credentials`);
+  if (url.protocol === 'https:') return url;
+  if (url.protocol === 'http:' && isLoopbackHostname(url.hostname)) return url;
+  throw new Error(`${label} must use HTTPS (HTTP is allowed only for loopback development)`);
+}
+
 /**
  * Build an AuthResult from a verified OIDC JWT payload. Enforces the
  * required `mcp` scope (defence-in-depth: an external IdP token issued
@@ -168,6 +195,10 @@ function buildOidcAuthResult(payload: Record<string, unknown>): AuthResult {
   if (!scopes?.includes('mcp')) {
     return { ok: false, reason: 'token missing mcp scope' };
   }
+  if (typeof payload.iat === 'number'
+    && payload.iat > Math.floor(Date.now() / 1000) + OIDC_AUTH_TOKEN_CLOCK_SKEW_SECONDS) {
+    return { ok: false, reason: 'token issued in the future' };
+  }
 
   const claims: AuthClaims = {
     sub: payload.sub,
@@ -179,6 +210,7 @@ function buildOidcAuthResult(payload: Record<string, unknown>): AuthResult {
       ? payload.roles.filter((r): r is string => typeof r === 'string')
       : undefined,
     exp: typeof payload.exp === 'number' ? payload.exp : undefined,
+    iat: typeof payload.iat === 'number' ? payload.iat : undefined,
   };
   return { ok: true, claims };
 }

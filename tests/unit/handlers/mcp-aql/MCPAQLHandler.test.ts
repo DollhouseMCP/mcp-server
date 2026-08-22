@@ -64,6 +64,7 @@ describe('MCPAQLHandler', () => {
         ]),
         getElementDetails: jest.fn().mockResolvedValue({ name: 'test', type: 'persona' }),
         editElement: jest.fn().mockResolvedValue({ updated: true }),
+        replaceElement: jest.fn().mockResolvedValue({ replaced: true }),
         validateElement: jest.fn().mockResolvedValue({ valid: true }),
         deleteElement: jest.fn().mockResolvedValue({ deleted: true }),
         activateElement: jest.fn().mockResolvedValue({ activated: true }),
@@ -79,6 +80,7 @@ describe('MCPAQLHandler', () => {
         getPolicyElementsForReport: jest.fn().mockResolvedValue([]),
       },
       memoryManager: {
+        list: jest.fn().mockResolvedValue([]),
         find: jest.fn().mockResolvedValue({
           metadata: { name: TEST_MEMORY_NAME },
           addEntry: jest.fn().mockResolvedValue({
@@ -96,6 +98,11 @@ describe('MCPAQLHandler', () => {
         save: jest.fn().mockResolvedValue(undefined),
         // Issue #2329: addEntry pre-flights persistence before reporting success
         assertPersistable: jest.fn().mockResolvedValue(undefined),
+        getMemoryStateToken: jest.fn().mockResolvedValue('stable-memory-state'),
+        getMemoryProbeToken: jest.fn().mockReturnValue('stable-memory-probe'),
+        recoverMemoryPersistenceConflict: jest.fn(),
+        runFileMutationExclusive: jest.fn(async (memory, operation) => operation(memory)),
+        runFileDeleteExclusive: jest.fn(async (_memoryName, operation) => operation()),
       },
       agentManager: {
         canonicalizeExecutionName: jest.fn((name: string) => name),
@@ -286,7 +293,7 @@ describe('MCPAQLHandler', () => {
         }
       });
 
-      it('should import valid export package', async () => {
+      it('should replace an existing element as a complete snapshot when overwrite is enabled', async () => {
         const exportPackage = {
           exportVersion: '1.0',
           exportedAt: new Date().toISOString(),
@@ -308,15 +315,53 @@ describe('MCPAQLHandler', () => {
 
         const result = await handler.handleCreate(input);
 
-        // Should succeed with mocked createElement (overwrite allows replacing)
+        expect(result.success).toBe(true);
+        expect(mockRegistry.elementCRUD.replaceElement).toHaveBeenCalledWith({
+          name: TEST_PERSONA_NAME,
+          type: 'personas',
+          data: {
+            name: 'Test Persona',
+            description: 'A test persona for import',
+            content: TEST_CONTENT,
+          },
+        });
+        expect(mockRegistry.elementCRUD.editElement).not.toHaveBeenCalled();
+        expect(mockRegistry.elementCRUD.createElement).not.toHaveBeenCalled();
+      });
+
+      it('should create an imported element when it does not already exist', async () => {
+        (mockRegistry.elementCRUD.getElementDetails as jest.Mock).mockRejectedValueOnce(
+          new Error('Element not found'),
+        );
+        const exportPackage = {
+          exportVersion: '1.0',
+          exportedAt: new Date().toISOString(),
+          elementType: 'personas',
+          elementName: TEST_PERSONA_NAME,
+          format: 'json',
+          data: JSON.stringify({
+            name: 'Test Persona',
+            description: 'A test persona for import',
+            content: TEST_CONTENT,
+          }),
+        };
+
+        const result = await handler.handleCreate({
+          operation: 'import_element',
+          elementType: 'persona' as any,
+          params: { data: JSON.stringify(exportPackage), overwrite: true },
+        });
+
         expect(result.success).toBe(true);
         expect(mockRegistry.elementCRUD.createElement).toHaveBeenCalledWith(
           expect.objectContaining({
             name: 'Test Persona',
             description: 'A test persona for import',
             type: 'personas',
-          })
+          }),
         );
+        expect(mockRegistry.elementCRUD.editElement).not.toHaveBeenCalled();
+        expect(mockRegistry.elementCRUD.replaceElement).not.toHaveBeenCalled();
       });
     });
 
@@ -1269,6 +1314,35 @@ describe('MCPAQLHandler', () => {
           })
         );
       });
+
+      it('fences memory deletion under the canonical name resolved from a slug', async () => {
+        (mockRegistry.memoryManager.list as jest.Mock).mockResolvedValue([
+          { metadata: { name: 'Code Review' } },
+        ]);
+        const runDeleteExclusive = jest.spyOn(
+          (handler as unknown as {
+            memorySaveHandler: {
+              runDeleteExclusive: (
+                memoryName: string,
+                operation: () => Promise<unknown>,
+              ) => Promise<unknown>;
+            };
+          }).memorySaveHandler,
+          'runDeleteExclusive',
+        );
+        const input: OperationInput = {
+          operation: 'delete_element',
+          params: { element_name: 'code-review', element_type: 'memory' },
+        };
+
+        const result = await handler.handleDelete(input);
+
+        expect(result.success).toBe(true);
+        expect(runDeleteExclusive).toHaveBeenCalledWith('Code Review', expect.any(Function));
+        expect(mockRegistry.elementCRUD.deleteElement).toHaveBeenCalledWith(
+          expect.objectContaining({ elementName: 'Code Review' }),
+        );
+      });
     });
 
     // execute_agent moved to EXECUTE endpoint in Issue #244
@@ -1673,6 +1747,8 @@ describe('MCPAQLHandler', () => {
           save: jest.fn().mockResolvedValue(undefined),
           // Issue #2329: addEntry pre-flights persistence before reporting success
           assertPersistable: jest.fn().mockResolvedValue(undefined),
+          runFileMutationExclusive: jest.fn(async (memory, operation) => operation(memory)),
+          runFileDeleteExclusive: jest.fn(async (_memoryName, operation) => operation()),
         },
         agentManager: {
           canonicalizeExecutionName: jest.fn((name: string) => name),
@@ -1801,24 +1877,22 @@ describe('MCPAQLHandler', () => {
         .toThrow('Gatekeeper instance is required');
     });
 
-    it('should handle getActiveElements failure gracefully', async () => {
-      // Make getActiveElementsForPolicy throw
+    it('fails closed without dispatch when active policy state cannot be loaded', async () => {
       (enforcingRegistry.elementCRUD as any).getActiveElementsForPolicy
         .mockRejectedValue(new Error('Manager unavailable'));
-
-      // Pre-confirm so we can reach dispatch
-      (enforcingRegistry as any).gatekeeper.recordConfirmation(
-        'list_elements', PermissionLevel.CONFIRM_SESSION
-      );
+      (enforcingRegistry.elementCRUD.listElements as jest.Mock).mockClear();
 
       const input: OperationInput = {
         operation: 'list_elements',
         params: { element_type: 'persona' },
       };
 
-      // Should still work — fails open with empty active elements
       const result = await enforcingHandler.handleRead(input);
-      expect(result.success).toBe(true);
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error).toContain('Manager unavailable');
+      }
+      expect(enforcingRegistry.elementCRUD.listElements).not.toHaveBeenCalled();
     });
   });
 

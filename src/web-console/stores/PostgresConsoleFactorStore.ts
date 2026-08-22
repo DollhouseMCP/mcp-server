@@ -4,12 +4,16 @@ import {
   eq,
   isNotNull,
   isNull,
+  lt,
   lte,
+  or,
   sql,
 } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
+import type { DrizzleTx } from '../../database/db-utils.js';
+import { lockActiveUserLifecycleWithTx } from '../../database/authPrincipalLock.js';
 import { accountFactorBackupCodes, accountFactors } from '../../database/schema/index.js';
 import {
   ConsoleStoreConflictError,
@@ -23,6 +27,8 @@ import type {
   ConsoleTotpFactorRecord,
   IConsoleFactorStore,
 } from './IConsoleFactorStore.js';
+
+const TOTP_REPLAY_STEP_MS = 30_000;
 import {
   cloneFactorStatus,
   cloneTotpFactorRecord,
@@ -38,6 +44,7 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
     validateBackupCodeHashes(backupCodeHashes);
     try {
       await withSystemContext(this.db, async (tx) => {
+        await lockActiveUserLifecycleWithTx(tx, record.userId);
         await tx.insert(accountFactors).values(toRow(record));
         if (backupCodeHashes.length > 0) {
           await tx.insert(accountFactorBackupCodes).values(backupCodeHashes.map(codeHash => ({
@@ -131,6 +138,7 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
   async markTotpUsed(userId: string, factorId: string, usedAt: Date = new Date()): Promise<boolean> {
     assertUuid(userId, 'userId');
     assertUuid(factorId, 'factorId');
+    const stepStart = new Date(Math.floor(usedAt.getTime() / TOTP_REPLAY_STEP_MS) * TOTP_REPLAY_STEP_MS);
     const rows = await withSystemContext(this.db, tx =>
       tx.update(accountFactors).set({ lastUsedAt: usedAt }).where(and(
         eq(accountFactors.userId, userId),
@@ -138,6 +146,9 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
         eq(accountFactors.factorType, 'totp'),
         isNull(accountFactors.disabledAt),
         lte(accountFactors.enrolledAt, usedAt),
+        // Bucket comparison also rejects timestamps written by an older replica
+        // that recorded proof time rather than this version's step-end marker.
+        or(isNull(accountFactors.lastUsedAt), lt(accountFactors.lastUsedAt, stepStart)),
       )).returning({ factorId: accountFactors.factorId }),
     );
     return rows.length === 1;
@@ -198,16 +209,7 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
   }
 
   async disableActiveTotp(userId: string, disabledAt: Date = new Date()): Promise<boolean> {
-    assertUuid(userId, 'userId');
-    const rows = await withSystemContext(this.db, tx =>
-      tx.update(accountFactors).set({ disabledAt }).where(and(
-        eq(accountFactors.userId, userId),
-        eq(accountFactors.factorType, 'totp'),
-        isNull(accountFactors.disabledAt),
-        lte(accountFactors.enrolledAt, disabledAt),
-      )).returning({ factorId: accountFactors.factorId }),
-    );
-    return rows.length === 1;
+    return withSystemContext(this.db, tx => disableActiveTotpWithTx(tx, userId, disabledAt));
   }
 
   private async countUnusedBackupCodes(factorId: string): Promise<number> {
@@ -221,6 +223,21 @@ export class PostgresConsoleFactorStore implements IConsoleFactorStore {
     );
     return rows[0]?.count ?? 0;
   }
+}
+
+export async function disableActiveTotpWithTx(
+  tx: DrizzleTx,
+  userId: string,
+  disabledAt: Date = new Date(),
+): Promise<boolean> {
+  assertUuid(userId, 'userId');
+  const rows = await tx.update(accountFactors).set({ disabledAt }).where(and(
+    eq(accountFactors.userId, userId),
+    eq(accountFactors.factorType, 'totp'),
+    isNull(accountFactors.disabledAt),
+    lte(accountFactors.enrolledAt, disabledAt),
+  )).returning({ factorId: accountFactors.factorId });
+  return rows.length === 1;
 }
 
 function activeFactorExists(userId: string, factorId: string, at: Date) {

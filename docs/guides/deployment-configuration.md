@@ -198,6 +198,7 @@ The MCP endpoint is available at `http://127.0.0.1:3000/mcp` by default.
 | `DOLLHOUSE_HTTP_ALLOWED_HOSTS` | *(unset)* | Comma-separated Host header allowlist. Required when binding to `0.0.0.0`. |
 | `DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window in milliseconds. |
 | `DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS` | `300` | Maximum requests per client per window. |
+| `DOLLHOUSE_HTTP_BODY_LIMIT_BYTES` | `1048576` | Maximum decoded JSON request body for MCP and console APIs (1 MiB default; 16 KiB-10 MiB). |
 | `DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS` | `900000` | Session idle timeout (15 minutes). Set to `0` to disable. |
 | `DOLLHOUSE_HTTP_SESSION_POOL_SIZE` | `0` | Pre-warmed session pool size. `0` disables the pool. |
 | `DOLLHOUSE_HTTP_WEB_CONSOLE` | `true` | Start the web console alongside the HTTP transport. |
@@ -535,6 +536,10 @@ When `DOLLHOUSE_STORAGE_BACKEND=database` and the server starts for the first ti
 | `DOLLHOUSE_DATABASE_ADMIN_URL` | *(falls back to `DOLLHOUSE_DATABASE_URL`)* | Admin database URL (superuser, for bootstrap and migrations only) |
 | `DOLLHOUSE_DATABASE_POOL_SIZE` | `10` | Maximum connections in the pool |
 | `DOLLHOUSE_DATABASE_SSL` | `prefer` | SSL mode: `disable`, `prefer`, or `require` |
+| `DOLLHOUSE_MASTER_ENCRYPTION_KEY` | *(required for database secret storage)* | Base64-encoded 32-byte active master key. Keep stable across ordinary deploys. |
+| `DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID` | `master-v1` | Nonempty, at most 255 bytes, using only ASCII letters, digits, `.`, `_`, `:`, and `-`. Version ID embedded in newly encrypted PostgreSQL signing-key payloads. Change it together with the active key during rotation. |
+| `DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED` | *(unset)* | Decrypt-only prior or staged signing-key envelope keys as `keyId=base64key,...`. Use the two-phase rotation runbook before rewrapping. |
+| `DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP` | `false` | Explicit maintenance switch. After every replica can decrypt the new key and uses it as active, one startup takes the exclusive lifecycle lock and rewraps signing-key payloads. Never enable during the mixed active-key rollout. |
 
 Connection pool settings (not configurable via env, applied automatically):
 
@@ -1007,9 +1012,33 @@ dollhouse-create-user --username admin --email admin@example.com
 DOLLHOUSE_AUTH_STORAGE_BACKEND=postgres   # 'memory' | 'filesystem' | 'postgres'
 DOLLHOUSE_STORAGE_BACKEND=database         # required alongside auth=postgres
 DOLLHOUSE_DATABASE_URL=postgres://...
+DOLLHOUSE_AUTH_GENERATION=1                # increment for auth mode/secret changes
 ```
 
 `postgres` is the recommended production target. `filesystem` is the default for solo / small-team deployments. `memory` is dev/test only — refuses to run with durable methods (`local-password`, `magic-link`) unless `DOLLHOUSE_ALLOW_MEMORY_AUTH_STORAGE=true` is set explicitly.
+
+`DOLLHOUSE_AUTH_GENERATION` is optional for backward compatibility. Once set,
+it is a monotonic authorization deployment epoch: increment it whenever the
+embedded provider, methods, issuer, cookie signing secret, or invite signing
+secret changes. PostgreSQL replicas with an older value fail closed instead of
+rotating shared authorization state back to an obsolete generation. Reusing the
+current value with changed authorization configuration is rejected.
+The default Compose file passes an empty value when the epoch is not configured;
+startup normalizes that value to unset. On hosted-deploy reruns, an explicitly
+supplied generation may initialize or advance the persisted value, but cannot
+lower it. Equal values are a no-op.
+
+The hosted deploy helper also treats `DOLLHOUSE_MASTER_ENCRYPTION_KEY`,
+`DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID`,
+`DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED`, and
+`DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP` as explicit mutable maintenance
+controls. This permits the documented two-phase envelope-key rotation, including
+returning rewrap from `true` to `false` and clearing the retired-key list after
+all replicas have converged. A changed active key and key ID must be supplied
+together, and the exact previous ID/key pair must remain in the retained list.
+Rendering validates the complete requested state in a staging file and atomically
+replaces `.env.production`; rejected generation or rotation input leaves the
+persisted file unchanged.
 
 #### Signing secrets — multi-replica HA
 
@@ -1076,6 +1105,7 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Comma-separated list. Recognized: `github`, `magic-link`, `local-password`, `trivial-consent`. Multi-method deployments expose all configured methods at the same `/interaction` endpoint. |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived from bind)* | Public-facing base URL of this server. **Required behind a reverse proxy** so issued JWTs and `/.well-known/*` documents advertise the correct public origin. |
 | `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | One of `memory`, `filesystem`, `postgres`. `postgres` requires `DOLLHOUSE_STORAGE_BACKEND=database` and `DOLLHOUSE_DATABASE_URL` to be set. |
+| `DOLLHOUSE_AUTH_GENERATION` | *(unset)* | Optional positive monotonic epoch. Increment for every embedded-AS mode or managed signing-secret change; stale replicas and reused generations fail closed. |
 | `DOLLHOUSE_RATE_LIMIT_BACKEND` | `memory` | One of `memory`, `postgres`. Use `postgres` for multi-replica deployments so local-password and magic-link limits are shared across replicas. |
 | `DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT` | `false` | When `true`, CLI approval audit records retain raw tool input detail. Default `false` stores only redacted digest + HMAC hash. |
 | `DOLLHOUSE_AUDIT_HMAC_SECRET` | *(auto-generated)* | Hex-encoded secret (≥32 bytes) for HMAC-SHA256 audit-input hashes. Generate via `openssl rand -hex 32`; when unset the server persists an auto-generated key. |
@@ -1358,6 +1388,7 @@ All variables are optional unless marked **required**. Variables with no default
 | `DOLLHOUSE_HTTP_ALLOWED_HOSTS` | *(unset)* | Comma-separated Host header allowlist. Required when binding to `0.0.0.0`. |
 | `DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window in milliseconds |
 | `DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS` | `300` | Maximum requests per client per window |
+| `DOLLHOUSE_HTTP_BODY_LIMIT_BYTES` | `1048576` | Maximum decoded JSON request body for MCP and console APIs (1 MiB default; 16 KiB-10 MiB) |
 | `DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS` | `900000` | Session idle timeout in milliseconds. `0` disables the timeout. |
 | `DOLLHOUSE_HTTP_SESSION_POOL_SIZE` | `0` | Pre-warmed session pool size. `0` disables pooling. |
 | `DOLLHOUSE_HTTP_WEB_CONSOLE` | `true` | Start the web console when running in HTTP mode |
@@ -1397,6 +1428,7 @@ All variables are optional unless marked **required**. Variables with no default
 | `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject used for the startup convenience token printed to stderr. |
 | `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Embedded AS only. Comma-separated: `github`, `magic-link`, `local-password`, `trivial-consent`. |
 | `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | Embedded AS only. One of `memory`, `filesystem`, `postgres`. |
+| `DOLLHOUSE_AUTH_GENERATION` | *(unset)* | Embedded AS only. Optional positive-integer monotonic deployment epoch for safe rolling mode and managed-secret changes. |
 | `DOLLHOUSE_RATE_LIMIT_BACKEND` | `memory` | Auth rate-limit backend. Set `postgres` for multi-replica HA. |
 | `DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT` | `false` | Retain raw CLI approval tool inputs. Secure default stores digest/hash only. |
 | `DOLLHOUSE_AUDIT_HMAC_SECRET` | *(auto-generated)* | Hex-encoded ≥32-byte HMAC key for audit input hashes. |

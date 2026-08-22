@@ -65,6 +65,11 @@ export const elements = pgTable('elements', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
 }, (table) => [
   uniqueIndex('idx_elements_user_type_name').on(table.userId, table.elementType, table.name),
+  index('idx_elements_user_type_canonical_name').on(
+    table.userId,
+    table.elementType,
+    sql`trim(both '-' from regexp_replace(regexp_replace(lower(btrim(${table.name})), '[[:space:]_]+', '-', 'g'), '-+', '-', 'g'))`,
+  ),
   index('idx_elements_user_type').on(table.userId, table.elementType),
   index('idx_elements_name').on(table.userId, table.name),
   index('idx_elements_author').on(table.author),

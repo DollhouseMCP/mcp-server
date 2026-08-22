@@ -1227,11 +1227,11 @@ describe('editElement helper', () => {
       expect(saved.metadata.description).toBe(substantiveDescription);
     });
 
-    it('should reject top-level metadata descriptions exceeding the YAML frontmatter limit', async () => {
+    it('should reject top-level metadata descriptions that consume reserved frontmatter overhead', async () => {
       const element = createMockElement('test-skill');
       mockContext.skillManager.find = jest.fn().mockResolvedValue(element);
 
-      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
+      const oversizedDescription = 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1);
       const result = await editElement(mockContext, {
         name: 'test-skill',
         type: ElementType.SKILL,
@@ -1246,6 +1246,47 @@ describe('editElement helper', () => {
       expect(result.content[0].text).toContain('Description length validation failed');
       expect(result.content[0].text).toContain('input.metadata.description');
       expect(mockContext.skillManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should reject nested descriptions that collectively exceed the frontmatter budget', async () => {
+      const element = createMockElement('test-template');
+      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+
+      const result = await editElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        input: {
+          description: descriptionPart,
+          metadata: {
+            variables: [{ name: 'topic', description: descriptionPart }],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('aggregate frontmatter description budget');
+      expect(mockContext.templateManager.save).not.toHaveBeenCalled();
+    });
+
+    it('should include existing descriptions in the aggregate frontmatter budget', async () => {
+      const descriptionPart = 'a'.repeat(Math.floor(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH / 2) + 1);
+      const element = createMockElement('test-template', { description: descriptionPart });
+      mockContext.templateManager.find = jest.fn().mockResolvedValue(element);
+
+      const result = await editElement(mockContext, {
+        name: 'test-template',
+        type: ElementType.TEMPLATE,
+        input: {
+          metadata: {
+            variables: [{ name: 'topic', description: descriptionPart }],
+          },
+        },
+      });
+
+      expect(result.content[0].text).toContain('❌');
+      expect(result.content[0].text).toContain('element.metadata description fields total');
+      expect(mockContext.templateManager.save).not.toHaveBeenCalled();
     });
 
     it('should format empty metadata keys without doubled path separators', async () => {

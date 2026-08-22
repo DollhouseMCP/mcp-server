@@ -179,7 +179,7 @@ export async function createElement(context: ElementCrudContext, args: CreateEle
     }
 
     const validatedName = sanitizeInput(name, SECURITY_LIMITS.MAX_FILENAME_LENGTH);
-    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_YAML_LENGTH);
+    const validatedDescription = sanitizeInput(description, SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH);
 
     if (content) {
       try {

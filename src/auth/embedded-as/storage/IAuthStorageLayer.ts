@@ -128,6 +128,8 @@ export interface BootstrapState {
 }
 
 export interface IdentityAuditEvent {
+  /** Optional idempotency key. Repeated writes with the same id are a no-op. */
+  eventId?: string;
   /** e.g. 'auth.social.identity_changed', 'auth.local.brute_force_suspected'. */
   type: string;
   sub?: string;
@@ -257,8 +259,26 @@ export interface IAuthStorageLayer {
   // RefreshToken, AccessToken, RegistrationAccessToken, ReplayDetection,
   // PushedAuthorizationRequest, BackchannelAuthenticationRequest.
 
+  /**
+   * Return the storage authority's current epoch time in milliseconds.
+   * Distributed backends must use their shared database clock so refresh
+   * redemption leases cannot be extended or shortened by replica clock skew.
+   */
+  genericNow?(): Promise<number>;
   genericGet(model: string, id: string): Promise<unknown>;
   genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void>;
+  /**
+   * Atomically replace a live record only when its payload still equals the
+   * caller's previously-read snapshot. Returns false when the record is
+   * missing, expired, or changed by another writer.
+   */
+  genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean>;
   genericDestroy(model: string, id: string): Promise<void>;
 
   /**

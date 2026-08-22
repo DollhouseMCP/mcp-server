@@ -12,7 +12,7 @@
  * @since Phase 4.5 storage completion — Phase A
  */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from '@jest/globals';
+import { describe, it, expect, jest, beforeAll, beforeEach, afterAll, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
@@ -156,11 +156,15 @@ function runContractSuite(
 
   describe('isolation between loads', () => {
     it('mutating a loaded copy does not affect the stored row', async () => {
-      await store.save(makeConfig({ consoleConfig: { port: 3000 } }));
+      await store.save(makeConfig({
+        consoleConfig: { port: 3000, nested: { enabled: true } },
+      }));
       const a = await store.load();
       a.consoleConfig.port = 9999;
+      (a.consoleConfig.nested as { enabled: boolean }).enabled = false;
       const b = await store.load();
       expect(b.consoleConfig.port).toBe(3000);
+      expect(b.consoleConfig.nested).toEqual({ enabled: true });
     });
   });
 }
@@ -274,5 +278,35 @@ describe('FilesystemOperatorConfigStore — durable across instances', () => {
     const store = new FilesystemOperatorConfigStore({ rootDir: dir });
     const found = await store.load();
     expect(found.consoleConfig).toEqual({});
+  });
+
+  it('serializes compare-and-swap writes across store instances', async () => {
+    const seed = new FilesystemOperatorConfigStore({ rootDir: dir });
+    await seed.save(makeConfig({ consoleConfig: { port: 1000 } }));
+    const revision = (await seed.load()).updatedAt;
+    const first = new FilesystemOperatorConfigStore({ rootDir: dir });
+    const second = new FilesystemOperatorConfigStore({ rootDir: dir });
+
+    const results = await Promise.allSettled([
+      first.save(makeConfig({ consoleConfig: { port: 2000 } }), { expectedUpdatedAt: revision }),
+      second.save(makeConfig({ consoleConfig: { port: 3000 } }), { expectedUpdatedAt: revision }),
+    ]);
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find(result => result.status === 'rejected');
+    expect(rejected).toMatchObject({ reason: expect.any(OperatorConfigConflictError) });
+  });
+
+  it('advances revisions for unconditional writes within one clock tick', async () => {
+    jest.spyOn(Date, 'now').mockReturnValue(1_000_000);
+    const first = new FilesystemOperatorConfigStore({ rootDir: dir });
+    const second = new FilesystemOperatorConfigStore({ rootDir: dir });
+    await first.save(makeConfig({ consoleConfig: { port: 1000 } }));
+    const firstRevision = (await first.load()).updatedAt;
+    await second.save(makeConfig({ consoleConfig: { port: 2000 } }));
+    const secondRevision = (await second.load()).updatedAt;
+
+    expect(secondRevision).toBeGreaterThan(firstRevision);
+    jest.restoreAllMocks();
   });
 });

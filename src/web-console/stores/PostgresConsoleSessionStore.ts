@@ -2,6 +2,8 @@ import { and, desc, eq, gt, gte, isNull, lte, ne, or } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
+import type { DrizzleTx } from '../../database/db-utils.js';
+import { lockActiveUserLifecycleWithTx } from '../../database/authPrincipalLock.js';
 import { consoleSessions } from '../../database/schema/index.js';
 import type {
   ConsoleSessionElevation,
@@ -28,7 +30,10 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
   async create(record: ConsoleSessionRecord): Promise<void> {
     validateConsoleSessionRecord(record);
     try {
-      await withSystemContext(this.db, tx => tx.insert(consoleSessions).values(toRow(record)));
+      await withSystemContext(this.db, async (tx) => {
+        await lockActiveUserLifecycleWithTx(tx, record.userId);
+        await tx.insert(consoleSessions).values(toRow(record));
+      });
     } catch (error) {
       if (isUniqueViolation(error)) {
         throw new ConsoleStoreConflictError('console session id hash already exists');
@@ -183,13 +188,7 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
 
   async revokeForUser(userId: string, revokedAt: Date = new Date()): Promise<number> {
     assertUuid(userId, 'userId');
-    const rows = await withSystemContext(this.db, tx =>
-      tx.update(consoleSessions).set({ revokedAt }).where(and(
-        eq(consoleSessions.userId, userId),
-        isNull(consoleSessions.revokedAt),
-      )).returning({ idHash: consoleSessions.idHash }),
-    );
-    return rows.length;
+    return withSystemContext(this.db, tx => revokeConsoleSessionsForUserWithTx(tx, userId, revokedAt));
   }
 
   async revokeForUserExcept(userId: string, exceptIdHash: Buffer, revokedAt: Date = new Date()): Promise<number> {
@@ -214,11 +213,25 @@ export class PostgresConsoleSessionStore implements IConsoleSessionStore {
   }
 }
 
+export async function revokeConsoleSessionsForUserWithTx(
+  tx: DrizzleTx,
+  userId: string,
+  revokedAt: Date,
+): Promise<number> {
+  assertUuid(userId, 'userId');
+  const rows = await tx.update(consoleSessions).set({ revokedAt }).where(and(
+    eq(consoleSessions.userId, userId),
+    isNull(consoleSessions.revokedAt),
+  )).returning({ idHash: consoleSessions.idHash });
+  return rows.length;
+}
+
 function toRow(record: ConsoleSessionRecord): typeof consoleSessions.$inferInsert {
   return {
     idHash: record.idHash,
     userId: record.userId,
     authSub: record.authSub,
+    authzVersion: record.authzVersion,
     csrfTokenHash: record.csrfTokenHash,
     grantedCapabilities: [...record.grantedCapabilities],
     elevatedCapabilities: record.elevation ? [...record.elevation.capabilities] : [],
@@ -242,6 +255,7 @@ function fromRow(row: typeof consoleSessions.$inferSelect): ConsoleSessionRecord
     idHash: row.idHash,
     userId: row.userId,
     authSub: row.authSub,
+    authzVersion: row.authzVersion,
     csrfTokenHash: row.csrfTokenHash,
     grantedCapabilities: row.grantedCapabilities as ConsoleCapability[],
     elevation: elevated.length > 0 && row.elevationExpiresAt && row.elevationAcr

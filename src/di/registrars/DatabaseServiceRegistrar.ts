@@ -73,8 +73,10 @@ export class DatabaseServiceRegistrar {
       ssl: env.DOLLHOUSE_DATABASE_SSL,
     });
 
-    // Connection object (has .close() — picked up by Container.dispose() automatically)
-    container.register('DatabaseConnection', () => result.connection);
+    // Register pool owners as already-created instances. Their factories must
+    // not remain lazy: consumers commonly resolve only the Drizzle database,
+    // while container disposal owns and must close the underlying pool.
+    container.registerInstance('DatabaseConnection', result.connection);
     // Drizzle instance (resolved by stores and storage layers)
     container.register('DatabaseInstance', () => result.db);
 
@@ -85,7 +87,7 @@ export class DatabaseServiceRegistrar {
           ssl: env.DOLLHOUSE_DATABASE_SSL,
         })
       : result.connection;
-    container.register('SystemDatabaseConnection', () => systemConnection);
+    container.registerInstance('SystemDatabaseConnection', systemConnection);
     container.register('SystemDatabaseInstance', () => systemConnection.db);
     // Verify production database readiness over the APP connection (result.db),
     // not the admin/system connection. The expectedCurrentUser check exists to
@@ -102,7 +104,10 @@ export class DatabaseServiceRegistrar {
     const { DatabaseConfirmationStore } = await import('../../state/DatabaseConfirmationStore.js');
     const { DatabaseChallengeStore } = await import('../../state/DatabaseChallengeStore.js');
     const { DatabaseAgentStateStore } = await import('../../storage/DatabaseAgentStateStore.js');
-    const { findRecordedRuntimePresenceWithTx } = await import(
+    const { DatabaseAgentSnapshotReplacementJournal } = await import(
+      '../../storage/DatabaseAgentSnapshotReplacementJournal.js'
+    );
+    const { findRecordedRuntimePresenceWithTx, isRuntimePresenceActiveWithTx } = await import(
       '../../web-console/services/runtime/PostgresRuntimeSessionControlStore.js'
     );
 
@@ -156,11 +161,18 @@ export class DatabaseServiceRegistrar {
           if (presence?.userId !== userId) {
             return 'unknown';
           }
-          return presence.status === 'active' && presence.leaseUntil > new Date()
+          return await isRuntimePresenceActiveWithTx(tx, sessionId, userId)
             ? 'active'
             : 'inactive';
         },
         systemConnection.db,
+      )
+    );
+    container.register('AgentReplacementJournal', () =>
+      new DatabaseAgentSnapshotReplacementJournal(
+        result.db,
+        userIdResolver,
+        sessionIdResolver,
       )
     );
 
@@ -169,9 +181,11 @@ export class DatabaseServiceRegistrar {
     const { UserIdentityService } = await import('../../services/UserIdentityService.js');
     container.register('UserIdentityService', () => new UserIdentityService({
       db: result.db,
+      systemDb: systemConnection.db,
       adminConnectionUrl: env.DOLLHOUSE_DATABASE_ADMIN_URL,
       appConnectionUrl,
       ssl: env.DOLLHOUSE_DATABASE_SSL,
+      authProvider: env.DOLLHOUSE_AUTH_PROVIDER,
     }));
 
     // Re-register StdioSession with the bootstrapped DB UUID. registerServices()

@@ -22,7 +22,15 @@ import { isUniqueViolation } from '../database/db-utils.js';
 import { FrontmatterParser } from './FrontmatterParser.js';
 import { RelationshipExtractor } from './RelationshipExtractor.js';
 import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js';
-import type { ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
+import {
+  StorageAlreadyExistsError,
+  type ElementWriteMetadata,
+  type WriteContentOptions,
+} from './IStorageLayer.js';
+import {
+  afterAgentReplacementCommit,
+  withAgentReplacementTransactionOr,
+} from './AgentReplacementTransactionContext.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -58,7 +66,11 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
     // Use the caller-provided name as authoritative, falling back to frontmatter
     const elementName = name || frontmatter.name;
 
-    const elementId = await withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    const elementId = await withAgentReplacementTransactionOr<string>(
+      userId,
+      operation => withUserContext(this.db, userId, operation),
+      async (tx) => {
       // Build the column values once — both the insert and the upsert SET
       // reuse the same object so adding a column requires one change, not two.
       const values = {
@@ -100,7 +112,7 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
             // error matches the file-mode format. Fall back to capitalizing
             // the plural `elementType` only if no label was passed.
             const label = options?.elementLabel ?? capitalize(elementType);
-            throw new Error(`${label} '${elementName}' already exists`);
+            throw new StorageAlreadyExistsError(label, elementName);
           }
           throw err;
         }
@@ -123,26 +135,32 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
       // Replace tags atomically within the same transaction
       const tags = metadata.tags.length > 0 ? metadata.tags : frontmatter.tags;
       await this.replaceTags(tx, row.id, tags);
+      await this.relationshipExtractor.replaceForElementInTransaction(
+        tx, userId, row.id, elementType, frontmatter,
+      );
 
       return row.id;
-    });
+      },
+    );
 
-    // Update in-memory index
-    this.setIndex(elementName, elementId);
-
-    // Best-effort relationship extraction (soft integrity — runs after core commit)
-    this.relationshipExtractor.extractAndPersist(elementId, elementType, frontmatter)
-      .catch(() => { /* errors handled inside extractAndPersist */ });
-
-    this.logPersistEvent('ELEMENT_EDITED', 'LOW', `${STORE_NAME}.writeContent`,
-      `Element persisted to database: ${elementType}/${elementName}`,
-      { elementId, elementType, name: elementName });
+    const updateDerivedState = () => {
+      this.markDurableMutation();
+      this.setIndex(elementName, elementId);
+      this.logPersistEvent('ELEMENT_EDITED', 'LOW', `${STORE_NAME}.writeContent`,
+        `Element persisted to database: ${elementType}/${elementName}`,
+        { elementId, elementType, name: elementName });
+    };
+    if (!afterAgentReplacementCommit(updateDerivedState)) updateDerivedState();
 
     return elementId;
   }
 
   async deleteContent(elementType: string, name: string): Promise<void> {
-    await withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    await withAgentReplacementTransactionOr(
+      userId,
+      operation => withUserContext(this.db, userId, operation),
+      async (tx) => {
       await tx
         .delete(elements)
         .where(and(
@@ -150,13 +168,116 @@ export class DatabaseStorageLayer extends AbstractDatabaseStorageLayer {
           eq(elements.elementType, elementType),
           eq(elements.name, name),
         ));
-    });
+      },
+    );
 
-    this.removeIndex(name);
+    const updateDerivedState = () => {
+      this.markDurableMutation();
+      this.removeIndex(name);
+      this.logPersistEvent('ELEMENT_DELETED', 'MEDIUM', `${STORE_NAME}.deleteContent`,
+        `Element deleted from database: ${elementType}/${name}`,
+        { elementType, name });
+    };
+    if (!afterAgentReplacementCommit(updateDerivedState)) updateDerivedState();
+  }
 
-    this.logPersistEvent('ELEMENT_DELETED', 'MEDIUM', `${STORE_NAME}.deleteContent`,
-      `Element deleted from database: ${elementType}/${name}`,
-      { elementType, name });
+  async compareAndSwapContent(
+    elementType: string,
+    elementId: string,
+    name: string,
+    expectedContent: string,
+    replacementContent: string,
+    metadata: ElementWriteMetadata,
+  ): Promise<boolean> {
+    const frontmatter = FrontmatterParser.extractMetadata(replacementContent);
+    const contentHash = createHash('sha256').update(replacementContent, 'utf8').digest('hex');
+    const byteSize = Buffer.byteLength(replacementContent, 'utf8');
+    const bodyContent = extractBodyContent(replacementContent);
+    const userId = this.userId;
+    const updated = await withAgentReplacementTransactionOr(
+      userId,
+      operation => withUserContext(this.db, userId, operation),
+      async (tx) => {
+      const current = await tx
+        .select({ rawContent: elements.rawContent })
+        .from(elements)
+        .where(and(eq(elements.id, elementId), eq(elements.userId, userId)))
+        .for('update')
+        .limit(1);
+      if (current[0]?.rawContent !== expectedContent) return false;
+
+      const rows = await tx
+        .update(elements)
+        .set({
+          name,
+          rawContent: replacementContent,
+          bodyContent,
+          contentHash,
+          byteSize,
+          description: typeof frontmatter.description === 'string'
+            ? frontmatter.description
+            : metadata.description,
+          version: typeof frontmatter.version === 'string' ? frontmatter.version : metadata.version,
+          author: typeof frontmatter.author === 'string' ? frontmatter.author : metadata.author,
+          elementCreated: typeof frontmatter.created === 'string' ? frontmatter.created : null,
+          metadata: extractTypeSpecificMetadata(frontmatter),
+          visibility: metadata.visibility ?? 'private',
+          updatedAt: sql`NOW()`,
+        })
+        .where(and(
+          eq(elements.id, elementId),
+          eq(elements.userId, userId),
+          eq(elements.elementType, elementType),
+          eq(elements.rawContent, expectedContent),
+        ))
+        .returning({ id: elements.id });
+      if (rows.length === 0) return false;
+      const tags = metadata.tags.length > 0 ? metadata.tags : frontmatter.tags;
+      await this.replaceTags(tx, elementId, tags);
+      await this.relationshipExtractor.replaceForElementInTransaction(
+        tx, userId, elementId, elementType, frontmatter,
+      );
+      return true;
+      },
+    );
+    if (!updated) return false;
+    const updateDerivedState = () => {
+      this.markDurableMutation();
+      this.setIndex(name, elementId);
+    };
+    if (!afterAgentReplacementCommit(updateDerivedState)) updateDerivedState();
+    return true;
+  }
+
+  async deleteContentIfUnchanged(
+    elementType: string,
+    elementId: string,
+    expectedContent: string,
+  ): Promise<boolean> {
+    const userId = this.userId;
+    const deleted = await withAgentReplacementTransactionOr<string | undefined>(
+      userId,
+      operation => withUserContext(this.db, userId, operation),
+      async (tx) => {
+        const rows = await tx.delete(elements).where(and(
+          eq(elements.id, elementId),
+          eq(elements.userId, userId),
+          eq(elements.elementType, elementType),
+          eq(elements.rawContent, expectedContent),
+        )).returning({ name: elements.name });
+        return rows[0]?.name;
+      },
+    );
+    if (!deleted) return false;
+    const updateDerivedState = () => {
+      this.markDurableMutation();
+      this.removeIndex(deleted);
+      this.logPersistEvent('ELEMENT_DELETED', 'MEDIUM', `${STORE_NAME}.deleteContentIfUnchanged`,
+        `Element conditionally deleted from database: ${elementType}/${deleted}`,
+        { elementType, name: deleted });
+    };
+    if (!afterAgentReplacementCommit(updateDerivedState)) updateDerivedState();
+    return true;
   }
 }
 

@@ -1,8 +1,12 @@
 name: Publish Beta Release
 
 on:
-  workflow_dispatch:
+  workflow_call:
     inputs:
+      source_ref:
+        description: 'Exact beta source branch to publish'
+        required: true
+        type: string
       version:
         description: 'Exact beta version already committed in package.json and manifest.json'
         required: true
@@ -22,22 +26,29 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  actions: write
   contents: write
 
 jobs:
   publish-beta:
     name: Publish beta release
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 45
     environment:
       name: beta-publish
       url: https://github.com/DollhouseMCP/mcp-server/releases
 
     steps:
       - name: Checkout beta branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.source_ref }}
           fetch-depth: 0
+
+      - name: Resolve immutable beta source
+        id: source
+        shell: bash
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
       - name: Validate beta release inputs
         id: release
@@ -45,9 +56,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_VERSION: ${{ inputs.version }}
+          SOURCE_REF: ${{ inputs.source_ref }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
-          if [[ "${GITHUB_REF_NAME}" != "beta" ]]; then
-            echo "::error::Run this workflow from the beta branch, not ${GITHUB_REF_NAME}"
+          if [[ "${SOURCE_REF}" != "beta" && "${SOURCE_REF}" != "refs/heads/beta" ]]; then
+            echo "::error::Beta publication is restricted to the beta branch; got ${SOURCE_REF}"
             exit 1
           fi
 
@@ -64,29 +77,136 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "${package_version}" =~ ^[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
+          if ! node scripts/compare-semver.mjs --validate-beta "${package_version}"; then
             echo "::error::Beta publish requires a SemVer prerelease like 2.1.0-beta or 2.1.0-beta.1; got ${package_version}"
             exit 1
           fi
 
           tag_name="v${package_version}"
-          if git ls-remote --exit-code --tags origin "refs/tags/${tag_name}" >/dev/null 2>&1; then
-            echo "::error::Tag ${tag_name} already exists"
-            exit 1
+          tag_exists=false
+          remote_tag_object=$(git ls-remote --tags origin "refs/tags/${tag_name}" | awk 'NR == 1 { print $1 }')
+          if [[ -n "${remote_tag_object}" ]]; then
+            tag_exists=true
+            remote_tag_target=$(git ls-remote --tags origin "refs/tags/${tag_name}^{}" | awk 'NR == 1 { print $1 }')
+            remote_tag_target="${remote_tag_target:-${remote_tag_object}}"
+            if [[ "${remote_tag_target}" != "${SOURCE_SHA}" ]]; then
+              echo "::error::Tag ${tag_name} already exists at ${remote_tag_target}, not ${SOURCE_SHA}"
+              exit 1
+            fi
           fi
 
-          if gh release view "${tag_name}" >/dev/null 2>&1; then
-            echo "::error::Release ${tag_name} already exists"
-            exit 1
+          release_exists=false
+          if release_json=$(gh release view "${tag_name}" \
+            --json tagName,isPrerelease,isDraft,targetCommitish 2>/dev/null); then
+            release_exists=true
+            release_tag=$(jq -r '.tagName' <<<"${release_json}")
+            release_prerelease=$(jq -r '.isPrerelease' <<<"${release_json}")
+            release_draft=$(jq -r '.isDraft' <<<"${release_json}")
+            release_target=$(jq -r '.targetCommitish' <<<"${release_json}")
+
+            if [[ "${tag_exists}" != "true" ]]; then
+              echo "::error::Release ${tag_name} exists without its expected Git tag"
+              exit 1
+            fi
+            if [[ "${release_tag}" != "${tag_name}" ]]; then
+              echo "::error::Release lookup returned tag ${release_tag}, not ${tag_name}"
+              exit 1
+            fi
+            if [[ "${release_prerelease}" != "true" || "${release_draft}" != "false" ]]; then
+              echo "::error::Existing release ${tag_name} must be a published prerelease"
+              exit 1
+            fi
+            # The dereferenced remote tag above is the authoritative release identity.
+            # GitHub ignores targetCommitish when the tag already exists, and this
+            # metadata may retain a symbolic branch name that advances after release.
+            if [[ "${release_target}" != "${SOURCE_SHA}" ]]; then
+              echo "::warning::Release ${tag_name} records a different targetCommitish; verified tag ${tag_name} resolves to ${SOURCE_SHA}"
+            fi
           fi
 
+          npm_publish_complete=false
           if npm view "@dollhousemcp/mcp-server@${package_version}" version --registry=https://registry.npmjs.org >/dev/null 2>&1; then
-            echo "::error::npm version ${package_version} already exists"
-            exit 1
+            if [[ "${release_exists}" != "true" ]]; then
+              echo "::error::npm version ${package_version} exists without a matching reusable GitHub prerelease"
+              exit 1
+            fi
+            npm_beta_version=$(npm view "@dollhousemcp/mcp-server" dist-tags.beta --registry=https://registry.npmjs.org 2>/dev/null || true)
+            if ! node scripts/compare-semver.mjs --validate-beta "${npm_beta_version}"; then
+              echo "::error::npm version ${package_version} exists, but dist-tags.beta is invalid or unset (${npm_beta_version:-<unset>})"
+              exit 1
+            fi
+            npm_latest_version=$(npm view "@dollhousemcp/mcp-server" dist-tags.latest --registry=https://registry.npmjs.org 2>/dev/null || true)
+            if ! node scripts/compare-semver.mjs --validate-stable "${npm_latest_version}"; then
+              echo "::error::npm dist-tags.latest must point to a stable SemVer before a beta retry can skip npm publication (${npm_latest_version:-<unset>})"
+              exit 1
+            fi
+            if [[ "${npm_beta_version}" != "${package_version}" ]]; then
+              beta_is_newer() {
+                local left="$1"
+                local right="$2"
+                local left_core="${left%%-*}"
+                local right_core="${right%%-*}"
+                local left_pre="${left#*-}"
+                local right_pre="${right#*-}"
+                local -a left_core_parts right_core_parts left_ids right_ids
+                local index left_id right_id left_number right_number
+                local LC_ALL=C
+
+                IFS='.' read -r -a left_core_parts <<< "${left_core}"
+                IFS='.' read -r -a right_core_parts <<< "${right_core}"
+                for index in 0 1 2; do
+                  left_number="${left_core_parts[index]}"
+                  right_number="${right_core_parts[index]}"
+                  left_number="${left_number#"${left_number%%[!0]*}"}"
+                  right_number="${right_number#"${right_number%%[!0]*}"}"
+                  left_number="${left_number:-0}"
+                  right_number="${right_number:-0}"
+                  if ((${#left_number} > ${#right_number})); then return 0; fi
+                  if ((${#left_number} < ${#right_number})); then return 1; fi
+                  if [[ "${left_number}" > "${right_number}" ]]; then return 0; fi
+                  if [[ "${left_number}" < "${right_number}" ]]; then return 1; fi
+                done
+
+                IFS='.' read -r -a left_ids <<< "${left_pre}"
+                IFS='.' read -r -a right_ids <<< "${right_pre}"
+                for ((index = 0; index < ${#left_ids[@]} && index < ${#right_ids[@]}; index++)); do
+                  left_id="${left_ids[index]}"
+                  right_id="${right_ids[index]}"
+                  [[ "${left_id}" == "${right_id}" ]] && continue
+                  if [[ "${left_id}" =~ ^[0-9]+$ && "${right_id}" =~ ^[0-9]+$ ]]; then
+                    left_number="${left_id#"${left_id%%[!0]*}"}"
+                    right_number="${right_id#"${right_id%%[!0]*}"}"
+                    left_number="${left_number:-0}"
+                    right_number="${right_number:-0}"
+                    if ((${#left_number} > ${#right_number})); then return 0; fi
+                    if ((${#left_number} < ${#right_number})); then return 1; fi
+                    if [[ "${left_number}" > "${right_number}" ]]; then return 0; fi
+                    return 1
+                  fi
+                  if [[ "${left_id}" =~ ^[0-9]+$ ]]; then return 1; fi
+                  if [[ "${right_id}" =~ ^[0-9]+$ ]]; then return 0; fi
+                  [[ "${left_id}" > "${right_id}" ]] && return 0
+                  return 1
+                done
+                ((${#left_ids[@]} > ${#right_ids[@]}))
+              }
+
+              if ! beta_is_newer "${npm_beta_version}" "${package_version}"; then
+                echo "::error::npm dist-tags.beta points to older beta ${npm_beta_version}; refusing to report ${package_version} complete"
+                exit 1
+              fi
+              echo "::warning::npm dist-tags.beta points to newer beta ${npm_beta_version}; leaving that channel unchanged while repairing ${package_version} artifacts"
+            fi
+            npm_publish_complete=true
           fi
 
-          echo "version=${package_version}" >> "$GITHUB_OUTPUT"
-          echo "tag_name=${tag_name}" >> "$GITHUB_OUTPUT"
+          {
+            echo "version=${package_version}"
+            echo "tag_name=${tag_name}"
+            echo "tag_exists=${tag_exists}"
+            echo "release_exists=${release_exists}"
+            echo "npm_publish_complete=${npm_publish_complete}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Verify default-branch release workflows are prerelease-safe
         shell: bash
@@ -140,13 +260,20 @@ jobs:
       - name: Dry-run summary
         if: ${{ inputs.dry_run == true }}
         shell: bash
+        env:
+          RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}
         run: |
+          if [[ "${RELEASE_EXISTS}" == "true" ]]; then
+            release_action="reuse matching GitHub prerelease"
+          else
+            release_action="create GitHub prerelease"
+          fi
           {
             echo "## Beta Publish Dry Run"
             echo ""
             echo "- Version: \`${{ steps.release.outputs.version }}\`"
             echo "- Tag: \`${{ steps.release.outputs.tag_name }}\`"
-            echo "- Would create GitHub prerelease: yes"
+            echo "- Release action: ${release_action}"
             echo "- Downstream npm dist-tag: \`beta\`"
             echo "- Downstream bundle: \`dollhousemcp-${{ steps.release.outputs.version }}.mcpb\`"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -159,18 +286,90 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          TAG_EXISTS: ${{ steps.release.outputs.tag_exists }}
+          RELEASE_EXISTS: ${{ steps.release.outputs.release_exists }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
-          git tag -a "${TAG_NAME}" -m "DollhouseMCP ${TAG_NAME}"
-          git push origin "refs/tags/${TAG_NAME}"
+          if [[ "${TAG_EXISTS}" != "true" ]]; then
+            git tag -a "${TAG_NAME}" -m "DollhouseMCP ${TAG_NAME}"
+            git push origin "refs/tags/${TAG_NAME}"
+          else
+            echo "Reusing ${TAG_NAME}, which already points to ${SOURCE_SHA}"
+          fi
 
-          gh release create "${TAG_NAME}" \
-            --target "${GITHUB_SHA}" \
-            --title "DollhouseMCP ${TAG_NAME}" \
-            --notes-file beta-release-notes.md \
-            --prerelease
+          if [[ "${RELEASE_EXISTS}" != "true" ]]; then
+            gh release create "${TAG_NAME}" \
+              --target "${SOURCE_SHA}" \
+              --title "DollhouseMCP ${TAG_NAME}" \
+              --notes-file beta-release-notes.md \
+              --prerelease
+          else
+            echo "Reusing published prerelease ${TAG_NAME}, which targets ${SOURCE_SHA}"
+          fi
+
+      # Releases created with GITHUB_TOKEN do not emit workflow runs. Dispatch
+      # each publisher explicitly at the immutable release tag, capture the new
+      # run IDs, and wait so this orchestrator cannot succeed before they do.
+      - name: Dispatch and verify beta artifact publishers
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ steps.release.outputs.tag_name }}
+          NPM_PUBLISH_COMPLETE: ${{ steps.release.outputs.npm_publish_complete }}
+          SOURCE_SHA: ${{ steps.source.outputs.sha }}
+        run: |
+          dispatch_and_capture() {
+            local workflow="$1"
+            shift
+            local correlation_id="${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${workflow}"
+
+            gh workflow run "${workflow}" --ref "${TAG_NAME}" --field correlation_id="${correlation_id}" "$@" >&2
+
+            local run_id=""
+            for _ in {1..30}; do
+              run_id=$(latest_run_id "${workflow}" "${correlation_id}")
+              if [[ -n "${run_id}" ]]; then
+                printf '%s\n' "${run_id}"
+                return 0
+              fi
+              sleep 2
+            done
+
+            echo "::error::Timed out locating the dispatched ${workflow} run for ${SOURCE_SHA}" >&2
+            return 1
+          }
+
+          latest_run_id() {
+            local workflow="$1"
+            local correlation_id="$2"
+            gh run list \
+              --workflow "${workflow}" \
+              --event workflow_dispatch \
+              --limit 20 \
+              --json databaseId,headSha,displayTitle \
+              --jq ".[] | select(.headSha == \"${SOURCE_SHA}\" and (.displayTitle | contains(\"${correlation_id}\"))) | .databaseId" \
+              | head -n 1
+          }
+
+          publisher_run_ids=()
+          if [[ "${NPM_PUBLISH_COMPLETE}" != "true" ]]; then
+            npm_run_id=$(dispatch_and_capture publish-npm.yml --field dry_run=false)
+            publisher_run_ids+=("${npm_run_id}")
+          else
+            echo "Skipping npm publisher: ${TAG_NAME} is already published with the beta dist-tag"
+          fi
+
+          packages_run_id=$(dispatch_and_capture publish-github-packages.yml --field dry_run=false)
+          mcpb_run_id=$(dispatch_and_capture publish-mcpb.yml --field tag_name="${TAG_NAME}")
+
+          publisher_run_ids+=("${packages_run_id}" "${mcpb_run_id}")
+          for run_id in "${publisher_run_ids[@]}"; do
+            gh run watch "${run_id}" --exit-status
+          done
 
       - name: Publish summary
         if: always()
@@ -183,5 +382,5 @@ jobs:
             echo "- Tag: \`${{ steps.release.outputs.tag_name }}\`"
             echo "- Dry run: \`${{ inputs.dry_run }}\`"
             echo ""
-            echo "A non-dry-run publish creates the beta tag and GitHub prerelease. Existing release/tag workflows then publish npm/GitHub Packages with the beta dist-tag and attach the .mcpb bundle."
+            echo "A non-dry-run publish creates the beta tag and GitHub prerelease, then explicitly dispatches npm/GitHub Packages publication with the beta dist-tag and the .mcpb bundle build at that tag."
           } >> "$GITHUB_STEP_SUMMARY"

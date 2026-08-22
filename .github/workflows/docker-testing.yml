@@ -6,9 +6,9 @@ name: Docker Testing
 
 on:
   push:
-    branches: [main, develop, beta]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop, beta]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions: {}
@@ -357,8 +357,15 @@ jobs:
           set +e  # Don't exit on error, we want to analyze it
 
           echo "\n🔄 Executing MCP Server Test..."
-          docker_output=$(timeout $TIMEOUT_DURATION sh -c "echo '$MCP_JSON_REQUEST' | $DOCKER_CMD 2>&1" || true)
+          docker_output=$(timeout "$TIMEOUT_DURATION" sh -c "echo '$MCP_JSON_REQUEST' | $DOCKER_CMD 2>&1")
           test_exit_code=$?
+          set -e
+
+          if [[ $test_exit_code -ne 0 && $test_exit_code -ne 124 ]]; then
+            echo "::error::MCP initialize container exited with unexpected status ${test_exit_code}"
+            echo "$docker_output"
+            exit 1
+          fi
 
           TEST_END=$(date +%s)
           TEST_DURATION=$((TEST_END - TEST_START))
@@ -433,8 +440,9 @@ jobs:
               echo "✅ Correct serverInfo found - MCP server is working properly"
               echo "\n🎉 TEST PASSED FOR ${{ matrix.platform }}!"
             else
-              echo "⚠️ JSON-RPC response found but missing expected serverInfo"
+              echo "❌ FAILED: MCP initialize response is missing expected serverInfo"
               echo "Response may be incomplete or malformed"
+              exit 1
             fi
           else
             echo "❌ FAILED: No valid JSON-RPC response found"
@@ -487,8 +495,12 @@ jobs:
           echo "🏷️ Platform Tag: ${PLATFORM_TAG}"
 
           echo "\n📝 Constructing Tools/List Test Command:"
+          INIT_JSON_REQUEST='{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"docker-ci","version":"1.0.0"}},"id":1}'
+          INITIALIZED_NOTIFICATION='{"jsonrpc":"2.0","method":"notifications/initialized"}'
           TOOLS_JSON_REQUEST='{"jsonrpc":"2.0","method":"tools/list","params":{},"id":2}'
-          echo "JSON Request: $TOOLS_JSON_REQUEST"
+          echo "Initialization Request: $INIT_JSON_REQUEST"
+          echo "Initialized Notification: $INITIALIZED_NOTIFICATION"
+          echo "Tools/List Request: $TOOLS_JSON_REQUEST"
 
           echo "\n⏰ Starting Tools/List Test with Platform-Specific Timeout:"
           if [ "${{ matrix.platform }}" = "linux/arm64" ]; then
@@ -507,7 +519,7 @@ jobs:
           set +e  # Don't exit on error, we want to analyze it
 
           echo "\n🔄 Executing Tools/List Test..."
-          docker_output=$(timeout $TIMEOUT_DURATION sh -c "echo '$TOOLS_JSON_REQUEST' | \
+          docker_output=$(timeout "$TIMEOUT_DURATION" sh -c "printf '%s\\n' '$INIT_JSON_REQUEST' '$INITIALIZED_NOTIFICATION' '$TOOLS_JSON_REQUEST' | \
             docker run -i \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
@@ -520,9 +532,16 @@ jobs:
             --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
             --env NODE_ENV=test \
-            dollhousemcp:latest-${PLATFORM_TAG} 2>&1" || true)
+            dollhousemcp:latest-${PLATFORM_TAG} 2>&1")
 
           tools_exit_code=$?
+          set -e
+
+          if [[ $tools_exit_code -ne 0 && $tools_exit_code -ne 124 ]]; then
+            echo "::error::MCP tools/list container exited with unexpected status ${tools_exit_code}"
+            echo "$docker_output"
+            exit 1
+          fi
           TOOLS_END=$(date +%s)
           TOOLS_DURATION=$((TOOLS_END - TOOLS_START))
 
@@ -540,7 +559,7 @@ jobs:
 
           # Extract and display tools/list response
           echo "\n🔍 EXTRACTING TOOLS/LIST JSON-RPC RESPONSE:"
-          tools_response=$(echo "$docker_output" | grep -o '{"jsonrpc":"2.0".*}' || echo "")
+          tools_response=$(echo "$docker_output" | grep '"jsonrpc":"2.0".*"id":2' | tail -1 || true)
           if [ -n "$tools_response" ]; then
             echo "✅ FOUND TOOLS/LIST JSON-RPC RESPONSE:"
             # Try to pretty print with jq, fall back to raw if jq fails
@@ -552,10 +571,9 @@ jobs:
             echo "- Request ID: $(echo "$tools_response" | grep -o '"id":[^,}]*' || echo 'Not found')"
 
             # Check if we have tools in the response
-            if echo "$tools_response" | grep -q '"tools":\['; then
+            if echo "$tools_response" | jq -e '.result.tools | type == "array" and length > 0' >/dev/null 2>&1; then
               echo "- Tools Array: ✅ Present"
-              # Try to count and list tools
-              tool_names=$(echo "$tools_response" | grep -o '"name":"[^"]*"' | sed 's/"name":"//g' | sed 's/"//g')
+              tool_names=$(echo "$tools_response" | jq -r '.result.tools[].name // empty')
               tool_count=$(echo "$tool_names" | wc -l | tr -d ' ')
               echo "- Tool Count: $tool_count tools returned"
               if [ -n "$tool_names" ]; then
@@ -577,15 +595,16 @@ jobs:
           fi
 
           echo "\n🧪 JSON-RPC RESPONSE VALIDATION:"
-          if echo "$docker_output" | grep -q '"jsonrpc":"2.0".*"id":2'; then
+          if [ -n "$tools_response" ]; then
             echo "✅ Valid JSON-RPC response structure found for tools/list"
 
-            if echo "$docker_output" | grep -q '"result"'; then
-              echo "✅ Response contains result field - server is fully functional"
+            if echo "$tools_response" | jq -e '.result.tools | type == "array" and length > 0' >/dev/null 2>&1; then
+              echo "✅ Response contains a non-empty result.tools array"
               echo "\n🎉 TOOLS/LIST TEST PASSED FOR ${{ matrix.platform }}!"
             else
-              echo "⚠️ JSON-RPC response found but missing result field"
-              echo "Response may be incomplete"
+              echo "❌ FAILED: tools/list response does not contain a non-empty result.tools array"
+              echo "Response may be incomplete or may contain a JSON-RPC error"
+              exit 1
             fi
           else
             echo "❌ FAILED: No valid JSON-RPC response found for tools/list"
@@ -631,6 +650,39 @@ jobs:
           echo "✅ Docker Testing Complete for ${{ matrix.platform }}!"
           echo "Platform: ${{ matrix.platform }}"
           echo "All tests passed successfully"
+
+  permission-hook-integration:
+    name: Permission Hook Docker Integration
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOCKER_AVAILABLE: 'true'
+      TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify Docker daemon
+        run: docker info
+
+      - name: Run permission hook Docker integration
+        run: npm run test:integration:hooks:docker -- --runInBand
 
   docker-compose-test:
     name: Docker Compose Test
@@ -679,8 +731,16 @@ jobs:
           echo "⏳ Running MCP server via Docker Compose with initialize command..."
           # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
           # Use timeout since MCP server runs indefinitely
-          docker_output=$(timeout 10 sh -c 'printf "%s\n" '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm --interactive -T dollhousemcp 2>&1' || true)
+          set +e
+          docker_output=$(timeout 10 sh -c 'printf "%s\n" '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm --interactive -T dollhousemcp 2>&1')
           exit_code=$?
+          set -e
+
+          if [[ $exit_code -ne 0 && $exit_code -ne 124 ]]; then
+            echo "::error::Docker Compose initialize exited with unexpected status ${exit_code}"
+            echo "$docker_output"
+            exit 1
+          fi
 
           echo "Docker Compose run completed with exit code: $exit_code"
           echo "Output captured:"
@@ -691,6 +751,9 @@ jobs:
             echo "✅ Docker Compose MCP server returned valid JSON-RPC response"
             if echo "$docker_output" | grep -q '"serverInfo":{"name":"dollhousemcp"'; then
               echo "✅ Response contains correct serverInfo - server is working"
+            else
+              echo "❌ FAILED: Docker Compose initialize response is missing expected serverInfo"
+              exit 1
             fi
           else
             echo "❌ FAILED: Docker Compose MCP server did not return a JSON-RPC response"

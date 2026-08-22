@@ -18,6 +18,10 @@ import { describe, it, expect, jest, beforeEach } from '@jest/globals';
 import { MemorySaveHandler } from '../../../../src/handlers/mcp-aql/MemorySaveHandler.js';
 import type { HandlerRegistry } from '../../../../src/handlers/mcp-aql/MCPAQLHandler.js';
 
+interface MemorySaveHandlerInternals {
+  saveMemoryTracked(key: string, memory: unknown, manager: unknown): Promise<boolean>;
+}
+
 function makeMemory(name: string) {
   return {
     metadata: { name },
@@ -40,6 +44,8 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
     assertPersistable: jest.Mock;
     isMemoryDeletedAt: jest.Mock;
     getMemoryProbeToken: jest.Mock;
+    runFileMutationExclusive: jest.Mock;
+    runFileDeleteExclusive: jest.Mock;
   };
   let handler: MemorySaveHandler;
 
@@ -51,6 +57,8 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
       assertPersistable: jest.fn(async () => undefined),
       isMemoryDeletedAt: jest.fn(async () => false),
       getMemoryProbeToken: jest.fn(() => '/portfolio/users/a/memories/doomed-memory.yaml'),
+      runFileMutationExclusive: jest.fn(async (candidate, operation) => operation(candidate)),
+      runFileDeleteExclusive: jest.fn(async (_memoryName, operation) => operation()),
     };
     handler = new MemorySaveHandler(
       { memoryManager: manager } as unknown as HandlerRegistry,
@@ -59,10 +67,15 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
   });
 
   async function seedFailedSave() {
-    // addEntry succeeds (pre-flight passes), then the deferred save fails at flush.
-    await handler.dispatch('addEntry', { element_name: 'doomed-memory', content: 'entry content' });
+    // Exercise the retry ledger directly. addEntry now persists synchronously and
+    // intentionally does not retain failed writes after rejecting the request.
     manager.save.mockRejectedValueOnce(new Error('EIO: simulated disk failure'));
-    await handler.flushPendingSaves();
+    const internals = handler as unknown as MemorySaveHandlerInternals;
+    await expect(internals.saveMemoryTracked(
+      'session-a:doomed-memory',
+      memory,
+      manager,
+    )).rejects.toThrow('EIO: simulated disk failure');
     expect(manager.save).toHaveBeenCalledTimes(1);
   }
 
@@ -94,7 +107,7 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
 
     await handler.flushPendingSaves();
     expect(manager.save).toHaveBeenCalledTimes(1);
-    expect(manager.save).toHaveBeenCalledWith(memory);
+    expect(manager.save).toHaveBeenCalledWith(memory, undefined, { durable: true });
 
     // Success cleared the ledger — nothing left to retry.
     manager.save.mockClear();
@@ -109,7 +122,7 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
 
     await handler.flushPendingSaves();
     expect(manager.save).toHaveBeenCalledTimes(1);
-    expect(manager.save).toHaveBeenCalledWith(memory);
+    expect(manager.save).toHaveBeenCalledWith(memory, undefined, { durable: true });
   });
 
   it('applies the same guard during session cleanup', async () => {
@@ -120,6 +133,25 @@ describe('MemorySaveHandler failure-ledger retry guard (#2329)', () => {
     handler.cleanupSession('session-a');
     // cleanupSession fires asynchronously; give the microtask queue a turn.
     await new Promise(resolve => setTimeout(resolve, 10));
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('retains a failed cleanup retry for the shutdown flush', async () => {
+    await seedFailedSave();
+    manager.save.mockClear();
+    manager.save.mockRejectedValueOnce(new Error('cleanup retry still unavailable'));
+
+    handler.cleanupSession('session-a');
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(manager.save).toHaveBeenCalledTimes(1);
+
+    manager.save.mockClear();
+    await handler.flushPendingSaves();
+    expect(manager.save).toHaveBeenCalledTimes(1);
+    expect(manager.save).toHaveBeenCalledWith(memory, undefined, { durable: true });
+
+    manager.save.mockClear();
+    await handler.flushPendingSaves();
     expect(manager.save).not.toHaveBeenCalled();
   });
 });

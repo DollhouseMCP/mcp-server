@@ -4,6 +4,7 @@ import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InM
 import { InMemoryConsoleAuthPolicyStore } from '../../../../src/web-console/stores/InMemoryConsoleAuthPolicyStore.js';
 import { InMemoryConsoleFactorStore } from '../../../../src/web-console/stores/InMemoryConsoleFactorStore.js';
 import { InMemoryConsoleSecurityInvalidationStore } from '../../../../src/web-console/services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
+import type { IAccountAdminMutationTransactionRunner } from '../../../../src/web-console/modules/account-admin/AccountAdminMutationTransaction.js';
 import {
   createSecurityAdminModule,
   executeConsoleRoute,
@@ -35,14 +36,49 @@ async function createStores() {
   return { signingKeyStore, factorStore, invalidationStore, authPolicyStore };
 }
 
-async function createModule() {
+async function createModule(options: { isOperatorManagedSigningKey?: (kind: 'jwks' | 'cookie' | 'invite') => boolean } = {}) {
   const stores = await createStores();
+  const transactionRunner = {
+    run: async <T>(operation: (tx: never) => Promise<T>): Promise<T> => operation({
+      getSigningKeyByKid: (kid: string) => stores.signingKeyStore.getByKid(kid),
+      rotateSigningKey: (write: never) => stores.signingKeyStore.rotate(write),
+      retireSigningKey: (kid: string, retiredAt?: number) => stores.signingKeyStore.retire(kid, retiredAt),
+      deleteSigningKey: (kid: string, options?: { readonly force?: boolean }) => stores.signingKeyStore.delete(kid, options),
+      loadAuthPolicy: () => stores.authPolicyStore.load(),
+      saveAuthPolicy: (policy: never, options?: never) => stores.authPolicyStore.save(policy, options),
+      disableActiveTotp: (userId: string, disabledAt?: Date) => stores.factorStore.disableActiveTotp(userId, disabledAt),
+      appendSecurityInvalidationEvent: (input: never) => stores.invalidationStore.appendEvent(input),
+      writeAdminAuditEvent: async () => undefined,
+    } as never),
+  } as IAccountAdminMutationTransactionRunner;
+  const module = createSecurityAdminModule({
+    ...stores,
+    transactionRunner,
+    now: () => NOW,
+    isOperatorManagedSigningKey: options.isOperatorManagedSigningKey,
+  });
   return {
     ...stores,
-    module: createSecurityAdminModule({
-      ...stores,
-      now: () => NOW,
-    }),
+    module: {
+      ...module,
+      routes: module.routes.map(route => ({
+        ...route,
+        handler: request => route.handler({
+          ...request,
+          headers: request.headers ?? {},
+          get: () => undefined,
+          consoleContext: { correlationId: '00000000-0000-4000-8000-000000000099', receivedAt: NOW },
+          consoleAuthentication: {
+            sessionIdHash: Buffer.alloc(32, 1),
+            userId: request.consoleAuthentication?.userId ?? ACTOR_ID,
+            authSub: 'github_184286',
+            authzVersion: 1,
+            grantedCapabilities: [SECURITY_CAPABILITY],
+            elevation: null,
+          },
+        } as never),
+      })),
+    },
   };
 }
 
@@ -167,6 +203,49 @@ describe('SecurityAdminModule', () => {
     }));
   });
 
+  it.each(['cookie', 'invite'] as const)(
+    'rejects console rotation, retirement, and deletion for environment-managed %s keys',
+    async kind => {
+      const { module, signingKeyStore } = await createModule({
+        isOperatorManagedSigningKey: candidate => candidate === kind,
+      });
+      await signingKeyStore.rotate({
+        kind,
+        kid: `${kind}-operator-managed`,
+        payload: { secret: Buffer.alloc(32, 1).toString('base64'), length: 32 },
+      });
+      const rotateRoute = findRoute(module.routes, 'POST', '/api/v1/admin/security/signing-keys/:kind/rotate');
+      const retireRoute = findRoute(module.routes, 'POST', '/api/v1/admin/security/signing-keys/:kind/:kid/retire');
+      const deleteRoute = findRoute(module.routes, 'DELETE', '/api/v1/admin/security/signing-keys/:kind/:kid');
+
+      await expect(rotateRoute.handler({ query: {}, params: { kind } } as never))
+        .resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
+      await expect(retireRoute.handler({
+        query: {}, params: { kind, kid: `${kind}-operator-managed` },
+      } as never)).resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
+      await expect(deleteRoute.handler({
+        query: {}, params: { kind, kid: `${kind}-operator-managed` }, body: { emergency: true },
+      } as never)).resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
+      await expect(signingKeyStore.getActive(kind)).resolves.toMatchObject({ kid: `${kind}-operator-managed` });
+    },
+  );
+
+  it('prevents ordinary deletion until the full per-kind verification grace has elapsed', async () => {
+    const { module, signingKeyStore } = await createModule();
+    const deleteRoute = findRoute(module.routes, 'DELETE', '/api/v1/admin/security/signing-keys/:kind/:kid');
+    const retiredAt = NOW.getTime() - 24 * 60 * 60 * 1000;
+    await signingKeyStore.rotate({
+      kind: 'cookie',
+      kid: 'cookie-long-grace',
+      payload: { secret: Buffer.alloc(32, 2).toString('base64'), length: 32 },
+    });
+    await signingKeyStore.retire('cookie-long-grace', retiredAt);
+
+    await expect(deleteRoute.handler({
+      query: {}, params: { kind: 'cookie', kid: 'cookie-long-grace' }, body: {},
+    } as never)).resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
+  });
+
   it('persists signing-key retire/delete state through the store and enforces lifecycle guards', async () => {
     const { module, signingKeyStore } = await createModule();
     const rotateRoute = findRoute(module.routes, 'POST', '/api/v1/admin/security/signing-keys/:kind/rotate');
@@ -184,9 +263,19 @@ describe('SecurityAdminModule', () => {
       body: {},
     } as never)).resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
 
+    await expect(retireRoute.handler({ query: {}, params: { kind: 'invite', kid } } as never))
+      .resolves.toMatchObject({ status: 409, body: { code: 'conflict' } });
+    await expect(signingKeyStore.getActive('invite')).resolves.toMatchObject({ kid });
+
+    const replacement = projectSecuritySigningKeyJob((await rotateRoute.handler({
+      query: {},
+      params: { kind: 'invite' },
+    } as never)).body);
+    expect(replacement.result_kid).not.toBe(kid);
+
     const retired = await retireRoute.handler({ query: {}, params: { kind: 'invite', kid } } as never);
     expect(projectSecuritySigningKeyJob(retired.body)).toMatchObject({ action: 'retire', target_kid: kid });
-    await expect(signingKeyStore.getActive('invite')).resolves.toBeNull();
+    await expect(signingKeyStore.getActive('invite')).resolves.toMatchObject({ kid: replacement.result_kid });
     await expect(signingKeyStore.getByKid(kid)).resolves.toMatchObject({ retiredAt: NOW.getTime(), active: false });
 
     await expect(deleteRoute.handler({

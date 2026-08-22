@@ -87,6 +87,9 @@ export interface LogQueryOptions {
   message?: string;
   since?: string;
   until?: string;
+  /** Continue strictly after this entry in newest-first timestamp/id order. */
+  beforeTimestamp?: string;
+  beforeId?: string;
   limit?: number;
   offset?: number;
   correlationId?: string;

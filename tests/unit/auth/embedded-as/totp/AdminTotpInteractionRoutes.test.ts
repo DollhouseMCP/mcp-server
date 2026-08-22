@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { Secret, TOTP } from 'otpauth';
@@ -24,6 +24,7 @@ function buildFixture(options: { disabled?: boolean; unauthenticated?: boolean; 
   const storage = new InMemoryAuthStorageLayer();
   const factors = new InMemoryConsoleFactorStore();
   let currentSub: string | null = options.unauthenticated ? null : AUTH_SUB;
+  let now = NOW;
   const service = new AdminTotpService({
     authStorage: storage,
     factorStore: factors,
@@ -31,7 +32,7 @@ function buildFixture(options: { disabled?: boolean; unauthenticated?: boolean; 
       keyId: 'test-key',
       key: Buffer.alloc(32, 7),
     }),
-    now: () => NOW,
+    now: () => now,
   });
   const app = express();
   mountAdminTotpInteractionRoutes(app, {
@@ -63,10 +64,21 @@ function buildFixture(options: { disabled?: boolean; unauthenticated?: boolean; 
     factors,
     storage,
     setSessionSub(sub: string | null) { currentSub = sub; },
+    setNow(value: Date) { now = value; },
   };
 }
 
 describe('AdminTotpInteractionRoutes', () => {
+  it('normalizes the human-visible enrollment label without changing opaque TOTP values', async () => {
+    const { app, service } = buildFixture();
+    const beginEnrollment = jest.spyOn(service, 'beginEnrollment');
+
+    const response = await request(app).get('/auth/totp/enroll?label=Admin%E2%80%8B%20Console');
+
+    expect(response.status).toBe(200);
+    expect(beginEnrollment).toHaveBeenCalledWith(USER_ID, 'Admin Console');
+  });
+
   it('enrollment confirm creates an active factor and one-time backup codes', async () => {
     const { app, service, factors } = buildFixture();
 
@@ -90,7 +102,7 @@ describe('AdminTotpInteractionRoutes', () => {
   });
 
   it('disable confirm requires a valid proof before disabling the factor', async () => {
-    const { app, factors } = buildFixture();
+    const { app, factors, setNow } = buildFixture();
     const enroll = await request(app).get('/auth/totp/enroll?label=Admin%20Console');
     const pendingId = match(enroll.text, /name="pending_id" value="([^"]+)"/);
     const enrollCsrf = match(enroll.text, /name="csrf_token" value="([^"]+)"/);
@@ -111,11 +123,13 @@ describe('AdminTotpInteractionRoutes', () => {
     expect(failed.status).toBe(400);
     await expect(factors.getTotpStatus(USER_ID)).resolves.toMatchObject({ enrolled: true });
 
+    const nextStep = new Date(NOW.getTime() + ADMIN_TOTP_PARAMETERS.periodSeconds * 1000);
+    setNow(nextStep);
     const nextCsrf = match(failed.text, /name="csrf_token" value="([^"]+)"/);
     const disabled = await request(app)
       .post('/auth/totp/disable/confirm')
       .type('form')
-      .send({ disable_id: disableId, csrf_token: nextCsrf, code: totpCodeAt(secret) });
+      .send({ disable_id: disableId, csrf_token: nextCsrf, code: totpCodeAt(secret, nextStep) });
 
     expect(disabled.status).toBe(200);
     await expect(factors.getTotpStatus(USER_ID)).resolves.toMatchObject({ enrolled: false });
@@ -241,7 +255,7 @@ async function enrollFactor(app: express.Express): Promise<{ secret: string; bac
   return { secret, backupCodes };
 }
 
-function totpCodeAt(base32Secret: string): string {
+function totpCodeAt(base32Secret: string, at: Date = NOW): string {
   const totp = new TOTP({
     issuer: ADMIN_TOTP_PARAMETERS.issuer,
     label: 'Admin Console',
@@ -250,7 +264,7 @@ function totpCodeAt(base32Secret: string): string {
     period: ADMIN_TOTP_PARAMETERS.periodSeconds,
     secret: Secret.fromBase32(base32Secret),
   });
-  return totp.generate({ timestamp: NOW.getTime() });
+  return totp.generate({ timestamp: at.getTime() });
 }
 
 function match(value: string, pattern: RegExp): string {

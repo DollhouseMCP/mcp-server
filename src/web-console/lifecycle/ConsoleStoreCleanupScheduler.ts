@@ -1,6 +1,7 @@
 import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { ILoginTransactionStore } from '../stores/ILoginTransactionStore.js';
+import type { IConsoleSessionActivityStore } from '../stores/IConsoleSessionActivityStore.js';
 import type { IRuntimeSessionControlStore } from '../services/runtime/IRuntimeSessionControlStore.js';
 
 export const DEFAULT_CONSOLE_STORE_CLEANUP_INTERVAL_MS = 60 * 60 * 1000;
@@ -11,6 +12,7 @@ export interface ConsoleStoreCleanupStores {
   readonly loginTransactionStore: Pick<ILoginTransactionStore, 'sweepExpired'>;
   readonly idempotencyStore: Pick<IIdempotencyStore, 'sweepExpired'>;
   readonly runtimeSessionControlStore?: Pick<IRuntimeSessionControlStore, 'sweepStalePresence'>;
+  readonly sessionActivityStore?: Pick<IConsoleSessionActivityStore, 'sweepExpired'>;
   // account_factors is intentionally excluded; disabled factor rows remain for status history and audit context.
 }
 
@@ -40,7 +42,8 @@ type ConsoleStoreCleanupStoreName =
   | 'consoleSessions'
   | 'loginTransactions'
   | 'idempotencyRecords'
-  | 'runtimeSessionPresence';
+  | 'runtimeSessionPresence'
+  | 'sessionActivityEvents';
 
 type SweepStore = Pick<IConsoleSessionStore, 'sweepExpired'>;
 type RuntimePresenceSweepStore = Pick<IRuntimeSessionControlStore, 'sweepStalePresence'>;
@@ -49,6 +52,7 @@ export class ConsoleStoreCleanupScheduler {
   private readonly stores: ConsoleStoreCleanupStores;
   private readonly intervalMs: number;
   private readonly now: () => Date;
+  private readonly runtimeNow?: () => Date;
   private readonly reportError?: (error: ConsoleStoreCleanupError) => void;
   private running = false;
 
@@ -59,6 +63,7 @@ export class ConsoleStoreCleanupScheduler {
     }
     this.stores = options.stores;
     this.now = options.now ?? (() => new Date());
+    this.runtimeNow = options.now;
     this.reportError = options.reportError;
   }
 
@@ -82,6 +87,7 @@ export class ConsoleStoreCleanupScheduler {
       loginTransactions: 0,
       idempotencyRecords: 0,
       runtimeSessionPresence: 0,
+      sessionActivityEvents: 0,
     };
     const errors: ConsoleStoreCleanupError[] = [];
 
@@ -89,10 +95,18 @@ export class ConsoleStoreCleanupScheduler {
       removed.consoleSessions = await this.sweep('consoleSessions', this.stores.sessionStore, before, errors);
       removed.loginTransactions = await this.sweep('loginTransactions', this.stores.loginTransactionStore, before, errors);
       removed.idempotencyRecords = await this.sweep('idempotencyRecords', this.stores.idempotencyStore, before, errors);
+      if (this.stores.sessionActivityStore) {
+        removed.sessionActivityEvents = await this.sweep(
+          'sessionActivityEvents',
+          this.stores.sessionActivityStore,
+          before,
+          errors,
+        );
+      }
       if (this.stores.runtimeSessionControlStore) {
         removed.runtimeSessionPresence = await this.sweepRuntimePresence(
           this.stores.runtimeSessionControlStore,
-          before,
+          this.runtimeNow?.(),
           errors,
         );
       }
@@ -120,7 +134,7 @@ export class ConsoleStoreCleanupScheduler {
 
   private async sweepRuntimePresence(
     store: RuntimePresenceSweepStore,
-    before: Date,
+    before: Date | undefined,
     errors: ConsoleStoreCleanupError[],
   ): Promise<number> {
     try {

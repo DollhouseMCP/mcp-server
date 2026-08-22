@@ -7,6 +7,8 @@ import type { AgentState } from '../elements/agents/types.js';
 export interface AgentStateKey {
   readonly name: string;
   readonly agentElementId: string;
+  /** Durable transport-session identity; required for cross-session recovery in DB mode. */
+  readonly sessionId?: string;
 }
 
 export interface AgentStateLoadOptions {
@@ -17,6 +19,15 @@ export interface AgentStateLoadOptions {
 export interface AgentStateSaveOptions {
   /** Require an existing durable state at exactly expectedVersion. */
   requireExisting?: boolean;
+  /** Recovery/snapshot writes preserve the supplied durable session counter. */
+  preserveSessionCount?: boolean;
+}
+
+export interface AgentStateDeleteOptions {
+  /** Reject deletion unless the durable row/file has this version. */
+  readonly expectedVersion?: number;
+  /** Reject deletion when no durable state exists. */
+  readonly requireExisting?: boolean;
 }
 
 export interface AgentStateReclaimOptions {
@@ -30,8 +41,8 @@ export interface IAgentStateStore {
 
   /**
    * Claim durable state left by a disconnected transport session.
-   * Database stores transfer session ownership atomically; file stores perform
-   * a strict durable read because their state file is already session-neutral.
+   * Database stores transfer session ownership atomically after checking
+   * durable presence. Stores without trustworthy ownership data fail closed.
    */
   reclaimOrphaned(
     key: AgentStateKey,
@@ -51,5 +62,5 @@ export interface IAgentStateStore {
     options?: AgentStateSaveOptions,
   ): Promise<number>;
 
-  delete(key: AgentStateKey): Promise<void>;
+  delete(key: AgentStateKey, options?: AgentStateDeleteOptions): Promise<boolean>;
 }

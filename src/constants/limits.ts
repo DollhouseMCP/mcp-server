@@ -3,7 +3,7 @@
  */
 
 // Export/Import limits
-export const MAX_PERSONA_SIZE = 100 * 1024; // 100KB per persona
+export const MAX_PERSONA_SIZE = 10 * 1024 * 1024; // 10MB per persona
 export const MAX_BUNDLE_SIZE = 1024 * 1024; // 1MB for bundles
 export const MAX_PERSONAS_PER_BUNDLE = 50; // Maximum personas in a single bundle
 

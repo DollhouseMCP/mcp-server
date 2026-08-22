@@ -7,6 +7,8 @@ import { createHttpSession } from '../../../src/context/HttpSession.js';
 import type { ContextTracker } from '../../../src/security/encryption/ContextTracker.js';
 import type { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import type { SessionContainerRegistry } from '../../../src/di/SessionContainerRegistry.js';
+import type { DangerZoneEnforcer } from '../../../src/security/DangerZoneEnforcer.js';
 
 const ELEMENT_TYPES = ['personas', 'skills', 'templates', 'agents', 'memories', 'ensembles'];
 
@@ -72,6 +74,41 @@ describe('HTTP write sandbox enforcement', () => {
       severity: 'HIGH',
     }));
     await expect(fs.access(bobTarget)).rejects.toThrow();
+
+    await dispose();
+  });
+
+  it('restores a user danger-zone block before exposing a replacement HTTP session', async () => {
+    const securityDir = path.join(portfolioRoot, 'users', 'alice', 'security');
+    await fs.mkdir(securityDir, { recursive: true });
+    await fs.writeFile(path.join(securityDir, 'blocked-agents.json'), JSON.stringify({
+      version: 1,
+      blocks: {
+        'blocked-agent': {
+          eventId: 'event-1',
+          reason: 'human verification required',
+          triggeredPatterns: ['dangerous-operation'],
+          blockedAt: '2026-08-20T12:00:00.000Z',
+          verificationId: 'challenge-1',
+        },
+      },
+    }));
+
+    container = new DollhouseContainer();
+    await container.preparePortfolio();
+    await container.bootstrapHttpHandlers();
+
+    const session = createHttpSession({ userId: 'alice' });
+    const { dispose } = await container.createServerForHttpSession(session);
+    const registry = container.resolve<SessionContainerRegistry>('SessionContainerRegistry');
+    const child = registry.get(session.sessionId);
+    const enforcer = child?.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+
+    expect(enforcer?.check('blocked-agent')).toMatchObject({
+      blocked: true,
+      eventId: 'event-1',
+      verificationId: 'challenge-1',
+    });
 
     await dispose();
   });

@@ -10,20 +10,24 @@
  * @since v2.2.0 — Phase 4, Step 4.3
  */
 
-import { eq, and, desc } from 'drizzle-orm';
+import { eq, and, desc, lte, sql } from 'drizzle-orm';
 import { logger } from '../utils/logger.js';
 import { withSystemContext } from '../database/admin.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import type { DrizzleTx } from '../database/db-utils.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
 import { agentStates } from '../database/schema/agents.js';
+import { runtimeSessionPresence } from '../database/schema/webConsole.js';
 import type { SessionIdResolver, UserIdResolver } from '../database/UserContext.js';
 import type { AgentState } from '../elements/agents/types.js';
 import type {
   AgentStateKey,
+  AgentStateDeleteOptions,
+  AgentStateSaveOptions,
   AgentStateReclaimOptions,
   IAgentStateStore,
 } from './IAgentStateStore.js';
+import { withAgentReplacementTransactionOr } from './AgentReplacementTransactionContext.js';
 
 // ── Types ───────────────────────────────────────────────────────────
 
@@ -100,7 +104,7 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
    * Returns null if no state exists for this agent.
    */
   async load(key: AgentStateKey): Promise<AgentState | null> {
-    const state = await this.loadData(key.agentElementId);
+    const state = await this.loadData(key.agentElementId, key.sessionId ?? this.sessionId);
     return state ? this.toAgentState(state) : null;
   }
 
@@ -119,16 +123,26 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     key: AgentStateKey,
     state: AgentState,
     expectedVersion: number,
+    options: AgentStateSaveOptions = {},
   ): Promise<number> {
-    return this.saveData(key.agentElementId, this.fromAgentState(state), expectedVersion);
+    return this.saveData(
+      key.agentElementId,
+      this.fromAgentState(state),
+      expectedVersion,
+      key.sessionId ?? this.sessionId,
+      options,
+    );
   }
 
-  async delete(key: AgentStateKey): Promise<void> {
-    await this.deleteData(key.agentElementId);
+  async delete(
+    key: AgentStateKey,
+    options: AgentStateDeleteOptions = {},
+  ): Promise<boolean> {
+    return this.deleteData(key.agentElementId, options, key.sessionId ?? this.sessionId);
   }
 
   async loadState(agentElementId: string): Promise<AgentStateData | null> {
-    return this.loadData(agentElementId);
+    return this.loadData(agentElementId, this.sessionId);
   }
 
   async saveState(
@@ -136,17 +150,25 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     state: AgentStateData,
     expectedVersion: number,
   ): Promise<number> {
-    return this.saveData(agentElementId, state, expectedVersion);
+    return this.saveData(agentElementId, state, expectedVersion, this.sessionId);
   }
 
-  async deleteState(agentElementId: string): Promise<void> {
-    return this.deleteData(agentElementId);
+  async deleteState(
+    agentElementId: string,
+    options: AgentStateDeleteOptions = {},
+  ): Promise<boolean> {
+    return this.deleteData(agentElementId, options, this.sessionId);
   }
 
-  private async loadData(agentElementId: string): Promise<AgentStateData | null> {
+  private async loadData(
+    agentElementId: string,
+    sessionId: string,
+  ): Promise<AgentStateData | null> {
     const userId = this.userId;
-    const sessionId = this.sessionId;
-    return withUserRead(this.db, userId, async (tx) => {
+    return withAgentReplacementTransactionOr(
+      userId,
+      operation => withUserRead(this.db, userId, operation),
+      async (tx) => {
       // Defense-in-depth: userId filter alongside RLS enforcement.
       const rows = await tx
         .select({
@@ -178,7 +200,8 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
         stateVersion: row.stateVersion,
         sessionCount: row.sessionCount,
       };
-    });
+      },
+    );
   }
 
   /**
@@ -269,6 +292,13 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
           tx,
         ) !== 'inactive'
       ) {
+        return null;
+      }
+      if (!await claimInactiveRuntimePresenceForReclaimWithTx(
+        tx,
+        input.candidate.sessionId,
+        input.userId,
+      )) {
         return null;
       }
 
@@ -489,25 +519,34 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
     agentElementId: string,
     state: AgentStateData,
     expectedVersion: number,
+    sessionId: string,
+    options: AgentStateSaveOptions = {},
   ): Promise<number> {
     const newVersion = expectedVersion + 1;
 
-    return withUserContext(this.db, this.userId, async (tx) => {
+    const userId = this.userId;
+    return withAgentReplacementTransactionOr(
+      userId,
+      operation => withUserContext(this.db, userId, operation),
+      async (tx) => {
       // SELECT FOR UPDATE: acquire row-level lock to prevent concurrent
       // readers from both passing the version check (TOCTOU prevention).
       const existing = await tx
         .select({ stateVersion: agentStates.stateVersion })
         .from(agentStates)
         .where(and(
-          eq(agentStates.userId, this.userId),
+          eq(agentStates.userId, userId),
           eq(agentStates.agentId, agentElementId),
-          eq(agentStates.sessionId, this.sessionId),
+          eq(agentStates.sessionId, sessionId),
         ))
         .for('update')
         .limit(1);
 
       if (existing.length === 0) {
         // No existing row — this is a first-time save
+        if (options.requireExisting) {
+          throw new Error(`Agent state disappeared while saving '${agentElementId}'`);
+        }
         if (expectedVersion !== 0) {
           throw new Error(
             `State version conflict for agent ${agentElementId}: ` +
@@ -517,13 +556,15 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
 
         await tx.insert(agentStates).values({
           agentId: agentElementId,
-          userId: this.userId,
-          sessionId: this.sessionId,
+          userId,
+          sessionId,
           goals: state.goals,
           decisions: state.decisions,
           context: state.context,
           stateVersion: newVersion,
-          sessionCount: (state.sessionCount ?? 0) + 1,
+          sessionCount: options.preserveSessionCount
+            ? state.sessionCount ?? 0
+            : (state.sessionCount ?? 0) + 1,
           lastActive: state.lastActive ?? new Date(),
         });
 
@@ -547,13 +588,15 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
           decisions: state.decisions,
           context: state.context,
           stateVersion: newVersion,
-          sessionCount: (state.sessionCount ?? 0) + 1,
+          sessionCount: options.preserveSessionCount
+            ? state.sessionCount ?? 0
+            : (state.sessionCount ?? 0) + 1,
           lastActive: state.lastActive ?? new Date(),
         })
         .where(and(
-          eq(agentStates.userId, this.userId),
+          eq(agentStates.userId, userId),
           eq(agentStates.agentId, agentElementId),
-          eq(agentStates.sessionId, this.sessionId),
+          eq(agentStates.sessionId, sessionId),
           eq(agentStates.stateVersion, expectedVersion),
         ))
         .returning({ id: agentStates.id });
@@ -566,23 +609,64 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
       }
 
       return newVersion;
-    });
+      },
+    );
   }
 
   /**
    * Delete agent state. Called when the agent element is deleted.
    */
-  private async deleteData(agentElementId: string): Promise<void> {
-    await withUserContext(this.db, this.userId, async (tx) => {
-      // Defense-in-depth: userId filter alongside RLS.
-      await tx.delete(agentStates).where(and(
-        eq(agentStates.userId, this.userId),
+  private async deleteData(
+    agentElementId: string,
+    options: AgentStateDeleteOptions,
+    sessionId: string,
+  ): Promise<boolean> {
+    const userId = this.userId;
+    const deleted = await withAgentReplacementTransactionOr<boolean>(
+      userId,
+      operation => withUserContext(this.db, userId, operation),
+      async (tx) => {
+      const existing = await tx
+        .select({ stateVersion: agentStates.stateVersion })
+        .from(agentStates)
+        .where(and(
+          eq(agentStates.userId, userId),
+          eq(agentStates.agentId, agentElementId),
+          eq(agentStates.sessionId, sessionId),
+        ))
+        .for('update')
+        .limit(1);
+      const row = existing[0];
+      if (!row) {
+        if (options.requireExisting) {
+          throw new Error(`Agent state disappeared while deleting '${agentElementId}'`);
+        }
+        return false;
+      }
+      if (
+        options.expectedVersion !== undefined &&
+        row.stateVersion !== options.expectedVersion
+      ) {
+        throw new Error(
+          `State version conflict for agent ${agentElementId}: ` +
+          `expected version ${options.expectedVersion}, current version is ${row.stateVersion}.`,
+        );
+      }
+      const removed = await tx.delete(agentStates).where(and(
+        eq(agentStates.userId, userId),
         eq(agentStates.agentId, agentElementId),
-        eq(agentStates.sessionId, this.sessionId),
-      ));
-    });
+        eq(agentStates.sessionId, sessionId),
+        eq(agentStates.stateVersion, row.stateVersion),
+      )).returning({ id: agentStates.id });
+      if (removed.length === 0) {
+        throw new Error(`Agent state changed concurrently while deleting '${agentElementId}'`);
+      }
+      return true;
+      },
+    );
 
     logger.debug(`[DatabaseAgentStateStore] Deleted state for agent ${agentElementId}`);
+    return deleted;
   }
 
   private toAgentState(state: AgentStateData): AgentState {
@@ -622,4 +706,41 @@ export class DatabaseAgentStateStore implements IAgentStateStore {
       if (decision.timestamp) decision.timestamp = new Date(decision.timestamp);
     });
   }
+}
+
+/**
+ * Atomically retire an expired source-session lease before its agent state is
+ * transferred. A delayed heartbeat then observes `closing` and loses
+ * ownership instead of reviving an execution that has already moved.
+ */
+export async function claimInactiveRuntimePresenceForReclaimWithTx(
+  tx: DrizzleTx,
+  sessionId: string,
+  userId: string,
+): Promise<boolean> {
+  const rows = await tx.select({
+    userId: runtimeSessionPresence.userId,
+    status: runtimeSessionPresence.status,
+    leaseUntil: runtimeSessionPresence.leaseUntil,
+    replicaId: runtimeSessionPresence.replicaId,
+  }).from(runtimeSessionPresence)
+    .where(eq(runtimeSessionPresence.sessionId, sessionId))
+    .for('update')
+    .limit(1);
+  const presence = rows[0];
+  if (!presence) return true;
+  if (presence.userId !== userId) return false;
+  if (presence.status === 'closing') return true;
+  const claimed = await tx.update(runtimeSessionPresence).set({
+    status: 'closing',
+    closedAt: sql<Date>`statement_timestamp()`,
+  }).where(and(
+    eq(runtimeSessionPresence.sessionId, sessionId),
+    eq(runtimeSessionPresence.userId, userId),
+    eq(runtimeSessionPresence.replicaId, presence.replicaId),
+    eq(runtimeSessionPresence.status, 'active'),
+    eq(runtimeSessionPresence.leaseUntil, presence.leaseUntil),
+    lte(runtimeSessionPresence.leaseUntil, sql<Date>`statement_timestamp()`),
+  )).returning({ sessionId: runtimeSessionPresence.sessionId });
+  return claimed.length === 1;
 }

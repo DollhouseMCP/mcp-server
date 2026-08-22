@@ -42,10 +42,29 @@ export interface PrincipalStateChange {
   readonly changedAt: Date;
 }
 
-export interface PrincipalDirectoryQuery {
-  readonly sub?: string;
-  readonly limit?: number;
+/** Keyset position for the users directory: the `(created_at, id)` of the last row of the prior page. */
+export interface PrincipalDirectoryCursor {
+  readonly createdAt: Date;
+  readonly userId: string;
 }
+
+export interface PrincipalDirectoryQuery {
+  /** Exact-match on a linked login `sub` (support/debug lookup). */
+  readonly sub?: string;
+  /** Case-insensitive prefix match on username / email / display name. */
+  readonly search?: string;
+  readonly role?: ConsoleAdminRole;
+  readonly enabled?: boolean;
+  readonly limit?: number;
+  readonly after?: PrincipalDirectoryCursor;
+}
+
+export interface PrincipalDirectoryPage {
+  readonly items: ConsolePrincipalSummary[];
+  readonly nextCursor: PrincipalDirectoryCursor | null;
+}
+
+export const PRINCIPAL_SEARCH_MAX_LENGTH = 128;
 
 export interface RoleGrantInput {
   readonly userId: string;
@@ -84,6 +103,7 @@ export interface PrincipalProfileUpdateInput {
 
 export interface PrincipalDeletionInput {
   readonly userId: string;
+  readonly deletedByUserId: string;
   readonly deletedAt: Date;
 }
 
@@ -117,6 +137,35 @@ export interface IdentityMutationResult {
   readonly linkedUserId: string | null;
 }
 
+export interface IdentityLinkPreparationResult extends IdentityMutationResult {
+  readonly outcome:
+    | 'provisional'
+    | 'already_linked'
+    | 'linked_elsewhere'
+    | 'subject_deleted'
+    | 'not_found';
+}
+
+export interface IdentityLinkFinalizationResult extends IdentityMutationResult {
+  readonly outcome: 'finalized' | 'already_finalized' | 'subject_deleted' | 'not_found';
+}
+
+/** Keyset position for the unlinked-logins directory: `(created_at, sub)` of the prior page's last row. */
+export interface UnlinkedIdentityCursor {
+  readonly createdAt: Date;
+  readonly sub: string;
+}
+
+export interface UnlinkedIdentityQuery {
+  readonly limit?: number;
+  readonly after?: UnlinkedIdentityCursor;
+}
+
+export interface UnlinkedIdentityPage {
+  readonly items: LinkedIdentity[];
+  readonly nextCursor: UnlinkedIdentityCursor | null;
+}
+
 /**
  * Outcome of a deletion attempt.
  *
@@ -131,10 +180,33 @@ export interface PrincipalDeletionOutcome {
   readonly userId: string;
   readonly outcome: 'deleted' | 'anonymized';
   readonly authzVersion: number | null;
+  readonly browserSessionsRevoked?: number;
+  readonly oauthGrantFamiliesRevoked?: number;
+  /** Runtime targets captured inside the deletion transaction before presence rows are purged. */
+  readonly runtimeTerminationTargets?: readonly PrincipalRuntimeTerminationTarget[];
+}
+
+export interface PrincipalRuntimeTerminationTarget {
+  readonly sessionId: string;
+  readonly replicaId: string;
+}
+
+export class WouldOrphanAccountsAdminError extends Error {
+  constructor() {
+    super('Administrative mutation would leave zero enabled account administrators');
+    this.name = 'WouldOrphanAccountsAdminError';
+  }
+}
+
+export class CannotUnlinkLastIdentityError extends Error {
+  constructor() {
+    super('Cannot unlink the only login on an account');
+    this.name = 'CannotUnlinkLastIdentityError';
+  }
 }
 
 export interface IConsoleAccountAdminStore {
-  listPrincipals(query?: PrincipalDirectoryQuery): Promise<ConsolePrincipalSummary[]>;
+  listPrincipals(query?: PrincipalDirectoryQuery): Promise<PrincipalDirectoryPage>;
   findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null>;
   findPrincipalByAccountCorrelationId(accountCorrelationId: string): Promise<ConsolePrincipalSummary | null>;
   listActiveRoles(userId: string): Promise<ConsoleAdminRole[]>;
@@ -153,10 +225,19 @@ export interface IConsoleAccountAdminStore {
   deletePrincipal(input: PrincipalDeletionInput): Promise<PrincipalDeletionOutcome | null>;
   /** Provider logins (auth accounts) currently linked to this user. */
   listLinkedIdentities(userId: string): Promise<LinkedIdentity[]>;
+  /** Logins not yet attached to any user (`user_id IS NULL`) — the link picker's source, keyset-paged. */
+  listUnlinkedIdentities(query?: UnlinkedIdentityQuery): Promise<UnlinkedIdentityPage>;
   /** A single login by its `sub`, with its current link state. Null if unknown. */
   findIdentityBySub(sub: string): Promise<LinkedIdentity | null>;
-  /** Attach an unlinked login to this user. Returns null when the login is gone. */
-  linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null>;
+  /** Whether durable authority fencing currently blocks this login subject. */
+  isIdentityRevocationFenced(sub: string): Promise<boolean>;
+  /**
+   * Attach an unlinked login provisionally while retaining a durable subject
+   * fence. A retry for the same linked-and-fenced identity is idempotent.
+   */
+  linkIdentity(input: IdentityLinkInput): Promise<IdentityLinkPreparationResult>;
+  /** Remove the provisional identity fence after runtime cleanup succeeds. */
+  finalizeIdentityLink(input: IdentityLinkInput): Promise<IdentityLinkFinalizationResult>;
   /** Detach a login from this user. Returns null when the login is gone. */
   unlinkIdentity(input: IdentityUnlinkInput): Promise<IdentityMutationResult | null>;
 }
@@ -179,8 +260,35 @@ export function validatePrincipalDirectoryQuery(query: PrincipalDirectoryQuery =
   if (query.sub?.trim() === '') {
     throw new ConsoleStoreValidationError('sub filter must be non-empty when provided');
   }
+  if (query.search !== undefined) {
+    if (query.search.trim() === '') {
+      throw new ConsoleStoreValidationError('search filter must be non-empty when provided');
+    }
+    if (query.search.length > PRINCIPAL_SEARCH_MAX_LENGTH) {
+      throw new ConsoleStoreValidationError(`search filter must be at most ${PRINCIPAL_SEARCH_MAX_LENGTH} characters`);
+    }
+  }
+  if (query.role !== undefined) assertAdminRole(query.role, 'role filter');
   if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 200)) {
     throw new ConsoleStoreValidationError('principal directory limit must be between 1 and 200');
+  }
+  if (query.after !== undefined) {
+    assertUuid(query.after.userId, 'after.userId');
+    if (!(query.after.createdAt instanceof Date) || Number.isNaN(query.after.createdAt.getTime())) {
+      throw new ConsoleStoreValidationError('after.createdAt must be a valid date');
+    }
+  }
+}
+
+export function validateUnlinkedIdentityQuery(query: UnlinkedIdentityQuery = {}): void {
+  if (query.limit !== undefined && (!Number.isInteger(query.limit) || query.limit < 1 || query.limit > 200)) {
+    throw new ConsoleStoreValidationError('unlinked identity limit must be between 1 and 200');
+  }
+  if (query.after !== undefined) {
+    validateIdentitySub(query.after.sub, 'after.sub');
+    if (!(query.after.createdAt instanceof Date) || Number.isNaN(query.after.createdAt.getTime())) {
+      throw new ConsoleStoreValidationError('after.createdAt must be a valid date');
+    }
   }
 }
 
@@ -210,6 +318,7 @@ export function validatePrincipalAuthzVersionBumpInput(input: PrincipalAuthzVers
 
 export function validatePrincipalDeletionInput(input: PrincipalDeletionInput): void {
   assertUuid(input.userId, 'userId');
+  assertUuid(input.deletedByUserId, 'deletedByUserId');
 }
 
 export function validateIdentitySub(sub: string, name = 'sub'): void {

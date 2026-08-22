@@ -832,6 +832,9 @@ export class AgentSkillConverter {
     try {
       parsedFrontmatter = SecureYamlParser.parseRawYaml(match[1]);
     } catch (error) {
+      if (error instanceof Error && error.message === 'YAML content must parse to an object') {
+        throw new Error(`Frontmatter in ${pathLabel} must be a YAML object`);
+      }
       throw new Error(
         `Invalid YAML frontmatter in ${pathLabel}: ${error instanceof Error ? error.message : String(error)}`
       );

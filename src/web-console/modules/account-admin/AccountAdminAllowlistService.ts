@@ -1,5 +1,4 @@
 import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
-import { UnicodeValidator } from '../../../security/validators/unicodeValidator.js';
 import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { ConsoleHandlerResult, ConsoleRequest, ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
@@ -14,6 +13,7 @@ import type {
 } from '../../stores/IConsoleAccountAllowlistStore.js';
 import {
   assertAllowlistKind,
+  normalizeAllowlistDisplayValue,
   validateAllowlistValue,
 } from '../../stores/IConsoleAccountAllowlistStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
@@ -67,7 +67,7 @@ export class AccountAdminAllowlistService {
           operation: 'allowlist_add',
           kind: entry.kind,
         }));
-      });
+      }, actor);
       return { status: 201, body };
     } catch (error) {
       if (error instanceof ConsoleStoreConflictError) {
@@ -83,6 +83,7 @@ export class AccountAdminAllowlistService {
 
   async update(req: ConsoleRequest, route: ConsoleRouteDefinition, id: string): Promise<ConsoleHandlerResult> {
     assertUuid(id, 'id');
+    const actor = requireConsoleAuthentication(req);
     const occurredAt = this.now();
     const parsed = parseUpdateBody(req.body);
     if (parsed.kind === 'invalid') {
@@ -95,7 +96,7 @@ export class AccountAdminAllowlistService {
         operation: 'allowlist_update',
       }));
       return entry ? serializeAccountAllowlistEntry(entry) : null;
-    });
+    }, actor);
     return body
       ? { status: 200, body }
       : problem(404, 'not_found', 'Not found', 'Allowlist entry was not found.');
@@ -115,7 +116,7 @@ export class AccountAdminAllowlistService {
         operation: 'allowlist_remove',
       }));
       return !!entry;
-    });
+    }, actor);
     return removed
       ? { status: 204, body: null }
       : problem(404, 'not_found', 'Not found', 'Allowlist entry was not found.');
@@ -156,7 +157,7 @@ function parseAddBody(body: unknown): { readonly kind: 'valid'; readonly value: 
     if (typeof record.kind !== 'string') throw new ConsoleStoreValidationError('kind must be a string.');
     assertAllowlistKind(record.kind, 'kind');
     if (typeof record.value !== 'string') throw new ConsoleStoreValidationError('value must be a string.');
-    const value = UnicodeValidator.normalize(record.value).normalizedContent.trim();
+    const value = normalizeAllowlistDisplayValue(record.value);
     validateAllowlistValue(record.kind, value, 'value');
     if (record.note !== undefined && record.note !== null && typeof record.note !== 'string') {
       throw new ConsoleStoreValidationError('note must be a string or null.');

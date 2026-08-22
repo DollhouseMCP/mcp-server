@@ -58,7 +58,7 @@ export const CollectionErrorSolutions: Record<CollectionErrorCode, string> = {
   [CollectionErrorCode.COLL_CFG_002]: "Check collection repository configuration",
   
   [CollectionErrorCode.COLL_VAL_001]: "Verify element has proper metadata and content",
-  [CollectionErrorCode.COLL_VAL_002]: "Reduce content size to under 500KB"
+  [CollectionErrorCode.COLL_VAL_002]: "Reduce content size to under 10MB"
 };
 
 /**

@@ -4,6 +4,7 @@ import { EmbeddedASOidcAccount } from '../../../../src/auth/embedded-as/Embedded
 import { ADMIN_STEP_UP_CLAIMS_MODEL } from '../../../../src/auth/embedded-as/InteractionRouter.js';
 import type { IAuthMethod } from '../../../../src/auth/embedded-as/IAuthMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
+import type { IConsoleIdentityResolver } from '../../../../src/web-console/identity/IConsoleIdentityResolver.js';
 
 const ADMIN_STEPUP_ACR = 'urn:dollhouse:acr:admin-stepup';
 
@@ -72,6 +73,23 @@ describe('EmbeddedASOidcAccount', () => {
       .resolves.toEqual({ auth_time: 0 });
     await expect(account.extraTokenClaims({}, { accountId: 'local_admin', grantId: 'grant-expired' }))
       .resolves.toEqual({ auth_time: 0 });
+  });
+
+  it('emits the live principal authorization generation in issued token claims', async () => {
+    const storage = await storageWithAdmin();
+    const identityResolver: IConsoleIdentityResolver = {
+      resolveEnabledPrincipal: async sub => ({
+        sub,
+        userId: '018f3d47-73ae-7f10-a0de-0742618d4fb1',
+        disabledAt: null,
+        authzVersion: 7,
+      }),
+      linkAccount: async () => undefined,
+    };
+    const account = new EmbeddedASOidcAccount([], storage, identityResolver);
+
+    await expect(account.extraTokenClaims({}, { accountId: 'local_admin' }))
+      .resolves.toMatchObject({ dollhouse_authz_version: 7 });
   });
 });
 

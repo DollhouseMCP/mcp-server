@@ -23,6 +23,10 @@ import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { IAuthProvider, AuthClaims } from './IAuthProvider.js';
 
+export interface AuthClaimsAuthority {
+  validateCurrentClaims(claims: AuthClaims): Promise<{ ok: true } | { ok: false; reason: string }>;
+}
+
 export interface AuthMiddlewareOptions {
   /** The auth provider to validate tokens against. */
   provider: IAuthProvider;
@@ -30,6 +34,8 @@ export interface AuthMiddlewareOptions {
   publicPaths?: string[];
   /** RFC 9728 protected resource metadata URL for WWW-Authenticate discovery. */
   protectedResourceMetadataUrl?: string;
+  /** Optional live account authority for disable/delete/relink/token fences. */
+  claimsAuthority?: AuthClaimsAuthority;
 }
 
 /**
@@ -50,7 +56,7 @@ declare module 'express' {
  *   app.use('/api', createAuthMiddleware({ provider, publicPaths: ['/api/health'] }));
  */
 export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): RequestHandler {
-  const { provider, publicPaths = [], protectedResourceMetadataUrl } = options;
+  const { provider, publicPaths = [], protectedResourceMetadataUrl, claimsAuthority } = options;
   const publicSet = new Set(publicPaths);
 
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
@@ -93,6 +99,28 @@ export function createUnifiedAuthMiddleware(options: AuthMiddlewareOptions): Req
       setAuthenticateHeader(res, protectedResourceMetadataUrl);
       res.status(401).json({ error: `Authentication failed: ${result.reason}` });
       return;
+    }
+
+    if (claimsAuthority) {
+      let authorityResult: Awaited<ReturnType<AuthClaimsAuthority['validateCurrentClaims']>>;
+      try {
+        authorityResult = await claimsAuthority.validateCurrentClaims(result.claims);
+      } catch (error) {
+        logger.error('[AuthMiddleware] Live account validation failed closed', { error });
+        authorityResult = { ok: false, reason: 'account validation unavailable' };
+      }
+      if (!authorityResult.ok) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'OPERATION_FAILED',
+          severity: 'MEDIUM',
+          source: `auth:${provider.name}`,
+          details: `Live account validation failed: ${authorityResult.reason}`,
+          additionalData: { path: req.path, method: req.method, reason: authorityResult.reason },
+        });
+        setAuthenticateHeader(res, protectedResourceMetadataUrl);
+        res.status(401).json({ error: `Authentication failed: ${authorityResult.reason}` });
+        return;
+      }
     }
 
     // Attach claims for downstream handlers

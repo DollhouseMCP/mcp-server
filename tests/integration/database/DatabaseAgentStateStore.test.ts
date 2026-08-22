@@ -4,10 +4,14 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { eq } from 'drizzle-orm';
 
 import { createDatabaseConnection } from '../../../src/database/connection.js';
 import { DatabaseAgentStateStore } from '../../../src/storage/DatabaseAgentStateStore.js';
+import { DatabaseAgentSnapshotReplacementJournal } from '../../../src/storage/DatabaseAgentSnapshotReplacementJournal.js';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
+import { withUserContext, withUserRead } from '../../../src/database/rls.js';
+import { agentReplacementJournals } from '../../../src/database/schema/agents.js';
 import {
   findRecordedRuntimePresenceWithTx,
   PostgresRuntimeSessionControlStore,
@@ -35,12 +39,22 @@ afterAll(async () => {
   await closeTestDb();
 });
 
-async function createTestAgent(userId: string): Promise<string> {
+async function createTestAgent(userId: string, name = 'state-test-agent'): Promise<string> {
   const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'agents');
-  const content = buildAgentContent('state-test-agent');
-  return layer.writeContent('agents', 'state-test-agent', content, {
+  const content = buildAgentContent(name);
+  return layer.writeContent('agents', name, content, {
     author: 'test', version: '1.0.0', description: 'Agent for state testing', tags: [],
   });
+}
+
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>(next => { resolve = next; });
+  return { promise, resolve };
+}
+
+function serializedAgent(name: string): string {
+  return JSON.stringify({ metadata: { name } });
 }
 
 describe('DatabaseAgentStateStore', () => {
@@ -130,6 +144,26 @@ describe('DatabaseAgentStateStore', () => {
     ).rejects.toThrow(/expected 0 for initial save/i);
   });
 
+  it('rejects a recovery save when durable database state disappeared', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const store = new DatabaseAgentStateStore(getTestDb(), fixedUserId(userId));
+    const agentId = await createTestAgent(userId);
+
+    await expect(store.save({
+      name: 'state-test-agent',
+      agentElementId: agentId,
+      sessionId: 'session-a',
+    }, {
+      goals: [],
+      decisions: [],
+      context: {},
+      stateVersion: 0,
+      sessionCount: 0,
+      lastActive: new Date(),
+    }, 0, { requireExisting: true })).rejects.toThrow('state disappeared');
+  });
+
   it('should delete agent state', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();
@@ -144,6 +178,288 @@ describe('DatabaseAgentStateStore', () => {
 
     const loaded = await store.loadState(agentId);
     expect(loaded).toBeNull();
+  });
+
+  it('uses the journaled session identity and CAS version for recovery deletion', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let currentSession = 'session-a';
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => currentSession,
+    );
+    const agentId = await createTestAgent(userId);
+    const key = {
+      name: 'state-test-agent',
+      agentElementId: agentId,
+      sessionId: 'session-a',
+    };
+    await store.save(key, {
+      goals: [],
+      decisions: [],
+      context: { owner: 'session-a' },
+      lastActive: new Date(),
+      sessionCount: 1,
+      stateVersion: 0,
+    }, 0);
+
+    currentSession = 'session-b';
+    await expect(store.load(key, { strict: true })).resolves.toMatchObject({
+      context: { owner: 'session-a' },
+      stateVersion: 1,
+    });
+    await expect(store.delete(key, {
+      expectedVersion: 0,
+      requireExisting: true,
+    })).rejects.toThrow(/version conflict/i);
+    await expect(store.delete(key, {
+      expectedVersion: 1,
+      requireExisting: true,
+    })).resolves.toBe(true);
+  });
+
+  it('persists replacement journals in PostgreSQL with their original session identity', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let currentSession = 'session-a';
+    const agentId = await createTestAgent(userId);
+    const owner = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(),
+      fixedUserId(userId),
+      () => currentSession,
+      5,
+    );
+    const entry = await owner.create({
+      agentName: 'state-test-agent',
+      filePath: agentId,
+      isDatabaseMode: true,
+      stateKey: {
+        name: 'state-test-agent',
+        agentElementId: agentId,
+        sessionId: 'session-a',
+      },
+      stateIncluded: false,
+      previousAgentJson: serializedAgent('state-test-agent'),
+      intendedAgentJson: serializedAgent('state-test-agent'),
+      previousDefinition: 'previous bytes',
+      intendedDefinition: 'intended bytes',
+      previousState: null,
+      intendedState: null,
+    });
+    await owner.releaseOwnership(entry);
+
+    currentSession = 'session-b';
+    const recoveringReplica = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(),
+      fixedUserId(userId),
+      () => currentSession,
+      5,
+    );
+    const durable = await recoveringReplica.list();
+    expect(durable).toHaveLength(1);
+    expect(durable[0].record.stateKey.sessionId).toBe('session-a');
+    const claimed = await recoveringReplica.claimForRecovery(durable[0]);
+    expect(claimed?.record.leaseToken).not.toBe(entry.record.leaseToken);
+    if (!claimed) throw new Error('Expected PostgreSQL lease takeover');
+    await expect(owner.remove(entry.journalPath, entry.record.leaseToken))
+      .rejects.toThrow('lost its lease fence');
+    let staleMutationRan = false;
+    await expect(owner.runWhileOwned(entry, async () => {
+      staleMutationRan = true;
+    })).rejects.toThrow('lease was lost');
+    expect(staleMutationRan).toBe(false);
+    await expect(recoveringReplica.list()).resolves.toEqual([
+      expect.objectContaining({
+        record: expect.objectContaining({ leaseToken: claimed.record.leaseToken }),
+      }),
+    ]);
+    await recoveringReplica.remove(claimed.journalPath, claimed.record.leaseToken);
+  });
+
+  it('fences PostgreSQL PID-reuse takeover with the lease token', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const agentId = await createTestAgent(userId);
+    const recordedIncarnation = {
+      source: 'linux-proc' as const,
+      bootId: 'boot-a',
+      processStartId: '100',
+    };
+    const owner = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(),
+      fixedUserId(userId),
+      () => 'session-a',
+      5,
+      async () => recordedIncarnation,
+    );
+    const entry = await owner.create({
+      agentName: 'state-test-agent',
+      filePath: agentId,
+      isDatabaseMode: true,
+      stateKey: {
+        name: 'state-test-agent',
+        agentElementId: agentId,
+        sessionId: 'session-a',
+      },
+      stateIncluded: false,
+      previousAgentJson: serializedAgent('state-test-agent'),
+      intendedAgentJson: serializedAgent('state-test-agent'),
+      previousDefinition: 'previous bytes',
+      intendedDefinition: 'intended bytes',
+      previousState: null,
+      intendedState: null,
+    });
+    await owner.releaseOwnership(entry);
+    await withUserContext(getTestDb(), userId, async (tx) => {
+      await tx.update(agentReplacementJournals).set({
+        ownerProcessIncarnation: recordedIncarnation,
+        leaseExpiresAt: new Date(0),
+      }).where(eq(agentReplacementJournals.operationId, entry.record.operationId));
+    });
+    const successor = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(),
+      fixedUserId(userId),
+      () => 'session-b',
+      5,
+      async () => ({ ...recordedIncarnation, processStartId: '200' }),
+    );
+    const durable = await successor.list();
+    expect(durable).toHaveLength(1);
+    const claimed = await successor.claimForRecovery(durable[0]);
+    if (!claimed) throw new Error('Expected PID-reuse lease takeover');
+
+    await expect(owner.remove(entry.journalPath, entry.record.leaseToken))
+      .rejects.toThrow('lost its lease fence');
+    await successor.remove(claimed.journalPath, claimed.record.leaseToken);
+  });
+
+  it('rejects concurrent replacement journals for one agent across sessions', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    let currentSession = 'session-a';
+    const agentId = await createTestAgent(userId);
+    const journal = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(),
+      fixedUserId(userId),
+      () => currentSession,
+      5_000,
+    );
+    const base = {
+      agentName: 'state-test-agent',
+      filePath: agentId,
+      isDatabaseMode: true as const,
+      stateIncluded: false,
+      previousAgentJson: serializedAgent('state-test-agent'),
+      intendedAgentJson: serializedAgent('state-test-agent'),
+      previousDefinition: 'previous bytes',
+      intendedDefinition: 'intended bytes',
+      previousState: null,
+      intendedState: null,
+    };
+    const first = await journal.create({
+      ...base,
+      stateKey: { name: 'state-test-agent', agentElementId: agentId, sessionId: 'session-a' },
+    });
+
+    currentSession = 'session-b';
+    await expect(journal.create({
+      ...base,
+      stateKey: { name: 'state-test-agent', agentElementId: agentId, sessionId: 'session-b' },
+    })).rejects.toThrow('already active');
+
+    currentSession = 'session-a';
+    await journal.remove(first.journalPath, first.record.leaseToken);
+  });
+
+  it('serializes same-agent mutations across PostgreSQL-backed replicas', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const first = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(), fixedUserId(userId), () => 'session-a',
+    );
+    const second = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(), fixedUserId(userId), () => 'session-b',
+    );
+    const entered = deferred();
+    const release = deferred();
+    let secondEntered = false;
+
+    const firstMutation = first.runWithAgentMutationGate('StateTestAgent', async () => {
+      entered.resolve();
+      await release.promise;
+    });
+    await entered.promise;
+    const secondMutation = second.runWithAgentMutationGate('state-test-agent', async () => {
+      secondEntered = true;
+    });
+    await new Promise(resolve => setTimeout(resolve, 50));
+    expect(secondEntered).toBe(false);
+
+    release.resolve();
+    await Promise.all([firstMutation, secondMutation]);
+    expect(secondEntered).toBe(true);
+  });
+
+  it('atomically quarantines malformed journal rows without hiding unrelated valid work', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const malformedAgentId = await createTestAgent(userId, 'malformed-journal-agent');
+    const validAgentId = await createTestAgent(userId, 'valid-journal-agent');
+    const malformedOperationId = randomUUID();
+    const now = new Date();
+    await withUserContext(getTestDb(), userId, async (tx) => {
+      await tx.insert(agentReplacementJournals).values({
+        operationId: malformedOperationId,
+        userId,
+        sessionId: 'session-a',
+        agentId: malformedAgentId,
+        agentName: 'malformed-journal-agent',
+        ownerHost: 'test-host',
+        ownerPid: process.pid,
+        ownerInstanceId: randomUUID(),
+        leaseToken: randomUUID(),
+        heartbeatAt: now,
+        leaseExpiresAt: new Date(now.getTime() + 30_000),
+        payload: { version: 1, operationId: malformedOperationId },
+        createdAt: now,
+      });
+    });
+    const journal = new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(), fixedUserId(userId), () => 'session-b',
+    );
+    const valid = await journal.create({
+      agentName: 'valid-journal-agent',
+      filePath: validAgentId,
+      isDatabaseMode: true,
+      stateKey: {
+        name: 'valid-journal-agent',
+        agentElementId: validAgentId,
+        sessionId: 'session-b',
+      },
+      stateIncluded: false,
+      previousAgentJson: serializedAgent('valid-journal-agent'),
+      intendedAgentJson: serializedAgent('valid-journal-agent'),
+      previousDefinition: 'previous bytes',
+      intendedDefinition: 'intended bytes',
+      previousState: null,
+      intendedState: null,
+    });
+
+    await expect(journal.list()).resolves.toEqual([
+      expect.objectContaining({ journalPath: valid.journalPath }),
+    ]);
+    const malformedRows = await withUserRead(getTestDb(), userId, tx => tx
+      .select({
+        quarantinedAt: agentReplacementJournals.quarantinedAt,
+        quarantineReason: agentReplacementJournals.quarantineReason,
+      })
+      .from(agentReplacementJournals)
+      .where(eq(agentReplacementJournals.operationId, malformedOperationId))
+      .limit(1));
+    expect(malformedRows[0]?.quarantinedAt).toBeInstanceOf(Date);
+    expect(malformedRows[0]?.quarantineReason).toContain('invalid schema');
+    await journal.remove(valid.journalPath, valid.record.leaseToken);
   });
 
   it('should transfer orphaned state to a replacement session', async () => {
@@ -398,6 +714,59 @@ describe('DatabaseAgentStateStore', () => {
     } finally {
       await connection.close();
     }
+  });
+
+  it('rejects a delayed source heartbeat after orphan state is reclaimed', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const agentId = await createTestAgent(userId);
+    const presenceStore = new PostgresRuntimeSessionControlStore(getTestAdminDb());
+    let sessionId = 'session-delayed-heartbeat-source';
+    const startedAt = new Date(Date.now() - 120_000);
+    const expiredAt = new Date(Date.now() - 60_000);
+    await presenceStore.registerPresence({
+      sessionId,
+      userId,
+      accountCorrelationId: randomUUID(),
+      replicaId: 'delayed-heartbeat-replica',
+      transport: 'streamable-http',
+      startedAt,
+      lastActiveAt: startedAt,
+      leaseUntil: expiredAt,
+    });
+    const store = new DatabaseAgentStateStore(
+      getTestDb(),
+      fixedUserId(userId),
+      () => sessionId,
+      async (candidateSessionId, candidateUserId, tx) => {
+        const presence = await findRecordedRuntimePresenceWithTx(tx, candidateSessionId);
+        if (presence?.userId !== candidateUserId) return 'unknown';
+        return presence.status === 'active' && presence.leaseUntil > new Date()
+          ? 'active'
+          : 'inactive';
+      },
+      getTestAdminDb(),
+    );
+    await store.saveState(agentId, {
+      goals: [{ id: 'goal-delayed-heartbeat', status: 'in_progress' }],
+      decisions: [], context: {}, stateVersion: 0,
+    }, 0);
+
+    sessionId = 'session-delayed-heartbeat-target';
+    await expect(store.reclaimOrphaned({ name: 'state-test-agent', agentElementId: agentId }))
+      .resolves.toMatchObject({
+        goals: expect.arrayContaining([
+          expect.objectContaining({ id: 'goal-delayed-heartbeat', status: 'in_progress' }),
+        ]),
+      });
+    await expect(presenceStore.heartbeatPresence({
+      sessionId: 'session-delayed-heartbeat-source',
+      replicaId: 'delayed-heartbeat-replica',
+      lastActiveAt: new Date(),
+      requestCount: 1,
+      errorCount: 0,
+      leaseUntil: new Date(Date.now() + 60_000),
+    })).resolves.toEqual({ kind: 'lost', reason: 'closing' });
   });
 
   it('does not retain stale presence for completed-only agent state', async () => {

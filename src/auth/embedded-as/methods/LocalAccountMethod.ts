@@ -35,7 +35,12 @@ import type {
 import type { IAuthStorageLayer, StoredAccount } from '../storage/IAuthStorageLayer.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
 import type { LocalLoginRateLimiter } from '../rateLimit.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
+import {
+  checkAllowlistGate,
+  provisionAccountThroughAllowlistGate,
+  renderAllowlistDeniedPage,
+  type SignInAllowlistAuthority,
+} from '../allowlistGate.js';
 
 const LOCAL_PROVIDER = 'local';
 /** Single error reason returned to users; precise causes go to logs only. */
@@ -83,7 +88,7 @@ function getDummyPasswordHash(): Promise<string> {
 
 export interface LocalAccountMethodOptions {
   storage: IAuthStorageLayer;
-  invites: InviteTokenStore;
+  invites: InviteTokenStore | (() => Promise<InviteTokenStore>);
   rateLimiter: LocalLoginRateLimiter;
   /**
    * Sign-in allowlist enforcement. Mirrors `DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED`.
@@ -152,11 +157,15 @@ export class LocalAccountMethod implements IAuthMethod {
    * Issue an invite for `dollhouse-create-user`. Returns the URL the
    * operator hand-delivers to the user. The token is single-use.
    */
-  issueInvite(sub: string, email: string, callbackUrl: string): string {
-    const token = this.options.invites.issue({ sub, email, purpose: 'invite' });
-    const url = new URL(callbackUrl);
-    url.searchParams.set('invite', token);
-    return url.toString();
+  async issueInvite(sub: string, email: string, callbackUrl: string): Promise<string> {
+    return (await this.inviteStore()).issueAndDeliver(
+      { sub, email, purpose: 'invite' },
+      async token => {
+        const url = new URL(callbackUrl);
+        url.searchParams.set('invite', token);
+        return url.toString();
+      },
+    );
   }
 
   /**
@@ -168,11 +177,11 @@ export class LocalAccountMethod implements IAuthMethod {
    * differentiating these cases would let an attacker confirm token
    * capture via an oracle.
    */
-  verifyInvite(token: string):
+  async verifyInvite(token: string): Promise<
     | { ok: true; sub: string; email: string }
     | { ok: false; reason: string }
-  {
-    const verified = this.options.invites.verify(token);
+  > {
+    const verified = (await this.inviteStore()).verify(token);
     if (!verified.ok) return { ok: false, reason: GENERIC_INVITE_INVALID };
     if (verified.payload.purpose !== 'invite') {
       return { ok: false, reason: GENERIC_INVITE_INVALID };
@@ -203,7 +212,8 @@ export class LocalAccountMethod implements IAuthMethod {
 
     // Step 1 — verify (no consume). Cheap. If the token is invalid /
     // expired we bail before paying the argon2 hash cost.
-    const verified = this.options.invites.verify(token);
+    const invites = await this.inviteStore();
+    const verified = invites.verify(token);
     if (!verified.ok || verified.payload.purpose !== 'invite') {
       return { kind: 'error', reason: GENERIC_INVITE_INVALID };
     }
@@ -221,7 +231,7 @@ export class LocalAccountMethod implements IAuthMethod {
     // the operator. The DoS attack surface outweighs the rare-failure UX
     // cost — we'd rather degrade one user's flow than open a CPU-pin
     // primitive to anyone with a captured URL.
-    const consume = await this.options.invites.consume(token);
+    const consume = await invites.consume(token);
     if (!consume.ok) {
       // rate-exceeded is server-side capacity, not a token problem; log so
       // the operator sees the saturation instead of misreading the user-
@@ -261,27 +271,13 @@ export class LocalAccountMethod implements IAuthMethod {
     // invite-redemption leaves no account row. The invite itself is
     // burned in the consume call above; a re-allowlisted user needs a
     // fresh invite. Bootstrap admin always passes via rule 1.
-    const gate = await checkAllowlistGate(
-      {
-        sub,
-        method: 'local-password',
-        email: consume.payload.email,
-        provider: LOCAL_PROVIDER,
-        externalSub,
-      },
-      {
-        storage: this.options.storage,
-        authority: this.options.signInAllowlistAuthority,
-        required: this.options.allowlistRequired ?? false,
-      },
-    );
-    if (!gate.allowed) {
-      return { kind: 'denied', reason: gate.reason };
-    }
-
-    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
-    // (and linked on first login), NOT stamped onto the auth account — so this
-    // path just records the credential/profile.
+    const gateIdentity = {
+      sub,
+      method: 'local-password' as const,
+      email: consume.payload.email,
+      provider: LOCAL_PROVIDER,
+      externalSub,
+    };
     const existing = await this.options.storage.getAccount(sub);
     const account: StoredAccount = {
       sub,
@@ -296,8 +292,22 @@ export class LocalAccountMethod implements IAuthMethod {
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
     };
-    await this.options.storage.upsertAccount(account);
+    const gate = await provisionAccountThroughAllowlistGate(
+      gateIdentity,
+      {
+        storage: this.options.storage,
+        authority: this.options.signInAllowlistAuthority,
+        required: this.options.allowlistRequired ?? false,
+      },
+      account,
+    );
+    if (!gate.allowed) {
+      return { kind: 'denied', reason: gate.reason };
+    }
 
+    // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
+    // (and linked on first login), NOT stamped onto the auth account — so this
+    // path just records the credential/profile.
     return { kind: 'ok', sub, email: consume.payload.email };
   }
 
@@ -360,17 +370,19 @@ export class LocalAccountMethod implements IAuthMethod {
     const bodyParser = express.urlencoded({ extended: false, limit: '4kb' });
 
     router.get('/auth/local/invite', (req, res, next) => {
-      try {
+      void (async () => {
+        try {
         const token = typeof req.query.invite === 'string' ? req.query.invite : '';
-        const verified = this.verifyInvite(token);
+        const verified = await this.verifyInvite(token);
         if (!verified.ok) {
           res.status(400).type('html').send(renderInviteError(verified.reason));
           return;
         }
         res.type('html').send(this.renderInviteForm(token, verified.email));
-      } catch (err) {
-        next(err);
-      }
+        } catch (err) {
+          next(err);
+        }
+      })();
     });
 
     router.post('/auth/local/invite', bodyParser, (req, res, next) => {
@@ -398,6 +410,12 @@ export class LocalAccountMethod implements IAuthMethod {
         }
       })();
     });
+  }
+
+  private inviteStore(): Promise<InviteTokenStore> {
+    return typeof this.options.invites === 'function'
+      ? this.options.invites()
+      : Promise.resolve(this.options.invites);
   }
 
   private async handleLogin(

@@ -163,7 +163,7 @@ describe('MagicLinkMethod', () => {
   describe('verifyMagicLink / consumeMagicLink (used by /auth/email/verify)', () => {
     it('verifyMagicLink returns the interactionId from the token payload', async () => {
       const token = await issueViaInteraction(method, emailSender);
-      const verified = method.verifyMagicLink(token);
+      const verified = await method.verifyMagicLink(token);
       expect(verified.ok).toBe(true);
       if (!verified.ok) return;
       expect(verified.interactionId).toBe('INTERACT-42');
@@ -171,8 +171,8 @@ describe('MagicLinkMethod', () => {
 
     it('verifyMagicLink does NOT consume — anti-pre-fetch (must-fix #1)', async () => {
       const token = await issueViaInteraction(method, emailSender);
-      method.verifyMagicLink(token);
-      method.verifyMagicLink(token);
+      await method.verifyMagicLink(token);
+      await method.verifyMagicLink(token);
       // Still consumable.
       const consumed = await method.consumeMagicLink(token);
       expect(consumed.kind).toBe('ok');

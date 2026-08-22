@@ -9,6 +9,7 @@ import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { SerializationService } from '../../../src/services/SerializationService.js';
 import { FileAgentStateStore } from '../../../src/storage/FileAgentStateStore.js';
+import { crashFilesystemGuardOwner } from '../../helpers/crashFilesystemGuardOwner.js';
 
 const key = { name: 'Recovery Agent', agentElementId: 'agent-id' };
 
@@ -66,13 +67,33 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     expect(cache.get('recovery-agent')?.goals).toHaveLength(1);
   });
 
-  it('reclaims from durable state instead of the process-local cache', async () => {
+  it('rereads durable version while holding the cross-process save guard', async () => {
+    await expect(store.save(key, state(), 0)).resolves.toBe(1);
+    await store.load(key);
+    const secondLockManager = new FileLockManager();
+    const secondStore = new FileAgentStateStore({
+      stateDir,
+      fileLockManager: secondLockManager,
+      fileOperations: new FileOperationsService(secondLockManager),
+      serializationService: new SerializationService(),
+      stateCache: new Map(),
+    });
+    const secondState = await secondStore.load(key, { strict: true });
+    if (!secondState) throw new Error('expected durable state');
+    await expect(secondStore.save(key, secondState, 1)).resolves.toBe(2);
+
+    await expect(store.save(key, state(1), 1)).rejects.toThrow('State version conflict');
+    await expect(store.load(key, { strict: true })).resolves.toMatchObject({ stateVersion: 2 });
+  });
+
+  it('fails closed when asked to reclaim session-neutral file state', async () => {
     await store.save(key, state(), 0);
     cache.get('recovery-agent')!.context.cachedOnly = true;
 
     const reclaimed = await store.reclaimOrphaned(key);
 
-    expect(reclaimed?.context).toEqual({});
+    expect(reclaimed).toBeNull();
+    expect(cache.get('recovery-agent')?.context).toEqual({ cachedOnly: true });
   });
 
   it('defaults malformed integer fields when loading durable state', async () => {
@@ -121,11 +142,23 @@ stateVersion: ${stateVersion}
     await expect(store.load(key, { strict: true })).rejects.toThrow();
   });
 
+  it('rejects an ordinary save when an existing durable state file is empty', async () => {
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), '');
+
+    await expect(store.save(key, state(), 0)).rejects.toThrow('YAML must contain an object at root level');
+  });
+
   it('rejects a recovery save when durable state disappeared', async () => {
     await fs.mkdir(stateDir, { recursive: true });
 
     await expect(store.save(key, state(1), 1, { requireExisting: true }))
       .rejects.toThrow('state disappeared');
+  });
+
+  it('rejects a nonzero expectedVersion when no durable state exists', async () => {
+    await expect(store.save(key, state(4), 4)).rejects.toThrow('State version conflict');
+    await expect(store.load(key, { strict: true })).resolves.toBeNull();
   });
 
   it('requires the exact durable version during a recovery save', async () => {
@@ -151,5 +184,81 @@ stateVersion: ${stateVersion}
     await expect(store.save(key, staleState, 0))
       .rejects.toThrow('State version conflict');
     expect(staleState.stateVersion).toBe(0);
+  });
+
+  it('does not resurrect state deleted by another process', async () => {
+    await expect(store.save(key, state(), 0)).resolves.toBe(1);
+    await store.load(key);
+
+    const secondLockManager = new FileLockManager();
+    const secondStore = new FileAgentStateStore({
+      stateDir,
+      fileLockManager: secondLockManager,
+      fileOperations: new FileOperationsService(secondLockManager),
+      serializationService: new SerializationService(),
+      stateCache: new Map(),
+    });
+    await expect(secondStore.load(key, { strict: true })).resolves.toMatchObject({ stateVersion: 1 });
+    await expect(secondStore.delete(key, { expectedVersion: 1 })).resolves.toBe(true);
+
+    await expect(store.save(key, state(1), 1)).rejects.toThrow('State version conflict');
+    await expect(store.load(key, { strict: true })).resolves.toBeNull();
+  });
+
+  it('allows a fresh create after strict absence while continuing to reject the stale object', async () => {
+    const stale = state();
+    await expect(store.save(key, stale, 0)).resolves.toBe(1);
+
+    const secondLockManager = new FileLockManager();
+    const secondStore = new FileAgentStateStore({
+      stateDir,
+      fileLockManager: secondLockManager,
+      fileOperations: new FileOperationsService(secondLockManager),
+      serializationService: new SerializationService(),
+      stateCache: new Map(),
+    });
+    await expect(secondStore.load(key, { strict: true })).resolves.toMatchObject({ stateVersion: 1 });
+    await expect(secondStore.delete(key, { expectedVersion: 1 })).resolves.toBe(true);
+
+    await expect(store.load(key, { strict: true })).resolves.toBeNull();
+    await expect(store.save(key, state(), 0)).resolves.toBe(1);
+    await expect(store.save(key, stale, 1)).rejects.toThrow('State version conflict');
+  });
+
+  it('rejects a stale state after another process deletes and recreates the same version', async () => {
+    const stale = state();
+    await expect(store.save(key, stale, 0)).resolves.toBe(1);
+
+    const secondLockManager = new FileLockManager();
+    const secondStore = new FileAgentStateStore({
+      stateDir,
+      fileLockManager: secondLockManager,
+      fileOperations: new FileOperationsService(secondLockManager),
+      serializationService: new SerializationService(),
+      stateCache: new Map(),
+    });
+    await expect(secondStore.load(key, { strict: true })).resolves.toMatchObject({ stateVersion: 1 });
+    await expect(secondStore.delete(key, { expectedVersion: 1 })).resolves.toBe(true);
+    await expect(secondStore.save(key, state(), 0)).resolves.toBe(1);
+
+    await expect(store.save(key, stale, 1)).rejects.toThrow('State version conflict');
+    await expect(store.load(key, { strict: true })).resolves.toMatchObject({ stateVersion: 1 });
+  });
+
+  it('clears stale cached state when a strict delete finds no durable file', async () => {
+    await expect(store.save(key, state(), 0)).resolves.toBe(1);
+    await store.load(key);
+    await fs.unlink(path.join(stateDir, 'recovery-agent.state.yaml'));
+
+    await expect(store.delete(key, { expectedVersion: 1 })).resolves.toBe(false);
+    expect(cache.has('recovery-agent')).toBe(false);
+  });
+
+  it('reclaims a state guard abandoned by a crashed process incarnation', async () => {
+    const guardPath = path.join(stateDir, '.locks', 'recovery-agent.guard');
+    await crashFilesystemGuardOwner(guardPath);
+
+    await expect(store.save(key, state(), 0)).resolves.toBe(1);
+    await expect(store.load(key, { strict: true })).resolves.toMatchObject({ stateVersion: 1 });
   });
 });

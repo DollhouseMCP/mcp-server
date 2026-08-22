@@ -128,7 +128,7 @@ export class SkillManager extends BaseElementManager<Skill> {
       effectiveContent
     );
 
-    await this.save(skill, filename);
+    await this.save(skill, filename, { exclusive: true });
     // Note: No reload() here — save() caches the element correctly.
     // See Issue #491 for why PersonaManager's reload-after-create was removed.
 
@@ -154,7 +154,7 @@ export class SkillManager extends BaseElementManager<Skill> {
       if (format === 'yaml' || format === 'markdown') {
         // Use SerializationService for YAML frontmatter parsing
         const result = this.serializationService.parseFrontmatter(data, {
-          maxYamlSize: 64 * 1024,
+          maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
           validateContent: true,
           source: 'SkillManager.importElement'
         });

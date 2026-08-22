@@ -6,7 +6,7 @@
  * 1. CRITICAL: Template injection prevention - no eval() or Function() constructor
  * 2. CRITICAL: Path traversal prevention for template includes
  * 3. HIGH: Input validation and sanitization for all template variables
- * 4. MEDIUM: Memory limits to prevent resource exhaustion (100KB templates, 100 variables)
+ * 4. MEDIUM: Memory limits to prevent resource exhaustion (10 MiB templates, 100 variables)
  * 5. MEDIUM: Audit logging for all security operations via SecurityMonitor
  * 6. MEDIUM: Unicode normalization to prevent homograph attacks
  */
@@ -94,7 +94,7 @@ export class Template extends BaseElement implements IElement {
   
   // SECURITY FIX #4: Memory management constants
   // Prevents unbounded template size and variable count that could exhaust memory
-  private readonly MAX_TEMPLATE_SIZE = 100 * 1024; // 100KB max template size
+  private readonly MAX_TEMPLATE_SIZE = SECURITY_LIMITS.MAX_CONTENT_LENGTH;
   private static readonly MAX_VARIABLE_COUNT = 100; // Max variables per template
   private readonly MAX_INCLUDE_DEPTH = 5;          // Prevent infinite include loops
   private readonly MAX_STRING_LENGTH = 10000;      // Max length for string variables
@@ -298,7 +298,7 @@ export class Template extends BaseElement implements IElement {
    *
    * **Performance:** Single-pass regex scan — O(n) in content length.
    * Called by `TemplateManager.save()` on every create/edit, so content
-   * is already validated and size-bounded (≤ 100 KB) before reaching here.
+   * is already validated and size-bounded (at most 10 MiB) before reaching here.
    *
    * @param content - Raw template content (may include section tags)
    * @param existingVariables - Already-declared variables; never overwritten

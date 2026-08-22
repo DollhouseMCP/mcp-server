@@ -8,10 +8,13 @@ import { ElementStatus } from '../../../src/types/elements/IElement.js';
 import type { ElementType } from '../../../src/portfolio/types.js';
 import {
   ManagerBackedPortfolioElementStore,
+  PortfolioElementAlreadyExistsError,
   PortfolioElementVersionConflictError,
   type ConsolePortfolioElementType,
   type ManagerBackedPortfolioManagers,
 } from '../../../src/web-console/index.js';
+import { MemoryPersistenceConflictError } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
+import { StorageAlreadyExistsError } from '../../../src/storage/IStorageLayer.js';
 import { createRealManagerSuite } from '../../helpers/di-mocks.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
@@ -123,6 +126,25 @@ describe('ManagerBackedPortfolioElementStore', () => {
     })).resolves.toMatchObject({ canonicalName: 'valid skill' });
   });
 
+  it('maps durable duplicate-create errors to the portfolio conflict contract', async () => {
+    class DuplicateManager extends FakeManager {
+      override async save(): Promise<void> {
+        throw new StorageAlreadyExistsError('Skill', 'Replica Skill');
+      }
+    }
+    const store = new ManagerBackedPortfolioElementStore({
+      managers: managersWith(new DuplicateManager(SKILLS_TYPE), SKILLS_TYPE),
+      getCurrentUserId: () => USER_ID,
+    });
+
+    await expect(store.create(elementInput(
+      SKILLS_TYPE,
+      'Replica Skill',
+      'body',
+      { description: 'duplicate' },
+    ))).rejects.toBeInstanceOf(PortfolioElementAlreadyExistsError);
+  });
+
   it('uses content-hash ETags for mutation preconditions', async () => {
     const manager = new FakeManager(SKILLS_TYPE, [{
       metadata: { name: MUTABLE_SKILL, description: 'Before' },
@@ -156,6 +178,202 @@ describe('ManagerBackedPortfolioElementStore', () => {
     })).resolves.toMatchObject({ content: 'after' });
   });
 
+  it('serializes same-element ETag mutations so only one concurrent writer succeeds', async () => {
+    const manager = new FakeManager(SKILLS_TYPE, [{
+      metadata: { name: MUTABLE_SKILL, description: 'Before' },
+      body: 'before',
+    }]);
+    const store = new ManagerBackedPortfolioElementStore({
+      managers: managersWith(manager, SKILLS_TYPE),
+      getCurrentUserId: () => USER_ID,
+    });
+    const existing = await store.findByName(USER_ID, SKILLS_TYPE, 'mutable-skill');
+    if (!existing?.contentHash) throw new Error('expected content hash');
+
+    const results = await Promise.allSettled(['writer-one', 'writer-two'].map(content => store.update({
+      userId: USER_ID,
+      type: SKILLS_TYPE,
+      canonicalName: 'mutable-skill',
+      expectedVersion: 1,
+      expectedContentHash: existing.contentHash,
+      content,
+      now: NOW,
+    })));
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({
+      reason: expect.any(PortfolioElementVersionConflictError),
+    });
+  });
+
+  it('maps a durable memory persistence conflict to the portfolio precondition error', async () => {
+    class ConflictingMemoryManager extends FakeManager {
+      override async save(): Promise<void> {
+        await Promise.resolve();
+        throw new MemoryPersistenceConflictError(MUTABLE_SKILL);
+      }
+    }
+    const manager = new ConflictingMemoryManager(SKILLS_TYPE, [{
+      metadata: { name: MUTABLE_SKILL, description: 'Before' },
+      body: 'before',
+    }]);
+    const store = new ManagerBackedPortfolioElementStore({
+      managers: managersWith(manager, SKILLS_TYPE),
+      getCurrentUserId: () => USER_ID,
+    });
+    const existing = await store.findByName(USER_ID, SKILLS_TYPE, 'mutable-skill');
+    if (!existing?.contentHash) throw new Error('expected content hash');
+
+    await expect(store.update({
+      userId: USER_ID,
+      type: SKILLS_TYPE,
+      canonicalName: 'mutable-skill',
+      expectedVersion: 1,
+      expectedContentHash: existing.contentHash,
+      content: 'after',
+      now: NOW,
+    })).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+  });
+
+  it('maps a file disappearing during conditional update to a version conflict', async () => {
+    class MissingFileManager extends FakeManager {
+      override async save(): Promise<void> {
+        const error = new Error('missing during CAS') as NodeJS.ErrnoException;
+        error.code = 'ENOENT';
+        throw error;
+      }
+    }
+    const manager = new MissingFileManager(SKILLS_TYPE, [{
+      metadata: { name: MUTABLE_SKILL, description: 'Before' },
+      body: 'before',
+    }]);
+    const store = new ManagerBackedPortfolioElementStore({
+      managers: managersWith(manager, SKILLS_TYPE),
+      getCurrentUserId: () => USER_ID,
+    });
+    const existing = await store.findByName(USER_ID, SKILLS_TYPE, 'mutable-skill');
+    if (!existing?.contentHash) throw new Error('expected content hash');
+
+    await expect(store.update({
+      userId: USER_ID,
+      type: SKILLS_TYPE,
+      canonicalName: 'mutable-skill',
+      expectedVersion: 1,
+      expectedContentHash: existing.contentHash,
+      content: 'after',
+      now: NOW,
+    })).rejects.toBeInstanceOf(PortfolioElementVersionConflictError);
+  });
+
+  it('uses the filesystem mutation guard across independent manager instances', async () => {
+    const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-backed-shared-portfolio-'));
+    cleanupDirs.push(portfolioDir);
+    const firstStore = createRealStoreAt(portfolioDir);
+    const secondStore = createRealStoreAt(portfolioDir);
+    const created = await firstStore.create(elementInput(
+      SKILLS_TYPE,
+      MUTABLE_SKILL,
+      'before',
+      { description: 'Before' },
+    ));
+    const current = await firstStore.findByName(USER_ID, SKILLS_TYPE, created.canonicalName);
+    if (!current?.contentHash) throw new Error('expected content hash');
+
+    const results = await Promise.allSettled([firstStore, secondStore].map((store, index) => store.update({
+      userId: USER_ID,
+      type: SKILLS_TYPE,
+      canonicalName: created.canonicalName,
+      expectedVersion: 1,
+      expectedContentHash: current.contentHash,
+      content: `writer-${index}`,
+      now: NOW,
+    })));
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+    expect(results.find(result => result.status === 'rejected')).toMatchObject({
+      reason: expect.any(PortfolioElementVersionConflictError),
+    });
+  });
+
+  it('allows an update from the exact hand-formatted bytes that were loaded', async () => {
+    const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-backed-hand-formatted-'));
+    cleanupDirs.push(portfolioDir);
+    const skillDir = path.join(portfolioDir, 'skills');
+    fs.mkdirSync(skillDir, { recursive: true });
+    const originalRaw = [
+      '---',
+      'name: Hand Formatted',
+      'description:   Kept with unusual spacing',
+      'version: 1.0.0',
+      'author: tester',
+      'tags: [formatting]',
+      '---',
+      '',
+      'original body',
+    ].join('\n');
+    fs.writeFileSync(path.join(skillDir, 'hand-formatted.md'), originalRaw);
+    const store = createRealStoreAt(portfolioDir);
+    const loaded = await store.findByName(USER_ID, SKILLS_TYPE, 'hand-formatted');
+    if (!loaded?.contentHash) throw new Error('expected loaded content hash');
+
+    await expect(store.update({
+      userId: USER_ID,
+      type: SKILLS_TYPE,
+      canonicalName: 'hand-formatted',
+      expectedVersion: 1,
+      expectedContentHash: loaded.contentHash,
+      content: 'updated body',
+      now: NOW,
+    })).resolves.toBeTruthy();
+    expect(fs.readFileSync(path.join(skillDir, 'hand-formatted.md'), 'utf8')).not.toBe(originalRaw);
+  });
+
+  it('renames a file-backed element without leaving the old path behind', async () => {
+    const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-backed-rename-'));
+    cleanupDirs.push(portfolioDir);
+    const store = createRealStoreAt(portfolioDir);
+    const created = await store.create(elementInput(
+      SKILLS_TYPE,
+      'Original Skill',
+      'body',
+      { description: 'rename me' },
+    ));
+
+    const updated = await store.update({
+      userId: USER_ID,
+      type: SKILLS_TYPE,
+      canonicalName: created.canonicalName,
+      expectedVersion: 1,
+      expectedContentHash: created.contentHash,
+      displayName: 'Renamed Skill',
+      now: NOW,
+    });
+
+    expect(updated).toMatchObject({ name: 'Renamed Skill' });
+    expect(fs.existsSync(path.join(portfolioDir, 'skills', 'original-skill.md'))).toBe(false);
+    expect(fs.existsSync(path.join(portfolioDir, 'skills', 'renamed-skill.md'))).toBe(true);
+    await expect(store.findByName(USER_ID, SKILLS_TYPE, 'original-skill')).resolves.toBeNull();
+    await expect(store.findByName(USER_ID, SKILLS_TYPE, 'renamed-skill'))
+      .resolves.toMatchObject({ name: 'Renamed Skill' });
+  });
+
+  it('atomically rejects one of two cross-replica creates for the same file path', async () => {
+    const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-backed-create-race-'));
+    cleanupDirs.push(portfolioDir);
+    const stores = [createRealStoreAt(portfolioDir), createRealStoreAt(portfolioDir)];
+    const results = await Promise.allSettled(stores.map(store => store.create(elementInput(
+      SKILLS_TYPE,
+      'Replica Create',
+      'body',
+      { description: 'only one' },
+    ))));
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+  });
+
   it('projects elements exported by the real element managers for all console portfolio types', async () => {
     const store = createRealStore(cleanupDirs);
 
@@ -178,6 +396,22 @@ describe('ManagerBackedPortfolioElementStore', () => {
       expect.objectContaining({ type: 'memories', name: 'Real Memory', contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
       expect.objectContaining({ type: 'ensembles', name: 'Real Ensemble', contentHash: expect.stringMatching(/^[a-f0-9]{64}$/u) }),
     ]));
+  });
+
+  it('preserves structured memory entries containing code-like text', async () => {
+    const store = createRealStore(cleanupDirs);
+    const codeLikeContent = "Explain require('./module'), eval(example), and file:// references.";
+    const structuredMemory = `metadata:\n  description: Code reference memory\nentries:\n  - id: mem_code_reference\n    content: ${JSON.stringify(codeLikeContent)}\n    timestamp: ${NOW.toISOString()}\n`;
+
+    const created = await store.create(elementInput(
+      'memories',
+      'Code Reference Memory',
+      structuredMemory,
+      { description: 'Code reference memory' },
+    ));
+
+    expect(created.content).toContain('mem_code_reference');
+    expect(created.content).toContain(codeLikeContent);
   });
 
   it('updates and deletes real manager-backed elements for all console portfolio types', async () => {
@@ -231,6 +465,10 @@ describe('ManagerBackedPortfolioElementStore', () => {
 function createRealStore(cleanupDirs: string[]): ManagerBackedPortfolioElementStore {
   const portfolioDir = fs.mkdtempSync(path.join(os.tmpdir(), 'manager-backed-portfolio-'));
   cleanupDirs.push(portfolioDir);
+  return createRealStoreAt(portfolioDir);
+}
+
+function createRealStoreAt(portfolioDir: string): ManagerBackedPortfolioElementStore {
   const suite = createRealManagerSuite(portfolioDir);
   return new ManagerBackedPortfolioElementStore({
     managers: {

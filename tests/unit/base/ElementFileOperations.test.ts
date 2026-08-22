@@ -1,6 +1,7 @@
 import { describe, it, beforeEach, afterEach, expect, jest } from '@jest/globals';
 import { ElementFileOperations } from '../../../src/elements/base/ElementFileOperations.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 import type { IFileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { promises as fs } from 'fs';
 import * as os from 'os';
@@ -77,7 +78,7 @@ describe('ElementFileOperations', () => {
     expect(result.content.trim()).toBe('Body text');
     expect(readMock).toHaveBeenCalledWith(fullPath, {
       encoding: 'utf-8',
-      maxSize: 1024 * 1024,
+      maxSize: SECURITY_LIMITS.MAX_FILE_SIZE,
       source: 'ElementFileOperations.readFileWithFrontmatter',
     });
   });

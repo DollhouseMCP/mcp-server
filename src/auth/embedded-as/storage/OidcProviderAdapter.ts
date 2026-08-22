@@ -13,26 +13,20 @@
  * the library boundary stays clean.
  *
  * **Refresh-token rotation grace window (R3 / spec L926).**
- * oidc-provider's Adapter contract is find-then-consume returning
- * Promise<void>; even though our storage layer's genericConsume CAS
- * tells us when a concurrent consume lost, that signal can't be
- * communicated upstream. Two truly-concurrent token redeems can both
- * pass `find()` before either consume completes. To prevent legitimate
- * concurrent rotations from tripping reuse-detection (which would log
- * the user out), the adapter implements the industry-standard grace
- * window: after a consume(), the consumed marker is HIDDEN from
- * subsequent find() calls for `graceWindowMs`. After the window
- * elapses, the marker becomes visible and oidc-provider triggers
- * `revokeByGrantId` on replay — preserving §6.1 reuse-detection for
- * actual token theft. Window applies ONLY to RefreshToken;
- * AuthorizationCode is single-use by spec and grace would weaken its
- * security guarantee. Default 30s, configurable.
+ * oidc-provider's Adapter contract is find-then-consume, so a storage CAS alone
+ * cannot stop two requests that both complete find() before either consume().
+ * The adapter therefore creates one durable redemption claim per parent token.
+ * The winner publishes a canonical successor; grace-period retries receive
+ * aliases to that same successor. No retry can create an independent refresh
+ * lineage. After the window, the consumed marker is visible and oidc-provider
+ * invokes normal family replay detection. AuthorizationCode remains strictly
+ * single-use. Default grace: 30 seconds, configurable.
  *
  * @module auth/embedded-as/storage/OidcProviderAdapter
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createHash, createHmac } from 'node:crypto';
+import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { logger } from '../../../utils/logger.js';
 import type { IAuthStorageLayer } from './IAuthStorageLayer.js';
 
@@ -48,6 +42,28 @@ export const DEFAULT_REFRESH_ROTATION_GRACE_MS = 30_000;
 
 /** Models that get the rotation grace treatment. RefreshToken only. */
 const GRACE_ELIGIBLE_MODELS = new Set(['RefreshToken']);
+const REFRESH_REDEMPTION_MODEL = 'DollhouseRefreshRedemption';
+const REFRESH_ALIAS_FIELD = '__dollhouseCanonicalRefreshTokenId';
+const REFRESH_REDEMPTION_INITIAL_POLL_MS = 10;
+const REFRESH_REDEMPTION_MAX_POLL_MS = 250;
+const REFRESH_REDEMPTION_MAX_POLLS = 128;
+
+interface RefreshRedemptionRecord {
+  readonly state: 'pending' | 'succeeded' | 'failed';
+  readonly ownerId: string;
+  readonly createdAt: number;
+  readonly successorId?: string;
+}
+
+interface RefreshRedemptionRequestState {
+  readonly parentId: string;
+  readonly ownerId: string;
+  readonly role: 'owner' | 'replay';
+  readonly createdAt: number;
+  readonly expiresAt: number;
+  readonly canonicalSuccessorId?: string;
+  successorPublished: boolean;
+}
 
 /**
  * Per-request context for the optional IP/UA-bound rotation grace
@@ -70,11 +86,15 @@ const GRACE_ELIGIBLE_MODELS = new Set(['RefreshToken']);
  * path remains available (passing salt=undefined).
  */
 export interface RotationRequestContext {
-  ipHash: string;
-  uaHash: string;
+  ipHash?: string;
+  uaHash?: string;
 }
 
-const requestContextStore = new AsyncLocalStorage<RotationRequestContext>();
+interface InternalRotationRequestContext extends RotationRequestContext {
+  refreshRedemption?: RefreshRedemptionRequestState;
+}
+
+const requestContextStore = new AsyncLocalStorage<InternalRotationRequestContext>();
 
 /**
  * Hash a value for use as `ipHash` or `uaHash` in the rotation
@@ -109,12 +129,35 @@ export function withRotationRequestContext<T>(
   context: RotationRequestContext,
   fn: () => T,
 ): T {
-  return requestContextStore.run(context, fn);
+  return requestContextStore.run({ ...context }, fn);
 }
 
 /** Read the current request context, if any. Returns undefined outside a wrapped call. */
 export function currentRotationRequestContext(): RotationRequestContext | undefined {
   return requestContextStore.getStore();
+}
+
+/**
+ * Release an unfinished refresh-token redemption claim at the end of a token
+ * request. A provider failure must not strand a pending claim for the full
+ * grace window and make an ordinary client retry look like a replay.
+ */
+export async function finalizeRotationRequestContext(storage: IAuthStorageLayer): Promise<void> {
+  const redemption = requestContextStore.getStore()?.refreshRedemption;
+  if (!redemption || redemption.role !== 'owner' || redemption.successorPublished) return;
+  const pending = pendingRedemption(redemption.ownerId, redemption.createdAt);
+  const failed: RefreshRedemptionRecord = {
+    state: 'failed',
+    ownerId: redemption.ownerId,
+    createdAt: pending.createdAt,
+  };
+  await storage.genericCompareAndSet(
+    REFRESH_REDEMPTION_MODEL,
+    redemption.parentId,
+    pending,
+    failed,
+    1,
+  );
 }
 
 export interface OidcProviderAdapterOptions {
@@ -171,6 +214,26 @@ export class OidcProviderAdapter {
   }
 
   async upsert(id: string, payload: Record<string, unknown>, expiresIn?: number): Promise<void> {
+    const redemption = requestContextStore.getStore()?.refreshRedemption;
+    if (this.model === 'RefreshToken' && redemption) {
+      const now = await this.authorityNow();
+      if (redemption.role === 'replay') {
+        if (now >= redemption.expiresAt) {
+          throw new Error('refresh-token replay grace expired before alias publication');
+        }
+        if (!redemption.canonicalSuccessorId) {
+          throw new Error('refresh-token replay is missing its canonical successor');
+        }
+        await this.storage.genericSet(this.model, id, {
+          [REFRESH_ALIAS_FIELD]: redemption.canonicalSuccessorId,
+        }, expiresIn);
+        return;
+      }
+      if (now >= redemption.expiresAt) {
+        throw new Error('refresh-token redemption claim expired before successor publication');
+      }
+    }
+
     // Round 5 / H1: when the operator opts into IP/UA-bound grace, stamp
     // the originating request's hashes onto the RefreshToken payload at
     // issue time. find() compares against the current request's hashes
@@ -215,18 +278,43 @@ export class OidcProviderAdapter {
       }
     }
     await this.storage.genericSet(this.model, id, payload, expiresIn);
+
+    if (this.model === 'RefreshToken' && redemption?.role === 'owner') {
+      const pending = pendingRedemption(
+        redemption.ownerId,
+        redemption.createdAt,
+      );
+      const succeeded: RefreshRedemptionRecord = {
+        ...pending,
+        state: 'succeeded',
+        successorId: id,
+      };
+      const published = await this.storage.genericCompareAndSet(
+        REFRESH_REDEMPTION_MODEL,
+        redemption.parentId,
+        pending,
+        succeeded,
+        this.redemptionTtlSeconds(),
+      );
+      if (!published) {
+        await this.storage.genericDestroy(this.model, id);
+        throw new Error('refresh-token redemption claim was lost before successor publication');
+      }
+      redemption.successorPublished = true;
+    }
   }
 
   async find(id: string): Promise<Record<string, unknown> | undefined> {
-    const payload = await this.storage.genericGet(this.model, id);
+    const canonicalId = this.model === 'RefreshToken'
+      ? await this.resolveCanonicalRefreshTokenId(id)
+      : id;
+    const payload = await this.storage.genericGet(this.model, canonicalId);
     if (!payload) return undefined;
     const record = payload as Record<string, unknown>;
 
-    // Rotation grace (R3): for refresh tokens within the grace window
-    // after first consume, hide the `consumed` marker so oidc-provider
-    // issues new rotated tokens instead of revoking the family. After
-    // the window expires, the marker becomes visible and reuse-detection
-    // fires normally on the next find().
+    // Rotation grace (R3): serialize refresh redemption and make later
+    // grace-period requests reuse the winner's canonical successor. After the
+    // window, return the consumed marker so oidc-provider revokes on replay.
     //
     // Round 5 / H1: when refreshRotationCheckIpUa is true AND the
     // payload carries ipHash/uaHash from issue time, the grace window
@@ -234,15 +322,8 @@ export class OidcProviderAdapter {
     // Mismatch = no grace = reuse-detection fires. When the option is
     // false (default), the time-only check matches Auth0 / better-auth
     // / industry norm and avoids false positives from NAT/CGNAT.
-    if (
-      this.graceMs > 0
-      && GRACE_ELIGIBLE_MODELS.has(this.model)
-      && typeof record.consumed === 'number'
-      && Date.now() - record.consumed < this.graceMs
-      && this.ipUaGraceAllowed(record)
-    ) {
-      const { consumed: _consumed, ...withoutConsumed } = record;
-      return withoutConsumed;
+    if (this.graceMs > 0 && GRACE_ELIGIBLE_MODELS.has(this.model)) {
+      return this.findRefreshTokenForRedemption(canonicalId, record);
     }
 
     return record;
@@ -279,12 +360,129 @@ export class OidcProviderAdapter {
     // §6.1 reuse-detection. genericConsume on our storage layer marks
     // the payload while leaving the record findable.
     //
-    // Note: genericConsume's CAS-loss boolean is intentionally
-    // discarded — oidc-provider's Adapter API is Promise<void>, so we
-    // can't propagate "you lost the race" upstream. The grace window
-    // in find() above absorbs the concurrent-redeem case so the lost
-    // CAS doesn't matter for legitimate users.
-    await this.storage.genericConsume(this.model, id);
+    // genericConsume's CAS-loss boolean is intentionally discarded because the
+    // durable redemption claim already determines which request owns the one
+    // canonical successor; retry aliases consume that same canonical record.
+    const canonicalId = this.model === 'RefreshToken'
+      ? await this.resolveCanonicalRefreshTokenId(id)
+      : id;
+    await this.storage.genericConsume(this.model, canonicalId);
+  }
+
+  private async findRefreshTokenForRedemption(
+    canonicalId: string,
+    record: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    const requestContext = requestContextStore.getStore();
+    if (!requestContext) return record;
+
+    const now = await this.authorityNow();
+    const consumedAt = typeof record.consumed === 'number' ? record.consumed : null;
+    if (consumedAt !== null && (
+      now - consumedAt >= this.graceMs
+      || !this.ipUaGraceAllowed(record)
+    )) {
+      return record;
+    }
+
+    const existingRequest = requestContext.refreshRedemption;
+    if (existingRequest) {
+      return existingRequest.parentId === canonicalId
+        ? withoutConsumed(record)
+        : record;
+    }
+
+    const createdAt = now;
+    const expiresAt = (consumedAt ?? createdAt) + this.graceMs;
+    const ownerId = randomUUID();
+    let pending = pendingRedemption(ownerId, createdAt);
+    let ownsClaim = await this.storage.genericInsertIfAbsent(
+      REFRESH_REDEMPTION_MODEL,
+      canonicalId,
+      pending,
+      this.redemptionTtlSeconds(),
+    );
+    let pollDelayMs = REFRESH_REDEMPTION_INITIAL_POLL_MS;
+    let pollCount = 0;
+
+    while (!ownsClaim && pollCount < REFRESH_REDEMPTION_MAX_POLLS) {
+      if (await this.authorityNow() >= expiresAt) break;
+      pollCount += 1;
+      const current = parseRedemptionRecord(
+        await this.storage.genericGet(REFRESH_REDEMPTION_MODEL, canonicalId),
+      );
+      if (!current) {
+        pending = pendingRedemption(ownerId, createdAt);
+        ownsClaim = await this.storage.genericInsertIfAbsent(
+          REFRESH_REDEMPTION_MODEL,
+          canonicalId,
+          pending,
+          this.redemptionTtlSeconds(),
+        );
+      } else if (!this.ipUaGraceAllowed(record)) {
+        return { ...record, consumed: consumedAt ?? current.createdAt };
+      } else if (current.state === 'failed') {
+        ownsClaim = await this.storage.genericCompareAndSet(
+          REFRESH_REDEMPTION_MODEL,
+          canonicalId,
+          current,
+          pending,
+          this.redemptionTtlSeconds(),
+        );
+      } else if (current.state === 'succeeded' && current.successorId) {
+        requestContext.refreshRedemption = {
+          parentId: canonicalId,
+          ownerId: current.ownerId,
+          role: 'replay',
+          createdAt: current.createdAt,
+          expiresAt,
+          canonicalSuccessorId: current.successorId,
+          successorPublished: true,
+        };
+        return withoutConsumed(record);
+      }
+      if (!ownsClaim) {
+        await delay(pollDelayMs);
+        pollDelayMs = Math.min(pollDelayMs * 2, REFRESH_REDEMPTION_MAX_POLL_MS);
+      }
+    }
+
+    if (ownsClaim) {
+      requestContext.refreshRedemption = {
+        parentId: canonicalId,
+        ownerId,
+        role: 'owner',
+        createdAt,
+        expiresAt,
+        successorPublished: false,
+      };
+      return withoutConsumed(record);
+    }
+
+    const latest = await this.storage.genericGet(this.model, canonicalId);
+    const failedAt = await this.authorityNow();
+    if (latest && typeof latest === 'object') {
+      const latestRecord = latest as Record<string, unknown>;
+      return typeof latestRecord.consumed === 'number'
+        ? latestRecord
+        : { ...latestRecord, consumed: failedAt };
+    }
+    return { ...record, consumed: failedAt };
+  }
+
+  private async resolveCanonicalRefreshTokenId(id: string): Promise<string> {
+    const payload = await this.storage.genericGet('RefreshToken', id);
+    if (!payload || typeof payload !== 'object') return id;
+    const canonicalId = (payload as Record<string, unknown>)[REFRESH_ALIAS_FIELD];
+    return typeof canonicalId === 'string' && canonicalId.length > 0 ? canonicalId : id;
+  }
+
+  private redemptionTtlSeconds(): number {
+    return Math.max(1, Math.ceil((this.graceMs + 1_000) / 1_000));
+  }
+
+  private authorityNow(): Promise<number> {
+    return this.storage.genericNow?.() ?? Promise.resolve(Date.now());
   }
 
   async findByUserCode(userCode: string): Promise<Record<string, unknown> | undefined> {
@@ -300,13 +498,47 @@ export class OidcProviderAdapter {
   }
 
   async destroy(id: string): Promise<void> {
-    await this.storage.genericDestroy(this.model, id);
+    if (this.model !== 'RefreshToken') {
+      await this.storage.genericDestroy(this.model, id);
+      return;
+    }
+    const canonicalId = await this.resolveCanonicalRefreshTokenId(id);
+    await this.storage.genericDestroy(this.model, canonicalId);
+    if (canonicalId !== id) await this.storage.genericDestroy(this.model, id);
   }
 
   async revokeByGrantId(grantId: string): Promise<void> {
     if (!this.storage.genericRevokeByGrantId) return;
     await this.storage.genericRevokeByGrantId(grantId);
   }
+}
+
+function pendingRedemption(ownerId: string, createdAt: number): RefreshRedemptionRecord {
+  return { state: 'pending', ownerId, createdAt };
+}
+
+function parseRedemptionRecord(value: unknown): RefreshRedemptionRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  if ((record.state !== 'pending' && record.state !== 'succeeded' && record.state !== 'failed')
+      || typeof record.ownerId !== 'string'
+      || typeof record.createdAt !== 'number') return null;
+  if (record.state === 'succeeded' && typeof record.successorId !== 'string') return null;
+  return {
+    state: record.state,
+    ownerId: record.ownerId,
+    createdAt: record.createdAt,
+    ...(typeof record.successorId === 'string' ? { successorId: record.successorId } : {}),
+  };
+}
+
+function withoutConsumed(record: Record<string, unknown>): Record<string, unknown> {
+  const { consumed: _consumed, ...remaining } = record;
+  return remaining;
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, milliseconds));
 }
 
 /**

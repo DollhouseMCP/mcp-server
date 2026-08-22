@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { json, Router } from 'express';
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 
 import { logger } from '../../utils/logger.js';
@@ -21,6 +21,7 @@ import type { IConsoleAuthPolicyStore } from '../stores/IConsoleAuthPolicyStore.
 import type { IIdempotencyStore } from '../stores/IIdempotencyStore.js';
 import type { IRuntimeSessionControlStore } from '../services/runtime/IRuntimeSessionControlStore.js';
 import type { ConsoleProtectedCorrelationRateLimiter } from '../services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
+import type { ConsoleCollectionFetchRateLimiter } from '../services/rate-limit/ConsoleCollectionFetchRateLimiter.js';
 import type { ConsoleHttpMethod, ConsoleRouteDefinition , ConsoleRequest } from './ConsolePlatformTypes.js';
 import { isElevationValidForRoute } from './ConsolePlatformTypes.js';
 import type { ConsoleModuleRegistry } from './ConsoleModuleRegistry.js';
@@ -44,7 +45,9 @@ export interface SecuredConsoleRouterOptions {
   readonly runtimeStore: IRuntimeSessionControlStore;
   readonly authPolicyStore?: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter?: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly collectionFetchRateLimiter?: ConsoleCollectionFetchRateLimiter | null;
   readonly idleTimeoutMs: number;
+  readonly bodyLimitBytes?: number;
   readonly now?: () => Date;
   readonly reportInternalError?: (error: unknown, correlationId: string) => void;
   readonly userContext?: ConsoleUserContextOptions;
@@ -59,6 +62,7 @@ export function assembleSecuredConsoleRouter(
   router.use(createConsoleSecurityHeadersMiddleware());
   const authenticate = createConsoleAuthenticationMiddleware(options);
   const csrf = createConsoleCsrfProtectionMiddleware(options);
+  const parseBody = json({ limit: options.bodyLimitBytes ?? 1024 * 1024 });
   const normalizeBody = createConsoleUnicodeNormalizationMiddleware({ params: false, query: false, body: 'keys' });
   const userContext = options.userContext
     ? createConsoleUserContextMiddleware(options.userContext)
@@ -69,6 +73,7 @@ export function assembleSecuredConsoleRouter(
       registerSecuredRoute(router, route, middlewareForRoute({
         route,
         options,
+        parseBody,
         normalizeBody,
         authenticate,
         userContext,
@@ -82,6 +87,11 @@ export function assembleSecuredConsoleRouter(
       return;
     }
     const correlationId = requireConsoleRequestContext(request as ConsoleRequest).correlationId;
+    const bodyParserProblem = problemForJsonBodyError(error);
+    if (bodyParserProblem) {
+      sendProblemResponse(response, bodyParserProblem, correlationId);
+      return;
+    }
     const knownProblem = problemForConsoleError(error);
     if (knownProblem) {
       sendProblemResponse(response, knownProblem, correlationId);
@@ -113,9 +123,37 @@ export function assembleSecuredConsoleRouter(
   return router;
 }
 
+function problemForJsonBodyError(error: unknown): {
+  readonly status: 400 | 413;
+  readonly code: 'invalid_json' | 'request_body_too_large';
+  readonly title: string;
+  readonly detail: string;
+} | null {
+  if (!error || typeof error !== 'object') return null;
+  const type = (error as { readonly type?: unknown }).type;
+  if (type === 'entity.too.large') {
+    return {
+      status: 413,
+      code: 'request_body_too_large',
+      title: 'Request body too large',
+      detail: 'The console request body exceeds the configured limit.',
+    };
+  }
+  if (type === 'entity.parse.failed') {
+    return {
+      status: 400,
+      code: 'invalid_json',
+      title: 'Invalid JSON',
+      detail: 'The console request body is not valid JSON.',
+    };
+  }
+  return null;
+}
+
 function middlewareForRoute(input: {
   readonly route: ConsoleRouteDefinition;
   readonly options: SecuredConsoleRouterOptions;
+  readonly parseBody: RequestHandler;
   readonly normalizeBody: RequestHandler;
   readonly authenticate: RequestHandler;
   readonly userContext: RequestHandler | null;
@@ -136,12 +174,13 @@ function middlewareForRoute(input: {
     normalizeRequestTarget,
     ...(input.route.responseKind === 'sse' ? [createConsoleStreamRequestProtectionMiddleware(input.route, input.options)] : []),
     input.authenticate,
-    input.normalizeBody,
     ...(input.userContext ? [input.userContext] : []),
     input.csrf,
     createConsoleAuthorizationMiddleware(input.route, input.options),
     createConsoleOwnershipMiddleware(input.route, input.options),
     createConsoleRateLimitMiddleware(input.route, input.options),
+    input.parseBody,
+    input.normalizeBody,
     createSecuredHandler(input.route, input.options),
   ];
 }
@@ -199,8 +238,8 @@ function singleHeader(value: string | string[] | undefined): string | undefined 
 
 /**
  * This executes privacy-projected routes and audit-writes authorized attempts.
- * Administrative mutations remain unmounted until their domain write and
- * mandatory durable audit append can share an atomic application transaction.
+ * Routes marked handler_transaction own their successful mutation audit inside
+ * the same domain transaction; the kernel retains failed-attempt auditing.
  */
 function createSecuredHandler(
   route: ConsoleRouteDefinition,

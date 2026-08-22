@@ -182,9 +182,15 @@ export class PersonaHandler {
    * Extracted from index.ts:633-648
    */
   async deactivatePersona() {
-    const wasActive = this.activePersona.get() !== null;
+    const activeIdentifier = this.activePersona.get();
+    const wasActive = activeIdentifier !== null;
     const indicator = this.indicatorService.getPersonaIndicator();
-    this.activePersona.set(null);
+    if (activeIdentifier) {
+      const result = this.personaManager.deactivatePersona(activeIdentifier);
+      if (!result.success) {
+        return { content: [{ type: 'text', text: `${indicator}Persona deactivation failed: ${result.message}` }] };
+      }
+    }
 
     return {
       content: [

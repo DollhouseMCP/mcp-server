@@ -315,7 +315,7 @@ describe('ExecutionModule', () => {
       data: { status: 'closed' },
     });
 
-    await runtimeStore.markPresenceClosing(SESSION_ID, NOW);
+    await runtimeStore.markPresenceClosing(SESSION_ID, 'replica-a', NOW);
     await expect(result.stream?.revalidate?.()).resolves.toBe(false);
   });
 

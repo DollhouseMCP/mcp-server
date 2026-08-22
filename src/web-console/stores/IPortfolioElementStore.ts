@@ -117,8 +117,8 @@ export const CONSOLE_PORTFOLIO_ELEMENT_TYPES = [
   'ensembles',
 ] as const satisfies readonly ConsolePortfolioElementType[];
 
-export const PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES = 1_048_576;
-export const PORTFOLIO_ELEMENT_METADATA_MAX_BYTES = 65_536;
+export const PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES = 10 * 1024 * 1024;
+export const PORTFOLIO_ELEMENT_METADATA_MAX_BYTES = 1024 * 1024;
 export const PORTFOLIO_ELEMENT_TAGS_MAX = 50;
 
 export function isConsolePortfolioElementType(value: string): value is ConsolePortfolioElementType {
@@ -176,7 +176,9 @@ export function validatePortfolioElementDetailRecord(record: ConsolePortfolioEle
     throw new ConsoleStoreValidationError('content must be a string');
   }
   if (Buffer.byteLength(record.content, 'utf8') > PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES) {
-    throw new ConsoleStoreValidationError('content must be at most 1 MiB');
+    throw new ConsoleStoreValidationError(
+      `content must be at most ${PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES / (1024 * 1024)} MiB`,
+    );
   }
 }
 

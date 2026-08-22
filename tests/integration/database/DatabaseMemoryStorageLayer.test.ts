@@ -7,14 +7,11 @@
 import { DatabaseMemoryStorageLayer } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
 import { buildMemoryContent, cleanupAllTestData, closeTestDb, ensureTestUser, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
-let dbAvailable = false;
-
-beforeAll(async () => {
-  dbAvailable = await isDatabaseAvailable();
-  if (!dbAvailable) {
-    console.warn('Skipping DatabaseMemoryStorageLayer tests — PostgreSQL not available');
-  }
-});
+const dbAvailable = await isDatabaseAvailable();
+const databaseIt = dbAvailable ? it : it.skip;
+if (!dbAvailable) {
+  console.warn('Skipping DatabaseMemoryStorageLayer tests — PostgreSQL not available');
+}
 
 afterEach(async () => {
   if (dbAvailable) await cleanupAllTestData();
@@ -27,8 +24,7 @@ afterAll(async () => {
 describe('DatabaseMemoryStorageLayer', () => {
   // ── writeContent + readContent ────────────────────────────────────
 
-  it('should write and read back memory content', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should write and read back memory content', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -46,8 +42,7 @@ describe('DatabaseMemoryStorageLayer', () => {
 
   // ── Entry sync (within same transaction) ──────────────────────────
 
-  it('should sync entries from YAML content atomically', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should sync entries from YAML content atomically', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -66,12 +61,11 @@ describe('DatabaseMemoryStorageLayer', () => {
     expect(entries[0].content).toBeTruthy();
   });
 
-  it('should sync entries for memories whose YAML exceeds 64KB (#2329)', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should sync entries for memories whose YAML exceeds 64KB (#2329)', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
-    // Issue #2329: memories up to MAX_YAML_SIZE (256KB) are valid; entry sync
+    // Issue #2329/#2473: memories up to MAX_YAML_SIZE are valid; entry sync
     // previously parsed with a 64KB frontmatter cap and silently skipped,
     // leaving memory_entries stale while the element row persisted.
     const bigText = 'research finding lorem ipsum dolor sit amet '.repeat(400);
@@ -93,8 +87,7 @@ describe('DatabaseMemoryStorageLayer', () => {
     expect(summary?.totalEntries).toBe(6);
   });
 
-  it('should replace entries on update (not duplicate)', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should replace entries on update (not duplicate)', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -119,10 +112,83 @@ describe('DatabaseMemoryStorageLayer', () => {
     expect(entries.map(e => e.entryId).sort((a, b) => a.localeCompare(b))).toEqual(['e1', 'e3']);
   });
 
+  databaseIt('rolls back the canonical row and entries when updated memory YAML cannot be parsed', async () => {
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('rollback-memory', [
+      { id: 'original-entry', content: 'must survive' },
+    ]);
+    const elementId = await layer.writeContent('memories', 'rollback-memory', original, {
+      author: '', version: '1.0.0', description: 'original', tags: [],
+    });
+
+    await expect(layer.writeContent(
+      'memories',
+      'rollback-memory',
+      'metadata: [unterminated\nentries: []',
+      { author: '', version: '2.0.0', description: 'bad update', tags: [] },
+    )).rejects.toThrow();
+
+    await expect(layer.readContent(elementId)).resolves.toBe(original);
+    const entries = await layer.getEntries(elementId);
+    expect(entries.map(entry => entry.entryId)).toEqual(['original-entry']);
+    expect(entries[0]?.content).toBe('must survive');
+  });
+
+  databaseIt('rolls back instead of retaining stale normalized entries when entries is not an array', async () => {
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('invalid-entries-memory', [
+      { id: 'original-entry', content: 'must survive' },
+    ]);
+    const elementId = await layer.writeContent('memories', 'invalid-entries-memory', original, {
+      author: '', version: '1.0.0', description: 'original', tags: [],
+    });
+
+    const invalidUpdate = [
+      'metadata:',
+      '  name: invalid-entries-memory',
+      'entries:',
+      '  unexpected: object',
+      '',
+    ].join('\n');
+    await expect(layer.writeContent('memories', 'invalid-entries-memory', invalidUpdate, {
+      author: '', version: '2.0.0', description: 'bad update', tags: [],
+    })).rejects.toThrow('Memory entries must be an array');
+
+    await expect(layer.readContent(elementId)).resolves.toBe(original);
+    await expect(layer.getEntries(elementId)).resolves.toEqual([
+      expect.objectContaining({ entryId: 'original-entry', content: 'must survive' }),
+    ]);
+  });
+
+  databaseIt('treats an omitted entries section as an empty replacement', async () => {
+    const userId = await ensureTestUser();
+    const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
+    const original = buildMemoryContent('entries-removed-memory', [
+      { id: 'old-entry', content: 'must be removed' },
+    ]);
+    const elementId = await layer.writeContent('memories', 'entries-removed-memory', original, {
+      author: '', version: '1.0.0', description: 'original', tags: [],
+    });
+
+    const withoutEntries = [
+      'name: entries-removed-memory',
+      'description: replacement without entries',
+      'version: 2.0.0',
+      '',
+    ].join('\n');
+    await layer.writeContent('memories', 'entries-removed-memory', withoutEntries, {
+      author: '', version: '2.0.0', description: 'replacement', tags: [],
+    });
+
+    await expect(layer.readContent(elementId)).resolves.toBe(withoutEntries);
+    await expect(layer.getEntries(elementId)).resolves.toEqual([]);
+  });
+
   // ── Entry-level operations ────────────────────────────────────────
 
-  it('should add individual entries', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should add individual entries', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -142,8 +208,7 @@ describe('DatabaseMemoryStorageLayer', () => {
     expect(entries.some(e => e.entryId === 'manual-1')).toBe(true);
   });
 
-  it('should remove individual entries', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should remove individual entries', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -162,8 +227,7 @@ describe('DatabaseMemoryStorageLayer', () => {
     expect(entries[0].entryId).toBe('keep');
   });
 
-  it('should upsert entries via addEntry (not duplicate)', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should upsert entries via addEntry (not duplicate)', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -187,8 +251,7 @@ describe('DatabaseMemoryStorageLayer', () => {
 
   // ── deleteContent ─────────────────────────────────────────────────
 
-  it('should cascade-delete entries when memory is deleted', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should cascade-delete entries when memory is deleted', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -207,8 +270,7 @@ describe('DatabaseMemoryStorageLayer', () => {
 
   // ── listSummaries with totalEntries ───────────────────────────────
 
-  it('should include totalEntries count in summaries', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should include totalEntries count in summaries', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -230,8 +292,7 @@ describe('DatabaseMemoryStorageLayer', () => {
 
   // ── purgeExpiredEntries ───────────────────────────────────────────
 
-  it('should purge expired entries', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should purge expired entries', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 
@@ -265,8 +326,7 @@ describe('DatabaseMemoryStorageLayer', () => {
 
   // ── Memory YAML without entries ───────────────────────────────────
 
-  it('should handle memory content with no entries section', async () => {
-    if (!dbAvailable) return;
+  databaseIt('should handle memory content with no entries section', async () => {
     const userId = await ensureTestUser();
     const layer = new DatabaseMemoryStorageLayer(getTestDb(), fixedUserId(userId));
 

@@ -1,4 +1,8 @@
 import { logger } from '../../utils/logger.js';
+import {
+  afterAgentReplacementCommit,
+  afterAgentReplacementRollback,
+} from '../../storage/AgentReplacementTransactionContext.js';
 
 export type TransactionAction = (error?: unknown) => Promise<void> | void;
 
@@ -23,7 +27,14 @@ export class ElementTransactionScope {
   async run(work: () => Promise<void>): Promise<void> {
     try {
       await work();
-      await this.executeActions(this.commitActions);
+      const commit = () => this.executeActions(this.commitActions);
+      const rollback = (error: unknown) => this.executeActions(this.rollbackActions, error);
+      const commitDeferred = afterAgentReplacementCommit(commit);
+      const rollbackDeferred = afterAgentReplacementRollback(rollback);
+      if (commitDeferred !== rollbackDeferred) {
+        throw new Error('Element transaction ambient lifecycle is incomplete');
+      }
+      if (!commitDeferred) await commit();
     } catch (error) {
       await this.executeActions(this.rollbackActions, error);
       throw error;

@@ -24,11 +24,23 @@ import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import type { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ElementTransactionScope } from './ElementTransactionScope.js';
-import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import {
+  type IStorageLayer,
+  isCompareAndSwapStorageLayer,
+  isWritableStorageLayer,
+  StorageAlreadyExistsError,
+  StorageVersionConflictError,
+} from '../../storage/IStorageLayer.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import type { ElementCache } from './ElementCache.js';
 import type { ElementEventCoordinator } from './ElementEventCoordinator.js';
 import type { ElementLoader, ElementTypeToContext } from './ElementLoader.js';
+import { withFilesystemInterprocessGuard } from '../../security/filesystemInterprocessGuard.js';
+import {
+  clearElementPersistenceRevision,
+  getElementPersistenceRevision,
+  recordElementPersistenceRevision,
+} from './ElementPersistenceRevision.js';
 
 /**
  * Host interface: the persister calls back into BaseElementManager for
@@ -93,10 +105,26 @@ export class ElementPersister<T extends IElement> {
    * Save an element to file or database.
    * Identical to the former BaseElementManager.save() body.
    */
-  async save(element: T, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+  async save(
+    element: T,
+    filePath: string,
+    options?: { exclusive?: boolean; durable?: boolean; expectedElement?: T },
+  ): Promise<void> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
+    const expectedRevision = options?.expectedElement
+      ? getElementPersistenceRevision(options.expectedElement)
+      : undefined;
+    if (options?.expectedElement && !expectedRevision) {
+      throw new StorageVersionConflictError();
+    }
+    const previousLocation = expectedRevision
+      ? await this.host.normalizeAndValidatePath(expectedRevision.relativePath)
+      : undefined;
+    const processLockPaths = previousLocation && previousLocation.absolutePath !== absolutePath
+      ? [previousLocation.absolutePath, absolutePath]
+      : [absolutePath];
 
-    await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+    await this.withProcessLocks(processLockPaths, async () => {
       const correlationId = randomUUID();
       const transaction = new ElementTransactionScope(this.host.getElementLabel(), correlationId);
 
@@ -120,12 +148,21 @@ export class ElementPersister<T extends IElement> {
 
       const isDbMode = isWritableStorageLayer(this.storageLayer);
       let savedRelativePath = relativePath;
+      let persistedContent = '';
 
       transaction.addCommit(async () => {
+        if (previousLocation && previousLocation.relativePath !== savedRelativePath) {
+          this.cache.uncacheByPath(previousLocation.relativePath);
+          if (!isDbMode) this.storageLayer.notifyDeleted(previousLocation.relativePath);
+        }
         this.cache.cacheElement(element, savedRelativePath);
         if (!isDbMode) {
           await this.storageLayer.notifySaved(savedRelativePath, absolutePath);
         }
+        recordElementPersistenceRevision(element, {
+          relativePath: savedRelativePath,
+          rawContent: persistedContent,
+        });
         this.events.eventDispatcher.emitAsync(
           'element:save:success',
           this.events.createEventPayload({ correlationId, filePath: savedRelativePath, element }),
@@ -146,50 +183,111 @@ export class ElementPersister<T extends IElement> {
         }
       });
 
-      await transaction.run(async () => {
+      const persist = () => transaction.run(async () => {
         if (this.host.beforeSave) {
           await this.host.beforeSave(element, relativePath);
         }
 
         const content = await this.host.serializeElement(element);
+        persistedContent = content;
         // Dispatch through the host so subclass overrides (e.g. MemoryManager) are called.
         this.host.validateSerializedContent(content);
 
         if (isDbMode) {
-          const elementId = await this.storageLayer.writeContent(
-            this.host.elementType,
-            element.metadata.name,
-            content,
-            {
-              author: element.metadata.author ?? '',
-              version: element.metadata.version ?? '1.0.0',
-              description: element.metadata.description,
-              tags: element.metadata.tags ?? [],
-            },
-            {
-              exclusive: options?.exclusive ?? false,
-              elementLabel: this.host.getElementLabelCapitalized(),
-            },
-          );
+          const metadata = {
+            author: element.metadata.author ?? '',
+            version: element.metadata.version ?? '1.0.0',
+            description: element.metadata.description,
+            tags: element.metadata.tags ?? [],
+          };
+          let elementId: string;
+          if (options?.expectedElement && isCompareAndSwapStorageLayer(this.storageLayer)) {
+            const expectedContent = expectedRevision!.rawContent;
+            elementId = expectedRevision!.relativePath;
+            if (!elementId || !await this.storageLayer.compareAndSwapContent(
+              this.host.elementType,
+              elementId,
+              element.metadata.name,
+              expectedContent,
+              content,
+              metadata,
+            )) {
+              throw new StorageVersionConflictError();
+            }
+          } else {
+            elementId = await this.storageLayer.writeContent(
+              this.host.elementType,
+              element.metadata.name,
+              content,
+              metadata,
+              {
+                exclusive: options?.exclusive ?? false,
+                elementLabel: this.host.getElementLabelCapitalized(),
+              },
+            );
+          }
           savedRelativePath = elementId;
+        } else if (options?.expectedElement) {
+          const expectedContent = expectedRevision!.rawContent;
+          const sourcePath = previousLocation!.absolutePath;
+          const currentContent = await this.fileOperations.readFile(sourcePath, { encoding: 'utf-8' });
+          if (currentContent !== expectedContent) throw new StorageVersionConflictError();
+          await this.fileOperations.createDirectory(path.dirname(absolutePath));
+          await this.host.createBackupBeforeSave(sourcePath);
+          if (sourcePath === absolutePath) {
+            await this.fileOperations.writeFile(absolutePath, content, {
+              encoding: 'utf-8',
+              durable: options?.durable,
+            });
+          } else {
+            if (await this.fileOperations.exists(absolutePath)) {
+              throw new StorageAlreadyExistsError(this.host.getElementLabelCapitalized(), element.metadata.name);
+            }
+            await this.fileOperations.renameFile(sourcePath, absolutePath);
+            try {
+              await this.fileOperations.writeFile(absolutePath, content, {
+                encoding: 'utf-8',
+                durable: options?.durable,
+              });
+            } catch (error) {
+              try {
+                await this.fileOperations.renameFile(absolutePath, sourcePath);
+                await this.fileOperations.writeFile(sourcePath, expectedContent, {
+                  encoding: 'utf-8',
+                  durable: options?.durable,
+                });
+              } catch (rollbackError) {
+                logger.error(`Failed to roll back ${this.host.getElementLabel()} rename`, rollbackError);
+              }
+              throw error;
+            }
+          }
         } else if (options?.exclusive) {
           await this.fileOperations.createDirectory(path.dirname(absolutePath));
           const created = await this.fileOperations.createFileExclusive(absolutePath, content, {
             source: `${this.host.constructor.name}.save`,
           });
           if (!created) {
-            throw new Error(`${this.host.getElementLabelCapitalized()} '${element.metadata.name}' already exists`);
+            throw new StorageAlreadyExistsError(this.host.getElementLabelCapitalized(), element.metadata.name);
           }
         } else {
           await this.fileOperations.createDirectory(path.dirname(absolutePath));
           await this.host.createBackupBeforeSave(absolutePath);
-          await this.fileOperations.writeFile(absolutePath, content, { encoding: 'utf-8' });
+          await this.fileOperations.writeFile(absolutePath, content, {
+            encoding: 'utf-8',
+            durable: options?.durable,
+          });
         }
 
         if (this.host.afterSave) {
           await this.host.afterSave(element, savedRelativePath);
         }
       });
+      if (!isDbMode && options?.expectedElement) {
+        await this.withFilesystemGuards(processLockPaths, persist);
+      } else {
+        await persist();
+      }
 
       logger.info(`${this.host.getElementLabelCapitalized()} saved: ${element.metadata.name}`);
     });
@@ -199,10 +297,17 @@ export class ElementPersister<T extends IElement> {
    * Delete an element from file or database.
    * Identical to the former BaseElementManager.delete() body.
    */
-  async delete(filePath: string): Promise<void> {
+  async delete(filePath: string, expectedElement?: T): Promise<void> {
     const { relativePath, absolutePath } = await this.host.normalizeAndValidatePath(filePath);
+    const expectedRevision = expectedElement
+      ? getElementPersistenceRevision(expectedElement)
+      : undefined;
+    if (expectedElement && !expectedRevision) throw new StorageVersionConflictError();
+    const persistedLocation = expectedRevision
+      ? await this.host.normalizeAndValidatePath(expectedRevision.relativePath)
+      : { relativePath, absolutePath };
 
-    await this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+    await this.fileLockManager.withLock(`element:${persistedLocation.absolutePath}`, async () => {
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_DELETED',
         severity: 'MEDIUM',
@@ -221,10 +326,11 @@ export class ElementPersister<T extends IElement> {
       const isDbMode = isWritableStorageLayer(this.storageLayer);
 
       transaction.addCommit(() => {
-        this.cache.uncacheByPath(relativePath);
+        this.cache.uncacheByPath(persistedLocation.relativePath);
         if (!isDbMode) {
-          this.storageLayer.notifyDeleted(relativePath);
+          this.storageLayer.notifyDeleted(persistedLocation.relativePath);
         }
+        if (expectedElement) clearElementPersistenceRevision(expectedElement);
         this.events.eventDispatcher.emitAsync(
           'element:delete:success',
           this.events.createEventPayload({ correlationId, filePath: relativePath }),
@@ -238,7 +344,7 @@ export class ElementPersister<T extends IElement> {
         );
       });
 
-      await transaction.run(async () => {
+      const remove = () => transaction.run(async () => {
         // In DB mode the storage layer is keyed by element id, but the inbound
         // relativePath may be an id OR a filename (the web-console portfolio
         // bridge passes "<name>.<ext>"). Resolve the canonical name and id once
@@ -269,8 +375,28 @@ export class ElementPersister<T extends IElement> {
           }
         }
 
-        if (isDbMode) {
+        if (isDbMode && expectedElement && isCompareAndSwapStorageLayer(this.storageLayer)) {
+          const expectedContent = expectedRevision!.rawContent;
+          if (!await this.storageLayer.deleteContentIfUnchanged(
+            this.host.elementType,
+            expectedRevision!.relativePath,
+            expectedContent,
+          )) {
+            throw new StorageVersionConflictError();
+          }
+        } else if (isDbMode) {
           await this.storageLayer.deleteContent(this.host.elementType, dbName as string);
+        } else if (expectedElement) {
+          const expectedContent = expectedRevision!.rawContent;
+          const currentContent = await this.fileOperations.readFile(persistedLocation.absolutePath, { encoding: 'utf-8' });
+          if (currentContent !== expectedContent) throw new StorageVersionConflictError();
+          const movedToBackup = await this.host.createBackupBeforeDelete(persistedLocation.absolutePath);
+          if (!movedToBackup) {
+            await this.fileOperations.deleteFile(persistedLocation.absolutePath, this.host.elementType, {
+              source: `${this.host.constructor.name}.delete`,
+              durable: true,
+            });
+          }
         } else {
           const movedToBackup = await this.host.createBackupBeforeDelete(absolutePath);
           if (!movedToBackup) {
@@ -284,9 +410,30 @@ export class ElementPersister<T extends IElement> {
           await this.host.afterDelete(relativePath);
         }
       });
+      if (!isDbMode && expectedElement) {
+        await withFilesystemInterprocessGuard(`${persistedLocation.absolutePath}.element-mutation.guard`, remove);
+      } else {
+        await remove();
+      }
 
       logger.info(`${this.host.getElementLabelCapitalized()} deleted: ${filePath}`);
     });
+  }
+
+  private async withProcessLocks<R>(absolutePaths: string[], operation: () => Promise<R>): Promise<R> {
+    const paths = [...new Set(absolutePaths)].sort();
+    const acquire = (index: number): Promise<R> => index >= paths.length
+      ? operation()
+      : this.fileLockManager.withLock(`element:${paths[index]}`, () => acquire(index + 1));
+    return acquire(0);
+  }
+
+  private async withFilesystemGuards<R>(absolutePaths: string[], operation: () => Promise<R>): Promise<R> {
+    const paths = [...new Set(absolutePaths)].sort();
+    const acquire = (index: number): Promise<R> => index >= paths.length
+      ? operation()
+      : withFilesystemInterprocessGuard(`${paths[index]}.element-mutation.guard`, () => acquire(index + 1));
+    return acquire(0);
   }
 
   /**
@@ -343,8 +490,24 @@ export class ElementPersister<T extends IElement> {
     if (frontmatterMatch) {
       const yamlContent = frontmatterMatch[1];
       const bodyContent = content.substring(frontmatterMatch[0].length);
+      const contentContext = this.elementTypeToContext[this.host.elementType];
+      const contentPolicy = contentContext === 'skill' || contentContext === 'template' || contentContext === 'agent'
+        ? 'structure-only'
+        : 'strict';
 
-      if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH && !ContentValidator.validateYamlContent(yamlContent)) {
+      if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+        throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
+      }
+
+      let frontmatterData: Record<string, unknown>;
+      try {
+        frontmatterData = SecureYamlParser.parseRawYaml(yamlContent, {
+          maxSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
+          schema: 'core',
+          contentPolicy,
+          contentContext,
+        });
+      } catch {
         SecurityMonitor.logSecurityEvent({
           type: 'YAML_INJECTION_ATTEMPT',
           severity: 'CRITICAL',
@@ -359,10 +522,8 @@ export class ElementPersister<T extends IElement> {
         );
       }
 
-      const frontmatterData = SecureYamlParser.parseRawYaml(yamlContent, SECURITY_LIMITS.MAX_YAML_LENGTH);
       validateGatekeeperMetadata(frontmatterData, 'frontmatter');
 
-      const contentContext = this.elementTypeToContext[this.host.elementType];
       const bodyValidation = ContentValidator.validateAndSanitize(bodyContent, { contentContext });
       if (!bodyValidation.isValid && bodyValidation.severity === 'critical') {
         throw new SecurityError(

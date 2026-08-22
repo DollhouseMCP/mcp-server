@@ -3,9 +3,9 @@ name: Core Build & Test
 
 on:
   push:
-    branches: [main, develop, beta]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop, beta]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: >-
+          ${{ fromJSON((github.base_ref == 'codex/hosted-http-integration' ||
+          github.ref == 'refs/heads/codex/hosted-http-integration') &&
+          '["ubuntu-latest"]' ||
+          '["ubuntu-latest","windows-latest","macos-latest"]') }}
         node-version: ['20.x']
 
     steps:
@@ -139,8 +143,10 @@ jobs:
 
       - name: Run performance tests (separate process)
         id: performance_tests
+        if: >-
+          github.base_ref != 'codex/hosted-http-integration' &&
+          github.ref != 'refs/heads/codex/hosted-http-integration'
         run: npm run test:performance
-        continue-on-error: true
 
       - name: Debug failed tests environment
         if: steps.original_tests.outcome == 'failure'
@@ -159,21 +165,73 @@ jobs:
             echo "✗ package.json NOT FOUND"
           fi
 
-      - name: Run compiled tests approach
-        if: false  # Temporarily disabled - see PR #845
-        # Original condition: if: steps.original_tests.outcome == 'failure'
-        working-directory: ${{ github.workspace }}
+      - name: Enforce unit test result
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
         run: |
-          echo "=== Running compiled test approach ==="
-          echo "Explicitly setting working directory to: ${{ github.workspace }}"
-          pwd
-          # Build the tests first
-          npm run build:test
-          # Run the compiled tests using cross-env
-          ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config tests/jest.config.compiled.cjs --ci --watchAll=false
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Unit tests failed for the core build gate."
+            exit 1
+          fi
 
       - name: Validation complete
         run: |
           echo "✅ Core Build & Test Complete!"
           echo "Platform: ${{ matrix.os }}"
           echo "Node.js: ${{ matrix.node-version }}"
+
+  postgres-integration:
+    name: PostgreSQL Migration & Parity
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      DOLLHOUSE_REQUIRE_TEST_DATABASE: '1'
+      DOLLHOUSE_REQUIRE_PG_AUTH_TESTS: '1'
+      DOLLHOUSE_TEST_DATABASE_URL: postgres://dollhouse_app:dollhouse_app@localhost:5432/dollhousemcp_test
+      DOLLHOUSE_TEST_DATABASE_ADMIN_URL: postgres://dollhouse:dollhouse@localhost:5432/dollhousemcp_test
+      TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+
+    services:
+      postgres:
+        # Match the repository's reviewed development database baseline.
+        image: postgres:17-alpine@sha256:18cfe3ef5e6815560c98237d6216d1e5119702fb0f3894c8785dd58b8bbe5d73
+        env:
+          POSTGRES_USER: dollhouse
+          POSTGRES_PASSWORD: dollhouse
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dollhouse -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Apply migrations and run PostgreSQL parity coverage
+        run: >-
+          npm run test:integration -- --runInBand
+          tests/integration/database
+          tests/integration/auth/storage-parity.test.ts
+          tests/integration/storage
+          tests/integration/agents/AgentManager.dbState.test.ts

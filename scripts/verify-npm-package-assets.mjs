@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, normalize, relative, resolve, sep } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
@@ -15,7 +15,10 @@ const REQUIRED_PACKAGE_ENTRIES = [
   'dist/web/public/setup.css',
   'dist/web-console/ui/index.html',
   'dist/web-console/ui/app.js',
+  'dist/web-console/ui/console.css',
   'dist/web-console/ui/dollhouse-logo.png',
+  'dist/web-console/ui/fonts/manrope-xn7gYHE41ni1AdIRggOxSvfedN62Zw.woff2',
+  'dist/web-console/ui/vendor/purify.min.js',
   'dist/seed-elements/memories',
   'scripts/pretooluse-dollhouse.sh',
   'scripts/permission-port-discovery.sh',
@@ -23,20 +26,84 @@ const REQUIRED_PACKAGE_ENTRIES = [
   'server.json',
 ];
 
-function run(command, args, cwd) {
+const CONSOLE_SOURCE_ROOT = join(projectRoot, 'src/web-console/ui');
+const CONSOLE_PACKAGE_ROOT = 'dist/web-console/ui';
+const SEED_SOURCE_ROOT = join(projectRoot, 'src/seed-elements');
+const SEED_PACKAGE_ROOT = 'dist/seed-elements';
+
+function run(command, args, cwd, env = process.env) {
   return execFileSync(command, args, {
     cwd,
+    env,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 }
 
+function listFiles(root, current = root) {
+  return readdirSync(current, { withFileTypes: true }).flatMap((entry) => {
+    const path = join(current, entry.name);
+    return entry.isDirectory() ? listFiles(root, path) : [relative(root, path)];
+  });
+}
+
+function localAssetReferences(html) {
+  const references = [];
+  const attributePattern = /\b(?:href|src)=["']([^"']+)["']/gi;
+  for (const match of html.matchAll(attributePattern)) {
+    const value = match[1].split(/[?#]/, 1)[0];
+    if (!value || value.startsWith('/') || value.startsWith('#') || /^[a-z][a-z\d+.-]*:/i.test(value)) continue;
+    references.push(value);
+  }
+  return references;
+}
+
+function escapesRoot(root, target) {
+  const rel = relative(root, target);
+  return rel === '..' || rel.startsWith(`..${sep}`);
+}
+
+function verifyConsoleAssets(packageRoot) {
+  const packagedConsoleRoot = join(packageRoot, CONSOLE_PACKAGE_ROOT);
+  const sourceFiles = listFiles(CONSOLE_SOURCE_ROOT).map(normalize);
+  const missingSourceFiles = sourceFiles.filter(file => !existsSync(join(packagedConsoleRoot, file)));
+
+  const indexPath = join(packagedConsoleRoot, 'index.html');
+  const unresolvedReferences = existsSync(indexPath)
+    ? localAssetReferences(readFileSync(indexPath, 'utf8')).filter(reference => {
+      const target = resolve(packagedConsoleRoot, reference);
+      return escapesRoot(packagedConsoleRoot, target) || !existsSync(target) || !statSync(target).isFile();
+    })
+    : ['index.html'];
+
+  return { missingSourceFiles, unresolvedReferences };
+}
+
+function verifyMirroredAssetTree(sourceRoot, packagedRoot) {
+  const sourceFiles = listFiles(sourceRoot).map(normalize).sort();
+  const packagedFiles = existsSync(packagedRoot)
+    ? listFiles(packagedRoot).map(normalize).sort()
+    : [];
+  const sourceSet = new Set(sourceFiles);
+  const packagedSet = new Set(packagedFiles);
+
+  return {
+    missingFiles: sourceFiles.filter(file => !packagedSet.has(file)),
+    unexpectedFiles: packagedFiles.filter(file => !sourceSet.has(file)),
+  };
+}
+
 let packedFile = null;
 let extractDir = null;
+let npmCacheDir = null;
 
 try {
-  const packJson = run('npm', ['pack', '--json'], projectRoot);
-  const [packResult] = JSON.parse(packJson);
+  npmCacheDir = mkdtempSync(join(tmpdir(), 'dollhouse-npm-cache-'));
+  const packOutput = run('npm', ['pack', '--json'], projectRoot, {
+    ...process.env,
+    npm_config_cache: npmCacheDir,
+  });
+  const [packResult] = JSON.parse(packOutput);
   packedFile = packResult?.filename;
 
   if (!packedFile) {
@@ -48,15 +115,38 @@ try {
 
   const packageRoot = join(extractDir, 'package');
   const missingEntries = REQUIRED_PACKAGE_ENTRIES.filter((entry) => !existsSync(join(packageRoot, entry)));
+  const { missingSourceFiles, unresolvedReferences } = verifyConsoleAssets(packageRoot);
+  const {
+    missingFiles: missingSeedFiles,
+    unexpectedFiles: unexpectedSeedFiles,
+  } = verifyMirroredAssetTree(SEED_SOURCE_ROOT, join(packageRoot, SEED_PACKAGE_ROOT));
 
-  if (missingEntries.length > 0) {
-    console.error('❌ npm package is missing required runtime assets:');
+  if (
+    missingEntries.length > 0 ||
+    missingSourceFiles.length > 0 ||
+    unresolvedReferences.length > 0 ||
+    missingSeedFiles.length > 0 ||
+    unexpectedSeedFiles.length > 0
+  ) {
+    console.error('❌ npm package runtime asset verification failed:');
     for (const entry of missingEntries) {
       console.error(`   - ${entry}`);
     }
+    for (const entry of missingSourceFiles) {
+      console.error(`   - ${CONSOLE_PACKAGE_ROOT}/${entry} (missing source asset)`);
+    }
+    for (const reference of unresolvedReferences) {
+      console.error(`   - ${CONSOLE_PACKAGE_ROOT}/index.html -> ${reference} (unresolved reference)`);
+    }
+    for (const entry of missingSeedFiles) {
+      console.error(`   - ${SEED_PACKAGE_ROOT}/${entry} (missing source seed asset)`);
+    }
+    for (const entry of unexpectedSeedFiles) {
+      console.error(`   - ${SEED_PACKAGE_ROOT}/${entry} (unexpected stale seed asset)`);
+    }
     process.exitCode = 1;
   } else {
-    console.log('✅ npm package contains all required runtime assets.');
+    console.log('✅ npm package contains exact seed assets, required runtime assets, and the complete web-console UI.');
     for (const entry of REQUIRED_PACKAGE_ENTRIES) {
       console.log(`   - ${entry}`);
     }
@@ -71,5 +161,8 @@ try {
   }
   if (extractDir) {
     rmSync(extractDir, { recursive: true, force: true });
+  }
+  if (npmCacheDir) {
+    rmSync(npmCacheDir, { recursive: true, force: true });
   }
 }

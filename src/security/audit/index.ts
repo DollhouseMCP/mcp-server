@@ -3,7 +3,7 @@
  * Provides automated security scanning for DollhouseMCP
  */
 
-export { SecurityAuditor } from './SecurityAuditor.js';
+export { SecurityAuditor, SecurityAuditFailure } from './SecurityAuditor.js';
 export * from './types.js';
 
 // Re-export commonly used components

@@ -60,7 +60,7 @@ describe('Input Length Validation', () => {
 
   describe('ContentValidator length checks', () => {
     test('rejects content exceeding limit before pattern matching', () => {
-      const largeContent = 'Safe content '.repeat(50000); // ~650KB
+      const largeContent = 'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
       
       expect(() => {
         ContentValidator.validateAndSanitize(largeContent);
@@ -72,7 +72,7 @@ describe('Input Length Validation', () => {
     });
 
     test('rejects YAML content exceeding limit', () => {
-      const largeYaml = 'key: value\n'.repeat(10000); // ~110KB
+      const largeYaml = 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
       
       const result = ContentValidator.validateYamlContent(largeYaml);
       expect(result).toBe(false);
@@ -91,7 +91,7 @@ describe('Input Length Validation', () => {
       // stable prefix instead of pinning the exact string.
       expect(result.detectedPatterns).toEqual(
         expect.arrayContaining([
-          expect.stringContaining('customField: Field exceeds maximum length of 1024 characters'),
+          expect.stringContaining(`customField: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_METADATA_FIELD_LENGTH} characters`),
         ]),
       );
     });
@@ -118,7 +118,7 @@ describe('Input Length Validation', () => {
       expect(result.isValid).toBe(false);
       expect(result.detectedPatterns).toEqual(
         expect.arrayContaining([
-          expect.stringContaining(`description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`),
+          expect.stringContaining(`description: Field exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters`),
         ]),
       );
     });
@@ -126,7 +126,8 @@ describe('Input Length Validation', () => {
 
   describe('SecureYamlParser length checks', () => {
     test('rejects content exceeding total size limit', () => {
-      const largeContent = '---\nkey: value\n---\n' + 'a'.repeat(1024 * 1024 + 1);
+      const largeContent = '---\nkey: value\n---\n' +
+        'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
       
       expect(() => {
         SecureYamlParser.parse(largeContent);
@@ -134,7 +135,9 @@ describe('Input Length Validation', () => {
     });
 
     test('rejects YAML frontmatter exceeding limit', () => {
-      const largeYaml = '---\n' + 'key: value\n'.repeat(10000) + '---\nContent';
+      const largeYaml = '---\ndescription: ' +
+        'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH) +
+        '\n---\nContent';
       
       expect(() => {
         SecureYamlParser.parse(largeYaml);
@@ -144,7 +147,7 @@ describe('Input Length Validation', () => {
 
   describe('YamlValidator length checks', () => {
     test('rejects YAML content exceeding limit', () => {
-      const largeYaml = 'key: value\n'.repeat(10000);
+      const largeYaml = 'description: ' + 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH);
       
       expect(() => {
         YamlValidator.parsePersonaMetadataSafely(largeYaml);

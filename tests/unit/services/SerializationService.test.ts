@@ -131,15 +131,15 @@ description: |
     });
 
     describe('Size Validation', () => {
-      it('should enforce default 64KB size limit', () => {
-        const largeYaml = 'name: test\n' + 'x'.repeat(65 * 1024);
+      it('should enforce the default 1 MiB YAML size limit', () => {
+        const largeYaml = 'name: test\n' + 'x'.repeat(1024 * 1024);
 
         expect(() => {
           service.parsePureYaml(largeYaml);
-        }).toThrow('YAML content exceeds allowed size of 65536 bytes');
+        }).toThrow('YAML content exceeds allowed size of 1048576 bytes');
       });
 
-      it('should accept YAML under 64KB limit', () => {
+      it('should accept YAML under the 1 MiB limit', () => {
         const yaml = 'name: test\n' + 'description: ' + 'x'.repeat(1000);
 
         expect(() => {
@@ -438,7 +438,7 @@ metadata:
 
     describe('Size Validation', () => {
       it('should enforce YAML size limit', () => {
-        const largeMeta = 'x'.repeat(65 * 1024);
+        const largeMeta = 'x'.repeat(1024 * 1024);
         const markdown = `---
 name: test
 large: ${largeMeta}
@@ -452,7 +452,7 @@ Content
       });
 
       it('should enforce content size limit', () => {
-        const largeContent = 'x'.repeat(2 * 1024 * 1024); // 2MB
+        const largeContent = 'x'.repeat(10 * 1024 * 1024 + 1);
         const markdown = `---
 name: test
 ---
@@ -863,7 +863,7 @@ description: Pure YAML
     });
 
     it('should enforce size limits', () => {
-      const largeJson = '{"data": "' + 'x'.repeat(2 * 1024 * 1024) + '"}';
+      const largeJson = '{"data": "' + 'x'.repeat(10 * 1024 * 1024) + '"}';
 
       expect(() => {
         service.parseJson(largeJson);
@@ -1405,7 +1405,7 @@ agents:
   describe('Error Handling', () => {
     describe('Size Limit Errors', () => {
       it('should throw clear error when YAML exceeds size limit', () => {
-        const largeYaml = 'x'.repeat(100 * 1024);
+        const largeYaml = 'x'.repeat(1024 * 1024 + 1);
 
         expect(() => {
           service.parsePureYaml(largeYaml);
@@ -1413,7 +1413,7 @@ agents:
       });
 
       it('should throw clear error when JSON exceeds size limit', () => {
-        const largeJson = '{"data": "' + 'x'.repeat(2 * 1024 * 1024) + '"}';
+        const largeJson = '{"data": "' + 'x'.repeat(10 * 1024 * 1024) + '"}';
 
         expect(() => {
           service.parseJson(largeJson);

@@ -23,7 +23,6 @@
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { BuildInfoService } from '../../../src/services/BuildInfoService.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
-import { assertTiming, createTimingThreshold } from '../../helpers/timing-thresholds.js';
 
 describe('BuildInfoService - Parallel Error Scenarios', () => {
   let service: BuildInfoService;
@@ -42,9 +41,14 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
 
   describe('Happy Path - All Git Info Retrieval Succeeds', () => {
     it('should retrieve all build info components in parallel', async () => {
-      const startTime = Date.now();
+      jest.spyOn(service as any, 'getGitInfo').mockResolvedValue({
+        commit: 'test-commit',
+        branch: 'test-branch',
+      });
+      jest.spyOn(service as any, 'getDockerInfo').mockResolvedValue({
+        isDocker: false,
+      });
       const info = await service.getBuildInfo();
-      const elapsed = Date.now() - startTime;
 
       // Verify structure is complete
       expect(info).toHaveProperty('package');
@@ -53,27 +57,22 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
       expect(info).toHaveProperty('environment');
       expect(info).toHaveProperty('server');
 
-      // Should be reasonably fast (parallel execution)
-      // Uses environment-aware threshold: local=1000ms, CI=15000ms (Windows shell commands are slow)
-      const threshold = assertTiming(elapsed, 'build-info-retrieval', 'getBuildInfo');
-      expect(elapsed).toBeLessThan(threshold);
     });
 
     it('should execute parallel calls efficiently', async () => {
       // Create a mock implementation that tracks call times
       const callTimes: { method: string; time: number }[] = [];
 
-      const originalGetGitInfo = (service as any).getGitInfo.bind(service);
-      const originalGetDockerInfo = (service as any).getDockerInfo.bind(service);
-
       jest.spyOn(service as any, 'getGitInfo').mockImplementation(async () => {
         callTimes.push({ method: 'git', time: Date.now() });
-        return originalGetGitInfo();
+        await new Promise(resolve => setTimeout(resolve, 25));
+        return { commit: 'test-commit', branch: 'test-branch' };
       });
 
       jest.spyOn(service as any, 'getDockerInfo').mockImplementation(async () => {
         callTimes.push({ method: 'docker', time: Date.now() });
-        return originalGetDockerInfo();
+        await new Promise(resolve => setTimeout(resolve, 25));
+        return { isDocker: false };
       });
 
       await service.getBuildInfo();
@@ -361,30 +360,30 @@ describe('BuildInfoService - Parallel Error Scenarios', () => {
 
   describe('Performance and Concurrency', () => {
     it('should benefit from parallel execution', async () => {
-      const delay = 100; // ms per operation
+      let started = 0;
+      let releaseOperations!: () => void;
+      const release = new Promise<void>(resolve => {
+        releaseOperations = resolve;
+      });
 
       jest.spyOn(service as any, 'getGitInfo').mockImplementation(async () => {
-        await new Promise(resolve => setTimeout(resolve, delay));
+        started += 1;
+        await release;
         return { commit: 'abc', branch: 'main' };
       });
 
       jest.spyOn(service as any, 'getDockerInfo').mockImplementation(async () => {
-        await new Promise(resolve => setTimeout(resolve, delay));
+        started += 1;
+        await release;
         return { isDocker: true, info: 'container-123' };
       });
 
-      const startTime = Date.now();
-      await service.getBuildInfo();
-      const elapsed = Date.now() - startTime;
-
-      // Parallel should be ~100ms, not 200ms (sequential)
-      // Use CI-aware thresholds: local=250ms (2.5x delay), CI=600ms (6x delay)
-      // CI threshold accounts for Windows scheduling delays, system load, and timer resolution
-      const { threshold } = createTimingThreshold(delay * 2.5, 2.4); // 250ms local, 600ms CI
-      expect(elapsed).toBeLessThan(threshold);
-      // Lower bound ensures operations actually ran (fast systems may skip mocks)
-      const lowerBound = delay - 60;
-      expect(elapsed).toBeGreaterThanOrEqual(lowerBound);
+      const buildInfo = service.getBuildInfo();
+      expect(started).toBe(2);
+      releaseOperations();
+      await expect(buildInfo).resolves.toEqual(expect.objectContaining({
+        build: expect.objectContaining({ gitCommit: 'abc', gitBranch: 'main' }),
+      }));
     });
 
     it('should handle concurrent getBuildInfo calls', async () => {

@@ -27,12 +27,6 @@ export function createConsoleAuthorizationMiddleware(
     const req = request as ConsoleRequest;
     void (async (): Promise<void> => {
       const authentication = requireConsoleAuthentication(req);
-      const now = options.now?.() ?? new Date();
-      const authPolicy = options.authPolicyStore ? await options.authPolicyStore.load() : null;
-      if (route.audience === 'admin' && !isElevationValidForRoute(authentication, route, now, authPolicy?.maxAdminElevationSeconds)) {
-        sendStepUpRequired(req, response, route, authPolicy?.maxAdminElevationSeconds);
-        return;
-      }
       if (route.requiredCapability === 'none') {
         sendProblemResponse(response, {
           status: 500,
@@ -49,6 +43,14 @@ export function createConsoleAuthorizationMiddleware(
           title: 'Forbidden',
           detail: 'The console session does not have the required capability.',
         }, requireConsoleRequestContext(req).correlationId);
+        return;
+      }
+      const now = options.now?.() ?? new Date();
+      const authPolicy = route.audience === 'admin' && options.authPolicyStore
+        ? await options.authPolicyStore.load()
+        : null;
+      if (route.audience === 'admin' && !isElevationValidForRoute(authentication, route, now, authPolicy?.maxAdminElevationSeconds)) {
+        sendStepUpRequired(req, response, route, authPolicy?.maxAdminElevationSeconds);
         return;
       }
       next();

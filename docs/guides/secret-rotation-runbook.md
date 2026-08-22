@@ -31,7 +31,7 @@ Procedures for rotating each secret a DollhouseMCP production deployment depends
 | Postgres app password | embedded in `DOLLHOUSE_DATABASE_URL` | None | Full read/write on user data (constrained by RLS) |
 | Postgres admin password | embedded in `DOLLHOUSE_DATABASE_ADMIN_URL` | None | Full superuser DB access |
 | Console token | Stored in `~/.dollhouse/run/console-token.auth.json` | Auto-generated on first run | Full web-console operator access |
-| Master encryption key | `DOLLHOUSE_ENCRYPTION_SECRET` / `DOLLHOUSE_MASTER_ENCRYPTION_KEY` | None | Decrypts encrypted columns (user OAuth tokens) — only relevant if encryption is enabled |
+| Master encryption key | `DOLLHOUSE_ENCRYPTION_SECRET` / `DOLLHOUSE_MASTER_ENCRYPTION_KEY` | Versioned retained-key ring for PostgreSQL signing payloads; coordinated migration for OAuth-token DEKs | Decrypts encrypted signing material and user OAuth tokens |
 
 ---
 
@@ -312,7 +312,35 @@ If you lose access (TOTP device gone, no backup codes left), delete the token fi
 
 ## Master encryption key (storage-level encryption)
 
-**Env vars:** `DOLLHOUSE_ENCRYPTION_SECRET` + `DOLLHOUSE_ENCRYPTION_SALT` (memory pattern encryption); `DOLLHOUSE_MASTER_ENCRYPTION_KEY` is referenced in some planning materials as the envelope key for encrypted columns (notably user OAuth tokens stored in `auth_accounts`).
+**Env vars:** `DOLLHOUSE_ENCRYPTION_SECRET` + `DOLLHOUSE_ENCRYPTION_SALT` (memory pattern encryption); `DOLLHOUSE_MASTER_ENCRYPTION_KEY`, `DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID`, and `DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED` protect PostgreSQL signing-key payloads. The retired-key format is `keyId=base64key,keyId2=base64key2`.
+
+Signing-key payload rotation is a two-phase fleet operation. Ordinary reads
+decrypt but never rewrap, so replicas running different configurations cannot
+rewrite the same row back and forth or make it unreadable to an older replica.
+
+1. While the old key remains active, add the replacement `new-id=new-key` to
+   `DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED` on every replica. Despite the
+   historical variable name, this first phase distributes decrypt capability
+   before any ciphertext changes.
+2. Roll every replica to the replacement key as
+   `DOLLHOUSE_MASTER_ENCRYPTION_KEY` with its fresh
+   `DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID`, retaining `old-id=old-key` in
+   `DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED`. Keep
+   `DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=false` throughout this rollout.
+   The active key and ID are one rotation unit: hosted-deploy rejects changing
+   only one of them, accepts only nonempty IDs of at most 255 bytes containing
+   ASCII letters, digits, `.`, `_`, `:`, or `-`, and rejects the transition
+   unless the exact previous ID/key pair is retained. Retained IDs use the same
+   grammar.
+3. After confirming no old-key-active replica remains, enable
+   `DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=true` for one maintenance startup.
+   The server takes the exclusive signing-key lifecycle lock and atomically
+   rewraps plaintext and retained-key payloads under the active key. Concurrent
+   opted-in replicas serialize and subsequent runs are no-ops.
+4. Return `DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP` to `false`, verify auth and
+   invite flows, then remove the old decrypt key from the retained list.
+
+`DOLLHOUSE_MASTER_ENCRYPTION_KEY` also wraps user OAuth-token DEKs through `EnvVarMasterKeyProvider`. That provider's separate key-version migration is not performed by the explicit signing-key rewrap, so do not remove or replace the deployment master key solely on the strength of signing-key rewrap verification; coordinate OAuth-token migration or user reauthorization as part of the same maintenance window.
 **Where used:** Encrypting sensitive columns and memory patterns at rest.
 
 > **Status note.** As of this writing, storage-level envelope encryption with a master key is a partial feature. The memory-pattern encryption (`DOLLHOUSE_ENCRYPTION_SECRET`/`SALT`) is in place; the column-level envelope is not universally applied across `auth_accounts.access_token` and similar columns. If your deployment requires column-level encryption at rest, confirm coverage by inspecting `EncryptionService` in the codebase before assuming rotation procedures apply.
@@ -348,6 +376,36 @@ If you rotate without re-encrypting, the data is unrecoverable from the new key 
 
 ## Generic rotation principles
 
+### Authorization mode changes rotate every credential boundary
+
+Changing the embedded authorization mode (provider, enabled methods, or
+issuer) is a hard security boundary, not an ordinary rolling key rotation.
+The durable signing-key store performs one atomic transition that retires
+every still-verifying JWKS, cookie, and invite/magic-link key before installing
+the applicable fresh replacements. OAuth state is then cleared and the new
+mode fingerprint is persisted last. A failed key-store transition leaves the
+old generation intact; a later failure leaves startup closed and causes the
+idempotent invalidation to run again on restart.
+
+Filesystem and database-managed deployments generate fresh replacements for
+all three key kinds automatically. If either
+`DOLLHOUSE_COOKIE_SIGNING_SECRET` or `DOLLHOUSE_INVITE_TOKEN_SECRET` is
+operator-managed, the server cannot rotate that secret. Its one-way
+fingerprint must already be recorded, and the operator must change the secret
+at the same time as the mode change. Startup fails closed when the prior
+fingerprint is missing or the configured secret was not rotated. This
+invalidates outstanding invites and magic links as well as access tokens and
+interaction cookies from the previous mode.
+
+For a rolling or multi-replica deployment, set `DOLLHOUSE_AUTH_GENERATION` to
+a positive integer and increment it with every provider, method, issuer,
+cookie-secret, or invite-secret change. The first configured value establishes
+the monotonic fence and intentionally invalidates the prior credential
+generation. A replica whose configured value is lower than the persisted value
+fails closed; a changed authorization configuration that reuses the current
+value is also rejected. Leave the variable unset only for backward-compatible
+single-replica operation where coordinated rolling transitions are not needed.
+
 ### Test before rotating in production
 
 Every rotation procedure here should be exercised at least once on a staging deploy before you run it in production. The "what gets invalidated" matters in practice — you'd rather discover it on a staging server than learn about it at 2am.
@@ -358,7 +416,7 @@ The biggest risk to secrets isn't a sophisticated attacker — it's letting them
 
 ### Multi-replica means same secret across replicas
 
-For every secret that the AS reads from env (cookie, invite token, GitHub OAuth secret), all replicas must agree. The deploy pattern is:
+For every secret that the AS reads from env (cookie, invite token, GitHub OAuth secret), all replicas must agree. For cookie or invite signing changes, increment `DOLLHOUSE_AUTH_GENERATION` in the same deployment. The deploy pattern is:
 
 1. Update the secret store with the new value.
 2. Restart replicas one at a time.

@@ -11,6 +11,8 @@ import {
   objectValue,
   stringField,
 } from '../../platform/ConsoleProjectorHelpers.js';
+import { decodeConsoleCursor, encodeConsoleCursor } from '../../platform/ConsoleCursor.js';
+import { boundedLimit, boundedString, firstString } from '../../platform/ConsoleQueryParams.js';
 
 const SELF_CAPABILITY = 'console:self';
 
@@ -29,6 +31,11 @@ export interface ConsoleLogQueryOptions {
   readonly sessionId: string | null;
   readonly since: string | null;
   readonly limit: number;
+  /** Opaque request cursor, retained in the response when it is valid. */
+  readonly cursor: string | null;
+  /** Continue strictly after this entry in newest-first timestamp/id order. */
+  readonly beforeTimestamp: string | null;
+  readonly beforeId: string | null;
 }
 
 export interface ConsoleLogEntry {
@@ -44,8 +51,17 @@ export interface ConsoleLogEntry {
 
 export interface ConsoleLogPage {
   readonly entries: readonly ConsoleLogEntry[];
-  readonly total: number;
   readonly has_more: boolean;
+}
+
+/** Cursor-family response envelope (`{items, page:{limit, cursor, next_cursor}}`). */
+export interface ConsoleLogPageDto {
+  readonly items: readonly ConsoleLogEntry[];
+  readonly page: {
+    readonly limit: number;
+    readonly cursor: string | null;
+    readonly next_cursor: string | null;
+  };
 }
 
 export interface IConsoleLogSource {
@@ -74,11 +90,12 @@ export function createMeLogsModule(options: MeLogsModuleOptions): ConsoleModuleD
         elevation: 'none',
         privacyClass: 'self_private',
         idempotency: 'not_applicable',
-        privacyProjector: projectConsoleLogPage,
+        privacyProjector: projectConsoleLogPageDto,
         handler: (req): ConsoleHandlerResult => {
           const actor = requireConsoleAuthentication(req);
-          const page = logSource.queryUserLogs(parseLogQuery(req, actor.userId));
-          return { status: 200, body: projectConsoleLogPage(page) };
+          const query = parseLogQuery(req, actor.userId);
+          const page = logSource.queryUserLogs(query);
+          return { status: 200, body: serializeConsoleLogPage(page, query) };
         },
       },
     ],
@@ -86,6 +103,8 @@ export function createMeLogsModule(options: MeLogsModuleOptions): ConsoleModuleD
 }
 
 function parseLogQuery(req: ConsoleRequest, userId: string): ConsoleLogQueryOptions {
+  const rawCursor = boundedString(firstString(req.query.cursor), 512);
+  const boundary = logBoundaryFromCursor(rawCursor);
   return {
     userId,
     level: boundedString(firstString(req.query.level), 16),
@@ -94,16 +113,47 @@ function parseLogQuery(req: ConsoleRequest, userId: string): ConsoleLogQueryOpti
     correlationId: boundedString(firstString(req.query.correlation_id), 128),
     sessionId: boundedString(firstString(req.query.session_id), 200),
     since: boundedString(firstString(req.query.since), 64),
-    limit: boundedLimit(firstString(req.query.limit), 200),
+    limit: boundedLimit(firstString(req.query.limit), 200, 1000),
+    cursor: boundary ? rawCursor : null,
+    beforeTimestamp: boundary?.timestamp ?? null,
+    beforeId: boundary?.id ?? null,
   };
 }
 
-function projectConsoleLogPage(value: unknown): ConsoleLogPage {
-  const record = objectValue(value);
+function serializeConsoleLogPage(page: ConsoleLogPage, query: ConsoleLogQueryOptions): ConsoleLogPageDto {
+  const lastEntry = page.entries.at(-1);
   return {
-    entries: arrayValue(record.entries).map(projectConsoleLogEntry),
-    total: numberField(record, 'total'),
-    has_more: record.has_more === true,
+    items: page.entries,
+    page: {
+      limit: query.limit,
+      cursor: query.cursor,
+      next_cursor: page.has_more && lastEntry ? logCursor(lastEntry) : null,
+    },
+  };
+}
+
+function logBoundaryFromCursor(token: string | null): { timestamp: string; id: string } | null {
+  if (!token) return null;
+  const payload = decodeConsoleCursor(token);
+  if (payload?.v !== 1 || typeof payload.t !== 'string' || typeof payload.i !== 'string') return null;
+  if (payload.t.length === 0 || payload.t.length > 64 || payload.i.length === 0 || payload.i.length > 200) return null;
+  return { timestamp: payload.t, id: payload.i };
+}
+
+function logCursor(entry: ConsoleLogEntry): string {
+  return encodeConsoleCursor({ v: 1, t: entry.ts, i: entry.id });
+}
+
+function projectConsoleLogPageDto(value: unknown): ConsoleLogPageDto {
+  const record = objectValue(value);
+  const page = objectValue(record.page);
+  return {
+    items: arrayValue(record.items).map(projectConsoleLogEntry),
+    page: {
+      limit: numberField(page, 'limit'),
+      cursor: nullableStringField(page, 'cursor'),
+      next_cursor: nullableStringField(page, 'next_cursor'),
+    },
   };
 }
 
@@ -119,22 +169,4 @@ function projectConsoleLogEntry(value: unknown): ConsoleLogEntry {
     correlation_id: nullableStringField(record, 'correlation_id'),
     session_id: nullableStringField(record, 'session_id'),
   };
-}
-
-function boundedLimit(value: string | null, fallback: number): number {
-  const parsed = value ? Number.parseInt(value, 10) : Number.NaN;
-  if (!Number.isSafeInteger(parsed) || parsed < 1) return fallback;
-  return Math.min(parsed, 1000);
-}
-
-function boundedString(value: string | null, maxLength: number): string | null {
-  if (value === null) return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 && trimmed.length <= maxLength ? trimmed : null;
-}
-
-function firstString(value: ConsoleRequest['query'][string] | undefined): string | null {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
-  return null;
 }

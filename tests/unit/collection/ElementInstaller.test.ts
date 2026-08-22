@@ -679,8 +679,8 @@ category: "test"
         } as UnifiedSearchResult
       ]);
 
-      // Mock fetch with oversized content (> 2MB)
-      const oversizedContent = 'A'.repeat(3 * 1024 * 1024); // 3MB
+      // Mock fetch with content above the 10 MiB persisted-element ceiling.
+      const oversizedContent = 'A'.repeat(11 * 1024 * 1024);
 
       globalThis.fetch = jest.fn().mockResolvedValueOnce({
         ok: true,

@@ -3,11 +3,14 @@ import type { Server as HttpServer } from 'node:http';
 import type { Server as HttpsServer } from 'node:https';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
-import { createMcpExpressApp } from '@modelcontextprotocol/sdk/server/express.js';
+import {
+  hostHeaderValidation,
+  localhostHostValidation,
+} from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
-import { json, static as expressStatic } from 'express';
-import type { Express, Request, RequestHandler, Response, Router } from 'express';
+import express, { json, static as expressStatic } from 'express';
+import type { ErrorRequestHandler, Express, Request, RequestHandler, Response, Router } from 'express';
 import type { AuthClaims } from '../auth/IAuthProvider.js';
 import type { PerformanceMonitor } from '../utils/PerformanceMonitor.js';
 import { env } from '../config/env.js';
@@ -44,8 +47,15 @@ export interface StreamableHttpRuntimeOptions {
   registerSignalHandlers?: boolean;
   rateLimitWindowMs?: number;
   rateLimitMaxRequests?: number;
+  bodyLimitBytes?: number;
   sessionIdleTimeoutMs?: number;
   sessionPoolSize?: number;
+  /** Maximum time to let accepted MCP requests finish during shutdown. */
+  shutdownGracePeriodMs?: number;
+  /** Maximum time to wait for one session attachment to dispose. */
+  sessionDisposalTimeoutMs?: number;
+  /** Drain process-level services after HTTP requests and sessions are closed. */
+  onShutdown?: () => Promise<void>;
   /** Express middleware for authentication. Mounted before MCP handlers when provided. */
   authMiddleware?: RequestHandler;
   /** Embedded OAuth provider. Discovery and token routes are mounted before MCP auth middleware. */
@@ -59,6 +69,7 @@ export interface StreamableHttpRuntimeOptions {
      * to a pod that can't yet serve auth flows.
      */
     isReadyForTraffic?: () => Promise<boolean>;
+    getReadinessFailureReason?: () => string;
   };
   /**
    * TLS configuration for the HTTP transport. When enabled, the server binds HTTPS.
@@ -121,6 +132,10 @@ export interface StreamableHttpSessionAttachment {
    * Sessions↔Logs "View logs" cross-link working for MCP clients.
    */
   readonly contextSessionId: string;
+  /** Resolves after the application handler for one JSON-RPC request completes. */
+  waitForRequest?: (requestId: string | number) => Promise<void>;
+  /** Resolves only after every application request handler has completed. */
+  waitForIdle?: () => Promise<void>;
   dispose(): Promise<void>;
   runtimeSession?: {
     readonly userId: string;
@@ -145,7 +160,7 @@ export interface StreamableHttpRuntimeSessionControl {
   recordActivity(sessionId: string, outcome?: 'ok' | 'error'): Promise<unknown>;
   markSessionDisposed(sessionId: string): Promise<void>;
   reconcilePendingCommands(terminator: {
-    terminateLocalSession(sessionId: string): Promise<'terminated' | 'already_absent'>;
+    terminateLocalSession(sessionId: string): Promise<'terminated' | 'already_absent' | 'retry'>;
   }): Promise<number>;
 }
 
@@ -154,6 +169,7 @@ interface ActiveSessionRecord {
   transport: StreamableHTTPServerTransport;
   expirationTimer: NodeJS.Timeout | null;
   lastTouchedAt: number;
+  inFlightRequests: number;
   /**
    * Authenticated subject of the user that initialized this session.
    * Set when auth is enabled and a bearer token authenticated the
@@ -166,6 +182,10 @@ interface ActiveSessionRecord {
    * session's user-scoped DI container (H7).
    */
   ownerSub: string | undefined;
+  /** Canonical DB user resolved for ownerSub when live account authority is enabled. */
+  ownerUserId: string | undefined;
+  /** Principal generation at session initialization; changes invalidate reuse. */
+  ownerAuthzVersion: number | undefined;
 }
 
 interface PreparedSessionRecord {
@@ -173,6 +193,10 @@ interface PreparedSessionRecord {
   transport: StreamableHTTPServerTransport;
   /** See ActiveSessionRecord.ownerSub. */
   ownerSub: string | undefined;
+  ownerUserId: string | undefined;
+  ownerAuthzVersion: number | undefined;
+  /** Presence row registered before initialization, if any. */
+  runtimePresenceSessionId: string | undefined;
   dispose(): Promise<void>;
 }
 
@@ -342,12 +366,8 @@ export function getStreamableHttpRuntimeOptions(): StreamableHttpRuntimeOptions 
   };
 }
 
-async function closeHttpServer(httpServer: HttpServer | HttpsServer): Promise<void> {
-  // Destroy all active sockets so keep-alive connections don't prevent shutdown.
-  // httpServer.close() only stops accepting new connections — existing sockets
-  // stay alive until their keep-alive timeout expires.
-  httpServer.closeAllConnections();
-  await new Promise<void>((resolve, reject) => {
+function beginHttpServerClose(httpServer: HttpServer | HttpsServer): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     httpServer.close((error) => {
       if (error) {
         reject(error);
@@ -468,6 +488,36 @@ function runHostedDeploymentSafetyChecks(config: HostedDeploymentSafetyConfig): 
       `https:// redirect URI validation.`,
     );
   }
+
+  // Checked last: once the network-exposure guards above pass, the deployment is
+  // reachable correctly, so the only remaining concern is at-rest secret
+  // protection. Encrypted GitHub tokens (github_token.enc in file mode) and the
+  // OAuth device-flow handoff fall back to a machine-derived passphrase when
+  // DOLLHOUSE_TOKEN_SECRET is unset. That passphrase has no per-install entropy
+  // (derived from homedir + USER, with the PBKDF2 salt stored beside the
+  // ciphertext), so anyone who reads the on-disk ciphertext could derive the key
+  // and decrypt every user's tokens offline. Fail closed; an operator who has
+  // accepted this at-rest risk can opt back in with
+  // DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE=true.
+  if (!process.env.DOLLHOUSE_TOKEN_SECRET?.trim()) {
+    const insecureTokenStoreDetail =
+      'DOLLHOUSE_TOKEN_SECRET is not set for this exposed multi-user deployment. ' +
+      'Encrypted GitHub tokens and OAuth handoff files would use a machine-derived ' +
+      'passphrase with no per-install entropy, so anyone who reads the on-disk ' +
+      'ciphertext could decrypt every user\'s at-rest secrets offline. Set ' +
+      'DOLLHOUSE_TOKEN_SECRET to a strong random value.';
+    if (process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE?.trim().toLowerCase() === 'true') {
+      logger.warn(
+        `[StreamableHttpServer] ${insecureTokenStoreDetail} Continuing anyway because ` +
+        'DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE=true.',
+      );
+    } else {
+      throw new Error(
+        `[StreamableHttpServer] Refusing to start: ${insecureTokenStoreDetail} To start ` +
+        'anyway (not recommended), set DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE=true.',
+      );
+    }
+  }
 }
 
 export async function createStreamableHttpRuntime(
@@ -484,7 +534,10 @@ export async function createStreamableHttpRuntime(
   const rateLimitWindowMs = Math.max(0, options.rateLimitWindowMs ?? env.DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS);
   const rateLimitMaxRequests = Math.max(0, options.rateLimitMaxRequests ?? env.DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS);
   const sessionIdleTimeoutMs = Math.max(0, options.sessionIdleTimeoutMs ?? env.DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS);
+  const bodyLimitBytes = options.bodyLimitBytes ?? env.DOLLHOUSE_HTTP_BODY_LIMIT_BYTES;
   const sessionPoolSize = Math.max(0, options.sessionPoolSize ?? env.DOLLHOUSE_HTTP_SESSION_POOL_SIZE);
+  const shutdownGracePeriodMs = Math.max(0, options.shutdownGracePeriodMs ?? 30_000);
+  const sessionDisposalTimeoutMs = Math.max(0, options.sessionDisposalTimeoutMs ?? 5_000);
   const runtimeCommandPollIntervalMs = Math.max(
     0,
     options.runtimeCommandPollIntervalMs ?? DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS,
@@ -493,7 +546,67 @@ export async function createStreamableHttpRuntime(
   if (publicBaseUrl) {
     assertSafePublicBaseUrl(publicBaseUrl);
   }
-  const app = createMcpExpressApp({ host, allowedHosts });
+  let closingPromise: Promise<void> | null = null;
+  let inFlightMcpRequests = 0;
+  const requestDrainWaiters = new Set<() => void>();
+  interface McpRequestTracking {
+    handlerOwnsCompletion: boolean;
+    release(): void;
+  }
+  const mcpRequestTracking = new WeakMap<Response, McpRequestTracking>();
+  const trackMcpRequest: RequestHandler = (req, res, next) => {
+    // Express is non-strict by default, so a route registered at `/mcp` also
+    // accepts `/mcp/`. Match the same shape here or the trailing-slash form can
+    // bypass shutdown rejection and request-drain accounting.
+    if (normalizeExpressRoutePath(req.path) !== normalizeExpressRoutePath(mcpPath)) {
+      next();
+      return;
+    }
+    if (closingPromise) {
+      respondWithJsonRpcError(res, 503, 'Server shutting down', getRequestId(req));
+      return;
+    }
+    inFlightMcpRequests += 1;
+    let released = false;
+    const tracking: McpRequestTracking = {
+      handlerOwnsCompletion: false,
+      release: () => {
+        if (released) return;
+        released = true;
+        inFlightMcpRequests = Math.max(0, inFlightMcpRequests - 1);
+        if (inFlightMcpRequests === 0) {
+          for (const waiter of [...requestDrainWaiters]) waiter();
+        }
+      },
+    };
+    mcpRequestTracking.set(res, tracking);
+    const releaseBeforeHandler = () => {
+      if (!tracking.handlerOwnsCompletion) tracking.release();
+    };
+    res.once('finish', releaseBeforeHandler);
+    res.once('close', releaseBeforeHandler);
+    next();
+  };
+  const claimMcpHandlerCompletion = (res: Response): (() => void) => {
+    const tracking = mcpRequestTracking.get(res);
+    if (!tracking) return () => {};
+    tracking.handlerOwnsCompletion = true;
+    return tracking.release;
+  };
+  const waitForApplicationRequest = async (
+    attachment: StreamableHttpSessionAttachment,
+    req: Request,
+  ): Promise<void> => {
+    const requestId = getRequestId(req);
+    if (typeof requestId === 'string' || typeof requestId === 'number') {
+      await attachment.waitForRequest?.(requestId);
+    }
+  };
+  const app = createProtectedMcpExpressApp({
+    host,
+    allowedHosts,
+    afterHostValidation: trackMcpRequest,
+  });
   // Defense-in-depth: suppress Express's default `X-Powered-By` header on
   // every response. Doesn't change auth posture but avoids version-disclosing
   // fingerprinting via response headers.
@@ -523,6 +636,10 @@ export async function createStreamableHttpRuntime(
   // req.ip. Hosted deployments override via DOLLHOUSE_TRUSTED_PROXIES.
   app.set('trust proxy', env.DOLLHOUSE_TRUSTED_PROXIES ?? ['loopback']);
   const sessions = new Map<string, ActiveSessionRecord>();
+  const closingSessions = new Map<string, ActiveSessionRecord>();
+  const pendingSessionDisposals = new Map<string, Promise<boolean>>();
+  const sessionDisposalRetryTimers = new Map<string, NodeJS.Timeout>();
+  const pendingDurableSessionClosures = new Set<string>();
   const rateLimits = new Map<string, RateLimitRecord>();
   const pooledSessions: PreparedSessionRecord[] = [];
   const sessionTelemetry: SessionTelemetry = {
@@ -533,11 +650,14 @@ export async function createStreamableHttpRuntime(
     poolMisses: 0,
     rateLimitedRequests: 0,
   };
-  let closingPromise: Promise<void> | null = null;
   const isShuttingDown = (): boolean => Boolean(closingPromise);
   let replenishPoolPromise: Promise<void> | null = null;
   let runtimeCommandPollTimer: NodeJS.Timeout | null = null;
   let runtimeCommandPollRunning = false;
+  const sessionDisposalRetryDelayMs = Math.max(
+    10,
+    Math.min(runtimeCommandPollIntervalMs || DEFAULT_RUNTIME_COMMAND_POLL_INTERVAL_MS, 5_000),
+  );
 
   const clearSessionTimer = (session: ActiveSessionRecord): void => {
     if (session.expirationTimer) {
@@ -546,55 +666,131 @@ export async function createStreamableHttpRuntime(
     }
   };
 
+  const markDurableSessionDisposed = async (sessionId: string): Promise<boolean> => {
+    if (!options.runtimeSessionControl) return true;
+    try {
+      await options.runtimeSessionControl.markSessionDisposed(sessionId);
+      pendingDurableSessionClosures.delete(sessionId);
+      closingSessions.delete(sessionId);
+      return true;
+    } catch (error) {
+      pendingDurableSessionClosures.add(sessionId);
+      logger.warn('[StreamableHTTP] Failed to mark runtime session disposed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
+  };
+
   const disposePreparedSession = async (preparedSession: PreparedSessionRecord): Promise<void> => {
-    await preparedSession.dispose().catch((error) => {
+    if (preparedSession.runtimePresenceSessionId) {
+      await options.runtimeSessionControl?.markSessionDisposed(preparedSession.runtimePresenceSessionId).catch((error) => {
+        logger.warn('[StreamableHTTP] Failed to mark prepared runtime session disposed', {
+          sessionId: preparedSession.runtimePresenceSessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      });
+    }
+    const disposal = preparedSession.dispose().then(() => true).catch((error) => {
       logger.warn('[StreamableHTTP] Failed to dispose pooled session', {
         error: error instanceof Error ? error.message : String(error),
       });
+      return true;
     });
+    if (!await settlesWithin(disposal, sessionDisposalTimeoutMs)) {
+      logger.warn('[StreamableHTTP] Timed out disposing pooled session', { sessionDisposalTimeoutMs });
+    }
   };
 
   const disposeSession = async (
     sessionId: string | undefined,
     skipTransportClose = false,
-  ): Promise<void> => {
+  ): Promise<boolean> => {
     if (!sessionId) {
-      return;
+      return true;
     }
 
-    const session = sessions.get(sessionId);
+    const pendingDisposal = pendingSessionDisposals.get(sessionId);
+    if (pendingDisposal) {
+      return (await booleanResultWithin(pendingDisposal, sessionDisposalTimeoutMs)) ?? false;
+    }
+
+    const session = sessions.get(sessionId) ?? closingSessions.get(sessionId);
     if (!session) {
-      return;
+      return pendingDurableSessionClosures.has(sessionId)
+        ? markDurableSessionDisposed(sessionId)
+        : true;
     }
 
-    sessions.delete(sessionId);
-    sessionTelemetry.disposed += 1;
-    clearSessionTimer(session);
-    options.onSessionDisposed?.(sessionId);
-    try {
-      await options.runtimeSessionControl?.markSessionDisposed(sessionId);
-    } catch (error) {
-      logger.warn('[StreamableHTTP] Failed to mark runtime session disposed', {
+    // Publish the in-progress promise before closing the transport. The SDK may
+    // synchronously invoke onsessionclosed from transport.close(); that callback
+    // must join this disposal instead of recursively starting another one.
+    const disposal = Promise.resolve().then(async () => {
+      if (sessions.delete(sessionId)) {
+        closingSessions.set(sessionId, session);
+        sessionTelemetry.disposed += 1;
+        clearSessionTimer(session);
+        options.onSessionDisposed?.(sessionId);
+      }
+      if (!skipTransportClose) {
+        await session.transport.close().catch(() => {
+          /* transport shutdown is best-effort */
+        });
+      }
+      let disposed = false;
+      try {
+        await session.attachment.dispose();
+        disposed = true;
+      } catch (error) {
+        logger.warn('[StreamableHTTP] Failed to dispose session attachment', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+      // A closing runtime presence is immediately reclaimable. Publish that
+      // state only after the attachment has drained all in-flight requests.
+      if (!disposed) return false;
+      const durableClosed = await markDurableSessionDisposed(sessionId);
+      if (durableClosed) {
+        closingSessions.delete(sessionId);
+        const retryTimer = sessionDisposalRetryTimers.get(sessionId);
+        if (retryTimer) clearTimeout(retryTimer);
+        sessionDisposalRetryTimers.delete(sessionId);
+      }
+      return durableClosed;
+    });
+    pendingSessionDisposals.set(sessionId, disposal);
+    void disposal.then(disposed => {
+      if (!disposed) scheduleSessionDisposalRetry(sessionId);
+    });
+    void disposal.finally(() => {
+      if (pendingSessionDisposals.get(sessionId) === disposal) {
+        pendingSessionDisposals.delete(sessionId);
+      }
+    });
+    const disposed = await booleanResultWithin(disposal, sessionDisposalTimeoutMs);
+    if (disposed === null) {
+      logger.warn('[StreamableHTTP] Timed out disposing session attachment', {
         sessionId,
-        error: error instanceof Error ? error.message : String(error),
+        sessionDisposalTimeoutMs,
       });
     }
-
-    if (!skipTransportClose) {
-      await session.transport.close().catch(() => {
-        /* transport shutdown is best-effort */
-      });
-    }
-
-    try {
-      await session.attachment.dispose();
-    } catch (error) {
-      logger.warn('[StreamableHTTP] Failed to dispose session attachment', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+    return disposed ?? false;
   };
+
+  function scheduleSessionDisposalRetry(sessionId: string): void {
+    if (closingPromise || sessionDisposalRetryTimers.has(sessionId)) return;
+    const timer = setTimeout(() => {
+      sessionDisposalRetryTimers.delete(sessionId);
+      if (!closingSessions.has(sessionId)) return;
+      void disposeSession(sessionId).then(disposed => {
+        if (!disposed) scheduleSessionDisposalRetry(sessionId);
+      });
+    }, sessionDisposalRetryDelayMs);
+    timer.unref();
+    sessionDisposalRetryTimers.set(sessionId, timer);
+  }
 
   const recordRuntimeActivity = (sessionId: string, outcome: 'ok' | 'error' = 'ok'): void => {
     void options.runtimeSessionControl?.recordActivity(sessionId, outcome).catch((error) => {
@@ -610,10 +806,18 @@ export async function createStreamableHttpRuntime(
     if (!options.runtimeSessionControl || runtimeCommandPollRunning || closingPromise) return;
     runtimeCommandPollRunning = true;
     try {
+      for (const sessionId of [...pendingDurableSessionClosures]) {
+        await markDurableSessionDisposed(sessionId);
+      }
       await options.runtimeSessionControl.reconcilePendingCommands({
         terminateLocalSession: async (sessionId) => {
-          if (!sessions.has(sessionId)) return 'already_absent';
-          await disposeSession(sessionId);
+          if (!sessions.has(sessionId)
+              && !closingSessions.has(sessionId)
+              && !pendingSessionDisposals.has(sessionId)
+              && !pendingDurableSessionClosures.has(sessionId)) {
+            return 'already_absent';
+          }
+          if (!await disposeSession(sessionId)) return 'retry';
           return 'terminated';
         },
       });
@@ -647,6 +851,7 @@ export async function createStreamableHttpRuntime(
 
     clearSessionTimer(session);
     session.lastTouchedAt = Date.now();
+    if (session.inFlightRequests > 0) return;
     session.expirationTimer = setTimeout(() => {
       logger.info('[StreamableHTTP] Expiring idle session', {
         sessionId,
@@ -656,6 +861,22 @@ export async function createStreamableHttpRuntime(
       void disposeSession(sessionId);
     }, sessionIdleTimeoutMs);
     session.expirationTimer.unref();
+  };
+
+  const beginSessionRequest = (sessionId: string): boolean => {
+    const session = sessions.get(sessionId);
+    if (!session) return false;
+    clearSessionTimer(session);
+    session.lastTouchedAt = Date.now();
+    session.inFlightRequests += 1;
+    return true;
+  };
+
+  const endSessionRequest = (sessionId: string): void => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    session.inFlightRequests = Math.max(0, session.inFlightRequests - 1);
+    if (session.inFlightRequests === 0) touchSession(sessionId);
   };
 
   const consumeRateLimit = (req: Request, res: Response): boolean => {
@@ -759,26 +980,16 @@ export async function createStreamableHttpRuntime(
           transport,
           expirationTimer: null,
           lastTouchedAt: Date.now(),
+          // The initialize request that caused this callback is still active.
+          inFlightRequests: 1,
           ownerSub: authClaims?.sub,
+          ownerUserId: authClaims?.userId,
+          ownerAuthzVersion: authClaims?.authzVersion,
         });
         sessionTelemetry.created += 1;
         touchSession(sessionId);
         logger.info('[StreamableHTTP] Session initialized', { sessionId });
         options.onSessionCreated?.(sessionId);
-        const runtimeSession = attachment.runtimeSession;
-        if (runtimeSession && options.runtimeSessionControl) {
-          void options.runtimeSessionControl.registerSession({
-            sessionId,
-            userId: runtimeSession.userId,
-            accountCorrelationId: runtimeSession.accountCorrelationId,
-            clientInfo: runtimeSession.clientInfo ?? null,
-          }).catch((error) => {
-            logger.warn('[StreamableHTTP] Failed to register runtime session presence', {
-              sessionId,
-              error: error instanceof Error ? error.message : String(error),
-            });
-          });
-        }
         // Fire-and-forget: replenishPoolPromise guard inside maintainSessionPool()
         // prevents concurrent replenishment — safe to call without awaiting.
         void maintainSessionPool();
@@ -799,11 +1010,35 @@ export async function createStreamableHttpRuntime(
     };
 
     attachment = await createSessionAttachment(transport, authClaims, clientInfo);
+    const runtimeSession = attachment.runtimeSession;
+    if (runtimeSession && options.runtimeSessionControl) {
+      try {
+        await options.runtimeSessionControl.registerSession({
+          sessionId: attachment.contextSessionId,
+          userId: runtimeSession.userId,
+          accountCorrelationId: runtimeSession.accountCorrelationId,
+          clientInfo: runtimeSession.clientInfo ?? null,
+        });
+      } catch (error) {
+        await transport.close().catch(() => {
+          /* failed setup cleanup is best-effort */
+        });
+        await attachment.dispose().catch(() => {
+          /* failed setup cleanup is best-effort */
+        });
+        throw error;
+      }
+    }
 
     return {
       attachment,
       transport,
       ownerSub: authClaims?.sub,
+      ownerUserId: authClaims?.userId,
+      ownerAuthzVersion: authClaims?.authzVersion,
+      runtimePresenceSessionId: runtimeSession && options.runtimeSessionControl
+        ? attachment.contextSessionId
+        : undefined,
       dispose: async () => {
         await transport.close().catch(() => {
           /* pooled transport shutdown is best-effort */
@@ -829,6 +1064,24 @@ export async function createStreamableHttpRuntime(
 
     sessionTelemetry.poolMisses += 1;
     return prepareSession(authClaims, clientInfo);
+  };
+
+  const waitForMcpRequestDrain = async (): Promise<boolean> => {
+    if (inFlightMcpRequests === 0) return true;
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let timer: NodeJS.Timeout;
+      const finish = (drained: boolean) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        requestDrainWaiters.delete(onDrained);
+        resolve(drained);
+      };
+      const onDrained = () => finish(true);
+      timer = setTimeout(() => finish(false), shutdownGracePeriodMs);
+      requestDrainWaiters.add(onDrained);
+    });
   };
 
   app.get('/', (_req, res) => {
@@ -875,7 +1128,7 @@ export async function createStreamableHttpRuntime(
           if (!ready) {
             res.status(503).json({
               ready: false,
-              reason: 'bootstrap_required',
+              reason: options.oauthProvider.getReadinessFailureReason?.() ?? 'bootstrap_required',
               transport: STREAMABLE_HTTP,
             });
             return;
@@ -903,14 +1156,6 @@ export async function createStreamableHttpRuntime(
   });
 
   if (options.webConsoleApiV1) {
-    const parseConsoleJson = json();
-    app.use((req, res, next) => {
-      if (req.path === '/api/v1' || req.path.startsWith('/api/v1/')) {
-        parseConsoleJson(req, res, next);
-        return;
-      }
-      next();
-    });
     // Serve the console UI (static) at /ui. Public; the page self-gates on
     // GET /api/v1/auth/me. Assets are copied to dist/web-console/ui by postbuild.
     const consoleUiDir = resolve(dirname(fileURLToPath(import.meta.url)), '../web-console/ui');
@@ -930,58 +1175,68 @@ export async function createStreamableHttpRuntime(
     app.use(mcpPath, options.authMiddleware);
     logger.info('[StreamableHTTP] Auth middleware mounted on MCP path', { mcpPath });
   }
+  app.use(mcpPath, (req, res, next) => {
+    if (consumeRateLimit(req, res)) next();
+  });
+  app.use(mcpPath, json({ limit: bodyLimitBytes }));
+  app.use(createJsonBodyErrorHandler());
 
   app.post(mcpPath, async (req, res) => {
-    if (closingPromise) {
-      respondWithJsonRpcError(res, 503, 'Server shutting down', getRequestId(req));
-      return;
-    }
-
-    if (!consumeRateLimit(req, res)) {
-      return;
-    }
-
-    const sessionId = getMcpSessionId(req);
-
+    const completeRequest = claimMcpHandlerCompletion(res);
     try {
-      if (sessionId) {
-        const existingSession = sessions.get(sessionId);
-        if (!existingSession) {
-          respondWithJsonRpcError(res, 404, 'Unknown MCP session', getRequestId(req));
+      const sessionId = getMcpSessionId(req);
+
+      try {
+        if (sessionId) {
+          const existingSession = sessions.get(sessionId);
+          if (!existingSession) {
+            respondWithJsonRpcError(res, 404, 'Unknown MCP session', getRequestId(req));
+            return;
+          }
+
+          if (!assertSessionOwner(req, res, sessionId, existingSession)) return;
+
+          beginSessionRequest(sessionId);
+          try {
+            await existingSession.transport.handleRequest(req, res, req.body);
+            recordRuntimeActivity(sessionId);
+          } finally {
+            await waitForApplicationRequest(existingSession.attachment, req);
+            endSessionRequest(sessionId);
+          }
           return;
         }
 
-        if (!assertSessionOwner(req, res, sessionId, existingSession)) return;
-
-        touchSession(sessionId);
-        await existingSession.transport.handleRequest(req, res, req.body);
-        recordRuntimeActivity(sessionId);
-        return;
-      }
-
-      if (!isInitializeRequest(req.body)) {
-        respondWithJsonRpcError(res, 400, 'Initialization request required before session use', getRequestId(req));
-        return;
-      }
-
-      const preparedSession = await getOrCreatePreparedSession(res.locals.authClaims, extractClientInfo(req.body));
-
-      try {
-        await preparedSession.transport.handleRequest(req, res, req.body);
-      } catch (error) {
-        const initializedSessionId = preparedSession.transport.sessionId;
-
-        if (initializedSessionId) {
-          await disposeSession(initializedSessionId);
-        } else {
-          await disposePreparedSession(preparedSession);
+        if (!isInitializeRequest(req.body)) {
+          respondWithJsonRpcError(res, 400, 'Initialization request required before session use', getRequestId(req));
+          return;
         }
 
-        throw error;
+        const preparedSession = await getOrCreatePreparedSession(res.locals.authClaims, extractClientInfo(req.body));
+
+        try {
+          await preparedSession.transport.handleRequest(req, res, req.body);
+        } catch (error) {
+          const initializedSessionId = preparedSession.transport.sessionId;
+
+          if (initializedSessionId) {
+            await disposeSession(initializedSessionId);
+          } else {
+            await disposePreparedSession(preparedSession);
+          }
+
+          throw error;
+        } finally {
+          await waitForApplicationRequest(preparedSession.attachment, req);
+          const initializedSessionId = preparedSession.transport.sessionId;
+          if (initializedSessionId) endSessionRequest(initializedSessionId);
+        }
+      } catch (error) {
+        if (sessionId) recordRuntimeActivity(sessionId, 'error');
+        handleRequestFailure(req, res, 'POST', error, sessionId);
       }
-    } catch (error) {
-      if (sessionId) recordRuntimeActivity(sessionId, 'error');
-      handleRequestFailure(req, res, 'POST', error, sessionId);
+    } finally {
+      completeRequest();
     }
   });
 
@@ -1004,13 +1259,21 @@ export async function createStreamableHttpRuntime(
     session: ActiveSessionRecord,
   ): boolean => {
     if (session.ownerSub === undefined) return true;
-    const callerSub = (res.locals.authClaims as { sub?: string } | undefined)?.sub;
-    if (callerSub === session.ownerSub) return true;
+    const caller = res.locals.authClaims;
+    const sameSubject = caller?.sub === session.ownerSub;
+    const sameCanonicalUser = session.ownerUserId === undefined || caller?.userId === session.ownerUserId;
+    const sameAuthorizationGeneration = session.ownerAuthzVersion === undefined
+      || caller?.authzVersion === session.ownerAuthzVersion;
+    if (sameSubject && sameCanonicalUser && sameAuthorizationGeneration) return true;
     logger.warn('[StreamableHTTP] Session ownership mismatch — rejecting dispatch', {
       sessionId,
       method: req.method,
       ownerSub: session.ownerSub,
-      callerSub: callerSub ?? '(none)',
+      callerSub: caller?.sub ?? '(none)',
+      ownerUserId: session.ownerUserId,
+      callerUserId: caller?.userId,
+      ownerAuthzVersion: session.ownerAuthzVersion,
+      callerAuthzVersion: caller?.authzVersion,
     });
     respondWithJsonRpcError(res, 403, 'Session does not belong to the authenticated user', getRequestId(req));
     return false;
@@ -1021,15 +1284,6 @@ export async function createStreamableHttpRuntime(
     res: Response,
     methodName: 'GET' | 'DELETE',
   ): Promise<void> => {
-    if (closingPromise) {
-      respondWithJsonRpcError(res, 503, 'Server shutting down');
-      return;
-    }
-
-    if (!consumeRateLimit(req, res)) {
-      return;
-    }
-
     const sessionId = getMcpSessionId(req);
     const session = sessionId ? sessions.get(sessionId) : undefined;
 
@@ -1058,17 +1312,34 @@ export async function createStreamableHttpRuntime(
     }
 
     try {
-      touchSession(sessionId);
-      await session.transport.handleRequest(req, res);
-      recordRuntimeActivity(sessionId);
+      beginSessionRequest(sessionId);
+      try {
+        await session.transport.handleRequest(req, res);
+        recordRuntimeActivity(sessionId);
+      } finally {
+        await waitForApplicationRequest(session.attachment, req);
+        endSessionRequest(sessionId);
+      }
     } catch (error) {
       recordRuntimeActivity(sessionId, 'error');
       handleRequestFailure(req, res, methodName, error, sessionId);
     }
   };
 
-  app.get(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'GET'));
-  app.delete(mcpPath, async (req, res) => handleSessionLifecycleRequest(req, res, 'DELETE'));
+  const executeTrackedLifecycleRequest = async (
+    req: Request,
+    res: Response,
+    methodName: 'GET' | 'DELETE',
+  ): Promise<void> => {
+    const completeRequest = claimMcpHandlerCompletion(res);
+    try {
+      await handleSessionLifecycleRequest(req, res, methodName);
+    } finally {
+      completeRequest();
+    }
+  };
+  app.get(mcpPath, async (req, res) => executeTrackedLifecycleRequest(req, res, 'GET'));
+  app.delete(mcpPath, async (req, res) => executeTrackedLifecycleRequest(req, res, 'DELETE'));
 
   // OAuth provider router is mounted LAST so its catch-all (oidc-provider's
   // request handler) only sees URLs that none of the specific routes above
@@ -1118,6 +1389,15 @@ export async function createStreamableHttpRuntime(
     }
 
     closingPromise = (async () => {
+      const serverClosePromise = beginHttpServerClose(httpServer);
+      httpServer.closeIdleConnections();
+      if (runtimeCommandPollTimer) {
+        clearInterval(runtimeCommandPollTimer);
+        runtimeCommandPollTimer = null;
+      }
+      for (const timer of sessionDisposalRetryTimers.values()) clearTimeout(timer);
+      sessionDisposalRetryTimers.clear();
+
       // Wait for any in-flight pool replenishment to finish.
       // closingPromise is set before this await, so maintainSessionPool()'s
       // while-loop guard (!closingPromise) will stop the loop from continuing
@@ -1126,22 +1406,37 @@ export async function createStreamableHttpRuntime(
         await replenishPoolPromise.catch(() => {});
       }
 
-      const allSessions = Array.from(sessions.keys());
+      const drained = await waitForMcpRequestDrain();
+      if (!drained) {
+        logger.warn('[StreamableHTTP] Shutdown grace period expired; closing active connections', {
+          inFlightMcpRequests,
+          shutdownGracePeriodMs,
+        });
+      }
+
+      // `server.close()` waits for active non-MCP responses too. Console SSE
+      // streams may otherwise retain the process for their full lifetime. At
+      // this point accepted MCP handlers completed or exhausted their explicit
+      // grace period, so terminate every remaining socket before disposal.
+      httpServer.closeAllConnections();
+
       const warmSessions = pooledSessions.splice(0);
-      if (runtimeCommandPollTimer) {
-        clearInterval(runtimeCommandPollTimer);
-        runtimeCommandPollTimer = null;
-      }
 
-      for (const sessionId of allSessions) {
-        await disposeSession(sessionId);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const allSessions = [...new Set([...sessions.keys(), ...closingSessions.keys()])];
+        if (allSessions.length === 0) break;
+        await Promise.all(allSessions.map(sessionId => disposeSession(sessionId)));
       }
-
-      for (const preparedSession of warmSessions) {
-        await disposePreparedSession(preparedSession);
+      if (closingSessions.size > 0) {
+        logger.warn('[StreamableHTTP] Session attachments remained after shutdown retries', {
+          sessionIds: [...closingSessions.keys()],
+        });
       }
+      await Promise.all(warmSessions.map(preparedSession => disposePreparedSession(preparedSession)));
 
-      await closeHttpServer(httpServer);
+      httpServer.closeIdleConnections();
+      await serverClosePromise;
+      await options.onShutdown?.();
     })();
 
     return closingPromise;
@@ -1185,4 +1480,71 @@ export async function createStreamableHttpRuntime(
       await shutdown();
     },
   };
+}
+
+function normalizeExpressRoutePath(routePath: string): string {
+  if (routePath === '/') return routePath;
+  return routePath.replace(/\/+$/u, '');
+}
+
+async function settlesWithin(promise: Promise<unknown>, timeoutMs: number): Promise<boolean> {
+  if (timeoutMs === 0) return false;
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise.then(() => true),
+      new Promise<false>(resolve => {
+        timer = setTimeout(() => resolve(false), timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+async function booleanResultWithin(promise: Promise<boolean>, timeoutMs: number): Promise<boolean | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>(resolve => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function createProtectedMcpExpressApp(input: {
+  readonly host: string;
+  readonly allowedHosts: readonly string[] | undefined;
+  readonly afterHostValidation?: RequestHandler;
+}): Express {
+  const app = express();
+  if (input.allowedHosts) {
+    app.use(hostHeaderValidation([...input.allowedHosts]));
+  } else if (isLoopbackHost(input.host)) {
+    app.use(localhostHostValidation());
+  } else if (input.host === '0.0.0.0' || input.host === '::') {
+    logger.warn('[StreamableHTTP] Binding to all interfaces without an explicit Host allowlist');
+  }
+  if (input.afterHostValidation) app.use(input.afterHostValidation);
+  return app;
+}
+
+function createJsonBodyErrorHandler(): ErrorRequestHandler {
+  return (error: unknown, req, res, next): void => {
+    if (isEntityTooLargeError(error)) {
+      respondWithJsonRpcError(res, 413, 'MCP request body exceeds the configured limit', getRequestId(req));
+      return;
+    }
+    next(error);
+  };
+}
+
+function isEntityTooLargeError(error: unknown): boolean {
+  return Boolean(error && typeof error === 'object' && 'type' in error && error.type === 'entity.too.large');
 }

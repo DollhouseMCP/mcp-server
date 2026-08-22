@@ -22,7 +22,10 @@ import { randomUUID } from 'node:crypto';
 import { exportJWK, generateKeyPair, type JWK } from 'jose';
 import { logger } from '../../utils/logger.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
-import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
+import type {
+  ISigningKeyStore,
+  SigningKeyWrite,
+} from '../../storage/signingKeys/ISigningKeyStore.js';
 
 const ALGORITHM = 'ES256';
 
@@ -167,6 +170,10 @@ export async function loadOrGenerateSigningJwksViaStore(
       'All previously-issued tokens will fail validation.');
   }
 
+  if (!active && (await store.listByKind('jwks')).length > 0) {
+    throw new Error('No active JWKS signing key is available; rotate a replacement explicitly');
+  }
+
   // Generate fresh + rotate atomically into the store.
   const stored = await generateNewKeypair();
   await store.rotate({
@@ -188,14 +195,20 @@ export async function loadOrGenerateSigningJwksViaStore(
  * same transaction, per ISigningKeyStore's rotation invariant).
  */
 export async function rotateSigningKeyViaStore(store: ISigningKeyStore): Promise<void> {
+  const write = await createFreshSigningKeyWrite();
+  await store.rotate(write);
+  logger.warn('[persistKeys] Rotated signing key in store — old kid invalidated; ' +
+    `new kid=${write.kid}`);
+}
+
+/** Generate a fresh JWKS write before entering an atomic multi-ring transition. */
+export async function createFreshSigningKeyWrite(): Promise<SigningKeyWrite> {
   const stored = await generateNewKeypair();
-  await store.rotate({
+  return {
     kid: stored.kid,
     kind: 'jwks',
     payload: stored as unknown as Record<string, unknown>,
-  });
-  logger.warn('[persistKeys] Rotated signing key in store — old kid invalidated; ' +
-    `new kid=${stored.kid}`);
+  };
 }
 
 /**

@@ -6,6 +6,7 @@ import { Memory, MemoryEntry } from '../../../../src/elements/memories/Memory.js
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
 import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
+import { MEMORY_CONSTANTS } from '../../../../src/elements/memories/constants.js';
 
 // Create a shared MetadataService instance for all tests
 const metadataService = createTestMetadataService();
@@ -339,28 +340,19 @@ describe('Memory Element', () => {
     });
     
     it('should validate total memory size', async () => {
-      // Create entries that exceed memory limit
-      const largeContent = 'x'.repeat(500 * 1024); // 500KB
-      
-      await memory.addEntry(largeContent.substring(0, 100 * 1024)); // Max entry size
-      await memory.addEntry(largeContent.substring(0, 100 * 1024));
-      
-      // Try to add more to exceed 1MB limit
-      for (let i = 0; i < 10; i++) {
-        try {
-          await memory.addEntry(largeContent.substring(0, 100 * 1024));
-        } catch {
-          // May hit max entries first
-        }
+      const maxEntry = 'x'.repeat(MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+      const entriesNeeded = Math.floor(MEMORY_CONSTANTS.MAX_MEMORY_SIZE / MEMORY_CONSTANTS.MAX_ENTRY_SIZE) + 1;
+
+      for (let i = 0; i < entriesNeeded; i++) {
+        await memory.addEntry(maxEntry);
       }
-      
+
       const result = memory.validate();
       const stats = memory.getStats();
-      
-      if (stats.totalSize > 1024 * 1024) {
-        expect(result.valid).toBe(false);
-        expect(result.errors?.some(e => e.field === 'memory')).toBe(true);
-      }
+
+      expect(stats.totalSize).toBeGreaterThan(MEMORY_CONSTANTS.MAX_MEMORY_SIZE);
+      expect(result.valid).toBe(false);
+      expect(result.errors?.some(e => e.field === 'memory')).toBe(true);
     });
   });
   
@@ -400,11 +392,21 @@ describe('Memory Element', () => {
     });
     
     it('should enforce content size limits', async () => {
-      const hugeContent = 'x'.repeat(200 * 1024); // 200KB
+      const hugeContent = 'x'.repeat(MEMORY_CONSTANTS.MAX_ENTRY_SIZE + 64 * 1024);
       const entry = await memory.addEntry(hugeContent);
       
       // Should be truncated to max entry size
-      expect(entry.content.length).toBeLessThanOrEqual(100 * 1024);
+      expect(entry.content.length).toBeLessThanOrEqual(MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+      expect(Buffer.byteLength(entry.content, 'utf8')).toBeLessThanOrEqual(MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+    });
+
+    it('caps multibyte entry content by UTF-8 bytes without splitting code points', async () => {
+      const content = 'é'.repeat(Math.floor(MEMORY_CONSTANTS.MAX_ENTRY_SIZE / 2) + 10);
+      const entry = await memory.addEntry(content);
+
+      expect(Buffer.byteLength(entry.content, 'utf8')).toBeLessThanOrEqual(MEMORY_CONSTANTS.MAX_ENTRY_SIZE);
+      expect(entry.content.endsWith('é')).toBe(true);
+      expect(entry.content).not.toContain('\uFFFD');
     });
     
     it('should sanitize metadata', async () => {

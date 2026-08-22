@@ -4,7 +4,7 @@
  *
  * MEMORY ARCHITECTURE DESIGN:
  * - Memories are stored as small, sharded YAML files for fast loading
- * - Each memory file should be <256KB for optimal parse performance
+ * - Each persisted memory file is capped at 10 MiB
  * - Larger content referenced via external documents (PDFs, images, etc)
  * - Index-of-indexes pattern for O(log n) search performance
  *
@@ -22,8 +22,8 @@
 // Memory size limits
 export const MEMORY_CONSTANTS = {
   // Size limits
-  MAX_MEMORY_SIZE: 1024 * 1024,        // 1MB total memory size
-  MAX_ENTRY_SIZE: 100 * 1024,          // 100KB per entry
+  MAX_MEMORY_SIZE: 10 * 1024 * 1024,   // 10MB persisted memory element
+  MAX_ENTRY_SIZE: 400 * 1024,          // 400KB per entry
   MAX_ENTRIES_DEFAULT: 1000,           // Maximum number of entries
 
   // Entry limits
@@ -43,20 +43,8 @@ export const MEMORY_CONSTANTS = {
   // Search limits
   DEFAULT_SEARCH_LIMIT: 100,           // Default search result limit
 
-  /**
-   * YAML Size Limit Rationale:
-   * 256KB is optimal for YAML parsing performance while preventing DoS attacks.
-   * - YAML parsing is CPU-intensive; large files can block the event loop
-   * - 256KB accommodates ~5000 lines of typical memory content
-   * - Larger memories should be sharded across multiple files
-   * - External references used for binary data (images, PDFs, etc)
-   *
-   * Performance benchmarks:
-   * - <256KB: Parse time <10ms on average hardware
-   * - 1MB: Parse time ~50-100ms (acceptable but not ideal)
-   * - >5MB: Parse time >500ms (unacceptable, blocks UI)
-   */
-  MAX_YAML_SIZE: 256 * 1024,           // 256KB max serialized memory YAML — enforced on save, load, import, and index extraction (#2329)
+  /** Pure-YAML memories share the 10 MiB persisted-element ceiling. */
+  MAX_YAML_SIZE: 10 * 1024 * 1024,     // Memory elements are pure YAML and share the 10MB persisted-element ceiling
 
   /**
    * Privacy Level Hierarchy:

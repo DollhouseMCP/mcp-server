@@ -13,9 +13,9 @@ export { elements, elementTags, elementRelationships } from './elements.js';
 export { elementProvenance } from './provenance.js';
 export { memoryEntries } from './memories.js';
 export { ensembleMembers } from './ensembles.js';
-export { agentStates } from './agents.js';
+export { agentStates, agentReplacementJournals } from './agents.js';
 export { sessions } from './sessions.js';
-export { authAccounts, authIdentityEvents, authKv } from './auth.js';
+export { authAccounts, authIdentityEvents, authSubjectRevocationFences, authKv } from './auth.js';
 // Phase 4.5 storage completion:
 export { operatorSettings } from './operatorSettings.js';
 export { sharedCache } from './sharedCache.js';
@@ -29,11 +29,15 @@ export { authAllowlist } from './authAllowlist.js';
 export type { AuthAllowlistKind, AuthAllowlistEntry } from './authAllowlist.js';
 export {
   userAdminRoles,
+  accountAllowlistAuthorityOrderSequence,
   accountAllowlistEntries,
   consoleSessions,
   consoleAuthPolicy,
   consoleLoginTransactions,
   userIntegrations,
+  integrationProviderDescriptors,
+  integrationCuratedProviderState,
+  integrationOpenApiSpecs,
   portfolioSyncJobs,
   idempotencyRecords,
   accountFactors,
@@ -59,6 +63,8 @@ export type {
   UserIntegrationProvider,
   UserIntegrationErrorReason,
   UserIntegrationStatus,
+  IntegrationDescriptorOwnership,
+  IntegrationAuthStrategy,
   PortfolioSyncDirection,
   PortfolioSyncConflictPolicy,
   PortfolioSyncJobStatus,

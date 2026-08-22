@@ -12,6 +12,7 @@ import {
 } from '../middleware/ConsoleCookies.js';
 import type { IConsoleOpaqueValueService } from '../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../security/SecretEncryption.js';
+import type { IConsoleAccountAdminStore } from '../stores/IConsoleAccountAdminStore.js';
 import type { IConsoleSessionStore } from '../stores/IConsoleSessionStore.js';
 import type { ILoginTransactionStore } from '../stores/ILoginTransactionStore.js';
 import type {
@@ -22,7 +23,7 @@ import type {
   ConsoleRequest,
 } from '../platform/ConsolePlatformTypes.js';
 import { CONSOLE_CAPABILITIES } from '../platform/ConsolePlatformTypes.js';
-import { capabilitiesForRoles } from '../modules/account-admin/AccountAdminRoleAuthority.js';
+import { capabilitiesForRoles } from '../platform/ConsoleRoleCapabilities.js';
 import { normalizeConsoleReturnPath } from '../platform/ConsoleReturnPaths.js';
 import type { IConsoleOAuthClient } from './IConsoleOAuthClient.js';
 
@@ -44,6 +45,8 @@ export interface ConsoleBffAuthModuleOptions {
   readonly loginTransactions: ILoginTransactionStore;
   readonly sessionStore: IConsoleSessionStore;
   readonly identityResolver: IConsoleIdentityResolver;
+  /** Profile-field source for /auth/me — the same store /me/profile reads. */
+  readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly opaqueValues: IConsoleOpaqueValueService;
   readonly secretEncryption: ISecretEncryptionService;
   readonly publicBaseUrl: string;
@@ -225,6 +228,7 @@ class ConsoleBffAuthService {
       idHash: this.options.opaqueValues.hashOpaqueValue(sessionValue),
       userId: principal.userId,
       authSub: principal.sub,
+      authzVersion: principal.authzVersion,
       csrfTokenHash: this.options.opaqueValues.hashOpaqueValue(csrfValue),
       grantedCapabilities: [SELF_CAPABILITY],
       elevation: null,
@@ -257,6 +261,15 @@ class ConsoleBffAuthService {
         userId: authentication.userId,
       });
       return invalidCapability();
+    }
+    const principal = await this.options.identityResolver.resolveEnabledPrincipal(authentication.authSub);
+    if (principal?.userId !== authentication.userId ||
+        !capabilitiesForRoles(principal.roles ?? []).includes(capability)) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: capability not role-entitled', {
+        userId: authentication.userId,
+        requestedCapability: capability,
+      });
+      return forbiddenCapability();
     }
     const now = this.now();
     const transactionId = this.options.opaqueValues.createOpaqueValue();
@@ -381,17 +394,18 @@ class ConsoleBffAuthService {
       });
       return failedCallback();
     }
-    // One step-up elevates the session to the principal's FULL role-entitled
-    // admin capability set (e.g. an `admin` gets operate + accounts + audit +
-    // security at once) instead of only the requested capability — so a single
-    // step-up unlocks all admin surfaces the role allows. Falls back to the
-    // requested capability when the principal carries no recognized roles.
+    // Re-check live role entitlement after the external proof. Roles can change
+    // while the user is completing the OAuth/TOTP interaction.
     const roleCapabilities = capabilitiesForRoles(principal.roles ?? []);
-    const elevationCapabilities = roleCapabilities.length > 0
-      ? roleCapabilities
-      : [transaction.requestedCapability];
+    if (!roleCapabilities.includes(transaction.requestedCapability)) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: role entitlement changed', {
+        userId: authentication.userId,
+        requestedCapability: transaction.requestedCapability,
+      });
+      return failedCallback();
+    }
     const attached = await this.options.sessionStore.setElevation(authentication.sessionIdHash, {
-      capabilities: elevationCapabilities,
+      capabilities: roleCapabilities,
       expiresAt: new Date(now.getTime() + ELEVATION_TTL_MAX_MS),
       acr: claims.acr,
       amr: claims.amr,
@@ -449,11 +463,18 @@ class ConsoleBffAuthService {
     // failure (disabled/removed principal) falls back to none.
     const principal = await this.options.identityResolver.resolveEnabledPrincipal(authentication.authSub);
     const availableAdminCapabilities = principal ? capabilitiesForRoles(principal.roles ?? []) : [];
+    // Profile fields for the SPA header, from the same store /me/profile
+    // serves. Null-safe: a session can briefly outlive a deleted principal,
+    // and /auth/me must keep answering (the SPA uses it to decide sign-out).
+    const profile = await this.options.accountAdminStore.findPrincipal(authentication.userId);
     return {
       status: 200,
       body: {
         user_id: authentication.userId,
         auth_sub: authentication.authSub,
+        display_name: profile?.displayName ?? null,
+        email: profile?.email ?? null,
+        auth_methods: profile ? [...profile.authMethods] : [],
         granted_capabilities: authentication.grantedCapabilities,
         available_admin_capabilities: availableAdminCapabilities,
         elevation: authentication.elevation
@@ -528,8 +549,24 @@ function invalidCapability(): ConsoleHandlerResult {
   return {
     status: 400,
     body: {
+      type: 'about:blank',
+      title: 'Invalid request',
+      status: 400,
       code: 'invalid_capability',
       detail: 'Step-up requires a valid administrative console capability.',
+    },
+  };
+}
+
+function forbiddenCapability(): ConsoleHandlerResult {
+  return {
+    status: 403,
+    body: {
+      type: 'about:blank',
+      title: 'Forbidden',
+      status: 403,
+      code: 'insufficient_role_authority',
+      detail: 'Your active administrative roles do not grant that capability.',
     },
   };
 }

@@ -42,10 +42,21 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import { logger } from '../../../utils/logger.js';
 import { FileLockManager } from '../../../security/fileLockManager.js';
+import {
+  durableAppendFile,
+  durableAtomicWriteFile,
+  syncFilesystemDirectory,
+} from '../../../security/durableFileOperations.js';
+import { withFilesystemInterprocessGuard } from '../../../security/filesystemInterprocessGuard.js';
+import {
+  normalizeAuthAllowlistValue,
+  storedAuthAllowlistValueMatches,
+} from '../allowlistIdentity.js';
 import type {
   AllowlistAddInput,
   AllowlistMatchValues,
@@ -84,6 +95,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private readonly kvDir: string;
   private readonly bootstrapPath: string;
   private readonly allowlistPath: string;
+  private readonly auditGuardPath: string;
   private readonly locks = new FileLockManager();
   private initialized = false;
 
@@ -99,6 +111,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     this.kvDir = path.join(this.rootDir, 'kv');
     this.bootstrapPath = path.join(this.rootDir, 'bootstrap.json');
     this.allowlistPath = path.join(this.rootDir, 'allowlist.json');
+    this.auditGuardPath = path.join(this.rootDir, '.audit.lock');
   }
 
   // ---- Accounts (must-fix #18) ----
@@ -230,29 +243,54 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {
     await this.locks.withLock(`auth:audit:${this.auditPath}`, async () => {
       await this.ensureRoot();
-      // Rotate before append when the current file is past threshold.
-      // Standard log-rotation shape: rename audit.jsonl → audit.jsonl.1,
-      // then start a fresh file. The .1 file is preserved for offline
-      // analysis; operators can sweep it on their own retention policy.
-      try {
-        const stat = await fs.stat(this.auditPath);
-        if (stat.size >= FilesystemAuthStorageLayer.AUDIT_ROTATION_THRESHOLD_BYTES) {
-          const archived = `${this.auditPath}.1`;
-          await fs.rename(this.auditPath, archived).catch(() => {});
-          logger.info('[AuthStorage:fs] audit log rotated', {
-            from: this.auditPath, to: archived, sizeBytes: stat.size,
-          });
+      await withFilesystemInterprocessGuard(this.auditGuardPath, async () => {
+        if (event.eventId && await this.auditEventExists(event.eventId)) return;
+        // Rotate before append when the current file is past threshold.
+        // Standard log-rotation shape: rename audit.jsonl → audit.jsonl.1,
+        // then start a fresh file. The .1 file is preserved for offline
+        // analysis; operators can sweep it on their own retention policy.
+        try {
+          const stat = await fs.stat(this.auditPath);
+          if (stat.size >= FilesystemAuthStorageLayer.AUDIT_ROTATION_THRESHOLD_BYTES) {
+            const archived = `${this.auditPath}.1`;
+            await fs.rename(this.auditPath, archived).catch(() => {});
+            await syncFilesystemDirectory(this.rootDir);
+            logger.info('[AuthStorage:fs] audit log rotated', {
+              from: this.auditPath, to: archived, sizeBytes: stat.size,
+            });
+          }
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
         }
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-      }
-      await fs.appendFile(this.auditPath, `${JSON.stringify(event)}\n`, 'utf8');
+        await durableAppendFile(this.auditPath, `${JSON.stringify(event)}\n`);
+      });
     });
     logger.info('[AuthStorage:fs] identity event', {
       type: event.type,
       sub: event.sub,
       provider: event.provider,
     });
+  }
+
+  private async auditEventExists(eventId: string): Promise<boolean> {
+    for (const candidate of [this.auditPath, `${this.auditPath}.1`]) {
+      try {
+        const raw = await fs.readFile(candidate, 'utf8');
+        for (const line of raw.split('\n')) {
+          if (!line.trim()) continue;
+          try {
+            const event = JSON.parse(line) as Partial<IdentityAuditEvent>;
+            if (event.eventId === eventId) return true;
+          } catch {
+            // Existing audit readers already tolerate malformed lines. A bad
+            // unrelated line must not suppress a valid idempotent append.
+          }
+        }
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      }
+    }
+    return false;
   }
 
   async listIdentityEvents(filter?: IdentityEventFilter): Promise<IdentityAuditEvent[]> {
@@ -327,6 +365,10 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
 
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
+  async genericNow(): Promise<number> {
+    return Date.now();
+  }
+
   async genericGet(model: string, id: string): Promise<unknown> {
     // Defense in depth: assert at the public surface in addition to the
     // internal `readKv` check. Keeps the path-traversal guarantee from
@@ -357,6 +399,38 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     });
   }
 
+  async genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    const filePath = this.kvPath(model, id);
+    return this.locks.withLock(`auth:kv:${filePath}`, async () => {
+      await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      return withFilesystemInterprocessGuard(`${filePath}.lock`, async () => {
+        let existing: KvRecord;
+        try {
+          existing = JSON.parse(await fs.readFile(filePath, 'utf-8')) as KvRecord;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') return false;
+          throw error;
+        }
+        if (existing.exp !== null && existing.exp <= Date.now()) return false;
+        if (!isDeepStrictEqual(existing.value, toJsonValue(expectedPayload))) return false;
+        const record: KvRecord = {
+          exp: expiresInSec ? Date.now() + expiresInSec * 1000 : null,
+          value: payload,
+        };
+        await durableAtomicWriteFile(filePath, JSON.stringify(record));
+        return true;
+      });
+    });
+  }
+
   async genericDestroy(model: string, id: string): Promise<void> {
     assertSafeModel(model);
     assertSafeId(id);
@@ -373,24 +447,26 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     assertSafeId(id);
     const filePath = this.kvPath(model, id);
     return this.locks.withLock(`auth:kv:${filePath}`, async () => {
-      try {
-        const raw = await fs.readFile(filePath, 'utf-8');
-        const existing = JSON.parse(raw) as KvRecord;
-        if (existing.exp === null || existing.exp > Date.now()) {
-          return false;
+      await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      return withFilesystemInterprocessGuard(`${filePath}.lock`, async () => {
+        try {
+          const raw = await fs.readFile(filePath, 'utf-8');
+          const existing = JSON.parse(raw) as KvRecord;
+          if (existing.exp === null || existing.exp > Date.now()) {
+            return false;
+          }
+          // Expired record present — fall through to overwrite.
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+          // Not present — proceed with insert.
         }
-        // Expired record present — fall through to overwrite.
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
-        // Not present — proceed with insert.
-      }
-      const record: KvRecord = {
-        exp: expiresInSec ? Date.now() + expiresInSec * 1000 : null,
-        value: payload,
-      };
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await this.locks.atomicWriteFile(filePath, JSON.stringify(record));
-      return true;
+        const record: KvRecord = {
+          exp: expiresInSec ? Date.now() + expiresInSec * 1000 : null,
+          value: payload,
+        };
+        await durableAtomicWriteFile(filePath, JSON.stringify(record));
+        return true;
+      });
     });
   }
 
@@ -399,30 +475,28 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     assertSafeId(id);
     const filePath = this.kvPath(model, id);
     return this.locks.withLock(`auth:kv:${filePath}`, async () => {
-      let record: KvRecord;
-      try {
-        const raw = await fs.readFile(filePath, 'utf-8');
-        record = JSON.parse(raw) as KvRecord;
-      } catch (err) {
-        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
-        throw err;
-      }
-      if (record.exp !== null && record.exp <= Date.now()) {
-        return false;
-      }
-      const value = record.value as (Record<string, unknown> & { consumed?: number }) | undefined;
-      if (value && typeof value.consumed === 'number') return false;
-      // Same lock that guards genericSet — this read-modify-write is
-      // serialized against any concurrent set/destroy/consume on the
-      // same record. Two simultaneous consume() calls cannot both
-      // observe an unconsumed record and both report success.
-      const next: KvRecord = {
-        exp: record.exp,
-        value: { ...(value ?? {}), consumed: Date.now() },
-      };
-      await fs.mkdir(path.dirname(filePath), { recursive: true });
-      await this.locks.atomicWriteFile(filePath, JSON.stringify(next));
-      return true;
+      await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+      return withFilesystemInterprocessGuard(`${filePath}.lock`, async () => {
+        let record: KvRecord;
+        try {
+          const raw = await fs.readFile(filePath, 'utf-8');
+          record = JSON.parse(raw) as KvRecord;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+          throw err;
+        }
+        if (record.exp !== null && record.exp <= Date.now()) {
+          return false;
+        }
+        const value = record.value as (Record<string, unknown> & { consumed?: number }) | undefined;
+        if (value && typeof value.consumed === 'number') return false;
+        const next: KvRecord = {
+          exp: record.exp,
+          value: { ...(value ?? {}), consumed: Date.now() },
+        };
+        await durableAtomicWriteFile(filePath, JSON.stringify(next));
+        return true;
+      });
     });
   }
 
@@ -696,8 +770,9 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
     return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
       const entries = await this.readAllowlistRaw();
-      const value = input.value.toLowerCase();
-      const duplicate = entries.find(e => e.kind === input.kind && e.value === value);
+      const value = normalizeAuthAllowlistValue(input.kind, input.value);
+      const duplicate = entries.some(e =>
+        e.kind === input.kind && storedAuthAllowlistValueMatches(input.kind, e.value, value));
       if (duplicate) {
         throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
       }
@@ -744,13 +819,13 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
     const entries = await this.readAllowlist();
     if (entries.length === 0) return false;
-    const email = values.email?.toLowerCase();
-    const githubUsername = values.githubUsername?.toLowerCase();
-    const githubId = values.githubId;
     for (const e of entries) {
-      if (e.kind === 'email' && email && e.value === email) return true;
-      if (e.kind === 'github_username' && githubUsername && e.value === githubUsername) return true;
-      if (e.kind === 'github_id' && githubId && e.value === githubId) return true;
+      if (e.kind === 'email' && values.email &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.email)) return true;
+      if (e.kind === 'github_username' && values.githubUsername &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.githubUsername)) return true;
+      if (e.kind === 'github_id' && values.githubId &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.githubId)) return true;
     }
     return false;
   }
@@ -770,7 +845,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
         });
         return [];
       }
-      return parsed
+      const entries = parsed
         .filter((e): e is AuthAllowlistEntry & { createdAt: string | Date } =>
           typeof e === 'object' && e !== null
           && typeof (e as { id?: unknown }).id === 'string'
@@ -785,6 +860,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
           createdBy: typeof e.createdBy === 'string' ? e.createdBy : null,
           createdAt: typeof e.createdAt === 'string' ? new Date(e.createdAt) : e.createdAt,
         }));
+      return canonicalizePersistedAllowlist(entries, this.allowlistPath);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') return [];
@@ -798,6 +874,31 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       throw err;
     }
   }
+}
+
+function toJsonValue(value: unknown): unknown {
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? undefined : JSON.parse(encoded) as unknown;
+}
+
+function canonicalizePersistedAllowlist(
+  entries: AuthAllowlistEntry[],
+  allowlistPath: string,
+): AuthAllowlistEntry[] {
+  const canonicalKeys = new Map<string, string>();
+  return entries.map(entry => {
+    const value = normalizeAuthAllowlistValue(entry.kind, entry.value);
+    const key = `${entry.kind}\u0000${value}`;
+    const existingId = canonicalKeys.get(key);
+    if (existingId !== undefined && existingId !== entry.id) {
+      throw new Error(
+        `allowlist normalization collision in ${allowlistPath}: entries ` +
+        `${existingId} and ${entry.id} resolve to the same ${entry.kind} identity`,
+      );
+    }
+    canonicalKeys.set(key, entry.id);
+    return { ...entry, value };
+  });
 }
 
 function serializeAllowlist(entries: AuthAllowlistEntry[]): string {

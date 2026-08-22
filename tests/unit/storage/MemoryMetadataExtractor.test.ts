@@ -3,6 +3,7 @@
  */
 
 import { MemoryMetadataExtractor } from '../../../src/storage/MemoryMetadataExtractor.js';
+import { MEMORY_CONSTANTS } from '../../../src/elements/memories/constants.js';
 
 describe('MemoryMetadataExtractor', () => {
   describe('extractMetadata', () => {
@@ -145,9 +146,8 @@ payload: !!js/function "function () { return process.env; }"
     });
 
     it('should fail closed for oversized YAML input', () => {
-      // Issue #2329: the cap is MAX_YAML_SIZE (256KB, matching save/load) — a
-      // 70KB memory is legitimate and must extract; past 256KB fails closed.
-      const hugeValue = 'a'.repeat(280 * 1024);
+      // Issue #2329/#2473: extraction shares the 10 MiB memory save/load cap.
+      const hugeValue = 'a'.repeat(MEMORY_CONSTANTS.MAX_YAML_SIZE + 1);
       const raw = `
 name: Oversized
 description: ${hugeValue}
@@ -351,7 +351,7 @@ tags:
     });
 
     it('should extract metadata from memory files larger than 64KB (#2329)', () => {
-      // Memories up to MAX_YAML_SIZE (256KB) are valid on disk; the extractor
+      // Memories up to MAX_YAML_SIZE are valid on disk; the extractor
       // previously capped at 64KB and indexed such files as 'unnamed'.
       const bigEntry = 'research finding lorem ipsum dolor sit amet '.repeat(400);
       const entries = Array.from({ length: 6 }, (_, i) =>

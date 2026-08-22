@@ -385,6 +385,7 @@ function sessionFixture(options: {
     idHash: options.idHash,
     userId: options.userId,
     authSub: `github|${options.userId}`,
+    authzVersion: 1,
     csrfTokenHash: hash(100),
     grantedCapabilities: elevation ? ['console:self', ...elevation.capabilities] : ['console:self'],
     elevation,

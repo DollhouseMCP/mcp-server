@@ -47,16 +47,16 @@ describe('Security Audit Suppressions', () => {
     });
 
     describe('wildcard patterns', () => {
-      it('should match single wildcard patterns', () => {
-        expect(shouldSuppress('DMCP-SEC-004', 'src/types/persona.ts')).toBe(true);
-        expect(shouldSuppress('DMCP-SEC-004', 'src/types/mcp.ts')).toBe(true);
+      it('should not suppress broad type directories', () => {
+        expect(shouldSuppress('DMCP-SEC-004', 'src/types/persona.ts')).toBe(false);
+        expect(shouldSuppress('DMCP-SEC-004', 'src/types/mcp.ts')).toBe(false);
         expect(shouldSuppress('DMCP-SEC-004', 'src/types/subdir/nested.ts')).toBe(false);
       });
 
-      it('should match double wildcard patterns', () => {
-        expect(shouldSuppress('DMCP-SEC-004', 'src/collection/PersonaInstaller.ts')).toBe(true);
-        expect(shouldSuppress('DMCP-SEC-004', 'src/collection/api/PersonaAPI.ts')).toBe(true);
-        expect(shouldSuppress('DMCP-SEC-004', 'src/collection/deep/nested/file.ts')).toBe(true);
+      it('should match only justified double wildcard patterns', () => {
+        expect(shouldSuppress('DMCP-SEC-004', 'src/telemetry/types.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-004', 'packages/core/telemetry/types.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-004', 'src/collection/deep/nested/file.ts')).toBe(false);
       });
 
       it('should match test file patterns', () => {
@@ -85,7 +85,7 @@ describe('Security Audit Suppressions', () => {
       });
 
       it('should handle paths with multiple slashes', () => {
-        const messyPath = 'src//types///persona.ts';
+        const messyPath = 'src//telemetry///types.ts';
         expect(shouldSuppress('DMCP-SEC-004', messyPath)).toBe(true);
       });
 
@@ -134,7 +134,7 @@ describe('Security Audit Suppressions', () => {
         
         // This will recompute (we can't easily test this without spying on internals)
         const result = shouldSuppress(rule, file);
-        expect(result).toBe(true);
+        expect(result).toBe(false);
       });
     });
 
@@ -178,7 +178,19 @@ describe('Security Audit Suppressions', () => {
       it('should handle paths with special characters', () => {
         // Special characters should be properly escaped and still match glob patterns
         expect(shouldSuppress('*', 'test[1].md')).toBe(true); // **/*.md should match any .md file
-        expect(shouldSuppress('*', 'test(1).yaml')).toBe(true); // **/*.yaml should match any .yaml file
+        expect(shouldSuppress('*', 'test(1).yaml')).toBe(false); // YAML source remains auditable
+      });
+    });
+
+    describe('narrow primitive suppressions', () => {
+      it('suppresses only the reviewed pure primitive file', () => {
+        expect(shouldSuppress('DMCP-SEC-006', 'src/security/pathValidator.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-006', 'src/security/pathTraversalService.ts')).toBe(false);
+      });
+
+      it('does not turn the signing-key directory into a blanket exemption', () => {
+        expect(shouldSuppress('DMCP-SEC-006', 'src/storage/signingKeys/signingKeyPayloadEncryption.ts')).toBe(true);
+        expect(shouldSuppress('DMCP-SEC-006', 'src/storage/signingKeys/UnreviewedKeyOperation.ts')).toBe(false);
       });
     });
   });

@@ -25,67 +25,146 @@
  */
 
 import { get, post, del } from './api.js';
+import { confirmDialog, escapeHtml, relAgo } from './ui-utils.js';
+import { createAllowlistView, createIdentityTriageView, createBootstrapView } from './accounts-admin.js';
 
-// Role → capabilities it grants (mirrors the server's ROLE_GRANT_CAPABILITIES).
-// Used to gate which roles THIS admin may assign: you can only grant a role
-// whose powers you already hold (the server enforces the same rule).
-const ROLE_CAPS = {
-  admin: ['console:admin:accounts', 'console:admin:operate', 'console:admin:audit', 'console:admin:security'],
-  account_admin: ['console:admin:accounts'],
-  operator: ['console:admin:operate'],
-  auditor: ['console:admin:audit'],
-  security_admin: ['console:admin:security'],
+const DRAWER_ROOT_SELECTOR = '#ua-drawer-root';
+const USER_ROUTES = {
+  invite: ['POST', '/admin/accounts/users/invite'],
+  grantRole: ['POST', '/admin/accounts/users/:user_id/roles/grant'],
+  revokeRole: ['POST', '/admin/accounts/users/:user_id/roles/revoke'],
+  resetTotp: ['POST', '/admin/security/users/:user_id/factors/totp/reset'],
+  enable: ['POST', '/admin/accounts/users/:user_id/enable'],
+  disable: ['POST', '/admin/accounts/users/:user_id/disable'],
+  revokeAllCredentials: ['POST', '/admin/accounts/users/:user_id/credentials/revoke-all'],
+  delete: ['DELETE', '/admin/accounts/users/:user_id'],
+  listIdentities: ['GET', '/admin/accounts/users/:user_id/identities'],
+  linkIdentity: ['POST', '/admin/accounts/users/:user_id/identities/link'],
+  unlinkIdentity: ['POST', '/admin/accounts/users/:user_id/identities/unlink'],
+  listSessions: ['GET', '/admin/accounts/users/:user_id/sessions'],
+  disconnectSession: ['DELETE', '/admin/accounts/users/:user_id/sessions/:session_id'],
 };
-const ROLE_LABELS = {
-  admin: 'Admin',
-  account_admin: 'Account admin',
-  operator: 'Operator',
-  auditor: 'Auditor',
-  security_admin: 'Security admin',
-};
-const ROLE_ORDER = ['admin', 'account_admin', 'operator', 'auditor', 'security_admin'];
 
 let host;
 let notify = () => {};
-const state = { users: [], loading: true, error: false, selectedId: null, actorCaps: [] };
+const state = {
+  users: [], loading: true, error: false, selectedId: null, actorCaps: [],
+  roleCatalog: { roles: [], grants: {} }, hasRoute: () => false,
+};
+let globalListenersBound = false;
+let governanceSections = [];
+let loadGeneration = 0;
+let loadController = null;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
+  state.roleCatalog = normalizeRoleCatalog(ctx.roleCatalog);
+  state.hasRoute = ctx.hasRoute || state.hasRoute;
+  state.selectedId = null;
+  governanceSections = governanceDefinitions();
   host.innerHTML = shell();
+  for (const section of governanceSections) {
+    section.view.mount(host.querySelector(`[data-ua-panel="${section.id}"]`));
+  }
+  host.querySelector('#ua-nav')?.addEventListener('click', event => {
+    const button = event.target.closest('[data-ua-nav]');
+    if (button) selectUaSection(button.dataset.uaNav);
+  });
   host.querySelector('#ua-refresh').addEventListener('click', load);
-  host.querySelector('#ua-invite').addEventListener('click', openInvite);
-  // Re-fetch when re-entering the tab; accounts drift as other admins act.
-  globalThis.addEventListener('dh:tab-activated', (e) => { if (e.detail?.name === 'users') load(); });
+  host.querySelector('#ua-invite')?.addEventListener('click', openInvite);
+  bindGlobalListeners();
   await load();
+}
+
+function bindGlobalListeners() {
+  if (globalListenersBound) return;
+  // Re-fetch when re-entering the tab; accounts drift as other admins act.
+  globalThis.addEventListener('dh:tab-activated', onTabActivated);
+  // Never retain privileged drawer content after elevation ends.
+  globalThis.addEventListener('dh:elevation-changed', onElevationChanged);
+  globalListenersBound = true;
+}
+
+function onTabActivated(event) {
+  if (event.detail?.name === 'users') load();
+}
+
+function onElevationChanged(event) {
+  if (event.detail?.active === false) closeDrawer();
 }
 
 /* ── Data ───────────────────────────────────────────────────────────────── */
 
 async function load() {
+  const generation = ++loadGeneration;
+  loadController?.abort();
+  const controller = new AbortController();
+  loadController = controller;
   state.loading = true;
   state.error = false;
   renderList();
-  const [usersRes, me] = await Promise.all([
-    get('/admin/accounts/users?limit=200').catch(() => null),
-    get('/auth/me').catch(() => null),
+  const [usersResult, me] = await Promise.all([
+    loadAllUsers(controller.signal).catch(() => null),
+    get('/auth/me', { signal: controller.signal }).catch(() => null),
   ]);
+  if (generation !== loadGeneration) return;
   state.actorCaps = me?.status === 200 && Array.isArray(me.body?.available_admin_capabilities)
     ? me.body.available_admin_capabilities : [];
-  if (usersRes?.status === 200 && Array.isArray(usersRes.body?.users)) {
-    state.users = usersRes.body.users;
+  if (usersResult) {
+    state.users = usersResult;
     state.error = false;
   } else {
     state.users = [];
     // A 401 step_up_required is handled by the shell; show a soft message here.
-    state.error = usersRes?.status !== 200;
+    state.error = true;
   }
   state.loading = false;
   renderList();
 }
 
+async function loadAllUsers(signal) {
+  const users = [];
+  const seenCursors = new Set();
+  let cursor = null;
+  do {
+    const query = new URLSearchParams({ limit: '200' });
+    if (cursor) query.set('cursor', cursor);
+    const response = await get(`/admin/accounts/users?${query.toString()}`, { signal });
+    if (response.status !== 200 || !Array.isArray(response.body?.items)) throw new Error('user_directory_unavailable');
+    users.push(...response.body.items);
+    cursor = typeof response.body?.page?.next_cursor === 'string' ? response.body.page.next_cursor : null;
+    if (cursor && seenCursors.has(cursor)) throw new Error('user_directory_cursor_loop');
+    if (cursor) seenCursors.add(cursor);
+  } while (cursor);
+  return users;
+}
+
 function canManageRole(role) {
-  return (ROLE_CAPS[role] || []).every(cap => state.actorCaps.includes(cap));
+  const capabilities = roleCapabilities(role);
+  return Object.hasOwn(state.roleCatalog.grants, role)
+    && capabilities.every(cap => state.actorCaps.includes(cap));
+}
+
+function hasUserRoute(name) {
+  const route = USER_ROUTES[name];
+  return !!route && state.hasRoute(route[0], route[1]);
+}
+
+function normalizeRoleCatalog(catalog) {
+  if (!catalog || !Array.isArray(catalog.roles) || !catalog.grants || typeof catalog.grants !== 'object') {
+    return { roles: [], grants: {} };
+  }
+  return { roles: catalog.roles, grants: catalog.grants };
+}
+
+function roleCapabilities(role) {
+  const capabilities = state.roleCatalog.grants[role];
+  return Array.isArray(capabilities) ? capabilities : [];
+}
+
+function roleLabel(role) {
+  return String(role).split('_').map(word => word ? word[0].toUpperCase() + word.slice(1) : '').join(' ');
 }
 
 // Resetting a factor is a security operation — gated on console:admin:security
@@ -121,11 +200,81 @@ function shell() {
     <span class="ua-title">Users</span>
     <div class="ua-bar-actions">
       <button class="btn btn-ghost" id="ua-refresh" type="button">&#x21bb; Refresh</button>
-      <button class="btn btn-primary" id="ua-invite" type="button">+ Invite user</button>
+      ${hasUserRoute('invite') ? '<button class="btn btn-primary" id="ua-invite" type="button">+ Invite user</button>' : ''}
     </div>
   </div>
-  <div id="ua-list"></div>
-  <div id="ua-drawer-root"></div>`;
+  ${navMarkup()}
+  <div data-ua-panel="accounts">
+    <div id="ua-list"></div>
+    <div id="ua-drawer-root"></div>
+  </div>
+  ${governancePanelsMarkup()}`;
+}
+
+/**
+ * The account list keeps its own markup untouched; the governance surfaces are
+ * separate panels beside it so this tab gains sections without the list changing.
+ */
+function governancePanelsMarkup() {
+  return governanceSections.map(section => `<div data-ua-panel="${section.id}" hidden></div>`).join('');
+}
+
+function navMarkup() {
+  if (governanceSections.length === 0) return '';
+  const items = [
+    navItemMarkup('accounts', 'Accounts', true),
+    ...governanceSections.map(section => navItemMarkup(section.id, section.label, false)),
+  ];
+  return `
+    <div class="ua-nav" id="ua-nav" role="tablist" aria-label="Account administration views">
+      ${items.join('')}
+    </div>`;
+}
+
+function navItemMarkup(id, label, active) {
+  return `<button class="ua-nav-item${active ? ' is-active' : ''}" data-ua-nav="${id}" role="tab" aria-selected="${active}" type="button">${escapeHtml(label)}</button>`;
+}
+
+function governanceDefinitions() {
+  const definitions = [];
+  if (state.hasRoute('GET', '/admin/accounts/allowlist')) {
+    definitions.push({
+      id: 'allowlist',
+      label: 'Allowlist',
+      view: createAllowlistView({
+        notify: (text, tone) => notify(text, tone),
+        canAdd: state.hasRoute('POST', '/admin/accounts/allowlist'),
+        canEdit: state.hasRoute('PATCH', '/admin/accounts/allowlist/:id'),
+        canRemove: state.hasRoute('DELETE', '/admin/accounts/allowlist/:id'),
+      }),
+    });
+  }
+  if (state.hasRoute('GET', '/admin/accounts/identities/unlinked')) {
+    definitions.push({
+      id: 'triage',
+      label: 'Identity triage',
+      view: createIdentityTriageView({
+        canLookup: state.hasRoute('GET', '/admin/accounts/correlations/:account_correlation_id'),
+      }),
+    });
+  }
+  if (state.hasRoute('GET', '/admin/accounts/bootstrap')) {
+    definitions.push({ id: 'bootstrap', label: 'Bootstrap', view: createBootstrapView() });
+  }
+  return definitions;
+}
+
+function selectUaSection(id) {
+  const panels = [{ id: 'accounts' }, ...governanceSections];
+  for (const section of panels) {
+    const active = section.id === id;
+    const button = host.querySelector(`[data-ua-nav="${section.id}"]`);
+    const panel = host.querySelector(`[data-ua-panel="${section.id}"]`);
+    button?.classList.toggle('is-active', active);
+    button?.setAttribute('aria-selected', String(active));
+    if (panel) panel.hidden = !active;
+    if (active) section.view?.activate();
+  }
 }
 
 function renderList() {
@@ -172,7 +321,7 @@ function userRow(u) {
 
 function rolesChips(roles) {
   if (!roles || roles.length === 0) return '<span class="ua-muted">user</span>';
-  return roles.map(r => `<span class="ua-role-chip" data-role="${escapeHtml(r)}">${escapeHtml(ROLE_LABELS[r] || r)}</span>`).join('');
+  return roles.map(r => `<span class="ua-role-chip" data-role="${escapeHtml(r)}">${escapeHtml(roleLabel(r))}</span>`).join('');
 }
 
 function providerChip(p) {
@@ -188,13 +337,13 @@ function openDrawer(userId) {
 
 function closeDrawer() {
   state.selectedId = null;
-  const root = host.querySelector('#ua-drawer-root');
+  const root = host.querySelector(DRAWER_ROOT_SELECTOR);
   if (root) root.innerHTML = '';
 }
 
 function renderDrawer() {
   const u = findUser(state.selectedId);
-  const root = host.querySelector('#ua-drawer-root');
+  const root = host.querySelector(DRAWER_ROOT_SELECTOR);
   if (!root || !u) return;
   const disabled = !!u.disabled_at;
 
@@ -223,8 +372,8 @@ function renderDrawer() {
   wireMfa(u);
   wireIdentity(u);
   wireLifecycle(u);
-  loadUserIdentities(u.user_id);
-  loadUserSessions(u.user_id);
+  if (hasUserRoute('listIdentities')) loadUserIdentities(u.user_id);
+  if (hasUserRoute('listSessions')) loadUserSessions(u.user_id);
 }
 
 function panelSection(title, inner, note) {
@@ -247,26 +396,34 @@ function panelIdentity(u) {
     ['Email', `${u.email || '—'}${emailSuffix}`],
     ['Created', relAgo(u.created_at)],
   ].map(([k, v]) => `<div class="ua-kv"><span class="ua-kv-k">${escapeHtml(k)}</span><span class="ua-kv-v">${escapeHtml(String(v))}</span></div>`).join('');
-  return panelSection('Identity & linked logins',
-    `${rows}
+  const linkedLogins = hasUserRoute('listIdentities') ? `
      <div class="ua-identities-head">Linked logins</div>
      <div id="ua-identities-${escapeHtml(u.user_id)}" class="ua-identities"><span class="ua-muted">Loading…</span></div>
-     <div class="ua-link-row">
-       <input type="text" class="ua-link-input" id="ua-link-sub-${escapeHtml(u.user_id)}"
-              placeholder="provider_subject (e.g. github_12345)" maxlength="320" autocomplete="off">
-       <button class="btn btn-ghost" data-link-add="${escapeHtml(u.user_id)}" type="button">Link login</button>
-     </div>`,
+     ${identityLinkForm(u)}` : '';
+  return panelSection('Identity & linked logins',
+    `${rows}${linkedLogins}`,
     'All logins below resolve to this one account. Linking attaches another provider login; unlinking detaches one (the only login can’t be removed).');
 }
 
+function identityLinkForm(u) {
+  if (!hasUserRoute('linkIdentity')) return '';
+  const userId = escapeHtml(u.user_id);
+  return `<div class="ua-link-row">
+    <input type="text" class="ua-link-input" id="ua-link-sub-${userId}"
+           placeholder="provider_subject (e.g. github_12345)" maxlength="320" autocomplete="off">
+    <button class="btn btn-ghost" data-link-add="${userId}" type="button">Link login</button>
+  </div>`;
+}
+
 function panelRoles(u) {
-  const checks = ROLE_ORDER.map(role => {
+  const checks = state.roleCatalog.roles.map(role => {
     const on = (u.roles || []).includes(role);
-    const manageable = canManageRole(role);
+    const mutationRoute = on ? 'revokeRole' : 'grantRole';
+    const manageable = canManageRole(role) && hasUserRoute(mutationRoute);
     return `<label class="ua-role-opt${manageable ? '' : ' ua-role-opt--locked'}">
       <input type="checkbox" data-role-toggle="${role}" ${on ? 'checked' : ''} ${manageable ? '' : 'disabled'}>
-      <span class="ua-role-opt-label">${escapeHtml(ROLE_LABELS[role])}</span>
-      <span class="ua-role-opt-caps">${ROLE_CAPS[role].map(c => c.replace('console:', '')).join(' · ')}</span>
+      <span class="ua-role-opt-label">${escapeHtml(roleLabel(role))}</span>
+      <span class="ua-role-opt-caps">${roleCapabilities(role).map(c => c.replace('console:', '')).join(' · ')}</span>
     </label>`;
   }).join('');
   return panelSection('Roles',
@@ -286,9 +443,10 @@ function panelMfa(u) {
   // Reset is the industry-standard "require re-registration": disable the
   // current factor so the user must enroll a new one. Only meaningful when a
   // factor exists; only offered to actors holding the security capability.
+  const resetAvailable = hasUserRoute('resetTotp');
   const canReset = canResetFactor();
   const resetDisabledAttr = canReset ? '' : ' disabled title="Requires security-admin elevation"';
-  const resetRow = enrolled
+  const resetRow = enrolled && resetAvailable
     ? `<div class="ua-actions-row">
          <button class="btn btn-ghost session-danger" data-mfa="reset" type="button"${resetDisabledAttr}>Reset authenticator</button>
        </div>`
@@ -305,6 +463,7 @@ function panelMfa(u) {
 }
 
 function panelSessions(u) {
+  if (!hasUserRoute('listSessions')) return '';
   return panelSection('Active sessions',
     `<div id="ua-user-sessions-${escapeHtml(u.user_id)}" class="ua-sessions"><span class="ua-muted">Loading…</span></div>`,
     'Runtime (MCP) sessions for this account, across all their machines.');
@@ -312,14 +471,21 @@ function panelSessions(u) {
 
 function panelLifecycle(u) {
   const disabled = !!u.disabled_at;
+  const actions = [];
+  if (disabled && hasUserRoute('enable')) {
+    actions.push('<button class="btn btn-primary" data-lc="enable" type="button">Enable account</button>');
+  } else if (!disabled && hasUserRoute('disable')) {
+    actions.push('<button class="btn btn-ghost session-danger" data-lc="disable" type="button">Disable account</button>');
+  }
+  if (hasUserRoute('revokeAllCredentials')) {
+    actions.push('<button class="btn btn-ghost session-danger" data-lc="revoke-all" type="button">Revoke all credentials</button>');
+  }
+  if (hasUserRoute('delete')) {
+    actions.push('<button class="btn btn-ghost session-danger" data-lc="delete" type="button">Delete user</button>');
+  }
+  if (actions.length === 0) return '';
   return panelSection('Account lifecycle',
-    `<div class="ua-actions-row">
-       ${disabled
-         ? '<button class="btn btn-primary" data-lc="enable" type="button">Enable account</button>'
-         : '<button class="btn btn-ghost session-danger" data-lc="disable" type="button">Disable account</button>'}
-       <button class="btn btn-ghost session-danger" data-lc="revoke-all" type="button">Revoke all credentials</button>
-       <button class="btn btn-ghost session-danger" data-lc="delete" type="button">Delete user</button>
-     </div>`,
+    `<div class="ua-actions-row">${actions.join('')}</div>`,
     disabled ? 'This account is disabled; the user cannot sign in. Delete removes it permanently.'
              : 'Disable blocks sign-in and ends sessions. Revoke-all ends every session and OAuth grant without disabling. Delete removes the account permanently.');
 }
@@ -340,11 +506,11 @@ function wireRoleToggles(u) {
         if (Array.isArray(updated)) u.roles = updated;
         else if (grant) u.roles = [...new Set([...(u.roles || []), role])];
         else u.roles = (u.roles || []).filter(r => r !== role);
-        notify(`${grant ? 'Granted' : 'Revoked'} ${ROLE_LABELS[role]}.`, 'success');
+        notify(`${grant ? 'Granted' : 'Revoked'} ${roleLabel(role)}.`, 'success');
         renderList();
       } else {
         input.checked = !grant; // revert
-        notify(`Could not ${verb} ${ROLE_LABELS[role]}.`, 'error');
+        notify(`Could not ${verb} ${roleLabel(role)}.`, 'error');
       }
       input.disabled = false;
     });
@@ -352,7 +518,7 @@ function wireRoleToggles(u) {
 }
 
 function wireMfa(u) {
-  const root = host.querySelector('#ua-drawer-root');
+  const root = host.querySelector(DRAWER_ROOT_SELECTOR);
   root.querySelector('[data-mfa="reset"]')?.addEventListener('click', () => resetFactor(u));
 }
 
@@ -375,7 +541,7 @@ async function resetFactor(u) {
 }
 
 function wireLifecycle(u) {
-  const root = host.querySelector('#ua-drawer-root');
+  const root = host.querySelector(DRAWER_ROOT_SELECTOR);
   root.querySelector('[data-lc="enable"]')?.addEventListener('click', () => lifecycle(u, 'enable'));
   root.querySelector('[data-lc="disable"]')?.addEventListener('click', () => lifecycle(u, 'disable'));
   root.querySelector('[data-lc="revoke-all"]')?.addEventListener('click', () => lifecycle(u, 'revoke-all'));
@@ -424,7 +590,7 @@ async function lifecycle(u, action) {
 }
 
 function wireIdentity(u) {
-  const root = host.querySelector('#ua-drawer-root');
+  const root = host.querySelector(DRAWER_ROOT_SELECTOR);
   root.querySelector(`[data-link-add="${CSS.escape(u.user_id)}"]`)
     ?.addEventListener('click', () => linkLogin(u.user_id));
 }
@@ -444,11 +610,16 @@ async function loadUserIdentities(userId) {
         <span class="ua-identity-sub" title="${escapeHtml(id.sub)}">${escapeHtml(id.external_sub || id.sub)}</span>
         ${id.email ? `<span class="ua-muted">${escapeHtml(id.email)}</span>` : ''}
       </span>
-      <button class="btn btn-ghost session-danger ua-identity-unlink" data-unlink-sub="${escapeHtml(id.sub)}" type="button"${
-        onlyOne ? ' disabled title="The only login can’t be unlinked"' : ''}>Unlink</button>
+      ${identityUnlinkAction(id.sub, onlyOne)}
     </div>`).join('');
   box.querySelectorAll('[data-unlink-sub]').forEach(b =>
     b.addEventListener('click', () => unlinkLogin(userId, b.dataset.unlinkSub)));
+}
+
+function identityUnlinkAction(sub, onlyOne) {
+  if (!hasUserRoute('unlinkIdentity')) return '';
+  const disabled = onlyOne ? ' disabled title="The only login can’t be unlinked"' : '';
+  return `<button class="btn btn-ghost session-danger ua-identity-unlink" data-unlink-sub="${escapeHtml(sub)}" type="button"${disabled}>Unlink</button>`;
 }
 
 async function linkLogin(userId) {
@@ -482,16 +653,18 @@ async function loadUserSessions(userId) {
   const box = host.querySelector(`#ua-user-sessions-${CSS.escape(userId)}`);
   if (!box) return;
   const res = await get(`/admin/accounts/users/${encodeURIComponent(userId)}/sessions`).catch(() => null);
-  const fallbackSessions = Array.isArray(res?.body) ? res.body : [];
-  const sessions = res?.status === 200 && Array.isArray(res.body?.sessions) ? res.body.sessions
-    : fallbackSessions;
   if (!box.isConnected) return;
+  if (res?.status !== 200 || !Array.isArray(res.body?.sessions)) {
+    box.innerHTML = '<span class="ua-muted">Couldn\'t load active sessions.</span>';
+    return;
+  }
+  const sessions = res.body.sessions;
   if (sessions.length === 0) { box.innerHTML = '<span class="ua-muted">No active sessions.</span>'; return; }
   box.innerHTML = sessions.map(s => `
     <div class="ua-session">
       <span class="ua-session-id" title="${escapeHtml(s.session_id)}">${escapeHtml(shortId(s.session_id))}</span>
       <span class="ua-muted">active ${escapeHtml(relAgo(s.last_active_at))}</span>
-      <button class="btn btn-ghost session-danger ua-session-kill" data-kill="${escapeHtml(s.session_id)}" type="button">Disconnect</button>
+      ${hasUserRoute('disconnectSession') ? `<button class="btn btn-ghost session-danger ua-session-kill" data-kill="${escapeHtml(s.session_id)}" type="button">Disconnect</button>` : ''}
     </div>`).join('');
   box.querySelectorAll('[data-kill]').forEach(b =>
     b.addEventListener('click', () => disconnectUserSession(userId, b.dataset.kill)));
@@ -511,8 +684,8 @@ async function disconnectUserSession(userId, sessionId) {
 /* ── Invite ─────────────────────────────────────────────────────────────── */
 
 function openInvite() {
-  const roleOpts = ROLE_ORDER.filter(canManageRole).map(role =>
-    `<label class="ua-role-opt"><input type="checkbox" data-invite-role="${role}"><span class="ua-role-opt-label">${escapeHtml(ROLE_LABELS[role])}</span></label>`).join('');
+  const roleOpts = state.roleCatalog.roles.filter(canManageRole).map(role =>
+    `<label class="ua-role-opt"><input type="checkbox" data-invite-role="${role}"><span class="ua-role-opt-label">${escapeHtml(roleLabel(role))}</span></label>`).join('');
   const modal = document.createElement('div');
   modal.className = 'confirm-modal';
   modal.id = 'ua-invite-modal';
@@ -564,52 +737,8 @@ async function submitInvite(modal) {
   load();
 }
 
-/* ── Confirm dialog (Atelier-styled, mirrors sessions.js) ─────────────────── */
-
-function confirmDialog(message, confirmLabel) {
-  return new Promise((resolve) => {
-    document.getElementById('confirm-modal')?.remove();
-    const modal = document.createElement('div');
-    modal.className = 'confirm-modal';
-    modal.id = 'confirm-modal';
-    modal.innerHTML = `
-      <div class="confirm-backdrop"></div>
-      <div class="confirm-card" role="dialog" aria-modal="true">
-        <p class="confirm-msg">${escapeHtml(message)}</p>
-        <div class="confirm-actions">
-          <button class="btn btn-ghost" data-confirm="0" type="button">Cancel</button>
-          <button class="btn btn-primary" data-confirm="1" type="button">${escapeHtml(confirmLabel)}</button>
-        </div>
-      </div>`;
-    document.body.appendChild(modal);
-    const done = (val) => { modal.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
-    const onKey = (e) => { if (e.key === 'Escape') done(false); };
-    modal.querySelector('.confirm-backdrop').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="0"]').addEventListener('click', () => done(false));
-    modal.querySelector('[data-confirm="1"]').addEventListener('click', () => done(true));
-    document.addEventListener('keydown', onKey);
-  });
-}
-
 /* ── Helpers ────────────────────────────────────────────────────────────── */
 
 function shortId(id) {
   return typeof id === 'string' && id.length > 12 ? `${id.slice(0, 8)}…${id.slice(-4)}` : (id || '');
-}
-
-function relAgo(ts) {
-  if (!ts) return 'unknown';
-  const age = Date.now() - new Date(ts).getTime();
-  if (Number.isNaN(age)) return 'unknown';
-  if (age < 0 || age < 60_000) return 'just now';
-  const m = Math.floor(age / 60_000);
-  if (m < 60) return `${m}m ago`;
-  const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h ago`;
-  return `${Math.floor(h / 24)}d ago`;
-}
-
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

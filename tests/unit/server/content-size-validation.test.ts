@@ -107,8 +107,7 @@ describe('Content Size Validation', () => {
     });
 
     it('should prevent memory exhaustion with extremely large content', async () => {
-      // This is the test case that would have caused Claude to hang
-      const hugeContent = 'x'.repeat(1000000); // 1 million characters
+      const hugeContent = 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
       
       const result = await server.createElement({
         name: 'test-skill',

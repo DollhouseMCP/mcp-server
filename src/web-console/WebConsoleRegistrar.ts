@@ -1,6 +1,7 @@
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { env } from '../config/env.js';
+import { logger } from '../utils/logger.js';
 import type { Router } from 'express';
 import type { IAuthStorageLayer } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { Gatekeeper } from '../handlers/mcp-aql/Gatekeeper.js';
@@ -29,6 +30,8 @@ import { InMemoryConsoleAuthPolicyStore } from './stores/InMemoryConsoleAuthPoli
 import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
 import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllowlistStore.js';
 import type { IUserIntegrationStore } from './stores/IUserIntegrationStore.js';
+import type { IIntegrationDescriptorStore } from './stores/IIntegrationDescriptorStore.js';
+import type { IIntegrationOpenApiSpecStore } from './stores/IIntegrationOpenApiSpecStore.js';
 import type { IPortfolioElementStore } from './stores/IPortfolioElementStore.js';
 import type { IPortfolioSyncJobStore } from './stores/IPortfolioSyncJobStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
@@ -63,6 +66,8 @@ import { InMemoryUserConfigStore } from '../storage/userConfig/InMemoryUserConfi
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryUserIntegrationStore } from './stores/InMemoryUserIntegrationStore.js';
+import { InMemoryIntegrationDescriptorStore } from './stores/InMemoryIntegrationDescriptorStore.js';
+import { InMemoryIntegrationOpenApiSpecStore } from './stores/InMemoryIntegrationOpenApiSpecStore.js';
 import { InMemoryPortfolioElementStore } from './stores/InMemoryPortfolioElementStore.js';
 import {
   ManagerBackedPortfolioElementStore,
@@ -121,13 +126,19 @@ import {
 import { createAccountAdminModule } from './modules/account-admin/AccountAdminModule.js';
 import { createActivationModule } from './modules/activations/index.js';
 import { createMeLogsModule, createMemoryConsoleLogSource, type IConsoleLogSource } from './modules/me-logs/index.js';
+import { sql } from 'drizzle-orm';
 import { createHealthModule, type HealthReadinessChecks } from './modules/health/index.js';
+import { createConsoleMetaModule } from './modules/console-meta/ConsoleMetaModule.js';
 import {
   GitHubAppIntegrationProvider,
   type GitHubAppIntegrationProviderConfig,
 } from './modules/integrations/GitHubAppIntegrationProvider.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
+import { loadCuratedIntegrationProviders } from './modules/integrations/CuratedIntegrationProviders.js';
+import { INTEGRATION_OUTBOUND_OVERRIDES } from './modules/integrations/IntegrationOutboundOverrides.js';
+import type { DnsLookup } from './modules/integrations/IntegrationPublicHostGuard.js';
+import type { PinnedOutboundFactory } from './modules/integrations/PinnedOutboundFactory.js';
 import {
   InMemoryConsoleTelemetryQuery,
   PostgresConsoleTelemetryQuery,
@@ -136,7 +147,20 @@ import {
   type OperationsHealthChecks,
 } from './modules/operations/index.js';
 import type { ISystemMetricsSource } from './modules/operations/SystemMetricsSource.js';
+import {
+  createCollectionModule,
+  type CollectionDetailPort,
+  type CollectionIndexPort,
+  type CollectionInstallPort,
+  type CollectionSearchPort,
+} from './modules/collection/index.js';
 import { createPortfolioModule } from './modules/portfolio/PortfolioModule.js';
+import {
+  InMemoryPortfolioActivityEventSink,
+  PostgresPortfolioActivityEventSink,
+  type IPortfolioActivityEventSink,
+} from './modules/portfolio/PortfolioActivityEvents.js';
+import { PostgresConsoleSessionActivityStore } from './stores/IConsoleSessionActivityStore.js';
 import { createRuntimeSessionModule } from './modules/runtime-sessions/RuntimeSessionModule.js';
 import { createSelfServiceModule } from './modules/self-service/SelfServiceModule.js';
 import { createSelfSecurityModule } from './modules/self-security/SelfSecurityModule.js';
@@ -159,6 +183,7 @@ import {
 } from './modules/account-admin/AccountAdminMutationTransaction.js';
 import type { IRateLimitStore } from '../auth/embedded-as/storage/IRateLimitStore.js';
 import { ConsoleProtectedCorrelationRateLimiter } from './services/rate-limit/ConsoleProtectedCorrelationRateLimiter.js';
+import { ConsoleCollectionFetchRateLimiter } from './services/rate-limit/ConsoleCollectionFetchRateLimiter.js';
 import {
   assertWebConsoleProductionActivation,
   markWebConsoleProductionAdapter,
@@ -196,7 +221,10 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   accountAdminStore: 'WebConsoleAccountAdminStore',
   accountAllowlistStore: 'WebConsoleAccountAllowlistStore',
   integrationStore: 'WebConsoleIntegrationStore',
+  integrationDescriptorStore: 'WebConsoleIntegrationDescriptorStore',
+  integrationOpenApiSpecStore: 'WebConsoleIntegrationOpenApiSpecStore',
   portfolioStore: 'WebConsolePortfolioStore',
+  portfolioActivityEventSink: 'WebConsolePortfolioActivityEventSink',
   portfolioSyncJobStore: 'WebConsolePortfolioSyncJobStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
   runtimeSessionControlStore: 'WebConsoleRuntimeSessionControlStore',
@@ -263,11 +291,21 @@ export interface WebConsoleRegistrarOptions {
   readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
+  readonly securityInvalidationAcknowledgementTimeoutMs?: number;
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly githubIntegrationProviderConfig?: GitHubAppIntegrationProviderConfig | null;
+  /** Directory of curated integration descriptor seed files, loaded at bootstrap. */
+  readonly integrationDescriptorSeedDir?: string;
   readonly portfolioStore?: IPortfolioElementStore | null;
+  readonly portfolioActivityEventSink?: IPortfolioActivityEventSink | null;
   readonly enableManagerBackedPortfolioStore?: boolean;
   readonly enablePortfolioWriteRoutes?: boolean;
+  /**
+   * Registers the collection catalog browse routes (/api/v1/collection/*).
+   * Off by default: the surface spends server-funded outbound GitHub budget,
+   * so operators opt in via DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED.
+   */
+  readonly enableCollectionRoutes?: boolean;
   readonly portfolioSyncJobStore?: IPortfolioSyncJobStore | null;
   readonly portfolioSyncWorker?: IConsolePortfolioSyncWorker | null;
   readonly portfolioSyncJobExecutor?: IPortfolioSyncJobExecutor | null;
@@ -321,6 +359,8 @@ export interface WebConsoleComposition {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly integrationStore: IUserIntegrationStore;
+  readonly integrationDescriptorStore: IIntegrationDescriptorStore;
+  readonly integrationOpenApiSpecStore: IIntegrationOpenApiSpecStore;
   readonly portfolioStore: IPortfolioElementStore;
   readonly portfolioSyncJobStore: IPortfolioSyncJobStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
@@ -376,14 +416,6 @@ export class WebConsoleRegistrar {
     const adminAuditQuery = resolveAdminAuditQuery(database, container, this.options);
     const approvalAuditQuery = resolveApprovalAuditQuery(database, container, this.options);
     const authenticationAuditQuery = resolveAuthenticationAuditQuery(database, container, this.options);
-    const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
-      database,
-      container,
-      accountAdminStore: stores.accountAdminStore,
-      accountAllowlistStore: stores.accountAllowlistStore,
-      securityInvalidationStore: stores.securityInvalidationStore,
-      adminAuditWriter,
-    });
     const registry = new ConsoleModuleRegistry();
     const consoleOAuthClient = resolveConsoleOAuthClient(container, this.options);
     const authStorage = resolveAuthStorage(container, this.options);
@@ -418,6 +450,24 @@ export class WebConsoleRegistrar {
       publicBaseUrl: integrationPublicBaseUrl,
     });
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
+    const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
+      database,
+      container,
+      accountAdminStore: stores.accountAdminStore,
+      accountAllowlistStore: stores.accountAllowlistStore,
+      securityInvalidationStore: stores.securityInvalidationStore,
+      adminAuditWriter,
+      signingKeyStore,
+      authPolicyStore,
+      factorStore: stores.factorStore,
+      integrationStore: stores.integrationStore,
+      loginTransactionStore: stores.loginTransactionStore,
+      runtimeSessionControlStore: stores.runtimeSessionControlStore,
+      operatorConfigStore,
+      inviteIssuer: accountInviteIssuer,
+      hasExplicitSigningKeyStore: this.options.signingKeyStore !== undefined,
+      hasExplicitAuthPolicyStore: this.options.authPolicyStore !== undefined,
+    });
     const activationProfile = resolveWebConsoleActivationProfile({
       activationProfile: this.options.activationProfile,
       deploymentSignal: this.options.deploymentSignal,
@@ -447,23 +497,23 @@ export class WebConsoleRegistrar {
       database,
     );
     const apiV1MountState = createApiV1MountState();
-    const operationHealthChecks = createOperationHealthChecks({
+    const healthProbes = createConsoleHealthProbes({
       database,
       stores,
       authStorage,
-      container,
       securityInvalidationReadiness,
       routesMounted: apiV1MountState.mounted,
     });
+    const operationHealthChecks = createOperationHealthChecks(healthProbes, container);
     registry.register(createHealthModule({
-      readiness: createHealthReadinessInputs({
-        database,
-        stores,
-        authStorage,
-        securityInvalidationReadiness,
-        routesMounted: apiV1MountState.mounted,
-      }),
+      readiness: createHealthReadinessInputs(healthProbes, stores),
       now: this.options.now,
+    }));
+    // Bootstrap metadata (route manifest + role catalog); the manifest is resolved
+    // lazily so it reflects every module registered after this point.
+    registry.register(createConsoleMetaModule({
+      getRouteManifest: () => registry.createRouteManifest(),
+      portfolioRequestMaxBytes: env.DOLLHOUSE_HTTP_BODY_LIMIT_BYTES,
     }));
     if (consoleOAuthClient && secretEncryption && integrationPublicBaseUrl) {
       registry.register(createConsoleBffAuthModule({
@@ -471,6 +521,7 @@ export class WebConsoleRegistrar {
         loginTransactions: stores.loginTransactionStore,
         sessionStore: stores.sessionStore,
         identityResolver: stores.identityResolver,
+        accountAdminStore: stores.accountAdminStore,
         opaqueValues,
         secretEncryption,
         publicBaseUrl: integrationPublicBaseUrl,
@@ -486,6 +537,7 @@ export class WebConsoleRegistrar {
       healthChecks: operationHealthChecks,
       telemetry: telemetryQuery,
       operatorConfigStore,
+      transactionRunner: accountAdminMutationTransactionRunner,
       systemMetrics: systemMetricsSource,
       now: this.options.now,
     }));
@@ -494,17 +546,20 @@ export class WebConsoleRegistrar {
       factorStore: stores.factorStore,
       invalidationStore: stores.securityInvalidationStore,
       authPolicyStore,
+      transactionRunner: accountAdminMutationTransactionRunner,
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, 'accountAdmin', () => createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
       accountAllowlistStore: stores.accountAllowlistStore,
       sessionStore: stores.sessionStore,
+      securityInvalidationStore: stores.securityInvalidationStore,
       authStorage,
       accountInviteIssuer,
       oauthGrantRevocationService,
       runtimeSessionControlStore: stores.runtimeSessionControlStore,
       runtimeTerminationAcknowledgementTimeoutMs: this.options.runtimeTerminationAcknowledgementTimeoutMs,
+      securityInvalidationAcknowledgementTimeoutMs: this.options.securityInvalidationAcknowledgementTimeoutMs,
       accountAdminMutationTransactionRunner,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       now: this.options.now,
@@ -512,6 +567,7 @@ export class WebConsoleRegistrar {
     registerRouteModule(registry, this.options, 'runtimeSessions', () => createRuntimeSessionModule({
       runtimeStore: stores.runtimeSessionControlStore,
       accountAdminStore: stores.accountAdminStore,
+      transactionRunner: accountAdminMutationTransactionRunner,
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, 'activations', () => createActivationModule({
@@ -545,12 +601,42 @@ export class WebConsoleRegistrar {
     registerRouteModule(registry, this.options, 'me-logs', () => createMeLogsModule({
       logSource: resolveConsoleLogSource(container),
     }));
+    // Same outbound overrides the gateway/bridge honor, so curated and
+    // per-request-built provider OAuth token-endpoint calls share one guarded
+    // transport (and wired tests can route them to a local upstream).
+    const integrationProviderOutbound = {
+      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory)
+        ? { pinnedOutbound: container.resolve<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory) }
+        : {}),
+      ...(container.hasRegistration(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup)
+        ? { dnsLookup: container.resolve<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup) }
+        : {}),
+    };
+    // Curated, data-driven providers: load descriptor seed files into the store and
+    // build their connect/callback providers so the generic /:provider routes activate.
+    // Requires secret encryption (to decrypt deployment OAuth client secrets); without
+    // it the console is not fully configured, so no curated providers are loaded.
+    const configuredIntegrationProviders = secretEncryption
+      ? await loadCuratedIntegrationProviders({
+          seedDir: this.options.integrationDescriptorSeedDir,
+          descriptorStore: stores.integrationDescriptorStore,
+          integrationStore: stores.integrationStore,
+          secretEncryption,
+          secretRevisionHasher: opaqueValues,
+          outbound: integrationProviderOutbound,
+          ...(this.options.now ? { now: this.options.now } : {}),
+        })
+      : [];
     registerRouteModule(registry, this.options, 'integrations', () => createIntegrationModule({
       integrationStore: stores.integrationStore,
+      descriptorStore: stores.integrationDescriptorStore,
+      openApiSpecStore: stores.integrationOpenApiSpecStore,
       loginTransactions: stores.loginTransactionStore,
       opaqueValues,
       secretEncryption,
       githubProvider: githubIntegrationProvider,
+      configuredProviders: configuredIntegrationProviders,
+      providerOutbound: integrationProviderOutbound,
       publicBaseUrl: integrationPublicBaseUrl,
       now: this.options.now,
     }));
@@ -560,7 +646,27 @@ export class WebConsoleRegistrar {
       syncJobStore: stores.portfolioSyncJobStore,
       enablePortfolioWriteRoutes: this.options.enablePortfolioWriteRoutes === true,
       now: this.options.now,
+      activityEventSink: resolvePortfolioActivityEventSink(container, database, this.options),
     }));
+    // Whole-module gate (not per-route like portfolio writes): when the flag is
+    // off, the catalog surface is absent from the manifest entirely. The install
+    // route additionally requires the portfolio write flag — install is a
+    // portfolio mutation sourced from the catalog.
+    if (this.options.enableCollectionRoutes === true) {
+      const enableInstall = this.options.enablePortfolioWriteRoutes === true;
+      registerRouteModule(registry, this.options, 'collection', () => createCollectionModule({
+        index: resolveCollectionEngineService<CollectionIndexPort>(container, 'CollectionIndexManager'),
+        search: resolveCollectionEngineService<CollectionSearchPort>(container, 'CollectionSearch'),
+        details: resolveCollectionEngineService<CollectionDetailPort>(container, 'PersonaDetails'),
+        install: enableInstall
+          ? {
+              installer: resolveCollectionEngineService<CollectionInstallPort>(container, 'ElementInstaller'),
+              portfolioStore: stores.portfolioStore,
+              now: this.options.now,
+            }
+          : undefined,
+      }));
+    }
     registerRouteModule(registry, this.options, 'selfService', () => createSelfServiceModule({
       accountAdminStore: stores.accountAdminStore,
       userConfigStore,
@@ -572,6 +678,21 @@ export class WebConsoleRegistrar {
       now: this.options.now,
     }));
     const protectedCorrelationRateLimiter = resolveProtectedCorrelationRateLimiter(container, this.options);
+    const collectionFetchRateLimiter = this.options.enableCollectionRoutes === true
+      ? resolveCollectionFetchRateLimiter(container, this.options)
+      : null;
+    if (this.options.enableCollectionRoutes === true && env.DOLLHOUSE_RATE_LIMIT_BACKEND !== 'postgres') {
+      // The collection-fetch deployment budget lives in the rate-limit store.
+      // With the process-local (in-memory) backend each replica keeps its own
+      // budget, so a multi-replica deployment multiplies the shared GitHub
+      // budget it is meant to cap. Warn so operators set a shared backend.
+      logger.warn(
+        '[WebConsoleRegistrar] Collection browse is enabled but DOLLHOUSE_RATE_LIMIT_BACKEND is not "postgres". ' +
+        'The collection-fetch deployment budget is process-local, so a multi-replica deployment enforces one budget ' +
+        'per replica and multiplies the shared GitHub API budget it exists to protect. Set ' +
+        'DOLLHOUSE_RATE_LIMIT_BACKEND=postgres for a single cross-replica budget.',
+      );
+    }
     const protectedCorrelationRateLimitStore = resolveRateLimitStore(container);
     assertWebConsoleProductionActivation({
       activationProfile,
@@ -588,6 +709,7 @@ export class WebConsoleRegistrar {
           oauthGrantRevocationService,
           protectedCorrelationRateLimiter,
           protectedCorrelationRateLimitStore,
+          collectionFetchRateLimiter,
           adminAuditQuery,
           approvalAuditQuery,
           authenticationAuditQuery,
@@ -630,10 +752,11 @@ export class WebConsoleRegistrar {
       runtimeStore: stores.runtimeSessionControlStore,
       authPolicyStore,
       protectedCorrelationRateLimiter,
+      collectionFetchRateLimiter,
       apiV1MountState,
       userContext: resolveConsoleUserContext(container),
     });
-    const cleanupScheduler = this.createCleanupScheduler(stores, container);
+    const cleanupScheduler = this.createCleanupScheduler(stores, database, container);
     const composition: WebConsoleComposition = {
       activationProfile,
       registry,
@@ -684,6 +807,7 @@ export class WebConsoleRegistrar {
     stores: Pick<WebConsoleComposition,
       'sessionStore' | 'loginTransactionStore' | 'idempotencyStore' | 'runtimeSessionControlStore'
     >,
+    database: DatabaseInstance | undefined,
     container: DiContainerFacade,
   ): ConsoleStoreCleanupScheduler | null {
     if (this.options.registerCleanup === false) return null;
@@ -695,7 +819,12 @@ export class WebConsoleRegistrar {
       throw new Error('Web console cleanup registration requires LifecycleService');
     }
     const scheduler = new ConsoleStoreCleanupScheduler({
-      stores,
+      stores: {
+        ...stores,
+        sessionActivityStore: database
+          ? markProductionAdapter(new PostgresConsoleSessionActivityStore(database), 'PostgresConsoleSessionActivityStore')
+          : undefined,
+      },
       intervalMs: this.options.cleanupIntervalMs,
       now: this.options.now,
       reportError,
@@ -743,6 +872,7 @@ export function createProductionRouteDependencies(options: {
     readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
     readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
     readonly protectedCorrelationRateLimitStore: IRateLimitStore | null;
+    readonly collectionFetchRateLimiter: ConsoleCollectionFetchRateLimiter | null;
     readonly adminAuditQuery: IAdminAuditQuery;
     readonly approvalAuditQuery: IApprovalAuditQuery;
     readonly authenticationAuditQuery: IAuthenticationAuditQuery;
@@ -778,6 +908,8 @@ export function createProductionRouteDependencies(options: {
       'accountAdmin protected correlation routes require a production protected-correlation rate limiter or must be omitted before hosted/shared mount.'),
     routeDependency('accountAdmin', 'protectedCorrelationRateLimitStore', options.services.protectedCorrelationRateLimitStore,
       'accountAdmin protected correlation routes require a production rate-limit store or must be omitted before hosted/shared mount.'),
+    routeDependency('collection', 'collectionFetchRateLimiter', options.services.collectionFetchRateLimiter,
+      'collection catalog routes require a production collection-fetch rate limiter or must be omitted before hosted/shared mount.'),
     routeDependency('runtimeSessions', 'runtimeSessionControlStore', options.stores.runtimeSessionControlStore,
       'runtime session routes require production runtime-control persistence or must be omitted before hosted/shared mount.'),
     routeDependency('runtimeSessions', 'accountAdminStore', options.stores.accountAdminStore,
@@ -877,6 +1009,8 @@ function registerWebConsoleCompositionServices(
   container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => composition.accountAdminStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => composition.accountAllowlistStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.integrationStore, () => composition.integrationStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore, () => composition.integrationDescriptorStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore, () => composition.integrationOpenApiSpecStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioStore, () => composition.portfolioStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioSyncJobStore, () => composition.portfolioSyncJobStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => composition.securityInvalidationStore);
@@ -983,6 +1117,7 @@ function createApiV1Mount(options: {
   readonly runtimeStore: IRuntimeSessionControlStore;
   readonly authPolicyStore: IConsoleAuthPolicyStore;
   readonly protectedCorrelationRateLimiter: ConsoleProtectedCorrelationRateLimiter | null;
+  readonly collectionFetchRateLimiter: ConsoleCollectionFetchRateLimiter | null;
   readonly apiV1MountState: Pick<WebConsoleApiV1Mount, 'mounted' | 'markMounted'>;
   readonly userContext: ReturnType<typeof resolveConsoleUserContext>;
 }): WebConsoleApiV1Mount | null {
@@ -1001,7 +1136,9 @@ function createApiV1Mount(options: {
     runtimeStore: options.runtimeStore,
     authPolicyStore: options.authPolicyStore,
     protectedCorrelationRateLimiter: options.protectedCorrelationRateLimiter,
+    collectionFetchRateLimiter: options.collectionFetchRateLimiter,
     idleTimeoutMs: options.options.consoleSessionIdleTimeoutMs ?? 30 * 60 * 1000,
+    bodyLimitBytes: env.DOLLHOUSE_HTTP_BODY_LIMIT_BYTES,
     now: options.options.now,
     reportInternalError: options.options.reportApiV1InternalError,
     userContext: options.userContext ?? undefined,
@@ -1080,6 +1217,8 @@ interface ConsoleStoreSet {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly integrationStore: IUserIntegrationStore;
+  readonly integrationDescriptorStore: IIntegrationDescriptorStore;
+  readonly integrationOpenApiSpecStore: IIntegrationOpenApiSpecStore;
   readonly portfolioStore: IPortfolioElementStore;
   readonly portfolioSyncJobStore: IPortfolioSyncJobStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
@@ -1087,41 +1226,78 @@ interface ConsoleStoreSet {
   readonly identityResolver: IConsoleIdentityResolver;
 }
 
-function createHealthReadinessInputs(options: {
+type ConsoleSecurityInvalidationSnapshot = Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>;
+
+interface ConsoleHealthProbes {
+  // Real liveness: actually reaches the database, so a wired-but-unreachable
+  // backend reports degraded instead of a misleading green.
+  readonly databaseAvailable: () => Promise<boolean>;
+  // Presence probes. authServer is backed by the same Postgres in hosted mode, so
+  // databaseAvailable already covers its reachability; runtime control + api mount
+  // are in-process wiring where presence is liveness (no network hop to fail).
+  readonly authServerAvailable: () => boolean;
+  readonly runtimeControlAvailable: () => boolean;
+  readonly apiV1Mounted: () => boolean;
+  readonly securityInvalidationReadiness: () => Promise<ConsoleSecurityInvalidationSnapshot>;
+}
+
+// Single source for the dependency probes shared by both the public readiness surface
+// and the admin operations health surface, so a new or changed probe is defined once.
+function createConsoleHealthProbes(options: {
   readonly database: DatabaseInstance | undefined;
   readonly stores: ConsoleStoreSet;
   readonly authStorage: IAuthStorageLayer | null;
   readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
   readonly routesMounted: () => boolean;
-}): HealthReadinessChecks {
+}): ConsoleHealthProbes {
   return {
-    sessionStorageAvailable: () => Boolean(options.stores.sessionStore),
-    identityResolutionAvailable: () => Boolean(options.stores.identityResolver),
-    securityInvalidationReady: async () => (await options.securityInvalidationReadiness.getReadiness()).ready,
-    runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
-    databaseAvailable: () => Boolean(options.database),
+    databaseAvailable: () => probeDatabaseLiveness(options.database),
     authServerAvailable: () => Boolean(options.authStorage),
+    runtimeControlAvailable: () => Boolean(options.stores.runtimeSessionControlStore),
     apiV1Mounted: () => options.routesMounted(),
+    securityInvalidationReadiness: () => options.securityInvalidationReadiness.getReadiness(),
   };
 }
 
-function createOperationHealthChecks(options: {
-  readonly database: DatabaseInstance | undefined;
-  readonly stores: ConsoleStoreSet;
-  readonly authStorage: IAuthStorageLayer | null;
-  readonly container: DiContainerFacade;
-  readonly securityInvalidationReadiness: IConsoleSecurityInvalidationReadiness;
-  readonly routesMounted: () => boolean;
-}): OperationsHealthChecks {
+/** True only if a trivial `SELECT 1` round-trips — not merely that a DB handle is wired. */
+async function probeDatabaseLiveness(database: DatabaseInstance | undefined): Promise<boolean> {
+  if (!database) return false;
+  try {
+    await database.execute(sql`SELECT 1`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function createHealthReadinessInputs(
+  probes: ConsoleHealthProbes,
+  stores: ConsoleStoreSet,
+): HealthReadinessChecks {
   return {
-    database: () => Boolean(options.database),
-    authServer: () => Boolean(options.authStorage),
-    gatekeeper: () => options.container.hasRegistration('gatekeeper'),
-    runtimeControl: () => Boolean(options.stores.runtimeSessionControlStore),
+    sessionStorageAvailable: () => Boolean(stores.sessionStore),
+    identityResolutionAvailable: () => Boolean(stores.identityResolver),
+    securityInvalidationReady: async () => (await probes.securityInvalidationReadiness()).ready,
+    runtimeControlAvailable: probes.runtimeControlAvailable,
+    databaseAvailable: probes.databaseAvailable,
+    authServerAvailable: probes.authServerAvailable,
+    apiV1Mounted: probes.apiV1Mounted,
+  };
+}
+
+function createOperationHealthChecks(
+  probes: ConsoleHealthProbes,
+  container: DiContainerFacade,
+): OperationsHealthChecks {
+  return {
+    database: probes.databaseAvailable,
+    authServer: probes.authServerAvailable,
+    gatekeeper: () => container.hasRegistration('gatekeeper'),
+    runtimeControl: probes.runtimeControlAvailable,
     securityInvalidation: async () => operationHealthFromInvalidationReadiness(
-      await options.securityInvalidationReadiness.getReadiness(),
+      await probes.securityInvalidationReadiness(),
     ),
-    apiMount: () => options.routesMounted()
+    apiMount: () => probes.apiV1Mounted()
       ? {
         component: 'api_mount',
         status: 'ok',
@@ -1137,7 +1313,7 @@ function createOperationHealthChecks(options: {
   };
 }
 
-function operationHealthFromInvalidationReadiness(snapshot: Awaited<ReturnType<IConsoleSecurityInvalidationReadiness['getReadiness']>>) {
+function operationHealthFromInvalidationReadiness(snapshot: ConsoleSecurityInvalidationSnapshot) {
   return {
     component: 'security_invalidation' as const,
     status: snapshot.status,
@@ -1146,6 +1322,14 @@ function operationHealthFromInvalidationReadiness(snapshot: Awaited<ReturnType<I
   };
 }
 
+// Console stores support exactly two backend families: Postgres-backed (durable,
+// per-user, RLS-enforced) when a database is configured, and in-memory otherwise.
+// In-memory is development/loopback only — it loses all session, approval, and audit
+// state on restart — so there is deliberately no file-backed durable family (a file
+// store for security-relevant state would lack RLS, transactional CAS, and tamper
+// evidence). Shared-hosted production activation fails loud on a memory backend (see
+// WebConsoleProductionActivation's database_required check), so a no-DB production
+// deployment is refused rather than left silently volatile.
 async function createConsoleStores(database: DatabaseInstance | undefined): Promise<ConsoleStoreSet> {
   if (database) {
     const [
@@ -1156,6 +1340,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresConsoleAccountAdminStore },
       { PostgresConsoleAccountAllowlistStore },
       { PostgresUserIntegrationStore },
+      { PostgresIntegrationDescriptorStore },
+      { PostgresIntegrationOpenApiSpecStore },
       { PostgresPortfolioSyncJobStore },
       { PostgresConsoleSecurityInvalidationStore },
       { PostgresRuntimeSessionControlStore },
@@ -1168,6 +1354,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./stores/PostgresConsoleAccountAdminStore.js'),
       import('./stores/PostgresConsoleAccountAllowlistStore.js'),
       import('./stores/PostgresUserIntegrationStore.js'),
+      import('./stores/PostgresIntegrationDescriptorStore.js'),
+      import('./stores/PostgresIntegrationOpenApiSpecStore.js'),
       import('./stores/PostgresPortfolioSyncJobStore.js'),
       import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
       import('./services/runtime/PostgresRuntimeSessionControlStore.js'),
@@ -1184,6 +1372,14 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
         'PostgresConsoleAccountAllowlistStore',
       ),
       integrationStore: markProductionAdapter(new PostgresUserIntegrationStore(database), 'PostgresUserIntegrationStore'),
+      integrationDescriptorStore: markProductionAdapter(
+        new PostgresIntegrationDescriptorStore(database),
+        'PostgresIntegrationDescriptorStore',
+      ),
+      integrationOpenApiSpecStore: markProductionAdapter(
+        new PostgresIntegrationOpenApiSpecStore(database),
+        'PostgresIntegrationOpenApiSpecStore',
+      ),
       portfolioStore: new InMemoryPortfolioElementStore(),
       portfolioSyncJobStore: markProductionAdapter(
         new PostgresPortfolioSyncJobStore(database),
@@ -1209,6 +1405,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     accountAdminStore: new InMemoryConsoleAccountAdminStore(),
     accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
     integrationStore: new InMemoryUserIntegrationStore(),
+    integrationDescriptorStore: new InMemoryIntegrationDescriptorStore(),
+    integrationOpenApiSpecStore: new InMemoryIntegrationOpenApiSpecStore(),
     portfolioStore: new InMemoryPortfolioElementStore(),
     portfolioSyncJobStore: new InMemoryPortfolioSyncJobStore(),
     securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
@@ -1299,14 +1497,43 @@ function resolveAccountAdminMutationTransactionRunner(options: {
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly adminAuditWriter: IAdminAuditWriter;
+  readonly signingKeyStore: ISigningKeyStore;
+  readonly authPolicyStore: IConsoleAuthPolicyStore;
+  readonly factorStore: IConsoleFactorStore;
+  readonly integrationStore: IUserIntegrationStore;
+  readonly loginTransactionStore: ILoginTransactionStore;
+  readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
+  readonly operatorConfigStore: IOperatorConfigStore;
+  readonly inviteIssuer: IConsoleAccountInviteIssuer | null;
+  readonly hasExplicitSigningKeyStore: boolean;
+  readonly hasExplicitAuthPolicyStore: boolean;
 }): IAccountAdminMutationTransactionRunner {
+  if (options.container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner)) {
+    return markResolvedProductionAdapter(
+      options.container.resolve<IAccountAdminMutationTransactionRunner>(
+        WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner,
+      ),
+      'AccountAdminMutationTransactionRunner',
+    );
+  }
   if (options.database) {
     if (!options.container.hasRegistration('AuditHmacResolver')) {
       throw new Error('Web console PostgreSQL account-admin mutation transactions require AuditHmacResolver');
     }
+    if (options.hasExplicitSigningKeyStore || options.hasExplicitAuthPolicyStore) {
+      throw new Error(
+        'Web console PostgreSQL custom signing-key or auth-policy stores require a matching ' +
+        'WebConsoleAccountAdminMutationTransactionRunner registration',
+      );
+    }
     return markProductionAdapter(new PostgresAccountAdminMutationTransactionRunner({
       db: options.database,
       hmacKeyResolver: options.container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'),
+      signingKeyStore: options.signingKeyStore,
+      authPolicyStore: options.authPolicyStore,
+      runtimeSessionControlStore: options.runtimeSessionControlStore,
+      operatorConfigStore: options.operatorConfigStore,
+      inviteIssuer: options.inviteIssuer,
     }), 'PostgresAccountAdminMutationTransactionRunner');
   }
   return new InMemoryAccountAdminMutationTransactionRunner({
@@ -1314,6 +1541,14 @@ function resolveAccountAdminMutationTransactionRunner(options: {
     accountAllowlistStore: options.accountAllowlistStore,
     securityInvalidationStore: options.securityInvalidationStore,
     adminAuditWriter: options.adminAuditWriter,
+    signingKeyStore: options.signingKeyStore,
+    authPolicyStore: options.authPolicyStore,
+    factorStore: options.factorStore,
+    integrationStore: options.integrationStore,
+    loginTransactionStore: options.loginTransactionStore,
+    runtimeSessionControlStore: options.runtimeSessionControlStore,
+    operatorConfigStore: options.operatorConfigStore,
+    inviteIssuer: options.inviteIssuer,
   });
 }
 
@@ -1360,6 +1595,43 @@ function resolveProtectedCorrelationRateLimiter(
     selectorHmacKey: Buffer.from(key),
     now: options.now,
   }), 'ConsoleProtectedCorrelationRateLimiter');
+}
+
+/**
+ * Collection-fetch limiter for the catalog routes. Reuses the protected
+ * correlation selector HMAC key (the limiter derives its own selectors under a
+ * distinct prefix) so enabling the collection surface needs no extra key
+ * material; the shared RateLimitStore keeps the budget replica-wide.
+ */
+function resolveCollectionFetchRateLimiter(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): ConsoleCollectionFetchRateLimiter | null {
+  const key = options.protectedCorrelationSelectorHmacKey ??
+    (container.hasRegistration('WebConsoleProtectedCorrelationSelectorHmacKey')
+      ? container.resolve<Buffer>('WebConsoleProtectedCorrelationSelectorHmacKey')
+      : null);
+  if (!key) return null;
+  if (!container.hasRegistration('RateLimitStore')) {
+    throw new Error('Web console collection routes require RateLimitStore');
+  }
+  return markProductionAdapter(new ConsoleCollectionFetchRateLimiter({
+    store: container.resolve<IRateLimitStore>('RateLimitStore'),
+    selectorHmacKey: Buffer.from(key),
+    now: options.now,
+  }), 'ConsoleCollectionFetchRateLimiter');
+}
+
+/**
+ * The collection engine services live in the main DI container (registered by
+ * CollectionServiceRegistrar during server bootstrap). Resolve with a clear
+ * failure when a partial container enables the collection routes without them.
+ */
+function resolveCollectionEngineService<T>(container: DiContainerFacade, name: string): T {
+  if (!container.hasRegistration(name)) {
+    throw new Error(`Web console collection routes require the "${name}" collection engine service`);
+  }
+  return container.resolve<T>(name);
 }
 
 function resolveRateLimitStore(container: DiContainerFacade): IRateLimitStore | null {
@@ -1443,6 +1715,23 @@ function resolveSessionApprovalEventSink(
   }
   if (database) return markProductionAdapter(new PostgresSessionApprovalEventSink(database), 'PostgresSessionApprovalEventSink');
   return new InMemorySessionApprovalEventSink();
+}
+
+function resolvePortfolioActivityEventSink(
+  container: DiContainerFacade,
+  database: DatabaseInstance | undefined,
+  options: WebConsoleRegistrarOptions,
+): IPortfolioActivityEventSink {
+  if (options.portfolioActivityEventSink !== undefined) {
+    return options.portfolioActivityEventSink ?? new InMemoryPortfolioActivityEventSink();
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioActivityEventSink)) {
+    return container.resolve<IPortfolioActivityEventSink>(WEB_CONSOLE_SERVICE_NAMES.portfolioActivityEventSink);
+  }
+  if (database) {
+    return markProductionAdapter(new PostgresPortfolioActivityEventSink(database), 'PostgresPortfolioActivityEventSink');
+  }
+  return new InMemoryPortfolioActivityEventSink();
 }
 
 function resolveSessionExecutionReader(

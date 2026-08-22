@@ -21,8 +21,9 @@ import { getValidatedLockTimeout } from '../config/performance-constants.js';
  * preventing zombie races. See #1874.
  */
 export class FileLockManager {
-  // Map of resource identifiers to their lock promises
-  private locks = new Map<string, Promise<any>>();
+  // Per-resource queue tails. Each caller reserves its place before waiting so
+  // three or more concurrent callers cannot all wake on the same predecessor.
+  private locks = new Map<string, Promise<void>>();
 
   // Lock acquisition metrics for monitoring
   private metrics = {
@@ -65,8 +66,13 @@ export class FileLockManager {
     const startTime = Date.now();
     this.metrics.totalLockRequests++;
 
-    // Step 1: Wait for any existing operation on this resource
+    // Step 1: Reserve this caller's queue position before awaiting the current
+    // tail. This is what makes the queue exclusive for 3+ simultaneous callers.
     const existingLock = this.locks.get(resource);
+    let releaseQueue!: () => void;
+    const operationCompleted = new Promise<void>(resolve => { releaseQueue = resolve; });
+    const queueTail = (existingLock ?? Promise.resolve()).then(() => operationCompleted);
+    this.locks.set(resource, queueTail);
     if (existingLock) {
       this.metrics.concurrentWaits++;
       const shortResource = path.basename(resource);
@@ -81,25 +87,20 @@ export class FileLockManager {
       }
     }
 
-    // Step 2: Start the real operation immediately
-    const operationPromise = operation();
+    // Step 2: Start the real operation. Promise.resolve().then also turns a
+    // synchronous throw into a rejection so the queue is always released.
+    const operationPromise = Promise.resolve().then(operation);
+    void operationPromise.then(releaseQueue, releaseQueue);
 
-    // Step 3: Store a suppressed copy in the map.
-    // Subsequent callers await THIS — the actual work, not a timeout-wrapped shell.
-    // .catch(() => {}) prevents unhandled rejection if the operation rejects
-    // before any caller awaits operationPromise directly.
-    const suppressedPromise = operationPromise.catch(() => {});
-    this.locks.set(resource, suppressedPromise);
-
-    // Step 4: Clean up the map entry when the operation actually finishes.
-    // Identity check prevents stale cleanup from removing a newer lock.
-    suppressedPromise.finally(() => {
-      if (this.locks.get(resource) === suppressedPromise) {
+    // Step 3: Clean up only after this queue node and all predecessors settle.
+    // Identity check prevents stale cleanup from removing a newer queue tail.
+    void queueTail.finally(() => {
+      if (this.locks.get(resource) === queueTail) {
         this.locks.delete(resource);
       }
     });
 
-    // Step 5: Race against timeout for the CALLER's benefit only.
+    // Step 4: Race against timeout for the CALLER's benefit only.
     // If timeout fires, the caller gets an error, but the lock stays
     // in the map until the real operation completes (step 4).
     const timeout = options.timeout ?? this.DEFAULT_TIMEOUT_MS;
@@ -132,7 +133,7 @@ export class FileLockManager {
     } catch (error) {
       clearTimeout(timeoutHandle);
       // Do NOT delete the lock — the operation may still be running.
-      // The suppressedPromise.finally() callback handles map cleanup.
+      // The queue-tail callback handles map cleanup.
       throw error;
     }
   }

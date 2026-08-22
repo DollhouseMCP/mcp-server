@@ -17,6 +17,9 @@ const { InMemorySigningKeyStore } = await import('../../../../src/storage/signin
 const { PostgresConsoleAccountInviteIssuer } = await import(
   '../../../../src/web-console/modules/account-admin/PostgresConsoleAccountInviteIssuer.js'
 );
+const { SigningKeyLifecycleConflictError } = await import(
+  '../../../../src/storage/signingKeys/signingKeyLifecycle.js'
+);
 
 const USER_ID = '3d017fae-3c8e-47d3-9cb7-d391c19eb9e7';
 const ACTOR_USER_ID = '6c93d545-cd3b-44d9-a2ea-066c7e40d620';
@@ -38,6 +41,7 @@ describe('PostgresConsoleAccountInviteIssuer', () => {
       })),
     };
     const signingKeyStore = new InMemorySigningKeyStore();
+    const assertActiveKey = jest.spyOn(signingKeyStore, 'assertActiveKey');
     const issuer = new PostgresConsoleAccountInviteIssuer({
       db: {} as never,
       signingKeyStore,
@@ -58,6 +62,7 @@ describe('PostgresConsoleAccountInviteIssuer', () => {
       primarySub: 'local_alice',
     });
     expect(result.inviteUrl).toMatch(/^https:\/\/console\.example\.test\/auth\/local\/invite\?invite=/u);
+    expect(assertActiveKey).toHaveBeenCalledWith(expect.any(String), 'invite', transaction);
     const token = new URL(result.inviteUrl).searchParams.get('invite');
     expect(token).toEqual(expect.any(String));
     const activeInviteKey = await signingKeyStore.getActive('invite');
@@ -85,6 +90,35 @@ describe('PostgresConsoleAccountInviteIssuer', () => {
         passwordHash: null,
       }),
     ]);
+  });
+
+  it('rejects a prepared invite when its signing key is rotated before the account transaction', async () => {
+    transaction = { insert: jest.fn() };
+    const signingKeyStore = new InMemorySigningKeyStore();
+    const issuer = new PostgresConsoleAccountInviteIssuer({
+      db: {} as never,
+      signingKeyStore,
+      publicBaseUrl: 'https://console.example.test/',
+    });
+    const issueWithTx = await issuer.prepareIssueInviteWithTx();
+    await signingKeyStore.rotate({
+      kid: 'replacement-invite-key',
+      kind: 'invite',
+      payload: {
+        secret: Buffer.alloc(32, 0x4a).toString('base64'),
+        length: 32,
+      },
+    });
+
+    await expect(issueWithTx(transaction as never, {
+      username: 'Alice',
+      email: EMAIL,
+      ttlMinutes: 15,
+      roles: [],
+      actorUserId: ACTOR_USER_ID,
+      issuedAt: ISSUED_AT,
+    })).rejects.toBeInstanceOf(SigningKeyLifecycleConflictError);
+    expect(transaction.insert).not.toHaveBeenCalled();
   });
 });
 

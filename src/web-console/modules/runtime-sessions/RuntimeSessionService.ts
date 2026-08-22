@@ -1,15 +1,35 @@
 import type {
+  IRuntimeSessionControlStore,
+  RuntimeOperationalCursor,
   RuntimeSessionPresence,
+  RuntimeTerminationAck,
   RuntimeTerminationReason,
- IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
+} from '../../services/runtime/IRuntimeSessionControlStore.js';
+import { decodeConsoleCursor, encodeConsoleCursor } from '../../platform/ConsoleCursor.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type {
   RuntimeSessionAccountDto,
   RuntimeSessionOperationalDto,
+  RuntimeSessionOperationalListDto,
   RuntimeSessionRevokeAllDto,
   RuntimeSessionSelfDto,
   RuntimeTerminationAcceptedDto,
+  RuntimeTerminationCommandStatusDto,
 } from './RuntimeSessionDtos.js';
+import type { RuntimeSessionStatus } from '../../../database/schema/index.js';
+import type { AccountAdminMutationTransactionContext } from '../account-admin/AccountAdminMutationTransaction.js';
+
+export type RuntimeSessionAdminMutationContext = Pick<
+  AccountAdminMutationTransactionContext,
+  'lockPrincipal' | 'findRuntimePresence' | 'listAllRuntimePresenceByUser' | 'createRuntimeTerminationCommand'
+>;
+
+export interface OperationalSessionListQuery {
+  readonly limit?: number;
+  readonly cursor?: string | null;
+  readonly userId?: string;
+  readonly status?: RuntimeSessionStatus;
+}
 
 export class RuntimeSessionService {
   constructor(private readonly options: {
@@ -19,7 +39,7 @@ export class RuntimeSessionService {
   }) {}
 
   async listSelfSessions(userId: string): Promise<RuntimeSessionSelfDto[]> {
-    const sessions = await this.options.runtimeStore.listPresenceByUser(userId, { now: this.now() });
+    const sessions = await this.options.runtimeStore.listAllPresenceByUser(userId, this.runtimeStoreNow());
     return sessions.map(toSelfDto);
   }
 
@@ -37,25 +57,38 @@ export class RuntimeSessionService {
   async listAccountSessions(userId: string): Promise<RuntimeSessionAccountDto[] | null> {
     const principal = await this.options.accountAdminStore.findPrincipal(userId);
     if (!principal) return null;
-    const sessions = await this.options.runtimeStore.listPresenceByUser(userId, { now: this.now() });
+    const sessions = await this.options.runtimeStore.listAllPresenceByUser(userId, this.runtimeStoreNow());
     return sessions.map(toAccountDto);
   }
 
-  async terminateAccountSession(userId: string, sessionId: string): Promise<RuntimeTerminationAcceptedDto | null> {
-    const principal = await this.options.accountAdminStore.findPrincipal(userId);
+  async terminateAccountSession(
+    userId: string,
+    sessionId: string,
+    tx?: RuntimeSessionAdminMutationContext,
+  ): Promise<RuntimeTerminationAcceptedDto | null> {
+    const principal = tx
+      ? await tx.lockPrincipal(userId)
+      : await this.options.accountAdminStore.findPrincipal(userId);
     if (!principal) return null;
-    const session = await this.findOwnedPresence(userId, sessionId);
+    const session = await this.findOwnedPresence(userId, sessionId, tx);
     if (!session) return null;
-    return this.createTermination(session, 'admin_terminated', { kind: 'admin', userId });
+    return this.createTermination(session, 'admin_terminated', { kind: 'admin', userId }, tx);
   }
 
-  async revokeAllAccountSessions(userId: string): Promise<RuntimeSessionRevokeAllDto | null> {
-    const principal = await this.options.accountAdminStore.findPrincipal(userId);
+  async revokeAllAccountSessions(
+    userId: string,
+    tx?: RuntimeSessionAdminMutationContext,
+  ): Promise<RuntimeSessionRevokeAllDto | null> {
+    const principal = tx
+      ? await tx.lockPrincipal(userId)
+      : await this.options.accountAdminStore.findPrincipal(userId);
     if (!principal) return null;
-    const sessions = await this.options.runtimeStore.listPresenceByUser(userId, { now: this.now(), limit: 500 });
+    const sessions = tx
+      ? await tx.listAllRuntimePresenceByUser(userId, this.runtimeStoreNow())
+      : await this.options.runtimeStore.listAllPresenceByUser(userId, this.runtimeStoreNow());
     const commands = [];
     for (const session of sessions) {
-      commands.push(await this.createTermination(session, 'admin_terminated', { kind: 'admin', userId }));
+      commands.push(await this.createTermination(session, 'admin_terminated', { kind: 'admin', userId }, tx));
     }
     return {
       user_id: userId,
@@ -64,24 +97,70 @@ export class RuntimeSessionService {
     };
   }
 
-  async listOperationalSessions(): Promise<RuntimeSessionOperationalDto[]> {
-    const sessions = await this.options.runtimeStore.listOperationalPresence({ now: this.now() });
-    return sessions.map(toOperationalDto);
+  async listOperationalSessions(
+    query: OperationalSessionListQuery = {},
+  ): Promise<RuntimeSessionOperationalListDto> {
+    const limit = query.limit ?? 100;
+    const after = decodeOperationalCursor(query.cursor ?? null);
+    const page = await this.options.runtimeStore.listOperationalPresence({
+      now: this.runtimeStoreNow(),
+      limit,
+      after: after ?? undefined,
+      userId: query.userId,
+      status: query.status,
+    });
+    return {
+      items: page.items.map(toOperationalDto),
+      page: {
+        limit,
+        cursor: query.cursor ?? null,
+        next_cursor: page.nextCursor ? encodeOperationalCursor(page.nextCursor) : null,
+      },
+    };
   }
 
   async getOperationalSession(sessionId: string): Promise<RuntimeSessionOperationalDto | null> {
-    const session = await this.options.runtimeStore.findPresence(sessionId, this.now());
+    const session = await this.options.runtimeStore.findOperationalPresence(sessionId, this.runtimeStoreNow());
     return session ? toOperationalDto(session) : null;
   }
 
-  async terminateOperationalSession(sessionId: string, operatorUserId: string): Promise<RuntimeTerminationAcceptedDto | null> {
-    const session = await this.options.runtimeStore.findPresence(sessionId, this.now());
-    if (!session) return null;
-    return this.createTermination(session, 'operator_terminated', { kind: 'operator', userId: operatorUserId });
+  /** Operator-facing termination command status (any command). Null when the command id is unknown. */
+  async getCommandStatus(commandId: string): Promise<RuntimeTerminationCommandStatusDto | null> {
+    const command = await this.options.runtimeStore.getCommand(commandId);
+    if (!command) return null;
+    return toCommandStatusDto(commandId, await this.options.runtimeStore.getCommandAck(commandId));
   }
 
-  private async findOwnedPresence(userId: string, sessionId: string): Promise<RuntimeSessionPresence | null> {
-    const session = await this.options.runtimeStore.findPresence(sessionId, this.now());
+  /** Self-facing command status: only the caller's own termination commands are visible. */
+  async getSelfCommandStatus(
+    userId: string,
+    commandId: string,
+  ): Promise<RuntimeTerminationCommandStatusDto | null> {
+    const command = await this.options.runtimeStore.getCommand(commandId);
+    if (command?.requestedBy.userId !== userId) return null;
+    return toCommandStatusDto(commandId, await this.options.runtimeStore.getCommandAck(commandId));
+  }
+
+  async terminateOperationalSession(
+    sessionId: string,
+    operatorUserId: string,
+    tx?: RuntimeSessionAdminMutationContext,
+  ): Promise<RuntimeTerminationAcceptedDto | null> {
+    const session = tx
+      ? await tx.findRuntimePresence(sessionId, this.runtimeStoreNow())
+      : await this.options.runtimeStore.findPresence(sessionId, this.runtimeStoreNow());
+    if (!session) return null;
+    return this.createTermination(session, 'operator_terminated', { kind: 'operator', userId: operatorUserId }, tx);
+  }
+
+  private async findOwnedPresence(
+    userId: string,
+    sessionId: string,
+    tx?: RuntimeSessionAdminMutationContext,
+  ): Promise<RuntimeSessionPresence | null> {
+    const session = tx
+      ? await tx.findRuntimePresence(sessionId, this.runtimeStoreNow())
+      : await this.options.runtimeStore.findPresence(sessionId, this.runtimeStoreNow());
     return session?.userId === userId ? session : null;
   }
 
@@ -89,14 +168,18 @@ export class RuntimeSessionService {
     session: RuntimeSessionPresence,
     reason: RuntimeTerminationReason,
     requestedBy: { readonly kind: 'self' | 'admin' | 'operator'; readonly userId: string },
+    tx?: RuntimeSessionAdminMutationContext,
   ): Promise<RuntimeTerminationAcceptedDto> {
-    const command = await this.options.runtimeStore.createTerminationCommand({
+    const input = {
       sessionId: session.sessionId,
       targetReplicaId: session.replicaId,
       reason,
       requestedAt: this.now(),
       requestedBy,
-    });
+    };
+    const command = tx
+      ? await tx.createRuntimeTerminationCommand(input)
+      : await this.options.runtimeStore.createTerminationCommand(input);
     return {
       session_id: command.sessionId,
       command_id: command.commandId,
@@ -109,6 +192,10 @@ export class RuntimeSessionService {
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
+
+  private runtimeStoreNow(): Date | undefined {
+    return this.options.now?.();
+  }
 }
 
 function toSelfDto(session: RuntimeSessionPresence): RuntimeSessionSelfDto {
@@ -120,7 +207,7 @@ function toSelfDto(session: RuntimeSessionPresence): RuntimeSessionSelfDto {
     last_active_at: session.lastActiveAt.toISOString(),
     request_count: session.requestCount,
     error_count: session.errorCount,
-    status: 'active',
+    status: session.status,
   };
 }
 
@@ -130,7 +217,7 @@ function toAccountDto(session: RuntimeSessionPresence): RuntimeSessionAccountDto
     transport: session.transport,
     created_at: session.startedAt.toISOString(),
     last_active_at: session.lastActiveAt.toISOString(),
-    status: 'active',
+    status: session.status,
   };
 }
 
@@ -144,4 +231,37 @@ function toOperationalDto(session: RuntimeSessionPresence): RuntimeSessionOperat
     lease_until: session.leaseUntil.toISOString(),
     client_info: session.clientInfo ? { ...session.clientInfo } : null,
   };
+}
+
+function toCommandStatusDto(
+  commandId: string,
+  ack: RuntimeTerminationAck | null,
+): RuntimeTerminationCommandStatusDto {
+  if (!ack) {
+    return { command_id: commandId, status: 'pending', acknowledged_at: null, replica_id: null, error_code: null };
+  }
+  return {
+    command_id: commandId,
+    status: ack.result,
+    acknowledged_at: ack.acknowledgedAt.toISOString(),
+    replica_id: ack.replicaId,
+    error_code: ack.errorCode,
+  };
+}
+
+function encodeOperationalCursor(cursor: RuntimeOperationalCursor): string {
+  return encodeConsoleCursor({ t: cursor.lastActiveAt.toISOString(), s: cursor.sessionId });
+}
+
+/** Foreign/garbage tokens decode to null so traversal restarts from the first page (§5.3). */
+function decodeOperationalCursor(token: string | null): RuntimeOperationalCursor | null {
+  if (!token) return null;
+  const payload = decodeConsoleCursor(token);
+  const lastActiveRaw = payload?.t;
+  const sessionId = payload?.s;
+  if (typeof lastActiveRaw !== 'string' || typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200) {
+    return null;
+  }
+  const lastActiveAt = new Date(lastActiveRaw);
+  return Number.isNaN(lastActiveAt.getTime()) ? null : { lastActiveAt, sessionId };
 }

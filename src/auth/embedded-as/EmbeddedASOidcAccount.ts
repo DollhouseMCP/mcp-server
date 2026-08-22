@@ -1,11 +1,13 @@
 import type { IAuthMethod } from './IAuthMethod.js';
 import { ADMIN_STEP_UP_CLAIMS_MODEL, type AdminStepUpClaims } from './InteractionRouter.js';
 import type { IAuthStorageLayer } from './storage/IAuthStorageLayer.js';
+import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 
 export class EmbeddedASOidcAccount {
   constructor(
     private readonly methods: readonly IAuthMethod[],
     private readonly storage: IAuthStorageLayer,
+    private readonly identityResolver?: IConsoleIdentityResolver | null,
   ) {}
 
   async extraTokenClaims(_ctx: unknown, token: unknown): Promise<Record<string, unknown> | undefined> {
@@ -15,6 +17,8 @@ export class EmbeddedASOidcAccount {
     if (!account) return undefined;
     if (account.sub !== accountId) return undefined;
     const extras: Record<string, unknown> = {};
+    const principal = await this.identityResolver?.resolveEnabledPrincipal(account.sub);
+    if (principal) extras.dollhouse_authz_version = principal.authzVersion;
     if (account.lastAuthAt) {
       extras.auth_time = Math.floor(account.lastAuthAt / 1000);
     }

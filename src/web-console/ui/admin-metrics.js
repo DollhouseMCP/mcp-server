@@ -13,6 +13,8 @@
  */
 
 import { get } from './api.js';
+import { isAbortError } from './polling.js';
+import { escapeHtml } from './operations-ui.js';
 
 const REFRESH_MS = 10000;
 // A multi-instance source with this many instances renders as a full-width
@@ -20,41 +22,61 @@ const REFRESH_MS = 10000;
 const WIDE_INSTANCE_THRESHOLD = 7;
 
 let host;
-let notify = () => {};
 let timer = null;
-let tabActive = true;
+let sectionActive = false;
+let loadController;
 
 const state = { snapshot: null, meta: null, loading: true, error: false, disabled: false, autoRefresh: false };
 
-export async function init(panelEl, ctx = {}) {
+export function init(panelEl) {
   host = panelEl;
-  notify = ctx.toast || notify;
   host.innerHTML = shell();
-  host.querySelector('#am-refresh').addEventListener('click', () => load());
+  host.querySelector('#am-refresh').addEventListener('click', () => refresh());
   host.querySelector('#am-auto').addEventListener('change', (e) => { state.autoRefresh = e.target.checked; syncTimer(); });
-  await load();
-  globalThis.addEventListener('dh:tab-activated', onTabActivated);
-  document.addEventListener('visibilitychange', syncTimer);
+  return Object.freeze({
+    refresh,
+    setVisible(visible) {
+      sectionActive = visible;
+      if (visible) refresh();
+      else abortLoad();
+      syncTimer();
+    },
+  });
 }
 
-async function load() {
-  state.loading = true;
+async function refresh(externalSignal) {
+  abortLoad();
+  const controller = new AbortController();
+  loadController = controller;
+  const abort = () => controller.abort();
+  externalSignal?.addEventListener('abort', abort, { once: true });
+  state.loading = !state.snapshot;
   state.error = false;
   renderBody();
-  const res = await get('/admin/operate/metrics/system?latest=true').catch(() => null);
-  if (!res || res.status !== 200 || !res.body) {
+  try {
+    const res = await get('/admin/operate/metrics/system?latest=true', { signal: controller.signal });
+    if (res.status !== 200 || !res.body) {
+      state.error = true;
+      state.loading = false;
+      renderBody();
+      return;
+    }
+    const snapshots = Array.isArray(res.body.items) ? res.body.items : [];
+    state.snapshot = snapshots.length > 0 ? snapshots.at(-1) : null;
+    state.meta = { newest: res.body.newest_available, nextCursor: res.body.page?.next_cursor ?? null };
+    state.disabled = snapshots.length === 0; // empty result = collection disabled or nothing captured yet
+    state.loading = false;
+    state.error = false;
+    renderBody();
+  } catch (error) {
+    if (isAbortError(error)) return;
     state.error = true;
     state.loading = false;
     renderBody();
-    return;
+  } finally {
+    externalSignal?.removeEventListener('abort', abort);
+    if (loadController === controller) loadController = undefined;
   }
-  const snapshots = Array.isArray(res.body.snapshots) ? res.body.snapshots : [];
-  state.snapshot = snapshots.length > 0 ? snapshots[snapshots.length - 1] : null;
-  state.meta = { newest: res.body.newest_available, total: res.body.total };
-  state.disabled = snapshots.length === 0; // empty result = collection disabled or nothing captured yet
-  state.loading = false;
-  state.error = false;
-  renderBody();
 }
 
 /* ── Markup ─────────────────────────────────────────────────────────────── */
@@ -62,7 +84,7 @@ async function load() {
 function shell() {
   return `
   <div class="metrics-status-bar">
-    <span class="metrics-scope-label">System metrics</span>
+    <span class="metrics-scope-label">In-process metrics</span>
     <span class="metrics-checked" id="am-checked"></span>
     <div class="metrics-bar-actions">
       <label class="metrics-auto"><input type="checkbox" id="am-auto"> Auto-refresh</label>
@@ -79,7 +101,7 @@ function renderBody() {
   if (checked) checked.textContent = state.snapshot && !state.loading ? `as of ${relAgo(state.snapshot.timestamp)}` : '';
 
   if (state.loading) { body.innerHTML = '<div class="metrics-loading">Loading system metrics…</div>'; return; }
-  if (state.error) { body.innerHTML = '<div class="metrics-loading">Couldn\'t load system metrics. Admin elevation is required.</div>'; return; }
+  if (state.error && !state.snapshot) { body.innerHTML = '<div class="metrics-loading">Couldn\'t load system metrics. Admin elevation is required.</div>'; return; }
   if (state.disabled || !state.snapshot) {
     body.innerHTML = '<div class="metrics-loading">No metrics captured. Server-side metrics collection may be disabled (DOLLHOUSE_METRICS_ENABLED).</div>';
     return;
@@ -88,17 +110,23 @@ function renderBody() {
   const metrics = Array.isArray(state.snapshot.metrics) ? state.snapshot.metrics : [];
   const errors = Array.isArray(state.snapshot.errors) ? state.snapshot.errors : [];
   const sources = groupBySource(metrics);
+  const errorAlert = errors.length
+    ? `<div class="metrics-alert metrics-alert--warn">${errors.map(escapeHtml).join('<br>')}</div>`
+    : '';
+  const staleAlert = state.error
+    ? '<div class="metrics-alert metrics-alert--warn">System metrics could not be refreshed. Showing the last successful snapshot.</div>'
+    : '';
 
   const overview = `<div class="metrics-stat-grid">
         ${stat(formatNumber(metrics.length), 'Metrics')}
         ${stat(formatNumber(sources.length), 'Sources')}
         ${stat(formatNumber(errors.length), 'Collector errors')}
         ${stat(`${round(Number(state.snapshot.duration_ms || 0))}ms`, 'Collection time')}
-      </div>${errors.length ? `<div class="metrics-alert metrics-alert--warn">${errors.map(escapeHtml).join('<br>')}</div>` : ''}`;
+      </div>${errorAlert}`;
 
   body.innerHTML = `
     <div class="metrics-dashboard">
-      ${overviewCard(overview)}
+      ${staleAlert}${overviewCard(overview)}
       ${sources.map(s => sourceCard(s.source, s.badge, s.matrix ? sourceMatrix(s.metrics) : sourceTable(s.metrics), s.wide)).join('')}
     </div>`;
 }
@@ -109,7 +137,7 @@ function renderBody() {
 // instead of a long, repetitive flat list.
 function instanceKeyOf(m) {
   const labels = m.labels || {};
-  const keys = Object.keys(labels).sort();
+  const keys = Object.keys(labels).sort((left, right) => left.localeCompare(right));
   return keys.length ? keys.map(k => labels[k]).join(' · ') : '(default)';
 }
 
@@ -213,17 +241,23 @@ function sourceMatrix(metrics) {
   for (const m of metrics) { const k = instanceKeyOf(m); if (!seen.has(k)) { seen.add(k); instances.push(k); } }
   const names = [...new Set(metrics.map(m => m.name))].sort((a, b) => a.localeCompare(b));
   const cell = new Map();
-  for (const m of metrics) cell.set(`${m.name} ${instanceKeyOf(m)}`, m);
+  for (const metric of metrics) {
+    const instance = instanceKeyOf(metric);
+    if (!cell.has(metric.name)) cell.set(metric.name, new Map());
+    cell.get(metric.name).set(instance, metric);
+  }
 
-  const head = `<tr><th>Metric</th>${instances.map(i => `<th class="metrics-num">${escapeHtml(i)}</th>`).join('')}</tr>`;
+  const columnHeaders = instances.map(i => `<th class="metrics-num">${escapeHtml(i)}</th>`).join('');
+  const head = `<tr><th>Metric</th>${columnHeaders}</tr>`;
   const rows = names.map(name => {
     const sample = metrics.find(m => m.name === name);
     const unit = sample && sample.unit !== 'bytes' ? sample.unit : '';
     const cells = instances.map(i => {
-      const m = cell.get(`${name} ${i}`);
+      const m = cell.get(name)?.get(i);
       return m ? `<td class="metrics-num">${matrixCell(m)}</td>` : '<td class="metrics-num metrics-dim">—</td>';
     }).join('');
-    return `<tr><td>${escapeHtml(name)}${unit ? ` <span class="metrics-unit">${escapeHtml(unit)}</span>` : ''}</td>${cells}</tr>`;
+    const unitMarkup = unit ? ` <span class="metrics-unit">${escapeHtml(unit)}</span>` : '';
+    return `<tr><td>${escapeHtml(name)}${unitMarkup}</td>${cells}</tr>`;
   }).join('');
   return `<div class="metrics-matrix-wrap"><table class="metrics-table metrics-matrix"><thead>${head}</thead><tbody>${rows}</tbody></table></div>`;
 }
@@ -245,15 +279,14 @@ function stat(value, label) {
 /* ── Polling ────────────────────────────────────────────────────────────── */
 
 function syncTimer() {
-  const shouldRun = state.autoRefresh && tabActive && !document.hidden;
-  if (shouldRun && !timer) timer = setInterval(load, REFRESH_MS);
+  const shouldRun = state.autoRefresh && sectionActive && !document.hidden;
+  if (shouldRun && !timer) timer = setInterval(refresh, REFRESH_MS);
   else if (!shouldRun && timer) { clearInterval(timer); timer = null; }
 }
 
-function onTabActivated(e) {
-  tabActive = e.detail?.name === 'admin-metrics';
-  if (tabActive) load();
-  syncTimer();
+function abortLoad() {
+  loadController?.abort();
+  loadController = undefined;
 }
 
 /* ── Helpers ────────────────────────────────────────────────────────────── */
@@ -285,9 +318,4 @@ function relAgo(ts) {
   const m = Math.floor(s / 60);
   if (m < 60) return `${m}m ago`;
   return `${Math.floor(m / 60)}h ago`;
-}
-
-function escapeHtml(s) {
-  if (s === null || s === undefined) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

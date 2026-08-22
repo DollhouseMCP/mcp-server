@@ -90,7 +90,7 @@ describe('Token reuse-detection — OAuth 2.1 §4.1.3', () => {
   });
 
   it('replaying a consumed authorization_code returns invalid_grant', async () => {
-    const invite = method.issueInvite('local_replay', 'replay@example.com', REDIRECT_URI);
+    const invite = await method.issueInvite('local_replay', 'replay@example.com', REDIRECT_URI);
     const inviteToken = new URL(invite).searchParams.get('invite')!;
 
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);

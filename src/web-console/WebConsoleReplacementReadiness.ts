@@ -1,10 +1,14 @@
 import type { WebConsoleComposition } from './WebConsoleRegistrar.js';
-import { WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS } from './WebConsoleRouteModuleIds.js';
+import { WEB_CONSOLE_BASELINE_ROUTE_MODULE_IDS } from './WebConsoleRouteModuleIds.js';
 
+// Modules a complete console replacement must register. Only the baseline
+// feature modules count — optional, default-off modules (e.g. collection) are
+// intentionally excluded so a console that leaves them off is still a valid,
+// ready replacement.
 export const WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS = [
   'auth',
   'health',
-  ...WEB_CONSOLE_OMITTABLE_ROUTE_MODULE_IDS,
+  ...WEB_CONSOLE_BASELINE_ROUTE_MODULE_IDS,
 ] as const;
 
 export const WEB_CONSOLE_REPLACEMENT_LIVE_CHECK_IDS = [

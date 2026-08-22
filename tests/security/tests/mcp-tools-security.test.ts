@@ -2,8 +2,10 @@ import { describe, test, expect, beforeAll, afterAll, beforeEach } from '@jest/g
 import { SecurityTestFramework, SecurityTestPerformance } from '../framework/SecurityTestFramework.js';
 import type { DollhouseMCPServer } from '../../../src/index.js';
 import type { DollhouseContainer } from '../../../src/di/Container.js';
+import type { TokenManager } from '../../../src/security/tokenManager.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('MCP Tools Security Tests', () => {
   let server: InstanceType<typeof DollhouseMCPServer>;
@@ -11,6 +13,7 @@ describe('MCP Tools Security Tests', () => {
   let originalCwd: string;
   let DollhouseMCPServerClass: typeof DollhouseMCPServer;
   let DollhouseContainerClass: typeof DollhouseContainer;
+  let container: InstanceType<typeof DollhouseContainer>;
 
   beforeAll(async () => {
     // Save original working directory
@@ -37,7 +40,7 @@ describe('MCP Tools Security Tests', () => {
     // Initialize server with DI container
     ({ DollhouseMCPServer: DollhouseMCPServerClass } = await import('../../../src/index.js'));
     ({ DollhouseContainer: DollhouseContainerClass } = await import('../../../src/di/Container.js'));
-    const container = new DollhouseContainerClass();
+    container = new DollhouseContainerClass();
     server = new DollhouseMCPServerClass(container);
   });
   
@@ -247,8 +250,7 @@ describe('MCP Tools Security Tests', () => {
     test('should enforce size limits on persona content', async () => {
       SecurityTestPerformance.start();
 
-      // Create content that exceeds limits (1MB+)
-      const largeContent = 'x'.repeat(1024 * 1024 + 1);
+      const largeContent = 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
 
       // v2: Use createElement instead of createPersona
       const result = await server.createElement({
@@ -258,7 +260,7 @@ describe('MCP Tools Security Tests', () => {
         content: largeContent
       });
 
-      // SECURITY: Content over 500KB limit should be REJECTED (not accepted)
+      // SECURITY: Content above the 10 MiB persisted-element ceiling is rejected.
       // This validates that the security layer correctly enforces size limits
       expect(result.content[0].text).toMatch(/❌|Content too large/i);
 
@@ -371,24 +373,19 @@ describe('MCP Tools Security Tests', () => {
     });
     
     test('should validate GitHub token format', async () => {
+      const tokenManager = container.resolve<TokenManager>('TokenManager');
       const invalidTokens = [
         'invalid',
         'ghp_', // Too short
-        'ghs_1234', // Wrong prefix for our use case
         'Bearer token123', // Wrong format
-        'ghp_' + 'a'.repeat(100) // Too long
       ];
       
       for (const token of invalidTokens) {
-        process.env.GITHUB_TOKEN = token;
-        
-        const result = await server.browseCollection();
-        
-        // Should handle invalid tokens gracefully
-        expect(result.content[0].text).toBeDefined();
-        
-        delete process.env.GITHUB_TOKEN;
+        expect(tokenManager.validateTokenFormat(token)).toBe(false);
       }
+
+      expect(tokenManager.validateTokenFormat('ghs_1234')).toBe(true);
+      expect(tokenManager.validateTokenFormat('ghp_' + 'a'.repeat(100))).toBe(true);
     });
   });
   

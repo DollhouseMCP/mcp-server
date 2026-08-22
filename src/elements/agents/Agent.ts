@@ -107,7 +107,9 @@ export class Agent extends BaseElement implements IElement {
       context: {},
       lastActive: new Date(),
       sessionCount: 0,
-      stateVersion: 1  // Start at version 1
+      // Version 0 represents state that has not been persisted yet. The state
+      // store advances the first successful save to version 1.
+      stateVersion: 0
     };
 
     // Bounded FIFO queue for decision history

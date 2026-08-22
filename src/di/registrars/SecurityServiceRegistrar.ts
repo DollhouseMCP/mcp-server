@@ -54,10 +54,12 @@ import type { PathService } from '../../paths/PathService.js';
 
 export class SecurityServiceRegistrar {
   public register(container: DiContainerFacade): void {
+    container.register('ContextTracker', () => new ContextTracker());
+
     // SecurityMonitor: DI-managed instance wired into the static facade.
     // Eagerly resolved to replace the fallback before handlers start logging.
     container.register('SecurityMonitor', () => {
-      const instance = new SecurityMonitor();
+      const instance = new SecurityMonitor(() => container.resolve<ContextTracker>('ContextTracker'));
       SecurityMonitor.setInstance(instance);
       return instance;
     });
@@ -75,8 +77,6 @@ export class SecurityServiceRegistrar {
       const session = container.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
       return new SessionActivationRegistry(session.sessionId);
     });
-
-    container.register('ContextTracker', () => new ContextTracker());
 
     container.register('PatternEncryptor', () => new PatternEncryptor());
     container.register('PatternDecryptor', () => new PatternDecryptor(

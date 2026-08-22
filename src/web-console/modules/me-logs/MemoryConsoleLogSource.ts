@@ -22,6 +22,8 @@ export function createMemoryConsoleLogSource(sink: QueryableLogSink): IConsoleLo
         correlationId: options.correlationId ?? undefined,
         sessionId: options.sessionId ?? undefined,
         since: options.since ?? undefined,
+        beforeTimestamp: options.beforeTimestamp ?? undefined,
+        beforeId: options.beforeId ?? undefined,
         limit: options.limit,
       });
       return {
@@ -35,7 +37,6 @@ export function createMemoryConsoleLogSource(sink: QueryableLogSink): IConsoleLo
           correlation_id: entry.correlationId ?? null,
           session_id: entry.sessionId ?? null,
         })),
-        total: result.total,
         has_more: result.hasMore,
       };
     },

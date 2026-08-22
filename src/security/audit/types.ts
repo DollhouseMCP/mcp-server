@@ -64,6 +64,8 @@ export interface SecurityAuditConfig {
       severityThreshold: SeverityLevel;
       checkLicenses: boolean;
       allowedLicenses?: string[];
+      /** Reviewed package-specific SPDX replacements for ambiguous lockfile metadata. */
+      licenseOverrides?: Record<string, string>;
     };
     configuration: {
       enabled: boolean;

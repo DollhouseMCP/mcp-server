@@ -11,7 +11,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { env } from '../config/env.js';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -661,7 +661,42 @@ export class GitHubAuthManager {
       throw ErrorHandler.wrapError(error, 'Failed to store GitHub token', ErrorCategory.AUTH_ERROR);
     }
   }
-  
+
+  /**
+   * Store a token obtained by the detached OAuth device-flow helper, then confirm
+   * it is retrievable through this session's TokenManager before reporting
+   * success. The helper runs outside the DI/session context and cannot write the
+   * session's ITokenStore (in database mode it has no DB pool, master key, or RLS
+   * context), so the server performs the authoritative write here for both file
+   * and database token stores. A helper result file alone is never proof of
+   * storage — only a successful read-back through the session store is.
+   */
+  async importOAuthHelperToken(token: string): Promise<void> {
+    await this.storeToken(token);
+    // Verify through the STORE ONLY (retrieveGitHubToken), not getGitHubTokenAsync
+    // which is env-first: if the operator has GITHUB_TOKEN set in the process
+    // environment, an env hit would mask a failed session-store write (e.g. a
+    // silently-failed database write) and we would falsely report success.
+    const stored = await this.tokenManager.retrieveGitHubToken();
+    const expectedToken = Buffer.from(token, 'utf8');
+    const storedToken = stored ? Buffer.from(stored, 'utf8') : null;
+    try {
+      const matches = storedToken !== null &&
+        expectedToken.length === storedToken.length &&
+        timingSafeEqual(expectedToken, storedToken);
+      if (!matches) {
+        throw ErrorHandler.wrapError(
+          new Error('session token store read-back did not match the imported OAuth helper token'),
+          'OAuth helper token import failed',
+          ErrorCategory.AUTH_ERROR,
+        );
+      }
+    } finally {
+      expectedToken.fill(0);
+      storedToken?.fill(0);
+    }
+  }
+
   /**
    * Fetch user information from GitHub
    */

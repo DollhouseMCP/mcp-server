@@ -10,7 +10,9 @@
  *   - Live updates are *polled* incrementally (`?since=<newestTs>`) rather than
  *     streamed over SSE. The sink is query-only; polling also sidesteps the
  *     legacy SSE backpressure/jumpiness. We poll for entries strictly newer than
- *     the newest one we hold and append them to a capped buffer.
+ *     the newest one we hold and append them to a capped buffer. Polls overlap
+ *     the timestamp boundary by one millisecond; stable entry ids de-duplicate
+ *     the overlap so late entries sharing the newest timestamp are not lost.
  *
  * Server-side filters (re-fetch the buffer when changed): level, correlationId,
  * sessionId — these scope the query so history isn't limited to whatever the
@@ -19,6 +21,7 @@
  */
 
 import { get } from './api.js';
+import { escapeHtml } from './ui-utils.js';
 
 const BUFFER_SIZE = 10000;
 const ROW_HEIGHT = 22;
@@ -39,6 +42,7 @@ let pollTimer = null;
 let pollInFlight = false;
 let lastPollFailed = false;
 let panelActive = false;
+let dataGeneration = 0;
 
 // Selection state
 const selectedIds = new Set();
@@ -64,9 +68,6 @@ let viewport, scrollSpacer, jumpBtn, statusDot, statusText, entryCountEl;
 let sessionSelect, categorySelect, levelSelect, sourceInput, searchInput, pauseBtn, clearBtn;
 let detailModal, copySelectedBtn, selectCountEl;
 const rowPool = [];
-
-// Filters whose change requires a server re-query (vs. instant buffer re-filter).
-const SERVER_SIDE_FILTERS = new Set(['level', 'correlationId', 'sessionId']);
 
 // ── Entry point ────────────────────────────────────────────────────────────
 export async function init(panelEl, ctx = {}) {
@@ -367,8 +368,10 @@ function buildQuery(extra = {}) {
 
 // Full reload after a server-side filter change. Replaces the buffer.
 async function reload() {
+  const generation = ++dataGeneration;
   setStatus('reconnecting');
   const res = await get(buildQuery({ limit: INITIAL_LIMIT })).catch(() => null);
+  if (generation !== dataGeneration) return;
   if (res?.status !== 200 || !res?.body) {
     lastPollFailed = true;
     setStatus('disconnected');
@@ -381,7 +384,7 @@ async function reload() {
   updateSelectionUI();
   // The endpoint returns newest-first; the buffer is oldest→newest (newest at
   // the bottom, like the legacy stream).
-  const entries = (res.body.entries || []).slice().reverse();
+  const entries = (res.body.items || []).slice().reverse();
   for (const entry of entries) buffer.push(entry);
   newestTs = entries.length ? entries[entries.length - 1].ts : newestTs;
   noteSessions(entries);
@@ -426,24 +429,55 @@ function applyFreshEntries(fresh) {
   }
 }
 
-// Incremental tail: fetch only entries strictly newer than newestTs, append.
+// Incremental tail: overlap the newest timestamp by one millisecond. The server
+// uses a strict `>` filter, while appendToBuffer de-duplicates by stable entry id.
 async function poll() {
   if (pollInFlight || document.visibilityState !== 'visible') return;
   pollInFlight = true;
   try {
-    const res = await get(buildQuery({ since: newestTs ?? undefined, limit: POLL_LIMIT }));
-    if (res.status !== 200 || !res.body) {
-      markPollFailed();
-      return;
-    }
+    const generation = dataGeneration;
+    const pollSince = overlappingPollTimestamp(newestTs);
+    const firstPagePath = buildQuery({ since: pollSince, limit: POLL_LIMIT });
+    const freshNewestFirst = await drainLogPages(cursor => get(withCursor(firstPagePath, cursor)));
+    if (generation !== dataGeneration) return;
     if (lastPollFailed) setStatus(paused ? 'paused' : 'live');
     lastPollFailed = false;
-    applyFreshEntries((res.body.entries || []).slice().reverse()); // oldest→newest
+    applyFreshEntries(freshNewestFirst.reverse()); // oldest→newest
   } catch {
     markPollFailed();
   } finally {
     pollInFlight = false;
   }
+}
+
+export function overlappingPollTimestamp(timestamp) {
+  if (!timestamp) return undefined;
+  const parsed = Date.parse(timestamp);
+  return Number.isFinite(parsed) ? new Date(parsed - 1).toISOString() : timestamp;
+}
+
+/** Drain one stable keyset walk before the caller advances its timestamp cursor. */
+export async function drainLogPages(readPage) {
+  const items = [];
+  const seenCursors = new Set();
+  let cursor;
+  do {
+    const response = await readPage(cursor);
+    if (response?.status !== 200 || !response.body || !Array.isArray(response.body.items)) {
+      throw new Error('Log page could not be read.');
+    }
+    items.push(...response.body.items);
+    const nextCursor = response.body.page?.next_cursor;
+    cursor = typeof nextCursor === 'string' && nextCursor ? nextCursor : undefined;
+    if (cursor && seenCursors.has(cursor)) throw new Error('Log paging cursor did not advance.');
+    if (cursor) seenCursors.add(cursor);
+  } while (cursor);
+  return items;
+}
+
+function withCursor(path, cursor) {
+  if (!cursor) return path;
+  return `${path}${path.includes('?') ? '&' : '?'}cursor=${encodeURIComponent(cursor)}`;
 }
 
 // ── Buffer management ─────────────────────────────────────────────────────
@@ -769,9 +803,4 @@ function copyToClipboard(text) {
     document.execCommand('copy'); // NOSONAR — intentional fallback for browsers without navigator.clipboard support
     ta.remove();
   });
-}
-
-function escapeHtml(s) {
-  if (!s) return '';
-  return String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 }

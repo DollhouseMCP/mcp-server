@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 
 import { env, type Env } from '../config/env.js';
+import { isLoopbackHost } from '../auth/oauth/url.js';
 import { logger } from '../utils/logger.js';
 import type { DiContainerFacade } from '../di/DiContainerFacade.js';
 import type { AuthMethodId } from '../auth/embedded-as/AuthMethodFactory.js';
@@ -24,21 +25,25 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   Env,
   | 'DOLLHOUSE_WEB_CONSOLE_API_V1_ENABLED'
   | 'DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED'
+  | 'DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED'
   | 'DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED'
   | 'DOLLHOUSE_HTTP_WEB_CONSOLE'
   | 'DOLLHOUSE_PUBLIC_BASE_URL'
   | 'DOLLHOUSE_HTTP_HOST'
   | 'DOLLHOUSE_AUTH_METHODS'
   | 'GITHUB_REPOSITORY'
+  | 'GITHUB_TOKEN'
   | 'DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_NAME'
   | 'DOLLHOUSE_WEB_CONSOLE_PRODUCTION_DATABASE_USER'
   | 'DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY'
   | 'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY'
   | 'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID'
+  | 'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED'
   | 'DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY'
   | 'DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE'
   | 'DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID'
   | 'DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET'
+  | 'DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR'
 >;
 
 export async function bootstrapWebConsoleHttpApiV1(
@@ -68,6 +73,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
   if (!sourceEnv.DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE) {
     throw new Error(API_V1_REPLACEMENT_REQUIRES_EVIDENCE);
   }
+  warnCollectionBrowseWithoutGitHubToken(sourceEnv);
   const githubIntegrationProviderConfig = sourceEnv.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID &&
     sourceEnv.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET
     ? {
@@ -85,6 +91,7 @@ export function resolveWebConsoleHttpBootstrapOptions(
     },
     enableApiV1Mount: true,
     enablePortfolioWriteRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED,
+    enableCollectionRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED,
     enableAccountAllowlistRoutes: sourceEnv.DOLLHOUSE_WEB_CONSOLE_ALLOWLIST_ROUTES_ENABLED,
     requireExplicitProductionAdapterMetadata: true,
     productionDatabaseVerification: resolveWebConsoleProductionDatabaseVerificationFromEnv(sourceEnv),
@@ -100,11 +107,17 @@ export function resolveWebConsoleHttpBootstrapOptions(
         'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY',
       ),
     },
+    retainedSecretEncryptionKeys: decodeRetainedBase64Keys(
+      sourceEnv.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED,
+      sourceEnv.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID,
+      'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED',
+    ),
     protectedCorrelationSelectorHmacKey: decodeBase64Key(
       sourceEnv.DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY,
       'DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY',
     ),
     githubIntegrationProviderConfig,
+    integrationDescriptorSeedDir: sourceEnv.DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR,
     portfolioSyncRepositoryName: sourceEnv.GITHUB_REPOSITORY,
     reportCleanupError: ({ store, error }) => {
       logger.error('[WebConsole] Scheduled store cleanup failed', {
@@ -113,6 +126,29 @@ export function resolveWebConsoleHttpBootstrapOptions(
       });
     },
   };
+}
+
+/**
+ * Hosted collection-browse token nudge. Catalog browse makes server-funded
+ * outbound GitHub calls; without GITHUB_TOKEN those fall under GitHub's
+ * unauthenticated budget of 60 requests/hour per egress IP, shared across
+ * every console user AND portfolio sync. Warn (never fail — the surface
+ * degrades gracefully to cached/empty responses) so operators of non-loopback
+ * deployments set a token. Skip for loopback binds: dev/CI doesn't need the
+ * nudge, and a single local user rarely exhausts the anonymous budget.
+ */
+function warnCollectionBrowseWithoutGitHubToken(sourceEnv: WebConsoleHttpBootstrapEnv): void {
+  if (!sourceEnv.DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED) return;
+  if (sourceEnv.GITHUB_TOKEN) return;
+  if (isLoopbackHost(sourceEnv.DOLLHOUSE_HTTP_HOST)) return;
+  logger.warn(
+    '[WebConsoleHttpBootstrap] Collection browse is enabled (DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED=true) ' +
+    `on a non-loopback bind '${sourceEnv.DOLLHOUSE_HTTP_HOST}' without GITHUB_TOKEN. Catalog fetches will ` +
+    "use GitHub's unauthenticated rate budget (60 requests/hour per egress IP), shared across all console " +
+    'users and portfolio sync. Set GITHUB_TOKEN to a zero-scope personal access token — public catalog ' +
+    'reads need no scopes, and scopes like public_repo would grant public-repository write — to raise ' +
+    'the budget to 5,000 requests/hour.',
+  );
 }
 
 export async function assertWebConsoleReplacementEvidenceReady(
@@ -156,6 +192,30 @@ function decodeBase64Key(value: string | undefined, name: string): Buffer {
     throw new Error(`${name} must decode to exactly ${REQUIRED_KEY_BYTES} bytes`);
   }
   return decoded;
+}
+
+function decodeRetainedBase64Keys(
+  value: string | undefined,
+  activeKeyId: string,
+  name: string,
+): { keyId: string; key: Buffer }[] {
+  if (!value) return [];
+  const seen = new Set([activeKeyId]);
+  return value.split(',').map(rawEntry => rawEntry.trim()).filter(Boolean).map(entry => {
+    const separator = entry.indexOf('=');
+    if (separator <= 0) {
+      throw new Error(`${name} entry '${entry}' must be 'keyId=base64key'`);
+    }
+    const keyId = entry.slice(0, separator).trim();
+    if (!keyId || seen.has(keyId)) {
+      throw new Error(`${name} contains duplicate or active key ID '${keyId}'`);
+    }
+    seen.add(keyId);
+    return {
+      keyId,
+      key: decodeBase64Key(entry.slice(separator + 1).trim(), `${name} entry '${keyId}'`),
+    };
+  });
 }
 
 function normalizeAuthMethods(methods: readonly string[] | undefined): readonly AuthMethodId[] {

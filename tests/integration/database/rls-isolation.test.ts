@@ -7,9 +7,11 @@
 import { eq, sql } from 'drizzle-orm';
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
 import { DatabaseMemoryStorageLayer } from '../../../src/storage/DatabaseMemoryStorageLayer.js';
-import { withUserContext, withUserRead } from '../../../src/database/rls.js';
+import { InactiveUserContextError, withUserContext, withUserRead } from '../../../src/database/rls.js';
 import { elements } from '../../../src/database/schema/elements.js';
-import { buildMemoryContent, buildSkillContent, cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+import { users } from '../../../src/database/schema/users.js';
+import { lockUserLifecycleWithTx } from '../../../src/database/authPrincipalLock.js';
+import { buildMemoryContent, buildSkillContent, cleanupAllTestData, closeTestDb, ensureTestUser, ensureTestUserB, fixedUserId, getTestAdminDb, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
 
 let dbAvailable = false;
 
@@ -627,5 +629,53 @@ describe('RLS visibility — public elements', () => {
     const pgCode = (caught as { cause?: { code?: string } } | null)?.cause?.code;
     const combined = `${caught?.message ?? ''} ${(caught as { cause?: { message?: string } } | null)?.cause?.message ?? ''}`;
     expect(pgCode === '42501' || /row-level security|violates row-level/i.test(combined)).toBe(true);
+  });
+
+  it('serializes user writes ahead of account deletion and rejects writes afterward', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const adminDb = getTestAdminDb();
+    const elementName = 'deletion-fence-write';
+    let releaseWrite!: () => void;
+    let principalLocked!: () => void;
+    const writeGate = new Promise<void>(resolve => { releaseWrite = resolve; });
+    const lockObserved = new Promise<void>(resolve => { principalLocked = resolve; });
+
+    try {
+      const writer = withUserContext(db, userId, async tx => {
+        principalLocked();
+        await writeGate;
+        await tx.execute(sql`
+          INSERT INTO elements (user_id, element_type, name, raw_content, content_hash, byte_size, visibility)
+          VALUES (${userId}::uuid, 'skills', ${elementName}, 'body', ${'a'.repeat(64)}, 4, 'private')
+        `);
+      });
+      await lockObserved;
+
+      let deletionLockAcquired = false;
+      let signalDeletionStarted!: () => void;
+      const deletionStarted = new Promise<void>(resolve => { signalDeletionStarted = resolve; });
+      const disable = adminDb.transaction(async tx => {
+        signalDeletionStarted();
+        await lockUserLifecycleWithTx(tx, userId);
+        await tx.select({ id: users.id }).from(users).where(eq(users.id, userId)).for('update').limit(1);
+        deletionLockAcquired = true;
+        await tx.update(users).set({ disabledAt: new Date() }).where(eq(users.id, userId));
+      });
+      await deletionStarted;
+      await new Promise(resolve => setTimeout(resolve, 25));
+      expect(deletionLockAcquired).toBe(false);
+
+      releaseWrite();
+      await writer;
+      await disable;
+      await expect(withUserContext(db, userId, () => Promise.resolve()))
+        .rejects.toBeInstanceOf(InactiveUserContextError);
+    } finally {
+      releaseWrite?.();
+      await adminDb.delete(elements).where(eq(elements.userId, userId));
+      await adminDb.update(users).set({ disabledAt: null, deletedAt: null }).where(eq(users.id, userId));
+    }
   });
 });

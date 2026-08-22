@@ -4,6 +4,8 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import { projectConsoleStreamEndStatus } from '../../platform/ConsoleProjectorHelpers.js';
+import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
+import { boundedLimit, boundedString, firstString, optionalLimit } from '../../platform/ConsoleQueryParams.js';
 import { parseConsoleLastEventId } from '../../platform/ConsoleSseStream.js';
 import type { IOperatorConfigStore } from '../../../storage/operatorConfig/IOperatorConfigStore.js';
 import { ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
@@ -32,6 +34,11 @@ import {
 } from './OperationsPrivacyProjectors.js';
 import type { ISystemMetricsSource } from './SystemMetricsSource.js';
 import type { MetricQueryOptions, MetricQueryResult } from '../../../metrics/types.js';
+import type { IAccountAdminMutationTransactionRunner } from '../account-admin/AccountAdminMutationTransaction.js';
+import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
+import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
+import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
+import type { ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
 
 const OPERATE_CAPABILITY = 'console:admin:operate';
 const OPERATION_AUDIT_IDS = [
@@ -63,6 +70,7 @@ export interface OperationsModuleOptions {
   readonly healthChecks: OperationsHealthChecks;
   readonly telemetry: IConsoleTelemetryQuery;
   readonly operatorConfigStore: IOperatorConfigStore;
+  readonly transactionRunner: IAccountAdminMutationTransactionRunner;
   readonly operatorConfigDefinitions?: readonly OperatorConfigSettingDefinition[];
   /** In-process System A metrics sink; absent when metrics collection is off. */
   readonly systemMetrics?: ISystemMetricsSource;
@@ -106,7 +114,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         privacyProjector: projectOperatorConfigSetting,
         handler: req => configService.getConfig(firstString(req.params.key) ?? ''),
       },
-      {
+      transactionalOperationRoute({
         method: 'PUT',
         path: '/api/v1/admin/operate/config/:key',
         audience: 'admin',
@@ -116,12 +124,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         idempotency: 'required',
         auditOperation: 'operate.config.update',
         privacyProjector: projectOperatorConfigSetting,
-        handler: req => configService.updateConfig({
-          key: firstString(req.params.key) ?? '',
-          ifMatch: firstString(req.headers['if-match']),
-          body: req.body,
-        }),
-      },
+      }, (req, route) => updateOperatorConfig(req, route, configService, options.transactionRunner, resolveNow)),
       {
         method: 'GET',
         path: '/api/v1/admin/operate/health',
@@ -283,6 +286,78 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
   };
 }
 
+function transactionalOperationRoute(
+  definition: Omit<ConsoleRouteDefinition, 'auditExecution' | 'handler'>,
+  handler: (req: ConsoleRequest, route: ConsoleRouteDefinition) => Promise<ConsoleHandlerResult>,
+): ConsoleRouteDefinition {
+  let route!: ConsoleRouteDefinition;
+  route = {
+    ...definition,
+    auditExecution: 'handler_transaction',
+    handler: req => handler(req, route),
+  };
+  return route;
+}
+
+async function updateOperatorConfig(
+  req: ConsoleRequest,
+  route: ConsoleRouteDefinition,
+  service: OperatorConfigurationService,
+  transactionRunner: IAccountAdminMutationTransactionRunner,
+  now: () => Date,
+): Promise<ConsoleHandlerResult> {
+  const key = firstString(req.params.key) ?? '';
+  return transactionRunner.run(async tx => {
+    const transactionalStore: IOperatorConfigStore = {
+      load: () => tx.loadOperatorConfig(),
+      save: (config, options) => tx.saveOperatorConfig(config, options),
+    };
+    const result = await service.updateConfig(operatorConfigUpdateInput(req), transactionalStore);
+    const audit = operationAuditResult(result);
+    await tx.writeAdminAuditEvent(buildConsoleAdminAuditEvent(
+      route,
+      route.auditOperation ?? '',
+      req,
+      audit.result,
+      audit.errorCode,
+      now(),
+      {
+        resourceKind: 'operator_config',
+        resourceId: key || null,
+        argsRedacted: { key },
+        resultDetailRedacted: null,
+      },
+    ));
+    return result;
+  }, requireConsoleAuthentication(req));
+}
+
+function operatorConfigUpdateInput(req: ConsoleRequest) {
+  return {
+    key: firstString(req.params.key) ?? '',
+    ifMatch: firstString(req.headers['if-match']),
+    body: req.body,
+  };
+}
+
+function operationAuditResult(result: ConsoleHandlerResult): {
+  readonly result: ConsoleAdminAuditResult;
+  readonly errorCode: string | null;
+} {
+  if (result.status >= 200 && result.status < 300) return { result: 'approved', errorCode: null };
+  const errorCode = extractProblemCode(result.body);
+  if (result.status === 409 || result.status === 412) return { result: 'conflict', errorCode };
+  if (result.status === 404) return { result: 'failed', errorCode: errorCode ?? 'not_found' };
+  if (result.status >= 400 && result.status < 500) return { result: 'rejected', errorCode };
+  return { result: 'failed', errorCode: errorCode ?? 'internal_error' };
+}
+
+function extractProblemCode(body: unknown): string | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const code = (body as { readonly code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
+}
+
 // Reads the in-process System A sink. When metrics collection is disabled the
 // sink is absent, so we degrade to an empty result rather than erroring.
 function querySystemMetrics(
@@ -290,8 +365,26 @@ function querySystemMetrics(
   query: MetricQueryOptions,
   now: () => Date,
 ): ConsoleHandlerResult {
-  if (!source) return { status: 200, body: emptySystemMetrics(now()) };
-  return { status: 200, body: source.query(query) };
+  const result = source ? source.query(query) : emptySystemMetrics(now());
+  return { status: 200, body: serializeSystemMetrics(result) };
+}
+
+// Cursor-family envelope over the offset-backed ring buffer: the offset is
+// carried in an opaque cursor, never exposed raw. The ring-buffer anchors
+// (oldest/newest available) are domain metadata and stay top-level. Keys here
+// are the camelCase internal model — projectSystemMetrics maps them to the
+// snake_case DTO (oldestAvailable → oldest_available) at the trust boundary.
+function serializeSystemMetrics(result: MetricQueryResult): Record<string, unknown> {
+  return {
+    items: result.snapshots,
+    page: {
+      limit: result.limit,
+      cursor: result.offset > 0 ? offsetConsoleCursor(result.offset) : null,
+      next_cursor: result.hasMore ? offsetConsoleCursor(result.offset + result.snapshots.length) : null,
+    },
+    oldestAvailable: result.oldestAvailable,
+    newestAvailable: result.newestAvailable,
+  };
 }
 
 function emptySystemMetrics(at: Date): MetricQueryResult {
@@ -368,7 +461,7 @@ function projectMetricStreamFilters(value: unknown): Record<string, string | nul
 
 function parseLogQuery(req: ConsoleRequest): OperationalLogQuery {
   return {
-    limit: boundedLimit(firstString(req.query.limit), 100),
+    limit: boundedLimit(firstString(req.query.limit), 100, 100),
     cursor: boundedString(firstString(req.query.cursor), 256),
     level: boundedString(firstString(req.query.level), 16),
     subsystem: boundedString(firstString(req.query.subsystem), 64),
@@ -397,40 +490,16 @@ function parseSystemMetricQuery(req: ConsoleRequest): MetricQueryOptions {
   if (until) options.until = until;
   const latest = firstString(req.query.latest);
   if (latest !== null) options.latest = latest !== 'false';
-  const limit = boundedNonNegativeInt(firstString(req.query.limit), 1, 1000);
+  // Absent/invalid limit → omit the option so the sink's default applies.
+  const limit = optionalLimit(firstString(req.query.limit), 1000);
   if (limit !== null) options.limit = limit;
-  const offset = boundedNonNegativeInt(firstString(req.query.offset), 0, Number.MAX_SAFE_INTEGER);
-  if (offset !== null) options.offset = offset;
+  // Continuation position arrives as an opaque cursor (cursor family), never
+  // as a raw offset parameter.
+  const cursor = boundedString(firstString(req.query.cursor), 512);
+  if (cursor) options.offset = offsetFromConsoleCursor(cursor);
   return options;
 }
 
-function boundedNonNegativeInt(value: string | null, min: number, max: number): number | null {
-  if (value === null) return null;
-  const parsed = Number.parseInt(value, 10);
-  if (!Number.isSafeInteger(parsed)) return null;
-  return Math.min(Math.max(parsed, min), max);
-}
-
-function boundedLimit(value: string | null, fallback: number): number {
-  const parsed = value ? Number.parseInt(value, 10) : fallback;
-  if (!Number.isSafeInteger(parsed)) return fallback;
-  return Math.min(Math.max(parsed, 1), 100);
-}
-
-function boundedString(value: string | null, maxLength: number): string | null {
-  if (!value) return null;
-  const trimmed = value.trim();
-  if (!trimmed) return null;
-  return trimmed.slice(0, maxLength);
-}
-
-function firstString(value: ConsoleRequest['query'][string] | string | readonly string[] | undefined): string | null {
-  if (Array.isArray(value)) {
-    const first = value[0];
-    return typeof first === 'string' ? first : null;
-  }
-  return typeof value === 'string' ? value : null;
-}
 
 export function operationalProblem(status: number, code: string, detail: string): ConsoleHandlerResult {
   return {

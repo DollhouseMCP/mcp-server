@@ -1,6 +1,7 @@
 import { approvalAuditEvents, sessionActivityEvents, users } from '../../../database/schema/index.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import { withSystemContext } from '../../../database/admin.js';
+import { lockActiveUserLifecycleWithTx } from '../../../database/authPrincipalLock.js';
 import type { ConsoleApprovalScope, ConsoleApprovalStatus } from './ApprovalDtos.js';
 import { eq } from 'drizzle-orm';
 
@@ -40,6 +41,7 @@ export class PostgresSessionApprovalEventSink implements ISessionApprovalEventSi
 
   async recordApprovalDecision(event: SessionApprovalDecisionEvent): Promise<void> {
     await withSystemContext(this.db, async (tx) => {
+      await lockActiveUserLifecycleWithTx(tx, event.userId);
       const principalRows = await tx
         .select({ accountCorrelationId: users.accountCorrelationId })
         .from(users)

@@ -2,9 +2,9 @@
  * Relationship Extractor
  *
  * Parses element frontmatter for relationship-bearing fields and persists
- * to element_relationships and ensemble_members tables. Uses soft integrity:
- * extraction failure does NOT block the element save — the core element +
- * tags transaction commits first, then relationships are best-effort.
+ * to element_relationships and ensemble_members tables. DatabaseStorageLayer
+ * invokes replacement inside the element transaction so graph rows cannot lag
+ * or be reordered behind a newer element revision.
  *
  * Supported relationships:
  * - Agents: activates.personas[], activates.skills[], etc. → element_relationships
@@ -19,6 +19,7 @@ import { logger } from '../utils/logger.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext } from '../database/rls.js';
 import type { UserIdResolver } from '../database/UserContext.js';
+import type { DrizzleTx } from '../database/db-utils.js';
 import { elementRelationships } from '../database/schema/elements.js';
 import { ensembleMembers } from '../database/schema/ensembles.js';
 
@@ -80,56 +81,9 @@ export class RelationshipExtractor {
         ? this.extractEnsembleMembers(frontmatterData)
         : [];
 
-      if (relationships.length === 0 && ensembleEntries.length === 0) {
-        return;
-      }
-
-      await withUserContext(this.db, this.userId, async (tx) => {
-        // Defense-in-depth: include userId in DELETE filters alongside RLS.
-        // Delete old relationships for this element
-        await tx.delete(elementRelationships)
-          .where(and(
-            eq(elementRelationships.userId, this.userId),
-            eq(elementRelationships.sourceId, elementId),
-          ));
-
-        // Insert new relationships
-        if (relationships.length > 0) {
-          await tx.insert(elementRelationships).values(
-            relationships.map(r => ({
-              sourceId: elementId,
-              userId: this.userId,
-              targetName: r.targetName,
-              targetType: r.targetType,
-              relationship: r.relationship,
-            })),
-          );
-        }
-
-        // For ensembles: replace ensemble_members
-        if (ensembleEntries.length > 0) {
-          await tx.delete(ensembleMembers)
-            .where(and(
-              eq(ensembleMembers.userId, this.userId),
-              eq(ensembleMembers.ensembleId, elementId),
-            ));
-
-          await tx.insert(ensembleMembers).values(
-            ensembleEntries.map(m => ({
-              ensembleId: elementId,
-              userId: this.userId,
-              memberName: m.memberName,
-              memberType: m.memberType,
-              role: m.role,
-              priority: m.priority,
-              activation: m.activation,
-              condition: m.condition ?? null,
-              purpose: m.purpose ?? null,
-              dependencies: m.dependencies,
-            })),
-          );
-        }
-      });
+      const userId = this.userId;
+      await withUserContext(this.db, userId, tx =>
+        this.replaceInTransaction(tx, userId, elementId, elementType, relationships, ensembleEntries));
     } catch (error) {
       // Soft integrity: log warning, do not throw.
       // The element is already saved — relationships are stale until next save.
@@ -138,6 +92,64 @@ export class RelationshipExtractor {
         elementType,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  async replaceForElementInTransaction(
+    tx: DrizzleTx,
+    userId: string,
+    elementId: string,
+    elementType: string,
+    frontmatterData: Record<string, unknown>,
+  ): Promise<void> {
+    await this.replaceInTransaction(
+      tx,
+      userId,
+      elementId,
+      elementType,
+      this.extractRelationships(elementType, frontmatterData),
+      elementType === 'ensembles' ? this.extractEnsembleMembers(frontmatterData) : [],
+    );
+  }
+
+  private async replaceInTransaction(
+    tx: DrizzleTx,
+    userId: string,
+    elementId: string,
+    elementType: string,
+    relationships: ExtractedRelationship[],
+    ensembleEntries: ExtractedEnsembleMember[],
+  ): Promise<void> {
+    await tx.delete(elementRelationships).where(and(
+      eq(elementRelationships.userId, userId),
+      eq(elementRelationships.sourceId, elementId),
+    ));
+    if (relationships.length > 0) {
+      await tx.insert(elementRelationships).values(relationships.map(relationship => ({
+        sourceId: elementId,
+        userId,
+        ...relationship,
+      })));
+    }
+
+    if (elementType !== 'ensembles') return;
+    await tx.delete(ensembleMembers).where(and(
+      eq(ensembleMembers.userId, userId),
+      eq(ensembleMembers.ensembleId, elementId),
+    ));
+    if (ensembleEntries.length > 0) {
+      await tx.insert(ensembleMembers).values(ensembleEntries.map(member => ({
+        ensembleId: elementId,
+        userId,
+        memberName: member.memberName,
+        memberType: member.memberType,
+        role: member.role,
+        priority: member.priority,
+        activation: member.activation,
+        condition: member.condition ?? null,
+        purpose: member.purpose ?? null,
+        dependencies: member.dependencies,
+      })));
     }
   }
 

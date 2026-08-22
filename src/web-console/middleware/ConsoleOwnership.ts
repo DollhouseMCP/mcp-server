@@ -38,7 +38,7 @@ export function createConsoleOwnershipMiddleware(
         sendProblemResponse(response, notFoundProblem(), requireConsoleRequestContext(req).correlationId);
         return;
       }
-      const presence = await options.runtimeStore.findPresence(sessionId, options.now?.() ?? new Date());
+      const presence = await options.runtimeStore.findPresence(sessionId, options.now?.());
       if (presence?.userId !== authentication.userId) {
         sendProblemResponse(response, notFoundProblem(), requireConsoleRequestContext(req).correlationId);
         return;

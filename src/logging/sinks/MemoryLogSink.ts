@@ -116,11 +116,23 @@ export class MemoryLogSink implements ILogSink {
       entries = entries.filter(e => e.sessionId === sid);
     }
 
+    if (options?.beforeTimestamp && options.beforeId) {
+      const beforeTimestamp = options.beforeTimestamp;
+      const beforeId = options.beforeId;
+      entries = entries.filter(entry =>
+        entry.timestamp < beforeTimestamp ||
+        (entry.timestamp === beforeTimestamp && entry.id < beforeId),
+      );
+    }
+
     // 4. Count total before pagination
     const total = entries.length;
 
     // 5. Sort newest-first (descending timestamp)
-    entries.sort((a, b) => (a.timestamp > b.timestamp ? -1 : a.timestamp < b.timestamp ? 1 : 0));
+    entries.sort((a, b) => {
+      if (a.timestamp !== b.timestamp) return a.timestamp > b.timestamp ? -1 : 1;
+      return b.id.localeCompare(a.id);
+    });
 
     // 6. Paginate
     entries = entries.slice(offset, offset + limit);

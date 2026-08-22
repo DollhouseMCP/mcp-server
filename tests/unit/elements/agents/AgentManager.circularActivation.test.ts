@@ -43,6 +43,8 @@ describe('AgentManager - Circular Activation Detection (Issue #109)', () => {
     getBaseDir: jest.MockedFunction<() => string>;
   };
   let container: InstanceType<typeof DollhouseContainer>;
+  let fileStore: Map<string, string>;
+  const fileStoreKey = (filePath: string) => path.resolve(filePath);
 
   // Create test agents
   const createSelfReferencingAgent = () => ({
@@ -238,12 +240,18 @@ This agent activates personas (no cycles).
     container.register<FileLockManager>('FileLockManager', () => new FileLockManager());
 
     // Mock FileOperationsService
-    const fileStore = new Map<string, string>(); // Track written files
+    fileStore = new Map<string, string>(); // Track written files
 
     const readFileImpl = jest.fn().mockImplementation((filePath: string) => {
         // Check if file was written to fileStore first
-        if (fileStore.has(filePath)) {
-          return Promise.resolve(fileStore.get(filePath)!);
+        const storedPath = fileStoreKey(filePath);
+        if (fileStore.has(storedPath)) {
+          return Promise.resolve(fileStore.get(storedPath)!);
+        }
+        if (filePath.endsWith('.state.yaml')) {
+          const error = new Error('ENOENT') as NodeJS.ErrnoException;
+          error.code = 'ENOENT';
+          return Promise.reject(error);
         }
 
         // Otherwise, return agent content based on filename
@@ -311,11 +319,11 @@ activates:
     const mockFileOperations: any = {
       createDirectory: jest.fn().mockResolvedValue(undefined),
       exists: jest.fn().mockImplementation((filePath: string) => {
-        return Promise.resolve(fileStore.has(filePath));
+        return Promise.resolve(fileStore.has(fileStoreKey(filePath)));
       }),
       readFile: readFileImpl,
       writeFile: jest.fn().mockImplementation((filePath: string, content: string) => {
-        fileStore.set(filePath, content);
+        fileStore.set(fileStoreKey(filePath), content);
         return Promise.resolve(undefined);
       }),
       deleteFile: jest.fn().mockResolvedValue(undefined),
@@ -527,6 +535,14 @@ activates:
 
       // Override readFile to also serve diamond agent files
       mockFileOps.readFile = jest.fn().mockImplementation((filePath: string) => {
+        if (filePath.endsWith('.state.yaml')) {
+          if (!fileStore.has(fileStoreKey(filePath))) {
+            const error = new Error('ENOENT') as NodeJS.ErrnoException;
+            error.code = 'ENOENT';
+            return Promise.reject(error);
+          }
+          return originalReadFile(filePath);
+        }
         const basename = path.basename(filePath, '.md').toLowerCase();
         if (basename === 'diamond-a') {
           return Promise.resolve(`---
@@ -654,6 +670,9 @@ goal:
       const originalReadFile = mockFileOps.readFile;
 
       mockFileOps.readFile = jest.fn().mockImplementation((filePath: string) => {
+        if (filePath.endsWith('.state.yaml')) {
+          return originalReadFile(filePath);
+        }
         const basename = path.basename(filePath, '.md').toLowerCase();
 
         // chain-N agents: filename is chain-N.md, basename is 'chain-N'

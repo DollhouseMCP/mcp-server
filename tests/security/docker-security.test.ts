@@ -254,10 +254,11 @@ suite('Docker Security Hardening', () => {
       expect(httpCompose).toContain('DOLLHOUSE_HTTP_HOST=0.0.0.0');
     });
 
-    it('should expose port in HTTP compose', () => {
+    it('should publish the HTTP port on loopback unless explicitly overridden', () => {
       const httpCompose = fs.readFileSync(httpComposePath, 'utf-8');
       expect(httpCompose).toContain('ports:');
-      expect(httpCompose).toMatch(/"3000:3000"/);
+      expect(httpCompose).toContain('"${DOLLHOUSE_HTTP_PUBLISH_ADDRESS:-127.0.0.1}:3000:3000"');
+      expect(httpCompose).not.toMatch(/^\s*-\s*["']?3000:3000["']?\s*$/m);
     });
 
     it('should set streamable-http transport in HTTP compose', () => {

@@ -28,13 +28,19 @@
 
 import { and, eq, gte, inArray, or, sql, type SQL } from 'drizzle-orm';
 import type { DatabaseInstance } from '../../../database/connection.js';
+import type { DrizzleTx } from '../../../database/db-utils.js';
 import { withSystemContext } from '../../../database/admin.js';
+import { lockAuthPrincipalsWithTx } from '../../../database/authPrincipalLock.js';
 import {
   authAccounts,
   authIdentityEvents,
   authKv,
+  authSubjectRevocationFences,
 } from '../../../database/schema/auth.js';
+import { users } from '../../../database/schema/users.js';
 import { authAllowlist } from '../../../database/schema/authAllowlist.js';
+import { hashAuthSubject } from '../../../security/authSubjectRevocation.js';
+import { normalizeAuthAllowlistValue } from '../allowlistIdentity.js';
 import type {
   AllowlistAddInput,
   AllowlistMatchValues,
@@ -99,23 +105,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async upsertAccount(account: StoredAccount): Promise<void> {
-    const row = storedAccountToRow(account);
-    await withSystemContext(this.db, async (tx) => {
-      await tx.insert(authAccounts).values(row).onConflictDoUpdate({
-        target: [authAccounts.provider, authAccounts.externalSub],
-        set: {
-          sub: row.sub,
-          userId: sql`COALESCE(${authAccounts.userId}, excluded.user_id)`,
-          email: row.email,
-          emailVerified: row.emailVerified,
-          displayName: row.displayName,
-          rawProfile: row.rawProfile,
-          passwordHash: row.passwordHash,
-          lastAuthAt: row.lastAuthAt,
-          updatedAt: row.updatedAt,
-        },
-      });
-    });
+    await withSystemContext(this.db, tx => upsertAuthAccountWithTx(tx, account));
   }
 
   async getAccount(sub: string): Promise<StoredAccount | null> {
@@ -207,14 +197,19 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
 
   async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {
     await withSystemContext(this.db, async (tx) => {
+      if (event.sub) {
+        await lockAuthPrincipalsWithTx(tx, [event.sub]);
+        await assertAuthSubjectNotDeletedWithTx(tx, event.sub);
+      }
       await tx.insert(authIdentityEvents).values({
+        ...(event.eventId ? { id: event.eventId } : {}),
         type: event.type,
         sub: event.sub ?? null,
         provider: event.provider ?? null,
         externalSub: event.externalSub ?? null,
         details: event.details ?? null,
         timestamp: event.timestamp,
-      });
+      }).onConflictDoNothing();
     });
   }
 
@@ -242,41 +237,35 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   // ---- Grants (Phase 5 H14) ----
 
   async findGrantsByAccountId(sub: string): Promise<string[]> {
-    // Uses idx_auth_kv_grant_account partial expression index.
-    const rows = await withSystemContext(this.db, (tx) =>
-      tx.select({ id: authKv.id }).from(authKv).where(
-        and(
-          eq(authKv.model, 'Grant'),
-          sql`${authKv.payload}->>'accountId' = ${sub}`,
-          notExpired(),
-        ),
-      ),
-    );
-    return rows.map((r) => r.id);
+    return withSystemContext(this.db, tx => findAuthGrantIdsByAccountIdWithTx(tx, sub));
   }
 
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
+  async genericNow(): Promise<number> {
+    const rows = await withSystemContext(this.db, tx => tx.execute<{ now_ms: string }>(sql`
+      SELECT FLOOR(EXTRACT(EPOCH FROM statement_timestamp()) * 1000)::bigint AS now_ms
+    `));
+    const now = Number(rows[0]?.now_ms);
+    if (!Number.isSafeInteger(now) || now < 0) throw new Error('database returned an invalid auth clock');
+    return now;
+  }
+
   async genericGet(model: string, id: string): Promise<unknown> {
     const rows = await withSystemContext(this.db, (tx) =>
-      tx.select({ payload: authKv.payload, expiresAt: authKv.expiresAt })
+      tx.select({ payload: authKv.payload })
         .from(authKv)
-        .where(and(eq(authKv.model, model), eq(authKv.id, id)))
+        .where(and(eq(authKv.model, model), eq(authKv.id, id), notExpired()))
         .limit(1),
     );
     if (rows.length === 0) return null;
-    const row = rows[0];
-    if (row.expiresAt && row.expiresAt.getTime() <= Date.now()) {
-      // Lazy expiry; best-effort cleanup.
-      void this.genericDestroy(model, id);
-      return null;
-    }
-    return row.payload;
+    return rows[0].payload;
   }
 
   async genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void> {
-    const expiresAt = expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null;
+    const expiresAt = databaseExpiry(expiresInSec);
     await withSystemContext(this.db, async (tx) => {
+      await assertAuthKvPrincipalIsLiveWithTx(tx, payload);
       await tx.insert(authKv).values({
         model,
         id,
@@ -289,13 +278,36 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     });
   }
 
+  async genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    const expiresAt = databaseExpiry(expiresInSec);
+    const rows = await withSystemContext(this.db, async tx => {
+      await assertAuthKvPrincipalIsLiveWithTx(tx, payload);
+      return tx.update(authKv)
+        .set({ payload, expiresAt })
+        .where(and(
+          eq(authKv.model, model),
+          eq(authKv.id, id),
+          sql`${authKv.payload} = ${JSON.stringify(expectedPayload)}::jsonb`,
+          notExpired(),
+        ))
+        .returning({ id: authKv.id });
+    });
+    return rows.length === 1;
+  }
+
   async genericInsertIfAbsent(
     model: string,
     id: string,
     payload: unknown,
     expiresInSec?: number,
   ): Promise<boolean> {
-    const expiresAt = expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null;
+    const expiresAt = databaseExpiry(expiresInSec);
     // Cycle-15 fix: align with InMemory/Filesystem semantics where an
     // expired row is treated as absent — INSERT ... ON CONFLICT DO
     // UPDATE ... WHERE auth_kv.expires_at < NOW() lets a new insert
@@ -312,8 +324,9 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     // exists both hit the conflict path with the WHERE clause
     // rejecting both — `returning` is empty and both correctly
     // return false.
-    const rows = await withSystemContext(this.db, (tx) =>
-      tx.insert(authKv)
+    const rows = await withSystemContext(this.db, async (tx) => {
+      await assertAuthKvPrincipalIsLiveWithTx(tx, payload);
+      return tx.insert(authKv)
         .values({
           model,
           id,
@@ -330,8 +343,8 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
           // rows stay untouched.
           where: sql`${authKv.expiresAt} IS NOT NULL AND ${authKv.expiresAt} < NOW()`,
         })
-        .returning({ id: authKv.id }),
-    );
+        .returning({ id: authKv.id });
+    });
     return rows.length > 0;
   }
 
@@ -389,12 +402,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     // Delete both the Grant row itself (model='Grant', id=grantId) and
     // every entry whose payload.grantId references it (tokens, sessions,
     // codes). Single statement via OR.
-    await withSystemContext(this.db, async (tx) => {
-      await tx.delete(authKv).where(or(
-        and(eq(authKv.model, 'Grant'), eq(authKv.id, grantId)),
-        sql`${authKv.payload}->>'grantId' = ${grantId}`,
-      ));
-    });
+    await withSystemContext(this.db, tx => revokeAuthGrantByIdWithTx(tx, grantId));
   }
 
   /** Uses idx_auth_kv_session_uid partial expression index. */
@@ -428,7 +436,7 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
-    const value = input.value.toLowerCase();
+    const value = normalizeAuthAllowlistValue(input.kind, input.value);
     try {
       const rows = await withSystemContext(this.db, (tx) =>
         tx.insert(authAllowlist).values({
@@ -482,15 +490,24 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     // No values supplied → trivially false (no possible match).
     const predicates: SQL[] = [];
     if (values.email) {
-      const pred = and(eq(authAllowlist.kind, 'email'), eq(authAllowlist.value, values.email.toLowerCase()));
+      const pred = and(
+        eq(authAllowlist.kind, 'email'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('email', values.email))
+      );
       if (pred) predicates.push(pred);
     }
     if (values.githubUsername) {
-      const pred = and(eq(authAllowlist.kind, 'github_username'), eq(authAllowlist.value, values.githubUsername.toLowerCase()));
+      const pred = and(
+        eq(authAllowlist.kind, 'github_username'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('github_username', values.githubUsername))
+      );
       if (pred) predicates.push(pred);
     }
     if (values.githubId) {
-      const pred = and(eq(authAllowlist.kind, 'github_id'), eq(authAllowlist.value, values.githubId));
+      const pred = and(
+        eq(authAllowlist.kind, 'github_id'),
+        eq(authAllowlist.value, normalizeAuthAllowlistValue('github_id', values.githubId))
+      );
       if (pred) predicates.push(pred);
     }
     if (predicates.length === 0) return false;
@@ -502,8 +519,112 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
   }
 }
 
+/** Uses idx_auth_kv_grant_account partial expression index. */
+export async function findAuthGrantIdsByAccountIdWithTx(tx: DrizzleTx, sub: string): Promise<string[]> {
+  const rows = await tx.select({ id: authKv.id }).from(authKv).where(and(
+    eq(authKv.model, 'Grant'),
+    sql`${authKv.payload}->>'accountId' = ${sub}`,
+    notExpired(),
+  ));
+  return rows.map(row => row.id);
+}
+
+export async function revokeAuthGrantByIdWithTx(tx: DrizzleTx, grantId: string): Promise<void> {
+  await tx.delete(authKv).where(or(
+    and(eq(authKv.model, 'Grant'), eq(authKv.id, grantId)),
+    sql`${authKv.payload}->>'grantId' = ${grantId}`,
+  ));
+}
+
+/** Transaction-aware account upsert shared with the authoritative sign-in gate. */
+export async function upsertAuthAccountWithTx(tx: DrizzleTx, account: StoredAccount): Promise<void> {
+  await lockAuthPrincipalsWithTx(tx, [account.sub]);
+  await assertAuthSubjectNotDeletedWithTx(tx, account.sub);
+  const row = storedAccountToRow(account);
+  await tx.insert(authAccounts).values(row).onConflictDoUpdate({
+    target: [authAccounts.provider, authAccounts.externalSub],
+    set: {
+      sub: row.sub,
+      userId: sql`COALESCE(${authAccounts.userId}, excluded.user_id)`,
+      email: row.email,
+      emailVerified: row.emailVerified,
+      displayName: row.displayName,
+      rawProfile: row.rawProfile,
+      passwordHash: row.passwordHash,
+      lastAuthAt: row.lastAuthAt,
+      updatedAt: row.updatedAt,
+    },
+  });
+}
+
+async function assertAuthSubjectNotDeletedWithTx(tx: DrizzleTx, sub: string): Promise<void> {
+  const fence = await tx.select({ reason: authSubjectRevocationFences.reason })
+    .from(authSubjectRevocationFences)
+    .where(eq(authSubjectRevocationFences.subjectHash, hashAuthSubject(sub)))
+    .limit(1);
+  if (fence[0]?.reason === 'account_deleted') {
+    throw new Error('auth subject belongs to a deleted account');
+  }
+}
+
+async function assertAuthKvPrincipalIsLiveWithTx(
+  tx: DrizzleTx,
+  payload: unknown,
+): Promise<void> {
+  const value = payload && typeof payload === 'object' ? payload as Record<string, unknown> : null;
+  let accountId = typeof value?.accountId === 'string' ? value.accountId : null;
+  const grantId = typeof value?.grantId === 'string' ? value.grantId : null;
+
+  if (!accountId && grantId) {
+    const grant = await tx.select({ payload: authKv.payload }).from(authKv).where(and(
+      eq(authKv.model, 'Grant'),
+      eq(authKv.id, grantId),
+    )).limit(1);
+    const grantPayload = grant[0]?.payload && typeof grant[0].payload === 'object'
+      ? grant[0].payload as Record<string, unknown>
+      : null;
+    accountId = typeof grantPayload?.accountId === 'string' ? grantPayload.accountId : null;
+    if (!accountId) throw new Error('auth grant principal is no longer active');
+  }
+  if (!accountId) return;
+
+  await lockAuthPrincipalsWithTx(tx, [accountId]);
+  const account = await tx.select({
+    sub: authAccounts.sub,
+    userId: authAccounts.userId,
+  }).from(authAccounts)
+    .where(eq(authAccounts.sub, accountId)).limit(1);
+  if (!account[0]?.userId) throw new Error('auth principal is no longer active');
+
+  const liveUser = await tx.select({ id: users.id }).from(users).where(and(
+    eq(users.id, account[0].userId),
+    sql`${users.disabledAt} IS NULL`,
+    sql`${users.deletedAt} IS NULL`,
+  )).limit(1);
+  const fence = await tx.select({ subjectHash: authSubjectRevocationFences.subjectHash })
+    .from(authSubjectRevocationFences)
+    .where(eq(authSubjectRevocationFences.subjectHash, hashAuthSubject(accountId)))
+    .limit(1);
+  if (!liveUser[0] || fence[0]) throw new Error('auth principal is no longer active');
+
+  if (grantId) {
+    const grant = await tx.select({ id: authKv.id }).from(authKv).where(and(
+      eq(authKv.model, 'Grant'),
+      eq(authKv.id, grantId),
+      sql`${authKv.payload}->>'accountId' = ${accountId}`,
+    )).limit(1);
+    if (!grant[0]) throw new Error('auth grant principal is no longer active');
+  }
+}
+
 function notExpired(): SQL {
   return sql`(${authKv.expiresAt} IS NULL OR ${authKv.expiresAt} > NOW())`;
+}
+
+function databaseExpiry(expiresInSec?: number): SQL | null {
+  return expiresInSec
+    ? sql`statement_timestamp() + (${expiresInSec} * interval '1 second')`
+    : null;
 }
 
 function storedAccountToRow(account: StoredAccount): typeof authAccounts.$inferInsert {
@@ -544,6 +665,7 @@ function rowToStoredAccount(row: AuthAccountRow): StoredAccount {
 
 function rowToIdentityEvent(row: IdentityEventRow): IdentityAuditEvent {
   const event: IdentityAuditEvent = {
+    eventId: row.id,
     type: row.type,
     timestamp: row.timestamp,
   };

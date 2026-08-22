@@ -17,6 +17,7 @@ import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import { FileLockManager } from '../../security/fileLockManager.js';
+import { withFilesystemInterprocessGuard } from '../../security/filesystemInterprocessGuard.js';
 import { logger } from '../../utils/logger.js';
 import type { IOperatorConfigStore, OperatorConfig } from './IOperatorConfigStore.js';
 import { DEFAULT_OPERATOR_CONFIG, OperatorConfigConflictError } from './IOperatorConfigStore.js';
@@ -67,22 +68,22 @@ export class FilesystemOperatorConfigStore implements IOperatorConfigStore {
     options: { readonly expectedUpdatedAt?: number } = {},
   ): Promise<void> {
     await this.locks.withLock(`operator-config:${this.configPath}`, async () => {
-      let currentUpdatedAt = DEFAULT_OPERATOR_CONFIG.updatedAt;
-      if (options.expectedUpdatedAt !== undefined) {
-        const current = await this.load();
-        currentUpdatedAt = current.updatedAt;
-        if (current.updatedAt !== options.expectedUpdatedAt) throw new OperatorConfigConflictError();
-      }
-      const payload: OperatorConfig = {
-        enhancedIndexConfig: config.enhancedIndexConfig,
-        consoleConfig: config.consoleConfig,
-        licenseConfig: config.licenseConfig,
-        defaultsConfig: config.defaultsConfig,
-        configVersion: config.configVersion,
-        updatedAt: Math.max(Date.now(), currentUpdatedAt + 1),
-      };
       await this.ensureRoot();
-      await this.locks.atomicWriteFile(this.configPath, JSON.stringify(payload, null, 2));
+      await withFilesystemInterprocessGuard(`${this.configPath}.guard`, async () => {
+        const current = await this.load();
+        if (options.expectedUpdatedAt !== undefined && current.updatedAt !== options.expectedUpdatedAt) {
+          throw new OperatorConfigConflictError();
+        }
+        const payload: OperatorConfig = {
+          enhancedIndexConfig: config.enhancedIndexConfig,
+          consoleConfig: config.consoleConfig,
+          licenseConfig: config.licenseConfig,
+          defaultsConfig: config.defaultsConfig,
+          configVersion: config.configVersion,
+          updatedAt: Math.max(Date.now(), current.updatedAt + 1),
+        };
+        await this.locks.atomicWriteFile(this.configPath, JSON.stringify(payload, null, 2));
+      });
     });
   }
 

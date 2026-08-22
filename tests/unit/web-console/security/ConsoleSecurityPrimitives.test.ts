@@ -103,11 +103,10 @@ describe('AeadSecretEncryptionService', () => {
     expect(() => new AeadSecretEncryptionService({ keyId: 'short', key: Buffer.alloc(31) }))
       .toThrow('exactly 32 bytes');
 
-    const oversizedKeyId = new AeadSecretEncryptionService({
+    expect(() => new AeadSecretEncryptionService({
       keyId: 'x'.repeat(256),
       key: Buffer.alloc(32),
-    });
-    expect(() => oversizedKeyId.encrypt(Buffer.from('secret'), context)).toThrow('exceeds 255 bytes');
+    })).toThrow('at most 255 UTF-8 bytes');
     expect(() => new AeadSecretEncryptionService(activeKey).encrypt(Buffer.from('secret'), {
       secretClass: '',
       ownerId: 'owner',

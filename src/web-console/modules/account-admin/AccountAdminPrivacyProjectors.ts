@@ -13,14 +13,17 @@ import type {
   AccountBootstrapStatusDto,
   AccountInviteDto,
 } from './AccountAdminOnboardingDtos.js';
+import type { ConsolePageInfo } from '../../platform/ConsolePlatformTypes.js';
 import type {
   AccountIdentityDto,
   AccountIdentityListDto,
   AccountIdentityMutationDto,
+  AccountUnlinkedIdentityListDto,
 } from './AccountAdminIdentityDtos.js';
 import {
   serializeAccountIdentityList,
   serializeAccountIdentityMutation,
+  serializeAccountUnlinkedIdentityList,
 } from './AccountAdminIdentityDtos.js';
 import {
   serializeAccountAllowlistEntry,
@@ -44,7 +47,21 @@ export function projectAccountPrincipal(value: unknown): AccountPrincipalDto {
 
 export function projectAccountPrincipalList(value: unknown): AccountPrincipalListDto {
   const list = value as AccountPrincipalListDto;
-  return serializeAccountPrincipalList(list.users.map(item => fromPrincipalDto(item)));
+  return serializeAccountPrincipalList(list.items.map(item => fromPrincipalDto(item)), projectConsolePageInfo(list.page));
+}
+
+export function projectAccountUnlinkedIdentityList(value: unknown): AccountUnlinkedIdentityListDto {
+  const list = value as AccountUnlinkedIdentityListDto;
+  return serializeAccountUnlinkedIdentityList(list.items.map(fromIdentityDto), projectConsolePageInfo(list.page));
+}
+
+/** Allowlist the Family-B page envelope so a projector can't leak a producer's extra fields. */
+function projectConsolePageInfo(page: ConsolePageInfo): ConsolePageInfo {
+  return {
+    limit: Number(page.limit),
+    cursor: typeof page.cursor === 'string' ? page.cursor : null,
+    next_cursor: typeof page.next_cursor === 'string' ? page.next_cursor : null,
+  };
 }
 
 export function projectAccountRoleList(value: unknown): AccountRoleListDto {

@@ -17,7 +17,7 @@ import { logger } from '../utils/logger.js';
 
 export class MemoryMetadataExtractor {
   /**
-   * Align with the memory save/load limit (256KB). Issue #2329: this was 64KB,
+   * Align with the 10 MiB memory save/load limit. Issue #2329: this was 64 KiB,
    * so memories that grew past it indexed as 'unnamed' with default metadata.
    */
   private static readonly MAX_YAML_SIZE = MEMORY_CONSTANTS.MAX_YAML_SIZE;
@@ -173,11 +173,10 @@ export class MemoryMetadataExtractor {
    */
   private static tryParseYamlObject(content: string): { data?: Record<string, unknown>; errorMessage?: string } {
     try {
-      const data = SecureYamlParser.parseRawYaml(
-        content,
-        MemoryMetadataExtractor.MAX_YAML_SIZE,
-        { detectContentPatterns: false },
-      );
+      const data = SecureYamlParser.parseRawYaml(content, {
+        maxSize: MemoryMetadataExtractor.MAX_YAML_SIZE,
+        contentPolicy: 'structure-only',
+      });
       if (!validateMemoryControlFields(data)) {
         return { errorMessage: 'Malicious memory control content detected' };
       }

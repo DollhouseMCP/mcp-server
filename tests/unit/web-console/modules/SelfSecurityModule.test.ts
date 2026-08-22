@@ -103,6 +103,7 @@ function sessionRecord(overrides: Partial<ConsoleSessionRecord> = {}): ConsoleSe
     idHash: Buffer.alloc(32, 7),
     userId: USER_ID,
     authSub: PRIMARY_SUB,
+    authzVersion: 3,
     csrfTokenHash: Buffer.alloc(32, 17),
     grantedCapabilities: [SELF_CAPABILITY],
     elevation: null,

@@ -51,6 +51,7 @@ import type { ElementCRUDHandler } from '../../handlers/ElementCRUDHandler.js';
 import type { DiContainerFacade } from '../DiContainerFacade.js';
 import type { SessionContainerRegistry } from '../SessionContainerRegistry.js';
 import type { DangerZoneBlocker } from '../../elements/agents/types.js';
+import type { IAgentSnapshotReplacementJournal } from '../../elements/agents/AgentSnapshotReplacementJournal.js';
 
 export class ElementManagerServiceRegistrar {
   public register(container: DiContainerFacade): void {
@@ -117,7 +118,8 @@ export class ElementManagerServiceRegistrar {
         resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').reclaimOrphaned(key, options),
       save: (key, state, expectedVersion, options) =>
         resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').save(key, state, expectedVersion, options),
-      delete: (key) => resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').delete(key),
+      delete: (key, options) =>
+        resolveActiveOrRoot<IAgentStateStore>('AgentStateStore').delete(key, options),
     };
     const verificationStoreProxy = {
       set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) =>
@@ -265,6 +267,9 @@ export class ElementManagerServiceRegistrar {
       dangerZoneEnforcer: dangerZoneEnforcerProxy,
       verificationStore: verificationStoreProxy,
       stateStore: agentStateStoreProxy,
+      replacementJournal: container.hasRegistration('AgentReplacementJournal')
+        ? container.resolve<IAgentSnapshotReplacementJournal>('AgentReplacementJournal')
+        : undefined,
       storageLayerFactory: container.resolve<IStorageLayerFactory>('StorageLayerFactory'),
       getCurrentUserId: container.hasRegistration('UserIdResolver') ? container.resolve('UserIdResolver') : undefined,
       publicElementDiscovery: container.hasRegistration('PublicElementDiscovery') ? container.resolve('PublicElementDiscovery') : undefined,

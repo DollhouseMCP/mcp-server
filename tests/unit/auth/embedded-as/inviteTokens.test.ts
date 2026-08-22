@@ -7,9 +7,15 @@ import {
   InviteTokenStore,
   loadOrGenerateInviteSecret,
   loadOrGenerateInviteSecretViaStore,
+  loadInviteTokenStoreViaStore,
+  rotateInviteSecret,
 } from '../../../../src/auth/embedded-as/inviteTokens.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
+import type {
+  SigningKey,
+  SigningKeyKind,
+} from '../../../../src/storage/signingKeys/ISigningKeyStore.js';
 
 describe('InviteTokenStore', () => {
   let store: InviteTokenStore;
@@ -134,6 +140,16 @@ describe('InviteTokenStore', () => {
         .toThrow(/at least 16 bytes/);
     });
 
+    it.each([
+      `${'aa'.repeat(16)}a`,
+      `${'aa'.repeat(16)}zz`,
+    ])('rejects malformed hex instead of accepting a truncated prefix', value => {
+      expect(() => loadOrGenerateInviteSecret(
+        path.join(tmpDir, 'unused.bin'),
+        { envSecret: value },
+      )).toThrow(/even-length hexadecimal/u);
+    });
+
     it('env var takes precedence over the file', () => {
       const filePath = path.join(tmpDir, 'invite-secret.bin');
       const fileSecret = randomBytes(32);
@@ -162,6 +178,26 @@ describe('InviteTokenStore', () => {
       const first = loadOrGenerateInviteSecret(filePath);
       const second = loadOrGenerateInviteSecret(filePath);
       expect(first.equals(second)).toBe(true);
+    });
+
+    it('removes a filesystem-managed secret so the next load generates a fresh key', () => {
+      const filePath = path.join(tmpDir, 'invite-secret.bin');
+      const first = loadOrGenerateInviteSecret(filePath);
+
+      rotateInviteSecret(filePath);
+      const second = loadOrGenerateInviteSecret(filePath);
+
+      expect(second.equals(first)).toBe(false);
+    });
+
+    it('does not modify a filesystem key when the invite secret is operator-managed', () => {
+      const filePath = path.join(tmpDir, 'invite-secret.bin');
+      const fileSecret = randomBytes(32);
+      fs.writeFileSync(filePath, fileSecret);
+
+      rotateInviteSecret(filePath, { envSecret: randomBytes(32).toString('hex') });
+
+      expect(fs.readFileSync(filePath).equals(fileSecret)).toBe(true);
     });
   });
 
@@ -222,6 +258,105 @@ describe('InviteTokenStore', () => {
       const active = await keyStore.getActive('invite');
       expect(active?.kid).not.toBe('invite-short');
       expect(active?.payload.secret).toBe(resolved.toString('base64'));
+    });
+
+    it('does not regenerate a deliberately retired durable invite key', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+      await loadOrGenerateInviteSecretViaStore(keyStore);
+      const active = await keyStore.getActive('invite');
+      if (!active) throw new Error('expected generated invite signing key');
+      await keyStore.retire(active.kid);
+
+      await expect(loadOrGenerateInviteSecretViaStore(keyStore)).rejects.toThrow(
+        'No active invite signing key is available',
+      );
+      await expect(keyStore.getActive('invite')).resolves.toBeNull();
+    });
+
+    it('keeps tokens from the previous key verifiable during the invite grace window', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+      const beforeRotation = await loadInviteTokenStoreViaStore(keyStore, storage);
+      const token = beforeRotation.issue({ sub: 'rotating', email: 'rotate@example.com', purpose: 'invite' });
+      await keyStore.rotate({
+        kid: 'invite-new',
+        kind: 'invite',
+        payload: { secret: randomBytes(32).toString('base64'), length: 32 },
+      });
+
+      const afterRotation = await loadInviteTokenStoreViaStore(keyStore, storage);
+      expect(afterRotation.verify(token).ok).toBe(true);
+    });
+
+    it('holds the lifecycle fence through external token delivery', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+      const issuer = await loadInviteTokenStoreViaStore(keyStore, storage);
+      const active = await keyStore.getActive('invite');
+      if (!active) throw new Error('expected active invite key');
+      let releaseDelivery!: () => void;
+      let markDeliveryStarted!: () => void;
+      const deliveryStarted = new Promise<void>(resolve => { markDeliveryStarted = resolve; });
+      const deliveryRelease = new Promise<void>(resolve => { releaseDelivery = resolve; });
+
+      const issuing = issuer.issueAndDeliver(
+        { sub: 'fenced', email: 'fenced@example.com', purpose: 'magic-link' },
+        async token => {
+          markDeliveryStarted();
+          await deliveryRelease;
+          return token;
+        },
+      );
+      await deliveryStarted;
+      let retirementCompleted = false;
+      const retirement = keyStore.retire(active.kid).then(result => {
+        retirementCompleted = true;
+        return result;
+      });
+      await Promise.resolve();
+      expect(retirementCompleted).toBe(false);
+
+      releaseDelivery();
+      await expect(issuing).resolves.toEqual(expect.any(String));
+      await expect(retirement).resolves.toMatchObject({ kid: active.kid });
+    });
+
+    it('retries a transient signing lifecycle conflict before delivery', async () => {
+      class ConflictOnceSigningKeyStore extends InMemorySigningKeyStore {
+        attempts = 0;
+
+        override async withActiveKey<T>(
+          kind: SigningKeyKind,
+          operation: (key: SigningKey) => Promise<T>,
+        ): Promise<T> {
+          this.attempts += 1;
+          if (this.attempts === 1) throw new Error('signing key generation changed');
+          return super.withActiveKey(kind, operation);
+        }
+      }
+      const keyStore = new ConflictOnceSigningKeyStore();
+      const issuer = await loadInviteTokenStoreViaStore(keyStore, storage);
+
+      await expect(issuer.issueAndDeliver(
+        { sub: 'retry', email: 'retry@example.com', purpose: 'invite' },
+        async token => token,
+      )).resolves.toEqual(expect.any(String));
+      expect(keyStore.attempts).toBe(2);
+    });
+
+    it('excludes explicitly retired prior invite keys from verification', async () => {
+      const keyStore = new InMemorySigningKeyStore();
+      const beforeRotation = await loadInviteTokenStoreViaStore(keyStore, storage);
+      const token = beforeRotation.issue({ sub: 'retired', email: 'retired@example.com', purpose: 'invite' });
+      const prior = await keyStore.getActive('invite');
+      if (!prior) throw new Error('expected active invite key');
+      await keyStore.rotate({
+        kid: 'invite-new-after-retire',
+        kind: 'invite',
+        payload: { secret: randomBytes(32).toString('base64'), length: 32 },
+      });
+      await keyStore.retire(prior.kid);
+
+      const afterRetirement = await loadInviteTokenStoreViaStore(keyStore, storage);
+      expect(afterRetirement.verify(token)).toEqual({ ok: false, reason: 'invalid' });
     });
   });
 

@@ -1,4 +1,5 @@
 name: Publish to npm
+run-name: Publish to npm ${{ inputs.correlation_id || github.event.release.tag_name || github.ref_name }}
 
 # This workflow publishes the package to npm registry when a release is published.
 # Uses npm Trusted Publishing (OIDC) for secure, token-free authentication.
@@ -10,7 +11,7 @@ name: Publish to npm
 #    - Organization: DollhouseMCP
 #    - Repository: mcp-server
 #    - Workflow: publish-npm.yml
-#    - Environment: (leave blank)
+#    - Environment: release-publish
 
 on:
   release:
@@ -21,12 +22,16 @@ on:
         description: 'Run in dry-run mode (test without publishing)'
         required: false
         type: boolean
-        default: false
+        default: true
       debug_oidc:
         description: 'Print OIDC/npm environment diagnostics without secret values'
         required: false
         type: boolean
         default: false
+      correlation_id:
+        description: 'Optional orchestrator correlation id'
+        required: false
+        type: string
 
 concurrency:
   group: release-publish-${{ github.workflow }}
@@ -43,14 +48,43 @@ env:
 jobs:
   publish-npm:
     name: Publish to npm Registry
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    environment: release-publish
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify immutable release source
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="v${VERSION}"
+          if [[ "${EVENT_TAG}" != "${EXPECTED_TAG}" || "${GITHUB_REF}" != "refs/tags/${EXPECTED_TAG}" ]]; then
+            echo "::error::Live npm publication requires immutable tag ${EXPECTED_TAG}; got ${GITHUB_REF}"
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/${EXPECTED_TAG}^{commit}")" || exit 1
+          release_json=$(gh release view "${EXPECTED_TAG}" --json tagName,isDraft,isPrerelease)
+          test "$(jq -r '.tagName' <<<"${release_json}")" = "${EXPECTED_TAG}" || exit 1
+          test "$(jq -r '.isDraft' <<<"${release_json}")" = "false" || exit 1
+          VERSION_IS_PRERELEASE=false
+          [[ "${VERSION}" == *-* ]] && VERSION_IS_PRERELEASE=true
+          test "$(jq -r '.isPrerelease' <<<"${release_json}")" = "${VERSION_IS_PRERELEASE}" || {
+            echo "::error::Version ${VERSION} does not match the GitHub release channel"
+            exit 1
+          }
 
       - name: Setup Node.js for npm
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           # Node 24.x ships with npm 11.x — REQUIRED for OIDC Trusted Publishing.
           # npm 10.x (Node 22) does not support the OIDC handshake and fails with
@@ -126,6 +160,39 @@ jobs:
           echo "dist_tag=${dist_tag}" >> "$GITHUB_OUTPUT"
           echo "npm dist-tag: ${dist_tag}"
 
+      - name: Check if npm version already published
+        id: check_version
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        shell: bash
+        env:
+          PACKAGE_VERSION: ${{ steps.package_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PACKAGE='@dollhousemcp/mcp-server'
+          NPM_VIEW_STDERR=$(mktemp "${RUNNER_TEMP:-/tmp}/dollhouse-npm-view.XXXXXX")
+          trap 'rm -f "$NPM_VIEW_STDERR"' EXIT
+
+          set +e
+          PUBLISHED_VERSION=$(npm view "${PACKAGE}@${PACKAGE_VERSION}" version \
+            --registry=https://registry.npmjs.org --silent 2>"$NPM_VIEW_STDERR")
+          NPM_VIEW_STATUS=$?
+          set -e
+          PUBLISHED_VERSION=$(printf '%s' "$PUBLISHED_VERSION" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+          if [[ "$NPM_VIEW_STATUS" -eq 0 ]]; then
+            if [[ "$PUBLISHED_VERSION" != "$PACKAGE_VERSION" ]]; then
+              echo "::error::npm returned unexpected version output: ${PUBLISHED_VERSION:-<empty>}"
+              exit 1
+            fi
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          elif grep -Eqi '(^|[[:space:]])E404([[:space:]]|$)|404 Not Found|is not in this registry' "$NPM_VIEW_STDERR"; then
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Unable to determine whether ${PACKAGE}@${PACKAGE_VERSION} exists on npm"
+            cat "$NPM_VIEW_STDERR" >&2
+            exit 1
+          fi
+
       - name: Debug OIDC Environment
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.debug_oidc == true }}
         shell: bash
@@ -148,18 +215,127 @@ jobs:
           echo "=== NODE_AUTH_TOKEN ==="
           echo "NODE_AUTH_TOKEN: ${NODE_AUTH_TOKEN:-NOT SET}"
 
+      - name: Resolve protected npm channel publication mode
+        id: protected_channel
+        if: ${{ steps.check_version.outputs.already_published == 'false' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
+        shell: bash
+        env:
+          DIST_TAG: ${{ steps.npm_dist_tag.outputs.dist_tag }}
+        run: |
+          set -euo pipefail
+          PACKAGE='@dollhousemcp/mcp-server'
+          TARGET=$(node -p "require('./package.json').version")
+          DIST_TAG_STDERR=$(mktemp "${RUNNER_TEMP:-/tmp}/dollhouse-npm-dist-tags.XXXXXX")
+          trap 'rm -f "$DIST_TAG_STDERR"' EXIT
+
+          set +e
+          DIST_TAGS=$(npm view "${PACKAGE}" dist-tags --json \
+            --registry=https://registry.npmjs.org --silent 2>"$DIST_TAG_STDERR")
+          DIST_TAGS_STATUS=$?
+          set -e
+
+          if [[ "$DIST_TAGS_STATUS" -eq 0 ]]; then
+            CURRENT=$(printf '%s' "$DIST_TAGS" | node -e \
+              'const fs=require("fs"); const input=fs.readFileSync(0,"utf8"); const tags=input ? JSON.parse(input) : {}; process.stdout.write(tags[process.env.DIST_TAG] || "");')
+          elif grep -Eqi '(^|[[:space:]])E404([[:space:]]|$)|404 Not Found|is not in this registry' "$DIST_TAG_STDERR"; then
+            CURRENT=''
+          else
+            echo "::error::Unable to inspect the protected npm ${DIST_TAG} channel"
+            cat "$DIST_TAG_STDERR" >&2
+            exit 1
+          fi
+
+          PUBLISH_TAG="$DIST_TAG"
+          BACKFILL=false
+          if [[ -n "$CURRENT" && "$CURRENT" != "$TARGET" ]]; then
+            ORDER=$(node scripts/compare-semver.mjs "$CURRENT" "$TARGET")
+            if [[ "$ORDER" == '1' ]]; then
+              # Keep the newer protected channel in place while making this
+              # immutable historical version directly installable.
+              # npm Trusted Publishing authorizes npm publish, but not a later
+              # dist-tag removal. Use an explicitly nonprotected, persistent
+              # channel for historical backfills instead.
+              PUBLISH_TAG='dollhouse-backfill'
+              BACKFILL=true
+            fi
+          elif [[ "$CURRENT" == "$TARGET" ]]; then
+            echo "::error::Protected npm channel ${DIST_TAG} already references ${TARGET}, but publication was requested again"
+            exit 1
+          fi
+
+          echo "publish_tag=${PUBLISH_TAG}" >> "$GITHUB_OUTPUT"
+          echo "backfill_publish_tag=${BACKFILL}" >> "$GITHUB_OUTPUT"
+
       - name: Publish to npm (with provenance)
-        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        if: ${{ steps.check_version.outputs.already_published == 'false' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         env:
           # Ensure provenance is enabled for OIDC detection
           NPM_CONFIG_PROVENANCE: 'true'
           DIST_TAG: ${{ steps.npm_dist_tag.outputs.dist_tag }}
         run: |
+          set -euo pipefail
           # Publish with provenance via OIDC Trusted Publishing.
           # Requires: npm 11+ (Node 24), id-token: write, NODE_AUTH_TOKEN cleared,
           # and a Trusted Publisher configured at npmjs.com/package/@dollhousemcp/mcp-server/access
-          npm publish --provenance --access public --tag "${DIST_TAG}" --loglevel verbose
+          PUBLISH_TAG="${{ steps.protected_channel.outputs.publish_tag }}"
+          test -n "$PUBLISH_TAG"
+          if [[ "${{ steps.protected_channel.outputs.backfill_publish_tag }}" == 'true' ]]; then
+            cleanup_prepared_publish() {
+              npm run postpublish >/dev/null 2>&1 || true
+            }
+            trap cleanup_prepared_publish EXIT
+            npm_config_tag="${DIST_TAG}" npm run prepublishOnly
+            npm publish --ignore-scripts --provenance --access public --tag "$PUBLISH_TAG" --loglevel verbose
+            npm run postpublish
+            trap - EXIT
+          else
+            npm publish --provenance --access public --tag "$PUBLISH_TAG" --loglevel verbose
+          fi
+
+      - name: Reconcile existing npm publication
+        if: ${{ steps.check_version.outputs.already_published == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
+        shell: bash
+        env:
+          DIST_TAG: ${{ steps.npm_dist_tag.outputs.dist_tag }}
+          PACKAGE_VERSION: ${{ steps.package_version.outputs.version }}
+        run: |
+          set -euo pipefail
+          PACKAGE='@dollhousemcp/mcp-server'
+          DIST_TAG_STDERR=$(mktemp "${RUNNER_TEMP:-/tmp}/dollhouse-npm-reconcile.XXXXXX")
+          trap 'rm -f "$DIST_TAG_STDERR"' EXIT
+
+          set +e
+          DIST_TAGS=$(npm view "${PACKAGE}" dist-tags --json \
+            --registry=https://registry.npmjs.org --silent 2>"$DIST_TAG_STDERR")
+          DIST_TAGS_STATUS=$?
+          set -e
+          if [[ "$DIST_TAGS_STATUS" -ne 0 ]]; then
+            echo "::error::Unable to reconcile existing npm publication ${PACKAGE}@${PACKAGE_VERSION}"
+            cat "$DIST_TAG_STDERR" >&2
+            exit 1
+          fi
+
+          CURRENT=$(printf '%s' "$DIST_TAGS" | node -e \
+            'const fs=require("fs"); const tags=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(tags[process.env.DIST_TAG] || "");')
+          if [[ "$CURRENT" == "$PACKAGE_VERSION" ]]; then
+            echo "Existing ${DIST_TAG} channel already references ${PACKAGE_VERSION}"
+            exit 0
+          fi
+          if [[ -n "$CURRENT" ]]; then
+            ORDER=$(node scripts/compare-semver.mjs "$CURRENT" "$PACKAGE_VERSION")
+            if [[ "$ORDER" == '1' ]]; then
+              echo "Preserving newer ${DIST_TAG} channel ${CURRENT}; ${PACKAGE_VERSION} remains available by exact version"
+              exit 0
+            fi
+          fi
+
+          # Trusted Publishing does not authorize `npm dist-tag add`. Fail closed
+          # rather than silently moving a protected channel or attempting a command
+          # that cannot authenticate through OIDC.
+          echo "::error::${PACKAGE}@${PACKAGE_VERSION} exists, but protected channel ${DIST_TAG} resolves to ${CURRENT:-<unset>}"
+          echo "::error::Repair the channel with an explicitly authenticated operator workflow"
+          exit 1
 
       - name: Dry run (skip publish)
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
@@ -182,12 +358,31 @@ jobs:
           # users on OLD versions that predate any client-side checks. If a
           # prerelease ever lands on `latest` (manual publish without --tag,
           # registry hiccup), stable users would silently update onto beta.
-          sleep 10  # allow registry propagation before reading back
-          LATEST=$(npm view @dollhousemcp/mcp-server dist-tags.latest 2>/dev/null || echo "")
+          MAX_ATTEMPTS="${NPM_VERIFY_MAX_ATTEMPTS:-6}"
+          SLEEP_SECONDS="${NPM_VERIFY_SLEEP_SECONDS:-10}"
+          LATEST=""
+          latest_status=1
+
+          for attempt in $(seq 1 "${MAX_ATTEMPTS}"); do
+            set +e
+            LATEST=$(npm view @dollhousemcp/mcp-server dist-tags.latest 2>&1)
+            latest_status=$?
+            set -e
+
+            if [[ $latest_status -eq 0 && -n "${LATEST}" ]]; then
+              break
+            fi
+
+            echo "::warning::Unable to read dist-tags.latest on attempt ${attempt}/${MAX_ATTEMPTS} (status ${latest_status})"
+            if [[ $attempt -lt $MAX_ATTEMPTS ]]; then
+              sleep "${SLEEP_SECONDS}"
+            fi
+          done
+
           echo "npm dist-tags.latest resolves to: ${LATEST:-<unreadable>}"
-          if [[ -z "${LATEST}" ]]; then
-            echo "::warning::Could not read back dist-tags.latest (registry propagation delay?) — verify manually"
-            exit 0
+          if [[ $latest_status -ne 0 || -z "${LATEST}" ]]; then
+            echo "::error::Could not verify dist-tags.latest after ${MAX_ATTEMPTS} attempts; failing closed"
+            exit 1
           fi
           if [[ "${LATEST}" == *-* ]]; then
             echo "::error::dist-tags.latest points at a PRERELEASE (${LATEST}). Stable users installing via npx/@latest will receive it. Repair immediately:"

@@ -83,6 +83,10 @@ This is a sample persona with enough instructional content to satisfy validation
       importPersona: jest.fn(),
       validatePersona: jest.fn(),
       deletePersona: jest.fn(),
+      deactivatePersona: jest.fn().mockImplementation(() => {
+        activePersonaState.current = null;
+        return { success: true, message: 'Persona deactivated' };
+      }),
     };
 
     mockPersonaExporter = {

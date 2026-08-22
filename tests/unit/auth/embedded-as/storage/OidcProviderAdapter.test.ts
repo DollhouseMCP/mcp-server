@@ -1,17 +1,15 @@
 /**
  * OidcProviderAdapter — refresh-token rotation grace window (R3 / spec L926).
  *
- * The grace window is the industry-standard mitigation for the
- * find-then-consume race that's structural in oidc-provider's Adapter
- * API. Within the window after a consume(), find() hides the consumed
- * marker so legitimate concurrent rotations issue rotated tokens
- * normally instead of tripping reuse-detection. After the window
- * elapses, the marker becomes visible and replays trigger family
- * revocation per OAuth 2.1 §6.1.
+ * The grace window serializes redemption of a parent refresh token. The first
+ * request publishes one canonical successor; grace-period retries receive
+ * aliases to that successor rather than independent token lineages. After the
+ * window elapses, the consumed marker becomes visible and replay triggers
+ * family revocation per OAuth 2.1 §6.1.
  *
  * Pinned invariants:
- *   - Within grace, find() on a consumed RefreshToken returns the
- *     payload WITHOUT `consumed`.
+ *   - Grace requires a request context; unwrapped adapter calls fail strict.
+ *   - Concurrent retries converge on one canonical successor.
  *   - After grace, find() returns the payload WITH `consumed`.
  *   - Grace applies ONLY to RefreshToken — AuthorizationCode,
  *     Session, etc. always show consumed:true immediately.
@@ -25,6 +23,7 @@ import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import {
   OidcProviderAdapter,
   DEFAULT_REFRESH_ROTATION_GRACE_MS,
+  finalizeRotationRequestContext,
   hashRotationAttribute,
   withRotationRequestContext,
 } from '../../../../../src/auth/embedded-as/storage/OidcProviderAdapter.js';
@@ -41,7 +40,7 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
     expect(DEFAULT_REFRESH_ROTATION_GRACE_MS).toBe(30_000);
   });
 
-  it('within grace: find() on a consumed RefreshToken returns payload WITHOUT `consumed`', async () => {
+  it('fails strict outside a request context instead of minting an untracked grace successor', async () => {
     const adapter = new OidcProviderAdapter('RefreshToken', storage, {
       refreshRotationGraceMs: 30_000,
     });
@@ -52,8 +51,7 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
     expect(found).toBeDefined();
     expect(found?.grantId).toBe('g-1');
     expect(found?.sub).toBe('alice');
-    // Critical: oidc-provider must NOT see consumed:true within grace.
-    expect(found?.consumed).toBeUndefined();
+    expect(typeof found?.consumed).toBe('number');
   });
 
   it('after grace: find() reveals the `consumed` marker so reuse-detection fires', async () => {
@@ -71,6 +69,28 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
     expect(typeof found?.consumed).toBe('number');
     // Specifically: oidc-provider's grant handlers will treat consumed:<ts>
     // as a replay signal and call revokeByGrantId.
+  });
+
+  it('uses the storage authority clock for refresh-token replay grace', async () => {
+    let authorityNow = 1_050;
+    jest.spyOn(storage, 'genericNow').mockImplementation(async () => authorityNow);
+    const wallClock = jest.spyOn(Date, 'now').mockReturnValue(99_000);
+    const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+      refreshRotationGraceMs: 100,
+    });
+    await storage.genericSet('RefreshToken', 'rt-authority-clock', {
+      grantId: 'g-authority-clock',
+      sub: 'alice',
+      consumed: 1_000,
+    });
+
+    const withinGrace = await withRotationRequestContext({}, () => adapter.find('rt-authority-clock'));
+    expect(withinGrace?.consumed).toBeUndefined();
+
+    authorityNow = 1_101;
+    const afterGrace = await withRotationRequestContext({}, () => adapter.find('rt-authority-clock'));
+    expect(afterGrace?.consumed).toBe(1_000);
+    wallClock.mockRestore();
   });
 
   it('grace = 0 disables the grace window — consumed marker visible immediately', async () => {
@@ -124,26 +144,89 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
     expect(found).toBeUndefined();
   });
 
-  it('multiple concurrent finds within grace ALL see un-consumed payload', async () => {
-    // Pins the actual scenario the grace solves: oidc-provider gets two
-    // concurrent token-exchange requests; both call find() on the same
-    // refresh token; if both see un-consumed, both can issue rotated
-    // tokens. Without grace, the second find() would see consumed and
-    // trigger reuse-detection — kicking the user out.
+  it('serializes concurrent redemption and aliases the retry to one canonical successor', async () => {
     const adapter = new OidcProviderAdapter('RefreshToken', storage, {
       refreshRotationGraceMs: 30_000,
     });
     await adapter.upsert('rt-race', { grantId: 'g-race', sub: 'alice' });
-    await adapter.consume('rt-race');
 
-    const [a, b, c] = await Promise.all([
-      adapter.find('rt-race'),
-      adapter.find('rt-race'),
-      adapter.find('rt-race'),
-    ]);
-    expect(a?.consumed).toBeUndefined();
-    expect(b?.consumed).toBeUndefined();
-    expect(c?.consumed).toBeUndefined();
+    let releaseOwner!: () => void;
+    const ownerGate = new Promise<void>(resolve => { releaseOwner = resolve; });
+    let ownerClaimed!: () => void;
+    const claimed = new Promise<void>(resolve => { ownerClaimed = resolve; });
+
+    const owner = withRotationRequestContext({}, async () => {
+      expect((await adapter.find('rt-race'))?.consumed).toBeUndefined();
+      await adapter.consume('rt-race');
+      ownerClaimed();
+      await ownerGate;
+      await adapter.upsert('rt-successor', { grantId: 'g-race', sub: 'alice' });
+    });
+    await claimed;
+
+    const retry = withRotationRequestContext({}, async () => {
+      const found = await adapter.find('rt-race');
+      expect(found?.consumed).toBeUndefined();
+      await adapter.consume('rt-race');
+      await adapter.upsert('rt-retry-alias', { grantId: 'g-race', sub: 'alice' });
+      return adapter.find('rt-retry-alias');
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 20));
+    releaseOwner();
+    await owner;
+    await expect(retry).resolves.toMatchObject({ grantId: 'g-race', sub: 'alice' });
+
+    // The retry token is only an alias. Consuming it marks the canonical
+    // successor, proving there is one lineage rather than two descendants.
+    await adapter.consume('rt-retry-alias');
+    await expect(storage.genericGet('RefreshToken', 'rt-successor')).resolves.toEqual(
+      expect.objectContaining({ consumed: expect.any(Number) }),
+    );
+  });
+
+  it('backs off while a durable redemption claim remains pending', async () => {
+    const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+      refreshRotationGraceMs: 80,
+    });
+    await adapter.upsert('rt-stalled-owner', { grantId: 'g-stalled', sub: 'alice' });
+    await adapter.consume('rt-stalled-owner');
+    await storage.genericSet('DollhouseRefreshRedemption', 'rt-stalled-owner', {
+      state: 'pending',
+      ownerId: 'stalled-owner',
+      createdAt: Date.now(),
+    }, 1);
+    const genericGet = jest.spyOn(storage, 'genericGet');
+
+    const found = await withRotationRequestContext({}, () => adapter.find('rt-stalled-owner'));
+    const redemptionReads = genericGet.mock.calls.filter(
+      ([model]) => model === 'DollhouseRefreshRedemption',
+    );
+
+    expect(typeof found?.consumed).toBe('number');
+    expect(redemptionReads.length).toBeLessThanOrEqual(5);
+  });
+
+  it('releases an unfinished claim so a legitimate retry can become the owner', async () => {
+    const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+      refreshRotationGraceMs: 30_000,
+    });
+    await adapter.upsert('rt-provider-failure', { grantId: 'g-retry', sub: 'alice' });
+
+    await withRotationRequestContext({}, async () => {
+      expect((await adapter.find('rt-provider-failure'))?.consumed).toBeUndefined();
+      await finalizeRotationRequestContext(storage);
+    });
+
+    await withRotationRequestContext({}, async () => {
+      expect((await adapter.find('rt-provider-failure'))?.consumed).toBeUndefined();
+      await adapter.consume('rt-provider-failure');
+      await adapter.upsert('rt-recovered-successor', { grantId: 'g-retry', sub: 'alice' });
+    });
+    await expect(adapter.find('rt-recovered-successor')).resolves.toMatchObject({
+      grantId: 'g-retry',
+      sub: 'alice',
+    });
   });
 
   // ---- Cycle-15 fix: hashRotationAttribute salted branch coverage ----
@@ -253,6 +336,27 @@ describe('OidcProviderAdapter — refresh-token rotation grace window', () => {
         async () => adapter.find('rt-h1-ua'),
       );
       expect(typeof found?.consumed).toBe('number');
+    });
+
+    it('rejects a mismatched concurrent request even before the owner consumes', async () => {
+      const adapter = new OidcProviderAdapter('RefreshToken', storage, {
+        refreshRotationGraceMs: 30_000,
+        refreshRotationCheckIpUa: true,
+      });
+      await withRotationRequestContext({ ipHash: ipA, uaHash: uaA }, () =>
+        adapter.upsert('rt-h1-preconsume', { grantId: 'g-1', sub: 'alice' }));
+
+      const owner = withRotationRequestContext({ ipHash: ipA, uaHash: uaA }, async () => {
+        expect((await adapter.find('rt-h1-preconsume'))?.consumed).toBeUndefined();
+        const mismatched = await withRotationRequestContext(
+          { ipHash: ipB, uaHash: uaA },
+          () => adapter.find('rt-h1-preconsume'),
+        );
+        expect(typeof mismatched?.consumed).toBe('number');
+        await adapter.consume('rt-h1-preconsume');
+        await adapter.upsert('rt-h1-canonical', { grantId: 'g-1', sub: 'alice' });
+      });
+      await owner;
     });
 
     it('legacy records without ipHash get the time-only grace (fail-open)', async () => {

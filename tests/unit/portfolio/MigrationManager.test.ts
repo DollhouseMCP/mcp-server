@@ -10,6 +10,7 @@ import { PortfolioManager, ElementType } from '../../../src/portfolio/PortfolioM
 import { MigrationManager } from '../../../src/portfolio/MigrationManager.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { createTestFileOperationsService, type IFileOperationsService } from '../../helpers/di-mocks.js';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('MigrationManager', () => {
   let testDir: string;
@@ -21,9 +22,7 @@ describe('MigrationManager', () => {
   let fileOperationsService: IFileOperationsService;
   const originalEnv = process.env.DOLLHOUSE_PORTFOLIO_DIR;
 
-  // Test file size for oversized persona test (2.5MB exceeds 2MB limit)
-  // Sized to exceed limit while avoiding I/O timeouts (Issue #339)
-  const OVERSIZED_TEST_SIZE_BYTES = 2.5 * 1024 * 1024;
+  const OVERSIZED_TEST_SIZE_BYTES = SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES + 1;
 
   beforeEach(async () => {
     // Create test directories
@@ -158,7 +157,7 @@ describe('MigrationManager', () => {
       const legacyFile1 = path.join(legacyDir, 'persona1.md');
       const legacyFile2 = path.join(legacyDir, 'persona2.md');
 
-      // Create persona file that exceeds MAX_PERSONA_SIZE_BYTES (2MB limit)
+      // Create a persona file above the shared 10 MiB persisted-element limit.
       const oversizedContent = '---\nname: Oversized\n---\n' + 'x'.repeat(OVERSIZED_TEST_SIZE_BYTES);
 
       await fs.writeFile(legacyFile1, oversizedContent);
@@ -171,7 +170,7 @@ describe('MigrationManager', () => {
       expect(result.success).toBe(false);
       expect(result.migratedCount).toBe(1); // Only valid file migrated
       expect(result.errors.length).toBeGreaterThan(0);
-      expect(result.errors[0]).toContain('exceeds maximum allowed size');
+      expect(result.errors[0]).toMatch(/exceeds maximum (?:allowed )?size/);
     }, 30000); // Extended timeout for large file I/O on slower CI runners
 
     it('should reject malicious content and continue with valid ones', async () => {

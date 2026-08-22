@@ -665,8 +665,8 @@ describe('permissionRoutes', () => {
         }]),
       } as any;
 
-      const firstApp = createApp(firstHandler);
-      const secondApp = createApp(secondHandler);
+      const firstApp = createApp(firstHandler, { homeDir: join(tempHome, 'first') });
+      const secondApp = createApp(secondHandler, { homeDir: join(tempHome, 'second') });
 
       await request(firstApp)
         .post('/api/evaluate_permission')

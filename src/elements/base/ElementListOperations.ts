@@ -118,6 +118,7 @@ export class ElementListOperations<T extends IElement> {
 
       return userElements;
     } catch (error) {
+      if (isWritableStorageLayer(this.storageLayer)) throw error;
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
         const label = this.host.getElementLabelCapitalized();
         logger.debug(`${label}s directory does not exist yet, returning empty array`);
@@ -132,8 +133,7 @@ export class ElementListOperations<T extends IElement> {
    * Database-mode list: query summaries from storage layer, then load each element.
    */
   private async listFromDatabase(options?: { includePublic?: boolean }): Promise<T[]> {
-    try {
-      const diff = await this.storageLayer.scan();
+    const diff = await this.storageLayer.scan();
       for (const id of [...diff.modified, ...diff.removed]) {
         this.cache.uncacheByPath(id);
       }
@@ -158,8 +158,9 @@ export class ElementListOperations<T extends IElement> {
             const cached = this.cache.getCachedByPath(summary.filePath);
             if (cached) return cached;
             return await this.host.load(summary.filePath);
-          } catch {
-            return null;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+            throw error;
           }
         }),
       );
@@ -168,11 +169,7 @@ export class ElementListOperations<T extends IElement> {
         this.evictForeignRowsFromCache(summaries, currentUserId);
       }
 
-      return elements.filter((e): e is Awaited<T> => e !== null) as T[];
-    } catch (error) {
-      logger.error(`Failed to list ${this.host.elementType}s from database:`, error);
-      return [];
-    }
+    return elements.filter((e): e is Awaited<T> => e !== null) as T[];
   }
 
   private evictForeignRowsFromCache(summaries: ElementIndexEntry[], currentUserId: string): void {

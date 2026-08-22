@@ -29,12 +29,18 @@ export const PG_UNIQUE_VIOLATION = '23505';
 
 /**
  * Returns true when the given error is a PostgreSQL unique-constraint
- * violation (SQLSTATE 23505). postgres.js attaches the `code` property
- * on PostgresError objects; Drizzle passes them through unwrapped.
+ * violation (SQLSTATE 23505). Drizzle may wrap the original PostgresError
+ * under `cause`, so inspect a short, cycle-safe cause chain.
  */
 export function isUniqueViolation(err: unknown): boolean {
-  return typeof err === 'object'
-    && err !== null
-    && 'code' in err
-    && (err as { code: unknown }).code === PG_UNIQUE_VIOLATION;
+  const seen = new WeakSet<object>();
+  let current = err;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (!current || typeof current !== 'object') return false;
+    if (seen.has(current)) return false;
+    seen.add(current);
+    if ('code' in current && current.code === PG_UNIQUE_VIOLATION) return true;
+    current = 'cause' in current ? current.cause : null;
+  }
+  return false;
 }
