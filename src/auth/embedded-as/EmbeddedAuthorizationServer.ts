@@ -65,6 +65,8 @@ import {
 } from './totp/AdminTotpInteractionRoutes.js';
 import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 import {
+  FINGERPRINT_KEY,
+  FINGERPRINT_MODEL,
   reconcileModeFingerprint,
   OAUTH_STATE_MODELS,
 } from './modeFingerprint.js';
@@ -551,50 +553,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       void (async () => {
         try {
           const state = await this.ensureInitialized();
-          // Round 5 / H1: when IP/UA-bound rotation grace is opted in,
-          // wrap the oidc-provider callback in an AsyncLocalStorage
-          // context carrying the request's IP+UA hashes. The
-          // OidcProviderAdapter reads the context at upsert (to stamp
-          // hashes onto a freshly-issued RefreshToken) and at find (to
-          // gate the grace window on hash match). Without the wrap,
-          // the adapter falls back to time-only grace.
-          if (this.refreshRotationCheckIpUa) {
-            // Round 5 review fixup (MED-2): salt the ip/ua hashes
-            // with the AS cookie signing key. Plain SHA-256 of an
-            // IPv4 + a known user-agent is rainbow-tableable from an
-            // audit dump; HMAC with a per-deployment key forces an
-            // attacker to also exfiltrate the salt. Cookie key is
-            // already deployment-scoped, persisted, and rotated on
-            // mode-switch — exactly the lifecycle we want.
-            const salt = state.cookieKeys[0];
-            // Cycle-12 fix (H12-1): normalize the IP before hashing so
-            // the same dual-stack client (`::ffff:1.2.3.4` vs `1.2.3.4`)
-            // produces the same `ipHash`. Without this, the IP/UA-bound
-            // rotation grace silently fails closed for v6-mapped clients
-            // that rotate via v4 (or vice-versa). Same bug class as
-            // cycle-10 H10-2 (MagicLink), cycle-11 H11-2 (getClientKey)
-            // — fourth and final site of the pattern.
-            //
-            // Cycle-13 fix: Express's `req.headers['user-agent']` is
-            // typed `string | string[] | undefined`. Multi-value UA
-            // headers (rare but valid per HTTP/1.1) used to coerce to
-            // a comma-joined string via `createHmac.update(arr)` —
-            // producing a different hash from the same UA sent as a
-            // single header. Pick the first value when an array is
-            // present so the hash stays stable.
-            const context: RotationRequestContext = {
-              ipHash: hashRotationAttribute(normalizeIp(req.ip ?? ''), salt),
-              uaHash: hashRotationAttribute(pickHeaderValue(req.headers['user-agent']), salt),
-            };
-            // Await the oidc-provider callback so async rejections (e.g.
-            // adapter/DB hiccups during token issuance) reach the outer
-            // try/catch and flow to Express's error middleware via next().
-            // Without the await, the returned Promise is discarded and
-            // any async rejection becomes an unhandledRejection.
-            await withRotationRequestContext(context, () => state.provider.callback()(req, res));
-          } else {
-            await state.provider.callback()(req, res);
-          }
+          await this.dispatchProviderRequest(state, req, res);
         } catch (err) {
           next(err);
         }
@@ -602,6 +561,51 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     });
 
     return router;
+  }
+
+  private async dispatchProviderRequest(
+    state: InitializedState,
+    req: Request,
+    res: Response,
+  ): Promise<void> {
+    const dispatch = async (): Promise<void> => {
+      // Round 5 / H1: when IP/UA-bound rotation grace is opted in,
+      // wrap the oidc-provider callback in an AsyncLocalStorage context.
+      if (this.refreshRotationCheckIpUa) {
+        const salt = state.cookieKeys[0];
+        const context: RotationRequestContext = {
+          ipHash: hashRotationAttribute(normalizeIp(req.ip ?? ''), salt),
+          uaHash: hashRotationAttribute(pickHeaderValue(req.headers['user-agent']), salt),
+        };
+        await withRotationRequestContext(context, () => state.provider.callback()(req, res));
+      } else {
+        await state.provider.callback()(req, res);
+      }
+    };
+
+    const signingKeyStore = this.signingKeyStore;
+    if (!signingKeyStore || req.method !== 'POST' || req.path !== '/token') {
+      await dispatch();
+      return;
+    }
+
+    // Token issuance and generation invalidation share the same backend-owned
+    // lock. A request that started first completes before retirement; a stale
+    // replica arriving afterward cannot sign with its captured, retired key.
+    await this.storage.withGenericLock(FINGERPRINT_MODEL, FINGERPRINT_KEY, async () => {
+      const active = await signingKeyStore.getActive('jwks');
+      if (!active || active.retiredAt !== undefined || active.kid !== state.keyset.kid) {
+        res
+          .set('Retry-After', '1')
+          .status(503)
+          .json({
+            error: 'temporarily_unavailable',
+            error_description: 'Authorization signing keys changed; retry the token request.',
+          });
+        return;
+      }
+      await dispatch();
+    });
   }
 
   /**

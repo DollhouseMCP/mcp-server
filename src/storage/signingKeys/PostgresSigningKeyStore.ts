@@ -15,7 +15,7 @@
  * @module storage/signingKeys/PostgresSigningKeyStore
  */
 
-import { and, eq, lt, desc } from 'drizzle-orm';
+import { and, eq, lt, desc, sql } from 'drizzle-orm';
 
 import type { DatabaseInstance } from '../../database/connection.js';
 import { withSystemContext } from '../../database/admin.js';
@@ -114,7 +114,7 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
         .update(authSigningKeys)
         .set({
           active: false,
-          rotatedAt: now,
+          rotatedAt: sql`COALESCE(${authSigningKeys.rotatedAt}, ${now})`,
           retiredAt: now,
         })
         .where(eq(authSigningKeys.kind, write.kind));

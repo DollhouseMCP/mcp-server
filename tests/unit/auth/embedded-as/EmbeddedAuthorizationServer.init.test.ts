@@ -11,6 +11,8 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
+import express from 'express';
+import request from 'supertest';
 import { EmbeddedAuthorizationServer } from '../../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { TrivialConsentMethod } from '../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
@@ -283,6 +285,17 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
       ok: false,
       reason: 'unknown key id',
     });
+    const staleReplicaApp = express();
+    staleReplicaApp.use(firstServer.createRouter());
+    await request(staleReplicaApp)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', code: 'stale-code' })
+      .expect('Retry-After', '1')
+      .expect(503, {
+        error: 'temporarily_unavailable',
+        error_description: 'Authorization signing keys changed; retry the token request.',
+      });
     expect(await sharedStorage.genericGet('Session', 'store-generation-session')).toBeNull();
     const events = await sharedStorage.listIdentityEvents({
       type: 'auth.mode_switch_invalidation',
