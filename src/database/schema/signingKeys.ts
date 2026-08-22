@@ -19,11 +19,12 @@
  * migration 0015_auth_signing_keys.sql for the index DDL.
  *
  * Why this is necessary: in filesystem mode with a non-persistent run dir
- * (tmpfs, ephemeral container storage), every restart regenerates the
- * JWKS keyfile → fresh kid → mode-fingerprint mismatch in
- * `EmbeddedAuthorizationServer.initialize()` → all outstanding OAuth state
- * wiped → users must re-authenticate. DB-backed keys survive restart
- * AND let multiple replicas share signing material.
+ * (tmpfs, ephemeral container storage), every restart loses the JWKS keyfile
+ * and OAuth K/V state. The fresh kid cannot validate prior tokens, and prior
+ * sessions and grants no longer exist, so users must re-authenticate. Secret
+ * material is deliberately excluded from the public mode fingerprint.
+ * DB-backed keys survive restart AND let multiple replicas share signing
+ * material.
  *
  * No RLS — system-internal AS infrastructure, paired with auth_kv.
  *

@@ -75,6 +75,20 @@ validate_auth_methods() {
   return 0
 }
 
+validate_auth_generation() {
+  local max_safe_integer="9007199254740991"
+  if [[ ! "${AUTH_GENERATION}" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    die "DOLLHOUSE_AUTH_GENERATION must be a non-negative integer, got: ${AUTH_GENERATION}"
+  fi
+  if (( ${#AUTH_GENERATION} > ${#max_safe_integer} )) \
+    || { (( ${#AUTH_GENERATION} == ${#max_safe_integer} )) \
+      && [[ "${AUTH_GENERATION}" -gt "${max_safe_integer}" ]]; }; then
+    die "DOLLHOUSE_AUTH_GENERATION must not exceed ${max_safe_integer}, got: ${AUTH_GENERATION}"
+  fi
+
+  return 0
+}
+
 effective_config_value() {
   local key="$1"
   local value="${!key:-}"
@@ -430,6 +444,7 @@ validate_render_inputs() {
   validate_bool DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED "${ALLOWLIST_REQUIRED}"
   validate_auth_provider
   validate_auth_methods
+  validate_auth_generation
   validate_oidc_inputs
   validate_hostname
   validate_public_base_url

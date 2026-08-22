@@ -208,6 +208,7 @@ Common environment variables:
 | `DOLLHOUSE_HOSTED_ALLOW_CREDENTIAL_GIT_URL` | Permit credentials embedded in `DOLLHOUSE_HOSTED_GIT_URL` | `false` |
 | `DOLLHOUSE_AUTH_PROVIDER` | Auth provider: `embedded`, `oidc`, or `local` | `embedded` |
 | `DOLLHOUSE_AUTH_METHODS` | Embedded-AS sign-in methods, for example `github` or `github,local-password` | `github` for `embedded`, empty for `oidc` |
+| `DOLLHOUSE_AUTH_GENERATION` | Monotonic global authorization-invalidation generation; increment for cookie-secret rotation or intentional global sign-out | `0` |
 | `DOLLHOUSE_AUTH_ISSUER` | External OIDC issuer URL for `DOLLHOUSE_AUTH_PROVIDER=oidc` | none |
 | `DOLLHOUSE_AUTH_AUDIENCE` | Expected OIDC audience for `DOLLHOUSE_AUTH_PROVIDER=oidc` | none |
 | `DOLLHOUSE_AUTH_JWKS_URI` | Optional OIDC JWKS URL override | derived by server when omitted |

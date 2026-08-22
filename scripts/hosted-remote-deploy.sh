@@ -37,6 +37,7 @@ HTTPS_BIND_PORT_SET="false"
 [[ -z "${HTTPS_BIND_PORT}" ]] || HTTPS_BIND_PORT_SET="true"
 AUTH_PROVIDER="${DOLLHOUSE_AUTH_PROVIDER:-}"
 AUTH_METHODS="${DOLLHOUSE_AUTH_METHODS:-}"
+AUTH_GENERATION="${DOLLHOUSE_AUTH_GENERATION:-}"
 AUTH_OPEN_DCR="${DOLLHOUSE_AUTH_OPEN_DCR:-}"
 AUTH_ALLOWLIST_REQUIRED="${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}"
 AUTH_ISSUER="${DOLLHOUSE_AUTH_ISSUER:-}"
@@ -963,7 +964,7 @@ run_remote_action() {
   local helper_hostname helper_public_base_url helper_instance_name
   local helper_deploy_mode helper_proxy_mode helper_bind_address
   local helper_http_bind_port helper_https_bind_port
-  local helper_auth_provider helper_auth_methods helper_auth_open_dcr
+  local helper_auth_provider helper_auth_methods helper_auth_generation helper_auth_open_dcr
   local helper_auth_allowlist_required helper_auth_issuer helper_auth_audience
   local helper_auth_jwks_uri helper_auth_oidc_require_typ helper_auth_allowlist_seed_file
   local helper_mcp_port helper_image_tag helper_mem_limit helper_cpu_limit
@@ -981,6 +982,7 @@ run_remote_action() {
   helper_https_bind_port=""
   helper_auth_provider="${AUTH_PROVIDER}"
   helper_auth_methods="${AUTH_METHODS}"
+  helper_auth_generation="${AUTH_GENERATION}"
   helper_auth_open_dcr="${AUTH_OPEN_DCR}"
   helper_auth_allowlist_required="${AUTH_ALLOWLIST_REQUIRED}"
   helper_auth_issuer="${AUTH_ISSUER}"
@@ -1054,6 +1056,7 @@ run_remote_action() {
     "${helper_caddy_trusted_proxies}"
     "${helper_bootstrap_github_username}"
     "${helper_bootstrap_github_id}"
+    "${helper_auth_generation}"
   )
   remote_command="bash -s --"
   for remote_payload_arg in "${remote_payload_args[@]}"; do
@@ -1124,6 +1127,7 @@ caddy_access_log="${36}"
 caddy_trusted_proxies="${37}"
 bootstrap_github_username="${38}"
 bootstrap_github_id="${39}"
+auth_generation="${40}"
 workdir=""
 
 remote_log() {
@@ -1414,6 +1418,7 @@ run_hosted_helper() {
   [[ -z "${https_bind_port}" ]] || helper_env+=("DOLLHOUSE_HOSTED_HTTPS_BIND_PORT=${https_bind_port}")
   [[ -z "${auth_provider}" ]] || helper_env+=("DOLLHOUSE_AUTH_PROVIDER=${auth_provider}")
   [[ -z "${auth_methods}" ]] || helper_env+=("DOLLHOUSE_AUTH_METHODS=${auth_methods}")
+  [[ -z "${auth_generation}" ]] || helper_env+=("DOLLHOUSE_AUTH_GENERATION=${auth_generation}")
   [[ -z "${auth_open_dcr}" ]] || helper_env+=("DOLLHOUSE_AUTH_OPEN_DCR=${auth_open_dcr}")
   [[ -z "${auth_allowlist_required}" ]] || helper_env+=("DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED=${auth_allowlist_required}")
   [[ -z "${auth_issuer}" ]] || helper_env+=("DOLLHOUSE_AUTH_ISSUER=${auth_issuer}")
@@ -1445,6 +1450,7 @@ run_hosted_helper() {
     unset DOLLHOUSE_BOOTSTRAP_GITHUB_ID
     unset DOLLHOUSE_AUTH_PROVIDER
     unset DOLLHOUSE_AUTH_METHODS
+    unset DOLLHOUSE_AUTH_GENERATION
     unset DOLLHOUSE_AUTH_OPEN_DCR
     unset DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED
     unset DOLLHOUSE_AUTH_ISSUER

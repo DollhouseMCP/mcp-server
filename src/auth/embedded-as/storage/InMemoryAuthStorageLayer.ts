@@ -21,6 +21,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../../../utils/logger.js';
 import type {
   AllowlistAddInput,
@@ -34,6 +35,7 @@ import type {
   StoredAccount,
 } from './IAuthStorageLayer.js';
 import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
+import { InProcessKeyedLock } from './InProcessKeyedLock.js';
 
 interface GenericRecord {
   payload: unknown;
@@ -44,6 +46,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   private readonly accountsBySub = new Map<string, StoredAccount>();
   private readonly accountIndexByExternal = new Map<string, string>(); // `${provider}|${externalSub}` → sub
   private readonly genericStore = new Map<string, GenericRecord>(); // `${model}|${id}` → record
+  private readonly genericLocks = new InProcessKeyedLock();
   private readonly auditEvents: IdentityAuditEvent[] = [];
 
   // ---- Accounts (must-fix #18) ----
@@ -174,6 +177,35 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
 
   async genericDestroy(model: string, id: string): Promise<void> {
     this.genericStore.delete(genericKey(model, id));
+  }
+
+  async genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    const key = genericKey(model, id);
+    const record = this.genericStore.get(key);
+    if (!record) return false;
+    if (record.expiresAt !== undefined && record.expiresAt <= Date.now()) {
+      this.genericStore.delete(key);
+      return false;
+    }
+    if (!isDeepStrictEqual(record.payload, expectedPayload)) return false;
+
+    const expiresAt = expiresInSec ? Date.now() + expiresInSec * 1000 : undefined;
+    this.genericStore.set(key, { payload, expiresAt });
+    return true;
+  }
+
+  async withGenericLock<T>(
+    model: string,
+    id: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    return this.genericLocks.withLock(genericKey(model, id), operation);
   }
 
   async clearGenericByModels(models: readonly string[]): Promise<number> {

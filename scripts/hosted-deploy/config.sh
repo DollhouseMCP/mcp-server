@@ -91,6 +91,11 @@ hosted_deploy_init_config() {
   if hosted_deploy_nonempty_env DOLLHOUSE_AUTH_METHODS; then
     AUTH_METHODS_SET="true"
   fi
+  AUTH_GENERATION="${DOLLHOUSE_AUTH_GENERATION:-}"
+  AUTH_GENERATION_SET="false"
+  if hosted_deploy_nonempty_env DOLLHOUSE_AUTH_GENERATION; then
+    AUTH_GENERATION_SET="true"
+  fi
   ALLOWLIST_REQUIRED="${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}"
   ALLOWLIST_REQUIRED_SET="false"
   if hosted_deploy_nonempty_env DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED; then
@@ -188,6 +193,7 @@ Common environment:
   DOLLHOUSE_HOSTED_IMAGE_TAG=dollhousemcp-hosted:alpha
   DOLLHOUSE_AUTH_PROVIDER=embedded|oidc|local
   DOLLHOUSE_AUTH_METHODS=github
+  DOLLHOUSE_AUTH_GENERATION=0
   DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=...
   DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=...
   DOLLHOUSE_AUTH_OPEN_DCR=true

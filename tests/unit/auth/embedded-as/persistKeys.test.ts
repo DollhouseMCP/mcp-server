@@ -13,8 +13,12 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   loadOrGenerateSigningJwks,
+  loadOrGenerateSigningJwksViaStore,
+  rotateAndRetireSigningKeysViaStore,
   rotateSigningKey,
+  rotateSigningKeyViaStore,
 } from '../../../../src/auth/embedded-as/persistKeys.js';
+import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
 describe('persistKeys', () => {
   let tmpDir: string;
@@ -56,5 +60,35 @@ describe('persistKeys', () => {
   it('rotateSigningKey is idempotent when the file is already absent', async () => {
     // Never generated — ENOENT path. Must not throw.
     await expect(rotateSigningKey(keyFile)).resolves.toBeUndefined();
+  });
+
+  it('preserves verification grace during ordinary store-backed rotation', async () => {
+    const store = new InMemorySigningKeyStore();
+    const first = await loadOrGenerateSigningJwksViaStore(store);
+
+    await rotateSigningKeyViaStore(store);
+
+    expect(await store.getByKid(first.kid)).toMatchObject({
+      active: false,
+      retiredAt: undefined,
+    });
+  });
+
+  it('retires every pre-transition key during store-backed invalidation', async () => {
+    const store = new InMemorySigningKeyStore();
+    const first = await loadOrGenerateSigningJwksViaStore(store);
+    await rotateSigningKeyViaStore(store);
+    const second = await store.getActive('jwks');
+
+    await rotateAndRetireSigningKeysViaStore(store);
+
+    const active = await store.getActive('jwks');
+    expect(active?.kid).not.toBe(first.kid);
+    expect(active?.kid).not.toBe(second?.kid);
+    expect(active?.retiredAt).toBeUndefined();
+    expect(await store.getByKid(first.kid)).toMatchObject({ retiredAt: expect.any(Number) });
+    expect(await store.getByKid(second?.kid ?? '')).toMatchObject({
+      retiredAt: expect.any(Number),
+    });
   });
 });

@@ -59,6 +59,29 @@ export class InMemorySigningKeyStore implements ISigningKeyStore {
     return Promise.resolve(cloneKey(newKey));
   }
 
+  rotateAndRetirePrior(write: SigningKeyWrite): Promise<SigningKey> {
+    if (this.keys.has(write.kid)) {
+      return Promise.reject(new Error(`SigningKeyStore: kid '${write.kid}' already exists; rotation requires a fresh kid.`));
+    }
+    const now = Date.now();
+    for (const key of this.keys.values()) {
+      if (key.kind === write.kind) {
+        key.active = false;
+        key.rotatedAt ??= now;
+        key.retiredAt = now;
+      }
+    }
+    const newKey: SigningKey = {
+      kid: write.kid,
+      kind: write.kind,
+      payload: structuredClone(write.payload),
+      active: true,
+      createdAt: now,
+    };
+    this.keys.set(write.kid, newKey);
+    return Promise.resolve(cloneKey(newKey));
+  }
+
   pruneRotatedBefore(beforeEpochMs: number): Promise<number> {
     let removed = 0;
     for (const [kid, key] of this.keys) {

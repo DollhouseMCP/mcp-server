@@ -15,7 +15,7 @@
  * @module storage/signingKeys/PostgresSigningKeyStore
  */
 
-import { and, eq, lt, desc } from 'drizzle-orm';
+import { and, eq, lt, desc, sql } from 'drizzle-orm';
 
 import type { DatabaseInstance } from '../../database/connection.js';
 import { withSystemContext } from '../../database/admin.js';
@@ -92,6 +92,33 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
       // (kind) WHERE active=TRUE catches races: if another transaction
       // beat us, the INSERT fails and the caller sees a constraint
       // violation rather than two active rows.
+      const inserted = await tx
+        .insert(authSigningKeys)
+        .values({
+          kid: write.kid,
+          kind: write.kind,
+          payload: write.payload,
+          active: true,
+          createdAt: now,
+        })
+        .returning();
+
+      return rowToKey(inserted[0]);
+    });
+  }
+
+  async rotateAndRetirePrior(write: SigningKeyWrite): Promise<SigningKey> {
+    const now = new Date();
+    return withSystemContext(this.db, async (tx) => {
+      await tx
+        .update(authSigningKeys)
+        .set({
+          active: false,
+          rotatedAt: sql`COALESCE(${authSigningKeys.rotatedAt}, ${now})`,
+          retiredAt: now,
+        })
+        .where(eq(authSigningKeys.kind, write.kind));
+
       const inserted = await tx
         .insert(authSigningKeys)
         .values({

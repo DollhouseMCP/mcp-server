@@ -292,7 +292,7 @@ When `DOLLHOUSE_STORAGE_BACKEND=database` is set, **all persistent server state 
 
 **Agent runtime state is session-scoped in DB mode.** Concurrent MCP sessions for the same user and the same agent get independent goal/decision/context streams — switching tabs or opening a second client doesn't merge agent execution histories. `session_id` is part of the unique index, so sessions are isolated even within a single user account.
 
-**Container restart durability:** The `auth_signing_keys` table is the reason a containerized hosted deployment survives `docker compose restart` without invalidating user sessions. Filesystem-mode keyfiles in a `tmpfs` mount regenerate on every restart, which changes the JWKS `kid`, which trips mode-fingerprint detection, which wipes all `auth_kv` state — every user has to re-OAuth. DB-mode keys persist across restarts so the mode-fingerprint stays stable and tokens remain valid.
+**Container restart durability:** The `auth_signing_keys` table is the reason a containerized hosted deployment survives `docker compose restart` without invalidating user sessions. Filesystem-mode keyfiles and OAuth K/V state in a `tmpfs` mount disappear on restart; the server then generates a new JWKS `kid`, and prior tokens cannot validate while prior sessions and grants no longer exist. Every user has to re-OAuth. DB-mode keys and OAuth state persist across restarts, so tokens remain valid. Secret material is not part of the public mode fingerprint.
 
 ### Filesystem-to-Postgres config migration
 
@@ -695,7 +695,13 @@ Pre-cycle-24 issue — Node's default HTTP `keepAliveTimeout=5s` and `requestTim
 
 ### I changed `DOLLHOUSE_AUTH_METHODS` and now all my clients are signed out
 
-That's intentional. The AS computes a mode-fingerprint from `(provider, methodIds, issuer, primaryKid, primaryCookieKey)` and any change triggers a deliberate invalidation: K/V state is cleared, JWKS rotates, cookie secret rotates. Outstanding tokens fail validation (must-fix #14). Clients re-auth via the new method on next connect. Account rows (`auth_accounts`) survive — users keep their identity and per-user data — only sessions and grants reset.
+That's intentional. The AS computes a public mode fingerprint from `(provider, methodIds, issuer)`. A mode change triggers a coordinated invalidation: OAuth K/V state is cleared, JWKS rotates, and the cookie secret rotates. Outstanding tokens fail validation (must-fix #14). Clients re-auth via the new method on next connect. Account rows (`auth_accounts`) survive — users keep their identity and per-user data — only sessions and grants reset.
+
+The persisted mode record never contains a signing secret or an offline verifier derived from one. For an operator-managed secret rotation or an intentional global sign-out that does not otherwise change the public mode, increment `DOLLHOUSE_AUTH_GENERATION`. It is a monotonic deployment value: every replica must use the same number, and rollback must retain the persisted value or increase it. Decreasing it is refused at startup.
+
+Authorization-mode transitions are fenced by the auth storage backend. PostgreSQL uses a transaction-scoped advisory lock that PostgreSQL releases if the owning process crashes; an interrupted `transitioning` record is then recovered by the next replica. Recovery is at least once: a crash after invalidation but before the stable record is committed can safely repeat invalidation and emit another audit event. The filesystem and memory auth backends provide only in-process fencing and therefore support a single server process. Multi-process or multi-replica deployments must use PostgreSQL auth storage.
+
+An unreadable filesystem authorization record is never treated as a first run. Startup fails closed and logs the model and record id without logging its contents. To recover, stop the server, preserve the unreadable record for audit, remove all OAuth-state records and the corrupt fingerprint together, then restart with the intended public mode and a recorded `DOLLHOUSE_AUTH_GENERATION`. Do not delete only the fingerprint: that would discard the evidence needed to distinguish recovery from a new installation.
 
 If you're toggling between methods during testing and want to preserve auth state, don't change `DOLLHOUSE_AUTH_METHODS`; instead configure multiple methods at once and let the chooser handle which one the user picks (`DOLLHOUSE_AUTH_METHODS=github,local-password`).
 

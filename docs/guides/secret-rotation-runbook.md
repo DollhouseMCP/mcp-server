@@ -53,28 +53,34 @@ Procedures for rotating each secret a DollhouseMCP production deployment depends
    ```bash
    openssl rand -hex 32
    ```
-2. Update `.env.production` (or your secret store).
+2. Update `.env.production` (or your secret store) and increment
+   `DOLLHOUSE_AUTH_GENERATION` by one. The generation is monotonic and must be
+   identical on every replica; do not decrement it during rollback.
 3. Restart the server:
    ```bash
    docker compose up -d dollhousemcp   # Path A
    # or
    sudo systemctl restart dollhousemcp # Path B
    ```
-4. Verify the server restarts cleanly. The `kid` published at `/jwks` should not change (cookie secret is independent of JWKS). If startup fails with a length error, the secret didn't decode to ≥32 bytes — regenerate with `openssl rand -hex 32`.
+4. Verify the server restarts cleanly and emits one
+   `auth.mode_switch_invalidation` audit event. The coordinated transition
+   clears OAuth state and rotates the JWKS, so the active `kid` should change.
+   If startup fails with a length error, the secret didn't decode to ≥32 bytes
+   — regenerate with `openssl rand -hex 32`.
 
 ### Multi-replica coordination
 
-All replicas must use the **same** value. Update your secret store and roll replicas one at a time. Mid-rotation, in-flight `/interaction` sessions on the replica that hasn't restarted yet will fail signature verification against new cookies; users mid-OAuth see a "please retry" error. Window is the rolling-restart duration.
+All replicas must use the **same** secret and generation. Drain or stop every old-generation replica before starting replicas with the new generation; do not perform this as an ordinary rolling restart. The first new replica holds a PostgreSQL advisory lock while it clears OAuth state and rotates shared keys, and later replicas observe the completed transition. An old-generation replica left serving could retain stale in-memory keys and issue unusable state after the shared transition.
 
 ### Invalidation impact
 
 - **Active `/interaction` sessions:** invalidated. A user mid-OAuth must restart the flow.
-- **Issued access tokens:** unaffected. Tokens are signed by the JWKS key, not this cookie key.
-- **Active MCP sessions:** unaffected.
+- **Issued access and refresh tokens:** invalidated by the coordinated OAuth-state clear and JWKS rotation.
+- **Active MCP sessions:** must reconnect and authenticate again.
 
 ### Recovery
 
-If you set a bad value (e.g., the wrong length) and the server refuses to start, revert `.env.production` and restart. If you lost the previous value and tokens still need to validate: there's no recovery — the previous value is required to unmark already-issued cookies. New OAuth flows work fine.
+If you set a bad value (e.g., the wrong length) and the server refuses before a transition starts, restore the prior secret and generation and restart. After the new generation has been persisted, do not decrement it: keep that generation (or increase it) and correct the secret. Existing sessions cannot be recovered after a completed global invalidation; users authenticate again.
 
 ---
 
@@ -129,7 +135,7 @@ The AS supports key rotation through the `auth_signing_keys` table — the rotat
 
 - Annually as baseline (more frequently if you have a compliance requirement)
 - Immediately on suspected compromise of the keyfile or DB row
-- After a `DOLLHOUSE_AUTH_METHODS` change — the AS auto-rotates the key as part of mode-fingerprint invalidation (this is deliberate; see `auth-server-setup.md` troubleshooting)
+- After a `DOLLHOUSE_AUTH_METHODS` change or `DOLLHOUSE_AUTH_GENERATION` increase — the AS auto-rotates the key as part of coordinated authorization invalidation (this is deliberate; see `auth-server-setup.md` troubleshooting)
 
 ### Rotation procedure (DB mode, recommended)
 

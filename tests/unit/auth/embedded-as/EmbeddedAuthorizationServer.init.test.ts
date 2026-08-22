@@ -11,9 +11,14 @@ import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import os from 'node:os';
+import express from 'express';
+import request from 'supertest';
 import { EmbeddedAuthorizationServer } from '../../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { TrivialConsentMethod } from '../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
+import { rotateSigningKey } from '../../../../src/auth/embedded-as/persistKeys.js';
+import { loadPublicSigningJwksFromStore } from '../../../../src/auth/embedded-as/EmbeddedASTokens.js';
+import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 import type {
   IAuthStorageLayer,
   StoredAccount,
@@ -62,6 +67,12 @@ class FlakyStorage implements IAuthStorageLayer {
   genericDestroy(m: string, i: string) { return this.inner.genericDestroy(m, i); }
   genericConsume(m: string, i: string) { return this.inner.genericConsume(m, i); }
   genericInsertIfAbsent(m: string, i: string, p: unknown, e?: number) { return this.inner.genericInsertIfAbsent(m, i, p, e); }
+  genericCompareAndSet(m: string, i: string, x: unknown, p: unknown, e?: number) {
+    return this.inner.genericCompareAndSet(m, i, x, p, e);
+  }
+  withGenericLock<T>(m: string, i: string, op: () => Promise<T>) {
+    return this.inner.withGenericLock(m, i, op);
+  }
   clearGenericByModels(m: readonly string[]) { return this.inner.clearGenericByModels(m); }
   genericFindByUid(uid: string) { return this.inner.genericFindByUid?.(uid) ?? Promise.resolve(null); }
   genericRevokeByGrantId(grantId: string) { return this.inner.genericRevokeByGrantId?.(grantId) ?? Promise.resolve(); }
@@ -165,22 +176,19 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
     expect(eventsAfterSecond.length).toBe(1);
     const event = eventsAfterSecond[0];
     const details = event.details as Record<string, unknown>;
-    // Sanity-check the shape so a regression dropping `cleared`,
-    // `previous`, or `current` fails loudly.
+    // Sanity-check the non-secret transition audit shape. The v1
+    // `previous` value was a verifier derived from the cookie secret and must
+    // not be persisted or copied into audit events.
     expect(typeof event.timestamp).toBe('number');
     expect(typeof details.cleared).toBe('number');
-    expect(details.previous).toBeDefined();
     expect(details.current).toBeDefined();
-    expect(details.previous).not.toEqual(details.current);
+    expect(details.reason).toBe('mode-change');
+    expect(details.authorizationGeneration).toBe(0);
+    expect(typeof details.transitionId).toBe('string');
+    expect(details.previous).toBeUndefined();
 
-    // Cycle 22 / cycle-21 test-coverage HIGH: pin causality by
-    // computing the expected fingerprints from the same inputs the
-    // production code uses. If a future refactor decouples the issuer
-    // dimension from the fingerprint computation, the expected hash
-    // here will no longer match the recorded `current` and this
-    // assertion fails — making the silent-decoupling drift visible.
-    // Without this, `previous !== current` only proves the two opaque
-    // SHA-256 hashes differ, not that the issuer dimension drove it.
+    // Pin the issuer contribution using the same public-only input shape as
+    // production. Signing kids and cookie keys intentionally do not appear.
     const { computeFingerprint } = await import(
       '../../../../src/auth/embedded-as/modeFingerprint.js'
     );
@@ -188,18 +196,155 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
       provider: 'embedded',
       methodIds: ['trivial-consent'],
     };
-    // The test can't reconstruct primaryKid + primaryCookieKey
-    // (file-derived, lifecycle-dependent) but it CAN assert the
-    // issuer-derived component: compute fingerprints with each issuer
-    // holding everything else equal, and confirm the recorded
-    // current matches the second-AS issuer-set.
-    const fp1 = computeFingerprint({ ...baseInputs, issuer: 'http://127.0.0.1:65530', primaryKid: '', primaryCookieKey: '' });
-    const fp2 = computeFingerprint({ ...baseInputs, issuer: 'http://127.0.0.1:65531', primaryKid: '', primaryCookieKey: '' });
-    // The actual recorded fingerprints include the kid + cookieKey, so
-    // they won't equal fp1/fp2 directly. But fp1 vs fp2 must differ
-    // (issuer is the only changed input) — pins the issuer-dimension
-    // contribution to the fingerprint hash.
+    const fp1 = computeFingerprint({
+      ...baseInputs,
+      issuer: 'http://127.0.0.1:65530',
+      authorizationGeneration: 0,
+    });
+    const fp2 = computeFingerprint({
+      ...baseInputs,
+      issuer: 'http://127.0.0.1:65531',
+      authorizationGeneration: 0,
+    });
     expect(fp1).not.toBe(fp2);
+    expect(details.current).toBe(fp2);
+  });
+
+  it('generation increase invalidates state and rotates the signing key', async () => {
+    const sharedStorage = new InMemoryAuthStorageLayer();
+    const sharedKeyPath = path.join(tmpDir, 'generation-key.json');
+    const options = {
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: sharedKeyPath,
+      methods: [new TrivialConsentMethod({ defaultSubject: 'generation-test' })],
+      storage: sharedStorage,
+    };
+    const firstServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 0,
+    });
+    await firstServer.validate('warmup-not-a-real-token').catch(() => {});
+    const firstKey = JSON.parse(await fs.readFile(sharedKeyPath, 'utf8')) as { kid: string };
+    await sharedStorage.genericSet('Session', 'generation-session', { uid: 'old-session' });
+
+    const secondServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 1,
+    });
+    await secondServer.validate('warmup-not-a-real-token').catch(() => {});
+    const secondKey = JSON.parse(await fs.readFile(sharedKeyPath, 'utf8')) as { kid: string };
+
+    expect(secondKey.kid).not.toBe(firstKey.kid);
+    expect(await sharedStorage.genericGet('Session', 'generation-session')).toBeNull();
+    const events = await sharedStorage.listIdentityEvents({
+      type: 'auth.mode_switch_invalidation',
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.details).toMatchObject({
+      reason: 'generation-increase',
+      previousAuthorizationGeneration: 0,
+      authorizationGeneration: 1,
+    });
+  });
+
+  it('generation increase retires store-backed keys issued before the transition', async () => {
+    const sharedStorage = new InMemoryAuthStorageLayer();
+    const signingKeyStore = new InMemorySigningKeyStore();
+    const options = {
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      methods: [new TrivialConsentMethod({ defaultSubject: 'store-generation-test' })],
+      storage: sharedStorage,
+      signingKeyStore,
+    };
+    const firstServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 0,
+    });
+    const firstToken = await firstServer.issue('store-generation-user');
+    const firstKey = await signingKeyStore.getActive('jwks');
+    expect(firstKey).not.toBeNull();
+    await sharedStorage.genericSet('Session', 'store-generation-session', {
+      uid: 'old-session',
+    });
+
+    const secondServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 1,
+    });
+    await secondServer.validate('warmup-not-a-real-token').catch(() => {});
+
+    const secondKey = await signingKeyStore.getActive('jwks');
+    expect(secondKey?.kid).not.toBe(firstKey?.kid);
+    expect(await signingKeyStore.getByKid(firstKey?.kid ?? '')).toMatchObject({
+      retiredAt: expect.any(Number),
+    });
+    await expect(loadPublicSigningJwksFromStore(signingKeyStore)).resolves.toEqual({
+      keys: [expect.objectContaining({ kid: secondKey?.kid })],
+    });
+    await expect(firstServer.validate(firstToken)).resolves.toEqual({
+      ok: false,
+      reason: 'unknown key id',
+    });
+    const staleReplicaApp = express();
+    staleReplicaApp.use(firstServer.createRouter());
+    await request(staleReplicaApp)
+      .post('/token')
+      .type('form')
+      .send({ grant_type: 'authorization_code', code: 'stale-code' })
+      .expect('Retry-After', '1')
+      .expect(503, {
+        error: 'temporarily_unavailable',
+        error_description: 'Authorization signing keys changed; retry the token request.',
+      });
+    expect(await sharedStorage.genericGet('Session', 'store-generation-session')).toBeNull();
+    const events = await sharedStorage.listIdentityEvents({
+      type: 'auth.mode_switch_invalidation',
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.details).toMatchObject({
+      reason: 'generation-increase',
+      previousAuthorizationGeneration: 0,
+      authorizationGeneration: 1,
+    });
+  });
+
+  it.each([
+    ['cookie secret', true, false],
+    ['JWKS key', false, true],
+    ['cookie secret and JWKS key together', true, true],
+  ])('keeps OAuth state when the %s rotates without a generation change', async (
+    _label,
+    rotateCookie,
+    rotateJwks,
+  ) => {
+    const sharedStorage = new InMemoryAuthStorageLayer();
+    const sharedKeyPath = path.join(tmpDir, `independent-rotation-${String(_label)}.json`);
+    const common = {
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: sharedKeyPath,
+      methods: [new TrivialConsentMethod({ defaultSubject: 'independent-rotation-test' })],
+      storage: sharedStorage,
+      authorizationGeneration: 0,
+    };
+    const firstServer = new EmbeddedAuthorizationServer({
+      ...common,
+      cookieSecretEnvOverride: '11'.repeat(32),
+    });
+    await firstServer.validate('warmup-not-a-real-token').catch(() => {});
+    await sharedStorage.genericSet('Session', 'rotation-session', { uid: 'must-survive' });
+
+    if (rotateJwks) await rotateSigningKey(sharedKeyPath);
+    const secondServer = new EmbeddedAuthorizationServer({
+      ...common,
+      cookieSecretEnvOverride: (rotateCookie ? '22' : '11').repeat(32),
+    });
+    await secondServer.validate('warmup-not-a-real-token').catch(() => {});
+
+    expect(await sharedStorage.genericGet('Session', 'rotation-session'))
+      .toEqual({ uid: 'must-survive' });
+    expect(await sharedStorage.listIdentityEvents({
+      type: 'auth.mode_switch_invalidation',
+    })).toHaveLength(0);
   });
 
   it('repeated init failures keep producing fresh attempts (no stale rejection)', async () => {

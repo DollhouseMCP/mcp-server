@@ -302,6 +302,34 @@ export interface IAuthStorageLayer {
   ): Promise<boolean>;
 
   /**
+   * Atomically replace a live JSON-compatible payload when its current value
+   * exactly matches `expectedPayload`. Returns true only for the writer that
+   * performed the replacement. Missing, expired, or mismatched records return
+   * false without changing storage.
+   *
+   * This is the ownership primitive for cross-replica authorization-mode
+   * transitions. Implementations must serialize the comparison and write:
+   * in-process for memory, under the record lock for filesystem, and in one
+   * conditional UPDATE for Postgres.
+   */
+  genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean>;
+
+  /**
+   * Execute an operation while holding the backend's exclusive lock for a
+   * generic record. PostgreSQL implementations MUST use a database-owned lock
+   * so it is released when a crashed process loses its connection. This is the
+   * fencing boundary for authorization transitions that perform external
+   * effects between record writes.
+   */
+  withGenericLock<T>(model: string, id: string, operation: () => Promise<T>): Promise<T>;
+
+  /**
    * Bulk-delete all entries for the given models. Used on mode-switch
    * invalidation (must-fix #14): when the AS detects its operating mode
    * has changed since last run, it clears OAuth-state models so prior

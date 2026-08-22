@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOSTED_DEPLOY="${REPO_ROOT}/scripts/hosted-deploy.sh"
 TMP_ROOT="$(mktemp -d)"
+ENTERPRISE_MODE_ENV_LINE='DOLLHOUSE_HOSTED_MODE=enterprise'
 
 cleanup() {
   if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT}" && "${TMP_ROOT}" == "${TMPDIR:-/tmp}"* ]]; then
@@ -221,6 +222,8 @@ assert_contains "${COMPOSE_FILE}" "DOLLHOUSE_TRUSTED_PROXIES: 172.16.0.0/12"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_UNSAFE_NO_TLS: "true"'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_PROVIDER: embedded'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_METHODS: "github"'
+assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_GENERATION: "0"'
+assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=0'
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED: "true"'
 assert_contains "${COMPOSE_FILE}" '      - "0.0.0.0:80:80"'
 assert_contains "${COMPOSE_FILE}" '      - "0.0.0.0:443:443"'
@@ -299,6 +302,52 @@ fi
 log "rendering stricter DCR override"
 render_with_dcr "${DEPLOY_DIR}" "false"
 assert_contains "${COMPOSE_FILE}" 'DOLLHOUSE_AUTH_OPEN_DCR: "false"'
+
+log "checking authorization generation persists across re-render"
+AUTH_GENERATION_DEPLOY_DIR="${TMP_ROOT}/auth-generation-deploy"
+AUTH_GENERATION_ENV_FILE="${AUTH_GENERATION_DEPLOY_DIR}/.env.production"
+AUTH_GENERATION_COMPOSE_FILE="${AUTH_GENERATION_DEPLOY_DIR}/compose.yml"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${AUTH_GENERATION_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+DOLLHOUSE_AUTH_GENERATION=7 \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=7'
+assert_contains "${AUTH_GENERATION_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_GENERATION: "7"'
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${AUTH_GENERATION_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=7'
+assert_contains "${AUTH_GENERATION_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_GENERATION: "7"'
+
+log "checking authorization generation persists across hosted-mode changes"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${AUTH_GENERATION_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_MODE=enterprise \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${AUTH_GENERATION_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
+assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=7'
+assert_contains "${AUTH_GENERATION_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_GENERATION: "7"'
+
+log "checking invalid authorization generation rejection"
+AUTH_GENERATION_BAD_OUTPUT="${TMP_ROOT}/auth-generation-bad.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/auth-generation-bad-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GENERATION=-1 \
+  bash "${HOSTED_DEPLOY}" --dry-run render > "${AUTH_GENERATION_BAD_OUTPUT}" 2>&1; then
+  fail "negative DOLLHOUSE_AUTH_GENERATION unexpectedly succeeded"
+fi
+assert_contains "${AUTH_GENERATION_BAD_OUTPUT}" 'DOLLHOUSE_AUTH_GENERATION must be a non-negative integer'
+
+AUTH_GENERATION_TOO_LARGE_OUTPUT="${TMP_ROOT}/auth-generation-too-large.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/auth-generation-too-large-deploy" \
+  DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  DOLLHOUSE_AUTH_GENERATION=9007199254740992 \
+  bash "${HOSTED_DEPLOY}" --dry-run render > "${AUTH_GENERATION_TOO_LARGE_OUTPUT}" 2>&1; then
+  fail "unsafe DOLLHOUSE_AUTH_GENERATION unexpectedly succeeded"
+fi
+assert_contains "${AUTH_GENERATION_TOO_LARGE_OUTPUT}" 'DOLLHOUSE_AUTH_GENERATION must not exceed 9007199254740991'
 
 log "rendering cloud configuration behind Cloudflare"
 CLOUDFLARE_DEPLOY_DIR="${TMP_ROOT}/cloudflare-deploy"
@@ -605,7 +654,7 @@ assert_contains "${LAN_COMPOSE_FILE}" '      - "0.0.0.0:80:80"'
 assert_contains "${LAN_COMPOSE_FILE}" '      - "0.0.0.0:443:443"'
 assert_contains "${LAN_CADDY_FILE}" 'lanbox.local {'
 assert_not_contains "${LAN_CADDY_FILE}" "${LAN_CADDY_SITE}"
-assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${LAN_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_PROXY_MODE=caddy-tls'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_BIND_ADDRESS=0.0.0.0'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_PUBLIC_BASE_URL=https://lanbox.local'
@@ -760,7 +809,7 @@ assert_contains "${RESTATED_MODE_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_PROVIDER: oidc'
 assert_contains "${RESTATED_MODE_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_METHODS: ""'
 assert_contains "${RESTATED_MODE_COMPOSE_FILE}" '      - "127.0.0.1:8080:80"'
 assert_contains "${RESTATED_MODE_COMPOSE_FILE}" '      - "127.0.0.1:8443:443"'
-assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${RESTATED_MODE_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
 assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_BIND_ADDRESS=127.0.0.1'
 assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_HTTP_BIND_PORT=8080'
 assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_HTTPS_BIND_PORT=8443'
@@ -801,7 +850,7 @@ assert_contains "${ENTERPRISE_COMPOSE_FILE}" '      - "0.0.0.0:80:80"'
 assert_contains "${ENTERPRISE_COMPOSE_FILE}" '      - "0.0.0.0:443:443"'
 assert_contains "${ENTERPRISE_CADDY_FILE}" 'mcp.enterprise.test {'
 assert_contains "${ENTERPRISE_CADDY_FILE}" 'header_up X-Forwarded-Proto https'
-assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${ENTERPRISE_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
 assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_AUTH_PROVIDER=oidc'
 assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_AUTH_ISSUER=https://idp.enterprise.test'
 assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_AUTH_AUDIENCE=dollhouse-mcp'
@@ -899,7 +948,7 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: would render deployment files"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: deployment mode=cloud"
 assert_contains "${DRY_RUN_OUTPUT}" "dry-run: Docker json-file log rotation max-size=25m max-file=5"
-assert_contains "${DRY_RUN_OUTPUT}" "dry-run: auth provider=embedded methods=github open_dcr=true allowlist_required=true"
+assert_contains "${DRY_RUN_OUTPUT}" "dry-run: auth provider=embedded methods=github generation=0 open_dcr=true allowlist_required=true"
 
 log "checking quiet logging mode"
 QUIET_OUTPUT="${TMP_ROOT}/quiet.out"

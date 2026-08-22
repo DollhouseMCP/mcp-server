@@ -54,6 +54,12 @@ class AlwaysFailGetStorage implements IAuthStorageLayer {
   genericDestroy(m: string, i: string) { return this.inner.genericDestroy(m, i); }
   genericConsume(m: string, i: string) { return this.inner.genericConsume(m, i); }
   genericInsertIfAbsent(m: string, i: string, p: unknown, e?: number) { return this.inner.genericInsertIfAbsent(m, i, p, e); }
+  genericCompareAndSet(m: string, i: string, x: unknown, p: unknown, e?: number) {
+    return this.inner.genericCompareAndSet(m, i, x, p, e);
+  }
+  withGenericLock<T>(m: string, i: string, op: () => Promise<T>) {
+    return this.inner.withGenericLock(m, i, op);
+  }
   clearGenericByModels(m: readonly string[]) { return this.inner.clearGenericByModels(m); }
   genericFindByUid(uid: string) { return this.inner.genericFindByUid?.(uid) ?? Promise.resolve(null); }
   genericRevokeByGrantId(grantId: string) { return this.inner.genericRevokeByGrantId?.(grantId) ?? Promise.resolve(); }
