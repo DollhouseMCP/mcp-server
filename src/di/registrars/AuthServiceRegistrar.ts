@@ -39,14 +39,7 @@ export class AuthServiceRegistrar {
       logger.debug('[AuthServiceRegistrar] Auth disabled — skipping');
       return;
     }
-    if (env.DOLLHOUSE_AUTH_PROVIDER === 'embedded'
-      && env.DOLLHOUSE_AUTH_STORAGE_BACKEND === 'postgres'
-      && env.DOLLHOUSE_DATABASE_POOL_SIZE < 2) {
-      throw new Error(
-        'Embedded PostgreSQL auth requires DOLLHOUSE_DATABASE_POOL_SIZE >= 2: '
-        + 'one connection fences authorization transitions while another performs the transition work.',
-      );
-    }
+    assertEmbeddedPostgresPoolCapacity();
 
     const { createAuthProvider, resolveAuthMethods } = await import('../../auth/AuthProviderFactory.js');
     const { createUnifiedAuthMiddleware } = await import('../../auth/authMiddleware.js');
@@ -251,6 +244,16 @@ export class AuthServiceRegistrar {
       consoleIdentityResolver: new PostgresConsoleIdentityResolver(database),
     };
   }
+}
+
+function assertEmbeddedPostgresPoolCapacity(): void {
+  if (env.DOLLHOUSE_AUTH_PROVIDER !== 'embedded'
+    || env.DOLLHOUSE_AUTH_STORAGE_BACKEND !== 'postgres'
+    || env.DOLLHOUSE_DATABASE_POOL_SIZE >= 2) return;
+  throw new Error(
+    'Embedded PostgreSQL auth requires DOLLHOUSE_DATABASE_POOL_SIZE >= 2: '
+    + 'one connection fences authorization transitions while another performs the transition work.',
+  );
 }
 
 /**

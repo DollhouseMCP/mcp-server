@@ -320,6 +320,15 @@ DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
 assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=7'
 assert_contains "${AUTH_GENERATION_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_GENERATION: "7"'
 
+log "checking authorization generation persists across hosted-mode changes"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${AUTH_GENERATION_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_MODE=enterprise \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+  bash "${HOSTED_DEPLOY}" render
+assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=7'
+assert_contains "${AUTH_GENERATION_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_GENERATION: "7"'
+
 log "checking invalid authorization generation rejection"
 AUTH_GENERATION_BAD_OUTPUT="${TMP_ROOT}/auth-generation-bad.out"
 if DOLLHOUSE_HOSTED_DEPLOY_DIR="${TMP_ROOT}/auth-generation-bad-deploy" \

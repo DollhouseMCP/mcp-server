@@ -116,6 +116,8 @@ export function computeFingerprint(inputs: ModeFingerprintInputs): string {
     methodIds: [...inputs.methodIds].sort(compareCodepoints),
     issuer: inputs.issuer,
   });
+  // This is a stable identifier over public authorization metadata, not a
+  // password or secret verifier. Fast SHA-256 is intentional here.
   return createHash('sha256').update(canonical).digest('base64url');
 }
 

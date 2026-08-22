@@ -184,6 +184,40 @@ describe('reconcileModeFingerprint', () => {
     expect(results.filter((result) => result.changed)).toHaveLength(1);
   });
 
+  it('accepts idempotent completion when a peer already stored the matching stable record', async () => {
+    class PeerCompletionStorage extends InMemoryAuthStorageLayer {
+      override async genericCompareAndSet(
+        model: string,
+        id: string,
+        expectedPayload: unknown,
+        payload: unknown,
+        expiresInSec?: number,
+      ): Promise<boolean> {
+        const expected = expectedPayload as { status?: unknown };
+        const desired = payload as { status?: unknown };
+        if (expected.status === 'transitioning' && desired.status === 'stable') {
+          await this.genericSet(model, id, payload, expiresInSec);
+          return false;
+        }
+        return super.genericCompareAndSet(model, id, expectedPayload, payload, expiresInSec);
+      }
+    }
+
+    storage = new PeerCompletionStorage();
+    await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    const result = await reconcileModeFingerprint(
+      storage,
+      { ...baseInputs, authorizationGeneration: 1 },
+      noOpInvalidation,
+    );
+
+    expect(result).toMatchObject({ changed: true, reason: 'generation-increase' });
+    expect(await storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY)).toMatchObject({
+      status: 'stable',
+      authorizationGeneration: 1,
+    });
+  });
+
   it('recovers an interrupted transition after the backend releases a crashed owner lock', async () => {
     const fingerprint = computeFingerprint(baseInputs);
     const pending: TransitioningModeFingerprintRecord = {

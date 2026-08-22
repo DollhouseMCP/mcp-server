@@ -140,7 +140,9 @@ adopt_deployment_config_from_env_file() {
     [[ -z "${value}" ]] || AUTH_METHODS="${value}"
   fi
 
-  if [[ "${adopt_mode_dependent}" == "true" && "${AUTH_GENERATION_SET}" != "true" && -z "${AUTH_GENERATION}" ]]; then
+  # The authorization generation is deployment-wide and monotonic. Preserve it
+  # even when the operator intentionally changes the hosted deployment mode.
+  if [[ "${AUTH_GENERATION_SET}" != "true" && -z "${AUTH_GENERATION}" ]]; then
     value="$(deployment_env_file_value DOLLHOUSE_AUTH_GENERATION)"
     [[ -z "${value}" ]] || AUTH_GENERATION="${value}"
   fi
