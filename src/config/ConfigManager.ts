@@ -46,6 +46,7 @@ import {
 } from '../utils/securityUtils.js';
 import { env } from './env.js';
 import { isKnownConfigPath, validateConfigPath } from './configSchema.js';
+import { deleteOwnConfigLeaf, parseSafeConfigPath } from './safeConfigDeletion.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { IOperatorConfigStore, OperatorConfig } from '../storage/operatorConfig/IOperatorConfigStore.js';
 import type { IUserConfigStore, UserConfig as UserConfigPayload } from '../storage/userConfig/IUserConfigStore.js';
@@ -1077,7 +1078,7 @@ export class ConfigManager {
       await this.initialize();
     }
 
-    validatePropertyPath(path, 'path');
+    const keys = parseSafeConfigPath(path);
 
     // Same admin gate as updateSetting — per-host paths require 'admin'.
     if (ConfigManager.isPerHostPath(path) && this.contextTracker) {
@@ -1095,35 +1096,24 @@ export class ConfigManager {
       }
     }
 
-    const previousValue = this.getSetting(path);
-    if (previousValue === undefined) {
-      return {
-        success: false,
-        message: `Configuration path '${path}' has no stored value to delete.`,
-      };
+    const deletion = deleteOwnConfigLeaf(this.config, keys, {
+      rejectObjectLeaf: !isKnownConfigPath(path),
+    });
+    if (deletion.kind === 'missing') {
+      return { success: true, message: `Setting '${path}' was already unset` };
     }
-    if (!isKnownConfigPath(path) && isPlainObject(previousValue)) {
+    if (deletion.kind === 'section') {
       return {
         success: false,
         message: `Configuration path '${path}' is a section, not a leaf setting. Delete a specific setting path instead.`,
       };
     }
+    if (deletion.kind === 'unsafe') {
+      logger.warn('[ConfigManager] Rejected unsafe config deletion', { path, reason: deletion.reason });
+      return { success: false, message: `Configuration path '${path}' cannot be deleted safely: ${deletion.reason}` };
+    }
 
-    const keys = path.split('.');
-    let current: any = this.config;
-    // Navigate to the parent
-    for (let i = 0; i < keys.length - 1; i++) {
-      const key = keys[i];
-      if (!safeHasOwnProperty(current, key)) {
-        // Parent missing — nothing to delete; return idempotently
-        return { success: true, message: `Setting '${path}' was already unset`, previousValue };
-      }
-      current = current[key];
-    }
-    const lastKey = keys.at(-1)!;
-    if (safeHasOwnProperty(current, lastKey)) {
-      delete current[lastKey];
-    }
+    const previousValue = deletion.previousValue;
 
     await this.persistMerged(userId, this.config!);
 
@@ -1565,10 +1555,4 @@ export class ConfigManager {
       sortKeys: false
     });
   }
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (value === null || typeof value !== 'object') return false;
-  const proto = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
 }
