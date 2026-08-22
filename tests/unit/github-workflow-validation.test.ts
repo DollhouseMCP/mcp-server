@@ -34,6 +34,10 @@ interface Workflow {
   jobs: Record<string, WorkflowJob>;
   env?: Record<string, any>;
   permissions?: Record<string, string> | string;
+  concurrency?: {
+    group?: string;
+    'cancel-in-progress'?: boolean;
+  };
 }
 
 describe('GitHub Workflow Validation', () => {
@@ -222,6 +226,46 @@ describe('GitHub Workflow Validation', () => {
 
       expect(betaPublishWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
       expect(betaDeployWorkflow).toContain('-beta(\\.[0-9A-Za-z.-]+)?$');
+    });
+  });
+
+  describe('Claude review head integrity', () => {
+    let workflow: Workflow;
+
+    beforeAll(() => {
+      const workflowPath = path.join(workflowDir, 'claude-code-review.yml');
+      workflow = yaml.load(fs.readFileSync(workflowPath, 'utf8')) as Workflow;
+    });
+
+    it('cancels superseded reviews for the same pull request', () => {
+      expect(workflow.concurrency?.group).toContain('github.event.pull_request.number');
+      expect(workflow.concurrency?.['cancel-in-progress']).toBe(true);
+    });
+
+    it('checks out and verifies the exact pull-request head', () => {
+      const steps = workflow.jobs['claude-review'].steps;
+      const checkout = steps.find(step => step.name === 'Checkout repository');
+      const verifyCheckout = steps.find(step => step.name === 'Verify checked out PR head');
+
+      expect(checkout?.uses).toMatch(/^actions\/checkout@[a-f0-9]{40}$/);
+      expect(checkout?.with?.ref).toBe('${{ github.event.pull_request.head.sha }}');
+      expect(checkout?.with?.['fetch-depth']).toBe(0);
+      expect(checkout?.with?.['persist-credentials']).toBe(false);
+      expect(verifyCheckout?.run).toContain('git rev-parse HEAD');
+      expect(verifyCheckout?.run).toContain("--jq '.head.sha'");
+      expect(verifyCheckout?.run).toContain('EXPECTED_HEAD_SHA');
+    });
+
+    it('binds the review prompt and completion check to the same head', () => {
+      const steps = workflow.jobs['claude-review'].steps;
+      const review = steps.find(step => step.name === 'Run Claude Code Review');
+      const verifyCurrent = steps.find(step => step.name === 'Verify PR head remained current');
+      const prompt = String(review?.with?.direct_prompt ?? '');
+
+      expect(prompt).toContain('github.event.pull_request.head.sha');
+      expect(prompt).toContain('**Reviewed commit:**');
+      expect(verifyCurrent?.run).toContain("--jq '.head.sha'");
+      expect(verifyCurrent?.run).toContain('PR head moved');
     });
   });
 });

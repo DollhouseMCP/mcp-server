@@ -11,6 +11,10 @@ on:
     #   - "src/**/*.jsx"
   workflow_dispatch:  # Allow manual runs on fork PRs by maintainers
 
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 jobs:
   claude-review:
     # Skip Dependabot PRs and fork PRs since they don't have access to secrets (CLAUDE_CODE_OAUTH_TOKEN)
@@ -29,9 +33,31 @@ jobs:
     
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          fetch-depth: 1
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify checked out PR head
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          actual_head_sha="$(git rev-parse HEAD)"
+          if [[ "${actual_head_sha}" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "::error::Checked out ${actual_head_sha}, expected PR head ${EXPECTED_HEAD_SHA}"
+            exit 1
+          fi
+          current_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [[ "${current_head_sha}" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "::error::Queued review expected ${EXPECTED_HEAD_SHA}, current PR head is ${current_head_sha}"
+            exit 1
+          fi
+          echo "Review checkout verified at ${EXPECTED_HEAD_SHA}"
 
       - name: Run Claude Code Review
         id: claude-review
@@ -45,6 +71,12 @@ jobs:
           
           # Direct prompt for automated review (no @claude mention needed)
           direct_prompt: |
+            The exact pull-request head for this review is ${{ github.event.pull_request.head.sha }}.
+            Before reviewing, verify that git rev-parse HEAD equals that exact SHA. If it does
+            not match, stop and report the mismatch instead of reviewing stale code. Review
+            the complete pull-request diff ending at that SHA, and begin the report with:
+            **Reviewed commit:** `${{ github.event.pull_request.head.sha }}`
+
             Please review this pull request and provide feedback on:
             - Code quality and best practices
             - Potential bugs or issues
@@ -56,27 +88,17 @@ jobs:
             
             Be constructive and helpful in your feedback.
 
-          # Optional: Use sticky comments to make Claude reuse the same comment on subsequent pushes to the same PR
-          # use_sticky_comment: true
-          
-          # Optional: Customize review based on file types
-          # direct_prompt: |
-          #   Review this PR focusing on:
-          #   - For TypeScript files: Type safety and proper interface usage
-          #   - For API endpoints: Security, input validation, and error handling
-          #   - For React components: Performance, accessibility, and best practices
-          #   - For tests: Coverage, edge cases, and test quality
-          
-          # Optional: Different prompts for different authors
-          # direct_prompt: |
-          #   ${{ github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR' && 
-          #   'Welcome! Please review this PR from a first-time contributor. Be encouraging and provide detailed explanations for any suggestions.' ||
-          #   'Please provide a thorough code review focusing on our coding standards and best practices.' }}
-          
-          # Optional: Add specific tools for running tests or linting
-          # allowed_tools: "Bash(npm run test),Bash(npm run lint),Bash(npm run typecheck)"
-          
-          # Optional: Skip review for certain conditions
-          # if: |
-          #   !contains(github.event.pull_request.title, '[skip-review]') &&
-          #   !contains(github.event.pull_request.title, '[WIP]')
+      - name: Verify PR head remained current
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          current_head_sha="$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
+          if [[ "${current_head_sha}" != "${EXPECTED_HEAD_SHA}" ]]; then
+            echo "::error::PR head moved from ${EXPECTED_HEAD_SHA} to ${current_head_sha} during review"
+            exit 1
+          fi
+          echo "Review completed for current PR head ${EXPECTED_HEAD_SHA}"
