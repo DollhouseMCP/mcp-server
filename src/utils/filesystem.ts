@@ -2,6 +2,7 @@
  * Filesystem and string manipulation utilities
  */
 
+import { randomInt } from 'node:crypto';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { ADJECTIVES, ANIMALS } from '../config/constants.js';
@@ -11,6 +12,14 @@ import { FileLockManager } from '../security/fileLockManager.js';
 
 // Singleton file operations service for utility functions
 let fileOperationsService: IFileOperationsService | null = null;
+
+const ID_SUFFIX_LENGTH = 4;
+const BASE36_RADIX = 36;
+const ID_SUFFIX_SPACE = BASE36_RADIX ** ID_SUFFIX_LENGTH;
+
+function generateIdSuffix(): string {
+  return randomInt(ID_SUFFIX_SPACE).toString(BASE36_RADIX).padStart(ID_SUFFIX_LENGTH, '0');
+}
 
 function getFileOperationsService(): IFileOperationsService {
   if (!fileOperationsService) {
@@ -23,9 +32,9 @@ function getFileOperationsService(): IFileOperationsService {
  * Generate an anonymous ID for users without identity
  */
 export function generateAnonymousId(): string {
-  const adjective = ADJECTIVES[Math.floor(Math.random() * ADJECTIVES.length)];
-  const animal = ANIMALS[Math.floor(Math.random() * ANIMALS.length)];
-  const random = Math.random().toString(36).substring(2, 6);
+  const adjective = ADJECTIVES[randomInt(ADJECTIVES.length)];
+  const animal = ANIMALS[randomInt(ANIMALS.length)];
+  const random = generateIdSuffix();
   return `anon-${adjective}-${animal}-${random}`;
 }
 
@@ -42,7 +51,7 @@ export function generateUniqueId(personaName: string, author?: string): string {
   // Issue #848: Add milliseconds + random suffix for sub-second uniqueness.
   // Critical for copy-on-write, swarm operations, and rapid programmatic creation.
   const msStr = now.getMilliseconds().toString().padStart(3, '0');
-  const rand = Math.random().toString(36).substring(2, 6);
+  const rand = generateIdSuffix();
   // SECURITY FIX: Prevent ReDoS by using a single-pass approach
   // Previously: Multiple replace() operations with unbounded quantifiers could cause exponential backtracking
   // Now: Single-pass transformation with built-in length limit
