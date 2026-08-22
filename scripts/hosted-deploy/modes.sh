@@ -140,6 +140,11 @@ adopt_deployment_config_from_env_file() {
     [[ -z "${value}" ]] || AUTH_METHODS="${value}"
   fi
 
+  if [[ "${adopt_mode_dependent}" == "true" && "${AUTH_GENERATION_SET}" != "true" && -z "${AUTH_GENERATION}" ]]; then
+    value="$(deployment_env_file_value DOLLHOUSE_AUTH_GENERATION)"
+    [[ -z "${value}" ]] || AUTH_GENERATION="${value}"
+  fi
+
   if [[ "${adopt_mode_dependent}" == "true" && "${ALLOWLIST_REQUIRED_SET}" != "true" && -z "${ALLOWLIST_REQUIRED}" ]]; then
     value="$(deployment_env_file_value DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED)"
     [[ -z "${value}" ]] || ALLOWLIST_REQUIRED="${value}"
@@ -461,6 +466,10 @@ resolve_mode_defaults() {
 
   if [[ "${AUTH_METHODS_SET}" != "true" && -z "${AUTH_METHODS}" ]]; then
     AUTH_METHODS="$(mode_default_auth_methods)"
+  fi
+
+  if [[ -z "${AUTH_GENERATION}" ]]; then
+    AUTH_GENERATION="0"
   fi
 
   if [[ -z "${ALLOWLIST_REQUIRED}" ]]; then

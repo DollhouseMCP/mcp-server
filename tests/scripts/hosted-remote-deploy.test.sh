@@ -236,9 +236,10 @@ set -euo pipefail
     "${DOLLHOUSE_AUTH_PROVIDER+x}" "${DOLLHOUSE_AUTH_PROVIDER:-}" \
     "${DOLLHOUSE_AUTH_ISSUER+x}" "${DOLLHOUSE_AUTH_ISSUER:-}" \
     "${DOLLHOUSE_AUTH_AUDIENCE+x}" "${DOLLHOUSE_AUTH_AUDIENCE:-}"
-  printf 'open_dcr_set=%s open_dcr=%s allowlist_required_set=%s allowlist_required=%s oidc_typ_set=%s oidc_typ=%s\n' \
+  printf 'open_dcr_set=%s open_dcr=%s allowlist_required_set=%s allowlist_required=%s auth_generation_set=%s auth_generation=%s oidc_typ_set=%s oidc_typ=%s\n' \
     "${DOLLHOUSE_AUTH_OPEN_DCR+x}" "${DOLLHOUSE_AUTH_OPEN_DCR:-}" \
     "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED+x}" "${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}" \
+    "${DOLLHOUSE_AUTH_GENERATION+x}" "${DOLLHOUSE_AUTH_GENERATION:-}" \
     "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP+x}" "${DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP:-}"
 } >> "${DOLLHOUSE_FAKE_REMOTE_LOG:?}"
 mkdir -p "${DOLLHOUSE_HOSTED_DEPLOY_DIR}/portfolio/personas"
@@ -360,6 +361,7 @@ run_remote() {
   DOLLHOUSE_HOSTED_HTTPS_BIND_PORT="${DOLLHOUSE_TEST_HTTPS_BIND_PORT:-${DOLLHOUSE_HOSTED_HTTPS_BIND_PORT:-}}" \
   DOLLHOUSE_AUTH_PROVIDER="${DOLLHOUSE_TEST_AUTH_PROVIDER:-${DOLLHOUSE_AUTH_PROVIDER:-}}" \
   DOLLHOUSE_AUTH_METHODS="${DOLLHOUSE_TEST_AUTH_METHODS:-${DOLLHOUSE_AUTH_METHODS:-}}" \
+  DOLLHOUSE_AUTH_GENERATION="${DOLLHOUSE_TEST_AUTH_GENERATION:-${DOLLHOUSE_AUTH_GENERATION:-}}" \
   DOLLHOUSE_AUTH_OPEN_DCR="${DOLLHOUSE_TEST_AUTH_OPEN_DCR:-${DOLLHOUSE_AUTH_OPEN_DCR:-}}" \
   DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED="${DOLLHOUSE_TEST_AUTH_ALLOWLIST_REQUIRED:-${DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED:-}}" \
   DOLLHOUSE_AUTH_ISSUER="${DOLLHOUSE_TEST_AUTH_ISSUER:-${DOLLHOUSE_AUTH_ISSUER:-}}" \
@@ -568,6 +570,7 @@ DOLLHOUSE_TEST_AUTH_JWKS_URI=https://login.example.test/.well-known/jwks.json \
 DOLLHOUSE_TEST_AUTH_OIDC_REQUIRE_TYP=true \
 DOLLHOUSE_TEST_AUTH_OPEN_DCR=false \
 DOLLHOUSE_TEST_AUTH_ALLOWLIST_REQUIRED=true \
+DOLLHOUSE_TEST_AUTH_GENERATION=7 \
   run_remote --skip-backup update > "${OIDC_REMOTE_OUTPUT}"
 assert_contains "${REMOTE_LOG}" "deploy=${TMP_ROOT}/remote-oidc-deploy"
 assert_contains "${REMOTE_LOG}" "mode_set=x mode=enterprise"
@@ -576,6 +579,7 @@ assert_contains "${REMOTE_LOG}" "auth_issuer_set=x auth_issuer=https://login.exa
 assert_contains "${REMOTE_LOG}" "auth_audience_set=x auth_audience=dollhouse-enterprise"
 assert_contains "${REMOTE_LOG}" "open_dcr_set=x open_dcr=false"
 assert_contains "${REMOTE_LOG}" "allowlist_required_set=x allowlist_required=true"
+assert_contains "${REMOTE_LOG}" "auth_generation_set=x auth_generation=7"
 assert_contains "${REMOTE_LOG}" "oidc_typ_set=x oidc_typ=true"
 
 log "checking postgres readiness retry"
