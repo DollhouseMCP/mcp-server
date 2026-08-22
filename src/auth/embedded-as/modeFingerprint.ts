@@ -17,10 +17,6 @@ export const FINGERPRINT_MODEL = 'AuthModeFingerprint';
 export const FINGERPRINT_KEY = 'current';
 export const MODE_FINGERPRINT_VERSION = 2;
 
-const DEFAULT_TRANSITION_LEASE_MS = 30_000;
-const DEFAULT_TRANSITION_WAIT_MS = 35_000;
-const DEFAULT_POLL_INTERVAL_MS = 100;
-
 /** OAuth-state K/V models that get wiped on an intentional mode transition. */
 export const OAUTH_STATE_MODELS: readonly string[] = [
   'Session',
@@ -97,12 +93,8 @@ export interface ReconcileModeFingerprintResult {
 }
 
 export interface ReconcileModeFingerprintOptions {
-  transitionLeaseMs?: number;
-  transitionWaitMs?: number;
-  pollIntervalMs?: number;
   now?: () => number;
   createTransitionId?: () => string;
-  sleep?: (milliseconds: number) => Promise<void>;
 }
 
 function compareCodepoints(a: string, b: string): number {
@@ -232,9 +224,10 @@ async function completeTransition(
 }
 
 /**
- * Reconcile the persisted authorization mode and run invalidation exactly once
- * per claimed transition. A stale claim may be recovered after its lease;
- * invalidation must therefore remain idempotent.
+ * Reconcile the persisted authorization mode under a backend-owned critical
+ * section. PostgreSQL holds a transaction advisory lock for the entire
+ * transition, so a crashed owner releases its claim while a merely paused
+ * owner cannot be overtaken and later resume destructive work.
  */
 export async function reconcileModeFingerprint(
   storage: IAuthStorageLayer,
@@ -246,14 +239,8 @@ export async function reconcileModeFingerprint(
   const fingerprint = computeFingerprint(inputs);
   const now = options.now ?? Date.now;
   const createTransitionId = options.createTransitionId ?? randomUUID;
-  const sleep = options.sleep ?? ((milliseconds: number) =>
-    new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
-  const transitionLeaseMs = options.transitionLeaseMs ?? DEFAULT_TRANSITION_LEASE_MS;
-  const transitionWaitMs = options.transitionWaitMs ?? DEFAULT_TRANSITION_WAIT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
-  const waitStartedAt = now();
 
-  for (;;) {
+  return storage.withGenericLock(FINGERPRINT_MODEL, FINGERPRINT_KEY, async () => {
     const stored = await storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY);
 
     if (stored === null) {
@@ -263,15 +250,15 @@ export async function reconcileModeFingerprint(
         fingerprint,
         authorizationGeneration: inputs.authorizationGeneration,
       };
-      if (await storage.genericInsertIfAbsent(FINGERPRINT_MODEL, FINGERPRINT_KEY, stable)) {
-        return {
-          changed: false,
-          firstRun: true,
-          current: fingerprint,
-          authorizationGeneration: inputs.authorizationGeneration,
-        };
+      if (!await storage.genericInsertIfAbsent(FINGERPRINT_MODEL, FINGERPRINT_KEY, stable)) {
+        throw new Error('Authorization mode first-run persistence conflict');
       }
-      continue;
+      return {
+        changed: false,
+        firstRun: true,
+        current: fingerprint,
+        authorizationGeneration: inputs.authorizationGeneration,
+      };
     }
 
     if (isStableRecord(stored)) {
@@ -297,15 +284,6 @@ export async function reconcileModeFingerprint(
         || stored.authorizationGeneration !== inputs.authorizationGeneration) {
         throw conflictError();
       }
-
-      const claimIsStale = now() - stored.transitionStartedAt >= transitionLeaseMs;
-      if (!claimIsStale) {
-        if (now() - waitStartedAt >= transitionWaitMs) {
-          throw new Error(`Authorization mode transition ${stored.transitionId} is still in progress`);
-        }
-        await sleep(pollIntervalMs);
-        continue;
-      }
     }
 
     const transition = createTransition(
@@ -321,7 +299,9 @@ export async function reconcileModeFingerprint(
       stored,
       transition,
     );
-    if (!claimed) continue;
+    if (!claimed) {
+      throw new Error('Authorization transition claim conflict while holding the backend lock');
+    }
 
     const context: ModeTransitionContext = {
       current: fingerprint,
@@ -340,5 +320,5 @@ export async function reconcileModeFingerprint(
       reason: transition.reason,
       transitionId: transition.transitionId,
     };
-  }
+  });
 }

@@ -361,6 +361,23 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     return rows.length > 0;
   }
 
+  async withGenericLock<T>(
+    model: string,
+    id: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const lockName = `auth-kv:${model}:${id}`;
+    return withSystemContext(this.db, async (tx) => {
+      // Transaction-scoped advisory ownership survives application awaits but
+      // is released by PostgreSQL automatically on commit, rollback, or a
+      // crashed/disconnected process. Every transition participant enters
+      // through this method, so a paused owner cannot be fenced out and later
+      // resume destructive key rotation behind its successor.
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`);
+      return operation();
+    });
+  }
+
   async genericConsume(model: string, id: string): Promise<boolean> {
     // Single-statement CAS: jsonb_set the `consumed` field only when the
     // row exists, isn't expired, and isn't already consumed. RETURNING

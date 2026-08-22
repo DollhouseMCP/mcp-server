@@ -14,6 +14,7 @@ import os from 'node:os';
 import { EmbeddedAuthorizationServer } from '../../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { TrivialConsentMethod } from '../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
+import { rotateSigningKey } from '../../../../src/auth/embedded-as/persistKeys.js';
 import type {
   IAuthStorageLayer,
   StoredAccount,
@@ -64,6 +65,9 @@ class FlakyStorage implements IAuthStorageLayer {
   genericInsertIfAbsent(m: string, i: string, p: unknown, e?: number) { return this.inner.genericInsertIfAbsent(m, i, p, e); }
   genericCompareAndSet(m: string, i: string, x: unknown, p: unknown, e?: number) {
     return this.inner.genericCompareAndSet(m, i, x, p, e);
+  }
+  withGenericLock<T>(m: string, i: string, op: () => Promise<T>) {
+    return this.inner.withGenericLock(m, i, op);
   }
   clearGenericByModels(m: readonly string[]) { return this.inner.clearGenericByModels(m); }
   genericFindByUid(uid: string) { return this.inner.genericFindByUid?.(uid) ?? Promise.resolve(null); }
@@ -237,6 +241,45 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
       previousAuthorizationGeneration: 0,
       authorizationGeneration: 1,
     });
+  });
+
+  it.each([
+    ['cookie secret', true, false],
+    ['JWKS key', false, true],
+    ['cookie secret and JWKS key together', true, true],
+  ])('keeps OAuth state when the %s rotates without a generation change', async (
+    _label,
+    rotateCookie,
+    rotateJwks,
+  ) => {
+    const sharedStorage = new InMemoryAuthStorageLayer();
+    const sharedKeyPath = path.join(tmpDir, `independent-rotation-${String(_label)}.json`);
+    const common = {
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: sharedKeyPath,
+      methods: [new TrivialConsentMethod({ defaultSubject: 'independent-rotation-test' })],
+      storage: sharedStorage,
+      authorizationGeneration: 0,
+    };
+    const firstServer = new EmbeddedAuthorizationServer({
+      ...common,
+      cookieSecretEnvOverride: '11'.repeat(32),
+    });
+    await firstServer.validate('warmup-not-a-real-token').catch(() => {});
+    await sharedStorage.genericSet('Session', 'rotation-session', { uid: 'must-survive' });
+
+    if (rotateJwks) await rotateSigningKey(sharedKeyPath);
+    const secondServer = new EmbeddedAuthorizationServer({
+      ...common,
+      cookieSecretEnvOverride: (rotateCookie ? '22' : '11').repeat(32),
+    });
+    await secondServer.validate('warmup-not-a-real-token').catch(() => {});
+
+    expect(await sharedStorage.genericGet('Session', 'rotation-session'))
+      .toEqual({ uid: 'must-survive' });
+    expect(await sharedStorage.listIdentityEvents({
+      type: 'auth.mode_switch_invalidation',
+    })).toHaveLength(0);
   });
 
   it('repeated init failures keep producing fresh attempts (no stale rejection)', async () => {

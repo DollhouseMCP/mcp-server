@@ -409,6 +409,39 @@ function runContractSuite(
       )).toBe(false);
     });
 
+    it('withGenericLock: serializes concurrent operations for the same record', async () => {
+      let active = 0;
+      let maximumActive = 0;
+      const order: number[] = [];
+
+      await Promise.all([1, 2, 3, 4].map((candidate) =>
+        storage.withGenericLock('AuthModeFingerprint', 'current', async () => {
+          active += 1;
+          maximumActive = Math.max(maximumActive, active);
+          await new Promise<void>((resolve) => setTimeout(resolve, 1));
+          order.push(candidate);
+          active -= 1;
+        }),
+      ));
+
+      expect(maximumActive).toBe(1);
+      expect(order).toHaveLength(4);
+    });
+
+    it('withGenericLock: releases ownership when the operation throws', async () => {
+      await expect(storage.withGenericLock(
+        'AuthModeFingerprint',
+        'current',
+        async () => { throw new Error('simulated owner failure'); },
+      )).rejects.toThrow('simulated owner failure');
+
+      await expect(storage.withGenericLock(
+        'AuthModeFingerprint',
+        'current',
+        async () => 'recovered',
+      )).resolves.toBe('recovered');
+    });
+
     it('genericRevokeByGrantId removes every entry referencing the grant id (H14)', async () => {
       await storage.genericSet('Grant', 'g-revoke', { accountId: 'sub-1' });
       await storage.genericSet('AccessToken', 't-1', { grantId: 'g-revoke', sub: 'sub-1' });
@@ -943,6 +976,19 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
 
     const b = new FilesystemAuthStorageLayer({ rootDir: dir });
     expect(await b.genericGet('Grant', 'g-persist')).toEqual({ accountId: 'github_42' });
+  });
+
+  it.each([
+    ['malformed JSON', '{"exp":null,"value":'],
+    ['invalid envelope', 'null'],
+  ])('fails closed for an unreadable generic security record: %s', async (_label, contents) => {
+    const recordDir = path.join(dir, 'kv', 'AuthModeFingerprint');
+    await fs.mkdir(recordDir, { recursive: true });
+    await fs.writeFile(path.join(recordDir, 'current.json'), contents, 'utf8');
+
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+    await expect(storage.genericGet('AuthModeFingerprint', 'current'))
+      .rejects.toThrow(/authorization storage record/i);
   });
 
   it('cycle-16: bootstrap state survives across instances', async () => {

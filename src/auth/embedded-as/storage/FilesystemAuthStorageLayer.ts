@@ -59,6 +59,7 @@ import type {
   StoredAccount,
 } from './IAuthStorageLayer.js';
 import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
+import { InProcessKeyedLock } from './InProcessKeyedLock.js';
 
 const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/;
 const SAFE_MODEL_RE = /^[A-Za-z][A-Za-z0-9]*$/;
@@ -86,6 +87,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private readonly bootstrapPath: string;
   private readonly allowlistPath: string;
   private readonly locks = new FileLockManager();
+  private readonly genericLocks = new InProcessKeyedLock();
   private initialized = false;
 
   constructor(options: FilesystemAuthStorageLayerOptions) {
@@ -426,6 +428,19 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
     });
   }
 
+  async withGenericLock<T>(
+    model: string,
+    id: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    // Filesystem auth storage is the documented single-process backend. The
+    // hosted multi-replica path uses PostgreSQL, whose advisory lock below is
+    // process-fenced and crash-released.
+    return this.genericLocks.withLock(this.kvPath(model, id), operation);
+  }
+
   async genericConsume(model: string, id: string): Promise<boolean> {
     assertSafeModel(model);
     assertSafeId(id);
@@ -684,15 +699,41 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   private async readKv(model: string, id: string): Promise<KvRecord | null> {
     assertSafeModel(model);
     assertSafeId(id);
+    let raw: string;
     try {
-      const raw = await fs.readFile(this.kvPath(model, id), 'utf8');
-      return JSON.parse(raw) as KvRecord;
+      raw = await fs.readFile(this.kvPath(model, id), 'utf8');
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null;
-      // Treat parse error as missing — same contract as expired entries.
-      if (err instanceof SyntaxError) return null;
       throw err;
     }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw) as unknown;
+    } catch (err) {
+      logger.error('[AuthStorage:fs] generic authorization record failed to parse', {
+        model,
+        id,
+        path: this.kvPath(model, id),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw new Error(`Unreadable authorization storage record: ${model}/${id}`, { cause: err });
+    }
+
+    if (!parsed || typeof parsed !== 'object'
+      || !(Object.hasOwn(parsed, 'value'))
+      || !(Object.hasOwn(parsed, 'exp'))
+      || ((parsed as Partial<KvRecord>).exp !== null
+        && (typeof (parsed as Partial<KvRecord>).exp !== 'number'
+          || !Number.isFinite((parsed as Partial<KvRecord>).exp)))) {
+      logger.error('[AuthStorage:fs] generic authorization record has an invalid envelope', {
+        model,
+        id,
+        path: this.kvPath(model, id),
+      });
+      throw new Error(`Invalid authorization storage record envelope: ${model}/${id}`);
+    }
+    return parsed as KvRecord;
   }
 
   private async unlinkKv(model: string, id: string): Promise<void> {

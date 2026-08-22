@@ -173,11 +173,10 @@ describe('reconcileModeFingerprint', () => {
       await winnerBlocked;
     });
     const nextInputs = { ...baseInputs, authorizationGeneration: 1 };
-    const options = { pollIntervalMs: 1, transitionWaitMs: 1_000 };
 
-    const first = reconcileModeFingerprint(storage, nextInputs, invalidate, options);
+    const first = reconcileModeFingerprint(storage, nextInputs, invalidate);
     await started;
-    const second = reconcileModeFingerprint(storage, nextInputs, invalidate, options);
+    const second = reconcileModeFingerprint(storage, nextInputs, invalidate);
     releaseWinner?.();
     const results = await Promise.all([first, second]);
 
@@ -185,7 +184,7 @@ describe('reconcileModeFingerprint', () => {
     expect(results.filter((result) => result.changed)).toHaveLength(1);
   });
 
-  it('recovers a stale transition after a crashed owner', async () => {
+  it('recovers an interrupted transition after the backend releases a crashed owner lock', async () => {
     const fingerprint = computeFingerprint(baseInputs);
     const pending: TransitioningModeFingerprintRecord = {
       version: MODE_FINGERPRINT_VERSION,
@@ -201,7 +200,6 @@ describe('reconcileModeFingerprint', () => {
 
     const result = await reconcileModeFingerprint(storage, baseInputs, invalidate, {
       now: () => 40_000,
-      transitionLeaseMs: 30_000,
       createTransitionId: () => 'recovery-owner',
     });
     expect(result).toMatchObject({ changed: true, transitionId: 'recovery-owner' });

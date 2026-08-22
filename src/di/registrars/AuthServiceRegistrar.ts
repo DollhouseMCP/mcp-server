@@ -39,6 +39,14 @@ export class AuthServiceRegistrar {
       logger.debug('[AuthServiceRegistrar] Auth disabled — skipping');
       return;
     }
+    if (env.DOLLHOUSE_AUTH_PROVIDER === 'embedded'
+      && env.DOLLHOUSE_AUTH_STORAGE_BACKEND === 'postgres'
+      && env.DOLLHOUSE_DATABASE_POOL_SIZE < 2) {
+      throw new Error(
+        'Embedded PostgreSQL auth requires DOLLHOUSE_DATABASE_POOL_SIZE >= 2: '
+        + 'one connection fences authorization transitions while another performs the transition work.',
+      );
+    }
 
     const { createAuthProvider, resolveAuthMethods } = await import('../../auth/AuthProviderFactory.js');
     const { createUnifiedAuthMiddleware } = await import('../../auth/authMiddleware.js');
