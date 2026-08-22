@@ -47,8 +47,8 @@ import {
   defaultKeyFilePath,
   loadOrGenerateSigningJwks,
   loadOrGenerateSigningJwksViaStore,
+  rotateAndRetireSigningKeysViaStore,
   rotateSigningKey,
-  rotateSigningKeyViaStore,
   type SigningKeyset,
 } from './persistKeys.js';
 import {
@@ -777,7 +777,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       if (this.signingKeyStore) {
         await rotateCookieSecretViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
         cookieKeys = await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
-        await rotateSigningKeyViaStore(this.signingKeyStore);
+        await rotateAndRetireSigningKeysViaStore(this.signingKeyStore);
         keyset = await loadOrGenerateSigningJwksViaStore(this.signingKeyStore);
       } else {
         rotateCookieSecret(undefined, { envSecret: this.cookieSecretEnvOverride });

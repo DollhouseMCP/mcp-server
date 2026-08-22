@@ -141,10 +141,11 @@ export async function rotateSigningKey(keyFilePath: string): Promise<void> {
 // Key behavior preserved across both backends:
 //   - First start: generate a fresh ES256 keypair, persist, return.
 //   - Subsequent starts: load existing key, return.
-//   - Rotation (public mode change or authorization-generation increase):
-//     atomically replace the active key with a fresh one. Old kid no longer
-//     publishes on /jwks; previously issued JWTs fail validation on next
-//     request (must-fix #14).
+//   - Ordinary rotation: atomically replace the active key with a fresh one,
+//     retaining the old key for an explicit verification grace period.
+//   - Public mode changes and authorization-generation increases use the
+//     invalidation-specific helper below, which also retires every key that
+//     existed before the transition so prior JWTs fail immediately.
 
 /**
  * Store-backed equivalent of `loadOrGenerateSigningJwks`. Reads the active
@@ -195,8 +196,29 @@ export async function rotateSigningKeyViaStore(store: ISigningKeyStore): Promise
     kind: 'jwks',
     payload: stored as unknown as Record<string, unknown>,
   });
-  logger.warn('[persistKeys] Rotated signing key in store — old kid invalidated; ' +
-    `new kid=${stored.kid}`);
+  logger.warn('[persistKeys] Rotated signing key in store; prior keys remain in ' +
+    `verification grace until retired (new kid=${stored.kid})`);
+}
+
+/**
+ * Rotate the active signing key and immediately retire every JWKS key that
+ * existed before the transition. This is intentionally separate from normal
+ * key rotation, which preserves prior keys for a verification grace period.
+ *
+ * The pre-rotation snapshot also makes an interrupted transition retry-safe:
+ * a key minted by a failed attempt is present in the next snapshot and is
+ * retired before that retry completes.
+ */
+export async function rotateAndRetireSigningKeysViaStore(
+  store: ISigningKeyStore,
+): Promise<void> {
+  const stored = await generateNewKeypair();
+  await store.rotateAndRetirePrior({
+    kid: stored.kid,
+    kind: 'jwks',
+    payload: stored as unknown as Record<string, unknown>,
+  });
+  logger.warn(`[persistKeys] Replaced and retired all pre-transition signing keys; new kid=${stored.kid}`);
 }
 
 /**

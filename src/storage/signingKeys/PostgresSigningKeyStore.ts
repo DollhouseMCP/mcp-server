@@ -107,6 +107,33 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
     });
   }
 
+  async rotateAndRetirePrior(write: SigningKeyWrite): Promise<SigningKey> {
+    const now = new Date();
+    return withSystemContext(this.db, async (tx) => {
+      await tx
+        .update(authSigningKeys)
+        .set({
+          active: false,
+          rotatedAt: now,
+          retiredAt: now,
+        })
+        .where(eq(authSigningKeys.kind, write.kind));
+
+      const inserted = await tx
+        .insert(authSigningKeys)
+        .values({
+          kid: write.kid,
+          kind: write.kind,
+          payload: write.payload,
+          active: true,
+          createdAt: now,
+        })
+        .returning();
+
+      return rowToKey(inserted[0]);
+    });
+  }
+
   async pruneRotatedBefore(beforeEpochMs: number): Promise<number> {
     const result = await withSystemContext(this.db, (tx) =>
       tx

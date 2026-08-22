@@ -207,6 +207,44 @@ function runContractSuite(
     });
   });
 
+  describe('rotateAndRetirePrior() semantics', () => {
+    it('retires every prior key of the kind while preserving other kinds', async () => {
+      const first = makeJwksWrite();
+      const second = makeJwksWrite();
+      const replacement = makeJwksWrite();
+      const cookie = makeCookieWrite();
+      await store.rotate(first);
+      await store.rotate(second);
+      await store.rotate(cookie);
+
+      const active = await store.rotateAndRetirePrior(replacement);
+
+      expect(active).toMatchObject({ kid: replacement.kid, active: true });
+      expect(await store.getByKid(first.kid)).toMatchObject({
+        active: false,
+        retiredAt: expect.any(Number),
+      });
+      expect(await store.getByKid(second.kid)).toMatchObject({
+        active: false,
+        retiredAt: expect.any(Number),
+      });
+      expect(await store.getActive('jwks')).toMatchObject({ kid: replacement.kid });
+      expect(await store.getActive('cookie')).toMatchObject({ kid: cookie.kid });
+    });
+
+    it('rolls back retirement when the replacement kid is a duplicate', async () => {
+      const first = makeJwksWrite();
+      await store.rotate(first);
+
+      await expect(store.rotateAndRetirePrior(first)).rejects.toThrow(/kid/);
+
+      expect(await store.getActive('jwks')).toMatchObject({ kid: first.kid });
+      const preserved = await store.getByKid(first.kid);
+      expect(preserved).toMatchObject({ active: true });
+      expect(preserved?.retiredAt).toBeUndefined();
+    });
+  });
+
   describe('pruneRotatedBefore()', () => {
     it('removes only inactive keys with rotatedAt < cutoff', async () => {
       const k1 = makeJwksWrite();

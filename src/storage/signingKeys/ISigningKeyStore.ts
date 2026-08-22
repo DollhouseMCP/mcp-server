@@ -117,6 +117,14 @@ export interface ISigningKeyStore {
   rotate(write: SigningKeyWrite): Promise<SigningKey>;
 
   /**
+   * Atomically install a new active key and retire every existing key of the
+   * same kind. Unlike `rotate()`, this provides no verification grace period.
+   * It is reserved for explicit global invalidation boundaries such as an
+   * authorization-generation increase.
+   */
+  rotateAndRetirePrior(write: SigningKeyWrite): Promise<SigningKey>;
+
+  /**
    * Mark a key inactive and retired. Active keys may be retired for emergency
    * compromise response, leaving the kind with no active key until rotation.
    * Returns null when the kid does not exist.

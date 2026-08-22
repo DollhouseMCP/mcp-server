@@ -15,6 +15,8 @@ import { EmbeddedAuthorizationServer } from '../../../../src/auth/embedded-as/Em
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { TrivialConsentMethod } from '../../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
 import { rotateSigningKey } from '../../../../src/auth/embedded-as/persistKeys.js';
+import { loadPublicSigningJwksFromStore } from '../../../../src/auth/embedded-as/EmbeddedASTokens.js';
+import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 import type {
   IAuthStorageLayer,
   StoredAccount,
@@ -232,6 +234,56 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
 
     expect(secondKey.kid).not.toBe(firstKey.kid);
     expect(await sharedStorage.genericGet('Session', 'generation-session')).toBeNull();
+    const events = await sharedStorage.listIdentityEvents({
+      type: 'auth.mode_switch_invalidation',
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.details).toMatchObject({
+      reason: 'generation-increase',
+      previousAuthorizationGeneration: 0,
+      authorizationGeneration: 1,
+    });
+  });
+
+  it('generation increase retires store-backed keys issued before the transition', async () => {
+    const sharedStorage = new InMemoryAuthStorageLayer();
+    const signingKeyStore = new InMemorySigningKeyStore();
+    const options = {
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      methods: [new TrivialConsentMethod({ defaultSubject: 'store-generation-test' })],
+      storage: sharedStorage,
+      signingKeyStore,
+    };
+    const firstServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 0,
+    });
+    const firstToken = await firstServer.issue('store-generation-user');
+    const firstKey = await signingKeyStore.getActive('jwks');
+    expect(firstKey).not.toBeNull();
+    await sharedStorage.genericSet('Session', 'store-generation-session', {
+      uid: 'old-session',
+    });
+
+    const secondServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 1,
+    });
+    await secondServer.validate('warmup-not-a-real-token').catch(() => {});
+
+    const secondKey = await signingKeyStore.getActive('jwks');
+    expect(secondKey?.kid).not.toBe(firstKey?.kid);
+    expect(await signingKeyStore.getByKid(firstKey?.kid ?? '')).toMatchObject({
+      retiredAt: expect.any(Number),
+    });
+    await expect(loadPublicSigningJwksFromStore(signingKeyStore)).resolves.toEqual({
+      keys: [expect.objectContaining({ kid: secondKey?.kid })],
+    });
+    await expect(firstServer.validate(firstToken)).resolves.toEqual({
+      ok: false,
+      reason: 'unknown key id',
+    });
+    expect(await sharedStorage.genericGet('Session', 'store-generation-session')).toBeNull();
     const events = await sharedStorage.listIdentityEvents({
       type: 'auth.mode_switch_invalidation',
     });

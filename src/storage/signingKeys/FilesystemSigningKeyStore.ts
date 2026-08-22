@@ -87,6 +87,36 @@ export class FilesystemSigningKeyStore implements ISigningKeyStore {
     });
   }
 
+  async rotateAndRetirePrior(write: SigningKeyWrite): Promise<SigningKey> {
+    return this.locks.withLock(`signing-keys:${this.filePath}`, async () => {
+      const all = await this.readAllRaw();
+      if (all.some((k) => k.kid === write.kid)) {
+        throw new Error(
+          `SigningKeyStore: kid '${write.kid}' already exists; rotation requires a fresh kid.`,
+        );
+      }
+      const now = Date.now();
+      for (const key of all) {
+        if (key.kind === write.kind) {
+          key.active = false;
+          key.rotatedAt ??= now;
+          key.retiredAt = now;
+        }
+      }
+      const newKey: SigningKey = {
+        kid: write.kid,
+        kind: write.kind,
+        payload: write.payload,
+        active: true,
+        createdAt: now,
+      };
+      all.push(newKey);
+      await this.ensureRoot();
+      await this.locks.atomicWriteFile(this.filePath, JSON.stringify(all, null, 2));
+      return newKey;
+    });
+  }
+
   async pruneRotatedBefore(beforeEpochMs: number): Promise<number> {
     return this.locks.withLock(`signing-keys:${this.filePath}`, async () => {
       const all = await this.readAllRaw();
