@@ -48,6 +48,13 @@ import type {
   StoredAccount,
 } from './IAuthStorageLayer.js';
 import { DEFAULT_IDENTITY_EVENTS_LIMIT } from './IAuthStorageLayer.js';
+import { InProcessKeyedLock } from './InProcessKeyedLock.js';
+
+// Shared across storage instances and lock names. A lock owner may need one
+// additional pooled connection for nested storage work, so only one local
+// owner may consume that connection budget when the supported pool size is 2.
+const POSTGRES_GENERIC_LOCKS = new InProcessKeyedLock();
+const POSTGRES_GENERIC_POOL_GATE = 'auth-storage-advisory-lock-pool-gate';
 
 export interface PostgresAuthStorageLayerOptions {
   /** Drizzle DB instance. Pass the same instance the rest of the app uses. */
@@ -367,15 +374,17 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     operation: () => Promise<T>,
   ): Promise<T> {
     const lockName = `auth-kv:${model}:${id}`;
-    return withSystemContext(this.db, async (tx) => {
-      // Transaction-scoped advisory ownership survives application awaits but
-      // is released by PostgreSQL automatically on commit, rollback, or a
-      // crashed/disconnected process. Every transition participant enters
-      // through this method, so a paused owner cannot be fenced out and later
-      // resume destructive key rotation behind its successor.
-      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`);
-      return operation();
-    });
+    return POSTGRES_GENERIC_LOCKS.withLock(POSTGRES_GENERIC_POOL_GATE, () =>
+      withSystemContext(this.db, async (tx) => {
+        // Transaction-scoped advisory ownership survives application awaits but
+        // is released by PostgreSQL automatically on commit, rollback, or a
+        // crashed/disconnected process. The process-wide gate above keeps local
+        // owners and waiters from consuming the spare connection needed by
+        // nested work, while another process waits against its own pool.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`);
+        return operation();
+      }),
+    );
   }
 
   async genericConsume(model: string, id: string): Promise<boolean> {

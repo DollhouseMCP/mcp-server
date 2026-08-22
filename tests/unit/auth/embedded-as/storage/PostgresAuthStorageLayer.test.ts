@@ -3,6 +3,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 let transaction: {
   readonly insert: jest.Mock;
   readonly select?: jest.Mock;
+  readonly execute?: jest.Mock;
 };
 const withSystemContextMock = jest.fn(async (
   _db: unknown,
@@ -64,6 +65,39 @@ describe('PostgresAuthStorageLayer', () => {
     await storage.genericFindByUid('session-uid');
 
     expect(sqlText(whereCalls[0])).toContain('( IS NULL OR  > NOW())');
+  });
+
+  it('gates same-process advisory locks before they consume the nested-work connection budget', async () => {
+    transaction = {
+      insert: jest.fn(),
+      execute: jest.fn(async () => undefined),
+    };
+    withSystemContextMock.mockClear();
+    const firstStorage = new PostgresAuthStorageLayer({ db: {} as never });
+    const secondStorage = new PostgresAuthStorageLayer({ db: {} as never });
+    let releaseFirst: (() => void) | undefined;
+    const firstBlocked = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    let markFirstEntered: (() => void) | undefined;
+    const firstEntered = new Promise<void>((resolve) => { markFirstEntered = resolve; });
+    const secondOperation = jest.fn(async () => undefined);
+
+    const first = firstStorage.withGenericLock('AuthModeFingerprint', 'current', async () => {
+      markFirstEntered?.();
+      await firstBlocked;
+    });
+    await firstEntered;
+    // Use a different record to prove the local gate protects the pool budget,
+    // while PostgreSQL remains responsible for record-specific fencing.
+    const second = secondStorage.withGenericLock('AnotherModel', 'another-key', secondOperation);
+    await Promise.resolve();
+
+    expect(withSystemContextMock).toHaveBeenCalledTimes(1);
+    expect(secondOperation).not.toHaveBeenCalled();
+
+    releaseFirst?.();
+    await Promise.all([first, second]);
+    expect(withSystemContextMock).toHaveBeenCalledTimes(2);
+    expect(secondOperation).toHaveBeenCalledTimes(1);
   });
 });
 
