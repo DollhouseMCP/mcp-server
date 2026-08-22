@@ -1,4 +1,5 @@
 const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'constructor', 'prototype']);
+// Bound decoding so nested encodings are caught without allowing unbounded work.
 const MAX_DECODE_PASSES = 3;
 
 type MutableConfigRecord = Record<string, unknown>;
@@ -44,26 +45,46 @@ export function deleteOwnConfigLeaf(
     assertSafeSegment(segment);
   }
 
+  const parentResult = resolveConfigParent(root, segments.slice(0, -1));
+  if ('result' in parentResult) return parentResult.result;
+  return deleteOwnLeaf(parentResult.parent, segments.at(-1)!, options.rejectObjectLeaf === true);
+}
+
+function resolveConfigParent(
+  root: unknown,
+  parentSegments: readonly string[],
+): { parent: MutableConfigRecord } | { result: ConfigDeletionResult } {
   let current = asAllowedConfigRecord(root);
   if (!current) {
-    return { kind: 'unsafe', reason: 'Configuration root is not a plain object.' };
+    return { result: { kind: 'unsafe', reason: 'Configuration root is not a plain object.' } };
   }
 
-  for (const segment of segments.slice(0, -1)) {
+  for (const segment of parentSegments) {
     const descriptor = Object.getOwnPropertyDescriptor(current, segment);
-    if (!descriptor) return { kind: 'missing' };
+    if (!descriptor) return { result: { kind: 'missing' } };
     if (!isDataDescriptor(descriptor)) {
-      return { kind: 'unsafe', reason: 'Configuration path crosses an accessor property.' };
+      return {
+        result: { kind: 'unsafe', reason: 'Configuration path crosses an accessor property.' },
+      };
     }
 
     current = asAllowedConfigRecord(descriptor.value);
     if (!current) {
-      return { kind: 'unsafe', reason: 'Configuration path crosses a non-plain object.' };
+      return {
+        result: { kind: 'unsafe', reason: 'Configuration path crosses a non-plain object.' },
+      };
     }
   }
 
-  const leaf = segments.at(-1)!;
-  const descriptor = Object.getOwnPropertyDescriptor(current, leaf);
+  return { parent: current };
+}
+
+function deleteOwnLeaf(
+  parent: MutableConfigRecord,
+  leaf: string,
+  rejectObjectLeaf: boolean,
+): ConfigDeletionResult {
+  const descriptor = Object.getOwnPropertyDescriptor(parent, leaf);
   if (!descriptor) return { kind: 'missing' };
   if (!isDataDescriptor(descriptor)) {
     return { kind: 'unsafe', reason: 'Configuration leaf is an accessor property.' };
@@ -71,11 +92,11 @@ export function deleteOwnConfigLeaf(
   if (!descriptor.configurable) {
     return { kind: 'unsafe', reason: 'Configuration leaf is not configurable.' };
   }
-  if (options.rejectObjectLeaf && asAllowedConfigRecord(descriptor.value)) {
+  if (rejectObjectLeaf && asAllowedConfigRecord(descriptor.value)) {
     return { kind: 'section' };
   }
 
-  if (!Reflect.deleteProperty(current, leaf)) {
+  if (!Reflect.deleteProperty(parent, leaf)) {
     return { kind: 'unsafe', reason: 'Configuration leaf could not be deleted.' };
   }
   return { kind: 'deleted', previousValue: descriptor.value };
@@ -124,5 +145,7 @@ function isPrototypeObject(value: object): boolean {
 function isDataDescriptor(
   descriptor: PropertyDescriptor,
 ): descriptor is PropertyDescriptor & { value: unknown } {
-  return Object.hasOwn(descriptor, 'value');
+  return Object.hasOwn(descriptor, 'value')
+    && !Object.hasOwn(descriptor, 'get')
+    && !Object.hasOwn(descriptor, 'set');
 }

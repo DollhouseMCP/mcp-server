@@ -40,6 +40,15 @@ describe('safeConfigDeletion', () => {
       expect(root.constructor).toBe('leave-me-alone');
     });
 
+    it('rejects double-encoded dangerous segments without relying on the path parser', () => {
+      const root = Object.assign(Object.create(null) as Record<string, unknown>, {
+        '%2563onstructor': 'leave-me-alone',
+      });
+
+      expect(() => deleteOwnConfigLeaf(root, ['%2563onstructor'])).toThrow(/Forbidden property/);
+      expect(root['%2563onstructor']).toBe('leave-me-alone');
+    });
+
     it('deletes a configurable own data property', () => {
       const root = { custom: { leaf: 'value' } };
 
