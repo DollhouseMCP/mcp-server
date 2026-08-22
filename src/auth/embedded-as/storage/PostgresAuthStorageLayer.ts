@@ -335,6 +335,32 @@ export class PostgresAuthStorageLayer implements IAuthStorageLayer {
     return rows.length > 0;
   }
 
+  async genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    const expectedJson = JSON.stringify(expectedPayload);
+    if (expectedJson === undefined) {
+      throw new Error('genericCompareAndSet expectedPayload must be JSON-compatible');
+    }
+    const expiresAt = expiresInSec ? new Date(Date.now() + expiresInSec * 1000) : null;
+    const rows = await withSystemContext(this.db, (tx) =>
+      tx.update(authKv)
+        .set({ payload, expiresAt })
+        .where(and(
+          eq(authKv.model, model),
+          eq(authKv.id, id),
+          notExpired(),
+          sql`${authKv.payload} = ${expectedJson}::jsonb`,
+        ))
+        .returning({ id: authKv.id }),
+    );
+    return rows.length > 0;
+  }
+
   async genericConsume(model: string, id: string): Promise<boolean> {
     // Single-statement CAS: jsonb_set the `consumed` field only when the
     // row exists, isn't expired, and isn't already consumed. RETURNING

@@ -21,6 +21,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../../../utils/logger.js';
 import type {
   AllowlistAddInput,
@@ -174,6 +175,27 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
 
   async genericDestroy(model: string, id: string): Promise<void> {
     this.genericStore.delete(genericKey(model, id));
+  }
+
+  async genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    const key = genericKey(model, id);
+    const record = this.genericStore.get(key);
+    if (!record) return false;
+    if (record.expiresAt !== undefined && record.expiresAt <= Date.now()) {
+      this.genericStore.delete(key);
+      return false;
+    }
+    if (!isDeepStrictEqual(record.payload, expectedPayload)) return false;
+
+    const expiresAt = expiresInSec ? Date.now() + expiresInSec * 1000 : undefined;
+    this.genericStore.set(key, { payload, expiresAt });
+    return true;
   }
 
   async clearGenericByModels(models: readonly string[]): Promise<number> {

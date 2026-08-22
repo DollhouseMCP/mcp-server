@@ -44,6 +44,7 @@
 import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../../../utils/logger.js';
 import { FileLockManager } from '../../../security/fileLockManager.js';
 import type {
@@ -390,6 +391,37 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       };
       await fs.mkdir(path.dirname(filePath), { recursive: true });
       await this.locks.atomicWriteFile(filePath, JSON.stringify(record));
+      return true;
+    });
+  }
+
+  async genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    assertSafeModel(model);
+    assertSafeId(id);
+    const filePath = this.kvPath(model, id);
+    return this.locks.withLock(`auth:kv:${filePath}`, async () => {
+      let record: KvRecord;
+      try {
+        const raw = await fs.readFile(filePath, 'utf-8');
+        record = JSON.parse(raw) as KvRecord;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false;
+        throw err;
+      }
+      if (record.exp !== null && record.exp <= Date.now()) return false;
+      if (!isDeepStrictEqual(record.value, expectedPayload)) return false;
+
+      const replacement: KvRecord = {
+        exp: expiresInSec ? Date.now() + expiresInSec * 1000 : null,
+        value: payload,
+      };
+      await this.locks.atomicWriteFile(filePath, JSON.stringify(replacement));
       return true;
     });
   }

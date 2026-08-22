@@ -344,6 +344,71 @@ function runContractSuite(
       expect(second).toBe(true);
     });
 
+    it('genericCompareAndSet: replaces a live record only when the payload matches', async () => {
+      const original = { status: 'stable', generation: 1 };
+      const replacement = { status: 'transitioning', generation: 2 };
+      await storage.genericSet('AuthModeFingerprint', 'current', original);
+
+      expect(await storage.genericCompareAndSet(
+        'AuthModeFingerprint',
+        'current',
+        original,
+        replacement,
+      )).toBe(true);
+      expect(await storage.genericGet('AuthModeFingerprint', 'current')).toEqual(replacement);
+    });
+
+    it('genericCompareAndSet: rejects a mismatched payload without overwriting', async () => {
+      const original = { status: 'stable', generation: 1 };
+      await storage.genericSet('AuthModeFingerprint', 'current', original);
+
+      expect(await storage.genericCompareAndSet(
+        'AuthModeFingerprint',
+        'current',
+        { status: 'stable', generation: 0 },
+        { status: 'transitioning', generation: 2 },
+      )).toBe(false);
+      expect(await storage.genericGet('AuthModeFingerprint', 'current')).toEqual(original);
+    });
+
+    it('genericCompareAndSet: concurrent replacements have exactly one winner', async () => {
+      const original = { status: 'stable', generation: 1 };
+      await storage.genericSet('AuthModeFingerprint', 'current', original);
+
+      const candidates = [2, 3, 4, 5];
+      const results = await Promise.all(candidates.map((generation) =>
+        storage.genericCompareAndSet(
+          'AuthModeFingerprint',
+          'current',
+          original,
+          { status: 'transitioning', generation },
+        ),
+      ));
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it('genericCompareAndSet: expired and missing records do not match', async () => {
+      await storage.genericSet(
+        'AuthModeFingerprint',
+        'expired',
+        { generation: 1 },
+        -1,
+      );
+
+      expect(await storage.genericCompareAndSet(
+        'AuthModeFingerprint',
+        'expired',
+        { generation: 1 },
+        { generation: 2 },
+      )).toBe(false);
+      expect(await storage.genericCompareAndSet(
+        'AuthModeFingerprint',
+        'missing',
+        { generation: 1 },
+        { generation: 2 },
+      )).toBe(false);
+    });
+
     it('genericRevokeByGrantId removes every entry referencing the grant id (H14)', async () => {
       await storage.genericSet('Grant', 'g-revoke', { accountId: 'sub-1' });
       await storage.genericSet('AccessToken', 't-1', { grantId: 'g-revoke', sub: 'sub-1' });
