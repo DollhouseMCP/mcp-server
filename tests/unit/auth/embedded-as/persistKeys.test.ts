@@ -13,8 +13,10 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   loadOrGenerateSigningJwks,
+  loadOrGenerateSigningJwksViaStore,
   rotateSigningKey,
 } from '../../../../src/auth/embedded-as/persistKeys.js';
+import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
 describe('persistKeys', () => {
   let tmpDir: string;
@@ -56,5 +58,16 @@ describe('persistKeys', () => {
   it('rotateSigningKey is idempotent when the file is already absent', async () => {
     // Never generated — ENOENT path. Must not throw.
     await expect(rotateSigningKey(keyFile)).resolves.toBeUndefined();
+  });
+
+  it('does not regenerate a deliberately retired durable signing key', async () => {
+    const store = new InMemorySigningKeyStore();
+    const first = await loadOrGenerateSigningJwksViaStore(store);
+    await store.retire(first.kid);
+
+    await expect(loadOrGenerateSigningJwksViaStore(store)).rejects.toThrow(
+      'No active JWKS signing key is available',
+    );
+    await expect(store.getActive('jwks')).resolves.toBeNull();
   });
 });

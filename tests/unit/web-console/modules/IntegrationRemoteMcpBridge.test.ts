@@ -18,6 +18,7 @@ import {
 import { integrationSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
 import type { DnsLookup } from '../../../../src/web-console/modules/integrations/IntegrationPublicHostGuard.js';
 import type { PinnedFetch, PinnedOutboundFactory } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
+import type { IntegrationTokenRefreshService } from '../../../../src/web-console/modules/integrations/IntegrationTokenRefreshService.js';
 
 const USER_ID = '00000000-0000-4000-8000-000000000001';
 const DESCRIPTOR_ID = '00000000-0000-4000-8000-000000000002';
@@ -77,6 +78,27 @@ describe('IntegrationRemoteMcpBridge', () => {
     }]);
   });
 
+  it('blocks remote MCP discovery and calls after a curated provider is durably disabled', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const { bridge, contextTracker, descriptorStore, integrationStore } = fixture({ clientFactory });
+    await descriptorStore.reconcileCuratedSeed({
+      provider: REMOTE_DOCS,
+      seedRevision: 1,
+      enabled: false,
+      updatedAt: TIMESTAMP,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.listAllowedTools())).resolves.toEqual([]);
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({ code: 'remote_mcp_descriptor_not_found', status: 404 });
+    expect(clientFactory).not.toHaveBeenCalled();
+    await expect(integrationStore.findByProvider(USER_ID, REMOTE_DOCS))
+      .resolves.toMatchObject({ status: 'connected' });
+  });
+
   it('accepts an equivalent canonical spelling of an allowlisted remote MCP host', async () => {
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
       listTools: jest.fn().mockResolvedValue({
@@ -107,7 +129,8 @@ describe('IntegrationRemoteMcpBridge', () => {
 
   it('skips discovery for providers the discovery gate refuses, before any credential use', async () => {
     const clientFactory = jest.fn<RemoteMcpClientFactory>();
-    const discoveryGate = jest.fn<(provider: string) => Promise<boolean>>().mockResolvedValue(false);
+    const discoveryGate = jest.fn<ConstructorParameters<typeof IntegrationRemoteMcpBridge>[0]['discoveryGate']>()
+      .mockResolvedValue(false);
     const integrationStore = {
       findByProvider: jest.fn(),
     } as unknown as IUserIntegrationStore;
@@ -116,10 +139,59 @@ describe('IntegrationRemoteMcpBridge', () => {
     const tools = await runAsUser(contextTracker, () => bridge.listAllowedTools());
 
     expect(tools).toEqual([]);
-    expect(discoveryGate).toHaveBeenCalledWith(REMOTE_DOCS);
+    expect(discoveryGate).toHaveBeenCalledWith(expect.objectContaining({
+      provider: REMOTE_DOCS,
+      descriptorId: DESCRIPTOR_ID,
+      serverUrl: 'https://mcp.example.com/mcp',
+      descriptorRoutingFingerprint: expect.any(String),
+    }));
     // Gate refusal must short-circuit BEFORE the credential lookup/decrypt and
     // before any outbound connection is attempted.
     expect(integrationStore.findByProvider).not.toHaveBeenCalled();
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('abandons discovery when the approved descriptor changes before credential use', async () => {
+    let releaseGate!: () => void;
+    let markGateEntered!: () => void;
+    const gateEntered = new Promise<void>(resolve => { markGateEntered = resolve; });
+    const gate = new Promise<void>(resolve => { releaseGate = resolve; });
+    const discoveryGate = jest.fn<ConstructorParameters<typeof IntegrationRemoteMcpBridge>[0]['discoveryGate']>(async () => {
+      markGateEntered();
+      await gate;
+      return true;
+    });
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const result = fixture({ discoveryGate, clientFactory });
+
+    const pending = runAsUser(result.contextTracker, () => result.bridge.listAllowedTools());
+    await gateEntered;
+    const current = descriptor();
+    await result.descriptorStore.upsert({
+      ...current,
+      operationPromotion: {
+        remoteMcp: {
+          serverUrl: 'https://mcp.example.com/v2/mcp',
+          tools: ['search'],
+        },
+      },
+      updatedAt: new Date(current.updatedAt.getTime() + 1),
+    });
+    releaseGate();
+
+    await expect(pending).resolves.toEqual([]);
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('rejects lone-surrogate remote tool names with a stable integration error', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const { bridge, contextTracker } = fixture({ clientFactory });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: '\uD800',
+      arguments: {},
+    }))).rejects.toMatchObject({ code: 'remote_mcp_invalid_tool_name', status: 400 });
     expect(clientFactory).not.toHaveBeenCalled();
   });
 
@@ -160,6 +232,183 @@ describe('IntegrationRemoteMcpBridge', () => {
       .filter(entry => entry.source === 'IntegrationRemoteMcpBridge' && entry.details.includes('tool_call allowed'));
     expect(events).toHaveLength(2);
     expect(events[0]?.details).toBe(events[1]?.details);
+  });
+
+  it('single-flight refreshes an expired OAuth token and retries a remote MCP call once', async () => {
+    const secretEncryption = encryption();
+    const stale = integration(secretEncryption);
+    const connected = {
+      ...stale,
+      refreshTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from('remote-refresh-token', 'utf8'),
+        integrationSecretContext('refresh_token', USER_ID, REMOTE_DOCS),
+      ),
+    };
+    const refreshed = integration(secretEncryption, REMOTE_DOCS, 'remote-access-token-rotated');
+    const tokenRefresh = {
+      refreshOnDemand: jest.fn().mockResolvedValue({ kind: 'refreshed', record: refreshed }),
+    } as unknown as Pick<IntegrationTokenRefreshService, 'refreshOnDemand'>;
+    const rawFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response(null, { status: 401 }));
+    const pinnedOutbound: PinnedOutboundFactory = () => ({
+      fetch: rawFetch,
+      close: () => Promise.resolve(),
+    });
+    const clientFactory = jest.fn<RemoteMcpClientFactory>()
+      .mockImplementationOnce(async ({ pinnedFetch, serverUrl }) => {
+        await pinnedFetch(serverUrl, { method: 'POST' });
+        throw new Error('unauthorized');
+      })
+      .mockResolvedValueOnce({
+        listTools: () => Promise.resolve({ tools: [] }),
+        callTool: () => Promise.resolve({
+          content: [{
+            type: 'text',
+            text: 'stale remote-access-token fresh remote-access-token-rotated',
+          }],
+        }),
+        close: () => Promise.resolve(),
+      });
+    const { bridge, contextTracker } = fixture({
+      secretEncryption,
+      integration: connected,
+      clientFactory,
+      pinnedOutbound,
+      tokenRefresh,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).resolves.toMatchObject({
+      result: { content: [{ type: 'text', text: 'stale [redacted] fresh [redacted]' }] },
+    });
+    expect(tokenRefresh.refreshOnDemand).toHaveBeenCalledWith(expect.objectContaining({
+      userId: USER_ID,
+      provider: REMOTE_DOCS,
+      integrationDescriptorId: DESCRIPTOR_ID,
+      staleAccessTokenCiphertext: stale.accessTokenCiphertext,
+      staleCredentialGeneration: stale.credentialGeneration,
+      staleAuthorizedPermissions: stale.authorizedPermissions,
+    }));
+    expect(clientFactory.mock.calls.map(call => call[0].bearerToken)).toEqual([
+      'remote-access-token',
+      'remote-access-token-rotated',
+    ]);
+  });
+
+  it('rejects a prepared call when descriptor routing changes before credential use', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const fixtureResult = fixture({ clientFactory });
+    const plan = await runAsUser(fixtureResult.contextTracker, () => fixtureResult.bridge.prepareCall({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }));
+    const current = descriptor();
+    await fixtureResult.descriptorStore.upsert({
+      ...current,
+      operationPromotion: {
+        remoteMcp: {
+          serverUrl: 'https://mcp.example.com/v2/mcp',
+          tools: ['search'],
+        },
+      },
+      updatedAt: new Date(current.updatedAt.getTime() + 1),
+    });
+
+    await expect(runAsUser(fixtureResult.contextTracker, () => fixtureResult.bridge.executePreparedCall(plan)))
+      .rejects.toMatchObject({ code: 'remote_mcp_descriptor_changed', status: 409 });
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
+  it('does not replace a successful tool result with cleanup failures', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: () => Promise.resolve({ tools: [] }),
+      callTool: () => Promise.resolve({ content: [{ type: 'text', text: 'ok' }] }),
+      close: () => Promise.reject(new Error('client cleanup failed')),
+    });
+    const pinnedOutbound: PinnedOutboundFactory = () => ({
+      fetch: jest.fn<PinnedFetch>(),
+      close: () => Promise.reject(new Error('outbound cleanup failed')),
+    });
+    const { bridge, contextTracker } = fixture({ clientFactory, pinnedOutbound });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).resolves.toMatchObject({ result: { content: [{ type: 'text', text: 'ok' }] } });
+  });
+
+  it('does not let a hung cleanup suppress a successful tool result', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: () => Promise.resolve({ tools: [] }),
+      callTool: () => Promise.resolve({ content: [{ type: 'text', text: 'ok' }] }),
+      close: () => new Promise<void>(() => undefined),
+    });
+    const { bridge, contextTracker } = fixture({ clientFactory, timeoutMs: 5 });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).resolves.toMatchObject({ result: { content: [{ type: 'text', text: 'ok' }] } });
+  });
+
+  it('executes the prepared argument snapshot when caller-owned input later mutates', async () => {
+    const callTool = jest.fn(() => Promise.resolve({ content: [] }));
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: () => Promise.resolve({ tools: [] }),
+      callTool,
+      close: () => Promise.resolve(),
+    });
+    const fixtureResult = fixture({ clientFactory });
+    const argumentsValue = { query: 'approved' };
+    const plan = await runAsUser(fixtureResult.contextTracker, () => fixtureResult.bridge.prepareCall({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: argumentsValue,
+    }));
+    argumentsValue.query = 'mutated-after-approval';
+
+    await runAsUser(fixtureResult.contextTracker, () => fixtureResult.bridge.executePreparedCall(plan));
+    expect(callTool).toHaveBeenCalledWith({ name: 'search', arguments: { query: 'approved' } });
+  });
+
+  it('does not retry remote MCP authorization more than once', async () => {
+    const secretEncryption = encryption();
+    const connected = {
+      ...integration(secretEncryption),
+      refreshTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from('remote-refresh-token', 'utf8'),
+        integrationSecretContext('refresh_token', USER_ID, REMOTE_DOCS),
+      ),
+    };
+    const refreshed = integration(secretEncryption, REMOTE_DOCS, 'remote-fresh-access-token');
+    const tokenRefresh = {
+      refreshOnDemand: jest.fn().mockResolvedValue({ kind: 'refreshed', record: refreshed }),
+    } as unknown as Pick<IntegrationTokenRefreshService, 'refreshOnDemand'>;
+    const rawFetch = jest.fn<PinnedFetch>().mockResolvedValue(new Response(null, { status: 401 }));
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockImplementation(async ({ pinnedFetch, serverUrl }) => {
+      await pinnedFetch(serverUrl, { method: 'POST' });
+      throw new Error('unauthorized');
+    });
+    const { bridge, contextTracker } = fixture({
+      secretEncryption,
+      integration: connected,
+      clientFactory,
+      pinnedOutbound: () => ({ fetch: rawFetch, close: () => Promise.resolve() }),
+      tokenRefresh,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({ code: 'remote_mcp_unauthorized', status: 401 });
+    expect(clientFactory).toHaveBeenCalledTimes(2);
+    expect(tokenRefresh.refreshOnDemand).toHaveBeenCalledTimes(1);
   });
 
   it('redacts bearer-token echoes throughout remote MCP call results', async () => {
@@ -449,7 +698,8 @@ function fixture(options: {
   readonly timeoutMs?: number;
   readonly maxResponseBytes?: number;
   readonly pinnedOutbound?: PinnedOutboundFactory;
-  readonly discoveryGate?: (provider: string) => Promise<boolean>;
+  readonly discoveryGate?: ConstructorParameters<typeof IntegrationRemoteMcpBridge>[0]['discoveryGate'];
+  readonly tokenRefresh?: Pick<IntegrationTokenRefreshService, 'refreshOnDemand'>;
 } = {}) {
   const contextTracker = new ContextTracker();
   const secretEncryption = options.secretEncryption ?? encryption();
@@ -461,11 +711,13 @@ function fixture(options: {
       ?? descriptorRecords.find(candidate => candidate.provider === record.provider)?.id
       ?? null,
   }));
+  const descriptorStore = new InMemoryIntegrationDescriptorStore(descriptorRecords);
+  const integrationStore = options.integrationStore ?? new InMemoryUserIntegrationStore(boundIntegrationRecords);
   return {
     contextTracker,
     bridge: new IntegrationRemoteMcpBridge({
-      descriptorStore: new InMemoryIntegrationDescriptorStore(descriptorRecords),
-      integrationStore: options.integrationStore ?? new InMemoryUserIntegrationStore(boundIntegrationRecords),
+      descriptorStore,
+      integrationStore,
       secretEncryption,
       contextTracker,
       discoveryGate: options.discoveryGate ?? (() => Promise.resolve(true)),
@@ -478,7 +730,10 @@ function fixture(options: {
         callTool: () => Promise.resolve({}),
         close: () => Promise.resolve(),
       })),
+      tokenRefresh: options.tokenRefresh,
     }),
+    descriptorStore,
+    integrationStore,
   };
 }
 
@@ -537,6 +792,7 @@ function integration(
     ),
     refreshTokenCiphertext: null,
     credentialKeyVersion: 'v1',
+    credentialGeneration: 0,
     status: 'connected',
     errorReason: null,
     connectedAt: TIMESTAMP,

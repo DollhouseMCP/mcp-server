@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 const projectRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
 const runtimeAssetTrees = [
-  { source: 'src/seed-elements', destination: 'dist/seed-elements', clean: false },
+  { source: 'src/seed-elements', destination: 'dist/seed-elements', clean: true },
   { source: 'src/web/public', destination: 'dist/web/public', clean: true },
   { source: 'src/web-console/ui', destination: 'dist/web-console/ui', clean: true },
 ];

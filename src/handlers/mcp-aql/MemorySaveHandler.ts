@@ -3,9 +3,15 @@ import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
 import type { Memory } from '../../elements/memories/Memory.js';
+import { MemoryPersistenceConflictError } from '../../storage/DatabaseMemoryStorageLayer.js';
 import type { ExecutionContext } from '../../security/encryption/ContextTracker.js';
 import type { HandlerRegistry } from './MCPAQLHandler.js';
 import { validateRequiredString } from './shared.js';
+import {
+  MemoryPersistenceCoordinator,
+  sharedMemoryPersistenceCoordinator,
+  type MemoryPersistenceVersion,
+} from './MemoryPersistenceCoordinator.js';
 
 /**
  * Capability used to re-establish a save's originating per-user execution context
@@ -25,6 +31,7 @@ interface PendingSave {
   manager: MemoryManager;
   /** Per-user execution context captured when the save was scheduled (#2329). */
   context?: ExecutionContext;
+  persistenceVersion: MemoryPersistenceVersion;
 }
 
 interface SaveFrequencyCounter {
@@ -47,6 +54,9 @@ interface FailedSave {
   probeToken: string | null;
   /** Per-user execution context captured at the time the save failed (#2329). */
   context?: ExecutionContext;
+  persistenceVersion: MemoryPersistenceVersion;
+  /** File snapshot digest observed before the failed mutation. */
+  expectedPersistedToken?: string;
 }
 
 export class MemorySaveHandler {
@@ -63,11 +73,11 @@ export class MemorySaveHandler {
    * an older in-flight save resolving late cannot erase a newer failure.
    */
   private readonly memorySaveAttempts = new Map<string, number>();
-
   constructor(
     private readonly handlers: HandlerRegistry,
     private readonly sessionKey: (name: string) => string,
     private readonly contextScope?: SaveContextScope,
+    private readonly persistenceCoordinator: MemoryPersistenceCoordinator = sharedMemoryPersistenceCoordinator,
   ) {}
 
   async dispatch(method: string, params: Record<string, unknown>): Promise<unknown> {
@@ -78,18 +88,33 @@ export class MemorySaveHandler {
       'the name of the memory to operate on'
     );
 
-    const memory = await manager.find(m => m.metadata.name === memoryName);
-    if (!memory) {
-      throw new Error(`Memory '${memoryName}' not found. Use list_elements to see available memories.`);
-    }
+    // Capture before the first await. A delete that completes while find() is
+    // loading must invalidate this operation rather than letting the stale
+    // loaded object schedule a save under the post-delete generation.
+    const persistenceVersion = this.persistenceCoordinator.capture(
+      this.memoryPersistenceKey(memoryName),
+    );
+    const saveKey = this.memorySaveKey(memoryName);
+    try {
+      const memory = await manager.find(m => m.metadata.name === memoryName);
+      if (!memory) {
+        throw new Error(`Memory '${memoryName}' not found. Use list_elements to see available memories.`);
+      }
 
-    switch (method) {
-      case 'addEntry':
-        return this.addEntry(memoryName, memory, manager, params);
-      case 'clear':
-        return this.clear(memoryName, memory, manager);
-      default:
-        throw new Error(`Unknown Memory method: ${method}`);
+      switch (method) {
+        case 'addEntry':
+          return await this.addEntry(memoryName, memory, manager, params, persistenceVersion);
+        case 'clear':
+          return await this.clear(memoryName, memory, manager, persistenceVersion);
+        default:
+          throw new Error(`Unknown Memory method: ${method}`);
+      }
+    } finally {
+      const pendingVersion = this.pendingSaves.get(saveKey)?.persistenceVersion;
+      const failedVersion = this.failedMemorySaves.get(saveKey)?.persistenceVersion;
+      if (pendingVersion !== persistenceVersion && failedVersion !== persistenceVersion) {
+        this.persistenceCoordinator.release(persistenceVersion);
+      }
     }
   }
 
@@ -154,10 +179,10 @@ export class MemorySaveHandler {
       logger.info(`[MCPAQLHandler] Flushing ${pending.length} pending memory save(s) on shutdown (total coalesced: ${this.debounceMetrics.coalesced}, total written: ${this.debounceMetrics.written})`);
     }
     const flushedKeys = new Set<string>();
-    for (const [key, { timer, memory, manager, context }] of pending) {
+    for (const [key, { timer, memory, manager, context, persistenceVersion }] of pending) {
       clearTimeout(timer);
       flushedKeys.add(key);
-      await this.flushOne(key, memory, manager, 'shutdown', context);
+      await this.flushOne(key, memory, manager, 'shutdown', context, persistenceVersion);
     }
     // Retry any failure-ledger entry not already attempted above. Direct Map
     // iteration is safe: saveMemoryTracked only deletes the current key on
@@ -174,13 +199,23 @@ export class MemorySaveHandler {
   }
 
   /** Write one tracked save during shutdown flush, reporting unrecoverable loss. */
-  private async flushOne(key: string, memory: Memory, manager: MemoryManager, reason: string, context?: ExecutionContext): Promise<void> {
+  private async flushOne(
+    key: string,
+    memory: Memory,
+    manager: MemoryManager,
+    reason: string,
+    context: ExecutionContext | undefined,
+    persistenceVersion: MemoryPersistenceVersion,
+  ): Promise<void> {
     try {
       // Re-establish the save's originating per-user context. Shutdown runs with
       // no ambient AsyncLocalStorage context, so without this a file-mode
       // per-user save would resolve to the shared baseDir instead of the owner's.
-      await this.runInSaveContext(context, () => this.saveMemoryTracked(key, memory, manager));
-      this.debounceMetrics.written++;
+      const persisted = await this.runInSaveContext(
+        context,
+        () => this.saveMemoryTracked(key, memory, manager, persistenceVersion),
+      );
+      if (persisted) this.debounceMetrics.written++;
     } catch (err) {
       const entryCount = typeof memory.getEntries === 'function' ? memory.getEntries().size : 'unknown';
       logger.error(`[MCPAQLHandler] Flush save failed for memory '${key}' on ${reason} (entries: ${entryCount}) — unpersisted entries will be lost if the process exits: ${err}`);
@@ -219,13 +254,14 @@ export class MemorySaveHandler {
       logger.info(
         `[MCPAQLHandler] ${context}: memory '${key}' was deleted; dropping failed-save bookkeeping`
       );
+      this.persistenceCoordinator.release(entry.persistenceVersion);
       this.failedMemorySaves.delete(key);
       this.memorySaveAttempts.delete(key);
       return false;
     }
     try {
-      await this.saveMemoryTracked(key, entry.memory, entry.manager);
-      return true;
+      const persisted = await this.retryFailedSave(key, entry);
+      return persisted;
     } catch (error) {
       logger.error(
         `[MCPAQLHandler] ${context} retry failed for memory '${key}': ${error}`
@@ -246,9 +282,9 @@ export class MemorySaveHandler {
    * Issue #2329: drop all save bookkeeping for a deleted memory. Called by
    * MCPAQLHandler after a successful delete_element so a retained failure-ledger
    * instance or a pending debounce timer can't re-save the in-RAM state and
-   * resurrect the deleted file. A save already in flight when the delete lands
-   * can still race the file back — that narrow window is inherent to
-   * fire-and-forget writes and unchanged here.
+   * resurrect the deleted file. The shared persistence coordinator also orders
+   * saves already in flight against deletion and rejects saves whose generation
+   * was captured before the delete.
    */
   cleanupDeletedMemory(memoryName: string): void {
     const key = this.memorySaveKey(memoryName);
@@ -256,17 +292,45 @@ export class MemorySaveHandler {
     if (pending) {
       clearTimeout(pending.timer);
       this.pendingSaves.delete(key);
+      this.persistenceCoordinator.release(pending.persistenceVersion);
     }
     this.failedMemorySaves.delete(key);
     this.memorySaveAttempts.delete(key);
     this.saveFrequencyCounters.delete(key);
   }
 
+  async runDeleteExclusive<T>(memoryName: string, operation: () => Promise<T>): Promise<T> {
+    const bookkeepingKey = this.memorySaveKey(memoryName);
+    const persistenceKey = this.memoryPersistenceKey(memoryName);
+    return this.persistenceCoordinator.runDelete(persistenceKey, async () => {
+      const result = await this.handlers.memoryManager.runFileDeleteExclusive(
+        memoryName,
+        operation,
+      );
+      // Deletion is the commit point. Until storage confirms success, retain an
+      // acknowledged pending save so shutdown flushing can still make it durable.
+      // The coordinator invalidates the captured save generation before releasing
+      // this delete lock, so clearing here cannot let an already-queued save revive
+      // a successfully deleted memory.
+      const pending = this.pendingSaves.get(bookkeepingKey);
+      if (pending) {
+        clearTimeout(pending.timer);
+        this.pendingSaves.delete(bookkeepingKey);
+        this.persistenceCoordinator.release(pending.persistenceVersion);
+      }
+      this.failedMemorySaves.delete(bookkeepingKey);
+      this.memorySaveAttempts.delete(bookkeepingKey);
+      this.saveFrequencyCounters.delete(bookkeepingKey);
+      return result;
+    });
+  }
+
   private async addEntry(
     memoryName: string,
     memory: Memory,
     manager: MemoryManager,
-    params: Record<string, unknown>
+    params: Record<string, unknown>,
+    persistenceVersion: MemoryPersistenceVersion,
   ): Promise<unknown> {
     if (params.entry !== undefined && params.content === undefined) {
       params.content = params.entry;
@@ -290,7 +354,10 @@ export class MemorySaveHandler {
     // behind the same failure and are lost on restart.
     if (priorFailure) {
       try {
-        await this.saveMemoryTracked(saveKey, targetMemory, priorFailure.manager);
+        const recovered = await this.retryFailedSave(saveKey, priorFailure);
+        if (!recovered) {
+          throw new Error(`Memory '${memoryName}' was deleted while its prior save was pending`);
+        }
       } catch (retryErr) {
         throw new Error(
           `Entry NOT saved: memory '${memoryName}' has unpersisted entries from an earlier save failure ` +
@@ -300,39 +367,88 @@ export class MemorySaveHandler {
       }
     }
 
-    const entriesBefore = targetMemory.getEntries().size;
-    const entryResult = await targetMemory.addEntry(content, tags, metadata);
+    const persistEntry = async (currentMemory: Memory, coordinatorLockHeld = false) => {
+      const expectedPersistedToken = manager.isDatabaseBacked?.() === true
+        ? undefined
+        : await manager.getMemoryStateToken(currentMemory);
+      const entriesBefore = currentMemory.getEntries().size;
+      const entryResult = await currentMemory.addEntry(content, tags, metadata);
 
-    // Issue #2329: verify the memory can still be persisted BEFORE reporting
-    // success. The disk write below is deferred (debounced), so a validation
-    // failure there can never reach the caller — entries were acknowledged with
-    // an id and then silently lost when the memory outgrew save limits.
-    try {
-      await manager.assertPersistable(targetMemory);
-    } catch (validationErr) {
-      targetMemory.removeEntry(entryResult.id);
-      // addEntry may have evicted old entries (retention/capacity policy) before
-      // validation failed. The eviction stands — it would happen on any future
-      // successful add — but it must reach disk, or RAM and disk silently
-      // diverge with no save scheduled.
-      if (targetMemory.getEntries().size !== entriesBefore) {
-        this.debouncedMemorySave(memoryName, targetMemory, manager);
+      // Validate the complete serialized memory before touching durable state.
+      try {
+        await manager.assertPersistable(currentMemory);
+      } catch (validationErr) {
+        currentMemory.removeEntry(entryResult.id);
+        // Retention may have evicted old entries before validation failed. Make
+        // that policy result durable rather than leaving RAM and storage split.
+        if (currentMemory.getEntries().size !== entriesBefore) {
+          await manager.save(currentMemory, undefined, { durable: true });
+        }
+        throw new Error(
+          `Entry NOT saved to memory '${memoryName}': ` +
+          `${validationErr instanceof Error ? validationErr.message : validationErr}`
+        );
       }
-      throw new Error(
-        `Entry NOT saved to memory '${memoryName}': ` +
-        `${validationErr instanceof Error ? validationErr.message : validationErr}`
-      );
-    }
 
-    this.trackSaveFrequency(memoryName);
-    this.debouncedMemorySave(memoryName, targetMemory, manager);
-    // Entry prose begins as untrusted. Return only server-generated receipt
-    // fields so the mutation response cannot bypass later rendering controls.
-    return {
-      id: entryResult.id,
-      timestamp: entryResult.timestamp.toISOString(),
-      trustLevel: entryResult.trustLevel,
+      this.trackSaveFrequency(memoryName);
+      try {
+        // Both backends persist before acknowledgement. File mode additionally
+        // requests fsync-backed publication while holding its interprocess guard.
+        const saveOptions = manager.isDatabaseBacked?.() === true ? undefined : { durable: true };
+        const persisted = coordinatorLockHeld
+          ? await this.saveMemoryTrackedUnlocked(
+              saveKey,
+              currentMemory,
+              manager,
+              persistenceVersion,
+              false,
+              saveOptions,
+              expectedPersistedToken,
+            ).then(() => true)
+          : await this.saveMemoryTracked(
+              saveKey,
+              currentMemory,
+              manager,
+              persistenceVersion,
+              false,
+              saveOptions,
+              expectedPersistedToken,
+            );
+        if (!persisted) {
+          throw new MemoryPersistenceConflictError(memoryName);
+        }
+      } catch (saveError) {
+        currentMemory.removeEntry(entryResult.id);
+        this.failedMemorySaves.delete(saveKey);
+        this.memorySaveAttempts.delete(saveKey);
+        manager.recoverMemoryPersistenceConflict?.(currentMemory);
+        throw new Error(
+          `Entry NOT saved to memory '${memoryName}': ` +
+          `${saveError instanceof Error ? saveError.message : saveError}`,
+        );
+      }
+      // Entry prose begins as untrusted. Return only server-generated receipt
+      // fields so the mutation response cannot bypass later rendering controls.
+      return {
+        id: entryResult.id,
+        timestamp: entryResult.timestamp.toISOString(),
+        trustLevel: entryResult.trustLevel,
+      };
     };
+
+    const outcome = await this.persistenceCoordinator.runMutation(
+      persistenceVersion,
+      () => manager.isDatabaseBacked?.() === true
+        ? persistEntry(targetMemory, true)
+        : manager.runFileMutationExclusive(targetMemory, current => persistEntry(current, true)),
+    );
+    if (!outcome.accepted) {
+      this.failedMemorySaves.delete(saveKey);
+      this.memorySaveAttempts.delete(saveKey);
+      manager.recoverMemoryPersistenceConflict?.(targetMemory);
+      throw new MemoryPersistenceConflictError(memoryName);
+    }
+    return outcome.value;
   }
 
   private validateContent(memoryName: string, params: Record<string, unknown>): void {
@@ -349,7 +465,12 @@ export class MemorySaveHandler {
     );
   }
 
-  private async clear(memoryName: string, memory: Memory, manager: MemoryManager): Promise<unknown> {
+  private async clear(
+    memoryName: string,
+    memory: Memory,
+    manager: MemoryManager,
+    persistenceVersion: MemoryPersistenceVersion,
+  ): Promise<unknown> {
     // Issue #2329: cancel any pending debounced save first — a stale timer
     // firing after the clear would resurrect the pre-clear entries on disk.
     const clearKey = this.memorySaveKey(memoryName);
@@ -357,18 +478,74 @@ export class MemorySaveHandler {
     if (pendingClear) {
       clearTimeout(pendingClear.timer);
       this.pendingSaves.delete(clearKey);
+      this.persistenceCoordinator.release(pendingClear.persistenceVersion);
     }
-    const clearResult = await memory.clearAll(true);
-    // Fix #438: persist so cleared state survives restart. Tracked so a success
-    // clears any stale failure record for this memory.
-    await this.saveMemoryTracked(clearKey, memory, manager);
-    return clearResult;
+    const clearAndPersist = async (currentMemory: Memory, coordinatorLockHeld = false): Promise<unknown> => {
+      const expectedPersistedToken = manager.isDatabaseBacked?.() === true
+        ? undefined
+        : await manager.getMemoryStateToken(currentMemory);
+      const clearResult = await currentMemory.clearAll(true);
+      // Fix #438: persist so cleared state survives restart. Tracked so a success
+      // clears any stale failure record for this memory.
+      const saveOptions = manager.isDatabaseBacked?.() === true ? undefined : { durable: true };
+      const persisted = coordinatorLockHeld
+        ? await this.saveMemoryTrackedUnlocked(
+            clearKey,
+            currentMemory,
+            manager,
+            persistenceVersion,
+            false,
+            saveOptions,
+            expectedPersistedToken,
+          ).then(() => true)
+        : await this.saveMemoryTracked(
+            clearKey,
+            currentMemory,
+            manager,
+            persistenceVersion,
+            false,
+            saveOptions,
+            expectedPersistedToken,
+          );
+      if (!persisted) {
+        throw new MemoryPersistenceConflictError(memoryName);
+      }
+      return clearResult;
+    };
+
+    let outcome;
+    try {
+      outcome = await this.persistenceCoordinator.runMutation(
+        persistenceVersion,
+        () => manager.isDatabaseBacked?.() === true
+          ? clearAndPersist(memory, true)
+          : manager.runFileMutationExclusive(memory, current => clearAndPersist(current, true)),
+      );
+    } catch (error) {
+      this.failedMemorySaves.delete(clearKey);
+      this.memorySaveAttempts.delete(clearKey);
+      // clearAll mutates the loaded object before persistence. Retire that
+      // snapshot after any failed save so a later write must reload durable
+      // entries instead of committing the already-cleared cache.
+      manager.recoverMemoryPersistenceConflict?.(memory);
+      throw error;
+    }
+    if (!outcome.accepted) {
+      this.failedMemorySaves.delete(clearKey);
+      this.memorySaveAttempts.delete(clearKey);
+      manager.recoverMemoryPersistenceConflict?.(memory);
+      throw new MemoryPersistenceConflictError(memoryName);
+    }
+    return outcome.value;
   }
 
   private debouncedMemorySave(
     memoryName: string,
     memory: Memory,
     manager: MemoryManager,
+    persistenceVersion = this.persistenceCoordinator.capture(
+      this.memoryPersistenceKey(memoryName),
+    ),
   ): void {
     const key = this.memorySaveKey(memoryName);
     // Capture the originating per-user context now, while a request context is
@@ -377,21 +554,23 @@ export class MemorySaveHandler {
     const existing = this.pendingSaves.get(key);
     if (existing) {
       clearTimeout(existing.timer);
+      this.persistenceCoordinator.release(existing.persistenceVersion);
       this.debounceMetrics.coalesced++;
       logger.debug(`[MCPAQLHandler] Coalesced save for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
     }
     const timer = setTimeout(() => {
       this.pendingSaves.delete(key);
-      this.debounceMetrics.written++;
       logger.debug(`[MCPAQLHandler] Flushing debounced save for memory '${memoryName}' (coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written})`);
-      this.saveMemoryTracked(key, memory, manager).catch((err) => {
+      this.saveMemoryTracked(key, memory, manager, persistenceVersion).then((persisted) => {
+        if (persisted) this.debounceMetrics.written++;
+      }).catch((err) => {
         logger.error(`[MCPAQLHandler] Debounced save failed for memory '${memoryName}' (pending: ${this.pendingSaves.size}, coalesced: ${this.debounceMetrics.coalesced}, written: ${this.debounceMetrics.written}): ${err}`);
       });
     }, STORAGE_LAYER_CONFIG.MEMORY_SAVE_DEBOUNCE_MS);
     if (typeof timer === 'object' && 'unref' in timer) {
       timer.unref();
     }
-    this.pendingSaves.set(key, { timer, memory, manager, context });
+    this.pendingSaves.set(key, { timer, memory, manager, context, persistenceVersion });
   }
 
   /**
@@ -405,20 +584,74 @@ export class MemorySaveHandler {
     key: string,
     memory: Memory,
     manager: MemoryManager,
+    persistenceVersion = this.persistenceCoordinator.capture(
+      this.memoryPersistenceKey(memory.metadata.name),
+    ),
+    retainFailure = true,
+    saveOptions?: { durable?: boolean },
+    expectedPersistedToken?: string,
+  ): Promise<boolean> {
+    const persisted = await this.persistenceCoordinator.runSave(
+      persistenceVersion,
+      () => this.saveMemoryTrackedUnlocked(
+        key,
+        memory,
+        manager,
+        persistenceVersion,
+        retainFailure,
+        saveOptions,
+        expectedPersistedToken,
+      ),
+    );
+    if (!persisted) {
+      // The memory was deleted after this save was scheduled. Retire the stale
+      // session-local ledger entry instead of retrying it on cleanup/shutdown.
+      this.failedMemorySaves.delete(key);
+      this.memorySaveAttempts.delete(key);
+      manager.recoverMemoryPersistenceConflict?.(memory);
+    }
+    return persisted;
+  }
+
+  private async saveMemoryTrackedUnlocked(
+    key: string,
+    memory: Memory,
+    manager: MemoryManager,
+    persistenceVersion: MemoryPersistenceVersion,
+    retainFailure: boolean,
+    saveOptions?: { durable?: boolean },
+    expectedPersistedToken?: string,
   ): Promise<void> {
     const attempt = (this.memorySaveAttempts.get(key) ?? 0) + 1;
     this.memorySaveAttempts.set(key, attempt);
     try {
-      await manager.save(memory);
-      if (this.memorySaveAttempts.get(key) === attempt) {
+      await manager.save(memory, undefined, saveOptions);
+      if (retainFailure && this.memorySaveAttempts.get(key) === attempt) {
+        const previousFailure = this.failedMemorySaves.get(key);
+        if (previousFailure?.persistenceVersion !== persistenceVersion) {
+          if (previousFailure) this.persistenceCoordinator.release(previousFailure.persistenceVersion);
+        }
         this.failedMemorySaves.delete(key);
         // Prune the counter on latest-success so the map stays bounded by
         // currently-failing memories. A stale in-flight save then sees
         // undefined !== its attempt and correctly skips ledger updates.
         this.memorySaveAttempts.delete(key);
+      } else if (!retainFailure && this.memorySaveAttempts.get(key) === attempt) {
+        this.failedMemorySaves.delete(key);
+        this.memorySaveAttempts.delete(key);
       }
     } catch (err) {
-      if (this.memorySaveAttempts.get(key) === attempt) {
+      if (err instanceof MemoryPersistenceConflictError) {
+        this.failedMemorySaves.delete(key);
+        this.memorySaveAttempts.delete(key);
+        manager.recoverMemoryPersistenceConflict?.(memory);
+        throw err;
+      }
+      if (retainFailure && this.memorySaveAttempts.get(key) === attempt) {
+        const previousFailure = this.failedMemorySaves.get(key);
+        if (previousFailure?.persistenceVersion !== persistenceVersion) {
+          if (previousFailure) this.persistenceCoordinator.release(previousFailure.persistenceVersion);
+        }
         this.failedMemorySaves.set(key, {
           error: err instanceof Error ? err : new Error(String(err)),
           memory,
@@ -428,10 +661,48 @@ export class MemorySaveHandler {
           // path, and the re-established context when retried from the shutdown
           // flush (flushOne runs saveMemoryTracked inside runInSaveContext).
           context: this.contextScope?.getContext?.(),
+          persistenceVersion,
+          expectedPersistedToken,
         });
+      } else if (!retainFailure && this.memorySaveAttempts.get(key) === attempt) {
+        this.failedMemorySaves.delete(key);
+        this.memorySaveAttempts.delete(key);
       }
       throw err;
     }
+  }
+
+  private async retryFailedSave(key: string, entry: FailedSave): Promise<boolean> {
+    const retry = async (current?: Memory): Promise<void> => {
+      if (entry.expectedPersistedToken !== undefined) {
+        if (!current) throw new MemoryPersistenceConflictError(entry.memory.metadata.name);
+        const currentToken = await entry.manager.getMemoryStateToken(current);
+        if (currentToken !== entry.expectedPersistedToken) {
+          throw new MemoryPersistenceConflictError(entry.memory.metadata.name);
+        }
+      }
+      await this.saveMemoryTrackedUnlocked(
+        key,
+        entry.memory,
+        entry.manager,
+        entry.persistenceVersion,
+        true,
+        entry.manager.isDatabaseBacked?.() === true ? undefined : { durable: true },
+        entry.expectedPersistedToken,
+      );
+    };
+    const outcome = await this.persistenceCoordinator.runMutation(
+      entry.persistenceVersion,
+      () => entry.manager.isDatabaseBacked?.() === true
+        ? retry()
+        : entry.manager.runFileMutationExclusive(entry.memory, retry),
+    );
+    if (!outcome.accepted) {
+      this.failedMemorySaves.delete(key);
+      this.memorySaveAttempts.delete(key);
+      entry.manager.recoverMemoryPersistenceConflict?.(entry.memory);
+    }
+    return outcome.accepted;
   }
 
   /**
@@ -443,6 +714,14 @@ export class MemorySaveHandler {
    */
   private memorySaveKey(memoryName: string): string {
     return this.sessionKey(memoryName.toLowerCase());
+  }
+
+  private memoryPersistenceKey(
+    memoryName: string,
+    context = this.contextScope?.getContext?.(),
+  ): string {
+    const userId = context?.session?.userId ?? 'local';
+    return `${userId}:${memoryName.normalize('NFC').trim().toLowerCase()}`;
   }
 
   private trackSaveFrequency(memoryName: string): void {

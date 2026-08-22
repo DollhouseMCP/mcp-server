@@ -71,6 +71,37 @@ export interface SigningKeyWrite {
   payload: Record<string, unknown>;
 }
 
+/** Complete key-ring replacement performed during an authorization mode change. */
+export interface SigningKeyModeTransition {
+  /** Stable UUID reused by retries of the same logical mode transition. */
+  transitionId: string;
+  /**
+   * Generation expected to own the active key ring. Undefined is accepted only
+   * for a legacy ring that predates generation markers.
+   */
+  expectedGenerationFingerprint?: string;
+  /** Generation installed by this transition. */
+  targetGenerationFingerprint: string;
+  /**
+   * Fresh keys to install. Omit cookie or invite when that kind is supplied
+   * by an operator-managed secret outside this store.
+   */
+  replacements: readonly SigningKeyWrite[];
+  /** Shared retirement/creation timestamp, primarily for deterministic tests. */
+  transitionedAt?: number;
+}
+
+export interface SigningKeyModeTransitionResult {
+  /** Stable identity of the installed generation, including idempotent retries. */
+  transitionId: string;
+  /** True when this generation was already installed by another caller/retry. */
+  alreadyApplied: boolean;
+  /** Previously-verifying keys retired by the transition. */
+  retired: readonly SigningKey[];
+  /** Fresh active keys installed by the transition. */
+  installed: readonly SigningKey[];
+}
+
 /**
  * Storage contract for signing keys. All methods async.
  *
@@ -107,6 +138,17 @@ export interface ISigningKeyStore {
   listByKind(kind: SigningKeyKind): Promise<SigningKey[]>;
 
   /**
+   * Run an operation while the selected active key is protected from rotate,
+   * retire, delete, and authorization-mode transition. Intended for issuing a
+   * credential and completing its externally visible delivery atomically with
+   * respect to key lifecycle changes.
+   */
+  withActiveKey<T>(
+    kind: SigningKeyKind,
+    operation: (key: SigningKey) => Promise<T>,
+  ): Promise<T>;
+
+  /**
    * Atomically install a new active key, marking any existing active key
    * of the same kind as inactive (with `rotatedAt = now`). The new key
    * is recorded with `active = true`, `createdAt = now`.
@@ -115,6 +157,27 @@ export interface ISigningKeyStore {
    * expected to generate fresh material. Rotation does not re-use kids.
    */
   rotate(write: SigningKeyWrite): Promise<SigningKey>;
+
+  /**
+   * Assert that a prebound key is still the active key. PostgreSQL performs
+   * this check with the caller's existing transaction and lifecycle advisory
+   * lock so a one-connection pool never opens a nested transaction.
+   */
+  assertActiveKey(
+    kid: string,
+    kind: SigningKeyKind,
+    transactionContext?: unknown,
+  ): Promise<SigningKey>;
+
+  /**
+   * Atomically invalidate all still-verifying JWKS, cookie, and invite keys,
+   * then install every applicable replacement. Implementations must expose no
+   * intermediate state in which only part of the old authorization mode has
+   * been invalidated or only part of the new mode has been installed.
+   */
+  transitionAuthorizationMode(
+    transition: SigningKeyModeTransition,
+  ): Promise<SigningKeyModeTransitionResult>;
 
   /**
    * Mark a key inactive and retired. Active keys may be retired for emergency

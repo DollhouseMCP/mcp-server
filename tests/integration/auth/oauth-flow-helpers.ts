@@ -162,6 +162,7 @@ export async function startASHarness(opts: ASHarnessOptions): Promise<ASHarness>
     tmpDir,
     close: async () => {
       await new Promise<void>((resolve) => server.close(() => resolve()));
+      await as.dispose();
       if (ownsTmpDir) {
         await fs.rm(tmpDir, { recursive: true, force: true });
       }

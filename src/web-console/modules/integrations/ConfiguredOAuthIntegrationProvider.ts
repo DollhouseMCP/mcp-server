@@ -13,6 +13,10 @@ import type {
   IntegrationTokenRefreshRequest,
   IntegrationTokenRefreshResult,
 } from './IntegrationProvider.js';
+import {
+  MintedIntegrationCredentialsError,
+  TerminalIntegrationRefreshError,
+} from './IntegrationProvider.js';
 import { serializeConfiguredIntegrationStatus } from './IntegrationDtos.js';
 import {
   assertPublicResolvedHost,
@@ -28,6 +32,7 @@ import {
 } from '../../security/IntegrationApiHosts.js';
 import { readBoundedResponseText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
 import { integrationDescriptorRoutingFingerprint } from './IntegrationDescriptorRoutingFingerprint.js';
+import { settleIntegrationCleanup } from './IntegrationCleanup.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
 const MAX_TOKEN_ENDPOINT_RESPONSE_BYTES = 256 * 1024;
@@ -132,14 +137,20 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       throw new Error('configured_oauth_token_exchange_failed');
     }
     const body = response.body;
-    const accessToken = readString(body, 'access_token');
+    const accessToken = readTokenString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_exchange_failed');
+    let refreshToken: string | null;
+    try {
+      refreshToken = readTokenString(body, 'refresh_token');
+    } catch (error) {
+      throw new MintedIntegrationCredentialsError(accessToken, null, { cause: error });
+    }
     return {
       accountLabel: accountLabelFromTokenResponse(body, oauth.accountLabel),
       externalInstallationId: null,
-      authorizedPermissions: { scopes: oauth.scopes },
+      authorizedPermissions: { scopes: grantedScopes(body, oauth.scopes) },
       accessToken,
-      refreshToken: readString(body, 'refresh_token'),
+      refreshToken,
     };
   }
 
@@ -163,46 +174,76 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         provider: this.descriptor.id,
         status: response.status,
       });
+      const oauthError = readString(response.body, 'error');
+      if (oauthError === 'invalid_grant') {
+        throw new TerminalIntegrationRefreshError(oauthError);
+      }
       throw new Error('configured_oauth_token_refresh_failed');
     }
     const body = response.body;
-    const accessToken = readString(body, 'access_token');
+    const accessToken = readTokenString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_refresh_failed');
+    let refreshToken: string | null;
+    try {
+      refreshToken = readTokenString(body, 'refresh_token');
+    } catch (error) {
+      throw new MintedIntegrationCredentialsError(accessToken, null, { cause: error });
+    }
     return {
       accessToken,
-      refreshToken: readString(body, 'refresh_token') ?? undefined,
+      refreshToken: refreshToken ?? undefined,
+      authorizedPermissions: readString(body, 'scope') === null
+        ? undefined
+        : { scopes: grantedScopes(body, oauth.scopes) },
     };
   }
 
   async revokeCredentials(request: IntegrationRevocationRequest): Promise<void> {
-    if (!request.accessToken) {
-      logger.warn('Configured OAuth revocation skipped: no access token to present', {
+    const tokens = [...new Set([request.accessToken, request.refreshToken].filter(
+      (token): token is string => typeof token === 'string' && token.length > 0,
+    ))];
+    if (tokens.length === 0) {
+      logger.warn('Configured OAuth revocation skipped: no token to present', {
         provider: this.descriptor.id,
       });
       return;
     }
     const oauth = this.oauthDescriptor();
     const revocationUrl = readString(oauth.tokenExchange, 'revocationUrl');
-    if (!revocationUrl) return;
-    const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: oauth.clientId,
-        client_secret: this.config.clientSecret,
-        token: request.accessToken,
-      }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-      // Fail closed on redirects: client_secret + token are sent to the
-      // revocation URL, so a 3xx must never replay them to a redirect target.
-      redirect: 'error',
-    });
-    if (!response.ok && response.status !== 404) {
-      throw new Error('configured_oauth_revocation_failed');
+    if (!revocationUrl) throw new Error('configured_oauth_revocation_unavailable');
+    let failure: unknown = null;
+    for (const token of tokens) {
+      try {
+        const clientAuth = readString(oauth.tokenExchange, 'clientAuth') ?? 'body';
+        const fields: Record<string, string> = { token };
+        const headers: Record<string, string> = {
+          Accept: 'application/json',
+          'Content-Type': 'application/x-www-form-urlencoded',
+        };
+        applyOAuthClientAuthentication({
+          clientId: oauth.clientId,
+          clientSecret: this.config.clientSecret,
+          clientAuth,
+          fields,
+          headers,
+        });
+        const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
+          method: 'POST',
+          headers,
+          body: new URLSearchParams(fields),
+          signal: AbortSignal.timeout(this.timeoutMs),
+          // Fail closed on redirects: client_secret + token are sent to the
+          // revocation URL, so a 3xx must never replay them to a redirect target.
+          redirect: 'error',
+        });
+        if (!response.ok && failure === null) {
+          failure = new Error('configured_oauth_revocation_failed');
+        }
+      } catch (error) {
+        if (failure === null) failure = error;
+      }
     }
+    if (failure !== null) throw failure;
   }
 
   projectStatus(record: UserIntegrationRecord | null): IntegrationProviderStatusProjection {
@@ -262,9 +303,23 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       const response = await outbound.fetch(urlValue, init);
       return { ok: response.ok, status: response.status, body: await readBoundedJson(response) };
     } finally {
-      await outbound.close();
+      const cleanup = await settleIntegrationCleanup(() => outbound.close(), this.timeoutMs);
+      if (cleanup !== 'completed') {
+        logger.warn('Configured OAuth outbound cleanup failed', {
+          provider: this.descriptor.id,
+          endpoint,
+          cleanup,
+        });
+      }
     }
   }
+}
+
+function grantedScopes(body: unknown, fallback: readonly string[]): readonly string[] {
+  const scope = readString(body, 'scope');
+  if (scope === null) return [...fallback];
+  return [...new Set(scope.split(/\s+/u).map(value => value.trim()).filter(Boolean))]
+    .sort((left, right) => left.localeCompare(right));
 }
 
 function tokenRequestInit(input: {
@@ -282,20 +337,11 @@ function tokenRequestInit(input: {
     redirect_uri: input.redirectUri,
   };
   if (input.codeVerifier) fields.code_verifier = input.codeVerifier;
-  if (clientAuth !== 'basic' && clientAuth !== 'none') {
-    fields.client_id = input.clientId;
-    fields.client_secret = input.clientSecret;
-  } else if (clientAuth === 'none') {
-    fields.client_id = input.clientId;
-  }
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'Content-Type': 'application/x-www-form-urlencoded',
   };
-  if (clientAuth === 'basic') {
-    const basicAuth = Buffer.from(`${input.clientId}:${input.clientSecret}`, 'utf8').toString('base64');
-    headers.Authorization = `Basic ${basicAuth}`;
-  }
+  applyOAuthClientAuthentication({ ...input, clientAuth, fields, headers });
   return {
     method: 'POST',
     headers,
@@ -314,25 +360,32 @@ function refreshTokenRequestInit(input: {
     grant_type: 'refresh_token',
     refresh_token: input.refreshToken,
   };
-  if (clientAuth !== 'basic' && clientAuth !== 'none') {
-    fields.client_id = input.clientId;
-    fields.client_secret = input.clientSecret;
-  } else if (clientAuth === 'none') {
-    fields.client_id = input.clientId;
-  }
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'Content-Type': 'application/x-www-form-urlencoded',
   };
-  if (clientAuth === 'basic') {
-    const basicAuth = Buffer.from(`${input.clientId}:${input.clientSecret}`, 'utf8').toString('base64');
-    headers.Authorization = `Basic ${basicAuth}`;
-  }
+  applyOAuthClientAuthentication({ ...input, clientAuth, fields, headers });
   return {
     method: 'POST',
     headers,
     body: new URLSearchParams(fields),
   };
+}
+
+function applyOAuthClientAuthentication(input: {
+  readonly clientId: string;
+  readonly clientSecret: string;
+  readonly clientAuth: string;
+  readonly fields: Record<string, string>;
+  readonly headers: Record<string, string>;
+}): void {
+  if (input.clientAuth === 'basic') {
+    const basicAuth = Buffer.from(`${input.clientId}:${input.clientSecret}`, 'utf8').toString('base64');
+    input.headers.Authorization = `Basic ${basicAuth}`;
+    return;
+  }
+  input.fields.client_id = input.clientId;
+  if (input.clientAuth !== 'none') input.fields.client_secret = input.clientSecret;
 }
 
 function accountLabelFromTokenResponse(
@@ -369,6 +422,29 @@ function readRecord(value: unknown): Readonly<Record<string, unknown>> {
 function readString(value: unknown, key: string): string | null {
   const field = readRecord(value)[key];
   return typeof field === 'string' && field.length > 0 ? field : null;
+}
+
+function readTokenString(value: unknown, key: string): string | null {
+  const token = readString(value, key);
+  if (token !== null && hasUnpairedSurrogate(token)) {
+    throw new Error('configured_oauth_token_malformed_unicode');
+  }
+  return token;
+}
+
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const unit = value.charCodeAt(index);
+    if (unit >= 0xd800 && unit <= 0xdbff) {
+      if (index + 1 >= value.length) return true;
+      const next = value.charCodeAt(index + 1);
+      if (next < 0xdc00 || next > 0xdfff) return true;
+      index += 1;
+    } else if (unit >= 0xdc00 && unit <= 0xdfff) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function stringRecord(value: Readonly<Record<string, unknown>>): Readonly<Record<string, string>> {

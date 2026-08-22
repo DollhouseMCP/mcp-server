@@ -45,9 +45,6 @@ describe('RelationshipExtractor', () => {
       author: '', version: '', description: '', tags: [],
     });
 
-    // Wait for fire-and-forget relationship extraction
-    await new Promise(resolve => setTimeout(resolve, 500));
-
     // Query relationships via RLS-scoped transaction
     const rels = await withUserRead(db, userId, async (tx) =>
       tx.select().from(elementRelationships).where(eq(elementRelationships.sourceId, elementId))
@@ -69,13 +66,11 @@ describe('RelationshipExtractor', () => {
     const elementId = await layer.writeContent('agents', 'replace-agent', contentV1, {
       author: '', version: '', description: '', tags: [],
     });
-    await new Promise(resolve => setTimeout(resolve, 500));
 
     const contentV2 = buildAgentContent('replace-agent', { skills: ['new-skill'] });
     await layer.writeContent('agents', 'replace-agent', contentV2, {
       author: '', version: '', description: '', tags: [],
     });
-    await new Promise(resolve => setTimeout(resolve, 500));
 
     const rels = await withUserRead(db, userId, async (tx) =>
       tx.select().from(elementRelationships).where(eq(elementRelationships.sourceId, elementId))
@@ -83,6 +78,30 @@ describe('RelationshipExtractor', () => {
 
     expect(rels).toHaveLength(1);
     expect(rels[0].targetName).toBe('new-skill');
+  });
+
+  it('deletes stale relationships when a newer definition extracts none', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const db = getTestDb();
+    const layer = new DatabaseStorageLayer(db, fixedUserId(userId), 'agents');
+    const elementId = await layer.writeContent(
+      'agents',
+      'empty-relationship-agent',
+      buildAgentContent('empty-relationship-agent', { skills: ['removed-skill'] }),
+      { author: '', version: '', description: '', tags: [] },
+    );
+
+    await layer.writeContent(
+      'agents',
+      'empty-relationship-agent',
+      buildAgentContent('empty-relationship-agent', {}),
+      { author: '', version: '', description: '', tags: [] },
+    );
+
+    const rels = await withUserRead(db, userId, tx =>
+      tx.select().from(elementRelationships).where(eq(elementRelationships.sourceId, elementId)));
+    expect(rels).toEqual([]);
   });
 
   it('should not extract relationships for skills (no relationship fields)', async () => {
@@ -95,7 +114,6 @@ describe('RelationshipExtractor', () => {
     const elementId = await layer.writeContent('skills', 'plain-skill', content, {
       author: 'test', version: '1.0.0', description: 'No relationships', tags: [],
     });
-    await new Promise(resolve => setTimeout(resolve, 500));
 
     const rels = await withUserRead(db, userId, async (tx) =>
       tx.select().from(elementRelationships).where(eq(elementRelationships.sourceId, elementId))
@@ -150,7 +168,6 @@ describe('RelationshipExtractor', () => {
     const elementId = await layer.writeContent('ensembles', 'test-ensemble', content, {
       author: 'test', version: '1.0.0', description: 'Test ensemble', tags: [],
     });
-    await new Promise(resolve => setTimeout(resolve, 500));
 
     const members = await withUserRead(db, userId, async (tx) =>
       tx.select().from(ensembleMembers).where(eq(ensembleMembers.ensembleId, elementId))

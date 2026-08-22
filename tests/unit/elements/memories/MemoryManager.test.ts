@@ -390,6 +390,36 @@ entries:
       expect(loaded.metadata.version).toBe('2.0.0');
     });
 
+    it('loads legacy identity and markdown entries deterministically', async () => {
+      const relativePath = 'legacy/deterministic.yaml';
+      const absolutePath = path.join(memoriesDir, relativePath);
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true });
+      await fs.writeFile(absolutePath, `---
+metadata:
+  name: Deterministic Legacy Memory
+  description: Lacks a persisted unique id
+---
+
+Stable markdown body`);
+
+      const first = await manager.load(relativePath);
+      const firstEntries = await first.search({});
+      manager.clearCache();
+      const second = await manager.load(relativePath);
+      const secondEntries = await second.search({});
+
+      expect(first.id).toBe(second.id);
+      expect(first.id).toMatch(/^legacy-[a-f0-9]{64}$/u);
+      expect(firstEntries).toEqual(secondEntries);
+      expect(firstEntries).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          id: expect.stringMatching(/^legacy-markdown-[a-f0-9]{64}$/u),
+          timestamp: new Date('1970-01-01T00:00:00.000Z'),
+          content: 'Stable markdown body',
+        }),
+      ]));
+    });
+
     // Test edge case: empty file
     it('should handle empty memory files gracefully', async () => {
       const dateFolder = new Date().toISOString().split('T')[0];

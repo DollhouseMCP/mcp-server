@@ -47,6 +47,23 @@ function approvalRequiredPolicy(requestId: string): IntegrationRequestPolicyEnfo
 }
 
 function authorized(gateway: IntegrationRequestGateway, policyEnforcer: IntegrationRequestPolicyEnforcer) {
+  const legacyRequest = gateway.request?.bind(gateway);
+  if (!gateway.prepareRequest) {
+    Object.assign(gateway, {
+      prepareRequest: jest.fn(async input => ({
+        input,
+        userId: '00000000-0000-4000-8000-000000000010',
+        sessionId: 'session-1',
+        provider: input.provider,
+        method: input.method.toUpperCase(),
+        descriptorId: input.specContract?.descriptorId ?? '00000000-0000-4000-8000-000000000001',
+        descriptorRoutingFingerprint: 'b'.repeat(64),
+        resolvedUrl: `https://gmail.googleapis.com${input.path}`,
+        authMode: input.authMode ?? 'credentialed',
+      })),
+      executePrepared: jest.fn(plan => legacyRequest(plan.input)),
+    });
+  }
   return new AuthorizedIntegrationGateway({ gateway, policyEnforcer });
 }
 
@@ -55,6 +72,21 @@ function authorizedCatalog(catalog: IntegrationOperationCatalog, policyEnforcer:
 }
 
 function authorizedBridge(bridge: IntegrationRemoteMcpBridge, policyEnforcer: IntegrationRequestPolicyEnforcer) {
+  const legacyCall = bridge.callTool?.bind(bridge);
+  if (!bridge.prepareCall) {
+    Object.assign(bridge, {
+      prepareCall: jest.fn(async input => ({
+        input,
+        userId: '00000000-0000-4000-8000-000000000010',
+        sessionId: 'session-1',
+        provider: input.provider,
+        descriptorId: '00000000-0000-4000-8000-000000000001',
+        descriptorRoutingFingerprint: 'b'.repeat(64),
+        serverUrl: 'https://mcp.example.com/mcp',
+      })),
+      executePreparedCall: jest.fn(plan => legacyCall(plan.input)),
+    });
+  }
   return new AuthorizedIntegrationRemoteMcpBridge({ bridge, policyEnforcer });
 }
 
@@ -73,13 +105,15 @@ describe('IntegrationTools', () => {
       path: '/gmail/v1/users/me/messages/send',
     });
 
-    expect(policy.authorize).toHaveBeenCalledWith({
+    expect(policy.authorize).toHaveBeenCalledWith(expect.objectContaining({
       provider: 'gmail',
       method: 'POST',
       path: '/gmail/v1/users/me/messages/send',
       query: undefined,
       body: undefined,
-    });
+      descriptorId: '00000000-0000-4000-8000-000000000001',
+      resolvedUrl: 'https://gmail.googleapis.com/gmail/v1/users/me/messages/send',
+    }));
     expect(gateway.request).not.toHaveBeenCalled();
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       ok: false,
@@ -131,6 +165,7 @@ describe('IntegrationTools', () => {
         },
       },
     });
+
   });
 
   it('returns a clean denial when policy checks are unavailable', async () => {
@@ -158,6 +193,7 @@ describe('IntegrationTools', () => {
         status: 503,
       },
     });
+
   });
 
   it('registers OpenAPI-derived operation discovery tools when a catalog is available', async () => {
@@ -255,7 +291,7 @@ describe('IntegrationTools', () => {
         unavailableReason: null,
         parameters: [
           { name: 'userId', in: 'path', required: true, description: null, schema: { type: 'string' } },
-          { name: 'q', in: 'query', required: false, description: null, schema: { type: 'string' } },
+          { name: 'q', in: 'query', required: true, description: null, schema: { type: 'string', minLength: 1 } },
         ],
         requestBody: null,
         responses: [],
@@ -264,6 +300,141 @@ describe('IntegrationTools', () => {
           provider: 'gmail',
           method: 'GET',
           pathTemplate: '/gmail/v1/users/{userId}/messages',
+          baseUrl: 'https://gmail.googleapis.com',
+        },
+        specContract: {
+          descriptorId: '00000000-0000-4000-8000-000000000001',
+          specHash: 'a'.repeat(64),
+        },
+        scopeAvailability: {
+          enforcement: 'advisory_upstream_oauth_token',
+          note: 'advisory',
+        },
+        authMode: 'credentialed',
+      }]),
+    } as unknown as IntegrationOperationCatalog;
+
+    const tools = await getPromotedIntegrationTools(
+      authorized(gateway, policy),
+      authorizedCatalog(catalog, allowingPolicy()),
+    );
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].tool.name).toBe('integration_gmail_listmessages');
+    expect(tools[0].tool.inputSchema).toMatchObject({
+      required: ['path_params', 'query'],
+      properties: {
+        path_params: { required: ['userId'] },
+        query: {
+          required: ['q'],
+          additionalProperties: false,
+          properties: { q: { type: 'string', minLength: 1 } },
+        },
+      },
+    });
+    const result = await tools[0].handler({
+      path_params: { userId: 'me' },
+      query: { q: 'is:unread' },
+    });
+
+    expect(policy.authorize).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/messages',
+      query: { q: 'is:unread' },
+      body: undefined,
+      specHash: 'a'.repeat(64),
+      resolvedUrl: 'https://gmail.googleapis.com/gmail/v1/users/me/messages',
+    }));
+    expect(gateway.request).toHaveBeenCalledWith(expect.objectContaining({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/messages',
+      query: { q: 'is:unread' },
+      body: undefined,
+      specContract: {
+        descriptorId: '00000000-0000-4000-8000-000000000001',
+        specHash: 'a'.repeat(64),
+      },
+      authMode: 'credentialed',
+    }));
+    expect(JSON.parse(result.content[0].text)).toMatchObject({
+      ok: true,
+      promotedTool: {
+        operationId: 'listMessages',
+        provider: 'gmail',
+      },
+      result: {
+        provenance: {
+          source: 'third_party_integration',
+          trust: 'untrusted',
+        },
+      },
+    });
+
+    const invalidUnicode = await tools[0].handler({
+      path_params: { userId: '\uD800' },
+    });
+    expect(JSON.parse(invalidUnicode.content[0].text)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_integration_request',
+        status: 400,
+      },
+    });
+    expect(gateway.request).toHaveBeenCalledTimes(1);
+
+    const missingRequiredQuery = await tools[0].handler({
+      path_params: { userId: 'me' },
+    });
+    expect(JSON.parse(missingRequiredQuery.content[0].text)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_integration_request',
+        status: 400,
+      },
+    });
+    expect(gateway.request).toHaveBeenCalledTimes(1);
+
+    for (const absentValue of [null, []]) {
+      const serializedAbsentQuery = await tools[0].handler({
+        path_params: { userId: 'me' },
+        query: { q: absentValue },
+      });
+      expect(JSON.parse(serializedAbsentQuery.content[0].text)).toMatchObject({
+        ok: false,
+        error: { code: 'invalid_integration_request', status: 400 },
+      });
+    }
+    expect(gateway.request).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects a malformed promoted path template before policy or gateway execution', async () => {
+    const gateway = {
+      request: jest.fn<IntegrationRequestGateway['request']>(),
+    } as unknown as IntegrationRequestGateway;
+    const policy = allowingPolicy();
+    const catalog = {
+      listPromotedOperations: jest.fn<IntegrationOperationCatalog['listPromotedOperations']>().mockResolvedValue([{
+        operationId: 'brokenPath',
+        method: 'GET',
+        path: '/users/{userId',
+        readWriteClass: 'read',
+        summary: null,
+        description: null,
+        requiredScopes: [],
+        available: true,
+        unavailableReason: null,
+        parameters: [
+          { name: 'userId', in: 'path', required: false, description: null, schema: { type: 'string' } },
+        ],
+        requestBody: null,
+        responses: [],
+        gatewayRequest: {
+          tool: 'integration_request',
+          provider: 'gmail',
+          method: 'GET',
+          pathTemplate: '/users/{userId',
         },
         specContract: {
           descriptorId: '00000000-0000-4000-8000-000000000001',
@@ -281,40 +452,19 @@ describe('IntegrationTools', () => {
       authorizedCatalog(catalog, allowingPolicy()),
     );
 
-    expect(tools).toHaveLength(1);
-    expect(tools[0].tool.name).toBe('integration_gmail_listmessages');
-    const result = await tools[0].handler({
-      path_params: { userId: 'me' },
-      query: { q: 'is:unread' },
+    expect(tools[0].tool.inputSchema).toMatchObject({
+      properties: { path_params: { required: ['userId'] } },
     });
-
-    expect(policy.authorize).toHaveBeenCalledWith({
-      provider: 'gmail',
-      method: 'GET',
-      path: '/gmail/v1/users/me/messages',
-      query: { q: 'is:unread' },
-      body: undefined,
-    });
-    expect(gateway.request).toHaveBeenCalledWith({
-      provider: 'gmail',
-      method: 'GET',
-      path: '/gmail/v1/users/me/messages',
-      query: { q: 'is:unread' },
-      body: undefined,
-    });
+    const result = await tools[0].handler({ path_params: { userId: 'me' } });
     expect(JSON.parse(result.content[0].text)).toMatchObject({
-      ok: true,
-      promotedTool: {
-        operationId: 'listMessages',
-        provider: 'gmail',
-      },
-      result: {
-        provenance: {
-          source: 'third_party_integration',
-          trust: 'untrusted',
-        },
+      ok: false,
+      error: {
+        code: 'invalid_integration_request',
+        status: 500,
       },
     });
+    expect(policy.authorize).not.toHaveBeenCalled();
+    expect(gateway.request).not.toHaveBeenCalled();
   });
 
   it('suffixes promoted operation names that collide with reserved tools', async () => {
@@ -391,12 +541,16 @@ describe('IntegrationTools', () => {
 
     expect(tools[0].tool.name).toBe('remote_mcp_remote_docs_search_2');
     const result = await tools[0].handler({ q: 'status' });
-    expect(policy.authorize).toHaveBeenCalledWith({
+    expect(policy.authorize).toHaveBeenCalledWith(expect.objectContaining({
       provider: REMOTE_DOCS,
       method: 'PUT',
       path: '_internal:/integration/remote_mcp/search',
-      body: { q: 'status' },
-    });
+      body: {
+        arguments: { q: 'status' },
+        remote_mcp_server_url: 'https://mcp.example.com/mcp',
+      },
+      resolvedUrl: 'https://mcp.example.com/mcp',
+    }));
     expect(bridge.callTool).toHaveBeenCalledWith({
       provider: REMOTE_DOCS,
       remoteName: 'search',

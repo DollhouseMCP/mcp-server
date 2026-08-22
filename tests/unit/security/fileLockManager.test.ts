@@ -16,13 +16,18 @@ describe('FileLockManager', () => {
   describe('withLock', () => {
     test('should execute operations sequentially for same resource', async () => {
       const results: number[] = [];
+      let active = 0;
+      let maxActive = 0;
       const delays = [50, 30, 40]; // Different delays to test ordering
       
       // Start multiple operations on same resource
       const promises = delays.map((delay, index) => 
         fileLockManager.withLock('test-resource', async () => {
+          active += 1;
+          maxActive = Math.max(maxActive, active);
           await new Promise(resolve => setTimeout(resolve, delay));
           results.push(index);
+          active -= 1;
           return index;
         })
       );
@@ -33,6 +38,7 @@ describe('FileLockManager', () => {
       // Results should be in order despite different delays
       expect(results).toEqual([0, 1, 2]);
       expect(returnValues).toEqual([0, 1, 2]);
+      expect(maxActive).toBe(1);
     });
 
     test('should execute operations in parallel for different resources', async () => {

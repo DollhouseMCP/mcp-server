@@ -6,11 +6,13 @@ import type {
   GitHubIntegrationTokenExchangeResult,
   IGitHubIntegrationProvider,
 } from './GitHubIntegrationProvider.js';
+import { MintedIntegrationCredentialsError } from './IntegrationProvider.js';
 
 const DEFAULT_GITHUB_AUTHORIZATION_URL = 'https://github.com/login/oauth/authorize';
 const DEFAULT_GITHUB_TOKEN_URL = 'https://github.com/login/oauth/access_token';
 const DEFAULT_GITHUB_API_BASE_URL = 'https://api.github.com';
 const GITHUB_API_VERSION = '2022-11-28';
+const DEFAULT_GITHUB_REQUEST_TIMEOUT_MS = 10_000;
 
 export interface GitHubAppIntegrationProviderConfig {
   readonly clientId: string;
@@ -19,6 +21,7 @@ export interface GitHubAppIntegrationProviderConfig {
   readonly tokenUrl?: string;
   readonly apiBaseUrl?: string;
   readonly fetch?: typeof fetch;
+  readonly requestTimeoutMs?: number;
 }
 
 export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider {
@@ -26,14 +29,19 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
   private readonly tokenUrl: string;
   private readonly apiBaseUrl: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly requestTimeoutMs: number;
 
   constructor(private readonly config: GitHubAppIntegrationProviderConfig) {
     this.authorizationUrl = config.authorizationUrl ?? DEFAULT_GITHUB_AUTHORIZATION_URL;
     this.tokenUrl = config.tokenUrl ?? DEFAULT_GITHUB_TOKEN_URL;
     this.apiBaseUrl = normalizeApiBaseUrl(config.apiBaseUrl ?? DEFAULT_GITHUB_API_BASE_URL);
     this.fetchImpl = config.fetch ?? fetch;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? DEFAULT_GITHUB_REQUEST_TIMEOUT_MS;
     if (!config.clientId || !config.clientSecret) {
       throw new Error('GitHub integration provider requires clientId and clientSecret');
+    }
+    if (!Number.isSafeInteger(this.requestTimeoutMs) || this.requestTimeoutMs <= 0) {
+      throw new Error('GitHub integration provider requestTimeoutMs must be a positive integer');
     }
   }
 
@@ -51,19 +59,27 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
     request: GitHubIntegrationTokenExchangeRequest,
   ): Promise<GitHubIntegrationTokenExchangeResult> {
     const token = await this.exchangeToken(request);
-    const [user, installations] = await Promise.all([
-      this.fetchUser(token.accessToken),
-      this.fetchInstallations(token.accessToken),
-    ]);
-    const installation = selectInstallation(installations, request.installationId ?? null);
-    return {
-      accountLabel: user.login,
-      installationId: installation?.id ?? null,
-      repositorySelection: installation?.repositorySelection ?? 'unknown',
-      contentsPermission: deriveContentsPermission(installations),
-      accessToken: token.accessToken,
-      refreshToken: token.refreshToken,
-    };
+    try {
+      const [user, installations] = await Promise.all([
+        this.fetchUser(token.accessToken),
+        this.fetchInstallations(token.accessToken),
+      ]);
+      const installation = selectInstallation(installations, request.installationId ?? null);
+      return {
+        accountLabel: user.login,
+        installationId: installation?.id ?? null,
+        repositorySelection: installation?.repositorySelection ?? 'unknown',
+        contentsPermission: deriveContentsPermission(installations),
+        accessToken: token.accessToken,
+        refreshToken: token.refreshToken,
+      };
+    } catch (error) {
+      throw new MintedIntegrationCredentialsError(
+        token.accessToken,
+        token.refreshToken,
+        { cause: error },
+      );
+    }
   }
 
   async revokeCredentials(request: GitHubIntegrationRevocationRequest): Promise<void> {
@@ -80,6 +96,7 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
       // Fail closed on redirects: client_secret (Basic auth) + access_token are
       // sent here, so a 3xx must never replay them to a redirect target.
       redirect: 'error',
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
     if (!response.ok && response.status !== 404) {
       throw new Error('github_integration_revocation_failed');
@@ -107,6 +124,7 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
       // Fail closed on redirects: client_secret is sent to the token URL, so a
       // 3xx must never replay it to a redirect target.
       redirect: 'error',
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
     if (!response.ok) {
       throw new Error('github_integration_token_exchange_failed');
@@ -157,6 +175,7 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
       // Fail closed on redirects so the Bearer access token can never be
       // replayed to a redirect target.
       redirect: 'error',
+      signal: AbortSignal.timeout(this.requestTimeoutMs),
     });
   }
 }

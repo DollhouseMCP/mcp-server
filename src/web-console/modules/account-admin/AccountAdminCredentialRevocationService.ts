@@ -2,13 +2,20 @@ import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
 import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
 import type { ConsoleHandlerResult, ConsoleRequest, ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
-import type { IOAuthGrantRevocationService } from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
+import type {
+  ConsoleOAuthGrantRevocationSummary,
+  ConsoleOAuthSubjectRevocationSummary,
+  IOAuthGrantRevocationService,
+} from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
+import type { IConsoleSecurityInvalidationStore } from '../../services/invalidation/IConsoleSecurityInvalidationStore.js';
+import { waitForSecurityInvalidationAcknowledgements } from '../../services/invalidation/ConsoleSecurityInvalidationAcknowledgement.js';
 import type {
   ConsolePrincipalSummary,
   IConsoleAccountAdminStore,
 } from '../../stores/IConsoleAccountAdminStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
+import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
 import { serializeAccountPrincipalLifecycle } from './AccountAdminDtos.js';
 import {
   emptyRuntimeTerminationSummary,
@@ -22,6 +29,9 @@ export interface AccountAdminCredentialRevocationServiceOptions {
   readonly sessionStore: IConsoleSessionStore;
   readonly oauthGrantRevocationService: IOAuthGrantRevocationService | null;
   readonly transactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly securityInvalidationStore?: Pick<IConsoleSecurityInvalidationStore,
+    'listLiveReplicaIds' | 'listAcknowledgedReplicaIds'> | null;
+  readonly invalidationAcknowledgementTimeoutMs?: number;
   readonly runtimeTerminationService?: AccountAdminRuntimeTerminationService | null;
   readonly now?: () => Date;
 }
@@ -35,7 +45,7 @@ export class AccountAdminCredentialRevocationService {
     userId: string,
   ): Promise<ConsoleHandlerResult> {
     const actor = requireConsoleAuthentication(req);
-    const occurredAt = this.now();
+    const requestOccurredAt = this.now();
     const before = await this.options.accountAdminStore.findPrincipal(userId);
     if (!before) {
       await this.writeAttemptAudit(req, route, 'failed', 'not_found', userId, {});
@@ -47,50 +57,150 @@ export class AccountAdminCredentialRevocationService {
       });
       return serviceUnavailable('OAuth grant revocation service is unavailable.');
     }
+    const unauthorizedRoles = rolesActorMayNotManage(req, protectedCredentialRoles(before.roles));
+    if (unauthorizedRoles.length > 0) {
+      await this.writeAttemptAudit(req, route, 'rejected', 'insufficient_role_authority', userId, {
+        operation: 'credentials_revoke_all', roles: unauthorizedRoles,
+      });
+      return insufficientRoleAuthorityProblem();
+    }
 
     let changed = withAuthzVersion(before, before.authzVersion);
-    await this.options.transactionRunner.run(async tx => {
-      const change = await tx.bumpPrincipalAuthzVersion({ userId, bumpedAt: occurredAt });
-      if (!change) throw new Error('credential revoke-all authz-version bump did not update a row');
-      changed = withAuthzVersion(before, change.authzVersion);
-      // Incident-response credential revocation must be acknowledged by the
-      // invalidation runtime so authz-version caches are bypassed cluster-wide.
-      await tx.appendSecurityInvalidationEvent({
-        kind: 'principal_credentials_revoked',
-        urgency: 'acknowledged',
-        userId,
-        authzVersion: change.authzVersion,
-        reason: 'account_admin_credentials_revoke_all',
-        payload: {
-          revokedGrants: true,
-          authzVersionBumped: true,
-        },
-        createdAt: occurredAt,
-        createdByUserId: actor.userId,
+    let invalidationEventId: string | null = null;
+    let browserSessionsRevokedInTransaction: number | null = null;
+    let oauthSummaryInTransaction: ConsoleOAuthGrantRevocationSummary | null = null;
+    let revocationCutoff = requestOccurredAt;
+    try {
+      await this.options.transactionRunner.run(async tx => {
+        const lockedPrincipal = await tx.lockPrincipal(userId);
+        if (!lockedPrincipal) throw new Error('credential revoke-all principal disappeared during mutation');
+        const lockedUnauthorizedRoles = rolesActorMayNotManage(req, protectedCredentialRoles(lockedPrincipal.roles));
+        if (lockedUnauthorizedRoles.length > 0) {
+          await tx.writeAdminAuditEvent(buildCredentialAuditEvent({
+            route,
+            req,
+            result: 'rejected',
+            errorCode: 'insufficient_role_authority',
+            occurredAt: this.now(),
+            userId,
+            argsRedacted: { operation: 'credentials_revoke_all', roles: lockedUnauthorizedRoles },
+            resultDetailRedacted: null,
+          }));
+          return;
+        }
+        const identities = await tx.lockLinkedAuthSubjects(userId);
+        // Any issuance for these subjects must complete before this instant or
+        // wait until the transaction commits. The cutoff therefore covers all
+        // credentials that existed when revoke-all took effect.
+        revocationCutoff = this.now();
+        if (tx.revokeOAuthSubjectGrants) {
+          const subjects: ConsoleOAuthSubjectRevocationSummary[] = [];
+          let grantCount = 0;
+          for (const identity of identities) {
+            const revoked = await tx.revokeOAuthSubjectGrants(identity.sub);
+            grantCount += revoked;
+            subjects.push({ sub: identity.sub, grantsDiscovered: revoked, grantsRevoked: revoked });
+          }
+          oauthSummaryInTransaction = {
+            userId,
+            revokedAt: revocationCutoff,
+            linkedSubjectsProcessed: identities.length,
+            oauthGrantFamiliesDiscovered: grantCount,
+            oauthGrantFamiliesRevoked: grantCount,
+            subjects,
+          };
+        }
+        if (tx.revokeBrowserSessionsForUser) {
+          browserSessionsRevokedInTransaction = await tx.revokeBrowserSessionsForUser(userId, revocationCutoff);
+        }
+        const change = await tx.bumpPrincipalAuthzVersion({ userId, bumpedAt: revocationCutoff });
+        if (!change) throw new Error('credential revoke-all authz-version bump did not update a row');
+        changed = withAuthzVersion(before, change.authzVersion);
+        // Incident-response credential revocation must be acknowledged by the
+        // invalidation runtime so authz-version caches are bypassed cluster-wide.
+        const invalidationEvent = await tx.appendSecurityInvalidationEvent({
+          kind: 'principal_credentials_revoked',
+          urgency: 'acknowledged',
+          userId,
+          authzVersion: change.authzVersion,
+          reason: 'account_admin_credentials_revoke_all',
+          payload: {
+            revokedGrants: true,
+            authzVersionBumped: true,
+          },
+          createdAt: revocationCutoff,
+          createdByUserId: actor.userId,
+        });
+        invalidationEventId = invalidationEvent.eventId;
+        await tx.writeAdminAuditEvent(buildCredentialAuditEvent({
+          route,
+          req,
+          result: 'approved',
+          errorCode: null,
+          occurredAt: revocationCutoff,
+          userId,
+          argsRedacted: { operation: 'credentials_revoke_all', phase: 'state_committed' },
+          resultDetailRedacted: {
+            previousAuthzVersion: before.authzVersion,
+            newAuthzVersion: change.authzVersion,
+            oauthRevokedInTransaction: oauthSummaryInTransaction !== null,
+          },
+        }));
+      }, actor);
+    } catch {
+      await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
+        operation: 'credentials_revoke_all',
+        phase: 'transactional_revocation',
       });
-      await tx.writeAdminAuditEvent(buildCredentialAuditEvent({
-        route,
-        req,
-        result: 'approved',
-        errorCode: null,
-        occurredAt,
-        userId,
-        argsRedacted: { operation: 'credentials_revoke_all', phase: 'state_committed' },
-        resultDetailRedacted: {
-          previousAuthzVersion: before.authzVersion,
-          newAuthzVersion: change.authzVersion,
-        },
-      }));
+      return serviceUnavailable('Credential revocation could not be committed atomically.');
+    }
+
+    if (changed.authzVersion === before.authzVersion) {
+      return insufficientRoleAuthorityProblem();
+    }
+
+    let browserSessionsRevoked = browserSessionsRevokedInTransaction ?? 0;
+    let oauthSummary: ConsoleOAuthGrantRevocationSummary | null = oauthSummaryInTransaction;
+    let browserRevocationFailed = false;
+    let oauthRevocationFailed = false;
+    if (browserSessionsRevokedInTransaction === null) {
+      try {
+        browserSessionsRevoked = await this.options.sessionStore.revokeForUser(userId, revocationCutoff);
+      } catch {
+        browserRevocationFailed = true;
+      }
+    }
+    if (oauthSummaryInTransaction === null) {
+      try {
+        oauthSummary = await this.options.oauthGrantRevocationService.revokePrincipalGrants({
+          userId,
+          revokedAt: revocationCutoff,
+        });
+      } catch {
+        oauthRevocationFailed = true;
+      }
+    }
+    const acknowledged = !invalidationEventId || await waitForSecurityInvalidationAcknowledgements({
+      store: this.options.securityInvalidationStore,
+      eventId: invalidationEventId,
+      occurredAt: revocationCutoff,
+      timeoutMs: this.options.invalidationAcknowledgementTimeoutMs,
     });
+    if (browserRevocationFailed || oauthRevocationFailed || !oauthSummary || !acknowledged) {
+      await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
+        operation: 'credentials_revoke_all',
+        phase: !acknowledged ? 'invalidation_acknowledgement' : 'post_commit_revocation',
+        browserSessionRevocationFailed: browserRevocationFailed,
+        oauthGrantRevocationFailed: oauthRevocationFailed,
+      });
+      return serviceUnavailable(
+        !acknowledged
+          ? 'Credential state was invalidated, but cluster acknowledgement timed out.'
+          : 'Credential revocation dependency failed after account state was invalidated.',
+      );
+    }
 
     try {
-      // Revoke browser sessions first so the interactive console surface closes
-      // even if downstream AS grant-family cleanup later reports failure.
-      const browserSessionsRevoked = await this.options.sessionStore.revokeForUser(userId, occurredAt);
-      const oauthSummary = await this.options.oauthGrantRevocationService.revokePrincipalGrants({
-        userId,
-        revokedAt: occurredAt,
-      });
       await this.writeAttemptAudit(req, route, 'approved', null, userId, {
         operation: 'credentials_revoke_all',
         phase: 'post_commit_revocation',
@@ -194,6 +304,10 @@ export class AccountAdminCredentialRevocationService {
   }
 }
 
+function protectedCredentialRoles(roles: readonly string[]): readonly 'admin'[] {
+  return roles.includes('admin') ? ['admin'] : [];
+}
+
 interface CredentialAuditEventInput {
   readonly route: ConsoleRouteDefinition;
   readonly req: ConsoleRequest;
@@ -238,4 +352,17 @@ function problem(status: number, code: string, title: string, detail: string): C
 
 function serviceUnavailable(detail: string): ConsoleHandlerResult {
   return problem(503, 'service_unavailable', 'Service unavailable', detail);
+}
+
+function insufficientRoleAuthorityProblem(): ConsoleHandlerResult {
+  return {
+    status: 403,
+    body: {
+      type: 'about:blank',
+      title: 'Forbidden',
+      status: 403,
+      code: 'insufficient_role_authority',
+      detail: 'The target has an administrative role that this account cannot manage.',
+    },
+  };
 }

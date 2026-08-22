@@ -11,7 +11,7 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { env } from '../config/env.js';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 
 export interface DeviceCodeResponse {
   device_code: string;
@@ -678,12 +678,22 @@ export class GitHubAuthManager {
     // environment, an env hit would mask a failed session-store write (e.g. a
     // silently-failed database write) and we would falsely report success.
     const stored = await this.tokenManager.retrieveGitHubToken();
-    if (!stored) {
-      throw ErrorHandler.wrapError(
-        new Error('token was not retrievable from the session token store after storage'),
-        'OAuth helper token import failed',
-        ErrorCategory.AUTH_ERROR,
-      );
+    const expectedToken = Buffer.from(token, 'utf8');
+    const storedToken = stored ? Buffer.from(stored, 'utf8') : null;
+    try {
+      const matches = storedToken !== null &&
+        expectedToken.length === storedToken.length &&
+        timingSafeEqual(expectedToken, storedToken);
+      if (!matches) {
+        throw ErrorHandler.wrapError(
+          new Error('session token store read-back did not match the imported OAuth helper token'),
+          'OAuth helper token import failed',
+          ErrorCategory.AUTH_ERROR,
+        );
+      }
+    } finally {
+      expectedToken.fill(0);
+      storedToken?.fill(0);
     }
   }
 

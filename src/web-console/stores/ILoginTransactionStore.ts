@@ -39,6 +39,22 @@ export interface ILoginTransactionStore {
   consume(idHash: Buffer, stateHash: Buffer, consumedAt?: Date): Promise<ConsoleLoginTransaction | null>;
   /** Mark an already-consumed transaction complete while retaining replay diagnostics. */
   completeConsumed(idHash: Buffer): Promise<boolean>;
+  /** Whether a still-live integration flow supersedes the supplied callback. */
+  hasNewerIntegrationAuthorization?(
+    userId: string,
+    integrationDescriptorId: string | null,
+    transactionIdHash: Buffer,
+  ): Promise<boolean>;
+  /** Whether this consumed integration callback still owns its completion lease. */
+  isIntegrationAuthorizationCompletionCurrent?(transactionIdHash: Buffer): Promise<boolean>;
+  /** In-memory descriptor mutation fence; PostgreSQL performs this in the descriptor transaction. */
+  fenceIntegrationAuthorizationsByDescriptor?(integrationDescriptorId: string): Promise<boolean>;
+  /** Whether account deletion must wait for a consumed integration callback to settle. */
+  hasInFlightIntegrationAuthorization?(userId: string): Promise<boolean>;
+  /** In-memory composition seam preventing callbacks for deleted/disabled principals. */
+  configurePrincipalLifecycleFence?(fence: {
+    isPrincipalActive(userId: string): Promise<boolean>;
+  }): void;
   sweepExpired(before?: Date): Promise<number>;
 }
 

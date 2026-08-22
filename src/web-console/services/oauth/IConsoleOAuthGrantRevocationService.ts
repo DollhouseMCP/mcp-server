@@ -42,6 +42,12 @@ export interface IOAuthGrantRevocationService {
    * `revokedAt` is provenance only; it is not a scheduling primitive.
    */
   revokePrincipalGrants(input: ConsoleOAuthGrantRevocationInput): Promise<ConsoleOAuthGrantRevocationSummary>;
+
+  /** Revoke every grant family owned by one OAuth subject. */
+  revokeSubjectGrants?(
+    sub: string,
+    revokedAt: Date,
+  ): Promise<ConsoleOAuthSubjectRevocationSummary>;
 }
 
 export interface OAuthRevocationCapableAuthStorage extends IAuthStorageLayer {

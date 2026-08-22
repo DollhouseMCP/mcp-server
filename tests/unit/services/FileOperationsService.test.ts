@@ -9,6 +9,8 @@ const mockReaddir = jest.fn<() => Promise<string[]>>();
 const mockRename = jest.fn<() => Promise<void>>();
 const mockStat = jest.fn<() => Promise<any>>();
 const mockOpen = jest.fn<() => Promise<any>>();
+const mockDurableAtomicWriteFile = jest.fn<() => Promise<void>>();
+const mockSyncFilesystemDirectory = jest.fn<() => Promise<void>>();
 
 // Mock fs module BEFORE importing the service
 jest.unstable_mockModule('fs', () => ({
@@ -37,6 +39,11 @@ jest.unstable_mockModule('../../../src/security/fileLockManager.js', () => ({
     atomicReadFile: mockAtomicReadFile,
     atomicWriteFile: mockAtomicWriteFile
   }))
+}));
+
+jest.unstable_mockModule('../../../src/security/durableFileOperations.js', () => ({
+  durableAtomicWriteFile: mockDurableAtomicWriteFile,
+  syncFilesystemDirectory: mockSyncFilesystemDirectory,
 }));
 
 // Mock SecurityMonitor
@@ -125,6 +132,17 @@ describe('FileOperationsService', () => {
       expect(mockAtomicWriteFile).toHaveBeenCalledWith(filePath, content, { encoding: 'utf-8' });
     });
 
+    it('uses a file-and-directory-synced write when durability is required', async () => {
+      const filePath = '/test/durable.txt';
+      const content = 'durable content';
+      mockDurableAtomicWriteFile.mockResolvedValue(undefined);
+
+      await service.writeFile(filePath, content, { durable: true });
+
+      expect(mockDurableAtomicWriteFile).toHaveBeenCalledWith(filePath, content);
+      expect(mockAtomicWriteFile).not.toHaveBeenCalled();
+    });
+
     it('should use active session PathValidator validated path for writes', async () => {
       const filePath = '/users/alice/file.txt';
       const validatedPath = '/real/users/alice/file.txt';
@@ -200,6 +218,17 @@ describe('FileOperationsService', () => {
       );
     });
 
+    it('syncs the containing directory when durable deletion is required', async () => {
+      const filePath = '/test/state/agent.state.json';
+      mockUnlink.mockResolvedValue(undefined);
+      mockSyncFilesystemDirectory.mockResolvedValue(undefined);
+
+      await service.deleteFile(filePath, ElementType.AGENT, { durable: true });
+
+      expect(mockUnlink).toHaveBeenCalledWith(filePath);
+      expect(mockSyncFilesystemDirectory).toHaveBeenCalledWith('/test/state');
+    });
+
     it('should ignore ENOENT errors', async () => {
       const filePath = '/test/missing.txt';
       const error: any = new Error('File not found');
@@ -266,9 +295,16 @@ describe('FileOperationsService', () => {
     });
 
     it('should return false if file does not exist', async () => {
-      mockAccess.mockRejectedValue(new Error('ENOENT'));
+      mockAccess.mockRejectedValue(Object.assign(new Error('missing'), { code: 'ENOENT' }));
       const result = await service.exists('/test/file.txt');
       expect(result).toBe(false);
+    });
+
+    it('should surface filesystem errors other than a missing path', async () => {
+      const error = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+      mockAccess.mockRejectedValue(error);
+
+      await expect(service.exists('/test/file.txt')).rejects.toBe(error);
     });
   });
 

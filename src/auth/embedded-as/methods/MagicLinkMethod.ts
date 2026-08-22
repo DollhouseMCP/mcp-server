@@ -85,7 +85,7 @@ export interface EmailSender {
 
 export interface MagicLinkMethodOptions {
   storage: IAuthStorageLayer;
-  invites: InviteTokenStore;
+  invites: InviteTokenStore | (() => Promise<InviteTokenStore>);
   emailSender: EmailSender;
   /** Absolute URL the magic link should point at. e.g. https://app/auth/email/verify */
   verifyUrl: string;
@@ -199,17 +199,19 @@ export class MagicLinkMethod implements IAuthMethod {
     const bodyParser = express.urlencoded({ extended: false, limit: '4kb' });
 
     router.get('/auth/email/verify', (req, res, next) => {
-      try {
-        const token = typeof req.query.token === 'string' ? req.query.token : '';
-        const verified = this.verifyMagicLink(token);
-        if (!verified.ok) {
-          res.status(400).type('html').send(renderMagicLinkError(verified.reason));
-          return;
+      void (async () => {
+        try {
+          const token = typeof req.query.token === 'string' ? req.query.token : '';
+          const verified = await this.verifyMagicLink(token);
+          if (!verified.ok) {
+            res.status(400).type('html').send(renderMagicLinkError(verified.reason));
+            return;
+          }
+          res.type('html').send(this.renderConfirmationPage(token));
+        } catch (err) {
+          next(err);
         }
-        res.type('html').send(this.renderConfirmationPage(token));
-      } catch (err) {
-        next(err);
-      }
+      })();
     });
 
     router.post('/auth/email/verify', bodyParser, (req, res, next) => {
@@ -226,7 +228,7 @@ export class MagicLinkMethod implements IAuthMethod {
           // already-consumed, so the real user's subsequent POST got
           // rejected with no path forward. Verify now, do cookie check
           // against the verified interactionId, and only THEN consume.
-          const verified = this.verifyMagicLink(token);
+          const verified = await this.verifyMagicLink(token);
           if (!verified.ok) {
             res.status(400).type('html').send(renderMagicLinkError(verified.reason));
             return;
@@ -301,8 +303,8 @@ export class MagicLinkMethod implements IAuthMethod {
    * the token signature was once valid — useful for credential-validation
    * oracles. Operators see the precise reason via logs (not exposed here).
    */
-  verifyMagicLink(token: string): { ok: true; interactionId?: string } | { ok: false; reason: string } {
-    const verified = this.options.invites.verify(token);
+  async verifyMagicLink(token: string): Promise<{ ok: true; interactionId?: string } | { ok: false; reason: string }> {
+    const verified = (await this.inviteStore()).verify(token);
     if (!verified.ok) return { ok: false, reason: GENERIC_LINK_INVALID };
     if (verified.payload.purpose !== PROVIDER_NAME) {
       return { ok: false, reason: GENERIC_LINK_INVALID };
@@ -321,7 +323,7 @@ export class MagicLinkMethod implements IAuthMethod {
     | { kind: 'denied'; reason: string }
     | { kind: 'error'; reason: string }
   > {
-    const consume = await this.options.invites.consume(token);
+    const consume = await (await this.inviteStore()).consume(token);
     // Generic error reason regardless of cause — see verifyMagicLink rationale.
     if (!consume.ok) {
       if (consume.reason === 'rate-exceeded') {
@@ -433,27 +435,27 @@ export class MagicLinkMethod implements IAuthMethod {
       // SMTP code path is taken regardless of whether the email is on
       // file. The user-facing response stays generic on send failure.
       const sub = `${PROVIDER_NAME}_${hashEmail(email)}`;
-      const token = this.options.invites.issue({
+      await (await this.inviteStore()).issueAndDeliver({
         sub,
         email,
         purpose: PROVIDER_NAME,
         interactionId,
+      }, async token => {
+        const url = new URL(this.options.verifyUrl);
+        url.searchParams.set('token', token);
+        try {
+          await this.options.emailSender.sendMagicLink({ to: email, url: url.toString() });
+        } catch (err) {
+          // The user-facing response stays generic (must-fix #2 enumeration
+          // prevention) — but the operator needs to see relay outages, so log
+          // server-side. Email is omitted to avoid joining log + audit trails
+          // by email; sub is the safer audit handle.
+          logger.warn('[MagicLinkMethod] sendMagicLink failed', {
+            sub,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       });
-      const url = new URL(this.options.verifyUrl);
-      url.searchParams.set('token', token);
-
-      try {
-        await this.options.emailSender.sendMagicLink({ to: email, url: url.toString() });
-      } catch (err) {
-        // The user-facing response stays generic (must-fix #2 enumeration
-        // prevention) — but the operator needs to see relay outages, so log
-        // server-side. Email is omitted to avoid joining log + audit trails
-        // by email; sub is the safer audit handle.
-        logger.warn('[MagicLinkMethod] sendMagicLink failed', {
-          sub,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
 
       return generic();
     } finally {
@@ -466,6 +468,12 @@ export class MagicLinkMethod implements IAuthMethod {
         await new Promise((resolve) => setTimeout(resolve, floor - elapsed));
       }
     }
+  }
+
+  private inviteStore(): Promise<InviteTokenStore> {
+    return typeof this.options.invites === 'function'
+      ? this.options.invites()
+      : Promise.resolve(this.options.invites);
   }
 
   /**

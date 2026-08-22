@@ -95,7 +95,7 @@ function accountPrincipal(overrides: Partial<ConsolePrincipalSummary> = {}): Con
     email: 'alice@example.test',
     emailVerified: true,
     authMethods: ['github'],
-    roles: [],
+    roles: ['account_admin'],
     disabledAt: null,
     createdAt: NOW,
     lastLoginAt: null,
@@ -122,6 +122,7 @@ function buildFixture(options: FixtureOptions = {}): {
     userId: USER_ID,
     disabledAt: null,
     authzVersion: 3,
+    roles: ['account_admin'],
   }];
   const identityResolver = new InMemoryConsoleIdentityResolver(principals);
   const accountAdminStore = new InMemoryConsoleAccountAdminStore(
@@ -201,6 +202,7 @@ describe('ConsoleBffAuthModule', () => {
     );
     expect(session?.userId).toBe(USER_ID);
     expect(session?.authSub).toBe(AUTH_SUB);
+    expect(session?.authzVersion).toBe(3);
 
     const me = await request(app).get(ME_PATH).set('Cookie', sessionCookie);
     expect(me.status).toBe(200);
@@ -211,7 +213,7 @@ describe('ConsoleBffAuthModule', () => {
       email: 'alice@example.test',
       auth_methods: ['github'],
       granted_capabilities: [SELF_CAPABILITY],
-      available_admin_capabilities: [],
+      available_admin_capabilities: [ADMIN_CAPABILITY],
       elevation: { active: false, expires_at: null, acr: null },
     });
   });
@@ -456,6 +458,7 @@ describe('ConsoleBffAuthModule', () => {
       idHash: opaqueValues.hashOpaqueValue(sessionValue),
       userId: USER_ID,
       authSub: AUTH_SUB,
+      authzVersion: 3,
       csrfTokenHash: opaqueValues.hashOpaqueValue(csrfValue),
       grantedCapabilities: [SELF_CAPABILITY, ADMIN_CAPABILITY],
       elevation: {
@@ -519,6 +522,27 @@ describe('ConsoleBffAuthModule', () => {
     expect(response.body.type).toBe('https://dollhousemcp.com/errors/invalid_capability');
     expect(response.body.code).toBe('invalid_capability');
     expect(response.body.instance).toBe(response.headers['x-correlation-id']);
+  });
+
+  it('rejects a valid administrative capability that is not granted by the principal roles', async () => {
+    const fixture = buildFixture({
+      principals: [{
+        sub: AUTH_SUB,
+        userId: USER_ID,
+        disabledAt: null,
+        authzVersion: 3,
+        roles: [],
+      }],
+    });
+    const session = await loginSession(fixture);
+
+    const response = await request(fixture.app)
+      .get(`${STEP_UP_PATH}?capability=${encodeURIComponent(ADMIN_CAPABILITY)}`)
+      .set('Cookie', session.sessionCookie);
+
+    expect(response.status).toBe(403);
+    expect(response.body.code).toBe('insufficient_role_authority');
+    expect(fixture.oauthClient.authorizationRequests).toHaveLength(1);
   });
 
   it('completes step-up once and attaches TOTP-backed elevation to the current session', async () => {
@@ -689,6 +713,7 @@ describe('ConsoleBffAuthModule', () => {
         userId: USER_ID,
         disabledAt: null,
         authzVersion: 3,
+        roles: ['account_admin'],
       }, {
         sub: 'github_other',
         userId: '118f3d47-73ae-7f10-a0de-0742618d4fb1',

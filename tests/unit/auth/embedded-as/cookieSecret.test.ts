@@ -23,8 +23,10 @@ import os from 'node:os';
 import { randomBytes } from 'node:crypto';
 import {
   loadOrGenerateCookieSigningKeys,
+  loadOrGenerateCookieSigningKeysViaStore,
   rotateCookieSecret,
 } from '../../../../src/auth/embedded-as/cookieSecret.js';
+import { InMemorySigningKeyStore } from '../../../../src/storage/signingKeys/InMemorySigningKeyStore.js';
 
 describe('cookieSecret — H5 coverage', () => {
   let tmpDir: string;
@@ -148,5 +150,50 @@ describe('cookieSecret — H5 coverage', () => {
       rotateCookieSecret(filePath, { envSecret: randomBytes(32).toString('hex') });
       expect(fs.existsSync(filePath)).toBe(true);
     });
+  });
+
+  it('does not regenerate a deliberately retired durable cookie key', async () => {
+    const store = new InMemorySigningKeyStore();
+    await loadOrGenerateCookieSigningKeysViaStore(store);
+    const active = await store.getActive('cookie');
+    if (!active) throw new Error('expected generated cookie signing key');
+    await store.retire(active.kid);
+
+    await expect(loadOrGenerateCookieSigningKeysViaStore(store)).rejects.toThrow(
+      'No active cookie signing key is available',
+    );
+    await expect(store.getActive('cookie')).resolves.toBeNull();
+  });
+
+  it('returns the active cookie key first and retains a recently rotated verifier', async () => {
+    const store = new InMemorySigningKeyStore();
+    const [oldSecret] = await loadOrGenerateCookieSigningKeysViaStore(store);
+    const newSecret = randomBytes(32).toString('base64');
+    await store.rotate({
+      kid: 'cookie-new',
+      kind: 'cookie',
+      payload: { secret: newSecret, length: 32 },
+    });
+
+    await expect(loadOrGenerateCookieSigningKeysViaStore(store)).resolves.toEqual([
+      newSecret,
+      oldSecret,
+    ]);
+  });
+
+  it('never returns an explicitly retired cookie key as a verifier', async () => {
+    const store = new InMemorySigningKeyStore();
+    await loadOrGenerateCookieSigningKeysViaStore(store);
+    const prior = await store.getActive('cookie');
+    if (!prior) throw new Error('expected active cookie key');
+    const newSecret = randomBytes(32).toString('base64');
+    await store.rotate({
+      kid: 'cookie-after-retire',
+      kind: 'cookie',
+      payload: { secret: newSecret, length: 32 },
+    });
+    await store.retire(prior.kid);
+
+    await expect(loadOrGenerateCookieSigningKeysViaStore(store)).resolves.toEqual([newSecret]);
   });
 });

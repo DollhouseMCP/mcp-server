@@ -8,6 +8,7 @@ import type {
   ConsoleRequest,
 } from '../../platform/ConsolePlatformTypes.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
+import { attachSharedInMemoryTransactionGate } from '../../../utils/InMemoryTransactionGate.js';
 import {
   canonicalizeIntegrationApiHosts,
   IntegrationApiHostValidationError,
@@ -18,12 +19,15 @@ import {
   isValidDisplayString,
   isWellFormedUnicode,
 } from '../../stores/ConsoleStoreValidation.js';
-import type {
-  IIntegrationDescriptorStore,
-  IntegrationDescriptorCreateInput,
-  IntegrationDescriptorRecord,
-  IntegrationOAuthDescriptor,
-  IntegrationStaticApiKeyDescriptor,
+import {
+  IntegrationDescriptorMutationBusyError,
+  IntegrationDescriptorRevisionConflictError,
+  isCleanupRevocationEndpointRepair,
+  type IIntegrationDescriptorStore,
+  type IntegrationDescriptorCreateInput,
+  type IntegrationDescriptorRecord,
+  type IntegrationOAuthDescriptor,
+  type IntegrationStaticApiKeyDescriptor,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import type {
@@ -75,7 +79,18 @@ export class IntegrationDescriptorAuthoringService {
      */
     readonly reservedProviderIds?: ReadonlySet<string>;
     readonly now?: () => Date;
-  }) {}
+  }) {
+    attachSharedInMemoryTransactionGate([options.integrationStore, options.descriptorStore]);
+    options.descriptorStore.configureCredentialMutationFence?.({
+      hasCredentialMaterial: integrationDescriptorId =>
+        options.integrationStore.hasCredentialMaterialByDescriptor(integrationDescriptorId),
+      hasExecutableCredentialMaterial: integrationDescriptorId =>
+        options.integrationStore.hasExecutableCredentialMaterialByDescriptor(integrationDescriptorId),
+      revokeCredentiallessBindings: async (integrationDescriptorId, revokedAt) => {
+        await options.integrationStore.revokeAllByDescriptor(integrationDescriptorId, revokedAt);
+      },
+    });
+  }
 
   async list(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
@@ -201,9 +216,22 @@ export class IntegrationDescriptorAuthoringService {
 
     try {
       const merged = mergeDescriptor(existing, parsed);
+      const cleanupEndpointRepair = parsed.clientSecret === undefined
+        && isCleanupRevocationEndpointRepair(existing, {
+          ...existing,
+          authStrategy: (merged.authStrategy ?? existing.authStrategy) as IntegrationDescriptorRecord['authStrategy'],
+          apiHosts: merged.apiHosts ?? existing.apiHosts,
+          oauth: merged.oauth === undefined ? existing.oauth : merged.oauth,
+          staticApiKey: merged.staticApiKey === undefined ? existing.staticApiKey : merged.staticApiKey,
+          operationPromotion: merged.operationPromotion ?? existing.operationPromotion,
+        });
       if (hasCredentialRoutingChanges(parsed)) {
         const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-        if (hasIntegrationCredentials(active)) {
+        const pendingCleanup = await this.options.integrationStore.hasCredentialCleanupPending(
+          auth.userId,
+          existing.provider,
+        );
+        if ((hasIntegrationCredentials(active) || pendingCleanup) && !cleanupEndpointRepair) {
           auditDescriptorDecision(existing.provider, 'updated', 'blocked_connected');
           return connectedDescriptorConflict('updated');
         }
@@ -226,10 +254,19 @@ export class IntegrationDescriptorAuthoringService {
           existing.createdAt,
           this.now(),
         ),
+        { expectedUpdatedAt: existing.updatedAt },
       );
       auditDescriptorDecision(record.provider, 'updated', 'allowed');
       return { status: 200, body: serializeIntegrationDescriptor(record) };
     } catch (error) {
+      if (error instanceof IntegrationDescriptorMutationBusyError) {
+        auditDescriptorDecision(existing.provider, 'updated', 'blocked_callback');
+        return conflict('descriptor cannot be updated while an OAuth callback is completing');
+      }
+      if (error instanceof IntegrationDescriptorRevisionConflictError) {
+        auditDescriptorDecision(existing.provider, 'updated', 'denied_conflict');
+        return conflict('descriptor changed while this update was being prepared; reload and retry');
+      }
       if (error instanceof ConsoleStoreValidationError) {
         auditDescriptorDecision(existing.provider, 'updated', 'denied_invalid');
         return unprocessable(error.message);
@@ -253,7 +290,11 @@ export class IntegrationDescriptorAuthoringService {
     }
     try {
       const active = await this.options.integrationStore.findByProvider(auth.userId, existing.provider);
-      if (hasIntegrationCredentials(active)) {
+      const pendingCleanup = await this.options.integrationStore.hasCredentialCleanupPending(
+        auth.userId,
+        existing.provider,
+      );
+      if (hasIntegrationCredentials(active) || pendingCleanup) {
         auditDescriptorDecision(existing.provider, 'deleted', 'blocked_connected');
         return connectedDescriptorConflict('deleted');
       }
@@ -267,6 +308,10 @@ export class IntegrationDescriptorAuthoringService {
       auditDescriptorDecision(existing.provider, 'deleted', 'allowed');
       return { status: 204 };
     } catch (error) {
+      if (error instanceof IntegrationDescriptorMutationBusyError) {
+        auditDescriptorDecision(existing.provider, 'deleted', 'blocked_callback');
+        return conflict('descriptor cannot be deleted while an OAuth callback is completing');
+      }
       auditDescriptorDecision(existing.provider, 'deleted', 'failed');
       throw error;
     }
@@ -729,6 +774,7 @@ function connectedDescriptorConflict(action: 'updated' | 'deleted'): ConsoleHand
 
 type DescriptorAuditOutcome =
   | 'allowed'
+  | 'blocked_callback'
   | 'blocked_connected'
   | 'denied_conflict'
   | 'denied_invalid'

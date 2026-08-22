@@ -5,6 +5,7 @@ export type IntegrationCallbackRejectedReason =
   | 'session_mismatch'
   | 'descriptor_mismatch'
   | 'credential_persistence_failed'
+  | 'token_exchange_failed'
   | 'expired'
   | 'consumed'
   | 'missing';

@@ -82,7 +82,9 @@ Owner: {{owner}}
     contentRequired: false,
   },
 });
-const IMPORT_FILE_LIMIT_BYTES = 1_100_000;
+const DEFAULT_PORTFOLIO_CONSOLE_REQUEST_MAX_BYTES = 1024 * 1024;
+const IMPORT_FILE_LIMIT_BYTES = 10 * 1024 * 1024;
+const ACTIVE_SYNC_JOB_STORAGE_KEY = 'dollhouse.portfolio.active-sync-job.v1';
 const IMPORT_ENVELOPE_KEYS = new Set([
   'metadata', 'content', 'instructions', 'entries', 'stats', 'extensions', 'id', 'type', 'name', 'tags',
   'display_name', 'canonical_name', 'validation_status', 'updated_at',
@@ -99,12 +101,14 @@ const GUIDED_METADATA_KEYS = new Set([
 ]);
 const TERMINAL_SYNC_STATES = new Set(['succeeded', 'failed']);
 const SYNC_POLL_INTERVAL_MS = 1_000;
-const SYNC_POLL_LIMIT = 60;
 // The portfolio exposes one authoring workspace; opening another closes the
 // previous workspace and removes its document-level listeners first.
 let activeWorkspaceCleanup = null;
 
-export function createPortfolioAuthoring({ host, hasRoute, notify, refresh }) {
+export function createPortfolioAuthoring({ host, hasRoute, notify, refresh, requestMaxBytes }) {
+  const effectiveRequestMaxBytes = Number.isSafeInteger(requestMaxBytes) && requestMaxBytes > 0
+    ? requestMaxBytes
+    : DEFAULT_PORTFOLIO_CONSOLE_REQUEST_MAX_BYTES;
   const capabilities = Object.freeze({
     create: hasRoute('POST', '/me/portfolio/elements/:type'),
     edit: hasRoute('PATCH', '/me/portfolio/elements/:type/:name'),
@@ -116,9 +120,9 @@ export function createPortfolioAuthoring({ host, hasRoute, notify, refresh }) {
 
   return Object.freeze({
     capabilities,
-    openCreate: () => openEditor({ host, mode: 'create', capabilities, notify, refresh }),
-    openImport: () => openEditor({ host, mode: 'import', capabilities, notify, refresh }),
-    openEdit: element => openEditor({ host, mode: 'edit', element, capabilities, notify, refresh }),
+    openCreate: () => openEditor({ host, mode: 'create', capabilities, notify, refresh, requestMaxBytes: effectiveRequestMaxBytes }),
+    openImport: () => openEditor({ host, mode: 'import', capabilities, notify, refresh, requestMaxBytes: effectiveRequestMaxBytes }),
+    openEdit: element => openEditor({ host, mode: 'edit', element, capabilities, notify, refresh, requestMaxBytes: effectiveRequestMaxBytes }),
     deleteElement: element => deleteElement(element, { notify, refresh }),
     openSync: () => openSync({ notify, refresh }),
   });
@@ -133,6 +137,7 @@ function openEditor(context) {
   workspace.hidden = false;
   browser.hidden = true;
   const form = workspace.querySelector('form');
+  form.dataset.requestMaxBytes = String(context.requestMaxBytes ?? DEFAULT_PORTFOLIO_CONSOLE_REQUEST_MAX_BYTES);
   populateGuidedMetadata(form, context.element?.metadata ?? {}, context.element?.type ?? 'personas');
   let initialDraft = formDraft(form);
   let unsavedImport = false;
@@ -615,7 +620,19 @@ function editorPayload(form, includeName) {
     content,
   };
   if (includeName) payload.name = form.elements.name.value.trim();
+  const requestSizeProblem = portfolioRequestSizeProblem(payload, Number(form.dataset.requestMaxBytes));
+  if (requestSizeProblem) return { problem: requestSizeProblem, field: form.elements.content };
   return { payload };
+}
+
+export function serializedJsonByteLength(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}
+
+export function portfolioRequestSizeProblem(payload, maxBytes = DEFAULT_PORTFOLIO_CONSOLE_REQUEST_MAX_BYTES) {
+  return serializedJsonByteLength(payload) > maxBytes
+    ? `This draft exceeds the ${formatBytes(maxBytes)} web console request limit. Reduce its content or metadata before validating or saving.`
+    : null;
 }
 
 function commonGuidedMetadata(form) {
@@ -1134,7 +1151,7 @@ function wireImport(workspace, form, onDraft) {
 }
 
 async function parseElementFile(file) {
-  if (file.size > IMPORT_FILE_LIMIT_BYTES) throw new Error('This file is larger than the 1 MB import limit.');
+  if (file.size > IMPORT_FILE_LIMIT_BYTES) throw new Error('This file is larger than the 10 MiB element import limit.');
   const extension = file.name.toLowerCase().split('.').pop();
   if (!['md', 'markdown', 'yaml', 'yml', 'json'].includes(extension)) {
     throw new Error('Choose a Markdown, YAML, or JSON Dollhouse element file.');
@@ -1171,7 +1188,7 @@ function loadYaml(source) {
   }
 }
 
-function normalizeImportedDraft(parsed, originalSource, filename) {
+export function normalizeImportedDraft(parsed, originalSource, filename) {
   const packageRecord = asRecord(parsed.record);
   const portable = typeof packageRecord.exportVersion === 'string' && packageRecord.data !== undefined;
   const nested = portable ? parsePortableData(packageRecord) : packageRecord;
@@ -1252,7 +1269,10 @@ function importedMetadata(record) {
 
 function importedContent({ type, parsed, nested, originalSource, portable, packageRecord }) {
   if (type === 'memories') {
-    if (portable && typeof packageRecord.data === 'string') return packageRecord.data;
+    if (portable) {
+      if (typeof packageRecord.data === 'string') return packageRecord.data;
+      return JSON.stringify(nested, null, 2);
+    }
     return originalSource;
   }
   if (typeof parsed.content === 'string') return parsed.content;
@@ -1369,6 +1389,11 @@ async function openSync({ notify, refresh }) {
     event.preventDefault();
     startSync(dialog, { notify, refresh, signal: controller.signal });
   });
+  const pendingJobId = readPendingPortfolioSyncJob();
+  if (pendingJobId) {
+    renderSyncStatus(dialog, null, 'Resuming the last portfolio sync…', 'neutral');
+    void watchSync(dialog, pendingJobId, { notify, refresh, signal: controller.signal });
+  }
 }
 
 function syncDialog() {
@@ -1409,15 +1434,9 @@ async function startSync(dialog, context) {
       setSyncBusy(dialog, false);
       return;
     }
+    rememberPortfolioSyncJob(response.body.job_id);
     renderSyncStatus(dialog, response.body, 'Sync queued.');
-    const result = await pollSync(dialog, response.body.job_id, context.signal);
-    if (result?.status === 'succeeded') {
-      context.notify('Portfolio sync completed.', 'success');
-      await context.refresh();
-    } else if (result?.status === 'failed') {
-      const errorSuffix = result.error_code ? ` (${result.error_code})` : '';
-      context.notify(`Portfolio sync failed${errorSuffix}.`, 'error');
-    }
+    await handleSyncResult(await pollSync(dialog, response.body.job_id, context.signal), context);
   } catch (error) {
     if (error?.name !== 'AbortError') renderSyncStatus(dialog, null, 'Sync status could not reach the server.');
   } finally {
@@ -1425,30 +1444,100 @@ async function startSync(dialog, context) {
   }
 }
 
+async function watchSync(dialog, jobId, context) {
+  setSyncBusy(dialog, true);
+  try {
+    await handleSyncResult(await pollSync(dialog, jobId, context.signal), context);
+  } catch (error) {
+    if (error?.name !== 'AbortError') renderSyncStatus(dialog, null, 'Sync status could not reach the server.');
+  } finally {
+    setSyncBusy(dialog, false);
+  }
+}
+
+async function handleSyncResult(result, context) {
+  if (result?.status === 'succeeded') {
+    context.notify('Portfolio sync completed.', 'success');
+    await context.refresh();
+  } else if (result?.status === 'failed') {
+    const errorSuffix = result.error_code ? ` (${result.error_code})` : '';
+    context.notify(`Portfolio sync failed${errorSuffix}.`, 'error');
+  }
+}
+
 async function pollSync(dialog, jobId, signal) {
-  for (let attempt = 0; attempt < SYNC_POLL_LIMIT; attempt += 1) {
-    await delay(SYNC_POLL_INTERVAL_MS, signal);
+  dialog.dataset.syncJobId = jobId;
+  while (!signal.aborted) {
     const response = await get(`/me/portfolio/sync/${encodeURIComponent(jobId)}`, { signal });
     if (response.status !== 200 || !response.body) {
+      if (response.status === 404) forgetPortfolioSyncJob(jobId);
       renderSyncStatus(dialog, null, responseDetail(response, 'Could not read sync status.'));
       return null;
     }
     renderSyncStatus(dialog, response.body);
-    if (TERMINAL_SYNC_STATES.has(response.body.status)) return response.body;
+    if (TERMINAL_SYNC_STATES.has(response.body.status)) {
+      forgetPortfolioSyncJob(jobId);
+      return response.body;
+    }
+    await delay(SYNC_POLL_INTERVAL_MS, signal);
   }
-  renderSyncStatus(dialog, null, 'Sync is still running. Close this dialog and check again later.');
   return null;
 }
 
-function renderSyncStatus(dialog, job, fallback) {
+function renderSyncStatus(dialog, job, fallback, fallbackKind = 'error') {
   const status = dialog.querySelector('[data-sync-status]');
   if (!job) {
-    status.innerHTML = `<p class="portfolio-message portfolio-message--error">${escapeHtml(fallback)}</p>`;
+    status.innerHTML = `<p class="portfolio-message portfolio-message--${fallbackKind}">${escapeHtml(fallback)}</p>`;
     return;
   }
   const summary = job.result_summary ? `<pre>${escapeHtml(JSON.stringify(job.result_summary, null, 2))}</pre>` : '';
   const error = job.error_code ? `<p>Error: <code>${escapeHtml(job.error_code)}</code></p>` : '';
   status.innerHTML = `<p><strong>${escapeHtml(capitalize(job.status || fallback || 'updated'))}</strong> · ${escapeHtml(job.direction || '')} · ${escapeHtml(job.conflict_policy || '')}</p>${error}${summary}`;
+}
+
+export function rememberPortfolioSyncJob(jobId, storage = portfolioSyncStorage()) {
+  if (!isValidSyncJobId(jobId) || !storage) return false;
+  try {
+    storage.setItem(ACTIVE_SYNC_JOB_STORAGE_KEY, jobId);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function readPendingPortfolioSyncJob(storage = portfolioSyncStorage()) {
+  if (!storage) return null;
+  try {
+    const jobId = storage.getItem(ACTIVE_SYNC_JOB_STORAGE_KEY);
+    if (isValidSyncJobId(jobId)) return jobId;
+    if (jobId !== null) storage.removeItem(ACTIVE_SYNC_JOB_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+export function forgetPortfolioSyncJob(jobId, storage = portfolioSyncStorage()) {
+  if (!storage) return;
+  try {
+    if (jobId === undefined || storage.getItem(ACTIVE_SYNC_JOB_STORAGE_KEY) === jobId) {
+      storage.removeItem(ACTIVE_SYNC_JOB_STORAGE_KEY);
+    }
+  } catch {
+    // Storage availability is best-effort; server state remains authoritative.
+  }
+}
+
+function portfolioSyncStorage() {
+  try {
+    return globalThis.sessionStorage ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function isValidSyncJobId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9][A-Za-z0-9_-]{0,199}$/u.test(value);
 }
 
 function setEditorBusy(workspace, busy) {
@@ -1554,6 +1643,12 @@ function focusElement(element) {
 
 function capitalize(value) {
   return value ? value.charAt(0).toUpperCase() + value.slice(1) : '';
+}
+
+function formatBytes(value) {
+  if (value >= 1024 * 1024 && value % (1024 * 1024) === 0) return `${value / (1024 * 1024)} MiB`;
+  if (value >= 1024 && value % 1024 === 0) return `${value / 1024} KiB`;
+  return `${value} bytes`;
 }
 
 function escapeHtml(value) {

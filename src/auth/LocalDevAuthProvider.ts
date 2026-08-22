@@ -91,6 +91,11 @@ function buildLocalAuthResult(
       ? payload.roles.filter((r): r is string => typeof r === 'string')
       : undefined,
     exp: typeof payload.exp === 'number' ? payload.exp : undefined,
+    iat: typeof payload.iat === 'number' ? payload.iat : undefined,
+    authzVersion: Number.isSafeInteger(payload.dollhouse_authz_version)
+        && Number(payload.dollhouse_authz_version) > 0
+      ? Number(payload.dollhouse_authz_version)
+      : undefined,
   };
   return { ok: true, claims };
 }
@@ -160,6 +165,9 @@ export class LocalDevAuthProvider implements IAuthProvider {
       ...(options?.displayName ? { display_name: options.displayName } : {}),
       ...(options?.email ? { email: options.email } : {}),
       ...(options?.scopes?.length ? { scope: options.scopes.join(' ') } : {}),
+      ...(options?.authzVersion !== undefined
+        ? { dollhouse_authz_version: options.authzVersion }
+        : {}),
     })
       .setProtectedHeader({ alg: ALGORITHM, typ: 'at+jwt' })
       .setIssuer(ISSUER)

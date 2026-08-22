@@ -406,11 +406,6 @@ export const suppressions: Suppression[] = [
   // ========================================
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/types/*.ts',
-    reason: 'Type definition files do not process user input'
-  },
-  {
-    rule: 'DMCP-SEC-004',
     file: 'src/telemetry/types.ts',
     reason: 'Telemetry type definition file - contains only TypeScript interfaces, no runtime code or user input processing'
   },
@@ -418,26 +413,6 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-004',
     file: '**/telemetry/types.ts',
     reason: 'Telemetry type definition file - CI path variant, contains only TypeScript interfaces'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/types/elements/*.ts',
-    reason: 'Element interface files are type definitions that do not process user input'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/errors/*.ts',
-    reason: 'Error classes do not process user input'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/config/*.ts',
-    reason: 'Configuration files do not process user input directly'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/constants/*.ts',
-    reason: 'Constant definition files do not process user input'
   },
   {
     rule: 'DMCP-SEC-004',
@@ -486,28 +461,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: '**/memories/*.ts',
-    reason: 'Memory element files - all user input is properly normalized in Memory.ts and MemoryManager.ts'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/elements/memories/*.ts',
-    reason: 'Memory element files - all user input is properly normalized in Memory.ts and MemoryManager.ts'
-  },
-  {
-    rule: 'DMCP-SEC-004',
     file: 'src/utils/version.ts',
     reason: 'Version utility only handles internal version strings, not user input'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/cache/*.ts',
-    reason: 'Cache layer receives already-normalized input'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/security/**/*.ts',
-    reason: 'Security modules handle validation and normalization themselves'
   },
   {
     rule: 'DMCP-SEC-004',
@@ -536,53 +491,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/handlers/*.ts',
-    reason: 'CENTRALIZED NORMALIZATION: All handlers receive pre-normalized input from ServerSetup.normalizeArgumentsUnicode() (lines 89, 113-146). Unicode normalization happens at the entry point before handlers are invoked. PR #1'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/handlers/**/*.ts',
-    reason: 'CENTRALIZED NORMALIZATION: All handler strategies and modules receive pre-normalized input from ServerSetup.normalizeArgumentsUnicode(). Input is sanitized at the MCP request layer. PR #1'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/elements/**/*.ts',
-    reason: 'CENTRALIZED NORMALIZATION: Element managers receive pre-normalized input from handlers, which receive pre-normalized input from ServerSetup. Defense in depth with centralized entry point normalization. PR #1'
-  },
-  {
-    rule: 'DMCP-SEC-004',
     file: 'src/di/Container.ts',
     reason: 'FALSE POSITIVE: DI Container only wires dependencies, does not process user input. All user input is normalized in ServerSetup before reaching any injected service. PR #1'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/collection/*.ts',
-    reason: 'Marketplace modules receive normalized input from tool handlers'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/collection/**/*.ts',
-    reason: 'Marketplace modules receive normalized input from tool handlers'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/persona/*.ts',
-    reason: 'Persona modules receive normalized input from tool handlers'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/persona/**/*.ts',
-    reason: 'Persona modules receive normalized input from tool handlers'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/update/*.ts',
-    reason: 'Update modules receive normalized input from tool handlers'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/tools/*.ts',
-    reason: 'Tool files receive normalized input from ServerSetup'
   },
   {
     rule: 'DMCP-SEC-004',
@@ -591,23 +501,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
-    file: 'src/server/tools/*.ts',
-    reason: 'Server tools receive normalized input from ServerSetup'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'scripts/**/*',
-    reason: 'Build and utility scripts do not process user input'
-  },
-  {
-    rule: 'DMCP-SEC-004',
     file: 'src/tools/portfolio/types.ts',
     reason: 'Type definition file containing only TypeScript interfaces - no runtime code or user input processing'
-  },
-  {
-    rule: 'DMCP-SEC-004',
-    file: 'src/tools/**/types.ts',
-    reason: 'Type definition files do not process user input - compile-time only'
   },
   {
     rule: 'DMCP-SEC-004',
@@ -725,26 +620,6 @@ export const suppressions: Suppression[] = [
   // ========================================
   {
     rule: 'DMCP-SEC-006',
-    file: 'src/types/*.ts',
-    reason: 'Type definition files do not perform security operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/types/elements/*.ts',
-    reason: 'Element interface files are type definitions that do not perform security operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/constants/*.ts',
-    reason: 'Constant files do not perform security operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/config/*.ts',
-    reason: 'Configuration files do not perform security operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
     file: 'src/elements/memories/constants.ts',
     reason: 'Constants file - contains only type definitions and constants, no security operations'
   },
@@ -765,43 +640,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
-    file: 'src/errors/*.ts',
-    reason: 'Error classes are not security operations requiring audit'
-  },
-  {
-    rule: 'DMCP-SEC-006',
     file: '**/*.json',
     reason: 'JSON files cannot contain executable code'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/security/**/*.ts',
-    reason: 'Security modules are infrastructure, not operations requiring audit'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/collection/*.ts',
-    reason: 'Marketplace operations are not security-sensitive requiring audit'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/collection/**/*.ts',
-    reason: 'Marketplace operations are not security-sensitive requiring audit'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/persona/*.ts',
-    reason: 'Persona operations are validated at entry point, not security operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/persona/**/*.ts',
-    reason: 'Persona operations are validated at entry point, not security operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/server/tools/**/*.ts',
-    reason: 'Tool implementations delegate to services that handle security'
   },
   {
     rule: 'DMCP-SEC-006',
@@ -815,23 +655,8 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-006',
-    file: 'src/utils/*.ts',
-    reason: 'Utility functions are not security operations requiring audit'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'src/update/**/*.ts',
-    reason: 'Update system has its own logging and is not a direct security operation'
-  },
-  {
-    rule: 'DMCP-SEC-006',
     file: 'src/server/types.ts',
     reason: 'Type definition file does not perform operations'
-  },
-  {
-    rule: 'DMCP-SEC-006',
-    file: 'scripts/**/*',
-    reason: 'Build scripts do not perform runtime security operations'
   },
   {
     rule: 'DMCP-SEC-006',
@@ -896,10 +721,73 @@ export const suppressions: Suppression[] = [
     file: 'src/services/query/SortService.ts',
     reason: 'SortService validates sortBy against enum whitelist (SortableField) - no arbitrary string input. sortOrder is enum-validated. No Unicode normalization needed. PR #46'
   },
+
+  // ========================================
+  // Pure Validation and Cryptographic Primitives
+  // ========================================
+  // DMCP-SEC-006 is intentionally operation-oriented. These exact files are
+  // pure validators, serializers, or per-record cryptographic primitives;
+  // logging every validate/encrypt/decrypt call would create noisy recursive
+  // audit traffic. Their callers audit the user-visible security operation.
   {
-    rule: 'DMCP-SEC-004',
-    file: 'src/services/query/*.ts',
-    reason: 'Query services receive pre-normalized input from MCP layer and use normalizeSearchTerm() for additional protection. PR #46'
+    rule: 'DMCP-SEC-006',
+    file: 'src/utils/TemplateRenderer.ts',
+    reason: 'Pure template validation/rendering utility; user-visible template operations are audited by their handler.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/security/yamlValidator.ts',
+    reason: 'Pure YAML validation boundary; findings are returned to callers and security events are emitted by the surrounding operation.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/security/pathValidator.ts',
+    reason: 'Pure path validation primitive; it does not perform the filesystem operation being audited.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/security/commandValidator.ts',
+    reason: 'Pure command argument validation primitive; it does not execute commands or mutate security state.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/persona/PersonaElement.ts',
+    reason: 'Element model validation method; persistence and activation operations provide the audit boundary.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/storage/signingKeys/signingKeyPayloadEncryption.ts',
+    reason: 'Per-record AEAD primitive; key lifecycle operations are audited by the signing-key service rather than logging plaintext-adjacent calls.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/storage/signingKeys/PostgresSigningKeyStore.ts',
+    reason: 'Signing-key storage encryption is an implementation detail; lifecycle rotation and administrative operations are the audited boundary.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/security/tokenStores/DatabaseTokenStore.ts',
+    reason: 'Token envelope encryption primitive; token issuance, refresh, and revocation are audited by the authorization layer.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/security/validation/PatternExtractor.ts',
+    reason: 'Pattern extraction encrypts transient matches; the enclosing security operation owns audit logging.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/security/encryption/PatternEncryptor.ts',
+    reason: 'Low-level encryption primitive; emitting an audit event for every block would be recursive and operationally noisy.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/security/encryption/PatternDecryptor.ts',
+    reason: 'Low-level decryption primitive; authorization and caller-level operations own the audit event.'
+  },
+  {
+    rule: 'DMCP-SEC-006',
+    file: 'src/handlers/element-crud/replaceElement.ts',
+    reason: 'Transactional replacement helper invokes manager validation; the enclosing CRUD handler audits the user-visible mutation.'
   },
 
   // ========================================
@@ -936,11 +824,6 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: '*',
-    file: '**/*.json',
-    reason: 'JSON configuration and data files do not execute code'
-  },
-  {
-    rule: '*',
     file: 'LICENSE',
     reason: 'License file'
   },
@@ -948,21 +831,6 @@ export const suppressions: Suppression[] = [
     rule: '*',
     file: '.gitignore',
     reason: 'Git configuration file'
-  },
-  {
-    rule: '*',
-    file: 'package-lock.json',
-    reason: 'NPM lock file - auto-generated, no user input processing'
-  },
-  {
-    rule: '*',
-    file: '**/*.yml',
-    reason: 'YAML configuration files are data, not code'
-  },
-  {
-    rule: '*',
-    file: '**/*.yaml',
-    reason: 'YAML configuration files are data, not code'
   },
 
   // ========================================

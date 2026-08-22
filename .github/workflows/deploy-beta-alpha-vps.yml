@@ -47,6 +47,7 @@ permissions:
 jobs:
   deploy:
     name: Deploy beta to alpha VPS
+    if: github.ref == 'refs/heads/beta'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
@@ -64,7 +65,7 @@ jobs:
 
     steps:
       - name: Checkout workflow source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 1
 
@@ -84,12 +85,20 @@ jobs:
               ;;
           esac
 
-          if [[ "${INPUT_GIT_REF}" != "beta" \
-              && "${INPUT_GIT_REF}" != "refs/heads/beta" \
-              && ! "${INPUT_GIT_REF}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-beta(\.[0-9A-Za-z.-]+)?$ ]]; then
-            echo "::error::Deployments from this workflow are limited to beta, refs/heads/beta, or SemVer v*-beta / v*-beta.* tags; got ${INPUT_GIT_REF}"
-            exit 1
-          fi
+          case "${INPUT_GIT_REF}" in
+            beta|refs/heads/beta)
+              ;;
+            v*)
+              if ! node scripts/compare-semver.mjs --validate-beta "${INPUT_GIT_REF#v}"; then
+                echo "::error::Deployments from this workflow require a strict beta SemVer tag; got ${INPUT_GIT_REF}"
+                exit 1
+              fi
+              ;;
+            *)
+              echo "::error::Deployments from this workflow are limited to beta, refs/heads/beta, or strict SemVer beta tags; got ${INPUT_GIT_REF}"
+              exit 1
+              ;;
+          esac
 
           case "${INPUT_LOG_LEVEL}" in
             info|debug|quiet)
@@ -128,7 +137,7 @@ jobs:
           echo "DOLLHOUSE_REMOTE_KNOWN_HOSTS_FILE=${known_hosts_file}" >> "$GITHUB_ENV"
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: '20.x'
           cache: 'npm'

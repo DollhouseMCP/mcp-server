@@ -11,7 +11,7 @@ import {
   objectValue,
   stringField,
 } from '../../platform/ConsoleProjectorHelpers.js';
-import { offsetConsoleCursor, offsetFromConsoleCursor } from '../../platform/ConsoleCursor.js';
+import { decodeConsoleCursor, encodeConsoleCursor } from '../../platform/ConsoleCursor.js';
 import { boundedLimit, boundedString, firstString } from '../../platform/ConsoleQueryParams.js';
 
 const SELF_CAPABILITY = 'console:self';
@@ -31,8 +31,11 @@ export interface ConsoleLogQueryOptions {
   readonly sessionId: string | null;
   readonly since: string | null;
   readonly limit: number;
-  /** Continuation position within the filtered result set (0 = first page). */
-  readonly offset: number;
+  /** Opaque request cursor, retained in the response when it is valid. */
+  readonly cursor: string | null;
+  /** Continue strictly after this entry in newest-first timestamp/id order. */
+  readonly beforeTimestamp: string | null;
+  readonly beforeId: string | null;
 }
 
 export interface ConsoleLogEntry {
@@ -100,6 +103,8 @@ export function createMeLogsModule(options: MeLogsModuleOptions): ConsoleModuleD
 }
 
 function parseLogQuery(req: ConsoleRequest, userId: string): ConsoleLogQueryOptions {
+  const rawCursor = boundedString(firstString(req.query.cursor), 512);
+  const boundary = logBoundaryFromCursor(rawCursor);
   return {
     userId,
     level: boundedString(firstString(req.query.level), 16),
@@ -109,19 +114,34 @@ function parseLogQuery(req: ConsoleRequest, userId: string): ConsoleLogQueryOpti
     sessionId: boundedString(firstString(req.query.session_id), 200),
     since: boundedString(firstString(req.query.since), 64),
     limit: boundedLimit(firstString(req.query.limit), 200, 1000),
-    offset: offsetFromConsoleCursor(boundedString(firstString(req.query.cursor), 512)),
+    cursor: boundary ? rawCursor : null,
+    beforeTimestamp: boundary?.timestamp ?? null,
+    beforeId: boundary?.id ?? null,
   };
 }
 
 function serializeConsoleLogPage(page: ConsoleLogPage, query: ConsoleLogQueryOptions): ConsoleLogPageDto {
+  const lastEntry = page.entries.at(-1);
   return {
     items: page.entries,
     page: {
       limit: query.limit,
-      cursor: query.offset > 0 ? offsetConsoleCursor(query.offset) : null,
-      next_cursor: page.has_more ? offsetConsoleCursor(query.offset + page.entries.length) : null,
+      cursor: query.cursor,
+      next_cursor: page.has_more && lastEntry ? logCursor(lastEntry) : null,
     },
   };
+}
+
+function logBoundaryFromCursor(token: string | null): { timestamp: string; id: string } | null {
+  if (!token) return null;
+  const payload = decodeConsoleCursor(token);
+  if (payload?.v !== 1 || typeof payload.t !== 'string' || typeof payload.i !== 'string') return null;
+  if (payload.t.length === 0 || payload.t.length > 64 || payload.i.length === 0 || payload.i.length > 200) return null;
+  return { timestamp: payload.t, id: payload.i };
+}
+
+function logCursor(entry: ConsoleLogEntry): string {
+  return encodeConsoleCursor({ v: 1, t: entry.ts, i: entry.id });
 }
 
 function projectConsoleLogPageDto(value: unknown): ConsoleLogPageDto {
@@ -150,4 +170,3 @@ function projectConsoleLogEntry(value: unknown): ConsoleLogEntry {
     session_id: nullableStringField(record, 'session_id'),
   };
 }
-

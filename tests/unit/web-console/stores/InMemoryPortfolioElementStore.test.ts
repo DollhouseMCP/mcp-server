@@ -5,6 +5,7 @@ import {
   InMemoryPortfolioElementStore,
   PortfolioElementAlreadyExistsError,
   PortfolioElementVersionConflictError,
+  PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
   PORTFOLIO_ELEMENT_METADATA_MAX_BYTES,
   PORTFOLIO_ELEMENT_TAGS_MAX,
   validatePortfolioElementDetailRecord,
@@ -118,6 +119,12 @@ describe('InMemoryPortfolioElementStore', () => {
     expect(() => validatePortfolioElementSummaryRecord(portfolioElement({
       tags: Array.from({ length: PORTFOLIO_ELEMENT_TAGS_MAX + 1 }, (_, index) => `tag-${index}`),
     }))).toThrow(ConsoleStoreValidationError);
+  });
+
+  it('reports the configured 10 MiB content cap', () => {
+    expect(() => validatePortfolioElementDetailRecord(portfolioElement({
+      content: 'x'.repeat(PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES + 1),
+    }))).toThrow('content must be at most 10 MiB');
   });
 
   it('creates, updates, and deletes active elements with version checks', async () => {

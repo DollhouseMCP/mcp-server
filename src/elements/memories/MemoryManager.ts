@@ -11,6 +11,7 @@
  */
 
 import { Memory, MemoryMetadata } from './Memory.js';
+import { createHash } from 'node:crypto';
 import { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
@@ -20,6 +21,11 @@ import {
 } from '../../config/performance-constants.js';
 import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
 import { MemoryStorageLayer } from '../../storage/MemoryStorageLayer.js';
+import {
+  MemoryPersistenceConflictError,
+  type MemoryRevisionResult,
+  type MemoryStorageRevision,
+} from '../../storage/DatabaseMemoryStorageLayer.js';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
 const _packageLocator = new PackageResourceLocator();
@@ -45,6 +51,8 @@ import * as fs from 'node:fs/promises';
 import * as crypto from 'crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { sanitizeGatekeeperPolicy, getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
+import { withFilesystemInterprocessGuard } from '../../security/filesystemInterprocessGuard.js';
+import { recordElementPersistenceRevision } from '../base/ElementPersistenceRevision.js';
 
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
@@ -87,7 +95,19 @@ interface ParsedMemoryData {
   content: string;
 }
 
+interface RevisionAwareMemoryStorage {
+  runWithRevisionTracking<T>(
+    operation: () => Promise<T>,
+    expected?: MemoryStorageRevision,
+  ): Promise<MemoryRevisionResult<T>>;
+}
+
+function isRevisionAwareMemoryStorage(value: unknown): value is RevisionAwareMemoryStorage {
+  return typeof (value as Partial<RevisionAwareMemoryStorage> | undefined)?.runWithRevisionTracking === 'function';
+}
+
 export class MemoryManager extends BaseElementManager<Memory> {
+  private readonly persistenceRevisions = new WeakMap<Memory, MemoryStorageRevision>();
   /**
    * Phase 4.5 follow-up: `memoriesDir` is a delegated getter to
    * `this.elementDir` (the dynamic getter on BaseElementManager added
@@ -174,6 +194,106 @@ export class MemoryManager extends BaseElementManager<Memory> {
     return 'memory';
   }
 
+  /**
+   * Shared database state requires mutation conflicts to reach the requesting
+   * caller. File-backed saves remain eligible for the local debounce path.
+   */
+  override isDatabaseBacked(): boolean {
+    return isWritableStorageLayer(this.storageLayer);
+  }
+
+  /**
+   * Serialize a file-backed memory mutation across server processes. The
+   * callback receives a snapshot loaded only after the durable guard is held,
+   * so a stale process-local cache can never overwrite another process's entry.
+   */
+  async runFileMutationExclusive<T>(
+    memory: Memory,
+    operation: (current: Memory) => Promise<T>,
+  ): Promise<T> {
+    if (this.isDatabaseBacked()) return operation(memory);
+    const relativePath = memory.getFilePath()
+      ?? this.storageLayer.getPathByName(memory.metadata.name);
+    if (!relativePath) {
+      throw new Error(`Memory '${memory.metadata.name}' has no persisted file path`);
+    }
+    const { absolutePath } = await this.normalizeAndValidatePath(relativePath);
+    return withFilesystemInterprocessGuard(`${absolutePath}.memory-mutation.guard`, async () => {
+      const current = await this.loadFreshFileSnapshot(relativePath, absolutePath);
+      return operation(current);
+    });
+  }
+
+  /** Hydrate from the exact bytes read while the interprocess guard is held. */
+  private async loadFreshFileSnapshot(relativePath: string, absolutePath: string): Promise<Memory> {
+    const rawContent = await this.fileOperations.readElementFile(
+      absolutePath,
+      ElementType.MEMORY,
+      { source: 'MemoryManager.loadFreshFileSnapshot' },
+    );
+    const parsed = this.parseContent(rawContent);
+    this.migrateMetadataDefaults(parsed.data, relativePath);
+    const metadata = await this.parseMetadata(parsed.data);
+    const current = this.createElement(metadata, parsed.content);
+    await this.afterLoad(current, relativePath, parsed);
+    current.setFilePath(relativePath);
+    recordElementPersistenceRevision(current, { relativePath, rawContent });
+    this.cacheElement(current, relativePath);
+    return current;
+  }
+
+  /** Hold the same file mutation guard used by additions while deleting. */
+  async runFileDeleteExclusive<T>(
+    memoryName: string,
+    operation: (current?: Memory) => Promise<T>,
+  ): Promise<T> {
+    if (this.isDatabaseBacked()) return operation();
+    const memory = await this.find(candidate => candidate.metadata.name === memoryName);
+    if (!memory) return operation();
+    const relativePath = memory.getFilePath() ?? this.storageLayer.getPathByName(memoryName);
+    if (!relativePath) return operation();
+    const { absolutePath } = await this.normalizeAndValidatePath(relativePath);
+    return withFilesystemInterprocessGuard(`${absolutePath}.memory-mutation.guard`, async () => {
+      let current: Memory;
+      try {
+        current = await this.loadFreshFileSnapshot(relativePath, absolutePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return operation();
+        throw error;
+      }
+      return operation(current);
+    });
+  }
+
+  /** Stable digest of a loaded memory snapshot used to fence deferred file retries. */
+  async getMemoryStateToken(memory: Memory): Promise<string> {
+    const serialized = await this.serializeElement(memory);
+    return createHash('sha256').update(serialized, 'utf8').digest('hex');
+  }
+
+  /** Carry the loaded database revision onto a parsed replacement before saving. */
+  override async saveReplacement(expected: Memory, replacement: Memory, filePath?: string): Promise<void> {
+    if (isRevisionAwareMemoryStorage(this.storageLayer)) {
+      const revision = this.persistenceRevisions.get(expected);
+      if (!revision) throw new MemoryPersistenceConflictError(expected.metadata.name);
+      this.persistenceRevisions.set(replacement, revision);
+      await this.save(replacement, filePath);
+      return;
+    }
+    const persistedPath = expected.getFilePath() ?? this.storageLayer.getPathByName(expected.metadata.name);
+    const renamePath = filePath && persistedPath
+      ? path.join(path.dirname(persistedPath), path.basename(filePath))
+      : filePath;
+    await super.saveReplacement(expected, replacement, renamePath);
+    const replacementPath = renamePath ?? persistedPath;
+    if (replacementPath) replacement.setFilePath(replacementPath);
+  }
+
+  /** Delete a loaded memory using its observed database revision when applicable. */
+  override async deleteLoaded(memory: Memory): Promise<void> {
+    await this.delete(memory.getFilePath() ?? memory.metadata.name, memory);
+  }
+
   // MemoryManager has its own backup system (moveToUserBackup) and its
   // save/delete don't call super — no-op the universal backup hooks.
   protected override async createBackupBeforeSave(): Promise<void> { /* no-op */ }
@@ -253,7 +373,10 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // from its catch block). We do NOT wrap this in try/catch here — doing so
     // would double-emit alongside base's element:load:error event.
     if (isWritableStorageLayer(this.storageLayer)) {
-      return super.load(filePath);
+      if (!isRevisionAwareMemoryStorage(this.storageLayer)) return super.load(filePath);
+      const loaded = await this.storageLayer.runWithRevisionTracking(() => super.load(filePath));
+      if (loaded.revision) this.persistenceRevisions.set(loaded.result, loaded.revision);
+      return loaded.result;
     }
 
     const fullPath = await this.resolveMemoryPath(filePath);
@@ -336,7 +459,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    */
   protected override async afterLoad(
     memory: Memory,
-    _filePath: string,
+    filePath: string,
     parsedData?: { data: Record<string, unknown>; content: string },
   ): Promise<void> {
     if (!parsedData) return; // Defensive — base always supplies it, but the hook is optional.
@@ -350,29 +473,39 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // Strip format_version from runtime metadata (Fix #912)
     delete (memory.metadata as any).format_version;
 
-    // Load saved entries if present (from pure YAML entries array)
-    const entries = parsedData.data?.entries;
-    if (Array.isArray(entries) && entries.length > 0) {
-      memory.deserialize(JSON.stringify({
-        id: memory.id,
-        type: memory.type,
-        version: memory.version,
-        metadata: memory.metadata,
-        extensions: memory.extensions,
-        entries,
-      }));
-    }
-
-    // If markdown content exists after frontmatter, add it as a memory entry.
-    // Preserves content from seed memories and memory files with markdown sections.
-    if (parsedData.content?.trim()) {
-      await memory.addEntry(
-        parsedData.content.trim(),
-        [],  // tags
-        { loadedAt: new Date().toISOString() },  // metadata
-        'file',  // source
-      );
-    }
+    // Restore the persisted identity as well as entries. BaseElement generates
+    // time-based ids during construction; discarding unique_id made every fresh
+    // load look like a content change to ETag and optimistic-lock callers.
+    const entries = Array.isArray(parsedData.data?.entries) ? parsedData.data.entries : [];
+    const metadataDocument = parsedData.data?.metadata;
+    const persistedId = metadataDocument && typeof metadataDocument === 'object' && !Array.isArray(metadataDocument)
+      ? (metadataDocument as Record<string, unknown>).unique_id
+      : undefined;
+    const restoredId = typeof persistedId === 'string'
+      && persistedId.length > 0
+      && persistedId.length <= 200
+      && /^[A-Za-z0-9._:-]+$/u.test(persistedId)
+      ? persistedId
+      : `legacy-${createHash('sha256').update(filePath, 'utf8').digest('hex')}`;
+    const markdownContent = parsedData.content?.trim();
+    const markdownEntry = markdownContent
+      ? [{
+          id: `legacy-markdown-${createHash('sha256').update(`${filePath}\0${markdownContent}`, 'utf8').digest('hex')}`,
+          timestamp: '1970-01-01T00:00:00.000Z',
+          content: markdownContent,
+          tags: [],
+          metadata: { loadedFrom: 'markdown-body' },
+          source: 'file',
+        }]
+      : [];
+    memory.deserialize(JSON.stringify({
+      id: restoredId,
+      type: memory.type,
+      version: memory.version,
+      metadata: memory.metadata,
+      extensions: memory.extensions,
+      entries: [...entries, ...markdownEntry],
+    }));
   }
 
   /**
@@ -564,7 +697,11 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * @throws {Error} When path validation fails or file system errors occur
    * @throws {Error} When atomic write operation fails
    */
-  override async save(element: Memory, filePath?: string): Promise<void> {
+  override async save(
+    element: Memory,
+    filePath?: string,
+    options?: { exclusive?: boolean; durable?: boolean },
+  ): Promise<void> {
     // Issue #39: Auto-repair corrupted backup names before saving
     const memoryName = element.metadata.name;
     if (isCorruptedBackupName(memoryName)) {
@@ -618,7 +755,33 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // MEMORY_SAVE_FAILED is emitted via the onSaveError hook (base class calls it
     // from its transaction rollback). No try/catch wrapper here — that would
     // double-emit alongside base's element:save:error event.
-    await super.save(element, resolvedRelativePath);
+    if (isRevisionAwareMemoryStorage(this.storageLayer)) {
+      try {
+        const saved = await this.storageLayer.runWithRevisionTracking(
+          () => super.save(element, resolvedRelativePath, options),
+          this.persistenceRevisions.get(element),
+        );
+        if (saved.revision) this.persistenceRevisions.set(element, saved.revision);
+        return;
+      } catch (error) {
+        if ((error as { code?: unknown }).code === 'MEMORY_PERSISTENCE_CONFLICT') {
+          this.recoverMemoryPersistenceConflict(element);
+        }
+        throw error;
+      }
+    }
+    await super.save(element, resolvedRelativePath, options);
+  }
+
+  /**
+   * Retire a loaded database snapshot after a deterministic CAS conflict. The
+   * next request must reload current state instead of retrying a stale object.
+   */
+  recoverMemoryPersistenceConflict(element: Memory): void {
+    this.persistenceRevisions.delete(element);
+    const persistedPath = element.getFilePath();
+    if (persistedPath) this.uncacheByPath(persistedPath);
+    this.storageLayer.invalidate();
   }
 
   /**
@@ -759,19 +922,21 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * and gatekeeper policy validation.
    */
   private validateSerializedMemoryYaml(yamlContent: string): void {
-    // Fix #916/#918, tightened for #2329: cap at MAX_YAML_SIZE (256KB) — the same
+    // Fix #916/#918, aligned with #2473: cap at the configured persisted-memory
+    // ceiling — the same
     // limit parseContent() enforces on load. The previous 2MB cap allowed writing
     // files the loader would then reject.
-    if (yamlContent.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+    const serializedByteSize = Buffer.byteLength(yamlContent, 'utf8');
+    if (serializedByteSize > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
         severity: 'HIGH',
         source: 'MemoryManager.validateSerializedMemoryYaml',
-        details: `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
-        metadata: { contentLength: yamlContent.length, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE }
+        details: `Memory exceeds maximum serialized size (${serializedByteSize} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
+        metadata: { contentLength: serializedByteSize, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE }
       });
       throw new Error(
-        `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
+        `Memory exceeds maximum serialized size (${serializedByteSize} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
         `This memory is full — start a new memory for additional entries.`
       );
     }
@@ -797,7 +962,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
-      logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
+      logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${serializedByteSize} bytes`);
     }
     const gatekeeperErrors = [
       ...getGatekeeperAuthoringErrors(parsedYaml),
@@ -1640,7 +1805,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Delete a memory file
    * SECURITY: Validates path and logs deletion
    */
-  override async delete(filePath: string): Promise<void> {
+  override async delete(filePath: string, expectedElement?: Memory): Promise<void> {
     try {
       // Resolve to a relative path that super.delete() can handle.
       // In DB mode, filePath may be a name or UUID — passed through as-is.
@@ -1660,7 +1825,20 @@ export class MemoryManager extends BaseElementManager<Memory> {
 
       // Delegate to base class — gains: file lock, transaction, events, DB/file branching.
       // afterDelete() runs inside that transaction and emits MEMORY_DELETED.
-      await super.delete(resolvedRelative);
+      if (isRevisionAwareMemoryStorage(this.storageLayer)) {
+        const cached = expectedElement ?? this.getCachedByAbsolutePath(resolvedRelative);
+        const expectedRevision = cached ? this.persistenceRevisions.get(cached) : undefined;
+        if (expectedElement && !expectedRevision) {
+          throw new MemoryPersistenceConflictError(expectedElement.metadata.name);
+        }
+        await this.storageLayer.runWithRevisionTracking(
+          () => super.delete(resolvedRelative),
+          expectedRevision,
+        );
+        if (cached) this.persistenceRevisions.delete(cached);
+      } else {
+        await super.delete(resolvedRelative);
+      }
 
       // Memory-specific cleanup: content hash index.
       // Use the same key shape that afterSave used (UUID in DB mode, absolute path in file mode).
@@ -1748,7 +1926,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
 
     // Save (moved from createElement handler)
-    await this.save(memory);
+    await this.save(memory, undefined, { exclusive: true });
     // Note: No reload() here — save() caches the element correctly.
     // See Issue #491 for why PersonaManager's reload-after-create was removed.
 

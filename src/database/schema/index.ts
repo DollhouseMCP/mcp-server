@@ -13,9 +13,9 @@ export { elements, elementTags, elementRelationships } from './elements.js';
 export { elementProvenance } from './provenance.js';
 export { memoryEntries } from './memories.js';
 export { ensembleMembers } from './ensembles.js';
-export { agentStates } from './agents.js';
+export { agentStates, agentReplacementJournals } from './agents.js';
 export { sessions } from './sessions.js';
-export { authAccounts, authIdentityEvents, authKv } from './auth.js';
+export { authAccounts, authIdentityEvents, authSubjectRevocationFences, authKv } from './auth.js';
 // Phase 4.5 storage completion:
 export { operatorSettings } from './operatorSettings.js';
 export { sharedCache } from './sharedCache.js';
@@ -36,6 +36,7 @@ export {
   consoleLoginTransactions,
   userIntegrations,
   integrationProviderDescriptors,
+  integrationCuratedProviderState,
   integrationOpenApiSpecs,
   portfolioSyncJobs,
   idempotencyRecords,

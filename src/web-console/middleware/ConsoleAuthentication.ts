@@ -7,6 +7,7 @@ import type { ConsoleAuthenticatedContext, ConsoleRequest } from '../platform/Co
 import type { IConsoleOpaqueValueService } from '../security/ConsoleOpaqueValues.js';
 import type { IConsoleSessionStore, ConsoleSessionRecord } from '../stores/IConsoleSessionStore.js';
 import { cloneBuffer } from '../stores/ConsoleStoreValidation.js';
+import { capabilitiesForRoles, isAdministrativeCapability } from '../platform/ConsoleRoleCapabilities.js';
 import { CONSOLE_SESSION_COOKIE, readCookie } from './ConsoleCookies.js';
 
 const csrfHashesByRequest = new WeakMap<ConsoleRequest, Buffer>();
@@ -49,7 +50,7 @@ export function createConsoleAuthenticationMiddleware(
         return;
       }
       const principal = await options.identityResolver.resolveEnabledPrincipal(session.authSub);
-      if (principal?.userId !== session.userId) {
+      if (principal?.userId !== session.userId || principal.authzVersion !== session.authzVersion) {
         sendUnauthenticated(req, response);
         return;
       }
@@ -63,7 +64,7 @@ export function createConsoleAuthenticationMiddleware(
         return;
       }
 
-      req.consoleAuthentication = createAuthenticationContext(session, principal.authzVersion);
+      req.consoleAuthentication = createAuthenticationContext(session, principal.authzVersion, principal.roles ?? []);
       csrfHashesByRequest.set(req, cloneBuffer(session.csrfTokenHash));
       next();
     } catch (error) {
@@ -100,15 +101,20 @@ export function sessionCsrfHashMatches(
 function createAuthenticationContext(
   session: ConsoleSessionRecord,
   authzVersion: number,
+  roles: readonly string[],
 ): ConsoleAuthenticatedContext {
+  const roleCapabilities = new Set(capabilitiesForRoles(roles));
+  const grantedCapabilities = session.grantedCapabilities.filter(capability =>
+    !isAdministrativeCapability(capability) || roleCapabilities.has(capability));
+  const elevationCapabilities = session.elevation?.capabilities.filter(capability => roleCapabilities.has(capability)) ?? [];
   return {
     sessionIdHash: cloneBuffer(session.idHash),
     userId: session.userId,
     authSub: session.authSub,
     authzVersion,
-    grantedCapabilities: [...session.grantedCapabilities],
-    elevation: session.elevation ? {
-      capabilities: [...session.elevation.capabilities],
+    grantedCapabilities,
+    elevation: session.elevation && elevationCapabilities.length > 0 ? {
+      capabilities: elevationCapabilities,
       expiresAt: new Date(session.elevation.expiresAt),
       acr: session.elevation.acr,
       amr: [...session.elevation.amr],

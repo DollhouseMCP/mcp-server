@@ -51,6 +51,12 @@ describe('PostgresPortfolioActivityEventSink.recordElementDeleted', () => {
   it('inserts a metadata-only activity row carrying the hash, never the content', async () => {
     let inserted: { table?: unknown; row?: Record<string, unknown> } = {};
     const db = {
+      execute: jest.fn(() => Promise.resolve([])),
+      select: jest.fn(() => ({
+        from: () => ({
+          where: () => ({ limit: () => Promise.resolve([{ id: USER_ID }]) }),
+        }),
+      })),
       insert: (table: unknown) => ({
         values: (row: Record<string, unknown>) => {
           inserted = { table, row };
@@ -84,5 +90,29 @@ describe('PostgresPortfolioActivityEventSink.recordElementDeleted', () => {
       stableErrorCode: null,
     });
     expect(JSON.stringify(inserted.row)).not.toContain('Owner private content');
+  });
+
+  it('rejects a late activity write after the user lifecycle closes', async () => {
+    const insert = jest.fn();
+    const db = {
+      execute: jest.fn(() => Promise.resolve([])),
+      select: jest.fn(() => ({
+        from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }),
+      })),
+      insert,
+    };
+    const sink = new PostgresPortfolioActivityEventSink(db as unknown as DatabaseInstance);
+
+    await expect(sink.recordElementDeleted({
+      type: 'console.portfolio.element.deleted.v1',
+      userId: USER_ID,
+      consoleSessionId: 'a'.repeat(64),
+      elementType: 'skills',
+      canonicalName: 'review-helper',
+      contentHash: CONTENT_HASH,
+      correlationId: CORRELATION_ID,
+      occurredAt: NOW,
+    })).rejects.toThrow('disabled, deleted, or missing');
+    expect(insert).not.toHaveBeenCalled();
   });
 });

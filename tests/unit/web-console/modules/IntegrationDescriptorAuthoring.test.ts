@@ -272,6 +272,20 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(stored?.apiHosts).toEqual(['api.mycrm.example', 'xn--bcher-kva.example']);
   });
 
+  it('rejects one of two same-millisecond descriptor updates prepared from one revision', async () => {
+    const { service, descriptorStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() }))) as { id: string };
+
+    const results = await Promise.all([
+      service.update(consoleRequest({ params: { id: created.id }, body: { display_name: 'First name' } })),
+      service.update(consoleRequest({ params: { id: created.id }, body: { display_name: 'Second name' } })),
+    ]);
+
+    expect(results.map(result => result.status).sort()).toEqual([200, 409]);
+    const stored = await descriptorStore.findById(created.id, USER_ID);
+    expect(stored?.updatedAt.getTime()).toBe(NOW.getTime() + 1);
+  });
+
   it.each([
     'https://api.mycrm.example',
     'user@api.mycrm.example',
@@ -445,6 +459,38 @@ describe('IntegrationDescriptorAuthoringService', () => {
     expect(after?.clientSecretRevision).toBe(before?.clientSecretRevision);
   });
 
+  it('rejects a stale PATCH instead of overwriting a concurrent secret rotation', async () => {
+    const { service, descriptorStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
+    const originalUpsert = descriptorStore.upsert.bind(descriptorStore);
+    const rotatedRevision = '00000000-0000-4000-8000-000000000911';
+    jest.spyOn(descriptorStore, 'upsert').mockImplementationOnce(async (input, options) => {
+      const current = await descriptorStore.findById(descriptorId, USER_ID);
+      if (!current) throw new Error('expected descriptor fixture');
+      await originalUpsert({
+        ...current,
+        clientSecretCiphertext: Buffer.from('concurrently-rotated-secret'),
+        clientSecretRevision: rotatedRevision,
+        updatedAt: new Date(NOW.getTime() + 1_000),
+      });
+      return originalUpsert(input, options);
+    });
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { display_name: 'Stale cosmetic update' },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_conflict' },
+    });
+    await expect(descriptorStore.findById(descriptorId, USER_ID)).resolves.toMatchObject({
+      displayName: 'My CRM',
+      clientSecretRevision: rotatedRevision,
+      clientSecretCiphertext: Buffer.from('concurrently-rotated-secret'),
+    });
+  });
+
   it('requires disconnect before credential-routing changes or descriptor deletion', async () => {
     const { service, integrationStore } = fixture();
     const created = bodyOf(await service.create(consoleRequest({ body: staticKeyBody() })));
@@ -473,7 +519,15 @@ describe('IntegrationDescriptorAuthoringService', () => {
     await expect(service.remove(consoleRequest({ params: { id: descriptorId } })))
       .resolves.toMatchObject({ status: 409, body: { code: 'integration_descriptor_conflict' } });
 
-    await integrationStore.disconnect({ userId: USER_ID, provider: 'airtable', revokedAt: NOW });
+    const active = await integrationStore.findByProvider(USER_ID, 'airtable');
+    if (!active) throw new Error('expected active integration');
+    await integrationStore.disconnect({
+      userId: USER_ID,
+      provider: 'airtable',
+      integrationId: active.id,
+      credentialGeneration: active.credentialGeneration,
+      revokedAt: NOW,
+    });
     await expect(service.update(consoleRequest({
       params: { id: descriptorId },
       body: { api_hosts: ['api2.airtable.example'] },
@@ -482,18 +536,57 @@ describe('IntegrationDescriptorAuthoringService', () => {
       .resolves.toMatchObject({ status: 204 });
   });
 
-  it('allows descriptor maintenance when the provider has no usable credential', async () => {
-    const { service, integrationStore } = fixture();
+  it('allows adding a missing revocation endpoint only after credentials become cleanup-only', async () => {
+    const { service, descriptorStore, integrationStore } = fixture();
     const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
     const descriptorId = created.id as string;
-    await integrationStore.recordError({
-      userId: USER_ID,
-      provider: MYCRM,
-      integrationDescriptorId: descriptorId,
-      errorReason: 'provider_unavailable',
-      occurredAt: NOW,
+    await connectFixtureIntegration(integrationStore, MYCRM, descriptorId);
+    const oauthPatch = { ...(oauthBody().oauth as Record<string, unknown>) };
+    delete oauthPatch.client_secret;
+    oauthPatch.token_exchange = { revocationUrl: 'https://auth.mycrm.example/revoke' };
+
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { oauth: oauthPatch },
+    }))).resolves.toMatchObject({ status: 409 });
+
+    await integrationStore.beginAuthorizationDisconnect(USER_ID, MYCRM, NOW);
+    const repairResult = await service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { oauth: oauthPatch },
+    }));
+    expect(repairResult).toMatchObject({ status: 200 });
+    await expect(descriptorStore.findById(descriptorId, USER_ID)).resolves.toMatchObject({
+      oauth: { tokenExchange: { revocationUrl: 'https://auth.mycrm.example/revoke' } },
+    });
+  });
+
+  it('rechecks in-memory credentials atomically when a callback wins after the service preflight', async () => {
+    const { service, descriptorStore, integrationStore } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: staticKeyBody() })));
+    const descriptorId = created.id as string;
+    const originalUpsert = descriptorStore.upsert.bind(descriptorStore);
+    jest.spyOn(descriptorStore, 'upsert').mockImplementationOnce(async (input, options) => {
+      await connectFixtureIntegration(integrationStore, 'airtable', descriptorId);
+      return originalUpsert(input, options);
     });
 
+    await expect(service.update(consoleRequest({
+      params: { id: descriptorId },
+      body: { api_hosts: ['api2.airtable.example'] },
+    }))).resolves.toMatchObject({
+      status: 409,
+      body: { code: 'integration_descriptor_conflict' },
+    });
+    await expect(descriptorStore.findById(descriptorId, USER_ID)).resolves.toMatchObject({
+      apiHosts: ['api.airtable.example'],
+    });
+  });
+
+  it('allows descriptor maintenance when the provider has no usable credential', async () => {
+    const { service } = fixture();
+    const created = bodyOf(await service.create(consoleRequest({ body: oauthBody() })));
+    const descriptorId = created.id as string;
     await expect(service.update(consoleRequest({
       params: { id: descriptorId },
       body: { api_hosts: ['api2.mycrm.example'] },
@@ -512,6 +605,8 @@ describe('IntegrationDescriptorAuthoringService', () => {
       provider: MYCRM,
       integrationDescriptorId: descriptorId,
       staleAccessTokenCiphertext: Buffer.from('encrypted-test-token'),
+      staleCredentialGeneration: 0,
+      staleAuthorizedPermissions: { scopes: [] },
       refreshedAt: NOW,
       refresh: () => Promise.resolve({ kind: 'failed', errorReason: 'token_refresh_failed' }),
     });
@@ -1021,7 +1116,7 @@ describe('IntegrationModule per-request provider routes', () => {
       integrationStore,
       descriptorStore,
       openApiSpecStore: new InMemoryIntegrationOpenApiSpecStore(),
-      loginTransactions: new InMemoryLoginTransactionStore(),
+      loginTransactions: new InMemoryLoginTransactionStore(() => NOW),
       opaqueValues: new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8)),
       secretEncryption,
       publicBaseUrl: PUBLIC_BASE_URL,
@@ -1248,6 +1343,8 @@ describe('IntegrationTokenRefreshService per-request resolution', () => {
       provider: MYCRM,
       integrationDescriptorId: created.id as string,
       staleAccessTokenCiphertext: record.accessTokenCiphertext,
+      staleCredentialGeneration: record.credentialGeneration,
+      staleAuthorizedPermissions: record.authorizedPermissions,
     });
 
     expect(result.kind).toBe('refreshed');

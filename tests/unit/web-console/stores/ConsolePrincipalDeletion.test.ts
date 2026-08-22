@@ -62,7 +62,11 @@ function txMock({ hardDelete = false, transactionError }: { hardDelete?: boolean
     insert: (table: unknown) => ({
       values: (values: unknown) => {
         inserts.push({ table, values });
-        return Promise.resolve();
+        return {
+          onConflictDoUpdate: () => Promise.resolve(),
+          then: (resolve: (value: unknown) => void, reject: (error: unknown) => void) =>
+            Promise.resolve().then(resolve, reject),
+        };
       },
     }),
   };
@@ -88,8 +92,9 @@ describe('deleteConsolePrincipalWithTx', () => {
     expect(tables.indexOf(portfolioSyncJobs)).toBeLessThan(tables.indexOf(userIntegrations));
     // ...and the non-FK identity/credential tables are purged too (via purgeNonCascadeUserIdentity).
     expect(tables).toContain(authKv);
-    expect(inserts).toEqual([expect.objectContaining({ table: accountAllowlistEntries })]);
-    const tombstones = inserts[0]?.values as Array<{ revokedAt: Date }>;
+    const allowlistInsert = inserts.find(insert => insert.table === accountAllowlistEntries);
+    expect(allowlistInsert).toBeDefined();
+    const tombstones = allowlistInsert?.values as Array<{ revokedAt: Date }>;
     expect(tombstones[0]?.revokedAt.getTime()).toBeGreaterThanOrEqual(deletionTransactionStartedAt);
     expect(tombstones[0]?.revokedAt).not.toEqual(DELETED_AT);
   });

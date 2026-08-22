@@ -1,6 +1,7 @@
 import { and, asc, eq } from 'drizzle-orm';
 
 import { withSystemContext } from '../../../database/admin.js';
+import { lockActiveUserLifecycleWithTx } from '../../../database/authPrincipalLock.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import {
   sessionActivationEvents,
@@ -89,16 +90,17 @@ export class PostgresSessionActivationEventSink implements ISessionActivationEve
   constructor(private readonly db: DatabaseInstance) {}
 
   async recordActivationChanged(event: SessionActivationChangedEvent): Promise<void> {
-    await withSystemContext(this.db, tx =>
-      tx.insert(sessionActivationEvents).values({
+    await withSystemContext(this.db, async (tx) => {
+      await lockActiveUserLifecycleWithTx(tx, event.userId);
+      await tx.insert(sessionActivationEvents).values({
         userId: event.userId,
         sessionId: event.sessionId,
         elementType: event.elementType,
         elementName: event.elementName,
         action: event.action,
         occurredAt: event.occurredAt,
-      }),
-    );
+      });
+    });
   }
 }
 

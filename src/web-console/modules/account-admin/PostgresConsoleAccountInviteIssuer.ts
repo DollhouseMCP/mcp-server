@@ -1,9 +1,10 @@
 import {
   InviteTokenStore,
-  loadOrGenerateInviteSecretViaStore,
+  loadOrGenerateInviteSigningKeyViaStore,
 } from '../../../auth/embedded-as/inviteTokens.js';
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
+import type { DrizzleTx } from '../../../database/db-utils.js';
 import { authAccounts, users } from '../../../database/schema/index.js';
 import type { ISigningKeyStore } from '../../../storage/signingKeys/ISigningKeyStore.js';
 import type { ConsoleAdminRole } from '../../stores/IConsoleAccountAdminStore.js';
@@ -29,9 +30,30 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
   constructor(private readonly options: PostgresConsoleAccountInviteIssuerOptions) {}
 
   async issueInvite(input: ConsoleAccountInviteIssueInput): Promise<ConsoleAccountInviteIssueResult> {
+    const issueWithTx = await this.prepareIssueInviteWithTx();
+    return withSystemContext(this.options.db, tx => issueWithTx(tx, input));
+  }
+
+  async prepareIssueInviteWithTx(): Promise<(
+    tx: DrizzleTx,
+    input: ConsoleAccountInviteIssueInput,
+  ) => Promise<ConsoleAccountInviteIssueResult>> {
+    const binding = await loadOrGenerateInviteSigningKeyViaStore(this.options.signingKeyStore);
+    return async (tx, input) => {
+      if (binding.source === 'store') {
+        await this.options.signingKeyStore.assertActiveKey(binding.kid, 'invite', tx);
+      }
+      return this.issueInviteUsing(tx, input, new InviteTokenStore(binding.secret));
+    };
+  }
+
+  private async issueInviteUsing(
+    tx: DrizzleTx,
+    input: ConsoleAccountInviteIssueInput,
+    tokenStore: InviteTokenStore,
+  ): Promise<ConsoleAccountInviteIssueResult> {
     const username = normalizeLocalUsername(input.username);
     const primarySub = `${LOCAL_AUTH_METHOD_SUB_PREFIX}${username}`;
-    const tokenStore = await this.createInviteTokenStore();
     const token = tokenStore.issue({
       sub: primarySub,
       email: input.email,
@@ -42,7 +64,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
     if (!verified.ok) throw new Error('issued invite token could not be verified');
     const expiresAt = new Date(verified.payload.exp);
 
-    const userId = await this.createPrincipalAndAuthAccount({
+    const userId = await this.createPrincipalAndAuthAccount(tx, {
       username,
       email: input.email,
       primarySub,
@@ -59,13 +81,7 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
     };
   }
 
-  private async createInviteTokenStore(): Promise<InviteTokenStore> {
-    return new InviteTokenStore(
-      await loadOrGenerateInviteSecretViaStore(this.options.signingKeyStore),
-    );
-  }
-
-  private async createPrincipalAndAuthAccount(input: {
+  private async createPrincipalAndAuthAccount(tx: DrizzleTx, input: {
     readonly username: string;
     readonly email: string;
     readonly primarySub: string;
@@ -74,7 +90,6 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
     readonly issuedAt: Date;
   }): Promise<string> {
     try {
-      return await withSystemContext(this.options.db, async tx => {
       const insertedUsers = await tx.insert(users).values({
         username: input.username,
         email: input.email,
@@ -110,7 +125,6 @@ export class PostgresConsoleAccountInviteIssuer implements IConsoleAccountInvite
       }
 
       return userId;
-      });
     } catch (error) {
       // Duplicate username/email/sub -> a client conflict, not a server outage.
       if (isUniqueViolation(error)) {

@@ -80,16 +80,17 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     iss?: string;
     aud?: string | string[];
     exp?: number;
+    iat?: number;
     sub?: string;
     scope?: string;
   } = {}): Promise<string> {
     const now = Math.floor(Date.now() / 1000);
     return new SignJWT({ scope: opts.scope ?? 'mcp' })
-      .setProtectedHeader({ alg: ALGORITHM, kid: 'test-kid' })
+      .setProtectedHeader({ alg: ALGORITHM, kid: 'test-kid', typ: 'at+jwt' })
       .setIssuer(opts.iss ?? ISSUER)
       .setAudience(opts.aud ?? AUDIENCE)
       .setSubject(opts.sub ?? 'alice')
-      .setIssuedAt(now)
+      .setIssuedAt(opts.iat ?? now)
       .setExpirationTime(opts.exp ?? now + 3600)
       .sign(signKey);
   }
@@ -178,6 +179,12 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     }
   });
 
+  it('rejects a token issued more than the bounded clock skew in the future', async () => {
+    const token = await mintToken({ iat: Math.floor(Date.now() / 1000) + 120 });
+    const result = await provider.validate(token);
+    expect(result).toEqual({ ok: false, reason: 'token issued in the future' });
+  });
+
   it('logs verified tokens rejected by provider authorization checks', async () => {
     const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
     try {
@@ -255,7 +262,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
     });
   });
 
-  describe('cycle 19 / security-#6: opt-in RFC 9068 typ enforcement', () => {
+  describe('RFC 9068 typ enforcement', () => {
     it('warns when typ enforcement is disabled for a non-local issuer', () => {
       const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
 
@@ -263,6 +270,7 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
         issuer: ISSUER,
         audience: AUDIENCE,
         jwksGetter: verifyJwks,
+        requireAccessTokenTyp: false,
       });
 
       expect(warnSpy).toHaveBeenCalledWith(
@@ -279,25 +287,53 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
         issuer: 'http://127.0.0.1:8080/',
         audience: AUDIENCE,
         jwksGetter: verifyJwks,
+        requireAccessTokenTyp: false,
       });
 
       expect(warnSpy).not.toHaveBeenCalled();
       warnSpy.mockRestore();
     });
 
-    it('default (option off): accepts a token with no typ header (compat with most IdPs)', async () => {
-      // The cycle 19 fix is opt-in. Default behavior must preserve
-      // compat with Auth0/Okta/Keycloak/Cognito, which typically don't
-      // stamp typ on access tokens.
+    it('secure default rejects a token with no typ header', async () => {
       const token = await mintTokenWithTyp(signKey, undefined);
       const result = await provider.validate(token);
+      expect(result.ok).toBe(false);
+    });
+
+    it('secure default rejects a token with typ:JWT', async () => {
+      const strictByDefault = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      });
+      const token = await mintTokenWithTyp(signKey, 'JWT');
+      const result = await strictByDefault.validate(token);
+      expect(result.ok).toBe(false);
+    });
+
+    it('allows an explicit compatibility opt-out for providers that omit typ', async () => {
+      const compatible = new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+        requireAccessTokenTyp: false,
+      });
+      const token = await mintTokenWithTyp(signKey, undefined);
+      const result = await compatible.validate(token);
       expect(result.ok).toBe(true);
     });
 
-    it('default (option off): accepts a token with typ:JWT (legacy stamp)', async () => {
-      const token = await mintTokenWithTyp(signKey, 'JWT');
-      const result = await provider.validate(token);
-      expect(result.ok).toBe(true);
+    it('rejects non-loopback cleartext issuer and JWKS URLs', () => {
+      expect(() => new OidcAuthProvider({
+        issuer: 'http://idp.example.com/',
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      })).toThrow(/must use HTTPS/);
+      expect(() => new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksUri: 'http://keys.example.com/jwks',
+      })).toThrow(/must use HTTPS/);
     });
 
     it('option on: accepts a token with typ:at+jwt (RFC 9068 compliant)', async () => {

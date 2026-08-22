@@ -5,6 +5,10 @@ import { SecurityMonitor } from '../security/securityMonitor.js';
 import { logger } from '../utils/logger.js';
 import { ElementType } from '../portfolio/types.js';
 import { validatePath } from '../security/InputValidator.js';
+import {
+  durableAtomicWriteFile,
+  syncFilesystemDirectory,
+} from '../security/durableFileOperations.js';
 
 interface ActiveSessionContainerRegistry {
   getActiveContainer(): {
@@ -23,12 +27,16 @@ export interface FileWriteOptions {
   encoding?: BufferEncoding;
   source?: string;
   atomic?: boolean;
+  /** Flush file contents and the containing directory before returning. */
+  durable?: boolean;
   /** Override maximum file size for this operation (in bytes) */
   maxSize?: number;
 }
 
 export interface FileOperationOptions {
   source?: string;
+  /** Flush containing-directory metadata before acknowledging the operation. */
+  durable?: boolean;
 }
 
 export interface FileOperationsConfig {
@@ -222,9 +230,13 @@ export class FileOperationsService implements IFileOperationsService {
         throw new Error(`Content exceeds maximum size of ${maxSize} bytes`);
       }
 
-      await this.fileLockManager.atomicWriteFile(validatedPath, content, {
-        encoding: options.encoding ?? 'utf-8'
-      });
+      if (options.durable) {
+        await durableAtomicWriteFile(validatedPath, content);
+      } else {
+        await this.fileLockManager.atomicWriteFile(validatedPath, content, {
+          encoding: options.encoding ?? 'utf-8'
+        });
+      }
 
       SecurityMonitor.logSecurityEvent({
         type: 'FILE_WRITTEN',
@@ -242,6 +254,9 @@ export class FileOperationsService implements IFileOperationsService {
     try {
       const validatedPath = await this.enforceWriteAllowlist(filePath, 'deleteFile');
       await fs.unlink(validatedPath);
+      if (options.durable) {
+        await syncFilesystemDirectory(path.dirname(validatedPath));
+      }
       
       if (elementType) {
         SecurityMonitor.logSecurityEvent({
@@ -275,8 +290,10 @@ export class FileOperationsService implements IFileOperationsService {
     try {
       await fs.access(filePath);
       return true;
-    } catch {
-      return false;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return false;
+      throw error;
     }
   }
 

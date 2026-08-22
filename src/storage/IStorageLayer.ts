@@ -131,6 +131,9 @@ export interface WriteContentOptions {
  * implement this. Detection uses the isWritableStorageLayer() type guard.
  */
 export interface IWritableStorageLayer extends IStorageLayer {
+  /** Resolve an element UUID from durable storage, bypassing the local index. */
+  resolveNameById(id: string): Promise<string | undefined>;
+
   /**
    * Persist element content directly to the database.
    * Parses frontmatter, extracts metadata, upserts the element row
@@ -159,6 +162,41 @@ export interface IWritableStorageLayer extends IStorageLayer {
   readContent(relativePath: string): Promise<string>;
 }
 
+export interface ICompareAndSwapStorageLayer extends IWritableStorageLayer {
+  /** Replace exact raw content only when the durable bytes still match. */
+  compareAndSwapContent(
+    elementType: string,
+    elementId: string,
+    name: string,
+    expectedContent: string,
+    replacementContent: string,
+    metadata: ElementWriteMetadata,
+  ): Promise<boolean>;
+
+  /** Delete only when the durable bytes still match the caller's snapshot. */
+  deleteContentIfUnchanged(
+    elementType: string,
+    elementId: string,
+    expectedContent: string,
+  ): Promise<boolean>;
+}
+
+export class StorageVersionConflictError extends Error {
+  constructor() {
+    super('Element changed since it was read');
+    this.name = 'StorageVersionConflictError';
+  }
+}
+
+export class StorageAlreadyExistsError extends Error {
+  readonly code = 'STORAGE_ALREADY_EXISTS';
+
+  constructor(label: string, name: string) {
+    super(`${label} '${name}' already exists`);
+    this.name = 'StorageAlreadyExistsError';
+  }
+}
+
 /**
  * Type guard for detecting database-backed storage layers.
  * Used by BaseElementManager to branch between file and database
@@ -167,4 +205,14 @@ export interface IWritableStorageLayer extends IStorageLayer {
 export function isWritableStorageLayer(layer: IStorageLayer): layer is IWritableStorageLayer {
   return 'writeContent' in layer
     && typeof (layer as IWritableStorageLayer).writeContent === 'function';
+}
+
+export function isCompareAndSwapStorageLayer(
+  layer: IStorageLayer,
+): layer is ICompareAndSwapStorageLayer {
+  return isWritableStorageLayer(layer)
+    && 'compareAndSwapContent' in layer
+    && typeof (layer as ICompareAndSwapStorageLayer).compareAndSwapContent === 'function'
+    && 'deleteContentIfUnchanged' in layer
+    && typeof (layer as ICompareAndSwapStorageLayer).deleteContentIfUnchanged === 'function';
 }

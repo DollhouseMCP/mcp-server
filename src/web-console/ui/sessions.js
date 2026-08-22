@@ -40,6 +40,8 @@ const availableActions = {
 
 const state = {
   console: [],
+  consoleTruncated: false,
+  consoleLimit: 0,
   mcp: [],
   loading: true,
   error: false,
@@ -125,6 +127,8 @@ async function load() {
       get('/me/sessions', { signal: controller.signal }),
     ]);
     state.console = sec.status === 200 && Array.isArray(sec.body?.sessions) ? sec.body.sessions : [];
+    state.consoleTruncated = sec.status === 200 && sec.body?.truncated === true;
+    state.consoleLimit = sec.status === 200 && Number.isSafeInteger(sec.body?.limit) ? sec.body.limit : 0;
     state.mcp = mcp.status === 200 && Array.isArray(mcp.body?.sessions) ? mcp.body.sessions : [];
     state.error = sec.status !== 200 || mcp.status !== 200;
     state.loading = false;
@@ -192,8 +196,9 @@ function renderBody() {
 
   body.innerHTML = `
     <section class="session-section">
-      <h3 class="session-section-title">This console <span class="session-count">${state.console.length}</span></h3>
+      <h3 class="session-section-title">This console <span class="session-count">${sessionCountLabel(state.console.length, state.consoleTruncated)}</span></h3>
       <p class="session-section-sub">Browser sessions signed in to this console.</p>
+      ${browserSessionTruncationNotice(state.consoleTruncated, state.consoleLimit)}
       <div class="session-list">${state.console.map(consoleCard).join('') || emptyRow('No console sessions.')}</div>
     </section>
     <section class="session-section">
@@ -214,6 +219,16 @@ function renderBody() {
     b.addEventListener('click', () => jumpToLogs(b.dataset.logsMcp)));
   body.querySelectorAll('[data-copy-id]').forEach(b =>
     b.addEventListener('click', () => copyId(b.dataset.copyId)));
+}
+
+export function sessionCountLabel(visibleCount, truncated) {
+  return `${visibleCount}${truncated ? '+' : ''}`;
+}
+
+export function browserSessionTruncationNotice(truncated, limit) {
+  if (!truncated) return '';
+  const visibleLimit = Number.isSafeInteger(limit) && limit > 0 ? limit : 100;
+  return `<p class="session-section-sub session-list-notice" role="status">Showing the ${visibleLimit} most recent browser sessions. Older active sessions are not shown here.</p>`;
 }
 
 function copyId(id) {

@@ -21,8 +21,10 @@ import { ValidationService } from '../../../src/services/validation/ValidationSe
 import { createSessionIdResolver, createUserIdResolver } from '../../../src/database/UserContext.js';
 import { withUserRead } from '../../../src/database/rls.js';
 import { DatabaseAgentStateStore } from '../../../src/storage/DatabaseAgentStateStore.js';
+import { DatabaseAgentSnapshotReplacementJournal } from '../../../src/storage/DatabaseAgentSnapshotReplacementJournal.js';
 import { DatabaseStorageLayerFactory } from '../../../src/storage/DatabaseStorageLayerFactory.js';
 import { agentStates } from '../../../src/database/schema/agents.js';
+import { elements } from '../../../src/database/schema/elements.js';
 import {
   cleanupAllTestData,
   cleanupTestAgentStates,
@@ -58,6 +60,11 @@ function createDbAgentManager(tempDir: string, tracker: ContextTracker): AgentMa
     eventDispatcher: new ElementEventDispatcher(),
     storageLayerFactory: new DatabaseStorageLayerFactory(getTestDb(), userIdResolver),
     stateStore: new DatabaseAgentStateStore(getTestDb(), userIdResolver, sessionIdResolver),
+    replacementJournal: new DatabaseAgentSnapshotReplacementJournal(
+      getTestDb(),
+      userIdResolver,
+      sessionIdResolver,
+    ),
     contextTracker: tracker,
     getCurrentUserId: userIdResolver,
   });
@@ -226,6 +233,67 @@ describe('AgentManager DB-backed runtime state', () => {
             .where(eq(agentStates.userId, userId))
         );
         expect(afterDelete).toEqual([]);
+      });
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it('authoritatively resolves UUID deletion when a second replica has a stale completed index', async () => {
+    if (!dbAvailable) return;
+
+    const userId = await ensureTestUser();
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-manager-db-stale-delete-'));
+    const tracker = new ContextTracker();
+    const session = {
+      userId,
+      sessionId: 'agent-manager-db-stale-delete-test',
+      tenantId: null,
+      transport: 'http' as const,
+      createdAt: Date.now(),
+      roles: ['admin'],
+    };
+
+    try {
+      await tracker.runAsync({ type: 'test', timestamp: Date.now(), session }, async () => {
+        const staleReplica = createDbAgentManager(tempDir, tracker);
+        await staleReplica.list();
+
+        const writerReplica = createDbAgentManager(tempDir, tracker);
+        const created = await writerReplica.create(
+          'cross-replica-delete-agent',
+          'Created after the deleting replica completed its index scan',
+          'Use the provided objective as the active goal.',
+          {
+            goal: {
+              template: '{objective}',
+              parameters: [{ name: 'objective', type: 'string', required: true }],
+            },
+          },
+        );
+        expect(created.success).toBe(true);
+        await writerReplica.executeAgent('cross-replica-delete-agent', { objective: 'delete atomically' });
+
+        const beforeDelete = await withUserRead(getTestDb(), userId, (tx) => tx
+          .select({ id: elements.id })
+          .from(elements)
+          .where(eq(elements.name, 'cross-replica-delete-agent')));
+        expect(beforeDelete).toHaveLength(1);
+        const elementId = beforeDelete[0]?.id;
+        if (!elementId) throw new Error('Expected persisted agent UUID');
+
+        await staleReplica.delete(elementId);
+
+        const remainingDefinitions = await withUserRead(getTestDb(), userId, (tx) => tx
+          .select({ id: elements.id })
+          .from(elements)
+          .where(eq(elements.id, elementId)));
+        const remainingState = await withUserRead(getTestDb(), userId, (tx) => tx
+          .select({ agentId: agentStates.agentId })
+          .from(agentStates)
+          .where(eq(agentStates.agentId, elementId)));
+        expect(remainingDefinitions).toEqual([]);
+        expect(remainingState).toEqual([]);
       });
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });

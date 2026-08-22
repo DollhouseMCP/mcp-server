@@ -24,6 +24,9 @@
  * @module auth/IAuthProvider
  */
 
+/** Maximum positive `iat` skew accepted from external OIDC providers. */
+export const OIDC_AUTH_TOKEN_CLOCK_SKEW_SECONDS = 60;
+
 /** Claims extracted from a validated credential. */
 export interface AuthClaims {
   /** Unique subject identifier (e.g. "todd", a UUID, an OIDC sub claim). */
@@ -47,6 +50,12 @@ export interface AuthClaims {
   roles?: string[];
   /** Token expiration as Unix epoch seconds, if applicable. */
   exp?: number;
+  /** Token issuance time as Unix epoch seconds, used for revocation fences. */
+  iat?: number;
+  /** Internal canonical database user resolved by the live claims authority. */
+  userId?: string;
+  /** Live principal generation used to bind long-lived MCP sessions to current authority. */
+  authzVersion?: number;
 }
 
 /** Result of a credential validation attempt. */
@@ -78,6 +87,9 @@ export interface IAuthProvider {
    * The OIDC bridge does not issue at all.
    */
   issue?(sub: string, options?: IssueOptions): Promise<string>;
+
+  /** Drain provider-owned durable work before its storage dependencies close. */
+  dispose?(): Promise<void>;
 }
 
 /** Options for IAuthProvider.issue(). */
@@ -87,4 +99,6 @@ export interface IssueOptions {
   scopes?: string[];
   /** Token lifetime in seconds. Default: provider-specific. */
   ttlSeconds?: number;
+  /** Internal principal generation for test/dev tokens that participate in live authority checks. */
+  authzVersion?: number;
 }

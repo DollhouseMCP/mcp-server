@@ -12,9 +12,10 @@ describe('Content Truncation Fix Test', () => {
     });
 
     it('should respect explicit limit parameter', () => {
+      const explicitLimit = 500_000;
       const longContent = 'a'.repeat(600000);
-      const result = sanitizeInput(longContent, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
-      expect(result.length).toBe(SECURITY_LIMITS.MAX_CONTENT_LENGTH);
+      const result = sanitizeInput(longContent, explicitLimit);
+      expect(result.length).toBe(explicitLimit);
     });
 
     it('should handle the exact scenario from ARIA-7 persona', () => {

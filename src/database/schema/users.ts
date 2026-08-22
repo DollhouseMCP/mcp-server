@@ -23,6 +23,8 @@ export const users = pgTable('users', {
   // a live account; deleted rows are excluded from the account directory.
   deletedAt: timestamp('deleted_at', { withTimezone: true }),
   authzVersion: bigint('authz_version', { mode: 'number' }).notNull().default(1),
+  /** Last security-authority mutation; bearer tokens at/before this instant are stale. */
+  authzChangedAt: timestamp('authz_changed_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   accountCorrelationId: uuid('account_correlation_id').notNull().defaultRandom(),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),

@@ -1,5 +1,6 @@
 import { PersonaExporter } from '../../src/persona/export-import/PersonaExporter.js';
 import { Persona } from '../../src/types/persona.js';
+import { SECURITY_LIMITS } from '../../src/security/constants.js';
 
 describe('PersonaExporter', () => {
   let exporter: PersonaExporter;
@@ -123,7 +124,7 @@ describe('PersonaExporter', () => {
     it('should throw error for oversized persona', () => {
       const largePersona: Persona = {
         ...mockPersona,
-        content: 'x'.repeat(200 * 1024) // 200KB of content
+        content: 'x'.repeat(SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES)
       };
       
       expect(() => exporter.exportPersona(largePersona)).toThrow('Persona too large');

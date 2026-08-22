@@ -4,8 +4,11 @@
 
 import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
+import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 // Mock the security modules before importing anything that uses them
 jest.mock('../../../../src/security/fileLockManager.js');
@@ -15,10 +18,13 @@ jest.mock('../../../../src/services/FileOperationsService.js');
 
 // Import after mocking
 import { Agent } from '../../../../src/elements/agents/Agent.js';
+import { AgentSnapshotReplacementJournal } from '../../../../src/elements/agents/AgentSnapshotReplacementJournal.js';
+import { AGENT_LIMITS } from '../../../../src/elements/agents/constants.js';
 import type { AgentManager } from '../../../../src/elements/agents/AgentManager.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { FileLockManager } from '../../../../src/security/fileLockManager.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { DollhouseContainer } from '../../../../src/di/Container.js';
 import type { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
 import type { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
@@ -29,9 +35,9 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
-import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 import type { SessionContext } from '../../../../src/context/SessionContext.js';
+import { crashFilesystemGuardOwner } from '../../../helpers/crashFilesystemGuardOwner.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 const TEST_AGENT_NAME = 'test-agent';
@@ -48,6 +54,15 @@ function requireLoadedAgent(agent: Agent | null): Agent {
     throw new Error('Expected agent to load');
   }
   return agent;
+}
+
+function deferred<T = void>(): {
+  promise: Promise<T>;
+  resolve: (value: T | PromiseLike<T>) => void;
+} {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((next) => { resolve = next; });
+  return { promise, resolve };
 }
 
 interface AgentManagerExecutionInternals {
@@ -101,6 +116,7 @@ describe('AgentManager', () => {
         readFile: jest.fn<FileOperationsService['readFile']>().mockResolvedValue(''),
         writeFile: jest.fn<FileOperationsService['writeFile']>().mockResolvedValue(),
         deleteFile: jest.fn<FileOperationsService['deleteFile']>().mockResolvedValue(),
+        stat: jest.fn<FileOperationsService['stat']>().mockResolvedValue({} as Awaited<ReturnType<FileOperationsService['stat']>>),
         listDirectory: jest.fn<FileOperationsService['listDirectory']>().mockResolvedValue([]),
         resolvePath: jest.fn<FileOperationsService['resolvePath']>((p: string) => path.resolve(portfolioPath, p)),
         validatePath: jest.fn<FileOperationsService['validatePath']>().mockReturnValue(true),
@@ -143,6 +159,7 @@ describe('AgentManager', () => {
 
   afterEach(async () => {
     await container.dispose();
+    await fs.rm(testDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 10 });
   });
 
   describe('Initialization', () => {
@@ -658,14 +675,21 @@ Agent instructions here`);
     });
 
     it('should return null for non-existent agent', async () => {
-      fileOperationsService.readFile.mockRejectedValue({ code: 'ENOENT' });
+      fileOperationsService.readFile.mockImplementation((filePath) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+          return Promise.reject({ code: 'ENOENT' });
+        }
+        return Promise.resolve('---\nname: test-agent\n---\nPrevious definition');
+      });
 
       const agent = await agentManager.read('non-existent');
       expect(agent).toBeNull();
     });
 
     it('should reject oversized files', async () => {
-      fileOperationsService.readFile.mockResolvedValue('x'.repeat(200 * 1024)); // 200KB
+      fileOperationsService.readFile.mockResolvedValue(
+        `---\nname: huge-agent\ntype: agent\n---\n${'x'.repeat(SECURITY_LIMITS.MAX_FILE_SIZE)}`,
+      );
 
       await expect(agentManager.read('huge-agent'))
         .rejects.toThrow('exceeds maximum size');
@@ -780,6 +804,1086 @@ Content`);
       const writePath = (fileOperationsService.writeFile as jest.Mock).mock.calls[0][0];
       expect(writePath).toMatch(/test-agent\.md$/);
       expect(writePath).not.toMatch(/\.state\.yaml$/);
+    });
+  });
+
+  describe('Snapshot replacement', () => {
+    it('rejects a snapshot loaded before a concurrent definition edit', async () => {
+      const expected = new Agent({ name: TEST_AGENT_NAME, description: 'Loaded earlier' }, metadataService);
+      const current = new Agent({ name: TEST_AGENT_NAME, description: 'Concurrent edit' }, metadataService);
+      const replacement = new Agent({ name: TEST_AGENT_NAME, description: 'Imported replacement' }, metadataService);
+      jest.spyOn(agentManager, 'read').mockResolvedValue(current);
+      fileOperationsService.readFile.mockImplementation((filePath) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) return Promise.reject({ code: 'ENOENT' });
+        return Promise.resolve('---\nname: test-agent\ndescription: Concurrent edit\n---\nBody');
+      });
+
+      await expect(agentManager.replaceFromSnapshot(replacement, `${TEST_AGENT_NAME}.md`, {
+        stateIncluded: false,
+        expected,
+      })).rejects.toThrow("Agent definition changed concurrently while replacing 'test-agent'");
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
+      expect(fileOperationsService.deleteFile).not.toHaveBeenCalled();
+    });
+
+    it('clears durable sidecar state when the imported snapshot omits state', async () => {
+      const previous = new Agent({ name: TEST_AGENT_NAME, description: 'Previous definition' }, metadataService);
+      jest.spyOn(agentManager, 'read').mockResolvedValue(previous);
+      const replacement = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      fileOperationsService.readFile.mockResolvedValue(`---
+goals: []
+decisions: []
+context: {}
+lastActive: 2026-08-21T12:00:00.000Z
+sessionCount: 1
+stateVersion: 3
+---`);
+
+      await agentManager.replaceFromSnapshot(replacement, `${TEST_AGENT_NAME}.md`, {
+        stateIncluded: false,
+      });
+
+      expect(fileOperationsService.deleteFile).toHaveBeenCalledWith(
+        expect.stringContaining(`${TEST_AGENT_NAME}.state.yaml`),
+        ElementType.AGENT,
+        expect.objectContaining({ source: 'AgentManager.delete (state file)' }),
+      );
+      expect(replacement.getState().stateVersion).toBe(0);
+    });
+
+    it('persists included snapshot state even though import deserialization marks it clean', async () => {
+      const previous = new Agent({ name: TEST_AGENT_NAME, description: 'Previous definition' }, metadataService);
+      jest.spyOn(agentManager, 'read').mockResolvedValue(previous);
+      const replacement = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      replacement.addGoal({ description: 'Imported goal' });
+      replacement.markStatePersisted();
+      fileOperationsService.readFile.mockImplementation((filePath) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+          return Promise.reject({ code: 'ENOENT' });
+        }
+        return Promise.resolve('---\nname: test-agent\n---\nPrevious definition');
+      });
+
+      await agentManager.replaceFromSnapshot(replacement, `${TEST_AGENT_NAME}.md`, {
+        stateIncluded: true,
+      });
+
+      const stateWrite = fileOperationsService.writeFile.mock.calls.find(([filePath]) =>
+        String(filePath).endsWith(`${TEST_AGENT_NAME}.state.yaml`));
+      expect(stateWrite?.[1]).toContain('Imported goal');
+      expect(stateWrite?.[2]).toEqual(expect.objectContaining({ durable: true }));
+      const definitionWrite = fileOperationsService.writeFile.mock.calls.find(([filePath]) =>
+        String(filePath).endsWith(`${TEST_AGENT_NAME}.md`));
+      expect(definitionWrite?.[2]).toEqual(expect.objectContaining({ durable: true }));
+      expect(replacement.getState().stateVersion).toBe(1);
+      expect(replacement.needsStatePersistence()).toBe(false);
+    });
+
+    it('leaves the previous definition untouched when state removal fails', async () => {
+      const previous = new Agent({ name: TEST_AGENT_NAME, description: 'Previous definition' }, metadataService);
+      jest.spyOn(agentManager, 'read').mockResolvedValue(previous);
+      const replacement = new Agent({ name: TEST_AGENT_NAME, description: 'Replacement definition' }, metadataService);
+      fileOperationsService.readFile.mockResolvedValue(`---
+goals: []
+decisions: []
+context: {}
+lastActive: 2026-08-21T12:00:00.000Z
+sessionCount: 1
+stateVersion: 3
+---`);
+      fileOperationsService.deleteFile.mockRejectedValue(new Error('state removal failed'));
+
+      await expect(agentManager.replaceFromSnapshot(replacement, `${TEST_AGENT_NAME}.md`, {
+        stateIncluded: false,
+      })).rejects.toThrow('state removal failed');
+
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
+    });
+
+    it('restores the previous definition and state when definition persistence fails', async () => {
+      const previous = new Agent({
+        name: TEST_AGENT_NAME,
+        description: 'Previous definition',
+      }, metadataService);
+      previous.instructions = 'Previous instructions';
+      const previousSerialized = JSON.parse(previous.serializeToJSON());
+      previousSerialized.state = {
+        goals: [{
+          id: 'prior-goal',
+          description: 'Prior goal',
+          status: 'pending',
+          priority: 'medium',
+          createdAt: '2026-08-21T12:00:00.000Z',
+          updatedAt: '2026-08-21T12:00:00.000Z',
+        }],
+        decisions: [],
+        context: {},
+        lastActive: '2026-08-21T12:00:00.000Z',
+        sessionCount: 1,
+        stateVersion: 3,
+      };
+      previous.deserialize(JSON.stringify(previousSerialized));
+      jest.spyOn(agentManager, 'read').mockResolvedValue(previous);
+
+      const replacement = new Agent({
+        name: TEST_AGENT_NAME,
+        description: 'Replacement definition',
+      }, metadataService);
+      replacement.instructions = 'Replacement instructions';
+      replacement.addGoal({ description: 'Imported goal' });
+      replacement.markStatePersisted();
+
+      let durableState = `---
+goals:
+  - id: prior-goal
+    description: Prior goal
+    status: pending
+    priority: medium
+    createdAt: 2026-08-21T12:00:00.000Z
+    updatedAt: 2026-08-21T12:00:00.000Z
+decisions: []
+context: {}
+lastActive: 2026-08-21T12:00:00.000Z
+sessionCount: 1
+stateVersion: 3
+---`;
+      let durableDefinition = 'original bytes';
+      fileOperationsService.exists.mockResolvedValue(true);
+      fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
+        if (filePath.endsWith(STATE_FILE_SUFFIX)) return durableState;
+        return durableDefinition;
+      }));
+      fileOperationsService.writeFile.mockImplementation(async (filePath, content) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+          durableState = String(content);
+          return;
+        }
+        durableDefinition = String(content);
+        if (durableDefinition.includes('Replacement instructions')) {
+          throw new Error('definition persistence failed');
+        }
+      });
+
+      await expect(agentManager.replaceFromSnapshot(replacement, `${TEST_AGENT_NAME}.md`, {
+        stateIncluded: true,
+      })).rejects.toThrow('definition persistence failed');
+
+      expect(durableDefinition).toBe('original bytes');
+      expect(durableDefinition).not.toContain('Replacement instructions');
+      expect(durableState).toContain('Prior goal');
+      expect(durableState).not.toContain('Imported goal');
+      expect(fileOperationsService.writeFile.mock.calls.filter(([filePath]) =>
+        String(filePath).endsWith(STATE_FILE_SUFFIX))).toHaveLength(2);
+
+      previous.addGoal({ description: 'Goal after rollback' });
+      await expect(agentManager.save(previous, `${TEST_AGENT_NAME}.md`)).resolves.toBeUndefined();
+      expect(previous.getState().stateVersion).toBe(6);
+      expect(durableState).toContain('Goal after rollback');
+    });
+
+    it('recovers a crash after state persistence but before definition persistence', async () => {
+      const previous = new Agent({
+        name: TEST_AGENT_NAME,
+        description: 'Previous definition',
+      }, metadataService);
+      previous.instructions = 'Previous instructions';
+      const previousJson = JSON.parse(previous.serializeToJSON());
+      previousJson.state = {
+        goals: [{
+          id: 'prior-goal',
+          description: 'Prior goal',
+          status: 'pending',
+          priority: 'medium',
+          createdAt: '2026-08-21T12:00:00.000Z',
+          updatedAt: '2026-08-21T12:00:00.000Z',
+        }],
+        decisions: [],
+        context: { source: 'previous' },
+        lastActive: '2026-08-21T12:00:00.000Z',
+        sessionCount: 1,
+        stateVersion: 3,
+      };
+      previous.deserialize(JSON.stringify(previousJson));
+
+      const replacement = new Agent({
+        name: TEST_AGENT_NAME,
+        description: 'Replacement definition',
+      }, metadataService);
+      replacement.instructions = 'Replacement instructions';
+      replacement.addGoal({ description: 'Imported goal' });
+
+      const previousDefinition = [
+        '---',
+        'name: test-agent',
+        'description: Previous definition',
+        '# retained hand-edited formatting',
+        '---',
+        'Previous instructions',
+        '',
+      ].join('\n');
+      const intendedDefinition = await agentManager.exportElement(replacement, 'markdown');
+      let durableDefinition = previousDefinition;
+      const intendedState = { ...replacement.getState(), stateVersion: 3 };
+      let durableState = container.resolve<SerializationService>('SerializationService').dumpYaml(
+        {
+          ...intendedState,
+          lastActive: intendedState.lastActive.toISOString(),
+          sessionCount: String(intendedState.sessionCount),
+          stateVersion: '4',
+          goals: intendedState.goals.map((goal) => ({
+            ...goal,
+            createdAt: goal.createdAt.toISOString(),
+            updatedAt: goal.updatedAt.toISOString(),
+          })),
+        },
+        { schema: 'json', noRefs: true, sortKeys: true },
+      );
+      fileOperationsService.exists.mockResolvedValue(true);
+      fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) =>
+        filePath.endsWith(STATE_FILE_SUFFIX) ? durableState : durableDefinition));
+      fileOperationsService.writeFile.mockImplementation(async (filePath, content) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) durableState = String(content);
+        else durableDefinition = String(content);
+      });
+
+      const journal = new AgentSnapshotReplacementJournal(
+        () => path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements'),
+        0,
+      );
+      const journalEntry = await journal.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: previous.id },
+        stateIncluded: true,
+        previousAgentJson: previous.serializeToJSON(),
+        intendedAgentJson: replacement.serializeToJSON(),
+        previousDefinition,
+        intendedDefinition,
+        previousState: previous.getState(),
+        intendedState,
+      });
+      await journal.releaseOwnership(journalEntry);
+
+      await agentManager.initialize();
+
+      expect(durableDefinition).toContain('Previous instructions');
+      expect(durableDefinition).not.toContain('Replacement instructions');
+      expect(durableDefinition).toBe(previousDefinition);
+      expect(durableState).toContain('Prior goal');
+      expect(durableState).not.toContain('Imported goal');
+      await expect(journal.list()).resolves.toEqual([]);
+    });
+
+    it.each(['save', 'update'] as const)(
+      'does not let a concurrent %s interleave with snapshot replacement',
+      async (operation) => {
+        const previous = new Agent({ name: TEST_AGENT_NAME, description: 'Previous' }, metadataService);
+        jest.spyOn(agentManager, 'read').mockResolvedValue(previous);
+        const replacement = new Agent({ name: TEST_AGENT_NAME, description: 'Replacement' }, metadataService);
+        replacement.addGoal({ description: 'Replacement state' });
+        const concurrent = new Agent({ name: TEST_AGENT_NAME, description: 'Concurrent save' }, metadataService);
+        const stateWriteStarted = deferred();
+        const releaseStateWrite = deferred();
+        let durableDefinition = '---\nname: test-agent\ndescription: Previous\n---\nOriginal body';
+        let durableState: string | null = null;
+        const definitionWrites: string[] = [];
+
+        fileOperationsService.readFile.mockImplementation((filePath) => {
+          if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+            return durableState === null
+              ? Promise.reject({ code: 'ENOENT' })
+              : Promise.resolve(durableState);
+          }
+          return Promise.resolve(durableDefinition);
+        });
+        fileOperationsService.writeFile.mockImplementation(async (filePath, content) => {
+          if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+            durableState = String(content);
+            if (durableState.includes('Replacement state')) {
+              stateWriteStarted.resolve(undefined);
+              await releaseStateWrite.promise;
+            }
+            return;
+          }
+          durableDefinition = String(content);
+          definitionWrites.push(durableDefinition);
+        });
+
+        const replacementPromise = agentManager.replaceFromSnapshot(
+          replacement,
+          `${TEST_AGENT_NAME}.md`,
+          { stateIncluded: true },
+        );
+        await stateWriteStarted.promise;
+        const concurrentPromise = operation === 'save'
+          ? agentManager.save(concurrent, `${TEST_AGENT_NAME}.md`)
+          : agentManager.update(TEST_AGENT_NAME, { description: 'Concurrent update' });
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(definitionWrites).toEqual([]);
+
+        releaseStateWrite.resolve(undefined);
+        await replacementPromise;
+        await concurrentPromise;
+
+        expect(definitionWrites).toHaveLength(2);
+        expect(definitionWrites[0]).toContain('Replacement');
+        expect(definitionWrites[1]).toContain(
+          operation === 'save' ? 'Concurrent save' : 'Concurrent update',
+        );
+      },
+    );
+
+    it('rejects recovery when only sessionCount changed concurrently', async () => {
+      const previous = new Agent({ name: TEST_AGENT_NAME, description: 'Previous' }, metadataService);
+      const replacement = new Agent({ name: TEST_AGENT_NAME, description: 'Replacement' }, metadataService);
+      replacement.addGoal({ description: 'Imported goal' });
+      const previousDefinition = await agentManager.exportElement(previous, 'markdown');
+      const intendedDefinition = await agentManager.exportElement(replacement, 'markdown');
+      const intendedState = { ...replacement.getState(), stateVersion: 3 };
+      let durableState = container.resolve<SerializationService>('SerializationService').dumpYaml({
+        ...intendedState,
+        lastActive: intendedState.lastActive.toISOString(),
+        sessionCount: '2',
+        stateVersion: '4',
+      }, { schema: 'json', noRefs: true, sortKeys: true });
+      fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) =>
+        filePath.endsWith(STATE_FILE_SUFFIX) ? durableState : previousDefinition));
+      fileOperationsService.writeFile.mockImplementation(async (filePath, content) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) durableState = String(content);
+      });
+      const journal = new AgentSnapshotReplacementJournal(
+        () => path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements'),
+        0,
+      );
+      const entry = await journal.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: previous.id },
+        stateIncluded: true,
+        previousAgentJson: previous.serializeToJSON(),
+        intendedAgentJson: replacement.serializeToJSON(),
+        previousDefinition,
+        intendedDefinition,
+        previousState: previous.getState(),
+        intendedState,
+      });
+      await journal.releaseOwnership(entry);
+
+      await expect(agentManager.initialize()).resolves.toBeUndefined();
+      expect(durableState).toContain("sessionCount: '2'");
+      await expect(journal.list()).resolves.toHaveLength(0);
+    });
+
+    it('keeps a live replacement owned when a second manager observes an expired-age lease', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const ownerJournal = new AgentSnapshotReplacementJournal(() => journalDir, 5);
+      const observerJournal = new AgentSnapshotReplacementJournal(() => journalDir, 5);
+      const makeManager = (replacementJournal: AgentSnapshotReplacementJournal) =>
+        new TestableAgentManager({
+          portfolioManager: mockPortfolioManager as unknown as PortfolioManager,
+          fileLockManager: _fileLockManager,
+          baseDir: portfolioPath,
+          fileOperationsService,
+          validationRegistry: container.resolve('ValidationRegistry'),
+          serializationService: container.resolve('SerializationService'),
+          metadataService,
+          eventDispatcher: new ElementEventDispatcher(),
+          storageLayerFactory: createTestStorageFactory(),
+          replacementJournal,
+        });
+      const ownerManager = makeManager(ownerJournal);
+      const observerManager = makeManager(observerJournal);
+      await ownerManager.initialize();
+      await observerManager.initialize();
+      const previous = new Agent({ name: TEST_AGENT_NAME, description: 'Previous' }, metadataService);
+      jest.spyOn(ownerManager, 'read').mockResolvedValue(previous);
+      const replacement = new Agent({ name: TEST_AGENT_NAME, description: 'Replacement' }, metadataService);
+      replacement.addGoal({ description: 'Replacement state' });
+      let durableDefinition = '---\nname: test-agent\ndescription: Previous\n---\nBody';
+      let durableState: string | null = null;
+      const stateWriteStarted = deferred();
+      const releaseStateWrite = deferred();
+      fileOperationsService.readFile.mockImplementation((filePath) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+          return durableState === null
+            ? Promise.reject({ code: 'ENOENT' })
+            : Promise.resolve(durableState);
+        }
+        return Promise.resolve(durableDefinition);
+      });
+      fileOperationsService.writeFile.mockImplementation(async (filePath, content) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+          durableState = String(content);
+          stateWriteStarted.resolve(undefined);
+          await releaseStateWrite.promise;
+        } else {
+          durableDefinition = String(content);
+        }
+      });
+
+      const activeReplacement = ownerManager.replaceFromSnapshot(
+        replacement,
+        `${TEST_AGENT_NAME}.md`,
+        { stateIncluded: true },
+      );
+      await stateWriteStarted.promise;
+      await new Promise<void>((resolve) => setTimeout(resolve, 20));
+      await observerManager.initialize();
+      expect(durableDefinition).toContain('Previous');
+
+      releaseStateWrite.resolve(undefined);
+      await activeReplacement;
+    });
+
+    it('cannot remove a successor journal after takeover between definition CAS and completion', async () => {
+      const previous = new Agent({ name: TEST_AGENT_NAME, description: 'Previous' }, metadataService);
+      jest.spyOn(agentManager, 'read').mockResolvedValue(previous);
+      const replacement = new Agent({ name: TEST_AGENT_NAME, description: 'Replacement' }, metadataService);
+      const journal = (agentManager as unknown as {
+        replacementJournal: AgentSnapshotReplacementJournal;
+      }).replacementJournal;
+      const observer = new AgentSnapshotReplacementJournal(
+        () => path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements'),
+        5_000,
+      );
+      let durableDefinition = '---\nname: test-agent\ndescription: Previous\n---\nBody';
+      let takeover: Awaited<ReturnType<typeof observer.claimForRecovery>> = null;
+      fileOperationsService.readFile.mockImplementation((filePath) => {
+        if (String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+          return Promise.reject({ code: 'ENOENT' });
+        }
+        return Promise.resolve(durableDefinition);
+      });
+      fileOperationsService.writeFile.mockImplementation(async (filePath, content) => {
+        if (!String(filePath).endsWith(STATE_FILE_SUFFIX)) durableDefinition = String(content);
+      });
+      const originalRemove = journal.remove.bind(journal);
+      jest.spyOn(journal, 'remove').mockImplementationOnce(async (journalPath, leaseToken) => {
+        const active = await journal.read(journalPath);
+        if (!active) throw new Error('Expected active replacement journal');
+        await journal.releaseOwnership(active);
+        const released = await observer.read(journalPath);
+        if (!released) throw new Error('Expected released replacement journal');
+        takeover = await observer.claimForRecovery(released);
+        if (!takeover) throw new Error('Expected successor to claim replacement journal');
+        await originalRemove(journalPath, leaseToken);
+      });
+
+      try {
+        await expect(agentManager.replaceFromSnapshot(
+          replacement,
+          `${TEST_AGENT_NAME}.md`,
+          { stateIncluded: false },
+        )).rejects.toThrow('rollback failed');
+
+        expect(durableDefinition).toContain('Replacement');
+        const remaining = await observer.list();
+        expect(remaining).toHaveLength(1);
+        expect(remaining[0].record.leaseToken).toBe(takeover?.record.leaseToken);
+        if (!takeover) throw new Error('Expected successor takeover');
+        await observer.releaseOwnership(takeover);
+        await agentManager.initialize();
+        expect(durableDefinition).toContain('Previous');
+        await expect(observer.list()).resolves.toEqual([]);
+      } finally {
+        if (takeover) {
+          const remaining = await observer.read(takeover.journalPath);
+          if (remaining) {
+            await observer.remove(remaining.journalPath, remaining.record.leaseToken);
+          }
+        }
+      }
+    });
+
+    it('keeps a remotely visible lease valid throughout a long owned operation', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const recoveryDelayMs = 1_000;
+      const owner = new AgentSnapshotReplacementJournal(() => journalDir, recoveryDelayMs);
+      const previous = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await owner.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: previous.id },
+        stateIncluded: false,
+        previousAgentJson: previous.serializeToJSON(),
+        intendedAgentJson: previous.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      const operationEntered = deferred();
+      const releaseOperation = deferred();
+
+      const ownedMutation = owner.runWhileOwned(entry, async () => {
+        operationEntered.resolve(undefined);
+        await releaseOperation.promise;
+      });
+      await operationEntered.promise;
+      await new Promise(resolve => setTimeout(resolve, recoveryDelayMs * 2));
+
+      const moduleUrl = pathToFileURL(path.join(
+        process.cwd(),
+        'src/elements/agents/AgentSnapshotReplacementJournal.ts',
+      )).href;
+      const childSource = `
+        import { AgentSnapshotReplacementJournal } from ${JSON.stringify(moduleUrl)};
+        const input = JSON.parse(process.env.DOLLHOUSE_AGENT_RECOVERY_INPUT);
+        const observer = new AgentSnapshotReplacementJournal(() => input.journalDir, input.delay);
+        observer.isRecoveryEligible = async record =>
+          Date.parse(record.leaseExpiresAt) <= Date.now();
+        const current = await observer.read(input.journalPath);
+        if (!current) throw new Error('missing journal');
+        const claimed = await observer.claimForRecovery(current);
+        process.stdout.write(claimed ? 'claimed' : 'owned');
+      `;
+      const observer = spawn(
+        process.execPath,
+        ['--import', 'tsx', '--input-type=module', '-e', childSource],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DOLLHOUSE_AGENT_RECOVERY_INPUT: JSON.stringify({
+              journalDir,
+              journalPath: entry.journalPath,
+              delay: recoveryDelayMs,
+            }),
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      );
+      let stdout = '';
+      let stderr = '';
+      observer.stdout.on('data', chunk => { stdout += String(chunk); });
+      observer.stderr.on('data', chunk => { stderr += String(chunk); });
+      const observerResult = await new Promise<number | null>((resolve, reject) => {
+        observer.once('error', reject);
+        observer.once('close', resolve);
+      });
+      try {
+        expect({ code: observerResult, stderr, stdout }).toEqual({
+          code: 0,
+          stderr: '',
+          stdout: 'owned',
+        });
+      } finally {
+        releaseOperation.resolve(undefined);
+        await ownedMutation;
+        await owner.remove(entry.journalPath, entry.record.leaseToken);
+      }
+    }, 20_000);
+
+    it('reclaims a journal claim abandoned by a crashed process incarnation', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const owner = new AgentSnapshotReplacementJournal(() => journalDir, 5_000);
+      const previous = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await owner.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: previous.id },
+        stateIncluded: false,
+        previousAgentJson: previous.serializeToJSON(),
+        intendedAgentJson: previous.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      await owner.releaseOwnership(entry);
+      const released = await owner.read(entry.journalPath);
+      if (!released) throw new Error('Expected released replacement journal');
+
+      await crashFilesystemGuardOwner(`${entry.journalPath}.claim`);
+      const successor = new AgentSnapshotReplacementJournal(() => journalDir, 5_000);
+      const claimed = await successor.claimForRecovery(released);
+
+      expect(claimed).not.toBeNull();
+      if (!claimed) throw new Error('Expected successor recovery claim');
+      await successor.remove(claimed.journalPath, claimed.record.leaseToken);
+    });
+
+    it('serializes the same logical agent mutation across operating-system processes', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const readyPath = path.join(testDir, 'mutation-owner.ready');
+      const releasePath = path.join(testDir, 'mutation-owner.release');
+      const moduleUrl = pathToFileURL(path.join(
+        process.cwd(),
+        'src/elements/agents/AgentSnapshotReplacementJournal.ts',
+      )).href;
+      const childSource = `
+        import fs from 'node:fs/promises';
+        import { AgentSnapshotReplacementJournal } from ${JSON.stringify(moduleUrl)};
+        const input = JSON.parse(process.env.DOLLHOUSE_AGENT_GATE_INPUT);
+        const journal = new AgentSnapshotReplacementJournal(() => input.journalDir);
+        await journal.runWithAgentMutationGate('CamelCaseAgent', async () => {
+          await fs.writeFile(input.readyPath, 'ready', { mode: 0o600 });
+          while (true) {
+            try { await fs.access(input.releasePath); break; }
+            catch { await new Promise(resolve => setTimeout(resolve, 10)); }
+          }
+        });
+      `;
+      const child = spawn(
+        process.execPath,
+        ['--import', 'tsx', '--input-type=module', '-e', childSource],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            DOLLHOUSE_AGENT_GATE_INPUT: JSON.stringify({ journalDir, readyPath, releasePath }),
+          },
+          stdio: ['ignore', 'ignore', 'pipe'],
+        },
+      );
+      let stderr = '';
+      child.stderr.on('data', chunk => { stderr += String(chunk); });
+      const closed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+        (resolve, reject) => {
+          child.once('error', reject);
+          child.once('close', (code, signal) => resolve({ code, signal }));
+        },
+      );
+
+      try {
+        const deadline = Date.now() + 5_000;
+        while (true) {
+          try {
+            await fs.access(readyPath);
+            break;
+          } catch {
+            if (Date.now() >= deadline) throw new Error(`Child gate did not start: ${stderr}`);
+            await new Promise(resolve => setTimeout(resolve, 10));
+          }
+        }
+
+        const observer = new AgentSnapshotReplacementJournal(() => journalDir);
+        let observerEntered = false;
+        const observerMutation = observer.runWithAgentMutationGate('camel-case-agent', async () => {
+          observerEntered = true;
+        });
+        await new Promise(resolve => setTimeout(resolve, 50));
+        expect(observerEntered).toBe(false);
+
+        await fs.writeFile(releasePath, 'release', { mode: 0o600 });
+        const result = await closed;
+        expect(result).toEqual({ code: 0, signal: null });
+        await observerMutation;
+        expect(observerEntered).toBe(true);
+      } finally {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }
+    });
+
+    it('resolves a database UUID to the shared canonical gate before deletion', async () => {
+      const elementId = randomUUID();
+      const internals = agentManager as unknown as {
+        storageLayer: {
+          writeContent?: () => Promise<string>;
+          getNameById?: (id: string) => string | undefined;
+          resolveNameById: (id: string) => Promise<string | undefined>;
+          hasCompletedScan: () => boolean;
+          scan: () => Promise<unknown>;
+        };
+        replacementJournal: AgentSnapshotReplacementJournal;
+        recoverPendingSnapshotReplacements: (name?: string) => Promise<void>;
+        deleteUnlocked: (filePath: string, resolvedName?: string) => Promise<void>;
+      };
+      internals.storageLayer.writeContent = async () => elementId;
+      internals.storageLayer.getNameById = () => undefined;
+      const resolveNameById = jest.fn(async (id: string) =>
+        id === elementId ? 'CamelCaseAgent' : undefined);
+      internals.storageLayer.resolveNameById = resolveNameById;
+      internals.storageLayer.hasCompletedScan = () => true;
+      const gate = jest.spyOn(internals.replacementJournal, 'runWithAgentMutationGate')
+        .mockImplementation(async (_name, operation) => operation());
+      jest.spyOn(internals, 'recoverPendingSnapshotReplacements').mockResolvedValue();
+      const deleteUnlocked = jest.spyOn(internals, 'deleteUnlocked').mockResolvedValue();
+
+      await agentManager.delete(elementId);
+
+      expect(resolveNameById).toHaveBeenCalledWith(elementId);
+      expect(gate).toHaveBeenCalledWith('camel-case-agent', expect.any(Function));
+      expect(deleteUnlocked).toHaveBeenCalledWith(elementId, 'CamelCaseAgent');
+    });
+
+    it.each([
+      ['PID reuse', { source: 'linux-proc', bootId: 'boot-a', processStartId: '200' }],
+      ['host reboot', { source: 'linux-proc', bootId: 'boot-b', processStartId: '100' }],
+    ] as const)('recovers an expired file journal after %s without accepting stale ownership', async (
+      _label,
+      currentIncarnation,
+    ) => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const recordedIncarnation = {
+        source: 'linux-proc' as const,
+        bootId: 'boot-a',
+        processStartId: '100',
+      };
+      const owner = new AgentSnapshotReplacementJournal(
+        () => journalDir,
+        5,
+        async () => recordedIncarnation,
+      );
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await owner.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: agent.id },
+        stateIncluded: false,
+        previousAgentJson: agent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      await owner.releaseOwnership(entry);
+      const released = await owner.read(entry.journalPath);
+      if (!released) throw new Error('Expected released journal');
+      const crashedRecord = {
+        ...released.record,
+        ownerIncarnation: recordedIncarnation,
+        leaseExpiresAt: new Date(0).toISOString(),
+        releasedAt: null,
+      };
+      await fs.writeFile(entry.journalPath, `${JSON.stringify(crashedRecord)}\n`, { mode: 0o600 });
+      const crashed = await owner.read(entry.journalPath);
+      if (!crashed) throw new Error('Expected simulated crashed-owner journal');
+      const sameProcess = new AgentSnapshotReplacementJournal(
+        () => journalDir,
+        5,
+        async () => recordedIncarnation,
+      );
+      const successor = new AgentSnapshotReplacementJournal(
+        () => journalDir,
+        5,
+        async () => currentIncarnation,
+      );
+
+      await expect(sameProcess.isRecoveryEligible(crashed.record)).resolves.toBe(false);
+      await expect(successor.isRecoveryEligible(crashed.record)).resolves.toBe(true);
+      const claimed = await successor.claimForRecovery(crashed);
+      if (!claimed) throw new Error('Expected successor recovery claim');
+      await expect(owner.remove(entry.journalPath, entry.record.leaseToken))
+        .rejects.toThrow('lost its lease fence');
+      await successor.remove(claimed.journalPath, claimed.record.leaseToken);
+    });
+
+    it.each([
+      ['recorded owner incarnation is missing', null, {
+        source: 'linux-proc' as const,
+        bootId: 'boot-a',
+        processStartId: '100',
+      }],
+      ['current process incarnation is unavailable', {
+        source: 'linux-proc' as const,
+        bootId: 'boot-a',
+        processStartId: '100',
+      }, null],
+    ] as const)('keeps an expired file journal owned when %s', async (
+      _label,
+      ownerIncarnation,
+      currentIncarnation,
+    ) => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const journal = new AgentSnapshotReplacementJournal(
+        () => journalDir,
+        5,
+        async () => currentIncarnation,
+      );
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await journal.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: agent.id },
+        stateIncluded: false,
+        previousAgentJson: agent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      const expiredRecord = {
+        ...entry.record,
+        ownerIncarnation,
+        leaseExpiresAt: new Date(0).toISOString(),
+      };
+
+      await expect(journal.isRecoveryEligible(expiredRecord)).resolves.toBe(false);
+      await journal.remove(entry.journalPath, entry.record.leaseToken);
+    });
+
+    it('allows an explicitly released file journal to be claimed with unavailable incarnations', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const journal = new AgentSnapshotReplacementJournal(
+        () => journalDir,
+        5,
+        async () => null,
+      );
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await journal.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: agent.id },
+        stateIncluded: false,
+        previousAgentJson: agent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+
+      await journal.releaseOwnership(entry);
+      const released = await journal.read(entry.journalPath);
+      if (!released) throw new Error('Expected released journal');
+      expect(released.record.releasedAt).toEqual(expect.any(String));
+      await expect(journal.isRecoveryEligible(released.record)).resolves.toBe(true);
+      const claimed = await journal.claimForRecovery(released);
+      if (!claimed) throw new Error('Expected released journal recovery claim');
+      expect(claimed.record.releasedAt).toBeNull();
+      await journal.remove(claimed.journalPath, claimed.record.leaseToken);
+    });
+
+    it('revokes the pre-release file-journal lease token before clearing ownership', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const journal = new AgentSnapshotReplacementJournal(() => journalDir, 5_000);
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await journal.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: agent.id },
+        stateIncluded: false,
+        previousAgentJson: agent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+
+      await journal.releaseOwnership(entry);
+      const released = await journal.read(entry.journalPath);
+      if (!released) throw new Error('Expected released journal');
+      expect(released.record.leaseToken).not.toBe(entry.record.leaseToken);
+      expect(released.record.releasedAt).toEqual(expect.any(String));
+
+      await expect(journal.remove(entry.journalPath, entry.record.leaseToken))
+        .rejects.toThrow('removal lost its lease fence');
+      await expect(journal.quarantine(entry, 'stale pre-release owner'))
+        .rejects.toThrow('quarantine lost its lease fence');
+
+      await expect(journal.read(entry.journalPath)).resolves.toEqual(released);
+      await journal.remove(released.journalPath, released.record.leaseToken);
+    });
+
+    it('retains file-journal ownership when the durable release write fails', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const journal = new AgentSnapshotReplacementJournal(
+        () => journalDir,
+        5_000,
+        async () => null,
+      );
+      const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await journal.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: agent.id },
+        stateIncluded: false,
+        previousAgentJson: agent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      const internals = journal as unknown as {
+        writeRecord: (journalPath: string, record: unknown) => Promise<void>;
+      };
+      const writeRecord = jest.spyOn(internals, 'writeRecord')
+        .mockRejectedValueOnce(new Error('forced durable release failure'));
+
+      await expect(journal.releaseOwnership(entry)).rejects.toThrow('forced durable release failure');
+      await expect(journal.assertOwnership(entry)).resolves.toBeUndefined();
+      const stillOwned = await journal.read(entry.journalPath);
+      expect(stillOwned?.record.releasedAt).toBeNull();
+
+      writeRecord.mockRestore();
+      await journal.releaseOwnership(entry);
+      const released = await journal.read(entry.journalPath);
+      expect(released?.record.releasedAt).toEqual(expect.any(String));
+      if (!released) throw new Error('Expected released journal');
+      await journal.remove(released.journalPath, released.record.leaseToken);
+    });
+
+    it('permits only one file-backed replacement journal per logical agent', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const firstJournal = new AgentSnapshotReplacementJournal(() => journalDir, 5_000);
+      const secondJournal = new AgentSnapshotReplacementJournal(() => journalDir, 5_000);
+      const firstAgent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const otherAgent = new Agent({ name: 'other-agent' }, metadataService);
+      const recordFor = (agent: Agent) => ({
+        agentName: agent.metadata.name,
+        filePath: `${agent.metadata.name}.md`,
+        isDatabaseMode: false as const,
+        stateKey: { name: agent.metadata.name, agentElementId: agent.id },
+        stateIncluded: false,
+        previousAgentJson: agent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      const first = await firstJournal.create(recordFor(firstAgent));
+      await expect(secondJournal.create(recordFor(firstAgent))).rejects.toThrow('already active');
+      const unrelated = await secondJournal.create(recordFor(otherAgent));
+
+      await firstJournal.remove(first.journalPath, first.record.leaseToken);
+      await secondJournal.remove(unrelated.journalPath, unrelated.record.leaseToken);
+    });
+
+    it('quarantines an unrelated conflicted journal without blocking another agent', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const journal = new AgentSnapshotReplacementJournal(() => journalDir, 0);
+      const pendingAgent = new Agent({ name: 'pending-agent' }, metadataService);
+      const pendingEntry = await journal.create({
+        agentName: 'pending-agent',
+        filePath: 'pending-agent.md',
+        isDatabaseMode: false,
+        stateKey: { name: 'pending-agent', agentElementId: pendingAgent.id },
+        stateIncluded: false,
+        previousAgentJson: pendingAgent.serializeToJSON(),
+        intendedAgentJson: pendingAgent.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      await journal.releaseOwnership(pendingEntry);
+      fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) =>
+        filePath.endsWith('pending-agent.md') ? 'outside conflicting bytes' : 'unrelated bytes'
+      ));
+
+      const unrelatedAgent = new Agent({ name: 'unrelated-agent' }, metadataService);
+      await expect(agentManager.save(unrelatedAgent, 'unrelated-agent.md')).resolves.toBeUndefined();
+      await expect(journal.list()).resolves.toHaveLength(1);
+
+      await expect(agentManager.initialize()).resolves.toBeUndefined();
+      await expect(journal.list()).resolves.toEqual([]);
+      expect((await fs.readdir(journalDir)).some(name => name.includes('.quarantined-'))).toBe(true);
+    });
+
+    it('does not let a live replacement journal for one agent block an unrelated agent', async () => {
+      const journal = new AgentSnapshotReplacementJournal(
+        () => path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements'),
+        5_000,
+      );
+      const pendingAgent = new Agent({ name: 'pending-agent' }, metadataService);
+      const pendingEntry = await journal.create({
+        agentName: 'pending-agent',
+        filePath: 'pending-agent.md',
+        isDatabaseMode: false,
+        stateKey: { name: 'pending-agent', agentElementId: pendingAgent.id },
+        stateIncluded: false,
+        previousAgentJson: pendingAgent.serializeToJSON(),
+        intendedAgentJson: pendingAgent.serializeToJSON(),
+        previousDefinition: 'pending previous bytes',
+        intendedDefinition: 'pending intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      const unrelatedAgent = new Agent({ name: 'unrelated-agent' }, metadataService);
+
+      try {
+        await agentManager.save(unrelatedAgent, 'unrelated-agent.md');
+      } finally {
+        await journal.remove(pendingEntry.journalPath, pendingEntry.record.leaseToken);
+      }
+
+      expect(fileOperationsService.writeFile).toHaveBeenCalledWith(
+        expect.stringContaining('unrelated-agent.md'),
+        expect.any(String),
+        expect.any(Object),
+      );
+    });
+
+    it('atomically fences one remote recovery claimant after the durable lease expires', async () => {
+      const journalDir = path.join(portfolioPath, ElementType.AGENT, '.state', '.replacements');
+      const owner = new AgentSnapshotReplacementJournal(() => journalDir, 5);
+      const previous = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      const entry = await owner.create({
+        agentName: TEST_AGENT_NAME,
+        filePath: `${TEST_AGENT_NAME}.md`,
+        isDatabaseMode: false,
+        stateKey: { name: TEST_AGENT_NAME, agentElementId: previous.id },
+        stateIncluded: false,
+        previousAgentJson: previous.serializeToJSON(),
+        intendedAgentJson: previous.serializeToJSON(),
+        previousDefinition: 'previous bytes',
+        intendedDefinition: 'intended bytes',
+        previousState: null,
+        intendedState: null,
+      });
+      await owner.releaseOwnership(entry);
+      const released = await owner.read(entry.journalPath);
+      if (!released) throw new Error('Expected durable journal');
+      const remoteRecord = {
+        ...released.record,
+        ownerHost: 'remote.example.invalid',
+        ownerPid: 4242,
+        leaseToken: randomUUID(),
+        leaseExpiresAt: new Date(0).toISOString(),
+      };
+      await fs.writeFile(entry.journalPath, `${JSON.stringify(remoteRecord)}\n`, 'utf8');
+      const observerA = new AgentSnapshotReplacementJournal(() => journalDir, 5);
+      const observerB = new AgentSnapshotReplacementJournal(() => journalDir, 5);
+      const remoteEntry = { journalPath: entry.journalPath, record: remoteRecord };
+      const claims = await Promise.all([
+        observerA.claimForRecovery(remoteEntry),
+        observerB.claimForRecovery(remoteEntry),
+      ]);
+      expect(claims.filter(Boolean)).toHaveLength(1);
+      const claim = claims.find((value) => value !== null);
+      if (!claim) throw new Error('Expected one recovery claimant');
+      await observerA.remove(claim.journalPath, claim.record.leaseToken);
+    });
+
+    it('rejects omitted-state replacement when the durable version changes before CAS delete', async () => {
+      const previous = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      jest.spyOn(agentManager, 'read').mockResolvedValue(previous);
+      const replacement = new Agent({ name: TEST_AGENT_NAME }, metadataService);
+      let stateReads = 0;
+      fileOperationsService.readFile.mockImplementation((filePath) => {
+        if (!String(filePath).endsWith(STATE_FILE_SUFFIX)) {
+          return Promise.resolve('---\nname: test-agent\n---\nExact previous bytes');
+        }
+        stateReads += 1;
+        return Promise.resolve(`---\ngoals: []\ndecisions: []\ncontext: {}\nlastActive: 2026-08-21T12:00:00.000Z\nsessionCount: 1\nstateVersion: ${stateReads === 1 ? 3 : 4}\n---`);
+      });
+
+      await expect(agentManager.replaceFromSnapshot(
+        replacement,
+        `${TEST_AGENT_NAME}.md`,
+        { stateIncluded: false },
+      )).rejects.toThrow('State version conflict');
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalledWith(
+        expect.stringContaining(`${TEST_AGENT_NAME}.md`),
+        expect.anything(),
+        expect.anything(),
+      );
     });
   });
 
@@ -1062,7 +2166,7 @@ Content`;
         context: { test: 'concurrent-test' },
         lastActive: new Date().toISOString(),
         sessionCount: 1,
-        stateVersion: 1
+        stateVersion: 0
       };
 
       await agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state as any);
@@ -1080,6 +2184,14 @@ Content`;
       const executionOrder: number[] = [];
       const lockEntries: number[] = [];
       const lockExits: number[] = [];
+      let persistedState = '';
+      fileOperationsService.exists.mockImplementation(async filePath =>
+        filePath.includes(STATE_FILE_SUFFIX) && persistedState.length > 0);
+      fileOperationsService.readFile.mockImplementation(asAsyncRead(filePath =>
+        filePath.includes(STATE_FILE_SUFFIX) ? persistedState : ''));
+      fileOperationsService.writeFile.mockImplementation(async (filePath, content) => {
+        if (filePath.includes(STATE_FILE_SUFFIX)) persistedState = String(content);
+      });
 
       // Track lock acquisition and release without interfering with the lock mechanism
       const originalWithLock = _fileLockManager.withLock.bind(_fileLockManager);
@@ -1105,7 +2217,7 @@ Content`;
         context: { order: 1 },
         lastActive: new Date().toISOString(),
         sessionCount: 1,
-        stateVersion: 1
+        stateVersion: 0
       };
 
       const state2 = {
@@ -1114,19 +2226,19 @@ Content`;
         context: { order: 2 },
         lastActive: new Date().toISOString(),
         sessionCount: 2,
-        stateVersion: 2
+        stateVersion: 0
       };
 
-      // Execute concurrent saves
-      await Promise.all([
+      // Both callers observed the same initial version. Serialization allows
+      // one writer to commit and makes the stale contender fail its CAS.
+      const outcomes = await Promise.allSettled([
         agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state1 as any).then(() => executionOrder.push(1)),
         agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state2 as any).then(() => executionOrder.push(2))
       ]);
 
-      // Both should complete successfully (serialized by lock)
-      expect(executionOrder).toHaveLength(2);
-      expect(executionOrder).toContain(1);
-      expect(executionOrder).toContain(2);
+      expect(outcomes.filter(outcome => outcome.status === 'fulfilled')).toHaveLength(1);
+      expect(outcomes.filter(outcome => outcome.status === 'rejected')).toHaveLength(1);
+      expect(executionOrder).toHaveLength(1);
 
       // Verify locks were acquired and released in order (serialization)
       expect(lockEntries).toHaveLength(2);
@@ -1296,12 +2408,12 @@ Content`;
       });
     });
 
-    describe('MAX_STATE_SIZE Boundary Conditions', () => {
-      it('should accept state at exactly MAX_STATE_SIZE - 1 byte', async () => {
+    describe('serialized state persistence boundary conditions', () => {
+      it('should accept state below the semantic state ceiling', async () => {
         // Calculate padding needed to get just under the limit
         // YAML overhead is roughly 100 bytes for the structure
         const yamlOverhead = 200;
-        const targetSize = 64 * 1024 - yamlOverhead; // MAX_YAML_SIZE is 64KB
+        const targetSize = AGENT_LIMITS.MAX_STATE_SIZE - yamlOverhead;
         const padding = 'x'.repeat(targetSize);
 
         const state = {
@@ -1310,7 +2422,7 @@ Content`;
           context: { data: padding },
           lastActive: new Date().toISOString(),
           sessionCount: 1,
-          stateVersion: 1
+          stateVersion: 0
         };
 
         // Should succeed without throwing
@@ -1318,9 +2430,8 @@ Content`;
           .resolves.not.toThrow();
       });
 
-      it('should reject state at exactly MAX_STATE_SIZE + 1 byte', async () => {
-        // Create state that exceeds the limit by 1 byte
-        const targetSize = 64 * 1024 + 1; // Just over MAX_YAML_SIZE
+      it('should reject state that exceeds the semantic state ceiling', async () => {
+        const targetSize = AGENT_LIMITS.MAX_STATE_SIZE + 1;
         const padding = 'x'.repeat(targetSize);
 
         const state = {
@@ -1329,7 +2440,7 @@ Content`;
           context: { data: padding },
           lastActive: new Date().toISOString(),
           sessionCount: 1,
-          stateVersion: 1
+          stateVersion: 0
         };
 
         await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, state as any))
@@ -1358,7 +2469,7 @@ Content`;
           context: {},
           lastActive: new Date().toISOString(),
           sessionCount: 1,
-          stateVersion: 1
+          stateVersion: 0
         };
 
         // Should succeed - 50 small goals is under size limit
@@ -1401,15 +2512,15 @@ Content`;
       it('stateVersion should only increment on successful save', async () => {
         const agent = new Agent({ name: TEST_AGENT_NAME }, metadataService);
         const initialVersion = agent.getState().stateVersion;
-        expect(initialVersion).toBe(1);
+        expect(initialVersion).toBe(0);
 
         // Add a goal - with correct implementation, version should NOT change yet
         agent.addGoal({ description: 'Test goal for correct behavior' });
 
-        // With Option C (correct behavior): version should still be 1
-        // With current (buggy) behavior: version is already 2
+        // With Option C (correct behavior): version should still be 0.
+        // A successful first save advances the persisted version to 1.
         // This test asserts the CORRECT behavior
-        expect(agent.getState().stateVersion).toBe(1); // Will fail with current bug
+        expect(agent.getState().stateVersion).toBe(0);
 
         // Mock successful save
         fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
@@ -1424,7 +2535,7 @@ Content`;
         // Save should increment version
         await agentManager.exposedSaveAgentState(TEST_AGENT_NAME, agent.getState() as any);
 
-        // After successful save, version should be 2
+        // After successful save, version should be 1
         // Note: The agent object won't automatically update - this tests the pattern
       });
 
@@ -1454,6 +2565,7 @@ Content`;
 
       it('should not persist stateVersion increment when version conflict occurs', async () => {
         // Setup: Load an agent with version 1
+        fileOperationsService.exists.mockResolvedValue(true);
         fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
           if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
@@ -1645,6 +2757,7 @@ Agent with both root and nested riskTolerance`;
     describe('Version Conflict Detection', () => {
       it('should detect version conflict when disk version is higher', async () => {
         // Mock disk state with version 10
+        fileOperationsService.exists.mockResolvedValue(true);
         fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
           if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
@@ -1678,6 +2791,7 @@ Content`;
 
       it('should allow save when disk version matches attempted version', async () => {
         // Mock disk state with version 5
+        fileOperationsService.exists.mockResolvedValue(true);
         fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
           if (filePath.includes(STATE_FILE_SUFFIX)) {
             return `---
@@ -1711,7 +2825,7 @@ Content`;
           .resolves.not.toThrow();
       });
 
-      it('should allow save when disk version is lower (normal progression)', async () => {
+      it('should reject a save when the caller skipped over the durable version', async () => {
         // Mock disk state with version 3
         fileOperationsService.readFile.mockImplementation(asAsyncRead((filePath: string) => {
           if (filePath.includes(STATE_FILE_SUFFIX)) {
@@ -1730,7 +2844,8 @@ name: test-agent
 Content`;
         }));
 
-        // Save with version 5 (higher than disk 3) - normal case
+        // A caller cannot skip from version 3 to version 5. It must reload and
+        // present the exact durable generation before writing version 4.
         const newerState = {
           goals: [],
           decisions: [],
@@ -1740,9 +2855,8 @@ Content`;
           stateVersion: 5
         };
 
-        // Should succeed
         await expect(agentManager.exposedSaveAgentState(TEST_AGENT_NAME, newerState as any))
-          .resolves.not.toThrow();
+          .rejects.toThrow('State version conflict');
       });
 
       it('should handle first save when no state file exists', async () => {
@@ -1765,7 +2879,7 @@ Content`;
           context: {},
           lastActive: new Date().toISOString(),
           sessionCount: 1,
-          stateVersion: 1
+          stateVersion: 0
         };
 
         // Should succeed - no existing state to conflict with

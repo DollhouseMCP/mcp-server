@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
+import type { DrizzleTx } from '../../database/db-utils.js';
 import { consoleAuthPolicy } from '../../database/schema/index.js';
 import {
   cloneConsoleAuthPolicy,
@@ -15,21 +16,41 @@ export class PostgresConsoleAuthPolicyStore implements IConsoleAuthPolicyStore {
   constructor(private readonly db: DatabaseInstance) {}
 
   async load(): Promise<ConsoleAuthPolicy> {
-    const rows = await withSystemContext(this.db, tx =>
-      tx.select().from(consoleAuthPolicy).where(eq(consoleAuthPolicy.id, 1)).limit(1));
-    const row = rows.at(0);
-    if (!row) return cloneConsoleAuthPolicy(DEFAULT_CONSOLE_AUTH_POLICY);
-    return {
-      maxAdminElevationSeconds: row.maxAdminElevationSeconds,
-      updatedAt: new Date(row.updatedAt),
-    };
+    return withSystemContext(this.db, tx => loadConsoleAuthPolicyWithTx(tx));
   }
 
   async save(
     policy: Pick<ConsoleAuthPolicy, 'maxAdminElevationSeconds'>,
     options: { readonly expectedUpdatedAt?: Date } = {},
   ): Promise<ConsoleAuthPolicy> {
-    return withSystemContext(this.db, async tx => {
+    return withSystemContext(this.db, tx => saveConsoleAuthPolicyWithTx(tx, policy, options));
+  }
+}
+
+export async function loadConsoleAuthPolicyWithTx(tx: DrizzleTx): Promise<ConsoleAuthPolicy> {
+  const rows = await tx.select().from(consoleAuthPolicy).where(eq(consoleAuthPolicy.id, 1)).limit(1);
+  const row = rows.at(0);
+  if (!row) return cloneConsoleAuthPolicy(DEFAULT_CONSOLE_AUTH_POLICY);
+  return {
+    maxAdminElevationSeconds: row.maxAdminElevationSeconds,
+    updatedAt: new Date(row.updatedAt),
+  };
+}
+
+export async function saveConsoleAuthPolicyWithTx(
+  tx: DrizzleTx,
+  policy: Pick<ConsoleAuthPolicy, 'maxAdminElevationSeconds'>,
+  options: { readonly expectedUpdatedAt?: Date } = {},
+): Promise<ConsoleAuthPolicy> {
+      // Materialize the singleton before locking it. Without this step, two
+      // first updates both observe the implicit default and both pass the same
+      // ETag check because SELECT FOR UPDATE cannot lock a row that does not
+      // exist; the second then silently overwrites the first through UPSERT.
+      await tx.insert(consoleAuthPolicy).values({
+        id: 1,
+        maxAdminElevationSeconds: DEFAULT_CONSOLE_AUTH_POLICY.maxAdminElevationSeconds,
+        updatedAt: DEFAULT_CONSOLE_AUTH_POLICY.updatedAt,
+      }).onConflictDoNothing();
       const rows = await tx
         .select({ updatedAt: consoleAuthPolicy.updatedAt })
         .from(consoleAuthPolicy)
@@ -57,6 +78,4 @@ export class PostgresConsoleAuthPolicyStore implements IConsoleAuthPolicyStore {
       return row
         ? { maxAdminElevationSeconds: row.maxAdminElevationSeconds, updatedAt: row.updatedAt }
         : cloneConsoleAuthPolicy({ maxAdminElevationSeconds: policy.maxAdminElevationSeconds, updatedAt });
-    });
-  }
 }

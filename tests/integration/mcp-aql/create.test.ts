@@ -885,7 +885,7 @@ metadata:
       // Regression test: A production QA review skill (~13KB) with structured
       // checklists and scoring rubrics was silently rejected when the regex
       // validator's medium complexity limit was 10KB. The limit was raised to
-      // 500KB (matching MAX_CONTENT_LENGTH) since medium complexity patterns
+      // A large input that remains within the linear-time validator tier
       // use simple quantifiers with O(n) linear time — no ReDoS risk.
       // This tests the full create path through MCPAQLHandler, not just
       // RegexValidator in isolation, to catch pipeline-level regressions.

@@ -377,7 +377,7 @@ category: [unclosed array
      * Test oversized content
      */
     it('should reject oversized content', async () => {
-      const oversizedContent = 'A'.repeat(3 * 1024 * 1024); // 3MB content
+      const oversizedContent = 'A'.repeat(11 * 1024 * 1024);
       
       mockGitHubClient.fetchFromGitHub.mockResolvedValueOnce({
         type: 'file',

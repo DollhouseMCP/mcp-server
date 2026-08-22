@@ -126,7 +126,10 @@ export class OperatorConfigurationService {
     };
   }
 
-  async updateConfig(input: OperatorConfigUpdateInput): Promise<ConsoleHandlerResult> {
+  async updateConfig(
+    input: OperatorConfigUpdateInput,
+    store: IOperatorConfigStore = this.store,
+  ): Promise<ConsoleHandlerResult> {
     const definition = this.findDefinition(input.key);
     if (!definition) return configProblem(404, 'not_found', 'Operator configuration key was not found.');
     if (definition.mutability === 'read_only') {
@@ -136,7 +139,7 @@ export class OperatorConfigurationService {
       return configProblem(428, 'precondition_required', 'If-Match is required for operator configuration mutations.');
     }
 
-    const loaded = await this.store.load();
+    const loaded = await store.load();
     const current = this.toDto(loaded, definition);
     if (input.ifMatch !== current.etag) {
       return configProblem(412, 'precondition_failed', 'If-Match does not match the current operator configuration ETag.');
@@ -160,7 +163,7 @@ export class OperatorConfigurationService {
       pendingRestart,
     });
     try {
-      await this.store.save(next, { expectedUpdatedAt: loaded.updatedAt });
+      await store.save(next, { expectedUpdatedAt: loaded.updatedAt });
     } catch (error) {
       if (error instanceof OperatorConfigConflictError) {
         return configProblem(412, 'precondition_failed', 'Operator configuration changed while this request was being applied.');
@@ -168,7 +171,7 @@ export class OperatorConfigurationService {
       throw error;
     }
 
-    const saved = await this.store.load();
+    const saved = await store.load();
     const dto = this.toDto(saved, definition);
     return {
       status: 200,

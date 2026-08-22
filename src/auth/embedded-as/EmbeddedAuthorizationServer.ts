@@ -22,6 +22,8 @@
  */
 
 import express, { type Router, type Request, type RequestHandler, type Response } from 'express';
+import { randomUUID } from 'node:crypto';
+import { setTimeout as delay } from 'node:timers/promises';
 import OidcProvider from 'oidc-provider';
 import type { Configuration } from 'oidc-provider';
 import { env } from '../../config/env.js';
@@ -34,6 +36,7 @@ import type {
 } from '../IAuthProvider.js';
 import { assertSafePublicBaseUrl, joinUrl, resolvePublicBaseUrl } from '../oauth/url.js';
 import { normalizeIp } from './rateLimit.js';
+import { createTokenEndpointRateLimitMiddleware } from './tokenEndpointRateLimit.js';
 import type { IRateLimitStore } from './storage/IRateLimitStore.js';
 import type { IAuthMethod } from './IAuthMethod.js';
 import {
@@ -45,19 +48,21 @@ import {
 import { securityHeaders } from './securityHeaders.js';
 import {
   defaultKeyFilePath,
+  createFreshSigningKeyWrite,
   loadOrGenerateSigningJwks,
   loadOrGenerateSigningJwksViaStore,
   rotateSigningKey,
-  rotateSigningKeyViaStore,
   type SigningKeyset,
 } from './persistKeys.js';
 import {
+  createFreshCookieSigningKeyWrite,
   loadOrGenerateCookieSigningKeys,
   loadOrGenerateCookieSigningKeysViaStore,
   rotateCookieSecret,
-  rotateCookieSecretViaStore,
 } from './cookieSecret.js';
 import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
+import { readAuthorizationGeneration } from '../../storage/signingKeys/signingKeyLifecycle.js';
+import { createFreshInviteSigningKeyWrite, rotateInviteSecret } from './inviteTokens.js';
 import type { AdminTotpService } from './totp/AdminTotpService.js';
 import {
   mountAdminTotpInteractionRoutes,
@@ -66,12 +71,16 @@ import {
 import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 import {
   checkModeFingerprint,
+  computeAuthorizationGenerationFingerprint,
+  FINGERPRINT_KEY,
+  FINGERPRINT_MODEL,
   persistModeFingerprint,
   OAUTH_STATE_MODELS,
 } from './modeFingerprint.js';
 import {
   createOidcAdapterFactory,
   hashRotationAttribute,
+  finalizeRotationRequestContext,
   withRotationRequestContext,
   type RotationRequestContext,
 } from './storage/OidcProviderAdapter.js';
@@ -91,6 +100,7 @@ import {
   importSigningKeys,
   loadPublicSigningJwksFromStore,
 } from './EmbeddedASTokens.js';
+import { OidcLifecycleSigningKey } from './OidcLifecycleSigningKey.js';
 
 /**
  * Cycle-8 fix (B1): predicate that decides whether oidc-provider's
@@ -174,7 +184,11 @@ function servePackagedAuthFont(): RequestHandler {
 export interface EmbeddedAuthorizationServerOptions {
   publicBaseUrl?: string;
   mcpPath?: string;
+  /** Monotonic operator-managed deployment epoch for authorization changes. */
+  authGeneration?: number;
   keyFilePath?: string;
+  /** Legacy filesystem invite-key path; primarily a test/embedded override. */
+  inviteSecretFilePath?: string;
   /**
    * Auth methods exposed by this AS. Single-method deployments pass a
    * one-element array; multi-method deployments pass several. Each method
@@ -217,6 +231,8 @@ export interface EmbeddedAuthorizationServerOptions {
    * env value). Mirrors `cookieSecret.ts`'s `options.envSecret` shape.
    */
   cookieSecretEnvOverride?: string;
+  /** Test injection equivalent for DOLLHOUSE_INVITE_TOKEN_SECRET. */
+  inviteSecretEnvOverride?: string;
 
   /**
    * Cycle 24 test injection + operator escape hatch. When set, overrides
@@ -260,6 +276,10 @@ interface InitializedState {
   cookieKeys: readonly string[];
   /** Pre-built interaction middleware bound to the initialized provider. */
   interactionMiddleware: Router;
+  /** Identities of the durable key material actually loaded into this provider. */
+  signingKeyIds: { readonly jwks: string; readonly cookie: string } | null;
+  /** Shared authorization generation this provider was initialized against. */
+  authorizationGenerationFingerprint: string;
 }
 
 export class EmbeddedAuthorizationServer implements IAuthProvider {
@@ -269,9 +289,12 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly storage: IAuthStorageLayer;
   private readonly mcpPath: string;
   private readonly keyFilePath: string;
+  private readonly authGeneration: number | undefined;
+  private readonly inviteSecretFilePath: string | undefined;
   private readonly refreshRotationGraceMs: number | undefined;
   private readonly refreshRotationCheckIpUa: boolean;
   private readonly cookieSecretEnvOverride: string | undefined;
+  private readonly inviteSecretEnvOverride: string | undefined;
   private readonly openDCR: boolean;
   private readonly rateLimitStore: IRateLimitStore | null;
   private readonly signingKeyStore: ISigningKeyStore | null;
@@ -287,6 +310,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private resource: string;
   private state: InitializedState | null = null;
   private initPromise: Promise<InitializedState> | null = null;
+  /** Audit writes started by oidc-provider events that must finish before disposal. */
+  private readonly pendingAuditWrites = new Set<Promise<void>>();
+  /** Terminal audit failures make readiness and shutdown fail closed. */
+  private readonly auditWriteFailures: Error[] = [];
   /**
    * Generation counter incremented on every setPublicBaseUrl. ensureInitialized
    * captures this at start; if it has moved on by the time initialize() returns,
@@ -310,9 +337,12 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.issuer = this.publicBaseUrl;
     this.resource = joinUrl(this.publicBaseUrl, this.mcpPath);
     this.keyFilePath = options.keyFilePath ?? defaultKeyFilePath();
+    this.authGeneration = options.authGeneration;
+    this.inviteSecretFilePath = options.inviteSecretFilePath;
     this.refreshRotationGraceMs = options.refreshRotationGraceMs;
     this.refreshRotationCheckIpUa = options.refreshRotationCheckIpUa ?? false;
     this.cookieSecretEnvOverride = options.cookieSecretEnvOverride;
+    this.inviteSecretEnvOverride = options.inviteSecretEnvOverride;
     this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
     this.rateLimitStore = options.rateLimitStore ?? null;
     this.signingKeyStore = options.signingKeyStore ?? null;
@@ -331,7 +361,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       () => this.resource,
       this.signingKeyStore ?? undefined,
     );
-    this.oidcAccount = new EmbeddedASOidcAccount(this.methods, this.storage);
+    this.oidcAccount = new EmbeddedASOidcAccount(
+      this.methods,
+      this.storage,
+      this.consoleIdentityResolver,
+    );
   }
 
   setPublicBaseUrl(publicBaseUrl: string): void {
@@ -372,6 +406,15 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    *     header rather than silently ignoring it.
    */
   async validate(token: string): Promise<AuthResult> {
+    if (this.signingKeyStore) {
+      const observedState = this.state;
+      if (!observedState || !(await this.authorizationGenerationStillCurrent(observedState))) {
+        // Store-backed token verification intentionally accepts still-valid
+        // rotated keys without rebuilding oidc-provider. It must still fence
+        // a process whose configured authorization epoch is stale.
+        await this.ensureInitialized();
+      }
+    }
     return await this.tokens.validate(token);
   }
 
@@ -435,6 +478,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       router.get('/jwks', (_req, res, next) => {
         void (async () => {
           try {
+            // A cold durable store has no active key until initialization mints
+            // one. Publishing before initialization returned an empty JWKS and
+            // caused clients to cache a verifier set that could validate no
+            // tokens.
             await this.ensureInitialized();
             res.json(await loadPublicSigningJwksFromStore(signingKeyStore));
           } catch (err) {
@@ -521,6 +568,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       }));
     }
 
+    // Token exchange and refresh can perform durable claim coordination. Keep
+    // abusive retry traffic from amplifying into sustained database polling.
+    // AuthServiceRegistrar always supplies a shared store in deployed modes;
+    // direct test/dev construction may intentionally omit one.
+    if (this.rateLimitStore) {
+      router.post('/token', createTokenEndpointRateLimitMiddleware(this.rateLimitStore));
+    }
+
     // Mount oidc-provider's full OAuth/OIDC surface (/auth, /token, /jwks,
     // /reg for DCR, /me, etc.) and our interaction handlers under the same
     // router so they share host/path. oidc-provider's callback() is the
@@ -583,9 +638,21 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
             // try/catch and flow to Express's error middleware via next().
             // Without the await, the returned Promise is discarded and
             // any async rejection becomes an unhandledRejection.
-            await withRotationRequestContext(context, () => state.provider.callback()(req, res));
+            await withRotationRequestContext(context, async () => {
+              try {
+                await state.provider.callback()(req, res);
+              } finally {
+                await finalizeRotationRequestContext(this.storage);
+              }
+            });
           } else {
-            await state.provider.callback()(req, res);
+            await withRotationRequestContext({}, async () => {
+              try {
+                await state.provider.callback()(req, res);
+              } finally {
+                await finalizeRotationRequestContext(this.storage);
+              }
+            });
           }
         } catch (err) {
           next(err);
@@ -632,7 +699,12 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
    * storage (we want to see the moment it flips).
    */
   async isReadyForTraffic(): Promise<boolean> {
+    if (this.auditWriteFailures.length > 0) return false;
     return await this.bootstrap.isReadyForTraffic();
+  }
+
+  getReadinessFailureReason(): 'audit_write_failed' | 'bootstrap_required' {
+    return this.auditWriteFailures.length > 0 ? 'audit_write_failed' : 'bootstrap_required';
   }
 
   /**
@@ -673,7 +745,23 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   }
 
   private async ensureInitialized(): Promise<InitializedState> {
-    if (this.state) return this.state;
+    const observedState = this.state;
+    const signingKeysCurrent = !observedState || await this.signingKeysStillCurrent(observedState);
+    if (observedState && signingKeysCurrent) return observedState;
+    if (observedState && this.state !== observedState) {
+      // Another request already reacted to the same rotation while this request
+      // was checking durable key ids. Join that initialization instead of
+      // invalidating the newer provider a second time.
+      return this.ensureInitialized();
+    }
+    if (observedState) {
+      // A different replica (or the admin console) rotated a durable key.
+      // Rebuild oidc-provider before serving the next auth request so new
+      // tokens/cookies immediately use the active material.
+      this.generation += 1;
+      this.state = null;
+      this.initPromise = null;
+    }
     // Capture the generation BEFORE awaiting init. If setPublicBaseUrl bumps
     // the counter while initialize() is in flight, the result we receive is
     // stale and must NOT replace this.state — a fresh ensureInitialized()
@@ -704,6 +792,14 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // next call see this.state === null and trigger a fresh initialize().
       return this.ensureInitialized();
     }
+    if (!(await this.signingKeysStillCurrent(result))) {
+      // A lifecycle mutation landed while the provider was importing its key
+      // material. Never publish that mixed/stale initialization; retry against
+      // one current generation instead.
+      this.generation += 1;
+      if (this.initPromise === inFlight) this.initPromise = null;
+      return this.ensureInitialized();
+    }
     this.state = result;
     return this.state;
   }
@@ -724,11 +820,36 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     // Mode-switch invalidation. The split API (checkModeFingerprint +
     // persistModeFingerprint) lets the AS and out-of-band tooling (dashboard,
     // ops scripts) compute "did the mode change?" the same way. On mismatch
-    // we rotate three things — K/V state, cookie secret, AND the JWKS signing
-    // key — then persist the fingerprint reflecting the post-rotation state.
-    let cookieKeys = this.signingKeyStore
-      ? await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride })
-      : loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
+    // we rotate four things — K/V state plus the cookie, invite/magic-link,
+    // and JWKS verification rings — then persist the new fingerprint.
+    let missingStoredCookieForGenerationTransition = false;
+    let cookieKeys: string[];
+    if (this.signingKeyStore && !this.usesCookieSecretOverride()) {
+      const activeCookie = await this.signingKeyStore.getActive('cookie');
+      const hasCookieHistory = !activeCookie
+        && (await this.signingKeyStore.listByKind('cookie')).length > 0;
+      if (hasCookieHistory) {
+        // Override introduction deliberately retires the stored cookie ring.
+        // On override removal there is therefore no active store key to load
+        // until the generation transition installs a fresh one. This sentinel
+        // is used only by legacy fingerprint comparison and must never reach
+        // provider construction without a successful transition below.
+        cookieKeys = ['missing-active-cookie-generation'];
+        missingStoredCookieForGenerationTransition = true;
+      } else {
+        cookieKeys = await loadOrGenerateCookieSigningKeysViaStore(
+          this.signingKeyStore,
+          { envSecret: this.cookieSecretEnvOverride },
+        );
+      }
+    } else {
+      cookieKeys = this.signingKeyStore
+        ? await loadOrGenerateCookieSigningKeysViaStore(
+          this.signingKeyStore,
+          { envSecret: this.cookieSecretEnvOverride },
+        )
+        : loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
+    }
 
     // Round 6 review fixup: when the operator opts into IP/UA-bound
     // rotation grace, the cookie key doubles as the HMAC salt for the
@@ -763,36 +884,118 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       provider: 'embedded',
       methodIds: this.methods.map((m) => m.id),
       issuer: this.issuer,
+      authorizationGeneration: this.authGeneration,
       primaryKid: keyset.kid,
       primaryCookieKey: cookieKeys[0],
+      operatorManagedCookieKey: this.usesCookieSecretOverride() ? cookieKeys[0] : undefined,
+      operatorManagedInviteKey: this.usesInviteSecretOverride()
+        ? (this.inviteSecretEnvOverride ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET)
+        : undefined,
+      legacyKeyCandidates: this.signingKeyStore
+        ? await legacyFingerprintKeyCandidates(this.signingKeyStore)
+        : undefined,
     };
     const fingerprintResult = await checkModeFingerprint(this.storage, fingerprintInputs);
 
+    let generationTransitionCompleted = false;
     if (fingerprintResult.firstRun) {
       // First run: nothing to invalidate, just record the fingerprint.
-      await persistModeFingerprint(this.storage, fingerprintInputs);
-    } else if (fingerprintResult.changed) {
-      // Invalidate FIRST, then persist the new fingerprint. Persisting
-      // before clearing would leave stale tokens valid against the new
-      // mode if a crash hit between the two. Clear-then-persist is
-      // crash-safe: a crash mid-sequence means the next boot recomputes
-      // `changed: true` and re-runs the idempotent clear.
-      // Cycle 24 / cycle-23 code LOW: forward cookieSecretEnvOverride
-      // to the mode-switch rotation calls so tests that exercise this
-      // path with the override observe the same env-driven semantics
-      // as the initial load. Production callers don't set the override,
-      // so this is a no-op outside tests.
-      const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
+      await persistModeFingerprint(this.storage, fingerprintInputs, {
+        expectedSnapshot: fingerprintResult.persistenceSnapshot,
+      });
+    } else if (fingerprintResult.migrationRequired) {
+      await persistModeFingerprint(this.storage, fingerprintInputs, {
+        expectedSnapshot: fingerprintResult.persistenceSnapshot,
+      });
+      logger.info('[EmbeddedAuthorizationServer] updated auth-mode fingerprint metadata');
+    } else if (fingerprintResult.changed || fingerprintResult.credentialGenerationChanged) {
+      // A v2 fingerprint contains only immutable operating-mode inputs. Key
+      // rotation cannot produce this mismatch, so every mismatch must take the
+      // complete invalidation path.
+      if (fingerprintResult.changed && this.usesCookieSecretOverride()) {
+        // The server cannot rotate an operator-owned environment secret. A
+        // separately persisted, one-way fingerprint lets us prove that the
+        // operator rotated it without making ordinary store key rotation look
+        // like a mode change. Missing historical metadata cannot prove a
+        // simultaneous mode + key change, so that upgrade path fails closed.
+        if (!fingerprintResult.cookieOverrideFingerprintRecorded) {
+          throw new Error(
+            'Authorization mode changed while DOLLHOUSE_COOKIE_SIGNING_SECRET is operator-managed, ' +
+            'but no prior override fingerprint is recorded; start once in the previous mode to ' +
+            'record it, or remove the override before activating the new mode',
+          );
+        }
+        if (!fingerprintResult.cookieOverrideChanged) {
+          throw new Error(
+            'Authorization mode changed while DOLLHOUSE_COOKIE_SIGNING_SECRET is operator-managed; ' +
+            'rotate or remove that secret before activating the new mode',
+          );
+        }
+      } else if (
+        fingerprintResult.credentialGenerationChanged
+        && this.usesCookieSecretOverride()
+        && fingerprintResult.cookieOverrideFingerprintRecorded
+        && !fingerprintResult.cookieOverrideChanged
+      ) {
+        throw new Error(
+          'Authorization generation changed while DOLLHOUSE_COOKIE_SIGNING_SECRET is operator-managed; ' +
+          'rotate or remove that secret before activating the new generation',
+        );
+      }
+      if (fingerprintResult.changed && this.usesInviteSecretOverride()) {
+        if (!fingerprintResult.inviteOverrideFingerprintRecorded) {
+          throw new Error(
+            'Authorization mode changed while DOLLHOUSE_INVITE_TOKEN_SECRET is operator-managed, ' +
+            'but no prior override fingerprint is recorded; start once in the previous mode to ' +
+            'record it, or remove the override before activating the new mode',
+          );
+        }
+        if (!fingerprintResult.inviteOverrideChanged) {
+          throw new Error(
+            'Authorization mode changed while DOLLHOUSE_INVITE_TOKEN_SECRET is operator-managed; ' +
+            'rotate or remove that secret before activating the new mode',
+          );
+        }
+      } else if (
+        fingerprintResult.credentialGenerationChanged
+        && this.usesInviteSecretOverride()
+        && fingerprintResult.inviteOverrideFingerprintRecorded
+        && !fingerprintResult.inviteOverrideChanged
+      ) {
+        throw new Error(
+          'Authorization generation changed while DOLLHOUSE_INVITE_TOKEN_SECRET is operator-managed; ' +
+          'rotate or remove that secret before activating the new generation',
+        );
+      }
+
       // Phase 4.5: rotate via store when injected, else legacy file path.
-      // The store's rotate() is atomic (mark-old-inactive + insert-new in one
-      // transaction); the file path is unlink + regenerate-on-next-load.
+      // Durable mode retires all three verification rings and installs every
+      // applicable replacement in one store-level atomic operation. Any
+      // failure leaves the prior generation intact rather than exposing a
+      // partially switched authorization mode.
+      const requestedTransitionId = randomUUID();
+      let appliedTransitionId: string = requestedTransitionId;
       if (this.signingKeyStore) {
-        await rotateCookieSecretViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
+        const replacements = [await createFreshSigningKeyWrite()];
+        if (!this.usesCookieSecretOverride()) {
+          replacements.push(createFreshCookieSigningKeyWrite());
+        }
+        if (!this.usesInviteSecretOverride()) {
+          replacements.push(createFreshInviteSigningKeyWrite());
+        }
+        const transition = await this.signingKeyStore.transitionAuthorizationMode({
+          replacements,
+          transitionId: requestedTransitionId,
+          expectedGenerationFingerprint: fingerprintResult.previousGenerationFingerprint,
+          targetGenerationFingerprint: fingerprintResult.currentGenerationFingerprint,
+        });
+        generationTransitionCompleted = true;
+        appliedTransitionId = transition.transitionId;
         cookieKeys = await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
-        await rotateSigningKeyViaStore(this.signingKeyStore);
         keyset = await loadOrGenerateSigningJwksViaStore(this.signingKeyStore);
       } else {
         rotateCookieSecret(undefined, { envSecret: this.cookieSecretEnvOverride });
+        rotateInviteSecret(this.inviteSecretFilePath, { envSecret: this.inviteSecretEnvOverride });
         cookieKeys = loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
         // Phase 9 H2/Q2: rotate the JWKS signing key too. Without this,
         // stateless JWT access tokens issued before the mode change keep
@@ -802,16 +1005,12 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         await rotateSigningKey(this.keyFilePath);
         keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
       }
-      // Persist with the post-rotation cookie key + new kid so the
-      // next boot sees a stable fingerprint that already reflects the
-      // rotation. Done LAST so a crash before this point re-triggers
-      // the invalidation on next boot rather than skipping it.
-      await persistModeFingerprint(this.storage, {
-        ...fingerprintInputs,
-        primaryKid: keyset.kid,
-        primaryCookieKey: cookieKeys[0],
-      });
+      const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
+      // Record the event before the completion fingerprint. The transition id
+      // makes this append idempotent, so a crash can safely retry without
+      // either losing the event or duplicating it.
       await this.storage.recordIdentityEvent({
+        eventId: appliedTransitionId,
         type: 'auth.mode_switch_invalidation',
         details: {
           cleared,
@@ -820,10 +1019,39 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         },
         timestamp: Date.now(),
       });
+      // Persist with the post-rotation cookie key + new kid only after keys,
+      // state invalidation, and the idempotent audit append have completed.
+      await persistModeFingerprint(this.storage, {
+        ...fingerprintInputs,
+        primaryKid: keyset.kid,
+        primaryCookieKey: cookieKeys[0],
+      }, {
+        transitionId: appliedTransitionId,
+        expectedSnapshot: fingerprintResult.persistenceSnapshot,
+      });
       logger.warn('[EmbeddedAuthorizationServer] mode-switch detected; OAuth state cleared, cookie secret rotated', {
         cleared,
       });
     }
+    if (missingStoredCookieForGenerationTransition && !generationTransitionCompleted) {
+      throw new Error('No active cookie signing key is available; rotate a replacement explicitly');
+    }
+
+    const authorizationGenerationFingerprint = computeAuthorizationGenerationFingerprint({
+      ...fingerprintInputs,
+      primaryKid: keyset.kid,
+      primaryCookieKey: cookieKeys[0],
+    });
+    const providerJwks = this.signingKeyStore
+      ? {
+          keys: [new OidcLifecycleSigningKey({
+            store: this.signingKeyStore,
+            keysetJwk: keyset.jwks.keys[0],
+            expectedKid: keyset.kid,
+            expectedGenerationFingerprint: authorizationGenerationFingerprint,
+          })],
+        }
+      : keyset.jwks;
 
     const adapterFactory = createOidcAdapterFactory(this.storage, {
       refreshRotationGraceMs: this.refreshRotationGraceMs,
@@ -836,10 +1064,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // mismatch — see https://github.com/panva/node-oidc-provider docs on
       // adapter shape (the `Adapter` interface is structural at runtime).
       adapter: adapterFactory,
-      // jwks: the JWKS object shape we produce from `loadOrGenerateSigningJwks`
-      // matches the runtime spec ({ keys: [JWK] }) but the @types/oidc-provider
-      // declares a narrower internal type. Cast preserves runtime correctness.
-      jwks: keyset.jwks,
+      // Store-backed deployments use oidc-provider's external-signing hook so
+      // the lifecycle lease spans only the signature. File-backed deployments
+      // retain the ordinary private-JWK configuration.
+      jwks: providerJwks,
       // Pre-register the default Claude connector client so curl-based dev
       // flows and native MCP clients work without DCR. The bare-host
       // loopback redirect_uris below are deliberate: with
@@ -888,6 +1116,9 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       },
       clientAuthMethods: this.supportedTokenEndpointAuthMethods(),
       features: {
+        ...(this.signingKeyStore ? {
+          externalSigningSupport: { enabled: true, ack: 'experimental-01' },
+        } : {}),
         // RFC 7591 Dynamic Client Registration. initialAccessToken: true
         // means /reg requires an InitialAccessToken bearer. Without this
         // gate, any unauthenticated client on the network could register
@@ -986,18 +1217,11 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       // that returns a consumed payload — this is the §6.1 family-
       // revocation path.
       //
-      // Atomicity nuance: oidc-provider's Adapter contract is
-      // find-then-consume, not transactional find-and-consume. Two
-      // truly-concurrent token exchanges can both `find` an unconsumed
-      // record before either calls `consume`. The CAS in
-      // `genericConsume` (single-statement UPDATE WHERE NOT consumed
-      // on Postgres; lock-protected RMW on filesystem; single-process
-      // serialization on memory) guarantees only ONE caller marks the
-      // record consumed — the other's consume returns false. That's
-      // sufficient to detect a third use (which sees consumed: true and
-      // triggers revoke), but does NOT prevent a single double-redeem
-      // window. A truly-atomic solution would require an upstream
-      // contract change in oidc-provider; out of §8.1 scope.
+      // The adapter serializes each parent refresh-token redemption through a
+      // durable claim. Grace-period retries receive aliases to the first
+      // canonical successor, so concurrent requests cannot create independent
+      // refresh lineages. After grace, the consumed marker is exposed and the
+      // normal oidc-provider family-revocation path handles replay.
       rotateRefreshToken: true,
       issueRefreshToken: (_ctx, client, code) => {
         // Only issue a refresh token when offline_access was granted.
@@ -1099,13 +1323,88 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         : undefined,
     });
 
-    return { provider, keyset, publicSigningKey, privateSigningKey, cookieKeys, interactionMiddleware };
+    if (this.signingKeyStore) {
+      await this.assertActiveJwksGeneration(authorizationGenerationFingerprint);
+    }
+    const signingKeyIds = this.signingKeyStore ? {
+      // Use the material loaded above, not a second store read. A concurrent
+      // rotation between those reads must be detected by the next request.
+      jwks: keyset.kid,
+      cookie: this.usesCookieSecretOverride()
+        ? 'environment-override'
+        : cookieKeys[0],
+    } : null;
+    return {
+      provider,
+      keyset,
+      publicSigningKey,
+      privateSigningKey,
+      cookieKeys,
+      interactionMiddleware,
+      signingKeyIds,
+      authorizationGenerationFingerprint,
+    };
+  }
+
+  private async signingKeysStillCurrent(state: InitializedState): Promise<boolean> {
+    if (!(await this.authorizationGenerationStillCurrent(state))) return false;
+    if (!this.signingKeyStore || !state.signingKeyIds) return true;
+    const [jwks, cookie] = await Promise.all([
+      this.signingKeyStore.getActive('jwks'),
+      this.usesCookieSecretOverride() ? Promise.resolve(null) : this.signingKeyStore.getActive('cookie'),
+    ]);
+    if (!jwks) throw new Error('No active JWKS signing key is available for authorization-server requests');
+    const jwksCurrent = jwks.kid === state.signingKeyIds.jwks;
+    const jwksGeneration = readAuthorizationGeneration(jwks.payload);
+    const jwksGenerationCurrent = !jwksGeneration
+      || jwksGeneration.generationFingerprint === state.authorizationGenerationFingerprint;
+    const cookieCurrent = this.usesCookieSecretOverride()
+      ? state.signingKeyIds.cookie === 'environment-override'
+      : (() => {
+          if (!cookie) throw new Error('No active cookie signing key is available for authorization-server requests');
+          const secret = cookie.payload.secret;
+          return typeof secret === 'string' && secret === state.signingKeyIds.cookie;
+        })();
+    return jwksCurrent && jwksGenerationCurrent && cookieCurrent;
+  }
+
+  private async assertActiveJwksGeneration(expectedGenerationFingerprint: string): Promise<void> {
+    const jwks = await this.signingKeyStore?.getActive('jwks');
+    if (!jwks) {
+      throw new Error('No active JWKS signing key is available for authorization-server requests');
+    }
+    const marker = readAuthorizationGeneration(jwks.payload);
+    if (marker && marker.generationFingerprint !== expectedGenerationFingerprint) {
+      throw new Error(
+        'Active JWKS authorization generation does not match this replica configuration',
+      );
+    }
+  }
+
+  private async authorizationGenerationStillCurrent(state: InitializedState): Promise<boolean> {
+    const persistedGeneration = (await this.storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY)) as
+      | { generationFingerprint?: unknown }
+      | null;
+    return (
+      typeof persistedGeneration?.generationFingerprint !== 'string'
+      ? false
+      : persistedGeneration.generationFingerprint === state.authorizationGenerationFingerprint
+    );
+  }
+
+  private usesCookieSecretOverride(): boolean {
+    return Boolean((this.cookieSecretEnvOverride ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET)?.length);
+  }
+
+  private usesInviteSecretOverride(): boolean {
+    return Boolean((this.inviteSecretEnvOverride ?? env.DOLLHOUSE_INVITE_TOKEN_SECRET)?.length);
   }
 
   private attachAuditEventHandlers(provider: InstanceType<typeof OidcProvider>): void {
     const recordTokenIssued = (eventName: string) => (token: unknown) => {
       const accountId = stringProperty(token, 'accountId');
-      void this.storage.recordIdentityEvent({
+      const event = {
+        eventId: randomUUID(),
         type: 'auth.oauth.token_issued',
         sub: accountId,
         details: {
@@ -1117,12 +1416,17 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
           audience: stringOrStringArrayProperty(token, 'aud'),
         },
         timestamp: Date.now(),
-      }).catch((err) => {
-        logger.warn('[EmbeddedAuthorizationServer] failed to record token-issued audit event', {
+      };
+      const pendingWrite = this.recordAuditEventWithRetry(event).catch((err: unknown) => {
+        const failure = err instanceof Error ? err : new Error(String(err));
+        this.auditWriteFailures.push(failure);
+        logger.error('[EmbeddedAuthorizationServer] failed to durably record token-issued audit event', {
           providerEvent: eventName,
-          error: err instanceof Error ? err.message : String(err),
+          error: failure.message,
         });
       });
+      this.pendingAuditWrites.add(pendingWrite);
+      void pendingWrite.finally(() => this.pendingAuditWrites.delete(pendingWrite));
     };
 
     provider.on('access_token.issued', recordTokenIssued('access_token.issued'));
@@ -1130,11 +1434,58 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     provider.on('refresh_token.saved', recordTokenIssued('refresh_token.saved'));
   }
 
+  private async recordAuditEventWithRetry(
+    event: Parameters<IAuthStorageLayer['recordIdentityEvent']>[0],
+  ): Promise<void> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        await this.storage.recordIdentityEvent(event);
+        return;
+      } catch (err) {
+        lastError = err;
+        if (attempt < 2) await delay(10 * (2 ** attempt));
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  }
+
+  /** Wait for event-driven durable writes before storage or process teardown. */
+  async dispose(): Promise<void> {
+    while (this.pendingAuditWrites.size > 0) {
+      await Promise.allSettled([...this.pendingAuditWrites]);
+    }
+    if (this.auditWriteFailures.length > 0) {
+      throw new AggregateError(
+        [...this.auditWriteFailures],
+        'One or more authorization audit events could not be persisted',
+      );
+    }
+  }
+
   private supportedTokenEndpointAuthMethods(): ['none'] | ['none', 'client_secret_basic', 'client_secret_post'] {
     return this.openDCR
       ? ['none']
       : ['none', 'client_secret_basic', 'client_secret_post'];
   }
+}
+
+const MAX_LEGACY_FINGERPRINT_KEYS_PER_KIND = 32;
+
+async function legacyFingerprintKeyCandidates(store: ISigningKeyStore): Promise<{
+  primaryKid: string;
+  primaryCookieKey: string;
+}[]> {
+  const [jwksKeys, cookieSigningKeys] = await Promise.all([
+    store.listByKind('jwks'),
+    store.listByKind('cookie'),
+  ]);
+  const kids = jwksKeys.slice(0, MAX_LEGACY_FINGERPRINT_KEYS_PER_KIND).map(key => key.kid);
+  const cookieKeys = cookieSigningKeys
+    .slice(0, MAX_LEGACY_FINGERPRINT_KEYS_PER_KIND)
+    .map(key => key.payload.secret)
+    .filter((secret): secret is string => typeof secret === 'string' && secret.length > 0);
+  return kids.flatMap(primaryKid => cookieKeys.map(primaryCookieKey => ({ primaryKid, primaryCookieKey })));
 }
 
 

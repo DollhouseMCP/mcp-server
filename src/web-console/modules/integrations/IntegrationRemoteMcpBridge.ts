@@ -11,8 +11,16 @@ import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
+import { isWellFormedUnicode } from '../../stores/ConsoleStoreValidation.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import { integrationDescriptorRoutingFingerprint } from './IntegrationDescriptorRoutingFingerprint.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
+import { createStoreIntegrationProviderResolver } from './CuratedIntegrationProviders.js';
+import { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
+import {
+  IntegrationTokenRefreshService,
+  type IntegrationTokenRefreshInput,
+} from './IntegrationTokenRefreshService.js';
 import {
   assertPublicResolvedHost,
   PublicHostGuardError,
@@ -26,6 +34,7 @@ import {
   redactRemoteMcpCredentialEchoes,
   RemoteMcpPayloadSafetyError,
 } from './IntegrationRemoteMcpSecurity.js';
+import { settleIntegrationCleanup } from './IntegrationCleanup.js';
 
 const DEFAULT_REMOTE_MCP_TIMEOUT_MS = 5_000;
 
@@ -41,12 +50,18 @@ export interface IntegrationRemoteMcpBridgeOptions {
    * — the bridge cannot be constructed without a discovery policy, so
    * session-start discovery can never run un-gated.
    */
-  readonly discoveryGate: (provider: string) => Promise<boolean>;
+  readonly discoveryGate: (input: {
+    readonly provider: string;
+    readonly descriptorId: string;
+    readonly descriptorRoutingFingerprint: string;
+    readonly serverUrl: string;
+  }) => Promise<boolean>;
   readonly clientFactory?: RemoteMcpClientFactory;
   readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
   readonly maxResponseBytes?: number;
+  readonly tokenRefresh?: Pick<IntegrationTokenRefreshService, 'refreshOnDemand'>;
 }
 
 export interface RemoteMcpTool {
@@ -75,6 +90,16 @@ export interface RemoteMcpCallResult {
     readonly remoteTool: string;
     readonly handling: 'data_only_not_instructions';
   };
+}
+
+export interface PreparedRemoteMcpCall {
+  readonly input: RemoteMcpCallInput;
+  readonly userId: string;
+  readonly sessionId: string | null;
+  readonly provider: UserIntegrationProvider;
+  readonly descriptorId: string;
+  readonly descriptorRoutingFingerprint: string;
+  readonly serverUrl: string;
 }
 
 export interface RemoteMcpClient {
@@ -111,6 +136,7 @@ export class IntegrationRemoteMcpBridge {
   private readonly dnsLookupImpl: DnsLookup;
   private readonly timeoutMs: number;
   private readonly maxResponseBytes: number;
+  private readonly refreshToken: (input: IntegrationTokenRefreshInput) => ReturnType<IntegrationTokenRefreshService['refreshOnDemand']>;
 
   constructor(private readonly options: IntegrationRemoteMcpBridgeOptions) {
     this.clientFactory = options.clientFactory ?? createSdkRemoteMcpClient;
@@ -118,6 +144,26 @@ export class IntegrationRemoteMcpBridge {
     this.dnsLookupImpl = options.dnsLookup ?? dnsLookup;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_REMOTE_MCP_TIMEOUT_MS;
     this.maxResponseBytes = options.maxResponseBytes ?? DEFAULT_REMOTE_MCP_RESPONSE_BYTES;
+    if (options.tokenRefresh) {
+      const tokenRefresh = options.tokenRefresh;
+      this.refreshToken = input => tokenRefresh.refreshOnDemand(input);
+    } else {
+      const refreshOptions = {
+        store: options.integrationStore,
+        providers: IntegrationProviderRegistry.empty(),
+        resolveProvider: createStoreIntegrationProviderResolver({
+          descriptorStore: options.descriptorStore,
+          secretEncryption: options.secretEncryption,
+          outbound: {
+            pinnedOutbound: this.pinnedOutboundFactory,
+            dnsLookup: this.dnsLookupImpl,
+          },
+        }),
+        secretEncryption: options.secretEncryption,
+      };
+      const tokenRefresh = new IntegrationTokenRefreshService(refreshOptions);
+      this.refreshToken = input => tokenRefresh.refreshOnDemand(input);
+    }
   }
 
   async listAllowedTools(): Promise<readonly RemoteMcpTool[]> {
@@ -156,7 +202,13 @@ export class IntegrationRemoteMcpBridge {
   ): Promise<readonly RemoteMcpTool[]> {
     const config = readRemoteMcpConfig(descriptor);
     if (!config) return [];
-    if (!(await this.options.discoveryGate(descriptor.provider))) {
+    const approvedFingerprint = integrationDescriptorRoutingFingerprint(descriptor);
+    if (!(await this.options.discoveryGate({
+      provider: descriptor.provider,
+      descriptorId: descriptor.id,
+      descriptorRoutingFingerprint: approvedFingerprint,
+      serverUrl: config.serverUrl.toString(),
+    }))) {
       this.auditRemote(descriptor.provider, 'discovery', 'denied');
       logger.info('Remote MCP tool discovery skipped by policy', {
         provider: descriptor.provider,
@@ -164,93 +216,165 @@ export class IntegrationRemoteMcpBridge {
       });
       return [];
     }
-    const integration = await this.options.integrationStore.findByProvider(userId, descriptor.provider);
-    if (!isIntegrationConnectedToDescriptor(integration, descriptor.id)) {
-      this.auditRemote(descriptor.provider, 'discovery', 'not_connected');
+    const activeDescriptor = await this.options.descriptorStore.findVisibleByProvider(userId, descriptor.provider);
+    if (!activeDescriptor
+        || activeDescriptor.id !== descriptor.id
+        || integrationDescriptorRoutingFingerprint(activeDescriptor) !== approvedFingerprint) {
+      this.auditRemote(descriptor.provider, 'discovery', 'descriptor_changed');
+      logger.warn('Remote MCP tool discovery skipped because the descriptor changed after policy approval', {
+        provider: descriptor.provider,
+        descriptorId: descriptor.id,
+      });
       return [];
     }
-    const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-    const bearerToken = this.decryptAccessToken(integration, userId);
-    const tools = await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
-      const listed = await this.awaitRemoteOperation(
-        client.listTools(),
-        'remote_mcp_list_timeout',
-        'Remote MCP tools/list timed out.',
-        'remote_mcp_list_failed',
-        'Remote MCP tools/list failed.',
-      );
-      return listed.tools.flatMap(tool => {
-        if (!config.allowedTools.has(tool.name)) return [];
-        // A name is both the allowlist key and invocation target; redacting it
-        // would authorize one name and invoke another, so credential echoes fail closed.
-        if (this.redactRemotePayload(tool.name, bearerToken) !== tool.name) {
-          throw new IntegrationRemoteMcpBridgeError(
-            'remote_mcp_response_invalid',
-            'Remote MCP tool metadata could not be handled safely.',
-            502,
-          );
-        }
-        const remoteTool: RemoteMcpTool = {
-          provider: descriptor.provider,
-          remoteName: tool.name,
-          localName: remoteMcpLocalToolName(descriptor.provider, tool.name),
-          description: tool.description,
-          inputSchema: tool.inputSchema,
-          serverUrl: config.serverUrl.toString(),
-        };
-        return [this.redactRemoteTool(remoteTool, bearerToken)];
-      });
-    });
-    this.auditRemote(descriptor.provider, 'discovery', 'allowed');
+    const activeConfig = readRemoteMcpConfig(activeDescriptor);
+    if (!activeConfig || activeConfig.serverUrl.toString() !== config.serverUrl.toString()) {
+      this.auditRemote(descriptor.provider, 'discovery', 'descriptor_changed');
+      return [];
+    }
+    const integration = await this.options.integrationStore.findByProvider(userId, activeDescriptor.provider);
+    if (!isIntegrationConnectedToDescriptor(integration, activeDescriptor.id)) {
+      this.auditRemote(activeDescriptor.provider, 'discovery', 'not_connected');
+      return [];
+    }
+    const vetted = await this.assertRemoteMcpPublicHost(activeConfig.serverUrl.hostname);
+    const tools = await this.withCredentialRefresh(activeDescriptor, integration, userId, (bearerToken, sensitiveTokens) =>
+      this.withPinnedClient(activeConfig.serverUrl, bearerToken, vetted, async client => {
+        const listed = await this.awaitRemoteOperation(
+          client.listTools(),
+          'remote_mcp_list_timeout',
+          'Remote MCP tools/list timed out.',
+          'remote_mcp_list_failed',
+          'Remote MCP tools/list failed.',
+        );
+        return listed.tools.flatMap(tool => {
+          if (!activeConfig.allowedTools.has(tool.name)) return [];
+          // A name is both the allowlist key and invocation target; redacting it
+          // would authorize one name and invoke another, so credential echoes fail closed.
+          if (this.redactRemotePayload(tool.name, sensitiveTokens) !== tool.name) {
+            throw new IntegrationRemoteMcpBridgeError(
+              'remote_mcp_response_invalid',
+              'Remote MCP tool metadata could not be handled safely.',
+              502,
+            );
+          }
+          const remoteTool: RemoteMcpTool = {
+            provider: activeDescriptor.provider,
+            remoteName: tool.name,
+            localName: remoteMcpLocalToolName(activeDescriptor.provider, tool.name),
+            description: tool.description,
+            inputSchema: tool.inputSchema,
+            serverUrl: activeConfig.serverUrl.toString(),
+          };
+          return [this.redactRemoteTool(remoteTool, sensitiveTokens)];
+        });
+      }),
+    );
+    this.auditRemote(activeDescriptor.provider, 'discovery', 'allowed');
     return tools;
   }
 
   async callTool(input: RemoteMcpCallInput): Promise<RemoteMcpCallResult> {
     let auditProvider = input.provider;
     try {
+      const plan = await this.prepareCall(input);
+      auditProvider = plan.provider;
+      return await this.executePreparedCall(plan);
+    } catch (error) {
+      this.auditRemote(auditProvider, 'tool_call', remoteFailureOutcome(error));
+      throw error;
+    }
+  }
+
+  async prepareCall(input: RemoteMcpCallInput): Promise<PreparedRemoteMcpCall> {
+    if (!isWellFormedUnicode(input.remoteName)) {
+      throw new IntegrationRemoteMcpBridgeError(
+        'remote_mcp_invalid_tool_name',
+        'Remote MCP tool name must contain well-formed Unicode.',
+        400,
+      );
+    }
+    const session = this.options.contextTracker.requireSessionContext('IntegrationRemoteMcpBridge');
+    const descriptor = await this.options.descriptorStore.findVisibleByProvider(
+      session.userId,
+      input.provider as UserIntegrationProvider,
+    );
+    if (!descriptor) {
+      throw new IntegrationRemoteMcpBridgeError('remote_mcp_descriptor_not_found', 'Remote MCP descriptor was not found.', 404);
+    }
+    const config = readRemoteMcpConfig(descriptor);
+    if (!config?.allowedTools.has(input.remoteName)) {
+      throw new IntegrationRemoteMcpBridgeError('remote_mcp_tool_not_allowed', 'Remote MCP tool is not allowlisted for this integration.', 403);
+    }
+    let preparedInput: RemoteMcpCallInput;
+    try {
+      preparedInput = {
+        provider: descriptor.provider,
+        remoteName: input.remoteName,
+        ...(input.arguments === undefined ? {} : { arguments: freezeRemoteSnapshot(structuredClone(input.arguments)) }),
+      };
+    } catch {
+      throw new IntegrationRemoteMcpBridgeError('remote_mcp_invalid_arguments', 'Remote MCP tool arguments must be cloneable.', 400);
+    }
+    return {
+      input: preparedInput,
+      userId: session.userId,
+      sessionId: session.sessionId,
+      provider: descriptor.provider,
+      descriptorId: descriptor.id,
+      descriptorRoutingFingerprint: integrationDescriptorRoutingFingerprint(descriptor),
+      serverUrl: config.serverUrl.toString(),
+    };
+  }
+
+  async executePreparedCall(plan: PreparedRemoteMcpCall): Promise<RemoteMcpCallResult> {
       const session = this.options.contextTracker.requireSessionContext('IntegrationRemoteMcpBridge');
-      const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, input.provider as UserIntegrationProvider);
-      if (!descriptor) {
-        throw new IntegrationRemoteMcpBridgeError('remote_mcp_descriptor_not_found', 'Remote MCP descriptor was not found.', 404);
+      if (session.userId !== plan.userId || session.sessionId !== plan.sessionId) {
+        throw new IntegrationRemoteMcpBridgeError('remote_mcp_context_changed', 'Remote MCP request context changed before execution.', 409);
       }
-      auditProvider = descriptor.provider;
+      const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, plan.provider);
+      if (!descriptor
+          || descriptor.id !== plan.descriptorId
+          || integrationDescriptorRoutingFingerprint(descriptor) !== plan.descriptorRoutingFingerprint) {
+        throw new IntegrationRemoteMcpBridgeError('remote_mcp_descriptor_changed', 'Remote MCP descriptor changed after authorization.', 409);
+      }
       const config = readRemoteMcpConfig(descriptor);
-      if (!config?.allowedTools.has(input.remoteName)) {
-        throw new IntegrationRemoteMcpBridgeError('remote_mcp_tool_not_allowed', 'Remote MCP tool is not allowlisted for this integration.', 403);
+      if (!config?.allowedTools.has(plan.input.remoteName) || config.serverUrl.toString() !== plan.serverUrl) {
+        throw new IntegrationRemoteMcpBridgeError('remote_mcp_destination_changed', 'Remote MCP destination changed after authorization.', 409);
       }
       const integration = await this.options.integrationStore.findByProvider(session.userId, descriptor.provider);
       if (!isIntegrationConnectedToDescriptor(integration, descriptor.id)) {
         throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
       }
       const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-      const bearerToken = this.decryptAccessToken(integration, session.userId);
-      const result = await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
-        const remoteResult = await this.awaitRemoteOperation(
-          client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
-          'remote_mcp_call_timeout',
-          'Remote MCP tool call timed out.',
-          'remote_mcp_call_failed',
-          'Remote MCP tool call failed.',
-        );
-        return this.redactRemoteCallResult({
-          provider: descriptor.provider,
-          remoteName: input.remoteName,
-          result: remoteResult,
-          provenance: {
-            source: 'third_party_integration',
-            trust: 'untrusted',
+      const result = await this.withCredentialRefresh(
+        descriptor,
+        integration,
+        session.userId,
+        (bearerToken, sensitiveTokens) => this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
+          const remoteResult = await this.awaitRemoteOperation(
+            client.callTool({ name: plan.input.remoteName, arguments: readArguments(plan.input.arguments) }),
+            'remote_mcp_call_timeout',
+            'Remote MCP tool call timed out.',
+            'remote_mcp_call_failed',
+            'Remote MCP tool call failed.',
+          );
+          return this.redactRemoteCallResult({
             provider: descriptor.provider,
-            remoteTool: input.remoteName,
-            handling: 'data_only_not_instructions',
-          },
-        }, bearerToken);
-      });
+            remoteName: plan.input.remoteName,
+            result: remoteResult,
+            provenance: {
+              source: 'third_party_integration',
+              trust: 'untrusted',
+              provider: descriptor.provider,
+              remoteTool: plan.input.remoteName,
+              handling: 'data_only_not_instructions',
+            },
+          }, sensitiveTokens);
+        }),
+      );
       this.auditRemote(descriptor.provider, 'tool_call', 'allowed');
       return result;
-    } catch (error) {
-      this.auditRemote(auditProvider, 'tool_call', remoteFailureOutcome(error));
-      throw error;
-    }
   }
 
   private auditRemote(provider: string, action: 'discovery' | 'tool_call', outcome: string): void {
@@ -273,6 +397,49 @@ export class IntegrationRemoteMcpBridge {
       ).toString('utf8');
     } catch {
       throw new IntegrationRemoteMcpBridgeError('remote_mcp_credential_decrypt_failed', 'Remote MCP credential could not be decrypted.', 409);
+    }
+  }
+
+  private async withCredentialRefresh<T>(
+    descriptor: IntegrationDescriptorRecord,
+    integration: UserIntegrationRecord,
+    userId: string,
+    operation: (bearerToken: string, sensitiveTokens: readonly string[]) => Promise<T>,
+  ): Promise<T> {
+    const firstToken = this.decryptAccessToken(integration, userId);
+    try {
+      return await operation(firstToken, [firstToken]);
+    } catch (error) {
+      if (!(error instanceof RemoteMcpUnauthorizedError)) throw error;
+    }
+    if (descriptor.authStrategy !== 'oauth2_authorization_code'
+        || descriptor.oauth?.refresh === 'none'
+        || !integration.refreshTokenCiphertext
+        || !integration.accessTokenCiphertext) {
+      throw remoteMcpUnauthorized();
+    }
+    let refresh;
+    try {
+      refresh = await this.refreshToken({
+        userId,
+        provider: descriptor.provider,
+        integrationDescriptorId: descriptor.id,
+        staleAccessTokenCiphertext: integration.accessTokenCiphertext,
+        staleCredentialGeneration: integration.credentialGeneration,
+        staleAuthorizedPermissions: integration.authorizedPermissions,
+      });
+    } catch {
+      throw remoteMcpRefreshFailed();
+    }
+    if ((refresh.kind !== 'refreshed' && refresh.kind !== 'reused') || !refresh.record) {
+      throw remoteMcpRefreshFailed();
+    }
+    const refreshedToken = this.decryptAccessToken(refresh.record, userId);
+    try {
+      return await operation(refreshedToken, [firstToken, refreshedToken]);
+    } catch (error) {
+      if (error instanceof RemoteMcpUnauthorizedError) throw remoteMcpUnauthorized();
+      throw error;
     }
   }
 
@@ -306,15 +473,26 @@ export class IntegrationRemoteMcpBridge {
       address: vetted.address,
       family: vetted.family,
     });
+    let unauthorized = false;
+    const observedFetch: PinnedFetch = async (input, init) => {
+      const response = await outbound.fetch(input, init);
+      if (response.status === 401) unauthorized = true;
+      return response;
+    };
     try {
-      const client = await this.connectClient(serverUrl, bearerToken, outbound.fetch);
+      const client = await this.connectClient(serverUrl, bearerToken, observedFetch);
       try {
         return await work(client);
       } finally {
-        await client.close();
+        const cleanup = await settleIntegrationCleanup(() => client.close(), this.timeoutMs);
+        if (cleanup !== 'completed') logger.warn(`Remote MCP client cleanup ${cleanup}`);
       }
+    } catch (error) {
+      if (unauthorized) throw new RemoteMcpUnauthorizedError();
+      throw error;
     } finally {
-      await outbound.close();
+      const cleanup = await settleIntegrationCleanup(() => outbound.close(), this.timeoutMs);
+      if (cleanup !== 'completed') logger.warn(`Remote MCP outbound cleanup ${cleanup}`);
     }
   }
 
@@ -356,9 +534,13 @@ export class IntegrationRemoteMcpBridge {
     }
   }
 
-  private redactRemotePayload(value: unknown, bearerToken: string): unknown {
+  private redactRemotePayload(value: unknown, bearerTokens: readonly string[]): unknown {
     try {
-      return redactRemoteMcpCredentialEchoes(value, bearerToken);
+      const longestFirst = [...new Set(bearerTokens)].sort((left, right) => right.length - left.length);
+      return longestFirst.reduce<unknown>(
+        (safeValue, bearerToken) => redactRemoteMcpCredentialEchoes(safeValue, bearerToken),
+        value,
+      );
     } catch (error) {
       if (!(error instanceof RemoteMcpPayloadSafetyError)) throw error;
       throw new IntegrationRemoteMcpBridgeError(
@@ -369,8 +551,8 @@ export class IntegrationRemoteMcpBridge {
     }
   }
 
-  private redactRemoteTool(tool: RemoteMcpTool, bearerToken: string): RemoteMcpTool {
-    const safe = this.redactRemotePayload(tool, bearerToken) as RemoteMcpTool;
+  private redactRemoteTool(tool: RemoteMcpTool, bearerTokens: readonly string[]): RemoteMcpTool {
+    const safe = this.redactRemotePayload(tool, bearerTokens) as RemoteMcpTool;
     this.assertRemoteWrapperFieldsUnchanged([
       [safe.provider, tool.provider],
       [safe.remoteName, tool.remoteName],
@@ -381,9 +563,9 @@ export class IntegrationRemoteMcpBridge {
 
   private redactRemoteCallResult(
     result: RemoteMcpCallResult,
-    bearerToken: string,
+    bearerTokens: readonly string[],
   ): RemoteMcpCallResult {
-    const safe = this.redactRemotePayload(result, bearerToken) as RemoteMcpCallResult;
+    const safe = this.redactRemotePayload(result, bearerTokens) as RemoteMcpCallResult;
     this.assertRemoteWrapperFieldsUnchanged([
       [safe.provider, result.provider],
       [safe.remoteName, result.remoteName],
@@ -409,6 +591,36 @@ export class IntegrationRemoteMcpBridge {
       502,
     );
   }
+}
+
+function freezeRemoteSnapshot<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) freezeRemoteSnapshot(nested, seen);
+  return Object.freeze(value);
+}
+
+class RemoteMcpUnauthorizedError extends Error {
+  constructor() {
+    super('remote MCP server rejected the credential');
+    this.name = 'RemoteMcpUnauthorizedError';
+  }
+}
+
+function remoteMcpUnauthorized(): IntegrationRemoteMcpBridgeError {
+  return new IntegrationRemoteMcpBridgeError(
+    'remote_mcp_unauthorized',
+    'Remote MCP server rejected the integration credential.',
+    401,
+  );
+}
+
+function remoteMcpRefreshFailed(): IntegrationRemoteMcpBridgeError {
+  return new IntegrationRemoteMcpBridgeError(
+    'remote_mcp_token_refresh_failed',
+    'Remote MCP integration token refresh failed.',
+    502,
+  );
 }
 
 function remoteFailureOutcome(error: unknown): string {
@@ -446,6 +658,13 @@ function readRemoteMcpConfig(descriptor: IntegrationDescriptorRecord): {
   const tools = remoteMcp.tools;
   if (typeof serverUrlValue !== 'string' || !Array.isArray(tools)) return null;
   const serverUrl = parseAllowedServerUrl(serverUrlValue, descriptor);
+  if (tools.some(tool => typeof tool === 'string' && !isWellFormedUnicode(tool))) {
+    throw new IntegrationRemoteMcpBridgeError(
+      'remote_mcp_invalid_tool_name',
+      'Remote MCP allowlisted tool names must contain well-formed Unicode.',
+      400,
+    );
+  }
   const allowedTools = new Set(tools.filter((tool): tool is string => typeof tool === 'string' && tool.trim() !== ''));
   return allowedTools.size > 0 ? { serverUrl, allowedTools } : null;
 }

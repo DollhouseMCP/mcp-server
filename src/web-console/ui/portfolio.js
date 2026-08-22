@@ -18,6 +18,7 @@ import { get, post } from './api.js';
 import { noConsoleRoute } from './console-meta.js';
 import { createPortfolioAuthoring } from './portfolio-authoring.js';
 import { renderElementDetail } from './portfolio-detail.js';
+import { createRequestOwner } from './polling.js';
 import { escapeHtml } from './ui-utils.js';
 
 // Plural API type → singular CSS/display type (drives the --family colour lanes
@@ -60,7 +61,13 @@ export async function init(panelEl, ctx = {}) {
   host = panelEl;
   notify = ctx.toast || notify;
   hasRoute = ctx.hasRoute || hasRoute;
-  authoring = createPortfolioAuthoring({ host, hasRoute, notify, refresh: refreshPortfolio });
+  authoring = createPortfolioAuthoring({
+    host,
+    hasRoute,
+    notify,
+    refresh: refreshPortfolio,
+    requestMaxBytes: ctx.limits?.portfolioRequestMaxBytes,
+  });
   state.collection.installEnabled = hasRoute('POST', '/me/portfolio/from-collection');
   host.innerHTML = template();
   const collectionAvailable = hasRoute('GET', '/collection/elements');
@@ -579,10 +586,14 @@ let modalIdx = -1;
 let modalEl = null;
 let modalContent = '';
 let modalPreviousFocus = null;
+const modalLoadOwner = createRequestOwner();
 
 async function openModal(list, idx) {
   ensureModal();
-  modalList = list; modalIdx = idx; modalEl = list[idx];
+  const requestedElement = list[idx];
+  const requestClaim = modalLoadOwner.claim();
+  modalList = list; modalIdx = idx; modalEl = requestedElement;
+  modalContent = '';
   modalPreviousFocus = document.activeElement;
   const dlg = document.getElementById('pf-modal');
   const body = dlg.querySelector('#pf-modal-body');
@@ -594,12 +605,21 @@ async function openModal(list, idx) {
 
   // Fetch the full element (metadata + content) — the legacy did the same on open.
   // Collection elements come from the catalog endpoint; portfolio from /me.
-  const res = await get(detailPath(modalEl));
+  let res;
+  try {
+    res = await get(detailPath(requestedElement));
+  } catch {
+    if (modalLoadOwner.owns(requestClaim) && dlg.open) {
+      body.innerHTML = '<p class="panel-placeholder">Couldn\'t reach the server for this element.</p>';
+    }
+    return;
+  }
+  if (!modalLoadOwner.owns(requestClaim) || !dlg.open) return;
   if (res.status !== 200 || !res.body) {
     body.innerHTML = `<p class="panel-placeholder">Couldn't load this element (status ${res.status}).</p>`;
     return;
   }
-  modalEl = { ...modalEl, ...res.body, metadata: res.body.metadata ?? {}, _etag: res.etag };
+  modalEl = { ...requestedElement, ...res.body, metadata: res.body.metadata ?? {}, _etag: res.etag };
   modalContent = typeof res.body.content === 'string' ? res.body.content : '';
   setHeader(modalEl);
   renderModalBody();
@@ -836,6 +856,7 @@ async function editCard(element, button) {
 }
 
 function closeDetailModal() {
+  modalLoadOwner.invalidate();
   const dialog = document.getElementById('pf-modal');
   if (dialog?.open) dialog.close();
   document.body.classList.remove('modal-open');

@@ -18,6 +18,7 @@ import type { IFileOperationsService } from '../../services/FileOperationsServic
 import { promises as fs } from 'fs';
 import * as path from 'path';
 import matter from 'gray-matter';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 
 /**
  * Result of parsing a file with frontmatter
@@ -32,7 +33,7 @@ export interface ParsedFile {
  * Options for file operations
  */
 export interface FileOperationOptions {
-  /** Maximum file size in bytes (default: 1MB) */
+  /** Maximum file size in bytes (default: 10MB persisted-element ceiling) */
   maxSize?: number;
   /** Whether to validate path is within base directory (default: true) */
   validatePath?: boolean;
@@ -72,7 +73,7 @@ export class ElementFileOperations {
     options: FileOperationOptions = {}
   ): Promise<ParsedFile> {
     const {
-      maxSize = 1024 * 1024, // 1MB default
+      maxSize = SECURITY_LIMITS.MAX_FILE_SIZE,
       validatePath: shouldValidatePath = true
     } = options;
 

@@ -1,8 +1,9 @@
-import { and, desc, eq, gt, isNull, lt, notExists, sql, type SQL } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt, lte, notExists, sql, type SQL } from 'drizzle-orm';
 
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import type { DrizzleTx } from '../../../database/db-utils.js';
+import { lockActiveUserLifecycleWithTx } from '../../../database/authPrincipalLock.js';
 import {
   runtimeControlAcks,
   runtimeControlCommands,
@@ -35,29 +36,38 @@ import {
   validateRuntimeTerminationCommandInput,
   validateSessionId,
 } from './IRuntimeSessionControlStore.js';
-import { assertUuid } from '../../stores/ConsoleStoreValidation.js';
+import { assertUuid, ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
 import { validateReplicaId } from '../invalidation/IConsoleSecurityInvalidationStore.js';
 
 export class PostgresRuntimeSessionControlStore implements IRuntimeSessionControlStore {
   constructor(private readonly db: DatabaseInstance) {}
 
   async registerPresence(input: RuntimeSessionPresenceInput): Promise<RuntimeSessionPresence> {
-    return withSystemContext(this.db, tx => registerRuntimePresenceWithTx(tx, input));
+    return withSystemContext(this.db, async (tx) => {
+      await lockActiveUserLifecycleWithTx(tx, input.userId);
+      return registerRuntimePresenceWithTx(tx, input);
+    });
   }
 
   async heartbeatPresence(input: RuntimeSessionHeartbeatInput): Promise<RuntimeSessionHeartbeatResult> {
     return withSystemContext(this.db, tx => heartbeatRuntimePresenceWithTx(tx, input));
   }
 
-  async markPresenceClosing(sessionId: string, closedAt: Date): Promise<RuntimeSessionPresence | null> {
-    return withSystemContext(this.db, tx => markRuntimePresenceClosingWithTx(tx, sessionId, closedAt));
+  async markPresenceClosing(
+    sessionId: string,
+    replicaId: string,
+    closedAt: Date,
+  ): Promise<RuntimeSessionPresence | null> {
+    return withSystemContext(this.db, tx =>
+      markRuntimePresenceClosingWithTx(tx, sessionId, replicaId, closedAt));
   }
 
-  async sweepStalePresence(before: Date = new Date()): Promise<number> {
+  async sweepStalePresence(before?: Date): Promise<number> {
+    const cutoff = before ?? sql<Date>`statement_timestamp()`;
     const rows = await withSystemContext(this.db, tx =>
       tx.delete(runtimeSessionPresence)
         .where(and(
-          lt(runtimeSessionPresence.leaseUntil, before),
+          lt(runtimeSessionPresence.leaseUntil, cutoff),
           notExists(
             tx.select({ id: agentStates.id })
               .from(agentStates)
@@ -81,14 +91,18 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
     return rows.length;
   }
 
-  async findPresence(sessionId: string, now: Date = new Date()): Promise<RuntimeSessionPresence | null> {
+  async findPresence(sessionId: string, now?: Date): Promise<RuntimeSessionPresence | null> {
+    return withSystemContext(this.db, tx => findRuntimePresenceWithTx(tx, sessionId, now));
+  }
+
+  async findOperationalPresence(sessionId: string, now?: Date): Promise<RuntimeSessionPresence | null> {
     validateSessionId(sessionId);
+    const cutoff = now ?? sql<Date>`statement_timestamp()`;
     const rows = await withSystemContext(this.db, tx =>
       tx.select().from(runtimeSessionPresence)
         .where(and(
           eq(runtimeSessionPresence.sessionId, sessionId),
-          eq(runtimeSessionPresence.status, 'active'),
-          gt(runtimeSessionPresence.leaseUntil, now),
+          gt(runtimeSessionPresence.leaseUntil, cutoff),
         ))
         .limit(1),
     );
@@ -116,17 +130,22 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
   ): Promise<RuntimeSessionPresence[]> {
     assertUuid(userId, 'userId');
     const parsed = validateRuntimeListQuery(query);
+    const cutoff = query.now ?? sql<Date>`statement_timestamp()`;
     const rows = await withSystemContext(this.db, tx =>
       tx.select().from(runtimeSessionPresence)
         .where(and(
           eq(runtimeSessionPresence.userId, userId),
           eq(runtimeSessionPresence.status, 'active'),
-          gt(runtimeSessionPresence.leaseUntil, parsed.now),
+          gt(runtimeSessionPresence.leaseUntil, cutoff),
         ))
         .orderBy(desc(runtimeSessionPresence.lastActiveAt), runtimeSessionPresence.sessionId)
         .limit(parsed.limit),
     );
     return rows.map(row => fromPresenceRow(row));
+  }
+
+  async listAllPresenceByUser(userId: string, now?: Date): Promise<RuntimeSessionPresence[]> {
+    return withSystemContext(this.db, tx => listAllRuntimePresenceByUserWithTx(tx, userId, now));
   }
 
   // Known limitation: the keyset sorts/cursors on last_active_at, which a heartbeat
@@ -136,10 +155,9 @@ export class PostgresRuntimeSessionControlStore implements IRuntimeSessionContro
   // cross-page audit should be aware it is best-effort, not a consistent point-in-time cut.
   async listOperationalPresence(query: RuntimeOperationalListQuery = {}): Promise<RuntimeOperationalPresencePage> {
     const parsed = validateRuntimeOperationalListQuery(query);
-    const conditions: SQL[] = [
-      eq(runtimeSessionPresence.status, parsed.status ?? 'active'),
-      gt(runtimeSessionPresence.leaseUntil, parsed.now),
-    ];
+    const cutoff = query.now ?? sql<Date>`statement_timestamp()`;
+    const conditions: SQL[] = [gt(runtimeSessionPresence.leaseUntil, cutoff)];
+    if (parsed.status) conditions.push(eq(runtimeSessionPresence.status, parsed.status));
     if (parsed.userId) conditions.push(eq(runtimeSessionPresence.userId, parsed.userId));
     if (parsed.after) {
       conditions.push(sql`(${runtimeSessionPresence.lastActiveAt}, ${runtimeSessionPresence.sessionId}) < (${parsed.after.lastActiveAt}::timestamptz, ${parsed.after.sessionId})`);
@@ -212,6 +230,10 @@ export async function registerRuntimePresenceWithTx(
   input: RuntimeSessionPresenceInput,
 ): Promise<RuntimeSessionPresence> {
   validateRuntimeSessionPresenceInput(input);
+  // Registration may restore a durable presence snapshot (including an
+  // already-expired one used by orphan reclamation), so preserve its absolute
+  // timestamps. Subsequent heartbeats and every liveness decision use the
+  // database clock and cannot extend a lease from replica wall-clock time.
   const insert = toPresenceInsert(input);
   const rows = await tx.insert(runtimeSessionPresence).values(insert)
     .onConflictDoUpdate({
@@ -229,39 +251,49 @@ export async function heartbeatRuntimePresenceWithTx(
   input: RuntimeSessionHeartbeatInput,
 ): Promise<RuntimeSessionHeartbeatResult> {
   validateRuntimeSessionHeartbeatInput(input);
+  const leaseDurationMs = runtimeLeaseDurationMs(input.lastActiveAt, input.leaseUntil);
   const rows = await tx.update(runtimeSessionPresence).set({
-    lastActiveAt: input.lastActiveAt,
+    lastActiveAt: sql<Date>`statement_timestamp()`,
     requestCount: input.requestCount,
     errorCount: input.errorCount,
-    leaseUntil: input.leaseUntil,
+    leaseUntil: sql<Date>`statement_timestamp() + (${leaseDurationMs} * interval '1 millisecond')`,
   }).where(and(
     eq(runtimeSessionPresence.sessionId, input.sessionId),
     eq(runtimeSessionPresence.replicaId, input.replicaId),
     eq(runtimeSessionPresence.status, 'active'),
+    lte(runtimeSessionPresence.requestCount, input.requestCount),
+    lte(runtimeSessionPresence.errorCount, input.errorCount),
   )).returning();
   if (rows[0]) return { kind: 'updated', presence: fromPresenceRow(rows[0]) };
 
-  const current = await tx.select({
-    replicaId: runtimeSessionPresence.replicaId,
-    status: runtimeSessionPresence.status,
-  }).from(runtimeSessionPresence)
+  const current = await tx.select().from(runtimeSessionPresence)
     .where(eq(runtimeSessionPresence.sessionId, input.sessionId))
     .limit(1);
   if (!current[0]) return { kind: 'lost', reason: 'missing' };
   if (current[0].replicaId !== input.replicaId) return { kind: 'lost', reason: 'replica_mismatch' };
+  // An out-of-order heartbeat from the current owner is stale, not an
+  // ownership loss. Preserve the newer durable snapshot and lease.
+  if (current[0].status === 'active') {
+    return { kind: 'updated', presence: fromPresenceRow(current[0]) };
+  }
   return { kind: 'lost', reason: 'closing' };
 }
 
 export async function markRuntimePresenceClosingWithTx(
   tx: DrizzleTx,
   sessionId: string,
+  replicaId: string,
   closedAt: Date,
 ): Promise<RuntimeSessionPresence | null> {
   validateSessionId(sessionId);
+  validateReplicaId(replicaId);
   const rows = await tx.update(runtimeSessionPresence).set({
     status: 'closing',
     closedAt,
-  }).where(eq(runtimeSessionPresence.sessionId, sessionId)).returning();
+  }).where(and(
+    eq(runtimeSessionPresence.sessionId, sessionId),
+    eq(runtimeSessionPresence.replicaId, replicaId),
+  )).returning();
   return rows[0] ? fromPresenceRow(rows[0]) : null;
 }
 
@@ -275,6 +307,59 @@ export async function findRecordedRuntimePresenceWithTx(
     .for('update')
     .limit(1);
   return rows[0] ? fromPresenceRow(rows[0]) : null;
+}
+
+export async function findRuntimePresenceWithTx(
+  tx: DrizzleTx,
+  sessionId: string,
+  now?: Date,
+): Promise<RuntimeSessionPresence | null> {
+  validateSessionId(sessionId);
+  const cutoff = now ?? sql<Date>`statement_timestamp()`;
+  const rows = await tx.select().from(runtimeSessionPresence)
+    .where(and(
+      eq(runtimeSessionPresence.sessionId, sessionId),
+      eq(runtimeSessionPresence.status, 'active'),
+      gt(runtimeSessionPresence.leaseUntil, cutoff),
+    ))
+    .limit(1);
+  return rows[0] ? fromPresenceRow(rows[0]) : null;
+}
+
+export async function listAllRuntimePresenceByUserWithTx(
+  tx: DrizzleTx,
+  userId: string,
+  now?: Date,
+): Promise<RuntimeSessionPresence[]> {
+  assertUuid(userId, 'userId');
+  const cutoff = now ?? sql<Date>`statement_timestamp()`;
+  const rows = await tx.select().from(runtimeSessionPresence)
+    .where(and(
+      eq(runtimeSessionPresence.userId, userId),
+      eq(runtimeSessionPresence.status, 'active'),
+      gt(runtimeSessionPresence.leaseUntil, cutoff),
+    ))
+    .orderBy(runtimeSessionPresence.sessionId);
+  return rows.map(row => fromPresenceRow(row));
+}
+
+export async function isRuntimePresenceActiveWithTx(
+  tx: DrizzleTx,
+  sessionId: string,
+  userId: string,
+): Promise<boolean> {
+  validateSessionId(sessionId);
+  assertUuid(userId, 'userId');
+  const rows = await tx.select({ sessionId: runtimeSessionPresence.sessionId })
+    .from(runtimeSessionPresence)
+    .where(and(
+      eq(runtimeSessionPresence.sessionId, sessionId),
+      eq(runtimeSessionPresence.userId, userId),
+      eq(runtimeSessionPresence.status, 'active'),
+      gt(runtimeSessionPresence.leaseUntil, sql<Date>`statement_timestamp()`),
+    ))
+    .limit(1);
+  return rows.length === 1;
 }
 
 export async function createRuntimeTerminationCommandWithTx(
@@ -320,6 +405,14 @@ function toPresenceInsert(input: RuntimeSessionPresenceInput): typeof runtimeSes
     status: 'active',
     closedAt: null,
   };
+}
+
+function runtimeLeaseDurationMs(lastActiveAt: Date, leaseUntil: Date): number {
+  const duration = leaseUntil.getTime() - lastActiveAt.getTime();
+  if (!Number.isSafeInteger(duration) || duration <= 0) {
+    throw new ConsoleStoreValidationError('runtime lease duration must be a positive safe integer');
+  }
+  return duration;
 }
 
 function toCommandInsert(input: RuntimeTerminationCommandInput): typeof runtimeControlCommands.$inferInsert {

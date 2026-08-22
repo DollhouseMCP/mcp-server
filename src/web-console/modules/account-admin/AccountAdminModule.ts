@@ -11,6 +11,7 @@ import type { ConsoleAdminRole, IConsoleAccountAdminStore } from '../../stores/I
 import { CONSOLE_ADMIN_ROLES } from '../../stores/IConsoleAccountAdminStore.js';
 import { tupleIncludes } from '../../stores/ConsoleStoreValidation.js';
 import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
+import type { IConsoleSecurityInvalidationStore } from '../../services/invalidation/IConsoleSecurityInvalidationStore.js';
 import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
 import { AccountAdminAllowlistService } from './AccountAdminAllowlistService.js';
 import { AccountAdminBootstrapService } from './AccountAdminBootstrapService.js';
@@ -76,11 +77,13 @@ export interface AccountAdminModuleOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly sessionStore: IConsoleSessionStore;
+  readonly securityInvalidationStore?: IConsoleSecurityInvalidationStore | null;
   readonly authStorage?: IAuthStorageLayer | null;
   readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
   readonly runtimeSessionControlStore?: IRuntimeSessionControlStore | null;
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
+  readonly securityInvalidationAcknowledgementTimeoutMs?: number;
   readonly accountAdminMutationTransactionRunner: IAccountAdminMutationTransactionRunner;
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly now?: () => Date;
@@ -105,7 +108,11 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
   const lifecycleMutationService = new AccountAdminLifecycleMutationService({
     accountAdminStore,
     transactionRunner,
+    sessionStore: options.sessionStore,
+    securityInvalidationStore: options.securityInvalidationStore ?? null,
+    invalidationAcknowledgementTimeoutMs: options.securityInvalidationAcknowledgementTimeoutMs,
     runtimeTerminationService,
+    oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     now: options.now,
   });
   const credentialRevocationService = new AccountAdminCredentialRevocationService({
@@ -113,20 +120,27 @@ export function createAccountAdminModule(options: AccountAdminModuleOptions): Co
     sessionStore: options.sessionStore,
     oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     transactionRunner,
+    securityInvalidationStore: options.securityInvalidationStore ?? null,
+    invalidationAcknowledgementTimeoutMs: options.securityInvalidationAcknowledgementTimeoutMs,
     runtimeTerminationService,
     now: options.now,
   });
   const deletionService = new AccountAdminDeletionService({
     accountAdminStore,
-    sessionStore: options.sessionStore,
-    oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     transactionRunner,
     runtimeTerminationService,
+    sessionStore: options.sessionStore,
+    oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
     now: options.now,
   });
   const identityService = new AccountAdminIdentityService({
     accountAdminStore,
     transactionRunner,
+    sessionStore: options.sessionStore,
+    securityInvalidationStore: options.securityInvalidationStore ?? null,
+    invalidationAcknowledgementTimeoutMs: options.securityInvalidationAcknowledgementTimeoutMs,
+    oauthGrantRevocationService: options.oauthGrantRevocationService ?? null,
+    runtimeTerminationService,
     now: options.now,
   });
   const allowlistService = new AccountAdminAllowlistService({

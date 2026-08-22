@@ -10,6 +10,12 @@ import {
 
 const SEND_PATH = '/gmail/v1/users/me/messages/send';
 const REMOTE_DOCS = 'remote-docs';
+const DISCOVERY_INPUT = {
+  provider: REMOTE_DOCS,
+  descriptorId: '00000000-0000-4000-8000-000000000001',
+  descriptorRoutingFingerprint: 'a'.repeat(64),
+  serverUrl: 'https://mcp.example.com/mcp',
+} as const;
 
 function approvalRequestId(decision: { readonly approvalRequest?: { readonly requestId: string } }): string {
   if (!decision.approvalRequest) throw new Error('expected an approval request');
@@ -34,6 +40,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       provider: 'gmail',
       method: 'POST',
       path: SEND_PATH,
+      baseUrl: 'https://gmail.googleapis.com/v1?tenant=alpha',
       body: { raw: 'abc' },
     });
 
@@ -62,6 +69,18 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       provider: 'gmail',
       method: 'POST',
       path: SEND_PATH,
+      baseUrl: 'https://gmail.googleapis.com/v1?tenant=beta',
+      body: { raw: 'abc' },
+    })).resolves.toMatchObject({
+      allowed: false,
+      error: { code: 'integration_request_approval_required' },
+    });
+
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'POST',
+      path: SEND_PATH,
+      baseUrl: 'https://gmail.googleapis.com/v1?tenant=alpha',
       body: { raw: 'abc' },
     })).resolves.toMatchObject({
       allowed: true,
@@ -172,7 +191,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       getActiveElements: () => Promise.resolve([]),
     });
 
-    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+    await expect(enforcer.evaluateDiscovery(DISCOVERY_INPUT)).resolves.toBe(true);
     expect(createSpy).not.toHaveBeenCalled();
   });
 
@@ -192,7 +211,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       getActiveElements: () => Promise.resolve([integrationReadGuard()]),
     });
 
-    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
+    await expect(enforcer.evaluateDiscovery(DISCOVERY_INPUT)).resolves.toBe(false);
     expect(createSpy).not.toHaveBeenCalled();
   });
 
@@ -216,7 +235,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     });
     await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
 
-    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(true);
+    await expect(enforcer.evaluateDiscovery(DISCOVERY_INPUT)).resolves.toBe(true);
   });
 
   it('evaluateDiscovery fails closed when policy evaluation is unavailable', async () => {
@@ -232,7 +251,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       getActiveElements: () => Promise.reject(new Error('element resolution failed')),
     });
 
-    await expect(enforcer.evaluateDiscovery(REMOTE_DOCS)).resolves.toBe(false);
+    await expect(enforcer.evaluateDiscovery(DISCOVERY_INPUT)).resolves.toBe(false);
   });
 
   it('normalizes active-element loading failures to policy unavailability', async () => {

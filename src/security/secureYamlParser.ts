@@ -71,8 +71,8 @@ export class SecureYamlParser {
     SECURITY_LIMITS.YAML_BOMB_AMPLIFICATION_THRESHOLD + 1;
 
   private static readonly DEFAULT_OPTIONS: SecureParseOptions = {
-    maxYamlSize: 64 * 1024,      // 64KB for YAML
-    maxContentSize: 1024 * 1024,  // 1MB for content
+    maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
+    maxContentSize: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
     validateContent: true,
     validateFields: true         // By default, apply field validators
   };
@@ -144,7 +144,7 @@ export class SecureYamlParser {
     const opts = { ...this.DEFAULT_OPTIONS, ...options };
 
     // 1. Size validation
-    if (input.length > (opts.maxContentSize || this.DEFAULT_OPTIONS.maxContentSize!)) {
+    if (Buffer.byteLength(input, 'utf8') > (opts.maxContentSize || this.DEFAULT_OPTIONS.maxContentSize!)) {
       throw new SecurityError('Content exceeds maximum allowed size', 'medium');
     }
 
@@ -163,7 +163,7 @@ export class SecureYamlParser {
     const markdownContent = input.substring(frontmatterMatch[0].length);
 
     // 3. Validate YAML size
-    if (yamlContent.length > (opts.maxYamlSize || this.DEFAULT_OPTIONS.maxYamlSize!)) {
+    if (Buffer.byteLength(yamlContent, 'utf8') > (opts.maxYamlSize || this.DEFAULT_OPTIONS.maxYamlSize!)) {
       throw new SecurityError('YAML frontmatter exceeds maximum allowed size', 'medium');
     }
 
@@ -387,32 +387,32 @@ export class SecureYamlParser {
    * - NO custom types, functions, or code execution
    *
    * @param yamlContent - Raw YAML string to parse
-   * @param maxSize - Maximum allowed size (default 64KB)
+   * @param maxSize - Maximum allowed size (default 1 MiB)
    * @returns Parsed object
    * @throws SecurityError if content is too large or contains threats
    */
   static parseRawYaml(
     yamlContent: string,
-    maxSizeOrOptions: number | SecureRawYamlParseOptions = 64 * 1024,
+    maxSizeOrOptions: number | SecureRawYamlParseOptions = SECURITY_LIMITS.MAX_YAML_LENGTH,
   ): Record<string, unknown> {
     const options = typeof maxSizeOrOptions === 'number'
       ? { maxSize: maxSizeOrOptions, schema: 'core' as const, contentPolicy: 'strict' as const }
       : {
-          maxSize: 64 * 1024,
+          maxSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
           schema: 'core' as const,
           contentPolicy: 'strict' as const,
           ...maxSizeOrOptions,
         };
 
     // Size validation
-    if (yamlContent.length > options.maxSize) {
+    if (Buffer.byteLength(yamlContent, 'utf8') > options.maxSize) {
       throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
     }
 
     // Fix #908: YAML bomb detection — previously skipped, allowing bomb payloads
     // through MCP-AQL create dispatcher and web routes that use parseRawYaml().
     // Issue #2329: pass maxSize through — validateYamlContent's own default cap is
-    // 64KB (frontmatter-sized), which rejected larger pure-YAML documents even
+    // the legacy 64KB frontmatter ceiling, which rejected larger pure-YAML documents even
     // when the caller allowed them.
     const isValid = options.contentPolicy === 'structure-only'
       ? ContentValidator.validateYamlStructure(yamlContent, options.maxSize)

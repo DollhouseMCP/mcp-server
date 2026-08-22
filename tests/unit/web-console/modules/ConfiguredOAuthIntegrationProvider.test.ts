@@ -1,6 +1,10 @@
 import { describe, expect, it, jest } from '@jest/globals';
 
 import { ConfiguredOAuthIntegrationProvider } from '../../../../src/web-console/modules/integrations/ConfiguredOAuthIntegrationProvider.js';
+import {
+  MintedIntegrationCredentialsError,
+  TerminalIntegrationRefreshError,
+} from '../../../../src/web-console/modules/integrations/IntegrationProvider.js';
 import type { IntegrationDescriptorRecord } from '../../../../src/web-console/stores/IIntegrationDescriptorStore.js';
 import type { DnsLookup } from '../../../../src/web-console/modules/integrations/IntegrationPublicHostGuard.js';
 import type { OutboundPin, PinnedFetch, PinnedOutboundFactory } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
@@ -49,6 +53,7 @@ function providerWith(input: {
   readonly dnsLookup: DnsLookup;
   readonly fetch?: PinnedFetch;
   readonly descriptor?: IntegrationDescriptorRecord;
+  readonly close?: () => Promise<void>;
 }): {
   readonly provider: ConfiguredOAuthIntegrationProvider;
   readonly factory: jest.Mock;
@@ -72,7 +77,7 @@ function providerWith(input: {
   });
   const factory = jest.fn((pin: OutboundPin) => {
     pins.push(pin);
-    return { fetch: fetchImpl, close: () => Promise.resolve() };
+    return { fetch: fetchImpl, close: input.close ?? (() => Promise.resolve()) };
   });
   const provider = new ConfiguredOAuthIntegrationProvider({
     descriptor: input.descriptor ?? descriptor(),
@@ -208,6 +213,18 @@ describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
     expect(fetchCalls[0].redirect).toBe('error');
   });
 
+  it('does not replace a successful OAuth response when outbound cleanup fails', async () => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      close: () => Promise.reject(new Error('dispatcher cleanup failed')),
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)).resolves.toMatchObject({
+      accessToken: 'fresh-access-token',
+      refreshToken: 'fresh-refresh-token',
+    });
+  });
+
   it('accepts bounded BOM-prefixed JSON for token exchange and refresh', async () => {
     const responseBody = `\uFEFF${JSON.stringify({
       access_token: 'bom-access-token',
@@ -233,6 +250,40 @@ describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
     });
   });
 
+  it.each([
+    ['access_token', `invalid-\uD800-token`],
+    ['refresh_token', `invalid-\uD800-token`],
+    ['access_token', `invalid-trailing-\uD800`],
+    ['refresh_token', `invalid-trailing-\uD800`],
+  ] as const)(
+    'rejects unpaired Unicode surrogates in %s values',
+    async (tokenField, malformedToken) => {
+      const responseBody = JSON.stringify({
+        access_token: 'valid-access-token',
+        refresh_token: 'valid-refresh-token',
+        [tokenField]: malformedToken,
+      });
+      const { provider } = providerWith({
+        dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+        fetch: () => Promise.resolve(new Response(responseBody, {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })),
+      });
+
+      const exchange = provider.exchangeAuthorizationCode(EXCHANGE_REQUEST);
+      if (tokenField === 'refresh_token') {
+        await expect(exchange).rejects.toMatchObject({
+          accessToken: 'valid-access-token',
+          refreshToken: null,
+          cause: expect.objectContaining({ message: 'configured_oauth_token_malformed_unicode' }),
+        });
+      } else {
+        await expect(exchange).rejects.toThrow('configured_oauth_token_malformed_unicode');
+      }
+    },
+  );
+
   it('routes refresh and revocation through the pinned transport', async () => {
     const { provider, pins, fetchCalls } = providerWith({ dnsLookup: lookupReturning(PUBLIC_ADDRESS) });
     const refreshed = await provider.refreshCredentials({ refreshToken: 'refresh-token' });
@@ -248,6 +299,135 @@ describe('ConfiguredOAuthIntegrationProvider token-endpoint host guard', () => {
     ]);
     // Credential-bearing calls must never follow a redirect to another host.
     expect(fetchCalls.map(call => call.redirect)).toEqual(['error', 'error']);
+  });
+
+  it('retains cleanup responsibility when no revocation endpoint is configured', async () => {
+    const configuredDescriptor = descriptor();
+    if (!configuredDescriptor.oauth) throw new Error('fixture oauth missing');
+    configuredDescriptor.oauth = {
+      ...configuredDescriptor.oauth,
+      tokenExchange: {
+        style: configuredDescriptor.oauth.tokenExchange.style,
+        clientAuth: configuredDescriptor.oauth.tokenExchange.clientAuth,
+      },
+    };
+    const { provider, factory } = providerWith({ descriptor: configuredDescriptor });
+
+    await expect(provider.revokeCredentials({ accessToken: 'access-token' }))
+      .rejects.toThrow('configured_oauth_revocation_unavailable');
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('treats a revocation endpoint 404 as a cleanup failure', async () => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response('', { status: 404 })),
+    });
+
+    await expect(provider.revokeCredentials({ accessToken: 'access-token' }))
+      .rejects.toThrow('configured_oauth_revocation_failed');
+  });
+
+  it('revokes distinct access and refresh tokens and still attempts the second after failure', async () => {
+    const presentedTokens: string[] = [];
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: (_url, init) => {
+        const token = new URLSearchParams(String(init?.body)).get('token') ?? '';
+        presentedTokens.push(token);
+        return Promise.resolve(new Response('', { status: token === 'access-token' ? 500 : 200 }));
+      },
+    });
+
+    await expect(provider.revokeCredentials({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      externalInstallationId: null,
+    })).rejects.toThrow('configured_oauth_revocation_failed');
+    expect(presentedTokens).toEqual(['access-token', 'refresh-token']);
+  });
+
+  it('supports refresh-token-only revocation and deduplicates identical token values', async () => {
+    const presentedTokens: string[] = [];
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: (_url, init) => {
+        presentedTokens.push(new URLSearchParams(String(init?.body)).get('token') ?? '');
+        return Promise.resolve(new Response('', { status: 200 }));
+      },
+    });
+
+    await provider.revokeCredentials({ accessToken: null, refreshToken: 'refresh-token', externalInstallationId: null });
+    await provider.revokeCredentials({ accessToken: 'same-token', refreshToken: 'same-token', externalInstallationId: null });
+
+    expect(presentedTokens).toEqual(['refresh-token', 'same-token']);
+  });
+
+  it.each([
+    ['basic', true, false],
+    ['body', false, true],
+    ['none', false, false],
+  ] as const)('uses %s client authentication for revocation', async (clientAuth, expectsBasic, expectsSecretBody) => {
+    let authorization: string | null = null;
+    let body = '';
+    const configuredDescriptor = descriptor();
+    configuredDescriptor.oauth = configuredDescriptor.oauth && {
+      ...configuredDescriptor.oauth,
+      tokenExchange: { ...configuredDescriptor.oauth.tokenExchange, clientAuth },
+    };
+    const { provider } = providerWith({
+      descriptor: configuredDescriptor,
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: (_url, init) => {
+        authorization = new Headers(init?.headers).get('authorization');
+        body = String(init?.body ?? '');
+        return Promise.resolve(new Response('', { status: 200 }));
+      },
+    });
+
+    await provider.revokeCredentials({ accessToken: 'access-token' });
+
+    expect(authorization !== null).toBe(expectsBasic);
+    expect(new URLSearchParams(body).has('client_secret')).toBe(expectsSecretBody);
+    expect(new URLSearchParams(body).get('client_id')).toBe(expectsBasic ? null : 'gmail-client-id');
+  });
+
+  it('captures a minted access token when a rotated refresh token is malformed', async () => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(JSON.stringify({
+        access_token: 'minted-access-token',
+        refresh_token: 'malformed-\uD800-token',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })),
+    });
+
+    await expect(provider.refreshCredentials({ refreshToken: 'old-refresh-token', authorizedPermissions: {} }))
+      .rejects.toMatchObject<MintedIntegrationCredentialsError>({
+        accessToken: 'minted-access-token',
+        refreshToken: null,
+      });
+  });
+
+  it('classifies invalid_grant as terminal but leaves provider 5xx retryable', async () => {
+    const terminal = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(JSON.stringify({ error: 'invalid_grant' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    }).provider;
+    const transient = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(JSON.stringify({ error: 'temporarily_unavailable' }), {
+        status: 503,
+        headers: { 'Content-Type': 'application/json' },
+      })),
+    }).provider;
+
+    await expect(terminal.refreshCredentials({ refreshToken: 'expired-refresh-token' }))
+      .rejects.toBeInstanceOf(TerminalIntegrationRefreshError);
+    await expect(transient.refreshCredentials({ refreshToken: 'still-valid-refresh-token' }))
+      .rejects.not.toBeInstanceOf(TerminalIntegrationRefreshError);
   });
 
   it('rejects a streaming token response that exceeds the byte cap', async () => {

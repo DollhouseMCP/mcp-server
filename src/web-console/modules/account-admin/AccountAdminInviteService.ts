@@ -8,7 +8,11 @@ import {
   assertAdminRole,
 } from '../../stores/IConsoleAccountAdminStore.js';
 import { ConsoleStoreConflictError, ConsoleStoreValidationError } from '../../stores/ConsoleStoreValidation.js';
-import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
+import {
+  CommittedAccountInviteDeliveryError,
+  type IAccountAdminMutationTransactionRunner,
+} from './AccountAdminMutationTransaction.js';
+import type { DrizzleTx } from '../../../database/db-utils.js';
 import { serializeAccountInvite } from './AccountAdminOnboardingDtos.js';
 import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
 
@@ -28,6 +32,12 @@ export interface ConsoleAccountInviteIssueResult {
   readonly primarySub: string;
 }
 
+export interface PreparedConsoleAccountInviteIssue {
+  readonly result: ConsoleAccountInviteIssueResult;
+  /** Delivers any externally visible side effect after the audited transaction commits. */
+  commit(): Promise<void>;
+}
+
 /**
  * Issues exactly one invite for the provided request. The secured console
  * kernel owns idempotency replay for identical Idempotency-Key/body pairs;
@@ -36,6 +46,16 @@ export interface ConsoleAccountInviteIssueResult {
  */
 export interface IConsoleAccountInviteIssuer {
   issueInvite(input: ConsoleAccountInviteIssueInput): Promise<ConsoleAccountInviteIssueResult>;
+  /**
+   * Stages in-memory invite state without delivering the credential. The
+   * issuer must also participate in transaction snapshots so failed
+   * transactions can restore the staged state.
+   */
+  prepareIssueInvite?(input: ConsoleAccountInviteIssueInput): Promise<PreparedConsoleAccountInviteIssue>;
+  prepareIssueInviteWithTx?(): Promise<(
+    tx: DrizzleTx,
+    input: ConsoleAccountInviteIssueInput,
+  ) => Promise<ConsoleAccountInviteIssueResult>>;
 }
 
 export interface AccountAdminInviteServiceOptions {
@@ -94,35 +114,53 @@ export class AccountAdminInviteService {
       return problem(503, 'service_unavailable', 'Service unavailable', 'Account invite issuer is unavailable.');
     }
 
-    let issued: ConsoleAccountInviteIssueResult;
     try {
-      issued = await this.options.inviteIssuer.issueInvite({
-        ...parsed.value,
-        actorUserId: actor.userId,
-        issuedAt,
-      });
-    } catch (error) {
-      if (error instanceof ConsoleStoreConflictError) {
-        await this.writeAudit(req, route, 'conflict', 'conflict', null, {
-          operation: 'invite',
+      return await this.options.transactionRunner.runInvite(async tx => {
+        const issued = await tx.issueInvite({
+          ...parsed.value,
+          actorUserId: actor.userId,
+          issuedAt,
         });
+        await tx.writeAdminAuditEvent(buildConsoleAdminAuditEvent(
+          route,
+          route.auditOperation ?? '',
+          req,
+          'approved',
+          null,
+          this.now(),
+          {
+            resourceKind: 'account_principal',
+            resourceId: issued.userId,
+            targetUserId: issued.userId,
+            argsRedacted: {
+              operation: 'invite',
+              roles: parsed.value.roles,
+              ttlMinutes: parsed.value.ttlMinutes,
+            },
+            resultDetailRedacted: null,
+          },
+        ));
+        return { status: 201, body: serializeAccountInvite(issued) };
+      }, actor);
+    } catch (error) {
+      if (error instanceof CommittedAccountInviteDeliveryError) {
+        return {
+          status: 201,
+          body: {
+            ...serializeAccountInvite(error.result),
+            delivery_status: 'manual_required',
+          },
+        };
+      }
+      if (error instanceof ConsoleStoreConflictError) {
+        await this.writeAudit(req, route, 'conflict', 'conflict', null, { operation: 'invite' });
         return problem(409, 'conflict', 'Conflict', 'An account with this username or email already exists.');
       }
       await this.writeAudit(req, route, 'failed', 'issuer_error', null, {
-        operation: 'invite',
-        dependency: 'account_invite_issuer',
+        operation: 'invite', dependency: 'account_invite_issuer',
       });
       return problem(503, 'service_unavailable', 'Service unavailable', 'Account invite issuer failed.');
     }
-    await this.writeAudit(req, route, 'approved', null, issued.userId, {
-      operation: 'invite',
-      roles: parsed.value.roles,
-      ttlMinutes: parsed.value.ttlMinutes,
-    });
-    return {
-      status: 201,
-      body: serializeAccountInvite(issued),
-    };
   }
 
   private async writeAudit(

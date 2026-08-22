@@ -10,6 +10,7 @@ import {
   type IntegrationRequestPolicyEnforcer,
 } from './IntegrationRequestPolicy.js';
 import {
+  IntegrationOperationCatalogError,
   type IntegrationOperationCatalog,
   type IntegrationGeneratedSkillInput,
   type IntegrationOpenApiIngestInput,
@@ -22,12 +23,14 @@ import {
   type GeneratedIntegrationSkillWriteResult,
 } from './IntegrationOperationCatalog.js';
 import {
+  IntegrationRemoteMcpBridgeError,
   type IntegrationRemoteMcpBridge,
   type RemoteMcpCallInput,
   type RemoteMcpCallResult,
   type RemoteMcpTool,
 } from './IntegrationRemoteMcpBridge.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
+import { isWellFormedUnicode } from '../../stores/ConsoleStoreValidation.js';
 
 /**
  * Policy-authorized facades over the integration execution authorities.
@@ -41,9 +44,9 @@ import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
  * facade requires its enforcer at construction — an un-gated authority is
  * unrepresentable rather than merely discouraged.
  *
- * For `request()` the facade passes the SAME input object to `authorize()`
- * and to the downstream call, so the exact-input HMAC that approval
- * verification binds to always matches what is actually executed. The
+ * Every facade authorizes an immutable prepared snapshot and executes that
+ * same snapshot, so the exact-input HMAC that approval verification binds to
+ * always matches what is actually executed. The
  * management-write facades (ingestOpenApiSpec / regenerateSkill / remote-MCP
  * callTool) authorize on a synthetic `_internal:/...` sentinel target
  * carrying the behavior-changing content (the spec and regenerate flag, or
@@ -92,9 +95,21 @@ export class AuthorizedIntegrationGateway {
   }) {}
 
   async request(input: IntegrationRequestInput): Promise<IntegrationAuthorizedOutcome<IntegrationRequestResult>> {
-    const decision = await authorizeOrDeny(this.options.policyEnforcer, input);
+    const plan = await this.options.gateway.prepareRequest(input);
+    const decision = await authorizeOrDeny(this.options.policyEnforcer, {
+      ...plan.input,
+      provider: plan.provider,
+      method: plan.method,
+      path: new URL(plan.resolvedUrl).pathname,
+      baseUrl: undefined,
+      descriptorId: plan.descriptorId,
+      descriptorRoutingFingerprint: plan.descriptorRoutingFingerprint,
+      resolvedUrl: plan.resolvedUrl,
+      specHash: plan.input.specContract?.specHash,
+      authMode: plan.authMode,
+    });
     if (!decision.authorized) return decision.denial;
-    const result = await this.options.gateway.request(input);
+    const result = await this.options.gateway.executePrepared(plan);
     return {
       ok: true,
       result,
@@ -110,19 +125,20 @@ export class AuthorizedIntegrationOperationCatalog {
   }) {}
 
   async ingestOpenApiSpec(input: IntegrationOpenApiIngestInput): Promise<IntegrationAuthorizedOutcome<IntegrationOpenApiIngestResult>> {
+    const preparedInput = snapshotOpenApiIngestInput(input);
     // `path` is a gateway-rejectable `_internal:/...` sentinel (not a real absolute path),
     // so a management-write approval can never be replayed as a real integration_request call.
     const decision = await authorizeOrDeny(this.options.policyEnforcer, {
-      provider: input.provider,
+      provider: preparedInput.provider,
       method: 'PUT',
       path: INTEGRATION_OPENAPI_SPEC_POLICY_PATH,
       body: {
-        spec: input.spec,
-        regenerateSkill: input.regenerateSkill === true,
+        spec: preparedInput.spec,
+        regenerateSkill: preparedInput.regenerateSkill === true,
       },
     });
     if (!decision.authorized) return decision.denial;
-    const result = await this.options.catalog.ingestOpenApiSpec(input);
+    const result = await this.options.catalog.ingestOpenApiSpec(preparedInput);
     return {
       ok: true,
       result,
@@ -131,13 +147,14 @@ export class AuthorizedIntegrationOperationCatalog {
   }
 
   async regenerateSkill(input: IntegrationGeneratedSkillInput): Promise<IntegrationAuthorizedOutcome<GeneratedIntegrationSkillWriteResult>> {
+    const preparedInput = Object.freeze({ provider: input.provider });
     const decision = await authorizeOrDeny(this.options.policyEnforcer, {
-      provider: input.provider,
+      provider: preparedInput.provider,
       method: 'PUT',
       path: INTEGRATION_GENERATED_SKILL_POLICY_PATH,
     });
     if (!decision.authorized) return decision.denial;
-    const result = await this.options.catalog.regenerateSkill(input);
+    const result = await this.options.catalog.regenerateSkill(preparedInput);
     return {
       ok: true,
       result,
@@ -174,20 +191,58 @@ export class AuthorizedIntegrationRemoteMcpBridge {
   }
 
   async callTool(input: RemoteMcpCallInput): Promise<IntegrationAuthorizedOutcome<RemoteMcpCallResult>> {
+    const plan = await this.options.bridge.prepareCall(input);
     const decision = await authorizeOrDeny(this.options.policyEnforcer, {
-      provider: input.provider,
+      provider: plan.provider,
       method: 'PUT',
-      path: `${INTEGRATION_REMOTE_MCP_POLICY_PATH_PREFIX}${encodeURIComponent(input.remoteName)}`,
-      body: policyArguments(input.arguments),
+      path: `${INTEGRATION_REMOTE_MCP_POLICY_PATH_PREFIX}${encodeRemotePolicySegment(plan.input.remoteName)}`,
+      body: {
+        arguments: policyArguments(plan.input.arguments),
+        remote_mcp_server_url: plan.serverUrl,
+      },
+      descriptorId: plan.descriptorId,
+      descriptorRoutingFingerprint: plan.descriptorRoutingFingerprint,
+      resolvedUrl: plan.serverUrl,
+      authMode: 'credentialed',
     });
     if (!decision.authorized) return decision.denial;
-    const result = await this.options.bridge.callTool(input);
+    const result = await this.options.bridge.executePreparedCall(plan);
     return {
       ok: true,
       result,
       ...(decision.approvalContext ? { approvalContext: decision.approvalContext } : {}),
     };
   }
+}
+
+function snapshotOpenApiIngestInput(input: IntegrationOpenApiIngestInput): IntegrationOpenApiIngestInput {
+  try {
+    return freezeSnapshot(structuredClone(input));
+  } catch {
+    throw new IntegrationOperationCatalogError(
+      'invalid_openapi_spec',
+      'OpenAPI ingestion input must contain cloneable JSON data.',
+      400,
+    );
+  }
+}
+
+function encodeRemotePolicySegment(value: string): string {
+  if (!isWellFormedUnicode(value)) {
+    throw new IntegrationRemoteMcpBridgeError(
+      'remote_mcp_invalid_tool_name',
+      'Remote MCP tool name must contain well-formed Unicode.',
+      400,
+    );
+  }
+  return encodeURIComponent(value);
+}
+
+function freezeSnapshot<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) freezeSnapshot(nested, seen);
+  return Object.freeze(value);
 }
 
 type AuthorizeDecision =

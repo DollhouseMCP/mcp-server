@@ -131,7 +131,8 @@ export class AdminTotpService {
   ): Promise<ConfirmTotpEnrollmentResult> {
     const pending = await this.readPendingEnrollment(userId, pendingId);
     const secretBase32 = this.decryptPendingSecret(pending);
-    if (!verifyTotpCode(secretBase32, pending.label, code, this.now())) {
+    const matchedStepEnd = matchingTotpStepEnd(secretBase32, pending.label, code, this.now());
+    if (matchedStepEnd === null) {
       logTotpEvent('TOTP_VERIFICATION_FAILED', 'MEDIUM', 'Admin TOTP enrollment confirmation failed', userId);
       throw new AdminTotpError('Invalid TOTP code', 'invalid_totp_code');
     }
@@ -152,7 +153,9 @@ export class AdminTotpService {
       secretCiphertext,
       enrolledAt,
       disabledAt: null,
-      lastUsedAt: null,
+      // Enrollment confirmation consumes this TOTP step just like any other
+      // proof, preventing immediate reuse for elevation or factor removal.
+      lastUsedAt: matchedStepEnd,
     }, backupCodeHashes);
     await this.authStorage.genericDestroy(ENROLLMENT_MODEL, pendingId);
     logTotpEvent('TOTP_ENROLLED', 'LOW', 'Admin TOTP factor enrolled', userId);
@@ -172,8 +175,9 @@ export class AdminTotpService {
       factor.secretCiphertext,
       { secretClass: 'console_totp_seed', ownerId: secretOwnerId(userId, factor.factorId) },
     ).toString('utf8');
-    if (verifyTotpCode(secretBase32, userId, code, authTime)) {
-      const marked = await this.factorStore.markTotpUsed(userId, factor.factorId, authTime);
+    const matchedStepEnd = matchingTotpStepEnd(secretBase32, userId, code, authTime);
+    if (matchedStepEnd !== null) {
+      const marked = await this.factorStore.markTotpUsed(userId, factor.factorId, matchedStepEnd);
       return marked ? { ok: true, method: 'totp', authTime } : { ok: false };
     }
     const consumed = await this.factorStore.consumeBackupCode(
@@ -202,8 +206,10 @@ export class AdminTotpService {
       factor.secretCiphertext,
       { secretClass: 'console_totp_seed', ownerId: secretOwnerId(userId, factor.factorId) },
     ).toString('utf8');
-    if (verifyTotpCode(secretBase32, userId, code, authTime)) {
-      const disabled = await this.factorStore.disableActiveTotp(userId, authTime);
+    const matchedStepEnd = matchingTotpStepEnd(secretBase32, userId, code, authTime);
+    if (matchedStepEnd !== null) {
+      const claimed = await this.factorStore.markTotpUsed(userId, factor.factorId, matchedStepEnd);
+      const disabled = claimed && await this.factorStore.disableActiveTotp(userId, authTime);
       if (disabled) {
         logTotpEvent('TOTP_DISABLED', 'LOW', 'Admin TOTP factor disabled', userId);
       }
@@ -291,9 +297,9 @@ function buildTotpUri(secret: Secret, label: string): string {
   }).toString();
 }
 
-function verifyTotpCode(secretBase32: string, label: string, code: string, at: Date): boolean {
+function matchingTotpStepEnd(secretBase32: string, label: string, code: string, at: Date): Date | null {
   const token = code.replaceAll(/\s/g, '');
-  if (!token) return false;
+  if (!token) return null;
   const totp = new TOTP({
     issuer: TOTP_ISSUER,
     label,
@@ -302,7 +308,11 @@ function verifyTotpCode(secretBase32: string, label: string, code: string, at: D
     period: TOTP_PERIOD_SECONDS,
     secret: Secret.fromBase32(secretBase32),
   });
-  return totp.validate({ token, window: TOTP_VALIDATE_WINDOW, timestamp: at.getTime() }) !== null;
+  const delta = totp.validate({ token, window: TOTP_VALIDATE_WINDOW, timestamp: at.getTime() });
+  if (delta === null) return null;
+  const periodMs = TOTP_PERIOD_SECONDS * 1000;
+  const matchedStep = Math.floor(at.getTime() / periodMs) + delta;
+  return new Date((matchedStep + 1) * periodMs - 1);
 }
 
 function generateBackupCodes(): string[] {

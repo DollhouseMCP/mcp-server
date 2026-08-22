@@ -18,7 +18,7 @@
  *
  * // Parse YAML with frontmatter
  * const result = this.serializationService.parseFrontmatter(data, {
- *   maxYamlSize: 64 * 1024,
+ *   maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
  *   validateContent: true,
  *   source: 'SkillManager.importElement'
  * });
@@ -35,6 +35,7 @@ import * as yaml from 'js-yaml';
 import matter from 'gray-matter';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityMonitor, SecurityEvent } from '../security/securityMonitor.js';
+import { SECURITY_LIMITS } from '../security/constants.js';
 import { logger } from '../utils/logger.js';
 
 // ============================================================================
@@ -74,7 +75,7 @@ export interface YamlParseOptions {
   /** YAML schema to use (default: 'failsafe' for security) */
   schema?: YamlSchema;
 
-  /** Maximum YAML size in bytes (default: 64KB) */
+  /** Maximum YAML size in bytes (default: 1 MiB) */
   maxSize?: number;
 
   /** Validate root structure is an object (default: true) */
@@ -88,10 +89,10 @@ export interface YamlParseOptions {
  * Options for parsing frontmatter + content
  */
 export interface FrontmatterParseOptions {
-  /** Maximum YAML frontmatter size in bytes (default: 64KB) */
+  /** Maximum YAML frontmatter size in bytes (default: 1 MiB) */
   maxYamlSize?: number;
 
-  /** Maximum content size in bytes (default: 1MB) */
+  /** Maximum content size in bytes (default: 10 MiB) */
   maxContentSize?: number;
 
   /** Enable content validation (default: false for local files) */
@@ -306,8 +307,8 @@ export function orderMetadataFields(metadata: Record<string, unknown>): Record<s
 
 export class SerializationService {
   // Default limits
-  private static readonly DEFAULT_MAX_YAML_SIZE = 64 * 1024; // 64KB
-  private static readonly DEFAULT_MAX_CONTENT_SIZE = 1024 * 1024; // 1MB
+  private static readonly DEFAULT_MAX_YAML_SIZE = SECURITY_LIMITS.MAX_YAML_LENGTH;
+  private static readonly DEFAULT_MAX_CONTENT_SIZE = SECURITY_LIMITS.MAX_CONTENT_LENGTH;
 
   constructor() {
     // No configuration needed - stateless service
@@ -335,7 +336,7 @@ export class SerializationService {
    * ```typescript
    * const parsed = service.parsePureYaml(yamlString, {
    *   schema: 'failsafe',
-   *   maxSize: 64 * 1024,
+   *   maxSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
    *   validateStructure: true,
    *   source: 'SkillManager.importElement'
    * });
@@ -420,7 +421,7 @@ export class SerializationService {
    * @example
    * ```typescript
    * const result = service.parseFrontmatter(markdownString, {
-   *   maxYamlSize: 64 * 1024,
+   *   maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
    *   validateContent: true,
    *   source: 'TemplateManager.importElement'
    * });
@@ -958,8 +959,8 @@ export class SerializationService {
    *
    * @example
    * ```typescript
-   * service.validateSize(data, 64 * 1024, 'YAML frontmatter');
-   * // Throws if data > 64KB
+   * service.validateSize(data, SECURITY_LIMITS.MAX_YAML_LENGTH, 'YAML frontmatter');
+   * // Throws if data exceeds the configured frontmatter ceiling
    * ```
    */
   validateSize(data: string, maxSize: number, context: string): void {

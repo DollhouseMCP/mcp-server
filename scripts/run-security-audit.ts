@@ -7,7 +7,7 @@
  * Reports are automatically gitignored to keep security findings private.
  * 
  * Usage:
- *   npm run security:audit                    # Run audit without failing
+ *   npm run security:audit                    # Fail on high/critical findings
  *   npm run security:audit -- --json          # Output JSON report
  *   npm run security:audit -- --markdown      # Output Markdown report (default)
  *   npm run security:audit -- --verbose       # Show all findings in console
@@ -18,11 +18,12 @@
  *   npm run security:audit -- --verbose --fail-on-high
  */
 
-import { SecurityAuditor } from '../src/security/audit/SecurityAuditor.js';
+import { SecurityAuditor, SecurityAuditFailure } from '../src/security/audit/SecurityAuditor.js';
 import { MarkdownReporter } from '../src/security/audit/reporters/MarkdownReporter.js';
 import { JsonReporter } from '../src/security/audit/reporters/JsonReporter.js';
 import { FileOperationsService } from '../src/services/FileOperationsService.js';
 import { FileLockManager } from '../src/security/fileLockManager.js';
+import type { ScanResult } from '../src/security/audit/types.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
@@ -104,9 +105,9 @@ async function runSecurityAudit() {
   } else if (failOnHigh) {
     config.reporting.failOnSeverity = 'high';
   } else {
-    // Keep the default report useful in repositories with advisory medium/low
-    // findings. Critical findings still fail; --fail-on-high tightens the gate.
-    config.reporting.failOnSeverity = 'critical';
+    // Retain the fail-on-high default. Dependency advisories must not become a
+    // green audit merely because an upgrade is intentionally cooling.
+    config.reporting.failOnSeverity = 'high';
   }
 
   const auditor = new SecurityAuditor(config, fileOperations);
@@ -114,7 +115,15 @@ async function runSecurityAudit() {
   try {
     // Run audit
     const startTime = Date.now();
-    const result = await auditor.audit(projectRoot);
+    let auditFailure: SecurityAuditFailure | undefined;
+    let result: ScanResult;
+    try {
+      result = await auditor.audit(projectRoot);
+    } catch (error) {
+      if (!(error instanceof SecurityAuditFailure)) throw error;
+      auditFailure = error;
+      result = error.result;
+    }
     const duration = Date.now() - startTime;
 
     // Console output already shown by SecurityAuditor
@@ -203,21 +212,29 @@ ${result.findings.slice(0, 10).map(f =>
       console.log('\n💡 Tip: Run with --verbose to see all findings in console');
     }
 
-    // Exit with error code based on configuration
-    if (config.reporting.failOnSeverity === 'critical' && result.summary.bySeverity.critical > 0) {
+    // Preserve a failing status after every requested report has been written.
+    // Dependency cooling advisories and scanner failures arrive as structured
+    // SecurityAuditFailure instances even when below the global severity gate.
+    if (auditFailure) {
+      console.log(`\n⚠️  ${auditFailure.message}`);
+      process.exitCode = 1;
+    } else if (config.reporting.failOnSeverity === 'critical' && result.summary.bySeverity.critical > 0) {
       console.log('\n⚠️  Critical severity issues found!');
-      process.exit(1);
+      process.exitCode = 1;
     } else if (config.reporting.failOnSeverity === 'high' && 
                (result.summary.bySeverity.critical > 0 || result.summary.bySeverity.high > 0)) {
       console.log('\n⚠️  Critical or high severity issues found!');
-      process.exit(1);
+      process.exitCode = 1;
     }
     
   } catch (error) {
     console.error('❌ Security audit failed:', error);
-    process.exit(1);
+    process.exitCode = 1;
   }
 }
 
 // Run the audit
-runSecurityAudit().catch(console.error);
+runSecurityAudit().catch(error => {
+  console.error('❌ Security audit runner failed:', error);
+  process.exitCode = 1;
+});

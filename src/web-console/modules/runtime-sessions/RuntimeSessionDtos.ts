@@ -3,6 +3,7 @@ import type {
   RuntimeTerminationAckResult,
   RuntimeTerminationReason,
 } from '../../services/runtime/IRuntimeSessionControlStore.js';
+import type { RuntimeSessionStatus } from '../../../database/schema/index.js';
 
 export interface RuntimeSessionSelfDto {
   readonly session_id: string;
@@ -15,7 +16,7 @@ export interface RuntimeSessionSelfDto {
   readonly last_active_at: string;
   readonly request_count: number;
   readonly error_count: number;
-  readonly status: 'active';
+  readonly status: RuntimeSessionStatus;
 }
 
 export interface RuntimeSessionAccountDto {
@@ -23,7 +24,7 @@ export interface RuntimeSessionAccountDto {
   readonly transport: 'streamable-http';
   readonly created_at: string;
   readonly last_active_at: string;
-  readonly status: 'active';
+  readonly status: RuntimeSessionStatus;
 }
 
 export interface RuntimeSessionOperationalDto extends RuntimeSessionAccountDto {

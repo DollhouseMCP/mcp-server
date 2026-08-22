@@ -28,6 +28,8 @@ const REQUIRED_PACKAGE_ENTRIES = [
 
 const CONSOLE_SOURCE_ROOT = join(projectRoot, 'src/web-console/ui');
 const CONSOLE_PACKAGE_ROOT = 'dist/web-console/ui';
+const SEED_SOURCE_ROOT = join(projectRoot, 'src/seed-elements');
+const SEED_PACKAGE_ROOT = 'dist/seed-elements';
 
 function run(command, args, cwd, env = process.env) {
   return execFileSync(command, args, {
@@ -77,6 +79,20 @@ function verifyConsoleAssets(packageRoot) {
   return { missingSourceFiles, unresolvedReferences };
 }
 
+function verifyMirroredAssetTree(sourceRoot, packagedRoot) {
+  const sourceFiles = listFiles(sourceRoot).map(normalize).sort();
+  const packagedFiles = existsSync(packagedRoot)
+    ? listFiles(packagedRoot).map(normalize).sort()
+    : [];
+  const sourceSet = new Set(sourceFiles);
+  const packagedSet = new Set(packagedFiles);
+
+  return {
+    missingFiles: sourceFiles.filter(file => !packagedSet.has(file)),
+    unexpectedFiles: packagedFiles.filter(file => !sourceSet.has(file)),
+  };
+}
+
 let packedFile = null;
 let extractDir = null;
 let npmCacheDir = null;
@@ -100,9 +116,19 @@ try {
   const packageRoot = join(extractDir, 'package');
   const missingEntries = REQUIRED_PACKAGE_ENTRIES.filter((entry) => !existsSync(join(packageRoot, entry)));
   const { missingSourceFiles, unresolvedReferences } = verifyConsoleAssets(packageRoot);
+  const {
+    missingFiles: missingSeedFiles,
+    unexpectedFiles: unexpectedSeedFiles,
+  } = verifyMirroredAssetTree(SEED_SOURCE_ROOT, join(packageRoot, SEED_PACKAGE_ROOT));
 
-  if (missingEntries.length > 0 || missingSourceFiles.length > 0 || unresolvedReferences.length > 0) {
-    console.error('❌ npm package is missing required runtime assets:');
+  if (
+    missingEntries.length > 0 ||
+    missingSourceFiles.length > 0 ||
+    unresolvedReferences.length > 0 ||
+    missingSeedFiles.length > 0 ||
+    unexpectedSeedFiles.length > 0
+  ) {
+    console.error('❌ npm package runtime asset verification failed:');
     for (const entry of missingEntries) {
       console.error(`   - ${entry}`);
     }
@@ -112,9 +138,15 @@ try {
     for (const reference of unresolvedReferences) {
       console.error(`   - ${CONSOLE_PACKAGE_ROOT}/index.html -> ${reference} (unresolved reference)`);
     }
+    for (const entry of missingSeedFiles) {
+      console.error(`   - ${SEED_PACKAGE_ROOT}/${entry} (missing source seed asset)`);
+    }
+    for (const entry of unexpectedSeedFiles) {
+      console.error(`   - ${SEED_PACKAGE_ROOT}/${entry} (unexpected stale seed asset)`);
+    }
     process.exitCode = 1;
   } else {
-    console.log('✅ npm package contains all required runtime assets and the complete web-console UI.');
+    console.log('✅ npm package contains exact seed assets, required runtime assets, and the complete web-console UI.');
     for (const entry of REQUIRED_PACKAGE_ENTRIES) {
       console.log(`   - ${entry}`);
     }

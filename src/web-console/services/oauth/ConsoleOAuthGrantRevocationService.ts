@@ -51,4 +51,24 @@ export class ConsoleOAuthGrantRevocationService implements IOAuthGrantRevocation
       subjects: subjectSummaries,
     };
   }
+
+  async revokeSubjectGrants(
+    sub: string,
+    revokedAt: Date,
+  ): Promise<ConsoleOAuthSubjectRevocationSummary> {
+    if (!sub.trim() || sub.length > 320 || Number.isNaN(revokedAt.getTime())) {
+      throw new Error('OAuth subject grant revocation input is invalid');
+    }
+    const revocationStorage = requireOAuthRevocationCapableStorage(this.authStorage);
+    const grants = await this.authStorage.findGrantsByAccountId(sub);
+    const uniqueGrants = new Set(grants);
+    for (const grantId of uniqueGrants) {
+      await revocationStorage.genericRevokeByGrantId(grantId);
+    }
+    return {
+      sub,
+      grantsDiscovered: uniqueGrants.size,
+      grantsRevoked: uniqueGrants.size,
+    };
+  }
 }

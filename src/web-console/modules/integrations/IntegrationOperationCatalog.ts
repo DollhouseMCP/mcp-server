@@ -7,6 +7,7 @@ import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpen
 import {
   PortfolioElementAlreadyExistsError,
   canonicalizePortfolioElementName,
+  type ConsolePortfolioElementDetailRecord,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
@@ -95,12 +96,16 @@ export interface IntegrationOperationDetails extends IntegrationOperationSummary
     readonly provider: string;
     readonly method: string;
     readonly pathTemplate: string;
+    /** Validated OpenAPI server URL selected by operation > path > root precedence. */
+    readonly baseUrl: string;
   };
   readonly specContract: {
     readonly descriptorId: string;
     readonly specHash: string;
   };
   readonly scopeAvailability: IntegrationScopeAvailability;
+  /** Whether the operation explicitly permits an unauthenticated request. */
+  readonly authMode: 'credentialed' | 'anonymous';
 }
 
 export interface IntegrationOperationParameter {
@@ -109,6 +114,8 @@ export interface IntegrationOperationParameter {
   readonly required: boolean;
   readonly description: string | null;
   readonly schema: unknown;
+  /** False when the current generated tool/gateway cannot honor OpenAPI serialization. */
+  readonly serializationSupported?: false;
 }
 
 export interface IntegrationOperationRequestBody {
@@ -357,10 +364,13 @@ export class IntegrationOperationCatalog {
     const portfolioName = skill.name;
     const canonicalName = canonicalizePortfolioElementName(portfolioName);
     const existing = await this.options.portfolioStore.findByName(userId, 'skills', canonicalName);
-    const metadata = generatedSkillMetadata(descriptor, skill);
     const tags = [GENERATED_SKILL_TAG, `integration:${descriptor.provider}`];
+    const metadata = withGeneratedSkillBaseline(
+      generatedSkillMetadata(descriptor, skill),
+      { displayName: null, content: skill.content, tags },
+    );
     if (!existing) {
-      await this.options.portfolioStore.create({
+      const created = await this.options.portfolioStore.create({
         userId,
         type: 'skills',
         name: portfolioName,
@@ -370,26 +380,35 @@ export class IntegrationOperationCatalog {
         tags,
         now: this.now(),
       });
+      await this.persistGeneratedSkillBaseline(userId, created);
       return { ...skill, written: true, portfolioAction: 'created', portfolioName };
+    }
+    if (!isUnmodifiedManagedGeneratedSkill(existing)) {
+      return this.createGeneratedSkillRevision(userId, descriptor, skill, metadata, tags);
     }
     if (isCurrentGeneratedSkill(existing.metadata, specHash, skill.regeneration.scopeFingerprint)) {
       return { ...skill, written: false, portfolioAction: 'skipped', portfolioName };
     }
-    if (!isManagedGeneratedSkill(existing.metadata)) {
-      return this.createGeneratedSkillRevision(userId, descriptor, skill, metadata, tags);
-    }
-    await this.options.portfolioStore.update({
+    const updated = await this.options.portfolioStore.update({
       userId,
       type: 'skills',
       canonicalName,
       expectedVersion: existing.version,
       expectedContentHash: existing.contentHash,
       displayName: null,
-      metadata,
+      metadata: mergeGeneratedSkillMetadata(existing.metadata, metadata),
       content: skill.content,
       tags,
       now: this.now(),
     });
+    if (!updated) {
+      throw new IntegrationOperationCatalogError(
+        'integration_generated_skill_conflict',
+        'Generated integration skill disappeared while it was being updated. Retry regeneration.',
+        409,
+      );
+    }
+    await this.persistGeneratedSkillBaseline(userId, updated);
     return { ...skill, written: true, portfolioAction: 'updated', portfolioName };
   }
 
@@ -403,23 +422,77 @@ export class IntegrationOperationCatalog {
     if (!this.options.portfolioStore) {
       throw new IntegrationOperationCatalogError('integration_generated_skill_store_unavailable', 'Generated integration skill storage is not configured.', 503);
     }
-    const revisionName = `${skill.name}-${skill.regeneration.specHash.slice(0, 8)}`;
-    try {
-      await this.options.portfolioStore.create({
-        userId,
-        type: 'skills',
-        name: revisionName,
-        displayName: null,
-        metadata,
-        content: skill.content,
-        tags,
-        now: this.now(),
-      });
-    } catch (error) {
-      if (!(error instanceof PortfolioElementAlreadyExistsError)) throw error;
-      return { ...skill, written: false, portfolioAction: 'skipped', portfolioName: revisionName };
+    const revisionBase = `${skill.name}-${skill.regeneration.specHash.slice(0, 8)}-${generatedContentHash(skill).slice(0, 8)}`;
+    for (let suffix = 0; suffix < 100; suffix += 1) {
+      const revisionName = suffix === 0 ? revisionBase : `${revisionBase}-${suffix + 1}`;
+      try {
+        const created = await this.options.portfolioStore.create({
+          userId,
+          type: 'skills',
+          name: revisionName,
+          displayName: null,
+          metadata,
+          content: skill.content,
+          tags,
+          now: this.now(),
+        });
+        await this.persistGeneratedSkillBaseline(userId, created);
+        return { ...skill, written: true, portfolioAction: 'created_revision', portfolioName: revisionName };
+      } catch (error) {
+        if (!(error instanceof PortfolioElementAlreadyExistsError)) throw error;
+        const collision = await this.options.portfolioStore.findByName(
+          userId,
+          'skills',
+          canonicalizePortfolioElementName(revisionName),
+        );
+        if (collision && isExpectedGeneratedSkillRevision(collision, skill, tags)) {
+          return { ...skill, written: false, portfolioAction: 'skipped', portfolioName: revisionName };
+        }
+      }
     }
-    return { ...skill, written: true, portfolioAction: 'created_revision', portfolioName: revisionName };
+    throw new IntegrationOperationCatalogError(
+      'integration_generated_skill_conflict',
+      'Generated integration skill could not allocate a unique revision name.',
+      409,
+    );
+  }
+
+  private async persistGeneratedSkillBaseline(
+    userId: string,
+    persisted: ConsolePortfolioElementDetailRecord,
+  ): Promise<ConsolePortfolioElementDetailRecord> {
+    if (!this.options.portfolioStore) {
+      throw new IntegrationOperationCatalogError('integration_generated_skill_store_unavailable', 'Generated integration skill storage is not configured.', 503);
+    }
+    const metadata = withGeneratedSkillBaseline(persisted.metadata, {
+      displayName: persisted.displayName,
+      content: persisted.content,
+      tags: persisted.tags,
+    });
+    const currentBaseline = asRecord(persisted.metadata.integration).generatedPersistedBaselineHash;
+    const nextBaseline = asRecord(metadata.integration).generatedPersistedBaselineHash;
+    if (currentBaseline === nextBaseline) return persisted;
+
+    const updated = await this.options.portfolioStore.update({
+      userId,
+      type: 'skills',
+      canonicalName: persisted.canonicalName,
+      expectedVersion: persisted.version,
+      expectedContentHash: persisted.contentHash,
+      displayName: persisted.displayName,
+      metadata,
+      content: persisted.content,
+      tags: persisted.tags,
+      now: this.now(),
+    });
+    if (!updated || !isUnmodifiedManagedGeneratedSkill(updated)) {
+      throw new IntegrationOperationCatalogError(
+        'integration_generated_skill_conflict',
+        'Generated integration skill changed while its persisted baseline was being recorded. Retry regeneration.',
+        409,
+      );
+    }
+    return updated;
   }
 
   private now(): Date {
@@ -498,17 +571,39 @@ function deriveOperationDetails(
   granted: ReadonlySet<string>,
 ): readonly Omit<IntegrationOperationDetails, 'specContract' | 'scopeAvailability'>[] {
   const paths = asRecord(spec.paths);
-  const rootSecurity = Array.isArray(spec.security) ? spec.security : undefined;
+  const rootSecurity = readSecurityRequirements(spec.security, 'OpenAPI root security');
+  const securitySchemes = asRecord(asRecord(spec.components).securitySchemes);
+  const rootServers = Array.isArray(spec.servers) ? spec.servers : undefined;
   const operations: Array<Omit<IntegrationOperationDetails, 'specContract' | 'scopeAvailability'>> = [];
 
   for (const [path, pathItemValue] of Object.entries(paths)) {
     const pathItem = asRecord(resolveInternalRef(pathItemValue, spec));
     const pathParameters = readParameters(pathItem.parameters, spec);
+    const pathServers = Array.isArray(pathItem.servers) ? pathItem.servers : rootServers;
     for (const [method, operationValue] of Object.entries(pathItem)) {
       const normalizedMethod = method.toLowerCase();
       if (!HTTP_METHODS.has(normalizedMethod)) continue;
       const operation = asRecord(resolveInternalRef(operationValue, spec));
-      const scopeDecision = resolveScopeDecision(operation, rootSecurity, granted);
+      const operationServers = Array.isArray(operation.servers) ? operation.servers : pathServers;
+      const baseUrl = selectedServerUrl(operationServers, descriptor);
+      const scopeDecision = resolveScopeDecision(
+        operation,
+        rootSecurity,
+        securitySchemes,
+        granted,
+        descriptor,
+        spec,
+      );
+      const requestBody = readRequestBody(operation.requestBody, spec);
+      const parameters = mergeOperationParameters(pathParameters, readParameters(operation.parameters, spec));
+      const unsupportedRequestBody = requestBody !== null
+        && !requestBody.contentTypes.includes('application/json');
+      const unsupportedParameterLocation = parameters.some(parameter =>
+        parameter.in !== 'path' && parameter.in !== 'query');
+      const unsupportedParameterSerialization = parameters.some(parameter =>
+        parameter.serializationSupported === false);
+      const unsupportedMethodBody = requestBody !== null
+        && (normalizedMethod === 'get' || normalizedMethod === 'delete');
       operations.push({
         operationId: readString(operation.operationId) ?? fallbackOperationId(normalizedMethod, path),
         method: normalizedMethod.toUpperCase(),
@@ -517,17 +612,31 @@ function deriveOperationDetails(
         summary: readString(operation.summary),
         description: readString(operation.description),
         requiredScopes: scopeDecision.requiredScopes,
-        available: scopeDecision.available,
-        unavailableReason: scopeDecision.available ? null : 'missing_required_scope',
-        parameters: [...pathParameters, ...readParameters(operation.parameters, spec)],
-        requestBody: readRequestBody(operation.requestBody, spec),
+        available: scopeDecision.available
+          && !unsupportedRequestBody
+          && !unsupportedParameterLocation
+          && !unsupportedParameterSerialization
+          && !unsupportedMethodBody,
+        unavailableReason: unsupportedRequestBody
+          ? 'unsupported_request_content_type'
+          : unsupportedParameterLocation
+            ? 'unsupported_parameter_location'
+            : unsupportedParameterSerialization
+              ? 'unsupported_parameter_serialization'
+            : unsupportedMethodBody
+              ? 'unsupported_request_method_body'
+          : scopeDecision.unavailableReason,
+        parameters,
+        requestBody,
         responses: readResponses(operation.responses, spec),
         gatewayRequest: {
           tool: 'integration_request',
           provider: descriptor.provider,
           method: normalizedMethod.toUpperCase(),
           pathTemplate: path,
+          baseUrl,
         },
+        authMode: scopeDecision.authMode,
       });
     }
   }
@@ -541,22 +650,116 @@ function deriveOperationDetails(
 
 function resolveScopeDecision(
   operation: Readonly<Record<string, unknown>>,
-  rootSecurity: readonly unknown[] | undefined,
+  rootSecurity: readonly Readonly<Record<string, readonly string[]>>[] | undefined,
+  securitySchemes: Readonly<Record<string, unknown>>,
   granted: ReadonlySet<string>,
-): { readonly requiredScopes: readonly string[]; readonly available: boolean } {
-  const security = Array.isArray(operation.security) ? operation.security : rootSecurity;
-  if (!security || security.length === 0) return { requiredScopes: [], available: true };
-  const alternatives = security
-    .map(requirement => Object.values(asRecord(requirement)).flatMap(value =>
-      Array.isArray(value) ? value.filter((scope): scope is string => typeof scope === 'string') : [],
-    ))
-    .map(scopes => [...new Set(scopes)].sort((a, b) => a.localeCompare(b)))
-    .sort((a, b) => a.length - b.length);
-  const satisfied = alternatives.find(scopes => scopes.every(scope => granted.has(scope)));
+  descriptor: IntegrationDescriptorRecord,
+  spec: Readonly<Record<string, unknown>>,
+): {
+  readonly requiredScopes: readonly string[];
+  readonly available: boolean;
+  readonly unavailableReason: string | null;
+  readonly authMode: 'credentialed' | 'anonymous';
+} {
+  const security = operation.security === undefined
+    ? rootSecurity
+    : readSecurityRequirements(operation.security, 'OpenAPI operation security');
+  if (!security || security.length === 0) {
+    return { requiredScopes: [], available: true, unavailableReason: null, authMode: 'anonymous' };
+  }
+  const alternatives = security.map(requirement => {
+    const entries = Object.entries(requirement);
+    if (entries.length === 0) return { supported: true, scopes: [] as string[], anonymous: true };
+    // Entries in one Security Requirement Object are ANDed. The gateway has a
+    // single credential-injection strategy, so multi-scheme requirements are
+    // not executable until multi-credential injection is implemented.
+    const supported = entries.length === 1 && entries.every(([schemeName]) => {
+      const scheme = Object.hasOwn(securitySchemes, schemeName)
+        ? securitySchemes[schemeName]
+        : undefined;
+      return isCompatibleSecurityScheme(resolveInternalRef(scheme, spec), descriptor);
+    });
+    const scopes = entries.flatMap(([, value]) => value);
+    return {
+      supported,
+      scopes: [...new Set(scopes)].sort((a, b) => a.localeCompare(b)),
+      anonymous: false,
+    };
+  })
+    .sort((a, b) => Number(b.anonymous) - Number(a.anonymous)
+      || a.scopes.length - b.scopes.length);
+  const satisfied = alternatives.find(alternative =>
+    alternative.supported && alternative.scopes.every(scope => granted.has(scope)));
+  const supportedRepresentative = alternatives.find(alternative => alternative.supported);
+  const representative = supportedRepresentative ?? alternatives[0];
   return {
-    requiredScopes: satisfied ?? alternatives[0],
+    requiredScopes: satisfied?.scopes ?? representative?.scopes ?? [],
     available: Boolean(satisfied),
+    unavailableReason: satisfied
+      ? null
+      : supportedRepresentative
+        ? 'missing_required_scope'
+        : 'unsupported_security_scheme',
+    authMode: satisfied?.anonymous === true ? 'anonymous' : 'credentialed',
   };
+}
+
+function readSecurityRequirements(
+  value: unknown,
+  label: string,
+): readonly Readonly<Record<string, readonly string[]>>[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) {
+    throw new IntegrationOperationCatalogError(
+      'invalid_openapi_spec',
+      `${label} must be an array.`,
+      400,
+    );
+  }
+  return value.map(requirement => {
+    if (!requirement || typeof requirement !== 'object' || Array.isArray(requirement)) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        'OpenAPI security requirements must be objects.',
+        400,
+      );
+    }
+    const normalized: Record<string, readonly string[]> = Object.create(null) as Record<string, readonly string[]>;
+    for (const [schemeName, scopes] of Object.entries(requirement as Readonly<Record<string, unknown>>)) {
+      if (schemeName.trim() === '' || !Array.isArray(scopes) || scopes.some(scope => typeof scope !== 'string')) {
+        throw new IntegrationOperationCatalogError(
+          'invalid_openapi_spec',
+          'OpenAPI security requirement values must be arrays of scope strings.',
+          400,
+        );
+      }
+      normalized[schemeName] = [...scopes] as string[];
+    }
+    return normalized;
+  });
+}
+
+function isCompatibleSecurityScheme(
+  value: unknown,
+  descriptor: IntegrationDescriptorRecord,
+): boolean {
+  const scheme = asRecord(value);
+  const type = readString(scheme.type)?.toLowerCase();
+  if (descriptor.authStrategy === 'oauth2_authorization_code') {
+    if (type === 'oauth2' || type === 'openidconnect') return true;
+    return type === 'http' && readString(scheme.scheme)?.toLowerCase() === 'bearer';
+  }
+  if (descriptor.authStrategy !== 'static_api_key' || !descriptor.staticApiKey) return false;
+  const injection = descriptor.staticApiKey.injection;
+  if (injection.location === 'basic') {
+    return type === 'http' && readString(scheme.scheme)?.toLowerCase() === 'basic';
+  }
+  if (type !== 'apikey' || readString(scheme.in)?.toLowerCase() !== injection.location) return false;
+  const schemeName = readString(scheme.name);
+  if (!schemeName) return false;
+  return injection.location === 'header'
+    ? schemeName.toLowerCase() === injection.name.toLowerCase()
+    : schemeName === injection.name;
 }
 
 function readParameters(
@@ -569,14 +772,60 @@ function readParameters(
     const name = readString(parameter.name);
     const location = readString(parameter.in);
     if (!name || !location) return [];
+    const schema = resolveInternalRef(parameter.schema, spec);
+    const serializationSupported = isSupportedParameterSerialization(parameter, schema, location, spec);
     return [{
       name,
       in: location,
       required: parameter.required === true,
       description: readString(parameter.description),
-      schema: parameter.schema ?? null,
+      schema: schema ?? null,
+      ...(serializationSupported ? {} : { serializationSupported: false as const }),
     }];
   });
+}
+
+function isSupportedParameterSerialization(
+  parameter: Readonly<Record<string, unknown>>,
+  schemaValue: unknown,
+  location: string,
+  spec: Readonly<Record<string, unknown>>,
+): boolean {
+  if (parameter.content !== undefined) return false;
+  const schema = asRecord(schemaValue);
+  const type = readString(schema.type)?.toLowerCase();
+  const scalarType = type === 'string' || type === 'number' || type === 'integer' || type === 'boolean';
+  const style = readString(parameter.style)?.toLowerCase();
+  const explode = typeof parameter.explode === 'boolean' ? parameter.explode : undefined;
+  if (location === 'path') {
+    return (style === undefined || style === 'simple')
+      && (explode === undefined || explode === false)
+      && scalarType;
+  }
+  if (location !== 'query' || (style !== undefined && style !== 'form')) return false;
+  if (type === 'object') return false;
+  if (type === 'array') {
+    const itemSchema = asRecord(resolveInternalRef(schema.items, spec));
+    const itemType = readString(itemSchema.type)?.toLowerCase();
+    const scalarItem = itemType === 'string' || itemType === 'number'
+      || itemType === 'integer' || itemType === 'boolean';
+    return explode !== false && scalarItem;
+  }
+  return scalarType;
+}
+
+function mergeOperationParameters(
+  pathParameters: readonly IntegrationOperationParameter[],
+  operationParameters: readonly IntegrationOperationParameter[],
+): readonly IntegrationOperationParameter[] {
+  const merged = new Map<string, IntegrationOperationParameter>();
+  for (const parameter of pathParameters) {
+    merged.set(`${parameter.in}\u0000${parameter.name}`, parameter);
+  }
+  for (const parameter of operationParameters) {
+    merged.set(`${parameter.in}\u0000${parameter.name}`, parameter);
+  }
+  return [...merged.values()];
 }
 
 function readRequestBody(
@@ -676,7 +925,8 @@ function generateSkill(
   let content = lines.join('\n');
   if (Buffer.byteLength(content, 'utf8') > MAX_SKILL_BYTES) {
     truncated = true;
-    content = content.slice(0, MAX_SKILL_BYTES - 80) + '\n\n[Truncated. Use list_operations and describe_operation for details.]';
+    const suffix = '\n\n[Truncated. Use list_operations and describe_operation for details.]';
+    content = truncateUtf8(content, MAX_SKILL_BYTES - Buffer.byteLength(suffix, 'utf8')) + suffix;
   }
   return {
     name: `using-${descriptor.provider}-integration`,
@@ -692,6 +942,18 @@ function generateSkill(
   };
 }
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  let bytes = 0;
+  let codeUnits = 0;
+  for (const codePoint of value) {
+    const codePointBytes = Buffer.byteLength(codePoint, 'utf8');
+    if (bytes + codePointBytes > maxBytes) break;
+    bytes += codePointBytes;
+    codeUnits += codePoint.length;
+  }
+  return value.slice(0, codeUnits);
+}
+
 function normalizeOpenApiSpec(spec: unknown): Readonly<Record<string, unknown>> {
   if (!spec || typeof spec !== 'object' || Array.isArray(spec)) {
     throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI spec must be a JSON object.', 400);
@@ -702,7 +964,7 @@ function normalizeOpenApiSpec(spec: unknown): Readonly<Record<string, unknown>> 
   if (typeof version !== 'string' || !version.startsWith('3.')) {
     throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI spec must declare OpenAPI 3.x.', 400);
   }
-  const normalizedPaths = buildNormalizedPaths(asRecord(specRecord.paths));
+  const normalizedPaths = buildNormalizedPaths(asRecord(specRecord.paths), specRecord);
   if (Object.keys(normalizedPaths).length === 0) {
     throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI spec must contain at least one supported operation.', 400);
   }
@@ -710,13 +972,17 @@ function normalizeOpenApiSpec(spec: unknown): Readonly<Record<string, unknown>> 
     ...structuredClone(specRecord),
     paths: normalizedPaths,
   };
+  assertPathParameterContracts(normalized);
   if (Buffer.byteLength(JSON.stringify(normalized), 'utf8') > 1024 * 1024) {
     throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI spec must be at most 1MB after normalization.', 400);
   }
   return normalized as Record<string, unknown>;
 }
 
-function buildNormalizedPaths(rawPaths: Readonly<Record<string, unknown>>): Record<string, unknown> {
+function buildNormalizedPaths(
+  rawPaths: Readonly<Record<string, unknown>>,
+  spec: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
   const normalizedPaths: Record<string, unknown> = {};
   const operationIds = new Set<string>();
   for (const [path, pathItemValue] of Object.entries(rawPaths).sort(([left], [right]) => left.localeCompare(right))) {
@@ -727,7 +993,12 @@ function buildNormalizedPaths(rawPaths: Readonly<Record<string, unknown>>): Reco
         400,
       );
     }
-    const normalizedPathItem = normalizePathItem(asRecord(pathItemValue), path, operationIds);
+    const normalizedPathItem = normalizePathItem(
+      asRecord(resolveInternalRef(pathItemValue, spec)),
+      path,
+      operationIds,
+      spec,
+    );
     if (Object.keys(normalizedPathItem).some(key => HTTP_METHODS.has(key))) {
       normalizedPaths[path] = normalizedPathItem;
     }
@@ -739,15 +1010,19 @@ function normalizePathItem(
   pathItem: Readonly<Record<string, unknown>>,
   path: string,
   operationIds: Set<string>,
+  spec: Readonly<Record<string, unknown>>,
 ): Record<string, unknown> {
   const normalizedPathItem: Record<string, unknown> = {};
   if (Array.isArray(pathItem.parameters)) {
     normalizedPathItem.parameters = structuredClone(pathItem.parameters);
   }
+  if (Array.isArray(pathItem.servers)) {
+    normalizedPathItem.servers = structuredClone(pathItem.servers);
+  }
   for (const [method, operationValue] of Object.entries(pathItem).sort(([left], [right]) => left.localeCompare(right))) {
     const normalizedMethod = method.toLowerCase();
     if (!HTTP_METHODS.has(normalizedMethod)) continue;
-    const operation = { ...asRecord(operationValue) };
+    const operation = { ...asRecord(resolveInternalRef(operationValue, spec)) };
     operation.operationId = uniqueOperationId(
       readString(operation.operationId) ?? fallbackOperationId(normalizedMethod, path),
       operationIds,
@@ -757,17 +1032,80 @@ function normalizePathItem(
   return normalizedPathItem;
 }
 
-function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descriptor: IntegrationDescriptorRecord): void {
-  const servers = Array.isArray(spec.servers) ? spec.servers : [];
-  for (const serverValue of servers) {
-    const url = readString(asRecord(serverValue).url);
-    if (!url) continue;
-    let parsed;
-    try {
-      parsed = new URL(url);
-    } catch {
-      continue;
+function assertPathParameterContracts(spec: Readonly<Record<string, unknown>>): void {
+  for (const [path, pathItemValue] of Object.entries(asRecord(spec.paths))) {
+    const pathItem = asRecord(resolveInternalRef(pathItemValue, spec));
+    const pathParameters = readParameters(pathItem.parameters, spec);
+    const placeholders = extractPathPlaceholders(path);
+    for (const [method, operationValue] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method.toLowerCase())) continue;
+      const operation = asRecord(resolveInternalRef(operationValue, spec));
+      const parameters = mergeOperationParameters(pathParameters, readParameters(operation.parameters, spec));
+      assertOperationPathParameters(path, method, placeholders, parameters);
     }
+  }
+}
+
+function extractPathPlaceholders(path: string): ReadonlySet<string> {
+  const placeholders = new Set<string>();
+  const remainder = path.replaceAll(/\{([^{}]{1,256})\}/gu, (_match, name: string) => {
+    placeholders.add(name);
+    return '';
+  });
+  if (remainder.includes('{') || remainder.includes('}')) {
+    throw new IntegrationOperationCatalogError(
+      'invalid_openapi_spec',
+      `OpenAPI path '${path}' contains a malformed path template placeholder.`,
+      400,
+    );
+  }
+  return placeholders;
+}
+
+function assertOperationPathParameters(
+  path: string,
+  method: string,
+  placeholders: ReadonlySet<string>,
+  parameters: readonly IntegrationOperationParameter[],
+): void {
+  const declared = new Map<string, IntegrationOperationParameter>();
+  for (const parameter of parameters) {
+    if (parameter.in === 'path') declared.set(parameter.name, parameter);
+  }
+  for (const placeholder of placeholders) {
+    const parameter = declared.get(placeholder);
+    if (!parameter || !parameter.required) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        `OpenAPI operation ${method.toUpperCase()} ${path} must declare required path parameter '${placeholder}'.`,
+        400,
+      );
+    }
+  }
+  for (const parameter of declared.values()) {
+    if (!parameter.required || !placeholders.has(parameter.name)) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        `OpenAPI operation ${method.toUpperCase()} ${path} declares path parameter '${parameter.name}' without a matching required placeholder.`,
+        400,
+      );
+    }
+  }
+}
+
+function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descriptor: IntegrationDescriptorRecord): void {
+  const serverGroups: unknown[][] = [Array.isArray(spec.servers) ? spec.servers : []];
+  for (const pathItemValue of Object.values(asRecord(spec.paths))) {
+    const pathItem = asRecord(pathItemValue);
+    if (Array.isArray(pathItem.servers)) serverGroups.push(pathItem.servers);
+    for (const [method, operationValue] of Object.entries(pathItem)) {
+      if (!HTTP_METHODS.has(method.toLowerCase())) continue;
+      const operation = asRecord(operationValue);
+      if (Array.isArray(operation.servers)) serverGroups.push(operation.servers);
+    }
+  }
+  for (const serverValue of serverGroups.flat()) {
+    const parsed = resolveServerUrl(serverValue, descriptor);
     if (parsed.protocol !== 'https:' || !isIntegrationApiHostAllowed(parsed.hostname, descriptor.apiHosts)) {
       throw new IntegrationOperationCatalogError(
         'invalid_openapi_spec',
@@ -775,6 +1113,75 @@ function assertSpecHostsAllowed(spec: Readonly<Record<string, unknown>>, descrip
         400,
       );
     }
+  }
+}
+
+function selectedServerUrl(
+  servers: readonly unknown[] | undefined,
+  descriptor: IntegrationDescriptorRecord,
+): string {
+  if (!servers || servers.length === 0) return `https://${descriptor.apiHosts[0]}`;
+  const parsed = resolveServerUrl(servers[0], descriptor);
+  if (parsed.protocol !== 'https:' || !isIntegrationApiHostAllowed(parsed.hostname, descriptor.apiHosts)) {
+    throw new IntegrationOperationCatalogError(
+      'invalid_openapi_spec',
+      'OpenAPI servers must use HTTPS hosts present in the descriptor apiHosts allowlist.',
+      400,
+    );
+  }
+  parsed.username = '';
+  parsed.password = '';
+  parsed.hash = '';
+  return parsed.toString();
+}
+
+function resolveServerUrl(
+  serverValue: unknown,
+  descriptor: IntegrationDescriptorRecord,
+): URL {
+  const server = asRecord(serverValue);
+  const template = readString(server.url);
+  if (!template) {
+    throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI server entries require a URL.', 400);
+  }
+  const variables = asRecord(server.variables);
+  const resolved = template.replaceAll(/\{([^{}]{1,256})\}/gu, (_match, name: string) => {
+    if (!Object.hasOwn(variables, name)) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        `OpenAPI server URL references undeclared variable '${name}'.`,
+        400,
+      );
+    }
+    const variable = asRecord(variables[name]);
+    const defaultValue = variable.default;
+    if (typeof defaultValue !== 'string') {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        `OpenAPI server variable '${name}' requires a string default value.`,
+        400,
+      );
+    }
+    if (Array.isArray(variable.enum) && !variable.enum.includes(defaultValue)) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        `OpenAPI server variable '${name}' default must be present in its enum.`,
+        400,
+      );
+    }
+    return defaultValue;
+  });
+  if (resolved.includes('{') || resolved.includes('}')) {
+    throw new IntegrationOperationCatalogError(
+      'invalid_openapi_spec',
+      'OpenAPI server URL contains a malformed or unresolved variable.',
+      400,
+    );
+  }
+  try {
+    return new URL(resolved, `https://${descriptor.apiHosts[0]}`);
+  } catch {
+    throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI server URLs must resolve to allowed HTTPS URLs.', 400);
   }
 }
 
@@ -815,6 +1222,10 @@ function sha256Json(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
 }
 
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
 function generatedSkillMetadata(
   descriptor: IntegrationDescriptorRecord,
   skill: GeneratedIntegrationSkill,
@@ -834,7 +1245,43 @@ function generatedSkillMetadata(
       descriptorId: descriptor.id,
       specHash: skill.regeneration.specHash,
       scopeFingerprint: skill.regeneration.scopeFingerprint,
+      generatedContentHash: generatedContentHash(skill),
       generated: true,
+    },
+  };
+}
+
+interface GeneratedSkillPersistedFields {
+  readonly displayName: string | null;
+  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly content: string;
+  readonly tags: readonly string[];
+}
+
+function withGeneratedSkillBaseline(
+  metadata: Readonly<Record<string, unknown>>,
+  fields: Omit<GeneratedSkillPersistedFields, 'metadata'>,
+): Readonly<Record<string, unknown>> {
+  const baseline = generatedSkillPersistedBaseline({ ...fields, metadata });
+  return {
+    ...metadata,
+    integration: {
+      ...asRecord(metadata.integration),
+      generatedPersistedBaselineHash: baseline,
+    },
+  };
+}
+
+function mergeGeneratedSkillMetadata(
+  existing: Readonly<Record<string, unknown>>,
+  generated: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return {
+    ...existing,
+    ...generated,
+    integration: {
+      ...asRecord(existing.integration),
+      ...asRecord(generated.integration),
     },
   };
 }
@@ -842,6 +1289,98 @@ function generatedSkillMetadata(
 function isManagedGeneratedSkill(metadata: Readonly<Record<string, unknown>>): boolean {
   return asRecord(metadata.integration).generated === true &&
     metadata.source === 'integration_openapi_spec';
+}
+
+function isUnmodifiedManagedGeneratedSkill(record: GeneratedSkillPersistedFields): boolean {
+  if (!isManagedGeneratedSkill(record.metadata)) return false;
+  const baseline = asRecord(record.metadata.integration).generatedPersistedBaselineHash;
+  return typeof baseline === 'string' &&
+    /^[a-f0-9]{64}$/u.test(baseline) &&
+    baseline === generatedSkillPersistedBaseline(record);
+}
+
+function isExpectedGeneratedSkillRevision(
+  record: ConsolePortfolioElementDetailRecord,
+  skill: GeneratedIntegrationSkill,
+  tags: readonly string[],
+): boolean {
+  const integration = asRecord(record.metadata.integration);
+  return isUnmodifiedManagedGeneratedSkill(record)
+    && isCurrentGeneratedSkill(
+      record.metadata,
+      skill.regeneration.specHash,
+      skill.regeneration.scopeFingerprint,
+    )
+    && integration.generatedContentHash === generatedContentHash(skill)
+    && normalizedGeneratedContent(record.content, record.metadata) === skill.content
+    && normalizedGeneratedDisplayName(record.displayName, record.metadata.name) === null
+    && sortedStringsEqual(record.tags, tags);
+}
+
+function sortedStringsEqual(left: readonly string[], right: readonly string[]): boolean {
+  if (left.length !== right.length) return false;
+  const sortedLeft = [...left].sort((a, b) => a.localeCompare(b));
+  const sortedRight = [...right].sort((a, b) => a.localeCompare(b));
+  return sortedLeft.every((value, index) => value === sortedRight[index]);
+}
+
+function generatedSkillPersistedBaseline(record: GeneratedSkillPersistedFields): string {
+  const metadata = record.metadata;
+  const integration = asRecord(metadata.integration);
+  return sha256CanonicalJson({
+    content: normalizedGeneratedContent(record.content, metadata),
+    // Manager-backed stores materialize a null display name as metadata.name
+    // during the markdown round trip. Treat those two representations as the
+    // same generated default while preserving any genuinely distinct edit.
+    displayName: normalizedGeneratedDisplayName(record.displayName, metadata.name),
+    tags: [...record.tags].sort((left, right) => left.localeCompare(right)),
+    metadata: {
+      name: metadata.name ?? null,
+      description: metadata.description ?? null,
+      instructions: metadata.instructions ?? null,
+      source: metadata.source ?? null,
+      integration: {
+        provider: integration.provider ?? null,
+        descriptorId: integration.descriptorId ?? null,
+        specHash: integration.specHash ?? null,
+        scopeFingerprint: integration.scopeFingerprint ?? null,
+        generatedContentHash: integration.generatedContentHash ?? null,
+        generated: integration.generated ?? null,
+      },
+    },
+  });
+}
+
+function normalizedGeneratedDisplayName(displayName: string | null, metadataName: unknown): string | null {
+  return displayName === null || displayName === metadataName ? null : displayName;
+}
+
+function normalizedGeneratedContent(
+  content: string,
+  metadata: Readonly<Record<string, unknown>>,
+): string {
+  const instructions = metadata.instructions;
+  const name = metadata.name;
+  const description = metadata.description;
+  if (typeof instructions !== 'string' || typeof name !== 'string' || typeof description !== 'string') {
+    return content;
+  }
+  const managerRenderedBody = `# ${name}\n\n${description}\n`;
+  return content === managerRenderedBody ? instructions : content;
+}
+
+function sha256CanonicalJson(value: unknown): string {
+  return sha256Text(JSON.stringify(canonicalizeJson(value)));
+}
+
+function canonicalizeJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(item => canonicalizeJson(item));
+  if (!value || typeof value !== 'object') return value;
+  return Object.fromEntries(
+    Object.entries(value as Readonly<Record<string, unknown>>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => [key, canonicalizeJson(item)]),
+  );
 }
 
 function isCurrentGeneratedSkill(
@@ -853,6 +1392,10 @@ function isCurrentGeneratedSkill(
   return isManagedGeneratedSkill(metadata) &&
     integration.specHash === specHash &&
     integration.scopeFingerprint === scopeFingerprint;
+}
+
+function generatedContentHash(skill: GeneratedIntegrationSkill): string {
+  return sha256Text(skill.content);
 }
 
 function grantedScopes(integration: UserIntegrationRecord): ReadonlySet<string> {

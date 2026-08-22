@@ -4,7 +4,16 @@
  */
 
 import { DatabaseStorageLayer } from '../../../src/storage/DatabaseStorageLayer.js';
-import { buildSkillContent, cleanupAllTestData, closeTestDb, ensureTestUser, fixedUserId, getTestDb, isDatabaseAvailable } from './test-db-helpers.js';
+import {
+  buildSkillContent,
+  cleanupAllTestData,
+  closeTestDb,
+  ensureTestUser,
+  ensureTestUserB,
+  fixedUserId,
+  getTestDb,
+  isDatabaseAvailable,
+} from './test-db-helpers.js';
 
 let dbAvailable = false;
 
@@ -72,6 +81,82 @@ describe('DatabaseStorageLayer', () => {
     expect(readBack).toBe(contentV2);
   });
 
+  it('rejects canonical-equivalent names across database replicas', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const replicas = [
+      new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills'),
+      new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills'),
+    ];
+    const results = await Promise.allSettled([
+      replicas[0].writeContent('skills', 'Foo Bar', buildSkillContent('Foo Bar'), {
+        author: 'test', version: '1.0.0', description: '', tags: [],
+      }, { exclusive: true, elementLabel: 'Skill' }),
+      replicas[1].writeContent('skills', 'foo_bar', buildSkillContent('foo_bar'), {
+        author: 'test', version: '1.0.0', description: '', tags: [],
+      }, { exclusive: true, elementLabel: 'Skill' }),
+    ]);
+
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1);
+  });
+
+  it('compare-and-swaps exact definition bytes and rejects a stale expected value', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const layer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const original = buildSkillContent('cas-skill', { description: 'original' });
+    const replacement = buildSkillContent('cas-skill', { description: 'replacement' });
+    const elementId = await layer.writeContent('skills', 'cas-skill', original, {
+      author: 'test', version: '1.0.0', description: 'original', tags: [],
+    });
+
+    await expect(layer.compareAndSwapContent(
+      'skills',
+      elementId,
+      'cas-skill',
+      `${original}\n`,
+      replacement,
+      { author: 'test', version: '1.0.0', description: 'replacement', tags: [] },
+    )).resolves.toBe(false);
+    await expect(layer.readContent(elementId)).resolves.toBe(original);
+
+    await expect(layer.compareAndSwapContent(
+      'skills',
+      elementId,
+      'cas-skill',
+      original,
+      replacement,
+      { author: 'test', version: '1.0.0', description: 'replacement', tags: [] },
+    )).resolves.toBe(true);
+    await expect(layer.readContent(elementId)).resolves.toBe(replacement);
+  });
+
+  it('compare-and-swaps a rename from a fresh replica without relying on its local name cache', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const writer = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const freshReplica = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const original = buildSkillContent('before-rename', { description: 'original' });
+    const replacement = buildSkillContent('after-rename', { description: 'renamed' });
+    const elementId = await writer.writeContent('skills', 'before-rename', original, {
+      author: 'test', version: '1.0.0', description: 'original', tags: [],
+    });
+
+    await expect(freshReplica.compareAndSwapContent(
+      'skills',
+      elementId,
+      'after-rename',
+      original,
+      replacement,
+      { author: 'test', version: '1.0.0', description: 'renamed', tags: [] },
+    )).resolves.toBe(true);
+
+    expect(freshReplica.getPathByName('before-rename')).toBeUndefined();
+    expect(freshReplica.getPathByName('after-rename')).toBe(elementId);
+    await expect(freshReplica.readContent(elementId)).resolves.toBe(replacement);
+  });
+
   it('should use the caller-provided name over frontmatter name', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();
@@ -104,6 +189,45 @@ describe('DatabaseStorageLayer', () => {
     await layer.deleteContent('skills', 'delete-me');
 
     expect(layer.getPathByName('delete-me')).toBeUndefined();
+  });
+
+  it('conditionally deletes exact definition bytes and preserves a concurrently changed row', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const firstReplica = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const secondReplica = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const original = buildSkillContent('conditional-delete', { description: 'original' });
+    const changed = buildSkillContent('conditional-delete', { description: 'changed elsewhere' });
+    const elementId = await firstReplica.writeContent('skills', 'conditional-delete', original, {
+      author: 'test', version: '1.0.0', description: 'original', tags: [],
+    });
+    await secondReplica.writeContent('skills', 'conditional-delete', changed, {
+      author: 'test', version: '1.0.0', description: 'changed elsewhere', tags: [],
+    });
+
+    await expect(firstReplica.deleteContentIfUnchanged('skills', elementId, original)).resolves.toBe(false);
+    await expect(firstReplica.readContent(elementId)).resolves.toBe(changed);
+    await expect(firstReplica.deleteContentIfUnchanged('skills', elementId, changed)).resolves.toBe(true);
+    await expect(firstReplica.readContent(elementId)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('removes another replica\'s deletion from the local index on the next scan', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const observingReplica = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const deletingReplica = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const content = buildSkillContent('replica-delete');
+    await observingReplica.writeContent('skills', 'replica-delete', content, {
+      author: 'test', version: '1.0.0', description: 'delete scan', tags: [],
+    });
+    await observingReplica.scan();
+    expect(observingReplica.getPathByName('replica-delete')).toBeDefined();
+
+    await deletingReplica.deleteContent('skills', 'replica-delete');
+    const diff = await observingReplica.scan();
+
+    expect(diff.removed).toHaveLength(1);
+    expect(observingReplica.getPathByName('replica-delete')).toBeUndefined();
   });
 
   it('should return ENOENT when reading a deleted element', async () => {
@@ -142,6 +266,58 @@ describe('DatabaseStorageLayer', () => {
     expect(diff.added).toHaveLength(2);
     expect(diff.modified).toHaveLength(0);
     expect(diff.removed).toHaveLength(0);
+  });
+
+  it('keeps scan indexes isolated when one shared layer serves different users', async () => {
+    if (!dbAvailable) return;
+    const userA = await ensureTestUser();
+    const userB = await ensureTestUserB();
+    let activeUserId = userA;
+    const sharedLayer = new DatabaseStorageLayer(getTestDb(), () => activeUserId, 'skills');
+    const writerA = new DatabaseStorageLayer(getTestDb(), fixedUserId(userA), 'skills');
+    const writerB = new DatabaseStorageLayer(getTestDb(), fixedUserId(userB), 'skills');
+    const idA = await writerA.writeContent('skills', 'user-a-skill', buildSkillContent('user-a-skill'), {
+      author: '', version: '', description: '', tags: [],
+    });
+    const idB = await writerB.writeContent('skills', 'user-b-skill', buildSkillContent('user-b-skill'), {
+      author: '', version: '', description: '', tags: [],
+    });
+
+    await sharedLayer.scan();
+    expect(sharedLayer.getPathByName('user-a-skill')).toBe(idA);
+    expect(sharedLayer.getPathByName('user-b-skill')).toBeUndefined();
+
+    activeUserId = userB;
+    await sharedLayer.scan();
+    expect(sharedLayer.getPathByName('user-a-skill')).toBeUndefined();
+    expect(sharedLayer.getPathByName('user-b-skill')).toBe(idB);
+
+    activeUserId = userA;
+    expect(sharedLayer.getPathByName('user-a-skill')).toBe(idA);
+    expect(sharedLayer.getPathByName('user-b-skill')).toBeUndefined();
+  });
+
+  it('detects a replica addition after an earlier scan and then reports the stable row unchanged', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const observingReplica = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+    const writingReplica = new DatabaseStorageLayer(getTestDb(), fixedUserId(userId), 'skills');
+
+    await expect(observingReplica.scan()).resolves.toMatchObject({ added: [] });
+    const elementId = await writingReplica.writeContent(
+      'skills',
+      'late-commit-visible',
+      buildSkillContent('late-commit-visible'),
+      { author: '', version: '', description: '', tags: [] },
+    );
+
+    await expect(observingReplica.scan()).resolves.toMatchObject({ added: [elementId] });
+    await expect(observingReplica.scan()).resolves.toMatchObject({
+      added: [],
+      modified: [],
+      removed: [],
+      unchanged: [elementId],
+    });
   });
 
   it('should detect removals on full scan after invalidate', async () => {

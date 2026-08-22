@@ -1,4 +1,4 @@
-import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
 
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import {
@@ -19,7 +19,17 @@ import type {
   ConsoleLoginTransaction,
   ILoginTransactionStore,
 } from '../../stores/ILoginTransactionStore.js';
-import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import type {
+  IUserIntegrationStore,
+  UserIntegrationConnectInput,
+  UserIntegrationProvider,
+  UserIntegrationRecord,
+} from '../../stores/IUserIntegrationStore.js';
+import {
+  hasIntegrationCredentials,
+  IntegrationAlreadyConnectedError,
+  IntegrationCredentialCleanupPendingError,
+} from '../../stores/IUserIntegrationStore.js';
 import {
   IntegrationDescriptorChangedError,
   isWellFormedUnicode,
@@ -32,14 +42,27 @@ import type {
   IntegrationCallbackRejectedReason,
 } from './IntegrationSecurityEvents.js';
 import { integrationSecretContext, type IntegrationSecretContext } from './IntegrationSecretContext.js';
-import type { IntegrationProviderResolver } from './CuratedIntegrationProviders.js';
+import type {
+  IntegrationCleanupProviderResolver,
+  IntegrationProviderResolver,
+} from './CuratedIntegrationProviders.js';
 import type { IIntegrationProvider } from './IntegrationProvider.js';
+import { isMintedIntegrationCredentialsError } from './IntegrationProvider.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
+import { isSafelyRedactableCredential } from './IntegrationCredentialRedactor.js';
+import { beginIntegrationCleanup, settleIntegrationCleanup } from './IntegrationCleanup.js';
 
 const INTEGRATION_TRANSACTION_TTL_MS = 10 * 60 * 1000;
 const PKCE_VERIFIER_BYTES = 32;
 const PKCE_SECRET_CLASS = 'pkce_verifier';
 const INTEGRATION_PATH = '/api/v1/me/integrations';
+const INTEGRATION_CREDENTIAL_CLEANUP_WAIT_MS = 1_000;
+// Configured OAuth providers may revoke access and refresh credentials
+// sequentially. The lease must exceed both bounded network/transport-close
+// budgets so a second worker cannot reclaim cleanup while the first is live.
+const INTEGRATION_CREDENTIAL_CLEANUP_LEASE_MS = 60_000;
+const INTEGRATION_CREDENTIAL_CLEANUP_RENEW_MS = 20_000;
+const CLEANUP_PERSISTENCE_RETRY_DELAYS_MS = [0, 25, 75] as const;
 
 interface ConsumedProviderCallbackContext {
   readonly req: ConsoleRequest;
@@ -60,6 +83,7 @@ export class IntegrationService {
      * connectable without a restart.
      */
     readonly resolveProvider?: IntegrationProviderResolver | null;
+    readonly resolveCleanupProvider?: IntegrationCleanupProviderResolver | null;
     readonly loginTransactions?: ILoginTransactionStore | null;
     readonly opaqueValues?: IConsoleOpaqueValueService | null;
     readonly secretEncryption?: ISecretEncryptionService | null;
@@ -115,12 +139,27 @@ export class IntegrationService {
 
   async connectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const operationStartedAt = await this.options.store.captureCredentialOperationStartedAt(this.now());
     const provider = await this.resolveProviderFor(auth.userId, providerId);
     if (!provider) return providerNotFound(providerId);
+    if (await this.options.store.hasCredentialCleanupPending(auth.userId, providerId)) {
+      return cleanupMustFinishConflict();
+    }
+    const existing = await this.options.store.findByProvider(auth.userId, providerId);
+    if (existing) {
+      if (hasIntegrationCredentials(existing)) return integrationAlreadyConnectedConflict();
+      await this.options.store.disconnect({
+        userId: auth.userId,
+        provider: providerId,
+        integrationId: existing.id,
+        credentialGeneration: existing.credentialGeneration,
+        revokedAt: this.now(),
+      });
+    }
     if (provider.credentialStrategy === 'static_api_key') {
       const deps = this.credentialDependencies(provider);
       if (!deps) return serviceUnavailable(`${providerId} integration linking is not configured.`);
-      return this.captureStaticApiKey(req, auth, deps);
+      return this.captureStaticApiKey(req, auth, deps, operationStartedAt);
     }
     const deps = this.writeDependencies(provider);
     if (!deps) return serviceUnavailable(`${providerId} integration linking is not configured.`);
@@ -278,62 +317,86 @@ export class IntegrationService {
         redirectUri: this.providerCallbackUri(providerId),
         providerCallbackParams: stringQueryParams(req.query),
       });
-    } catch {
-      try {
-        await this.options.store.recordError({
-          userId: auth.userId,
-          provider: providerId,
-          integrationDescriptorId: transaction.integrationDescriptorId ?? null,
-          errorReason: 'token_exchange_failed',
-          occurredAt: this.now(),
-        });
-      } catch {
-        await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
+    } catch (error) {
+      if (isMintedIntegrationCredentialsError(error)) {
+        await this.preserveAndCleanMintedCredentials(
+          currentDeps,
+          auth.userId,
+          transaction,
+          error.accessToken,
+          error.refreshToken,
+        );
       }
+      // A consumed callback can finish after a newer authorization succeeds.
+      // Exchange failure is therefore audit-only; it must not revoke an active
+      // connection whose generation this transaction does not own.
+      await this.recordCallbackRejected(providerId, auth.userId, 'token_exchange_failed');
       logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration token exchange failed', {
         userId: auth.userId,
       });
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
+    if (!isSafelyRedactableCredential(exchanged.accessToken)) {
+      await this.preserveAndCleanExchangedCredentials(
+        currentDeps,
+        auth.userId,
+        transaction,
+        exchanged,
+      );
+      await this.recordCallbackRejected(providerId, auth.userId, 'token_exchange_failed');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
 
     const connectedAt = this.now();
-    const connection = {
-      userId: auth.userId,
-      provider: providerId,
-      integrationDescriptorId: transaction.integrationDescriptorId ?? null,
-      externalAccountLabel: exchanged.accountLabel,
-      externalInstallationId: exchanged.externalInstallationId,
-      authorizedPermissions: exchanged.authorizedPermissions,
-      accessTokenCiphertext: currentDeps.secretEncryption.encrypt(
-        Buffer.from(exchanged.accessToken, 'utf8'),
-        integrationSecretContext('access_token', auth.userId, providerId),
-      ),
-      refreshTokenCiphertext: exchanged.refreshToken
-        ? currentDeps.secretEncryption.encrypt(
-          Buffer.from(exchanged.refreshToken, 'utf8'),
-          integrationSecretContext('refresh_token', auth.userId, providerId),
-        )
-        : null,
-      connectedAt,
-    };
+    let connection: UserIntegrationConnectInput;
     try {
-      const connected = transaction.integrationDescriptorId
-          && transaction.integrationDescriptorFingerprint
-          && this.options.store.connectDescriptorCallback
-        ? await this.options.store.connectDescriptorCallback({
-            transactionIdHash: idHash,
-            descriptorId: transaction.integrationDescriptorId,
-            descriptorFingerprint: transaction.integrationDescriptorFingerprint,
-            connection,
-          })
-        : await this.options.store.connect(connection);
+      connection = this.encryptProviderCredentialConnection(
+        currentDeps,
+        auth.userId,
+        transaction,
+        exchanged.accountLabel,
+        exchanged.externalInstallationId,
+        exchanged.authorizedPermissions,
+        exchanged.accessToken,
+        exchanged.refreshToken ?? null,
+        connectedAt,
+      );
+    } catch {
+      await this.revokeUntrackedCredential(
+        currentDeps,
+        exchanged.accessToken,
+        exchanged.refreshToken ?? null,
+        exchanged.externalInstallationId,
+        'encryption_failed',
+      );
+      await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
+      return failedIntegrationCallback(transaction.returnTo ?? undefined);
+    }
+    try {
+      const connected = await this.options.store.connectDescriptorCallback({
+        transactionIdHash: idHash,
+        descriptorId: transaction.integrationDescriptorId ?? null,
+        descriptorFingerprint: transaction.integrationDescriptorFingerprint ?? null,
+        authorizationStartedAt: transaction.createdAt,
+        connection,
+      });
       if (!connected) {
-        await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
+        await this.preserveAndCleanCredential(
+          currentDeps,
+          connection,
+          exchanged.accessToken,
+          exchanged.refreshToken ?? null,
+        );
         await this.recordCallbackRejected(providerId, auth.userId, 'descriptor_mismatch');
         return failedIntegrationCallback(transaction.returnTo ?? undefined);
       }
     } catch {
-      await this.revokeExchangedCredentials(currentDeps.provider, exchanged);
+      await this.preserveAndCleanCredential(
+        currentDeps,
+        connection,
+        exchanged.accessToken,
+        exchanged.refreshToken ?? null,
+      );
       await this.recordCallbackRejected(providerId, auth.userId, 'credential_persistence_failed');
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
@@ -356,79 +419,43 @@ export class IntegrationService {
 
   async disconnectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const provider = await this.resolveProviderFor(auth.userId, providerId);
+    const disconnectedAt = this.now();
+    // One store transaction persists intent and removes the current credential
+    // from execution before any mutable provider lookup can fail.
+    const disconnected = await this.options.store.beginAuthorizationDisconnect(
+      auth.userId,
+      providerId,
+      disconnectedAt,
+    );
+    const existingCleanup = await this.options.store.listCredentialCleanup(auth.userId, providerId);
+    const descriptorId = disconnected?.integrationDescriptorId
+      ?? existingCleanup[0]?.integrationDescriptorId
+      ?? null;
+    const provider = await this.resolveProviderFor(auth.userId, providerId)
+      ?? (descriptorId
+        ? await this.resolveProviderForCleanup(auth.userId, providerId, descriptorId)
+        : null);
     const deps = this.credentialDependencies(provider);
     if (!deps) return serviceUnavailable(`${providerId} integration disconnect is not configured.`);
-    const active = await this.options.store.findByProvider(auth.userId, providerId);
-    if (active) {
-      const revoked = this.recordOwnedByProvider(deps.provider, active)
-        ? await this.revokeRemoteCredentials(deps, auth, active)
-        : true;
-      if (!revoked) {
-        const errorRecord = await this.options.store.recordError({
-          userId: auth.userId,
-          provider: providerId,
-          integrationDescriptorId: active.integrationDescriptorId ?? null,
-          errorReason: 'revocation_failed',
-          occurredAt: this.now(),
-        });
-        return {
-          status: 200,
-          body: deps.provider.projectStatus(errorRecord).body,
-        };
+    if (disconnected && hasIntegrationCredentials(disconnected)) {
+      if (!this.recordOwnedByProvider(deps.provider, disconnected)) {
+        return cleanupPendingResponse();
       }
-      await this.options.store.disconnect({
-        userId: auth.userId,
-        provider: providerId,
-        revokedAt: this.now(),
-      });
+      if (!await this.cleanPendingCredential(deps, disconnected)) return cleanupPendingResponse();
+    }
+    if (disconnected) {
       logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration disconnected', {
         userId: auth.userId,
         provider: providerId,
       });
     }
+    if (!await this.cleanPendingCredentials(deps, auth.userId, providerId)) {
+      return cleanupPendingResponse();
+    }
     return {
       status: 200,
       body: deps.provider.projectStatus(null).body,
     };
-  }
-
-  private async revokeRemoteCredentials(
-    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
-    auth: ConsoleAuthenticatedContext,
-    active: NonNullable<Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>>,
-  ): Promise<boolean> {
-    const accessToken = active.accessTokenCiphertext
-      ? decryptNullable(
-        deps.secretEncryption,
-        active.accessTokenCiphertext,
-        integrationSecretContext('access_token', auth.userId, active.provider),
-        auth.userId,
-        active.provider,
-      )
-      : null;
-    const refreshToken = active.refreshTokenCiphertext
-      ? decryptNullable(
-        deps.secretEncryption,
-        active.refreshTokenCiphertext,
-        integrationSecretContext('refresh_token', auth.userId, active.provider),
-        auth.userId,
-        active.provider,
-      )
-      : null;
-    try {
-      await deps.provider.revokeCredentials({
-        accessToken,
-        refreshToken,
-        externalInstallationId: active.externalInstallationId,
-      });
-      return true;
-    } catch {
-      // Local credential invalidation still proceeds so no future console path
-      // can use the stored credentials. Structured event persistence lands with
-      // the self-security/user-event sink.
-      return false;
-    }
   }
 
   private recordOwnedByProvider(
@@ -445,9 +472,24 @@ export class IntegrationService {
     providerId: UserIntegrationProvider,
   ): Promise<IIntegrationProvider | null> {
     const registered = this.options.providers.get(providerId);
+    // Descriptor-backed providers are mutable deployment state. Re-resolve
+    // them on every request so an already-running replica cannot bypass a
+    // durable global disable through its boot-time registry snapshot.
+    if (registered?.integrationDescriptorId && this.options.resolveProvider) {
+      return this.options.resolveProvider(userId, providerId);
+    }
     if (registered) return registered;
-    if (!this.options.resolveProvider) return null;
-    return this.options.resolveProvider(userId, providerId);
+    return this.options.resolveProvider?.(userId, providerId) ?? null;
+  }
+
+  private async resolveProviderForCleanup(
+    userId: string,
+    providerId: UserIntegrationProvider,
+    integrationDescriptorId: string,
+  ): Promise<IIntegrationProvider | null> {
+    const registered = this.options.providers.get(providerId);
+    if (registered?.integrationDescriptorId === integrationDescriptorId) return registered;
+    return this.options.resolveCleanupProvider?.(userId, providerId, integrationDescriptorId) ?? null;
   }
 
   private writeDependencies(provider: IIntegrationProvider | null): {
@@ -476,6 +518,7 @@ export class IntegrationService {
     req: ConsoleRequest,
     auth: ConsoleAuthenticatedContext,
     deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    operationStartedAt: Date,
   ): Promise<ConsoleHandlerResult> {
     const { provider, secretEncryption } = deps;
     const captured = provider.staticApiKeyInjection?.location === 'basic'
@@ -495,17 +538,29 @@ export class IntegrationService {
         integrationSecretContext('access_token', auth.userId, provider.descriptor.id),
       ),
       refreshTokenCiphertext: null,
+      authorizationStartedAt: operationStartedAt,
       connectedAt,
     };
-    const record = provider.integrationDescriptorId
-        && provider.integrationDescriptorFingerprint
-        && this.options.store.connectDescriptorCredential
-      ? await this.options.store.connectDescriptorCredential({
-          descriptorId: provider.integrationDescriptorId,
-          descriptorFingerprint: provider.integrationDescriptorFingerprint,
-          connection,
-        })
-      : await this.options.store.connect(connection);
+    let record: UserIntegrationRecord | null;
+    try {
+      if (provider.integrationDescriptorId && provider.integrationDescriptorFingerprint) {
+        const connectDescriptorCredential = this.options.store.connectDescriptorCredential;
+        record = connectDescriptorCredential
+          ? await connectDescriptorCredential.call(this.options.store, {
+            descriptorId: provider.integrationDescriptorId,
+            descriptorFingerprint: provider.integrationDescriptorFingerprint,
+            operationStartedAt,
+            connection,
+          })
+          : null;
+      } else {
+        record = await this.options.store.connect(connection);
+      }
+    } catch (error) {
+      if (error instanceof IntegrationCredentialCleanupPendingError) return cleanupMustFinishConflict();
+      if (error instanceof IntegrationAlreadyConnectedError) return integrationAlreadyConnectedConflict();
+      throw error;
+    }
     if (!record) return descriptorChangedConflict();
     return {
       status: 200,
@@ -526,20 +581,334 @@ export class IntegrationService {
     };
   }
 
-  private async revokeExchangedCredentials(
-    provider: IIntegrationProvider,
+  private async preserveAndCleanExchangedCredentials(
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    userId: string,
+    transaction: ConsoleLoginTransaction,
     exchanged: Awaited<ReturnType<IIntegrationProvider['exchangeAuthorizationCode']>>,
   ): Promise<void> {
+    const connectedAt = this.now();
     try {
-      await provider.revokeCredentials({
-        accessToken: exchanged.accessToken,
-        refreshToken: exchanged.refreshToken ?? null,
-        externalInstallationId: exchanged.externalInstallationId,
-      });
+      await this.preserveAndCleanCredential(deps, this.encryptProviderCredentialConnection(
+        deps,
+        userId,
+        transaction,
+        exchanged.accountLabel,
+        exchanged.externalInstallationId,
+        exchanged.authorizedPermissions,
+        exchanged.accessToken,
+        exchanged.refreshToken ?? null,
+        connectedAt,
+      ), exchanged.accessToken, exchanged.refreshToken ?? null);
     } catch {
-      // The local credential write failed closed. Remote revocation is best-effort
-      // and must not revive or expose the rejected callback.
+      await this.revokeUntrackedCredential(
+        deps,
+        exchanged.accessToken,
+        exchanged.refreshToken ?? null,
+        exchanged.externalInstallationId,
+        'encryption_failed',
+      );
     }
+  }
+
+  private async preserveAndCleanMintedCredentials(
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    userId: string,
+    transaction: ConsoleLoginTransaction,
+    accessToken: string,
+    refreshToken: string | null,
+  ): Promise<void> {
+    const providerId = deps.provider.descriptor.id;
+    try {
+      await this.preserveAndCleanCredential(deps, this.encryptProviderCredentialConnection(
+        deps,
+        userId,
+        transaction,
+        null,
+        null,
+        defaultAuthorizedPermissions(providerId),
+        accessToken,
+        refreshToken,
+        this.now(),
+      ), accessToken, refreshToken);
+    } catch {
+      await this.revokeUntrackedCredential(deps, accessToken, refreshToken, null, 'encryption_failed');
+    }
+  }
+
+  private encryptProviderCredentialConnection(
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    userId: string,
+    transaction: ConsoleLoginTransaction,
+    externalAccountLabel: string | null,
+    externalInstallationId: string | null,
+    authorizedPermissions: Readonly<Record<string, unknown>>,
+    accessToken: string,
+    refreshToken: string | null,
+    connectedAt: Date,
+  ): UserIntegrationConnectInput {
+    const providerId = deps.provider.descriptor.id;
+    return {
+      userId,
+      provider: providerId,
+      integrationDescriptorId: transaction.integrationDescriptorId ?? null,
+      externalAccountLabel,
+      externalInstallationId,
+      authorizedPermissions,
+      accessTokenCiphertext: deps.secretEncryption.encrypt(
+        Buffer.from(accessToken, 'utf8'),
+        integrationSecretContext('access_token', userId, providerId),
+      ),
+      refreshTokenCiphertext: refreshToken
+        ? deps.secretEncryption.encrypt(
+          Buffer.from(refreshToken, 'utf8'),
+          integrationSecretContext('refresh_token', userId, providerId),
+        )
+        : null,
+      authorizationStartedAt: transaction.createdAt,
+      connectedAt,
+    };
+  }
+
+  private async revokeUntrackedCredential(
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    accessToken: string,
+    refreshToken: string | null,
+    externalInstallationId: string | null,
+    reason: string,
+  ): Promise<void> {
+    const cleanup = await settleIntegrationCleanup(
+      () => deps.provider.revokeCredentials({ accessToken, refreshToken, externalInstallationId }),
+      INTEGRATION_CREDENTIAL_CLEANUP_WAIT_MS,
+    );
+    if (cleanup !== 'completed') this.auditCredentialCleanupFailure(deps.provider, `${reason}:${cleanup}`);
+  }
+
+  private async preserveAndCleanCredential(
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    connection: UserIntegrationConnectInput,
+    accessToken: string,
+    refreshToken: string | null,
+  ): Promise<void> {
+    let pending: UserIntegrationRecord;
+    try {
+      pending = await this.queueCredentialCleanupWithRetry({
+        ...connection,
+        cleanupRequestedAt: this.now(),
+      });
+    } catch (error) {
+      this.auditCredentialCleanupFailure(deps.provider, 'persistence_failed', error);
+      // Once the provider has minted a credential, failure to persist its
+      // cleanup handle must fall back to immediate revocation. Leaving a valid,
+      // untracked credential is worse than requiring the current grant to
+      // reconnect when a provider revokes grant-wide.
+      const cleanup = await settleIntegrationCleanup(
+        () => deps.provider.revokeCredentials({
+          accessToken,
+          refreshToken,
+          externalInstallationId: connection.externalInstallationId,
+        }),
+        INTEGRATION_CREDENTIAL_CLEANUP_WAIT_MS,
+      );
+      this.auditCredentialCleanupFailure(deps.provider, cleanup);
+      return;
+    }
+    const active = await this.options.store.findByProvider(connection.userId, connection.provider);
+    if (active) return;
+    await this.cleanPendingCredential(deps, pending);
+  }
+
+  private async queueCredentialCleanupWithRetry(
+    input: Parameters<IUserIntegrationStore['queueCredentialCleanup']>[0],
+  ): Promise<UserIntegrationRecord> {
+    let lastError: unknown;
+    for (const delayMs of CLEANUP_PERSISTENCE_RETRY_DELAYS_MS) {
+      if (delayMs > 0) await new Promise(resolve => setTimeout(resolve, delayMs));
+      try {
+        return await this.options.store.queueCredentialCleanup(input);
+      } catch (error) {
+        lastError = error;
+      }
+    }
+    throw lastError instanceof Error ? lastError : new Error('integration_cleanup_persistence_failed');
+  }
+
+  private async cleanPendingCredentials(
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    userId: string,
+    providerId: UserIntegrationProvider,
+  ): Promise<boolean> {
+    if (await this.options.store.findByProvider(userId, providerId)) return false;
+    const pending = await this.options.store.listCredentialCleanup(userId, providerId);
+    let complete = true;
+    for (const record of pending) {
+      if (!await this.cleanPendingCredential(deps, record)) complete = false;
+    }
+    return complete;
+  }
+
+  private async cleanPendingCredential(
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+    pending: UserIntegrationRecord,
+  ): Promise<boolean> {
+    if (!this.recordOwnedByProvider(deps.provider, pending)) {
+      this.auditCredentialCleanupFailure(deps.provider, 'descriptor_mismatch');
+      return false;
+    }
+    const cleanupLeaseId = randomUUID();
+    const claimed = await this.options.store.claimCredentialCleanup({
+      userId: pending.userId,
+      provider: pending.provider,
+      integrationId: pending.id,
+      credentialGeneration: pending.credentialGeneration,
+      cleanupLeaseId,
+      leaseDurationMs: INTEGRATION_CREDENTIAL_CLEANUP_LEASE_MS,
+    });
+    if (!claimed) {
+      const stillPending = await this.options.store.listCredentialCleanup(pending.userId, pending.provider);
+      return !stillPending.some(record => record.id === pending.id);
+    }
+    pending = claimed;
+    const accessToken = pending.accessTokenCiphertext
+      ? decryptNullable(
+        deps.secretEncryption,
+        pending.accessTokenCiphertext,
+        integrationSecretContext('access_token', pending.userId, pending.provider),
+        pending.userId,
+        pending.provider,
+      )
+      : null;
+    const refreshToken = pending.refreshTokenCiphertext
+      ? decryptNullable(
+        deps.secretEncryption,
+        pending.refreshTokenCiphertext,
+        integrationSecretContext('refresh_token', pending.userId, pending.provider),
+        pending.userId,
+        pending.provider,
+      )
+      : null;
+    if ((pending.accessTokenCiphertext && !accessToken)
+        || (pending.refreshTokenCiphertext && !refreshToken)
+        || (!accessToken && !refreshToken)) {
+      this.auditCredentialCleanupFailure(deps.provider, 'decrypt_failed');
+      await this.releaseCredentialCleanupClaim(pending, cleanupLeaseId);
+      return false;
+    }
+    const cleanupAttempt = beginIntegrationCleanup(
+      () => deps.provider.revokeCredentials({
+        accessToken,
+        refreshToken,
+        externalInstallationId: pending.externalInstallationId,
+      }),
+      INTEGRATION_CREDENTIAL_CLEANUP_WAIT_MS,
+    );
+    const stopLeaseRenewal = this.maintainCredentialCleanupLease(deps.provider, pending, cleanupLeaseId);
+    void cleanupAttempt.settlement.then(() => stopLeaseRenewal());
+    const cleanup = await cleanupAttempt.result;
+    if (cleanup !== 'completed') {
+      this.auditCredentialCleanupFailure(deps.provider, cleanup);
+      if (cleanup === 'failed') {
+        await this.releaseCredentialCleanupClaim(pending, cleanupLeaseId);
+      } else {
+        void cleanupAttempt.settlement.then(async lateResult => {
+          try {
+            if (lateResult === 'completed') {
+              await this.completeClaimedCredentialCleanup(pending, cleanupLeaseId);
+            } else {
+              await this.releaseCredentialCleanupClaim(pending, cleanupLeaseId);
+            }
+          } catch {
+            this.auditCredentialCleanupFailure(deps.provider, 'failed');
+          }
+        });
+      }
+      return false;
+    }
+    return this.completeClaimedCredentialCleanup(pending, cleanupLeaseId);
+  }
+
+  private maintainCredentialCleanupLease(
+    provider: IIntegrationProvider,
+    pending: UserIntegrationRecord,
+    cleanupLeaseId: string,
+  ): () => void {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const schedule = (): void => {
+      if (stopped) return;
+      timer = setTimeout(() => {
+        void this.options.store.renewCredentialCleanupClaim({
+          userId: pending.userId,
+          provider: pending.provider,
+          integrationId: pending.id,
+          credentialGeneration: pending.credentialGeneration,
+          cleanupLeaseId,
+          leaseDurationMs: INTEGRATION_CREDENTIAL_CLEANUP_LEASE_MS,
+        }).then(renewed => {
+          if (!renewed) {
+            stopped = true;
+            this.auditCredentialCleanupFailure(provider, 'cleanup_lease_lost');
+            return;
+          }
+          schedule();
+        }).catch(() => {
+          stopped = true;
+          this.auditCredentialCleanupFailure(provider, 'cleanup_lease_renewal_failed');
+        });
+      }, INTEGRATION_CREDENTIAL_CLEANUP_RENEW_MS);
+      timer.unref?.();
+    };
+    schedule();
+    return () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    };
+  }
+
+  private async completeClaimedCredentialCleanup(
+    pending: UserIntegrationRecord,
+    cleanupLeaseId: string,
+  ): Promise<boolean> {
+    const completed = await this.options.store.completeCredentialCleanup({
+      userId: pending.userId,
+      provider: pending.provider,
+      integrationId: pending.id,
+      credentialGeneration: pending.credentialGeneration,
+      cleanupLeaseId,
+      completedAt: this.now(),
+    });
+    if (completed !== null) return true;
+    const stillPending = await this.options.store.listCredentialCleanup(pending.userId, pending.provider);
+    if (!stillPending.some(record => record.id === pending.id)) return true;
+    await this.releaseCredentialCleanupClaim(pending, cleanupLeaseId);
+    return false;
+  }
+
+  private async releaseCredentialCleanupClaim(
+    pending: UserIntegrationRecord,
+    cleanupLeaseId: string,
+  ): Promise<void> {
+    await this.options.store.releaseCredentialCleanupClaim({
+      userId: pending.userId,
+      provider: pending.provider,
+      integrationId: pending.id,
+      cleanupLeaseId,
+    });
+  }
+
+  private auditCredentialCleanupFailure(
+    provider: IIntegrationProvider,
+    cleanup: string,
+    error?: unknown,
+  ): void {
+    if (cleanup === 'completed') return;
+    logIntegrationSecurityEvent('OPERATION_FAILED', 'HIGH',
+      'Integration credential cleanup requires operator attention', {
+        provider: provider.descriptor.id,
+        cleanup,
+        error: error instanceof Error ? error.name : undefined,
+        requiredAction: 'retry_disconnect_or_revoke_oauth_grant_in_provider_console',
+      });
   }
 
   private async classifyMissingTransaction(
@@ -665,7 +1034,7 @@ function readStaticApiKey(body: unknown): string | null {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
   if (typeof record.api_key !== 'string') return null;
   const value = record.api_key.trim();
-  if (value.length === 0 || !isWellFormedUnicode(value) || Buffer.byteLength(value, 'utf8') > 8192) {
+  if (!isSafelyRedactableCredential(value) || !isWellFormedUnicode(value) || Buffer.byteLength(value, 'utf8') > 8192) {
     return null;
   }
   return value;
@@ -691,7 +1060,7 @@ function readBasicCredential(body: unknown): CapturedStaticCredential {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
   const username = typeof record.username === 'string' ? record.username.trim() : '';
   const password = typeof record.password === 'string' ? record.password : '';
-  if (username.length === 0 || password.length === 0 ||
+  if (username.length === 0 || !isSafelyRedactableCredential(password) ||
       !isWellFormedUnicode(username) || !isWellFormedUnicode(password)) {
     return { error: badRequest('invalid_basic_credential', 'Valid, non-empty username and password are required.') };
   }
@@ -760,6 +1129,51 @@ function serviceUnavailable(detail: string): ConsoleHandlerResult {
   };
 }
 
+function cleanupPendingResponse(): ConsoleHandlerResult {
+  return {
+    status: 502,
+    body: {
+      type: 'about:blank',
+      title: 'Provider credential cleanup pending',
+      status: 502,
+      code: 'integration_credential_cleanup_pending',
+      detail: 'The integration is disabled locally, but provider-side credential revocation must be retried.',
+    },
+  };
+}
+
+function cleanupMustFinishConflict(): ConsoleHandlerResult {
+  return {
+    status: 409,
+    body: {
+      type: 'about:blank',
+      title: 'Credential cleanup pending',
+      status: 409,
+      code: 'integration_credential_cleanup_pending',
+      detail: 'Finish provider credential cleanup before connecting this integration again.',
+    },
+  };
+}
+
+function integrationAlreadyConnectedConflict(): ConsoleHandlerResult {
+  return {
+    status: 409,
+    body: {
+      type: 'about:blank',
+      title: 'Integration already connected',
+      status: 409,
+      code: 'integration_already_connected',
+      detail: 'Disconnect the current integration before starting a new authorization.',
+    },
+  };
+}
+
+function defaultAuthorizedPermissions(provider: UserIntegrationProvider): Readonly<Record<string, unknown>> {
+  return provider === 'github'
+    ? { repository_selection: 'unknown', permissions: { contents: 'none' } }
+    : { scopes: [] };
+}
+
 function badRequest(code: string, detail: string): ConsoleHandlerResult {
   return {
     status: 400,
@@ -788,7 +1202,7 @@ function descriptorChangedConflict(): ConsoleHandlerResult {
 
 function logIntegrationSecurityEvent(
   type: 'OPERATION_COMPLETED' | 'OPERATION_FAILED',
-  severity: 'LOW' | 'MEDIUM',
+  severity: 'LOW' | 'MEDIUM' | 'HIGH',
   details: string,
   additionalData?: Record<string, unknown>,
 ): void {

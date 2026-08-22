@@ -172,6 +172,26 @@ render_with_dcr() {
   fi
 }
 
+log "checking hosted env values are parsed as data, never shell"
+(
+  # shellcheck source=/dev/null
+  source "${REPO_ROOT}/scripts/hosted-deploy/env.sh"
+  ENV_FILE="${TMP_ROOT}/literal-values.env"
+  : > "${ENV_FILE}"
+  marker="${TMP_ROOT}/must-not-exist"
+  # Shell syntax is deliberately inert test data here.
+  # shellcheck disable=SC2016
+  literal_value=' spaces # & $(touch SHOULD_NOT_RUN) "quotes" '\''single'\'' \\slashes '
+  literal_value="${literal_value/SHOULD_NOT_RUN/${marker}}"
+  upsert_env_value LITERAL_VALUE "${literal_value}"
+  upsert_env_value LITERAL_VALUE "${literal_value}"
+  unset LITERAL_VALUE
+  load_env_file
+  [[ "${LITERAL_VALUE?}" == "${literal_value}" ]] || fail "hosted env value did not round-trip literally"
+  [[ ! -e "${marker}" ]] || fail "hosted env parser executed command substitution"
+  assert_occurrences "${ENV_FILE}" 'LITERAL_VALUE=' 1
+)
+
 DEPLOY_DIR="${TMP_ROOT}/deploy"
 ENV_FILE="${DEPLOY_DIR}/.env.production"
 COMPOSE_FILE="${DEPLOY_DIR}/compose.yml"
@@ -254,6 +274,7 @@ assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'CREATE ROLE dollhouse_app'
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" ":'app_password'"
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO dollhouse_app'
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'REVOKE INSERT, UPDATE, DELETE ON TABLE users FROM dollhouse_app'
+assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'REVOKE INSERT, UPDATE, DELETE ON TABLE auth_subject_revocation_fences FROM dollhouse_app'
 assert_contains "${POST_MIGRATION_GRANTS_FILE}" 'GRANT SELECT ON ALL TABLES IN SCHEMA drizzle TO dollhouse_app'
 assert_contains "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" 'DOLLHOUSE_APP_DB_PASSWORD'
 assert_contains "${POST_MIGRATION_GRANTS_SCRIPT_FILE}" 'psql -v ON_ERROR_STOP=1'
@@ -272,6 +293,167 @@ assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_SIZE=25m'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_HOSTED_DOCKER_LOG_MAX_FILE=5'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client'
 assert_contains "${ENV_FILE}" 'DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret'
+
+log "checking monotonic auth generation and mutable envelope controls"
+LIFECYCLE_DEPLOY_DIR="${TMP_ROOT}/lifecycle-deploy"
+LIFECYCLE_ENV_FILE="${LIFECYCLE_DEPLOY_DIR}/.env.production"
+MASTER_KEY_V2="$(printf 'master-key-v2-material-32-bytes!' | openssl base64 -A)"
+MASTER_KEY_V3="$(printf 'master-key-v3-material-32-bytes!' | openssl base64 -A)"
+MASTER_KEY_V4="$(printf 'master-key-v4-material-32-bytes!' | openssl base64 -A)"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+DOLLHOUSE_AUTH_GENERATION=2 \
+DOLLHOUSE_MASTER_ENCRYPTION_KEY="${MASTER_KEY_V2}" \
+DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID=master-v2 \
+DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED='' \
+DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=false \
+  bash "${HOSTED_DEPLOY}" render
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=2'
+assert_line "${LIFECYCLE_ENV_FILE}" "DOLLHOUSE_MASTER_ENCRYPTION_KEY=${MASTER_KEY_V2}"
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID=master-v2'
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED='
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=false'
+
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+DOLLHOUSE_AUTH_GENERATION=3 \
+DOLLHOUSE_MASTER_ENCRYPTION_KEY="${MASTER_KEY_V3}" \
+DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID=master-v3 \
+DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED="master-v2=${MASTER_KEY_V2}" \
+DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=true \
+  bash "${HOSTED_DEPLOY}" render
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=3'
+assert_line "${LIFECYCLE_ENV_FILE}" "DOLLHOUSE_MASTER_ENCRYPTION_KEY=${MASTER_KEY_V3}"
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID=master-v3'
+assert_line "${LIFECYCLE_ENV_FILE}" "DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED=master-v2=${MASTER_KEY_V2}"
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=true'
+
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED='' \
+DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=false \
+  bash "${HOSTED_DEPLOY}" render
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED='
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=false'
+
+GENERATION_ROLLBACK_OUTPUT="${TMP_ROOT}/generation-rollback.out"
+LIFECYCLE_ENV_BEFORE_REJECTION="$(cat "${LIFECYCLE_ENV_FILE}")"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+  DOLLHOUSE_AUTH_METHODS=local-password \
+  DOLLHOUSE_AUTH_GENERATION=2 \
+    bash "${HOSTED_DEPLOY}" render > "${GENERATION_ROLLBACK_OUTPUT}" 2>&1; then
+  fail "authorization generation rollback unexpectedly succeeded"
+fi
+assert_contains "${GENERATION_ROLLBACK_OUTPUT}" 'DOLLHOUSE_AUTH_GENERATION cannot move backwards from 3 to 2'
+assert_line "${LIFECYCLE_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=3'
+[[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+  fail "rejected generation rollback mutated .env.production"
+
+GENERATION_OVERFLOW_OUTPUT="${TMP_ROOT}/generation-overflow.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+  DOLLHOUSE_AUTH_GENERATION=18446744073709551617 \
+    bash "${HOSTED_DEPLOY}" render > "${GENERATION_OVERFLOW_OUTPUT}" 2>&1; then
+  fail "authorization generation integer overflow unexpectedly succeeded"
+fi
+assert_contains "${GENERATION_OVERFLOW_OUTPUT}" \
+  'DOLLHOUSE_AUTH_GENERATION must be a positive safe integer'
+[[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+  fail "rejected generation overflow mutated .env.production"
+
+ROTATION_REJECTION_OUTPUT="${TMP_ROOT}/rotation-rejection.out"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+  DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID=master-v4 \
+    bash "${HOSTED_DEPLOY}" render > "${ROTATION_REJECTION_OUTPUT}" 2>&1; then
+  fail "master-key ID-only rotation unexpectedly succeeded"
+fi
+assert_contains "${ROTATION_REJECTION_OUTPUT}" \
+  'DOLLHOUSE_MASTER_ENCRYPTION_KEY and DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID must rotate together'
+[[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+  fail "rejected ID-only rotation mutated .env.production"
+
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+  DOLLHOUSE_MASTER_ENCRYPTION_KEY="${MASTER_KEY_V4}" \
+  DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID=master-v4 \
+  DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED='' \
+    bash "${HOSTED_DEPLOY}" render > "${ROTATION_REJECTION_OUTPUT}" 2>&1; then
+  fail "master-key rotation without retained previous key unexpectedly succeeded"
+fi
+assert_contains "${ROTATION_REJECTION_OUTPUT}" \
+  "master-key rotation requires the previous key 'master-v3'"
+[[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+  fail "rejected unsafe rotation mutated .env.production"
+
+OVERSIZED_KEY_ID="$(printf '%0256d' 0 | tr '0' 'k')"
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+  DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID="${OVERSIZED_KEY_ID}" \
+    bash "${HOSTED_DEPLOY}" render > "${ROTATION_REJECTION_OUTPUT}" 2>&1; then
+  fail "oversized active master-key ID unexpectedly succeeded"
+fi
+assert_contains "${ROTATION_REJECTION_OUTPUT}" 'must be at most 255 UTF-8 bytes'
+[[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+  fail "rejected oversized key ID mutated .env.production"
+
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+  DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED="${OVERSIZED_KEY_ID}=${MASTER_KEY_V2}" \
+    bash "${HOSTED_DEPLOY}" render > "${ROTATION_REJECTION_OUTPUT}" 2>&1; then
+  fail "oversized retained master-key ID unexpectedly succeeded"
+fi
+assert_contains "${ROTATION_REJECTION_OUTPUT}" 'retained master-key ID must be at most 255 UTF-8 bytes'
+[[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+  fail "rejected oversized retained key ID mutated .env.production"
+
+for INVALID_KEY_ID in 'master key' "master-\$(id)" 'master;id' 'master,key' 'master=key' 'master-é'; do
+  if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+    DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID="${INVALID_KEY_ID}" \
+      bash "${HOSTED_DEPLOY}" render > "${ROTATION_REJECTION_OUTPUT}" 2>&1; then
+    fail "non-portable active master-key ID unexpectedly succeeded: ${INVALID_KEY_ID}"
+  fi
+  assert_contains "${ROTATION_REJECTION_OUTPUT}" 'must be nonempty and use only ASCII letters'
+  [[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+    fail "rejected non-portable active key ID mutated .env.production"
+
+  if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+    DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED="${INVALID_KEY_ID}=${MASTER_KEY_V2}" \
+      bash "${HOSTED_DEPLOY}" render > "${ROTATION_REJECTION_OUTPUT}" 2>&1; then
+    fail "non-portable retained master-key ID unexpectedly succeeded: ${INVALID_KEY_ID}"
+  fi
+  case "${INVALID_KEY_ID}" in
+    *,*) assert_contains "${ROTATION_REJECTION_OUTPUT}" "entries must be 'keyId=base64key'" ;;
+    *=*) assert_contains "${ROTATION_REJECTION_OUTPUT}" 'must be a base64-encoded 32-byte key' ;;
+    *) assert_contains "${ROTATION_REJECTION_OUTPUT}" 'retained master-key ID must be nonempty and use only ASCII letters' ;;
+  esac
+  [[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+    fail "rejected non-portable retained key ID mutated .env.production"
+done
+
+BOUNDARY_DEPLOY_DIR="${TMP_ROOT}/boundary-key-id-deploy"
+BOUNDARY_ENV_FILE="${BOUNDARY_DEPLOY_DIR}/.env.production"
+BOUNDARY_KEY_ID="$(printf '%0251d' 0 | tr '0' 'a')._:-"
+BOUNDARY_RETIRED_KEY_ID="$(printf '%0251d' 0 | tr '0' 'r')._:-"
+DOLLHOUSE_HOSTED_DEPLOY_DIR="${BOUNDARY_DEPLOY_DIR}" \
+DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_ID=dummy-client \
+DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET=dummy-secret \
+DOLLHOUSE_MASTER_ENCRYPTION_KEY="${MASTER_KEY_V2}" \
+DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID="${BOUNDARY_KEY_ID}" \
+DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED="${BOUNDARY_RETIRED_KEY_ID}=${MASTER_KEY_V3}" \
+  bash "${HOSTED_DEPLOY}" render
+[[ "${#BOUNDARY_KEY_ID}" == "255" ]] || fail "boundary master-key ID fixture should be 255 bytes"
+[[ "${#BOUNDARY_RETIRED_KEY_ID}" == "255" ]] || fail "boundary retained-key ID fixture should be 255 bytes"
+assert_line "${BOUNDARY_ENV_FILE}" "DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID=${BOUNDARY_KEY_ID}"
+assert_line "${BOUNDARY_ENV_FILE}" \
+  "DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED=${BOUNDARY_RETIRED_KEY_ID}=${MASTER_KEY_V3}"
+
+if DOLLHOUSE_HOSTED_DEPLOY_DIR="${LIFECYCLE_DEPLOY_DIR}" \
+  DOLLHOUSE_AUTH_GENERATION=4 \
+  DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP=eventually \
+    bash "${HOSTED_DEPLOY}" render > "${ROTATION_REJECTION_OUTPUT}" 2>&1; then
+  fail "invalid rewrap maintenance flag unexpectedly succeeded"
+fi
+assert_contains "${ROTATION_REJECTION_OUTPUT}" \
+  'DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP must be true or false'
+[[ "$(cat "${LIFECYCLE_ENV_FILE}")" == "${LIFECYCLE_ENV_BEFORE_REJECTION}" ]] || \
+  fail "rejected maintenance controls mutated .env.production"
 
 first_postgres_password="$(env_value POSTGRES_PASSWORD "${ENV_FILE}")"
 first_cookie_secret="$(env_value DOLLHOUSE_COOKIE_SIGNING_SECRET "${ENV_FILE}")"

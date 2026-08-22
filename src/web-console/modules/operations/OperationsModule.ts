@@ -34,6 +34,11 @@ import {
 } from './OperationsPrivacyProjectors.js';
 import type { ISystemMetricsSource } from './SystemMetricsSource.js';
 import type { MetricQueryOptions, MetricQueryResult } from '../../../metrics/types.js';
+import type { IAccountAdminMutationTransactionRunner } from '../account-admin/AccountAdminMutationTransaction.js';
+import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
+import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
+import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
+import type { ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
 
 const OPERATE_CAPABILITY = 'console:admin:operate';
 const OPERATION_AUDIT_IDS = [
@@ -65,6 +70,7 @@ export interface OperationsModuleOptions {
   readonly healthChecks: OperationsHealthChecks;
   readonly telemetry: IConsoleTelemetryQuery;
   readonly operatorConfigStore: IOperatorConfigStore;
+  readonly transactionRunner: IAccountAdminMutationTransactionRunner;
   readonly operatorConfigDefinitions?: readonly OperatorConfigSettingDefinition[];
   /** In-process System A metrics sink; absent when metrics collection is off. */
   readonly systemMetrics?: ISystemMetricsSource;
@@ -108,7 +114,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         privacyProjector: projectOperatorConfigSetting,
         handler: req => configService.getConfig(firstString(req.params.key) ?? ''),
       },
-      {
+      transactionalOperationRoute({
         method: 'PUT',
         path: '/api/v1/admin/operate/config/:key',
         audience: 'admin',
@@ -118,12 +124,7 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
         idempotency: 'required',
         auditOperation: 'operate.config.update',
         privacyProjector: projectOperatorConfigSetting,
-        handler: req => configService.updateConfig({
-          key: firstString(req.params.key) ?? '',
-          ifMatch: firstString(req.headers['if-match']),
-          body: req.body,
-        }),
-      },
+      }, (req, route) => updateOperatorConfig(req, route, configService, options.transactionRunner, resolveNow)),
       {
         method: 'GET',
         path: '/api/v1/admin/operate/health',
@@ -283,6 +284,78 @@ export function createOperationsModule(options: OperationsModuleOptions): Consol
     ],
     auditOperations: OPERATION_AUDIT_IDS.map(id => ({ id })),
   };
+}
+
+function transactionalOperationRoute(
+  definition: Omit<ConsoleRouteDefinition, 'auditExecution' | 'handler'>,
+  handler: (req: ConsoleRequest, route: ConsoleRouteDefinition) => Promise<ConsoleHandlerResult>,
+): ConsoleRouteDefinition {
+  let route!: ConsoleRouteDefinition;
+  route = {
+    ...definition,
+    auditExecution: 'handler_transaction',
+    handler: req => handler(req, route),
+  };
+  return route;
+}
+
+async function updateOperatorConfig(
+  req: ConsoleRequest,
+  route: ConsoleRouteDefinition,
+  service: OperatorConfigurationService,
+  transactionRunner: IAccountAdminMutationTransactionRunner,
+  now: () => Date,
+): Promise<ConsoleHandlerResult> {
+  const key = firstString(req.params.key) ?? '';
+  return transactionRunner.run(async tx => {
+    const transactionalStore: IOperatorConfigStore = {
+      load: () => tx.loadOperatorConfig(),
+      save: (config, options) => tx.saveOperatorConfig(config, options),
+    };
+    const result = await service.updateConfig(operatorConfigUpdateInput(req), transactionalStore);
+    const audit = operationAuditResult(result);
+    await tx.writeAdminAuditEvent(buildConsoleAdminAuditEvent(
+      route,
+      route.auditOperation ?? '',
+      req,
+      audit.result,
+      audit.errorCode,
+      now(),
+      {
+        resourceKind: 'operator_config',
+        resourceId: key || null,
+        argsRedacted: { key },
+        resultDetailRedacted: null,
+      },
+    ));
+    return result;
+  }, requireConsoleAuthentication(req));
+}
+
+function operatorConfigUpdateInput(req: ConsoleRequest) {
+  return {
+    key: firstString(req.params.key) ?? '',
+    ifMatch: firstString(req.headers['if-match']),
+    body: req.body,
+  };
+}
+
+function operationAuditResult(result: ConsoleHandlerResult): {
+  readonly result: ConsoleAdminAuditResult;
+  readonly errorCode: string | null;
+} {
+  if (result.status >= 200 && result.status < 300) return { result: 'approved', errorCode: null };
+  const errorCode = extractProblemCode(result.body);
+  if (result.status === 409 || result.status === 412) return { result: 'conflict', errorCode };
+  if (result.status === 404) return { result: 'failed', errorCode: errorCode ?? 'not_found' };
+  if (result.status >= 400 && result.status < 500) return { result: 'rejected', errorCode };
+  return { result: 'failed', errorCode: errorCode ?? 'internal_error' };
+}
+
+function extractProblemCode(body: unknown): string | null {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+  const code = (body as { readonly code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
 }
 
 // Reads the in-process System A sink. When metrics collection is disabled the

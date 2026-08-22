@@ -20,6 +20,7 @@ export const TEST_CACHE_DIR = path.join(TEST_BASE_DIR, 'cache');
 const TEST_DB_NAME = 'dollhousemcp_test';
 const ADMIN_URL = 'postgres://dollhouse:dollhouse@localhost:5432/postgres';
 const TEST_DB_ADMIN_URL = `postgres://dollhouse:dollhouse@localhost:5432/${TEST_DB_NAME}`;
+const DATABASE_REQUIRED = process.env.DOLLHOUSE_REQUIRE_TEST_DATABASE === '1';
 
 export default async function globalSetup() {
   console.log('\n🔧 Setting up integration test environment...\n');
@@ -115,6 +116,9 @@ export default async function globalSetup() {
     console.log(`✅ Test database '${TEST_DB_NAME}' created and migrated`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
+    if (DATABASE_REQUIRED) {
+      throw new Error(`Required PostgreSQL integration setup failed: ${msg}`, { cause: err });
+    }
     console.warn(`⚠️  Test database setup skipped (Postgres not available: ${msg})`);
     console.warn('   DB integration tests will skip gracefully.\n');
   }

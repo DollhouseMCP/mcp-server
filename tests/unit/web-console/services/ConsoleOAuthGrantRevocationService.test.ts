@@ -87,6 +87,24 @@ describe('ConsoleOAuthGrantRevocationService', () => {
     expect(new Set(revokedGrantIds).size).toBe(3);
   });
 
+  it('revokes and deduplicates every grant family for one unlinked subject', async () => {
+    const revokedGrantIds: string[] = [];
+    const service = new ConsoleOAuthGrantRevocationService(
+      new InMemoryConsoleOAuthSubjectResolver(),
+      authStorage({
+        grantsBySub: new Map([['github_detached', ['grant-a', 'grant-a', 'grant-b']]]),
+        revokedGrantIds,
+      }),
+    );
+
+    await expect(service.revokeSubjectGrants('github_detached', REVOKED_AT)).resolves.toEqual({
+      sub: 'github_detached',
+      grantsDiscovered: 2,
+      grantsRevoked: 2,
+    });
+    expect(revokedGrantIds).toEqual(['grant-a', 'grant-b']);
+  });
+
   it('returns zero counts when the principal has no linked subjects or a linked subject has no grants', async () => {
     const service = new ConsoleOAuthGrantRevocationService(
       new InMemoryConsoleOAuthSubjectResolver(),

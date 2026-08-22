@@ -1,14 +1,19 @@
 import * as path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 
 import type { AgentState } from '../elements/agents/types.js';
+import { AGENT_LIMITS } from '../elements/agents/constants.js';
 import { ElementType } from '../portfolio/types.js';
 import type { FileLockManager } from '../security/fileLockManager.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import type { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { SerializationService } from '../services/SerializationService.js';
+import { SECURITY_LIMITS } from '../security/constants.js';
 import { logger } from '../utils/logger.js';
+import { withFilesystemInterprocessGuard } from '../security/filesystemInterprocessGuard.js';
 import type {
   AgentStateKey,
+  AgentStateDeleteOptions,
   AgentStateLoadOptions,
   AgentStateReclaimOptions,
   AgentStateSaveOptions,
@@ -16,7 +21,7 @@ import type {
 } from './IAgentStateStore.js';
 
 export const AGENT_STATE_FILE_EXTENSION = '.state.yaml';
-export const AGENT_STATE_MAX_YAML_SIZE = 64 * 1024;
+export const AGENT_STATE_MAX_YAML_SIZE = SECURITY_LIMITS.MAX_YAML_LENGTH;
 
 export interface FileAgentStateStoreDeps {
   stateDir: string | (() => string);
@@ -30,6 +35,11 @@ export interface FileAgentStateStoreDeps {
 export class FileAgentStateStore implements IAgentStateStore {
   private readonly stateDirProvider: () => string;
   private readonly maxYamlSize: number;
+  private readonly stateRevisions = new WeakMap<AgentState, string>();
+  private readonly observedRevisionByName = new Map<string, {
+    readonly revision: string;
+    readonly version: number;
+  }>();
 
   constructor(private readonly deps: FileAgentStateStoreDeps) {
     const stateDir = deps.stateDir;
@@ -56,8 +66,18 @@ export class FileAgentStateStore implements IAgentStateStore {
         source: 'FileAgentStateStore.load',
       });
 
-      const state = result.data as AgentState;
+      const parsed = result.data as Record<string, unknown>;
+      const revision = typeof parsed._storageRevision === 'string'
+        ? parsed._storageRevision
+        : createHash('sha256').update(content, 'utf8').digest('hex');
+      const state = { ...parsed } as unknown as AgentState;
+      delete (state as AgentState & { _storageRevision?: string })._storageRevision;
       this.normalizeLoadedState(state);
+      this.stateRevisions.set(state, revision);
+      this.observedRevisionByName.set(normalizedName, {
+        revision,
+        version: state.stateVersion ?? 0,
+      });
       if (!options.strict) {
         this.deps.stateCache.set(normalizedName, state);
       }
@@ -68,6 +88,11 @@ export class FileAgentStateStore implements IAgentStateStore {
           // A missing state file is valid only when its parent directory is
           // reachable. Otherwise ENOENT may describe a failed/unmounted store.
           await this.deps.fileOperations.stat(this.stateDir);
+          // A strict read is an explicit observation of durable absence. Clear
+          // the name-level baseline so a fresh object can be created, while
+          // object-level revision tokens continue fencing stale resurrection.
+          this.observedRevisionByName.delete(normalizedName);
+          this.deps.stateCache.delete(normalizedName);
         }
         return null;
       }
@@ -105,19 +130,37 @@ export class FileAgentStateStore implements IAgentStateStore {
     const filePath = path.join(this.stateDir, `${normalizedName}${AGENT_STATE_FILE_EXTENSION}`);
 
     await this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () => {
+      await this.withCrossProcessStateLock(normalizedName, async () => {
       // load() does not acquire an `agent-state:*` lock. Its disk read uses
       // FileOperationsService's distinct `file:<absolute path>` namespace, so
       // this is not a reentrant acquisition of the transaction lock.
-      const existingState = await this.load(key, { strict: options.requireExisting });
+      // The cross-process guard serializes writers, but it cannot make this
+      // process's cache current. Reread an existing durable state file while
+      // holding the guard so expectedVersion fences writes from other server
+      // processes. A first save has no document to parse yet.
+      const stateFileExists = await this.deps.fileOperations.exists(filePath);
+      const previouslyObservedRevision = this.observedRevisionByName.get(normalizedName);
+      const expectedRevision = this.stateRevisions.get(state)
+        ?? (previouslyObservedRevision?.version === expectedVersion
+          ? previouslyObservedRevision.revision
+          : undefined);
+      const existingState = stateFileExists
+        ? await this.load(key, { strict: true })
+        : null;
+      this.restoreObservedRevision(normalizedName, previouslyObservedRevision);
+      const existingRevision = existingState ? this.stateRevisions.get(existingState) : undefined;
       if (options.requireExisting && !existingState) {
         throw new Error(`Agent state disappeared while updating '${key.name}'`);
       }
       const existingVersion = existingState?.stateVersion ?? 0;
       const incomingVersionConflict = state.stateVersion !== undefined
         && state.stateVersion !== expectedVersion;
-      const durableVersionConflict = options.requireExisting
+      const durableVersionConflict = existingState
         ? existingVersion !== expectedVersion
-        : existingState?.stateVersion !== undefined && existingVersion > expectedVersion;
+          || (expectedRevision !== undefined && existingRevision !== expectedRevision)
+        : expectedVersion !== 0
+          || previouslyObservedRevision !== undefined
+          || expectedRevision !== undefined;
       const hasVersionConflict = incomingVersionConflict || durableVersionConflict;
       if (hasVersionConflict) {
         logger.warn(`State version conflict detected for agent ${key.name}`, {
@@ -144,16 +187,28 @@ export class FileAgentStateStore implements IAgentStateStore {
         );
       }
 
-      state.stateVersion = expectedVersion + 1;
-      const serializedState = this.prepareStateForSerialization(state);
+      const nextVersion = expectedVersion + 1;
+      const stateForPersistence: AgentState = { ...state, stateVersion: nextVersion };
+      const nextRevision = randomUUID();
+      const serializedState = this.prepareStateForSerialization(stateForPersistence, nextRevision);
       const yamlContent = this.deps.serializationService.dumpYaml(serializedState, {
         schema: 'json',
         noRefs: true,
         sortKeys: true,
       });
 
-      this.deps.serializationService.validateSize(yamlContent, this.maxYamlSize, 'Agent state');
-      await this.deps.fileOperations.writeFile(filePath, yamlContent, { encoding: 'utf-8' });
+      const persistedStateLimit = Math.min(this.maxYamlSize, AGENT_LIMITS.MAX_STATE_SIZE);
+      this.deps.serializationService.validateSize(yamlContent, persistedStateLimit, 'Agent state');
+      await this.deps.fileOperations.writeFile(filePath, yamlContent, {
+        encoding: 'utf-8',
+        durable: true,
+      });
+      state.stateVersion = nextVersion;
+      this.stateRevisions.set(state, nextRevision);
+      this.observedRevisionByName.set(normalizedName, {
+        revision: nextRevision,
+        version: nextVersion,
+      });
       this.deps.stateCache.set(normalizedName, state);
 
       logger.debug('Agent state saved successfully', {
@@ -162,26 +217,62 @@ export class FileAgentStateStore implements IAgentStateStore {
         stateVersion: state.stateVersion,
         goalCount: state.goals?.length ?? 0,
       });
+      });
     });
 
     return state.stateVersion!;
   }
 
-  async delete(key: AgentStateKey): Promise<void> {
+  async delete(
+    key: AgentStateKey,
+    options: AgentStateDeleteOptions = {},
+  ): Promise<boolean> {
     const normalizedName = this.normalizeFilename(key.name);
     const statePath = path.join(this.stateDir, `${normalizedName}${AGENT_STATE_FILE_EXTENSION}`);
-
-    try {
-      await this.deps.fileOperations.deleteFile(statePath, ElementType.AGENT, {
-        source: 'AgentManager.delete (state file)',
-      });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        throw error;
-      }
-    }
-
-    this.deps.stateCache.delete(normalizedName);
+    return this.deps.fileLockManager.withLock(`agent-state:${normalizedName}`, async () =>
+      this.withCrossProcessStateLock(normalizedName, async () => {
+        const strict = options.requireExisting === true || options.expectedVersion !== undefined;
+        const expectedRevision = this.observedRevisionByName.get(normalizedName);
+        const existing = strict ? await this.load(key, { strict: true }) : null;
+        this.restoreObservedRevision(normalizedName, expectedRevision);
+        if (!existing) {
+          if (options.requireExisting) {
+            throw new Error(`Agent state disappeared while deleting '${key.name}'`);
+          }
+          if (strict) {
+            this.deps.stateCache.delete(normalizedName);
+            return false;
+          }
+        }
+        if (
+          options.expectedVersion !== undefined &&
+          (existing === null
+            || existing.stateVersion !== options.expectedVersion
+            || (expectedRevision !== undefined
+              && (expectedRevision.version !== options.expectedVersion
+                || this.stateRevisions.get(existing) !== expectedRevision.revision)))
+        ) {
+          throw new Error(
+            `State version conflict: current version is ${existing?.stateVersion ?? 0}, ` +
+            `but attempted to delete version ${options.expectedVersion}.`,
+          );
+        }
+        try {
+          await this.deps.fileOperations.deleteFile(statePath, ElementType.AGENT, {
+            source: 'AgentManager.delete (state file)',
+            durable: true,
+          });
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          this.deps.stateCache.delete(normalizedName);
+          this.observedRevisionByName.delete(normalizedName);
+          return false;
+        }
+        this.deps.stateCache.delete(normalizedName);
+        this.observedRevisionByName.delete(normalizedName);
+        return true;
+      }),
+    );
   }
 
   async warnIfOrphanedStateFiles(): Promise<void> {
@@ -210,6 +301,19 @@ export class FileAgentStateStore implements IAgentStateStore {
     await this.deps.fileOperations.createDirectory(this.stateDir);
   }
 
+  private async withCrossProcessStateLock<T>(
+    normalizedName: string,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    const lockDir = path.join(this.stateDir, '.locks');
+    const lockPath = path.join(lockDir, `${normalizedName}.guard`);
+    await this.deps.fileOperations.createDirectory(lockDir);
+    return withFilesystemInterprocessGuard(lockPath, operation, {
+      timeoutMs: 5_000,
+      retryMs: 25,
+    });
+  }
+
   private normalizeFilename(name: string): string {
     if (!name || name.trim().length === 0) {
       return 'unnamed';
@@ -224,9 +328,10 @@ export class FileAgentStateStore implements IAgentStateStore {
       .replaceAll(/^-+|-+$/g, ''); // NOSONAR — anchored alternation, each branch has a single quantifier; no overlap, no backtracking
   }
 
-  private prepareStateForSerialization(state: AgentState): Record<string, unknown> {
+  private prepareStateForSerialization(state: AgentState, storageRevision: string): Record<string, unknown> {
     return {
       ...state,
+      _storageRevision: storageRevision,
       lastActive: state.lastActive instanceof Date ? state.lastActive.toISOString() : state.lastActive,
       sessionCount: String(state.sessionCount ?? 0),
       stateVersion: state.stateVersion === undefined ? '1' : String(state.stateVersion),
@@ -245,6 +350,17 @@ export class FileAgentStateStore implements IAgentStateStore {
         confidence: decision.confidence === undefined ? undefined : String(decision.confidence),
       })),
     };
+  }
+
+  private restoreObservedRevision(
+    normalizedName: string,
+    revision: { readonly revision: string; readonly version: number } | undefined,
+  ): void {
+    if (revision === undefined) {
+      this.observedRevisionByName.delete(normalizedName);
+    } else {
+      this.observedRevisionByName.set(normalizedName, revision);
+    }
   }
 
   private normalizeLoadedState(state: AgentState): void {

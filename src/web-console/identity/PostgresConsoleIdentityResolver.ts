@@ -2,7 +2,17 @@ import { and, eq, isNull } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
-import { authAccounts, userAdminRoles, users } from '../../database/schema/index.js';
+import {
+  lockAuthAuthorityMutationsWithTx,
+  lockAuthPrincipalsWithTx,
+} from '../../database/authPrincipalLock.js';
+import {
+  authAccounts,
+  authSubjectRevocationFences,
+  userAdminRoles,
+  users,
+} from '../../database/schema/index.js';
+import { hashAuthSubject } from '../../security/authSubjectRevocation.js';
 import type {
   ConsolePrincipalSecurityState,
   IConsoleIdentityResolver,
@@ -13,6 +23,12 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
 
   async resolveEnabledPrincipal(sub: string): Promise<ConsolePrincipalSecurityState | null> {
     return withSystemContext(this.db, async (tx) => {
+      await lockAuthPrincipalsWithTx(tx, [sub]);
+      const fences = await tx.select({ subjectHash: authSubjectRevocationFences.subjectHash })
+        .from(authSubjectRevocationFences)
+        .where(eq(authSubjectRevocationFences.subjectHash, hashAuthSubject(sub)))
+        .limit(1);
+      if (fences.length > 0) return null;
       const rows = await tx.select({
         sub: authAccounts.sub,
         userId: users.id,
@@ -21,7 +37,11 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
       })
         .from(authAccounts)
         .innerJoin(users, eq(authAccounts.userId, users.id))
-        .where(and(eq(authAccounts.sub, sub), isNull(users.disabledAt)))
+        .where(and(
+          eq(authAccounts.sub, sub),
+          isNull(users.disabledAt),
+          isNull(users.deletedAt),
+        ))
         .limit(1);
       if (rows.length === 0) return null;
       const principal = rows[0];
@@ -45,6 +65,13 @@ export class PostgresConsoleIdentityResolver implements IConsoleIdentityResolver
 
   async linkAccount(sub: string, displayName?: string): Promise<void> {
     await withSystemContext(this.db, async (tx) => {
+      await lockAuthAuthorityMutationsWithTx(tx);
+      await lockAuthPrincipalsWithTx(tx, [sub]);
+      const fences = await tx.select({ subjectHash: authSubjectRevocationFences.subjectHash })
+        .from(authSubjectRevocationFences)
+        .where(eq(authSubjectRevocationFences.subjectHash, hashAuthSubject(sub)))
+        .limit(1);
+      if (fences.length > 0) return;
       const account = await tx
         .select({ userId: authAccounts.userId })
         .from(authAccounts)

@@ -6,7 +6,7 @@
  * in process RAM and were lost on restart.
  *
  * These tests pin the corrected behavior:
- * - serialized memories up to MAX_YAML_SIZE (256KB, the load-path limit) save fine
+ * - serialized memories up to MAX_YAML_SIZE (the load-path limit) save fine
  * - memories past MAX_YAML_SIZE are rejected with an actionable error
  * - assertPersistable() reports the same verdict as save() without writing
  */
@@ -38,7 +38,7 @@ async function buildMemoryOfSize(name: string, targetBytes: number): Promise<Mem
     description: `Sized test memory targeting ${targetBytes} bytes`,
   }, metadataService);
 
-  // ~16KB of plain prose per entry — well under MAX_ENTRY_SIZE (100KB) and
+  // ~16KB of plain prose per entry — well under MAX_ENTRY_SIZE and
   // survives sanitization unchanged.
   const chunk = 'research finding lorem ipsum dolor sit amet consectetur adipiscing elit '.padEnd(80, 'x');
   const entryContent = chunk.repeat(200);
@@ -113,7 +113,7 @@ describe('MemoryManager save size limits (#2329)', () => {
     const memory = await buildMemoryOfSize('Oversized Memory 2329', MEMORY_CONSTANTS.MAX_YAML_SIZE + 32 * 1024);
 
     await expect(manager.save(memory, 'oversized-memory-2329.yaml'))
-      .rejects.toThrow('maximum serialized size');
+      .rejects.toThrow(/maximum serialized size|exceeds limit/);
 
     await expect(fs.stat(path.join(memoriesDir, 'oversized-memory-2329.yaml')))
       .rejects.toThrow();
@@ -134,6 +134,18 @@ describe('MemoryManager save size limits (#2329)', () => {
 
     await expect(manager.assertPersistable(memory))
       .rejects.toThrow('maximum serialized size');
+  });
+
+  it('enforces the serialized memory ceiling in UTF-8 bytes', () => {
+    const multibyteYaml = 'é'.repeat(Math.floor(MEMORY_CONSTANTS.MAX_YAML_SIZE / 2) + 1);
+    expect(multibyteYaml.length).toBeLessThan(MEMORY_CONSTANTS.MAX_YAML_SIZE);
+    expect(Buffer.byteLength(multibyteYaml, 'utf8')).toBeGreaterThan(MEMORY_CONSTANTS.MAX_YAML_SIZE);
+
+    const validate = manager as unknown as {
+      validateSerializedMemoryYaml(content: string): void;
+    };
+    expect(() => validate.validateSerializedMemoryYaml(multibyteYaml))
+      .toThrow('maximum serialized size');
   });
 
   it('does not brick a memory when historical prose matches a content rule', async () => {

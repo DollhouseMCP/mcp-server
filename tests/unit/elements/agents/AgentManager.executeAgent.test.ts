@@ -1035,6 +1035,10 @@ Minimal agent with no activates.`;
       }
 
       const state = agent.getState();
+      fileStore.set(
+        path.join(portfolioPath, 'agents', '.state', 'task-manager.state.yaml'),
+        'state-present',
+      );
 
       // Mock file reads
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
@@ -1114,6 +1118,10 @@ sessionCount: 1
       }
 
       const state = agent.getState();
+      fileStore.set(
+        path.join(portfolioPath, 'agents', '.state', 'task-manager-under-limit.state.yaml'),
+        'state-present',
+      );
 
       // Mock file reads
       fileOperationsService.readFile.mockImplementation(async (filePath: string) => {

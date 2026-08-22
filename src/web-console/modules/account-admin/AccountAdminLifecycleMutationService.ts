@@ -6,7 +6,19 @@ import type {
   ConsolePrincipalSummary,
   IConsoleAccountAdminStore,
 } from '../../stores/IConsoleAccountAdminStore.js';
-import type { IAccountAdminMutationTransactionRunner } from './AccountAdminMutationTransaction.js';
+import type {
+  AccountAdminMutationTransactionContext,
+  IAccountAdminMutationTransactionRunner,
+} from './AccountAdminMutationTransaction.js';
+import type {
+  ConsoleOAuthGrantRevocationSummary,
+  IOAuthGrantRevocationService,
+} from '../../services/oauth/IConsoleOAuthGrantRevocationService.js';
+import type { IConsoleSecurityInvalidationStore } from '../../services/invalidation/IConsoleSecurityInvalidationStore.js';
+import { waitForSecurityInvalidationAcknowledgements } from '../../services/invalidation/ConsoleSecurityInvalidationAcknowledgement.js';
+import type { IConsoleSessionStore } from '../../stores/IConsoleSessionStore.js';
+import type { RuntimeTerminationCommand } from '../../services/runtime/IRuntimeSessionControlStore.js';
+import { rolesActorMayNotManage } from './AccountAdminRoleAuthority.js';
 import { serializeAccountPrincipalLifecycle } from './AccountAdminDtos.js';
 import {
   emptyRuntimeTerminationSummary,
@@ -18,7 +30,12 @@ import {
 export interface AccountAdminLifecycleMutationServiceOptions {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly transactionRunner: IAccountAdminMutationTransactionRunner;
+  readonly sessionStore: Pick<IConsoleSessionStore, 'revokeForUser'>;
+  readonly securityInvalidationStore?: Pick<IConsoleSecurityInvalidationStore,
+    'listLiveReplicaIds' | 'listAcknowledgedReplicaIds'> | null;
+  readonly invalidationAcknowledgementTimeoutMs?: number;
   readonly runtimeTerminationService?: AccountAdminRuntimeTerminationService | null;
+  readonly oauthGrantRevocationService?: IOAuthGrantRevocationService | null;
   readonly now?: () => Date;
 }
 
@@ -42,13 +59,39 @@ export class AccountAdminLifecycleMutationService {
       return problem(409, 'conflict', 'Conflict', 'User principal is already disabled.');
     }
 
+    let committedBefore = before;
     let disabledAuthzVersion = before.authzVersion;
+    let invalidationEventId: string | null = null;
     try {
-      await this.options.transactionRunner.run(async tx => {
+      const rejection = await this.options.transactionRunner.run(async tx => {
+        const lockedPrincipal = await tx.lockPrincipal(userId);
+        if (!lockedPrincipal) {
+          await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+            route, req, result: 'failed', errorCode: 'not_found', occurredAt, userId,
+            argsRedacted: { operation: 'disable' }, resultDetailRedacted: null,
+          }));
+          return problem(404, 'not_found', 'Not found', 'User principal was not found.');
+        }
+        if (lockedPrincipal.disabledAt) {
+          await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+            route, req, result: 'conflict', errorCode: 'conflict', occurredAt, userId,
+            argsRedacted: { operation: 'disable', already_disabled: true }, resultDetailRedacted: null,
+          }));
+          return problem(409, 'conflict', 'Conflict', 'User principal is already disabled.');
+        }
+        const unauthorizedRoles = rolesActorMayNotManage(req, lockedPrincipal.roles);
+        if (unauthorizedRoles.length > 0) {
+          await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+            route, req, result: 'rejected', errorCode: 'insufficient_role_authority', occurredAt, userId,
+            argsRedacted: { operation: 'disable', roles: unauthorizedRoles }, resultDetailRedacted: null,
+          }));
+          return insufficientRoleAuthorityProblem();
+        }
+        committedBefore = lockedPrincipal;
         const change = await tx.disablePrincipal({ userId, disabledAt: occurredAt });
         if (!change) throw new DisablePrincipalNoChangeError();
         disabledAuthzVersion = change.authzVersion;
-        await tx.appendSecurityInvalidationEvent({
+        const invalidationEvent = await tx.appendSecurityInvalidationEvent({
           kind: 'principal_disabled',
           urgency: 'acknowledged',
           userId,
@@ -60,6 +103,7 @@ export class AccountAdminLifecycleMutationService {
           createdAt: occurredAt,
           createdByUserId: actor.userId,
         });
+        invalidationEventId = invalidationEvent.eventId;
         await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
           route,
           req,
@@ -69,11 +113,13 @@ export class AccountAdminLifecycleMutationService {
           userId,
           argsRedacted: { operation: 'disable' },
           resultDetailRedacted: {
-            previousAuthzVersion: before.authzVersion,
+            previousAuthzVersion: lockedPrincipal.authzVersion,
             newAuthzVersion: change.authzVersion,
           },
         }));
-      });
+        return null;
+      }, actor);
+      if (rejection) return rejection;
     } catch (error) {
       if (error instanceof DisablePrincipalNoChangeError) {
         return this.handleDisableNoChange(req, route, userId);
@@ -81,19 +127,63 @@ export class AccountAdminLifecycleMutationService {
       throw error;
     }
 
-    const disabled = withLifecycleState(before, occurredAt, disabledAuthzVersion);
+    const disabled = withLifecycleState(committedBefore, occurredAt, disabledAuthzVersion);
+    let browserSessionsRevoked = 0;
+    let browserSessionRevocationFailed = false;
+    try {
+      browserSessionsRevoked = await this.options.sessionStore.revokeForUser(userId, occurredAt);
+    } catch {
+      browserSessionRevocationFailed = true;
+    }
+    const invalidationAcknowledged = !invalidationEventId || await waitForSecurityInvalidationAcknowledgements({
+      store: this.options.securityInvalidationStore,
+      eventId: invalidationEventId,
+      occurredAt,
+      timeoutMs: this.options.invalidationAcknowledgementTimeoutMs,
+    });
+    if (browserSessionRevocationFailed) {
+      return problem(
+        503,
+        'service_unavailable',
+        'Service unavailable',
+        'The principal is disabled, but browser-session revocation must be retried before re-enabling.',
+      );
+    }
+    if (!invalidationAcknowledged) {
+      return problem(
+        503,
+        'service_unavailable',
+        'Service unavailable',
+        'The principal is disabled, but cluster session invalidation has not yet been acknowledged.',
+      );
+    }
+    const oauthSummary = await this.revokePrincipalGrants(req, route, userId, occurredAt, 'disable');
     const runtimeSummary = await this.terminateRuntimeSessions(req, route, userId, actor.userId, 'disable');
-    if (runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0) {
+    if (!oauthSummary || runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0) {
       return {
         status: 503,
-        body: serializeAccountPrincipalLifecycle(disabled, runtimeRevocationSummary(runtimeSummary, disabledAuthzVersion)),
+        body: serializeAccountPrincipalLifecycle(
+          disabled,
+          runtimeRevocationSummary(
+            runtimeSummary,
+            disabledAuthzVersion,
+            browserSessionsRevoked,
+            oauthSummary?.oauthGrantFamiliesRevoked ?? 0,
+          ),
+        ),
       };
     }
     return {
       status: 200,
-      body: serializeAccountPrincipalLifecycle(disabled, runtimeSummary.requested > 0
-        ? runtimeRevocationSummary(runtimeSummary, disabledAuthzVersion)
-        : undefined),
+      body: serializeAccountPrincipalLifecycle(
+        disabled,
+        runtimeRevocationSummary(
+          runtimeSummary,
+          disabledAuthzVersion,
+          browserSessionsRevoked,
+          oauthSummary.oauthGrantFamiliesRevoked,
+        ),
+      ),
     };
   }
 
@@ -113,9 +203,95 @@ export class AccountAdminLifecycleMutationService {
       await this.writeAttemptAudit(req, route, 'conflict', 'conflict', userId, { already_enabled: true });
       return problem(409, 'conflict', 'Conflict', 'User principal is already enabled.');
     }
-
+    const unauthorizedRoles = rolesActorMayNotManage(req, before.roles);
+    if (unauthorizedRoles.length > 0) {
+      await this.writeAttemptAudit(req, route, 'rejected', 'insufficient_role_authority', userId, {
+        operation: 'enable', roles: unauthorizedRoles,
+      });
+      return insufficientRoleAuthorityProblem();
+    }
+    const runtimePreflight = await this.requestEnableRuntimeTermination(
+      req,
+      route,
+      userId,
+      actor,
+      occurredAt,
+    );
+    if ('status' in runtimePreflight) return runtimePreflight;
+    const runtimeSummary = await this.awaitEnableRuntimeTermination(
+      req,
+      route,
+      userId,
+      runtimePreflight.commands,
+    );
+    if (runtimeSummary.timedOut > 0 || runtimeSummary.failed > 0) {
+      return problem(
+        503,
+        'service_unavailable',
+        'Service unavailable',
+        'MCP runtime sessions could not be terminated; the principal remains disabled.',
+      );
+    }
+    let committedBefore = before;
     let enabledAuthzVersion = before.authzVersion;
-    await this.options.transactionRunner.run(async tx => {
+    const rejection = await this.options.transactionRunner.run(async tx => {
+      const lockedPrincipal = await tx.lockPrincipal(userId);
+      if (!lockedPrincipal) {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'failed', errorCode: 'not_found', occurredAt, userId,
+          argsRedacted: { operation: 'enable' }, resultDetailRedacted: null,
+        }));
+        return problem(404, 'not_found', 'Not found', 'User principal was not found.');
+      }
+      if (!lockedPrincipal.disabledAt) {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'conflict', errorCode: 'conflict', occurredAt, userId,
+          argsRedacted: { operation: 'enable', already_enabled: true }, resultDetailRedacted: null,
+        }));
+        return problem(409, 'conflict', 'Conflict', 'User principal is already enabled.');
+      }
+      const unauthorizedRoles = rolesActorMayNotManage(req, lockedPrincipal.roles);
+      if (unauthorizedRoles.length > 0) {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'rejected', errorCode: 'insufficient_role_authority', occurredAt, userId,
+          argsRedacted: { operation: 'enable', roles: unauthorizedRoles }, resultDetailRedacted: null,
+        }));
+        return insufficientRoleAuthorityProblem();
+      }
+      const linkedSubjects = (await tx.listLinkedIdentities(userId)).map(identity => identity.sub);
+      try {
+        await this.revokeBrowserSessionsWithTx(tx, userId, occurredAt);
+      } catch {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'failed', errorCode: 'service_unavailable', occurredAt, userId,
+          argsRedacted: { operation: 'enable', phase: 'browser_session_revocation' },
+          resultDetailRedacted: null,
+        }));
+        return problem(
+          503,
+          'service_unavailable',
+          'Service unavailable',
+          'Browser sessions could not be revoked; the principal remains disabled.',
+        );
+      }
+      try {
+        for (const sub of linkedSubjects) {
+          await this.revokeSubjectGrantsWithTx(tx, sub, occurredAt);
+        }
+      } catch {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'failed', errorCode: 'service_unavailable', occurredAt, userId,
+          argsRedacted: { operation: 'enable', phase: 'oauth_grant_revocation' },
+          resultDetailRedacted: null,
+        }));
+        return problem(
+          503,
+          'service_unavailable',
+          'Service unavailable',
+          'OAuth credentials could not be revoked; the principal remains disabled.',
+        );
+      }
+      committedBefore = lockedPrincipal;
       const change = await tx.enablePrincipal({ userId, enabledAt: occurredAt });
       if (!change) throw new Error('enabled principal mutation did not update a row');
       enabledAuthzVersion = change.authzVersion;
@@ -137,15 +313,17 @@ export class AccountAdminLifecycleMutationService {
         userId,
         argsRedacted: { operation: 'enable' },
         resultDetailRedacted: {
-          previousAuthzVersion: before.authzVersion,
+          previousAuthzVersion: lockedPrincipal.authzVersion,
           newAuthzVersion: change.authzVersion,
         },
       }));
-    });
+      return null;
+    }, actor);
+    if (rejection) return rejection;
 
     return {
       status: 200,
-      body: serializeAccountPrincipalLifecycle(withLifecycleState(before, null, enabledAuthzVersion)),
+      body: serializeAccountPrincipalLifecycle(withLifecycleState(committedBefore, null, enabledAuthzVersion)),
     };
   }
 
@@ -206,6 +384,30 @@ export class AccountAdminLifecycleMutationService {
     return this.options.now?.() ?? new Date();
   }
 
+  private async revokeBrowserSessionsWithTx(
+    tx: AccountAdminMutationTransactionContext,
+    userId: string,
+    revokedAt: Date,
+  ): Promise<number> {
+    return tx.revokeBrowserSessionsForUser
+      ? tx.revokeBrowserSessionsForUser(userId, revokedAt)
+      : this.options.sessionStore.revokeForUser(userId, revokedAt);
+  }
+
+  private async revokeSubjectGrantsWithTx(
+    tx: AccountAdminMutationTransactionContext,
+    sub: string,
+    revokedAt: Date,
+  ): Promise<void> {
+    if (tx.revokeOAuthSubjectGrants) {
+      await tx.revokeOAuthSubjectGrants(sub);
+      return;
+    }
+    const revoke = this.options.oauthGrantRevocationService?.revokeSubjectGrants;
+    if (!revoke) throw new Error('OAuth subject grant revocation is unavailable');
+    await revoke.call(this.options.oauthGrantRevocationService, sub, revokedAt);
+  }
+
   private async terminateRuntimeSessions(
     req: ConsoleRequest,
     route: ConsoleRouteDefinition,
@@ -241,6 +443,118 @@ export class AccountAdminLifecycleMutationService {
         ...emptyRuntimeTerminationSummary(),
         failed: 1,
       };
+    }
+  }
+
+  private async requestEnableRuntimeTermination(
+    req: ConsoleRequest,
+    route: ConsoleRouteDefinition,
+    userId: string,
+    actor: ReturnType<typeof requireConsoleAuthentication>,
+    occurredAt: Date,
+  ): Promise<ConsoleHandlerResult | {
+    readonly commands: readonly Pick<RuntimeTerminationCommand, 'commandId'>[];
+  }> {
+    if (!this.options.runtimeTerminationService) return { commands: [] };
+    let commands: readonly Pick<RuntimeTerminationCommand, 'commandId'>[] = [];
+    const rejection = await this.options.transactionRunner.run(async tx => {
+      const lockedPrincipal = await tx.lockPrincipal(userId);
+      if (!lockedPrincipal) {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'failed', errorCode: 'not_found', occurredAt, userId,
+          argsRedacted: { operation: 'enable', phase: 'runtime_termination_request' },
+          resultDetailRedacted: null,
+        }));
+        return problem(404, 'not_found', 'Not found', 'User principal was not found.');
+      }
+      if (!lockedPrincipal.disabledAt) {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'conflict', errorCode: 'conflict', occurredAt, userId,
+          argsRedacted: {
+            operation: 'enable', phase: 'runtime_termination_request', already_enabled: true,
+          },
+          resultDetailRedacted: null,
+        }));
+        return problem(409, 'conflict', 'Conflict', 'User principal is already enabled.');
+      }
+      const unauthorizedRoles = rolesActorMayNotManage(req, lockedPrincipal.roles);
+      if (unauthorizedRoles.length > 0) {
+        await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+          route, req, result: 'rejected', errorCode: 'insufficient_role_authority', occurredAt, userId,
+          argsRedacted: {
+            operation: 'enable', phase: 'runtime_termination_request', roles: unauthorizedRoles,
+          },
+          resultDetailRedacted: null,
+        }));
+        return insufficientRoleAuthorityProblem();
+      }
+      const sessions = await tx.listAllRuntimePresenceByUser(userId, occurredAt);
+      commands = await Promise.all(sessions.map(session => tx.createRuntimeTerminationCommand({
+        sessionId: session.sessionId,
+        targetReplicaId: session.replicaId,
+        reason: 'admin_disabled',
+        requestedAt: occurredAt,
+        requestedBy: { kind: 'admin', userId: actor.userId },
+      })));
+      await tx.writeAdminAuditEvent(buildLifecycleAuditEvent({
+        route, req, result: 'approved', errorCode: null, occurredAt, userId,
+        argsRedacted: { operation: 'enable', phase: 'runtime_termination_request' },
+        resultDetailRedacted: { commandsCreated: commands.length },
+      }));
+      return null;
+    }, actor);
+    return rejection ?? { commands };
+  }
+
+  private async awaitEnableRuntimeTermination(
+    req: ConsoleRequest,
+    route: ConsoleRouteDefinition,
+    userId: string,
+    commands: readonly Pick<RuntimeTerminationCommand, 'commandId'>[],
+  ): Promise<AccountRuntimeTerminationSummary> {
+    if (!this.options.runtimeTerminationService) return emptyRuntimeTerminationSummary();
+    try {
+      const summary = await this.options.runtimeTerminationService.awaitTerminationCommands(commands);
+      await this.writeAttemptAudit(
+        req,
+        route,
+        summary.timedOut > 0 || summary.failed > 0 ? 'failed' : 'approved',
+        runtimeTerminationErrorCode(summary),
+        userId,
+        { operation: 'enable', phase: 'runtime_termination_acknowledgement' },
+      );
+      return summary;
+    } catch {
+      await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
+        operation: 'enable', phase: 'runtime_termination_acknowledgement',
+      });
+      return { ...emptyRuntimeTerminationSummary(), failed: 1 };
+    }
+  }
+
+  private async revokePrincipalGrants(
+    req: ConsoleRequest,
+    route: ConsoleRouteDefinition,
+    userId: string,
+    revokedAt: Date,
+    operation: 'disable' | 'enable',
+  ): Promise<ConsoleOAuthGrantRevocationSummary | null> {
+    const service = this.options.oauthGrantRevocationService;
+    if (!service) {
+      await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
+        operation,
+        phase: 'oauth_grant_revocation',
+      });
+      return null;
+    }
+    try {
+      return await service.revokePrincipalGrants({ userId, revokedAt });
+    } catch {
+      await this.writeAttemptAudit(req, route, 'failed', 'service_unavailable', userId, {
+        operation,
+        phase: 'oauth_grant_revocation',
+      });
+      return null;
     }
   }
 }
@@ -279,10 +593,15 @@ function withLifecycleState(
   };
 }
 
-function runtimeRevocationSummary(summary: AccountRuntimeTerminationSummary, authzVersion: number) {
+function runtimeRevocationSummary(
+  summary: AccountRuntimeTerminationSummary,
+  authzVersion: number,
+  browserSessionsRevoked: number,
+  oauthGrantFamiliesRevoked: number,
+) {
   return {
-    browser_sessions_revoked: 0,
-    mcp_oauth_grants_revoked: 0,
+    browser_sessions_revoked: browserSessionsRevoked,
+    mcp_oauth_grants_revoked: oauthGrantFamiliesRevoked,
     mcp_sessions_terminated: summary.terminated + summary.alreadyAbsent,
     mcp_sessions_termination_requested: summary.requested,
     mcp_sessions_termination_acknowledged: summary.acknowledged,
@@ -304,6 +623,15 @@ function problem(status: number, code: string, title: string, detail: string): C
       detail,
     },
   };
+}
+
+function insufficientRoleAuthorityProblem(): ConsoleHandlerResult {
+  return problem(
+    403,
+    'insufficient_role_authority',
+    'Forbidden',
+    'Actor cannot manage a principal whose active roles are outside their assigned capability tier.',
+  );
 }
 
 class DisablePrincipalNoChangeError extends Error {

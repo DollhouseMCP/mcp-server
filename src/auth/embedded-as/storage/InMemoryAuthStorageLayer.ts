@@ -21,6 +21,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../../../utils/logger.js';
 import { normalizeAuthAllowlistValue } from '../allowlistIdentity.js';
 import type {
@@ -110,6 +111,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   // ---- Audit (must-fix #21) ----
 
   async recordIdentityEvent(event: IdentityAuditEvent): Promise<void> {
+    if (event.eventId && this.auditEvents.some(existing => existing.eventId === event.eventId)) return;
     this.auditEvents.push(event);
     logger.info('[AuthStorage] identity event', {
       type: event.type,
@@ -158,6 +160,10 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
 
   // ---- Generic K/V (oidc-provider adapter sink) ----
 
+  async genericNow(): Promise<number> {
+    return Date.now();
+  }
+
   async genericGet(model: string, id: string): Promise<unknown> {
     const record = this.genericStore.get(genericKey(model, id));
     if (!record) return null;
@@ -171,6 +177,28 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   async genericSet(model: string, id: string, payload: unknown, expiresInSec?: number): Promise<void> {
     const expiresAt = expiresInSec ? Date.now() + expiresInSec * 1000 : undefined;
     this.genericStore.set(genericKey(model, id), { payload, expiresAt });
+  }
+
+  async genericCompareAndSet(
+    model: string,
+    id: string,
+    expectedPayload: unknown,
+    payload: unknown,
+    expiresInSec?: number,
+  ): Promise<boolean> {
+    const key = genericKey(model, id);
+    const existing = this.genericStore.get(key);
+    if (!existing) return false;
+    if (existing.expiresAt !== undefined && existing.expiresAt <= Date.now()) {
+      this.genericStore.delete(key);
+      return false;
+    }
+    if (!isDeepStrictEqual(toJsonValue(existing.payload), toJsonValue(expectedPayload))) return false;
+    this.genericStore.set(key, {
+      payload,
+      expiresAt: expiresInSec ? Date.now() + expiresInSec * 1000 : undefined,
+    });
+    return true;
   }
 
   async genericDestroy(model: string, id: string): Promise<void> {
@@ -369,4 +397,9 @@ function externalKey(provider: string, externalSub: string): string {
 
 function genericKey(model: string, id: string): string {
   return `${model}|${id}`;
+}
+
+function toJsonValue(value: unknown): unknown {
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? undefined : JSON.parse(encoded) as unknown;
 }

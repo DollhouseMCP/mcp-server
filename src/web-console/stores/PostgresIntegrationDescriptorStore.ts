@@ -1,30 +1,40 @@
-import { and, asc, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
 import {
   consoleLoginTransactions,
+  integrationCuratedProviderState,
   integrationProviderDescriptors,
   userIntegrations,
 } from '../../database/schema/index.js';
 import {
   cloneIntegrationDescriptorRecord,
+  CuratedIntegrationSeedConflictError,
   decodeDescriptorPageCursor,
   encodeDescriptorPageCursor,
   resolveDescriptorPageLimit,
   type IIntegrationDescriptorStore,
+  type CuratedIntegrationDeploymentState,
+  type CuratedIntegrationSeedDirective,
+  type CuratedIntegrationSeedResult,
   type IntegrationDescriptorCreateInput,
   type IntegrationDescriptorPage,
   type IntegrationDescriptorPageRequest,
   type IntegrationDescriptorRecord,
   type IntegrationDescriptorUpsertOptions,
+  integrationDescriptorMutationKey,
+  isRetainedSeedCredentialRefresh,
+  isCleanupRevocationEndpointRepair,
   type IntegrationOAuthDescriptor,
   type IntegrationStaticApiKeyDescriptor,
   validateIntegrationDescriptorInput,
   validateIntegrationDescriptorRecord,
+  IntegrationDescriptorMutationBusyError,
+  IntegrationDescriptorRevisionConflictError,
 } from './IIntegrationDescriptorStore.js';
-import type { UserIntegrationProvider } from './IUserIntegrationStore.js';
-import { assertUuid } from './ConsoleStoreValidation.js';
+import { assertUserIntegrationProvider, type UserIntegrationProvider } from './IUserIntegrationStore.js';
+import { assertUuid, ConsoleStoreConflictError } from './ConsoleStoreValidation.js';
 import { integrationDescriptorRoutingFingerprint } from '../modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
 
 export class PostgresIntegrationDescriptorStore implements IIntegrationDescriptorStore {
@@ -48,20 +58,16 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     assertUuid(userId, 'userId');
     const limit = resolveDescriptorPageLimit(page.limit);
     const cursor = page.cursor ? decodeDescriptorPageCursor(page.cursor) : null;
-    const visibility = or(
-      eq(integrationProviderDescriptors.ownership, 'curated'),
-      eq(integrationProviderDescriptors.ownerUserId, userId),
-    );
     const rows = await withSystemContext(this.db, tx =>
       tx.select().from(integrationProviderDescriptors).where(cursor
-        ? and(visibility, or(
+        ? and(descriptorVisibility(userId), or(
           gt(integrationProviderDescriptors.provider, cursor.provider),
           and(
             eq(integrationProviderDescriptors.provider, cursor.provider),
             gt(integrationProviderDescriptors.id, cursor.id),
           ),
         ))
-        : visibility)
+        : descriptorVisibility(userId))
         .orderBy(asc(integrationProviderDescriptors.provider), asc(integrationProviderDescriptors.id))
         .limit(limit + 1),
     );
@@ -81,10 +87,7 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     const rows = await withSystemContext(this.db, tx =>
       tx.select().from(integrationProviderDescriptors).where(and(
         eq(integrationProviderDescriptors.provider, provider),
-        or(
-          eq(integrationProviderDescriptors.ownership, 'curated'),
-          eq(integrationProviderDescriptors.ownerUserId, userId),
-        ),
+        descriptorVisibility(userId),
       ))
         // Curated strictly wins over a same-id BYO descriptor ('byo' < 'curated'
         // lexically, so descending order puts curated first) — deterministic
@@ -125,6 +128,21 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     assertUuid(id, 'id');
     assertUuid(ownerUserId, 'ownerUserId');
     const rows = await withSystemContext(this.db, async tx => {
+      const identityRows = await tx.select({
+        provider: integrationProviderDescriptors.provider,
+      }).from(integrationProviderDescriptors).where(and(
+        eq(integrationProviderDescriptors.id, id),
+        eq(integrationProviderDescriptors.ownership, 'byo'),
+        eq(integrationProviderDescriptors.ownerUserId, ownerUserId),
+      )).limit(1);
+      const identity = identityRows[0];
+      if (!identity) return [];
+      assertUserIntegrationProvider(identity.provider);
+      await lockDescriptorMutationWithTx(tx, {
+        provider: identity.provider,
+        ownership: 'byo',
+        ownerUserId,
+      });
       const existing = await tx.select({ id: integrationProviderDescriptors.id })
         .from(integrationProviderDescriptors).where(and(
           eq(integrationProviderDescriptors.id, id),
@@ -144,6 +162,11 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
 
   async deleteCurated(provider: UserIntegrationProvider): Promise<boolean> {
     const rows = await withSystemContext(this.db, async tx => {
+      await lockDescriptorMutationWithTx(tx, {
+        provider,
+        ownership: 'curated',
+        ownerUserId: null,
+      });
       const existing = await tx.select({ id: integrationProviderDescriptors.id })
         .from(integrationProviderDescriptors).where(and(
           eq(integrationProviderDescriptors.provider, provider),
@@ -161,60 +184,192 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
     return rows.length > 0;
   }
 
+  async reconcileCuratedSeed(
+    directive: CuratedIntegrationSeedDirective,
+  ): Promise<CuratedIntegrationSeedResult> {
+    validateCuratedSeedDirective(directive);
+    return withSystemContext(this.db, async tx => {
+      // The state and descriptor rows may not exist yet, so the canonical
+      // identity lock closes first-seed/first-insert races across every writer.
+      await lockDescriptorMutationWithTx(tx, directive.enabled
+        ? directive.descriptor
+        : { provider: directive.provider, ownership: 'curated', ownerUserId: null });
+      const stateRows = await tx.select().from(integrationCuratedProviderState).where(
+        eq(integrationCuratedProviderState.provider, directive.provider),
+      ).for('update').limit(1);
+      const descriptorRows = await tx.select().from(integrationProviderDescriptors).where(and(
+        eq(integrationProviderDescriptors.provider, directive.provider),
+        eq(integrationProviderDescriptors.ownership, 'curated'),
+        isNull(integrationProviderDescriptors.ownerUserId),
+      )).for('update').limit(1);
+      const currentState = stateRows[0] ? fromDeploymentStateRow(stateRows[0]) : null;
+      const transition = curatedSeedTransition(currentState, directive);
+      const existing = descriptorRows[0] ? fromDescriptorRow(descriptorRows[0]) : null;
+      if (transition === 'retain') {
+        return {
+          applied: false,
+          enabled: currentState?.enabled ?? true,
+          seedRevision: currentState?.seedRevision ?? existing?.curatedSeedRevision ?? null,
+          descriptor: currentState?.enabled === false ? null : existing,
+        };
+      }
+      if (!directive.enabled) {
+        await fenceDescriptorCallbacksWithTx(tx, existing?.id ?? null);
+        await persistDeploymentStateWithTx(tx, currentState, {
+          provider: directive.provider,
+          seedRevision: directive.seedRevision,
+          enabled: false,
+          updatedAt: directive.updatedAt,
+        });
+        return {
+          applied: transition === 'apply',
+          enabled: false,
+          seedRevision: directive.seedRevision,
+          descriptor: null,
+        };
+      }
+      const rows = await upsertDescriptorWithTx(
+        tx,
+        directive.descriptor,
+        directive.upsertOptions ?? {},
+        descriptorRows,
+      );
+      if (!rows[0]) throw new Error('PostgreSQL did not return integration descriptor row');
+      if (directive.seedRevision !== null) {
+        await persistDeploymentStateWithTx(tx, currentState, {
+          provider: directive.provider,
+          seedRevision: directive.seedRevision,
+          enabled: true,
+          updatedAt: directive.updatedAt,
+        });
+      }
+      return {
+        applied: transition === 'apply',
+        enabled: true,
+        seedRevision: directive.seedRevision,
+        descriptor: fromDescriptorRow(rows[0]),
+      };
+    });
+  }
+
   async upsert(
     input: IntegrationDescriptorCreateInput,
     options: IntegrationDescriptorUpsertOptions = {},
   ): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
-    const rows = await withSystemContext(this.db, async tx => {
-      const existing = await tx.select().from(integrationProviderDescriptors)
-        .where(descriptorIdentity(input)).for('update').limit(1);
-      const values = toDescriptorValues(input, existing[0]?.createdAt ?? input.createdAt);
-      if (existing[0]) {
-        const current = fromDescriptorRow(existing[0]);
-        const proposed: IntegrationDescriptorRecord = {
-          ...current,
-          provider: input.provider,
-          ownership: input.ownership,
-          ownerUserId: input.ownerUserId,
-          displayName: input.displayName,
-          category: input.category,
-          authStrategy: input.authStrategy,
-          apiHosts: [...input.apiHosts],
-          oauth: input.oauth ?? null,
-          staticApiKey: input.staticApiKey ?? null,
-          clientSecretCiphertext: input.clientSecretCiphertext ?? null,
-          clientSecretRevision: input.clientSecretRevision ?? null,
-          credentialKeyVersion: input.credentialKeyVersion ?? null,
-          operationPromotion: input.operationPromotion ?? {},
-          updatedAt: input.updatedAt,
-        };
-        const currentFingerprint = integrationDescriptorRoutingFingerprint(current);
-        const proposedFingerprint = integrationDescriptorRoutingFingerprint(proposed);
-        const initializesOnlyRevision = options.initializeClientSecretRevision === true
-          && current.clientSecretRevision === null
-          && proposed.clientSecretRevision !== null
-          && currentFingerprint === integrationDescriptorRoutingFingerprint({
-            ...proposed,
-            clientSecretRevision: null,
-          });
-        if (currentFingerprint !== proposedFingerprint && !initializesOnlyRevision) {
-          await invalidateDescriptorBindingsWithTx(tx, existing[0].id, input.updatedAt);
-        }
-        return tx.update(integrationProviderDescriptors)
-          .set(values)
-          .where(eq(integrationProviderDescriptors.id, existing[0].id))
-          .returning();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const rows = await this.upsertOnce(input, options);
+        if (!rows[0]) throw new Error('PostgreSQL did not return integration descriptor row');
+        return fromDescriptorRow(rows[0]);
+      } catch (error) {
+        if (attempt === 0 && isUniqueViolation(error)) continue;
+        throw error;
       }
-      return tx.insert(integrationProviderDescriptors).values(values).returning();
+    }
+    throw new Error('integration descriptor unique-race retry exhausted');
+  }
+
+  private async upsertOnce(
+    input: IntegrationDescriptorCreateInput,
+    options: IntegrationDescriptorUpsertOptions,
+  ): Promise<(typeof integrationProviderDescriptors.$inferSelect)[]> {
+    return withSystemContext(this.db, async tx => {
+      await lockDescriptorMutationWithTx(tx, input);
+      return upsertDescriptorWithTx(tx, input, options);
     });
-    if (!rows[0]) throw new Error('PostgreSQL did not return integration descriptor row');
-    return fromDescriptorRow(rows[0]);
   }
 }
 
+type SystemTransaction = Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0];
+
+async function lockDescriptorMutationWithTx(
+  tx: SystemTransaction,
+  identity: Pick<IntegrationDescriptorCreateInput, 'provider' | 'ownership' | 'ownerUserId'>,
+): Promise<void> {
+  const key = integrationDescriptorMutationKey(identity);
+  await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`);
+}
+
+async function upsertDescriptorWithTx(
+  tx: SystemTransaction,
+  input: IntegrationDescriptorCreateInput,
+  options: IntegrationDescriptorUpsertOptions,
+  lockedRows?: (typeof integrationProviderDescriptors.$inferSelect)[],
+): Promise<(typeof integrationProviderDescriptors.$inferSelect)[]> {
+  const existing = lockedRows ?? await tx.select().from(integrationProviderDescriptors)
+    .where(descriptorIdentity(input)).for('update').limit(1);
+  if (!existing[0]) {
+    if (options.expectedUpdatedAt) {
+      throw new IntegrationDescriptorRevisionConflictError();
+    }
+    return tx.insert(integrationProviderDescriptors)
+      .values(toDescriptorValues(input, input.createdAt)).returning();
+  }
+  const current = fromDescriptorRow(existing[0]);
+  if (options.expectedUpdatedAt
+      && current.updatedAt.getTime() !== options.expectedUpdatedAt.getTime()) {
+    throw new IntegrationDescriptorRevisionConflictError();
+  }
+  const nextUpdatedAt = new Date(Math.max(
+    input.updatedAt.getTime(),
+    current.updatedAt.getTime() + 1,
+  ));
+  const nextInput: IntegrationDescriptorCreateInput = {
+    ...input,
+    updatedAt: nextUpdatedAt,
+  };
+  if (preservesNewerCuratedSeed(current, input)) {
+    if (!options.refreshDeploymentCredentialsAtRetainedSeedRevision) return existing;
+    if (!isRetainedSeedCredentialRefresh(current, input)) {
+      throw new ConsoleStoreConflictError(
+        'retained seed revision may rewrap unchanged deployment OAuth credentials only',
+      );
+    }
+  }
+  const proposed: IntegrationDescriptorRecord = {
+    ...current,
+    provider: input.provider,
+    ownership: input.ownership,
+    ownerUserId: input.ownerUserId,
+    displayName: input.displayName,
+    category: input.category,
+    authStrategy: input.authStrategy,
+    apiHosts: [...input.apiHosts],
+    oauth: input.oauth ?? null,
+    staticApiKey: input.staticApiKey ?? null,
+    clientSecretCiphertext: input.clientSecretCiphertext ?? null,
+    clientSecretRevision: input.clientSecretRevision ?? null,
+    credentialKeyVersion: input.credentialKeyVersion ?? null,
+    curatedSeedRevision: input.curatedSeedRevision ?? null,
+    operationPromotion: input.operationPromotion ?? {},
+    updatedAt: nextUpdatedAt,
+  };
+  const currentFingerprint = integrationDescriptorRoutingFingerprint(current);
+  const proposedFingerprint = integrationDescriptorRoutingFingerprint(proposed);
+  const initializesOnlyRevision = options.initializeClientSecretRevision === true
+    && current.clientSecretRevision === null
+    && proposed.clientSecretRevision !== null
+    && currentFingerprint === integrationDescriptorRoutingFingerprint({
+      ...proposed,
+      clientSecretRevision: null,
+    });
+  if (currentFingerprint !== proposedFingerprint && !initializesOnlyRevision) {
+    if (isCleanupRevocationEndpointRepair(current, proposed)) {
+      await fenceDescriptorCallbacksWithTx(tx, existing[0].id);
+      await assertDescriptorCredentialsCleanupOnlyWithTx(tx, existing[0].id);
+    } else {
+      await invalidateDescriptorBindingsWithTx(tx, existing[0].id, nextUpdatedAt);
+    }
+  }
+  return tx.update(integrationProviderDescriptors)
+    .set(toDescriptorValues(nextInput, existing[0].createdAt))
+    .where(eq(integrationProviderDescriptors.id, existing[0].id))
+    .returning();
+}
+
 async function invalidateDescriptorBindingsWithTx(
-  tx: Parameters<Parameters<DatabaseInstance['transaction']>[0]>[0],
+  tx: SystemTransaction,
   descriptorId: string,
   revokedAt: Date,
 ): Promise<void> {
@@ -222,12 +377,14 @@ async function invalidateDescriptorBindingsWithTx(
   // callbacks first, then clear credentials, so callback persistence can use
   // the same descriptor -> transaction -> credential lock order without a
   // deadlock or a stale credential write after rotation.
-  await tx.delete(consoleLoginTransactions).where(
-    eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
-  );
+  await fenceDescriptorCallbacksWithTx(tx, descriptorId);
+  await assertDescriptorCredentiallessWithTx(tx, descriptorId);
   await tx.update(userIntegrations).set({
     accessTokenCiphertext: null,
     refreshTokenCiphertext: null,
+    refreshLeaseId: null,
+    refreshLeaseExpiresAt: null,
+    refreshFence: sql`${userIntegrations.refreshFence} + 1`,
     status: 'revoked',
     errorReason: null,
     revokedAt,
@@ -235,6 +392,152 @@ async function invalidateDescriptorBindingsWithTx(
     eq(userIntegrations.integrationDescriptorId, descriptorId),
     isNull(userIntegrations.revokedAt),
   ));
+}
+
+async function assertDescriptorCredentiallessWithTx(
+  tx: SystemTransaction,
+  descriptorId: string,
+): Promise<void> {
+  const credentialBindings = await tx.select({ id: userIntegrations.id })
+    .from(userIntegrations).where(and(
+      eq(userIntegrations.integrationDescriptorId, descriptorId),
+      or(
+        isNotNull(userIntegrations.accessTokenCiphertext),
+        isNotNull(userIntegrations.refreshTokenCiphertext),
+      ),
+    )).for('update').limit(1);
+  if (credentialBindings.length > 0) {
+    throw new IntegrationDescriptorMutationBusyError();
+  }
+}
+
+async function assertDescriptorCredentialsCleanupOnlyWithTx(
+  tx: SystemTransaction,
+  descriptorId: string,
+): Promise<void> {
+  const executableBindings = await tx.select({ id: userIntegrations.id })
+    .from(userIntegrations).where(and(
+      eq(userIntegrations.integrationDescriptorId, descriptorId),
+      or(
+        isNotNull(userIntegrations.accessTokenCiphertext),
+        isNotNull(userIntegrations.refreshTokenCiphertext),
+      ),
+      or(
+        isNull(userIntegrations.revokedAt),
+        sql`${userIntegrations.status} <> 'cleanup_pending'`,
+      ),
+    )).for('update').limit(1);
+  if (executableBindings.length > 0) throw new IntegrationDescriptorMutationBusyError();
+}
+
+async function fenceDescriptorCallbacksWithTx(
+  tx: SystemTransaction,
+  descriptorId: string | null,
+): Promise<void> {
+  if (!descriptorId) return;
+  const activeCallbacks = await tx.select({
+    consumedAt: consoleLoginTransactions.consumedAt,
+  }).from(consoleLoginTransactions).where(and(
+    eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
+    gt(consoleLoginTransactions.expiresAt, sql`statement_timestamp()`),
+  )).for('update');
+  if (activeCallbacks.some(callback => callback.consumedAt !== null)) {
+    throw new IntegrationDescriptorMutationBusyError();
+  }
+  await tx.delete(consoleLoginTransactions).where(
+    eq(consoleLoginTransactions.integrationDescriptorId, descriptorId),
+  );
+}
+
+function descriptorVisibility(userId: string) {
+  return or(
+    and(
+      eq(integrationProviderDescriptors.ownership, 'curated'),
+      sql`NOT EXISTS (
+        SELECT 1
+        FROM ${integrationCuratedProviderState}
+        WHERE ${integrationCuratedProviderState.provider} = ${integrationProviderDescriptors.provider}
+          AND ${integrationCuratedProviderState.enabled} = FALSE
+      )`,
+    ),
+    eq(integrationProviderDescriptors.ownerUserId, userId),
+  );
+}
+
+async function persistDeploymentStateWithTx(
+  tx: SystemTransaction,
+  current: CuratedIntegrationDeploymentState | null,
+  next: CuratedIntegrationDeploymentState,
+): Promise<void> {
+  if (current) {
+    await tx.update(integrationCuratedProviderState).set({
+      seedRevision: next.seedRevision,
+      enabled: next.enabled,
+      updatedAt: next.updatedAt,
+    }).where(eq(integrationCuratedProviderState.provider, next.provider));
+    return;
+  }
+  await tx.insert(integrationCuratedProviderState).values({
+    provider: next.provider,
+    seedRevision: next.seedRevision,
+    enabled: next.enabled,
+    updatedAt: next.updatedAt,
+  });
+}
+
+function fromDeploymentStateRow(
+  row: typeof integrationCuratedProviderState.$inferSelect,
+): CuratedIntegrationDeploymentState {
+  return {
+    provider: row.provider as UserIntegrationProvider,
+    seedRevision: row.seedRevision,
+    enabled: row.enabled,
+    updatedAt: row.updatedAt,
+  };
+}
+
+function validateCuratedSeedDirective(directive: CuratedIntegrationSeedDirective): void {
+  assertUserIntegrationProvider(directive.provider);
+  const revision = directive.seedRevision;
+  if (revision !== null && (!Number.isSafeInteger(revision) || revision < 1 || revision > 2_147_483_647)) {
+    throw new CuratedIntegrationSeedConflictError('curated seed revision is invalid');
+  }
+  if (!directive.enabled) {
+    if (revision === null) throw new CuratedIntegrationSeedConflictError('disabled curated seed requires a revision');
+    return;
+  }
+  validateIntegrationDescriptorInput(directive.descriptor);
+  const descriptorRevision = directive.descriptor.curatedSeedRevision ?? null;
+  if (directive.descriptor.ownership !== 'curated'
+      || directive.descriptor.ownerUserId !== null
+      || directive.descriptor.provider !== directive.provider
+      || (revision !== null && descriptorRevision !== null && descriptorRevision < revision)) {
+    throw new CuratedIntegrationSeedConflictError('curated seed directive does not match its descriptor');
+  }
+}
+
+function curatedSeedTransition(
+  current: CuratedIntegrationDeploymentState | null,
+  directive: CuratedIntegrationSeedDirective,
+): 'apply' | 'same' | 'retain' {
+  if (!current) return 'apply';
+  const revision = directive.seedRevision;
+  if (revision === null || revision < current.seedRevision) return 'retain';
+  if (revision === current.seedRevision) {
+    if (directive.enabled !== current.enabled) {
+      throw new CuratedIntegrationSeedConflictError(
+        'curated seed cannot change enabled state without a newer revision',
+      );
+    }
+    return 'same';
+  }
+  return 'apply';
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const candidate = error as { code?: unknown; cause?: unknown };
+  return candidate.code === '23505' || isUniqueViolation(candidate.cause);
 }
 
 function descriptorIdentity(input: IntegrationDescriptorCreateInput) {
@@ -267,6 +570,7 @@ function toDescriptorValues(input: IntegrationDescriptorCreateInput, createdAt: 
     clientSecretCiphertext: input.clientSecretCiphertext ? Buffer.from(input.clientSecretCiphertext) : null,
     clientSecretRevision: input.clientSecretRevision ?? null,
     credentialKeyVersion: input.credentialKeyVersion ?? null,
+    curatedSeedRevision: input.curatedSeedRevision ?? null,
     operationPromotion: cloneJsonValue(input.operationPromotion ?? {}),
     createdAt,
     updatedAt: input.updatedAt,
@@ -288,12 +592,23 @@ export function fromDescriptorRow(row: typeof integrationProviderDescriptors.$in
     clientSecretCiphertext: row.clientSecretCiphertext,
     clientSecretRevision: row.clientSecretRevision,
     credentialKeyVersion: row.credentialKeyVersion,
+    curatedSeedRevision: row.curatedSeedRevision,
     operationPromotion: asJsonRecord(row.operationPromotion),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
   validateIntegrationDescriptorRecord(record);
   return cloneIntegrationDescriptorRecord(record);
+}
+
+function preservesNewerCuratedSeed(
+  existing: IntegrationDescriptorRecord,
+  input: IntegrationDescriptorCreateInput,
+): boolean {
+  const currentRevision = existing.curatedSeedRevision ?? null;
+  if (existing.ownership !== 'curated' || currentRevision === null) return false;
+  const proposedRevision = input.curatedSeedRevision ?? null;
+  return proposedRevision === null || proposedRevision <= currentRevision;
 }
 
 function asNullableOAuth(value: unknown): IntegrationOAuthDescriptor | null {

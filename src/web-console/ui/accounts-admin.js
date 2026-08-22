@@ -10,6 +10,7 @@
  */
 
 import { del, get, patch, post } from './api.js';
+import { createRequestOwner } from './polling.js';
 import { confirmDialog } from './ui-utils.js';
 import { createCursorPager, escapeHtml, formatTimestamp, responseDetail } from './operations-ui.js';
 
@@ -289,14 +290,18 @@ export function createIdentityTriageView({ canLookup }) {
   let message = '';
   let lookup = { state: 'idle', record: null, message: '' };
   const pager = createCursorPager();
+  const listOwner = createRequestOwner();
+  const lookupOwner = createRequestOwner();
 
   async function load() {
+    const requestClaim = listOwner.claim();
     state = 'loading';
     repaint();
     const query = new URLSearchParams({ limit: String(PAGE_LIMIT) });
     const cursor = pager.cursor();
     if (cursor) query.set('cursor', cursor);
     const response = await get(`${UNLINKED_PATH}?${query}`).catch(() => null);
+    if (!listOwner.owns(requestClaim)) return;
     if (response?.status !== 200 || !Array.isArray(response.body?.items)) {
       state = 'error';
       message = responseDetail(response, 'Unlinked identities could not be loaded.');
@@ -312,9 +317,11 @@ export function createIdentityTriageView({ canLookup }) {
   async function resolve(form) {
     const id = formText(new FormData(form), 'correlation_id');
     if (!id) return;
+    const requestClaim = lookupOwner.claim();
     lookup = { state: 'loading', record: null, message: '' };
     repaint();
     const response = await get(`${CORRELATION_PATH}/${encodeURIComponent(id)}`).catch(() => null);
+    if (!lookupOwner.owns(requestClaim)) return;
     if (response?.status === 404) {
       lookup = { state: 'empty', record: null, message: 'No account matches that correlation ID.' };
       repaint();
@@ -363,10 +370,12 @@ export function createIdentityTriageView({ canLookup }) {
     if (list) list.innerHTML = unlinkedMarkup();
     const result = container?.querySelector('[data-correlation-result]');
     if (result) result.innerHTML = correlationResultMarkup(lookup);
+    const refresh = container?.querySelector('[data-unlinked-refresh]');
+    if (refresh) refresh.disabled = state === 'loading';
     const previous = container?.querySelector('[data-unlinked-previous]');
-    if (previous) previous.disabled = !pager.hasPrevious();
+    if (previous) previous.disabled = state === 'loading' || !pager.hasPrevious();
     const next = container?.querySelector('[data-unlinked-next]');
-    if (next) next.disabled = !pager.nextCursor();
+    if (next) next.disabled = state === 'loading' || !pager.nextCursor();
   }
 
   function unlinkedMarkup() {
@@ -395,6 +404,8 @@ export function createIdentityTriageView({ canLookup }) {
       if (state === 'idle') void load();
     },
     destroy() {
+      listOwner.invalidate();
+      lookupOwner.invalidate();
       container = null;
     },
   });

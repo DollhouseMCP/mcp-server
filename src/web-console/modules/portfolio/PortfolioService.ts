@@ -18,6 +18,7 @@ import {
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
 import { isValidDisplayString } from '../../stores/ConsoleStoreValidation.js';
+import { logger } from '../../../utils/logger.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnected } from '../../stores/IUserIntegrationStore.js';
 import {
   isPortfolioSyncJobConflictPolicy,
@@ -235,16 +236,28 @@ export class PortfolioService {
         now: this.now(),
       });
       if (!deleted) return notFound();
-      await this.activityEventSink?.recordElementDeleted({
-        type: 'console.portfolio.element.deleted.v1',
-        userId: auth.userId,
-        consoleSessionId: auth.sessionIdHash.toString('hex'),
-        elementType: deleted.type,
-        canonicalName: deleted.canonicalName,
-        contentHash: deleted.contentHash ?? null,
-        correlationId: requireConsoleRequestContext(req).correlationId,
-        occurredAt: this.now(),
-      });
+      try {
+        await this.activityEventSink?.recordElementDeleted({
+          type: 'console.portfolio.element.deleted.v1',
+          userId: auth.userId,
+          consoleSessionId: auth.sessionIdHash.toString('hex'),
+          elementType: deleted.type,
+          canonicalName: deleted.canonicalName,
+          contentHash: deleted.contentHash ?? null,
+          correlationId: requireConsoleRequestContext(req).correlationId,
+          occurredAt: this.now(),
+        });
+      } catch (error) {
+        // The durable delete already succeeded. Report telemetry failure
+        // separately instead of telling the caller the delete failed and
+        // encouraging an impossible retry.
+        logger.error('[PortfolioService] Element deleted but activity event persistence failed', {
+          userId: auth.userId,
+          elementType: deleted.type,
+          canonicalName: deleted.canonicalName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
       return {
         status: 200,
         body: {
@@ -526,7 +539,8 @@ export function validateElementPayload(type: ConsolePortfolioElementType, input:
     ...validateContentPayload(type, input.content, input.metadata),
   );
   if (input.content !== undefined && Buffer.byteLength(input.content, 'utf8') > PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES) {
-    issues.push(issue('content', 'too_large', 'content must be at most 1 MiB.'));
+    const maxMiB = PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES / (1024 * 1024);
+    issues.push(issue('content', 'too_large', `content must be at most ${maxMiB} MiB.`));
   }
   issues.push(...validateTagsPayload(input.tags ?? []));
   return issues;

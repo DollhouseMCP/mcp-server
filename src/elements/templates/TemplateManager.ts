@@ -67,7 +67,11 @@ export class TemplateManager extends BaseElementManager<Template> {
     return template;
   }
 
-  override async save(template: Template, filePath: string): Promise<void> {
+  override async save(
+    template: Template,
+    filePath: string,
+    options?: { exclusive?: boolean; durable?: boolean },
+  ): Promise<void> {
     // Auto-derive variables from content (#1896): ensures every {{placeholder}}
     // has a matching schema entry so render() never silently returns unfilled text.
     // Existing entries are never overwritten — user-set descriptions, types, and
@@ -79,7 +83,7 @@ export class TemplateManager extends BaseElementManager<Template> {
       );
     }
 
-    await super.save(template, filePath);
+    await super.save(template, filePath, options);
 
     SecurityMonitor.logSecurityEvent({
       type: 'TEMPLATE_SAVED',
@@ -162,7 +166,7 @@ export class TemplateManager extends BaseElementManager<Template> {
       template.instructions = data.instructions;
     }
 
-    await this.save(template, filename);
+    await this.save(template, filename, { exclusive: true });
     // Note: No reload() here — save() caches the element correctly.
     // See Issue #491 for why PersonaManager's reload-after-create was removed.
 
@@ -193,7 +197,7 @@ export class TemplateManager extends BaseElementManager<Template> {
 
         case 'yaml': {
           const parsed = this.serializationService.parseFrontmatter(data, {
-            maxYamlSize: 64 * 1024,
+            maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
             validateContent: true,
             source: 'TemplateManager.importElement'
           });
@@ -205,7 +209,7 @@ export class TemplateManager extends BaseElementManager<Template> {
 
         case 'markdown': {
           const mdParsed = this.serializationService.parseFrontmatter(data, {
-            maxYamlSize: 64 * 1024,
+            maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
             validateContent: true,
             source: 'TemplateManager.importElement'
           });

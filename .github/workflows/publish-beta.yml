@@ -1,0 +1,32 @@
+name: Publish Beta
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact beta version already committed on the beta branch'
+        required: true
+        type: string
+      release_notes:
+        description: 'Release notes for the GitHub prerelease'
+        required: false
+        type: string
+      dry_run:
+        description: 'Validate without creating a tag or publishing artifacts'
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  actions: write
+  contents: write
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/publish-beta-release.yml
+    with:
+      source_ref: beta
+      version: ${{ inputs.version }}
+      release_notes: ${{ inputs.release_notes }}
+      dry_run: ${{ inputs.dry_run }}

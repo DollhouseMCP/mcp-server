@@ -1144,7 +1144,7 @@ async function startStreamableHttpServer(
           // Resolve via the auth_account link (not username==sub) so this MCP
           // session and the web console converge on the SAME users row for this
           // identity — every machine on one OAuth identity is one account.
-          sessionUserId = await userIdentityService.resolveUserForSub(
+          sessionUserId = authClaims.userId ?? await userIdentityService.resolveUserForSub(
             authClaims.sub,
             authClaims.displayName,
           );
@@ -1170,7 +1170,12 @@ async function startStreamableHttpServer(
       // stamps `roles: ['admin']` on the JWT for the bootstrapped admin sub.
       roles: authClaims?.roles,
     });
-    const { server, dispose: disposeServer } = await container.createServerForHttpSession(sessionContext);
+    const {
+      server,
+      waitForRequest,
+      waitForIdle,
+      dispose: disposeServer,
+    } = await container.createServerForHttpSession(sessionContext);
     await server.connect(transport);
 
     // Store the resolved DB UUID on the session activation state so
@@ -1196,6 +1201,8 @@ async function startStreamableHttpServer(
       // tagged with this SessionContext (so Sessions↔Logs cross-linking lines up).
       contextSessionId: sessionContext.sessionId,
       runtimeSession,
+      waitForRequest,
+      waitForIdle,
       dispose: async () => {
         logger.info('[HTTP] Session disposing', { sessionId: sessionContext.sessionId });
         await disposeServer();
@@ -1217,6 +1224,7 @@ async function startStreamableHttpServer(
     webConsoleApiV1: resolveWebConsoleApiV1Mount(container),
     runtimeSessionControl: runtimeSessionControl?.service,
     registerSignalHandlers: true,
+    onShutdown: async () => container.dispose(),
     onSessionCreated: (sessionId) => {
       ingestRoutes?.registerHttpSession(sessionId, Date.now());
     },
@@ -1312,6 +1320,7 @@ function isEmbeddedOAuthProvider(value: unknown): value is {
   setPublicBaseUrl?: (publicBaseUrl: string) => void;
   createRouter: () => Router;
   isReadyForTraffic?: () => Promise<boolean>;
+  getReadinessFailureReason?: () => string;
 } {
   return typeof value === 'object'
     && value !== null

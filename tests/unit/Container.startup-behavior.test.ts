@@ -194,6 +194,42 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
     });
   });
 
+  describe('HTTP handler bootstrap', () => {
+    it('warms the persona cache for filesystem-backed HTTP mode', async () => {
+      await container.preparePortfolio();
+      const personaManager = container.resolve<any>('PersonaManager');
+      const reloadSpy = jest.spyOn(personaManager, 'reload').mockResolvedValue(undefined);
+
+      await container.bootstrapHttpHandlers();
+
+      expect(reloadSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it('defers the user-scoped persona warm-up for database-backed HTTP mode', async () => {
+      await container.preparePortfolio();
+      const personaManager = container.resolve<any>('PersonaManager');
+      const reloadSpy = jest.spyOn(personaManager, 'reload').mockRejectedValue(
+        new Error('database scan requires authenticated user context'),
+      );
+      // The database services are normally registered during preparePortfolio.
+      // This isolated fixture uses filesystem storage, so a sentinel registration
+      // is sufficient to exercise the HTTP bootstrap policy without a live DB.
+      container.registerInstance('DatabaseInstance', {});
+      container.registerInstance('CurrentUserId', '00000000-0000-4000-8000-000000000001');
+      const [activationModule, confirmationModule, challengeModule] = await Promise.all([
+        import('../../src/state/DatabaseActivationStateStore.js'),
+        import('../../src/state/DatabaseConfirmationStore.js'),
+        import('../../src/state/DatabaseChallengeStore.js'),
+      ]);
+      container.registerInstance('DatabaseActivationStateStoreClass', activationModule.DatabaseActivationStateStore);
+      container.registerInstance('DatabaseConfirmationStoreClass', confirmationModule.DatabaseConfirmationStore);
+      container.registerInstance('DatabaseChallengeStoreClass', challengeModule.DatabaseChallengeStore);
+
+      await expect(container.bootstrapHttpHandlers()).resolves.toBeDefined();
+      expect(reloadSpy).not.toHaveBeenCalled();
+    });
+  });
+
   // ============================================
   // STALE ACTIVATION PRUNING
   // Regression tests for the 37x skill loading bug (Fix 3)

@@ -8,6 +8,27 @@ import {
 import type { PinnedFetch } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 
 describe('IntegrationRemoteMcpSecurity', () => {
+  it('forces redirect rejection before a pinned request can follow an unvetted destination', async () => {
+    const pinnedFetch = jest.fn<PinnedFetch>().mockImplementation((_input, init) => {
+      if (init?.redirect !== 'error') {
+        return Promise.resolve(new Response(null, {
+          status: 302,
+          headers: { location: 'http://127.0.0.1/internal' },
+        }));
+      }
+      return Promise.reject(new TypeError('redirect mode is error'));
+    });
+
+    await expect(createBoundedRemoteMcpFetch(pinnedFetch, 1024)(
+      new URL('https://mcp.example.com/mcp'),
+      { method: 'POST', redirect: 'follow' },
+    )).rejects.toThrow('redirect mode is error');
+    expect(pinnedFetch).toHaveBeenCalledWith(
+      new URL('https://mcp.example.com/mcp'),
+      expect.objectContaining({ method: 'POST', redirect: 'error' }),
+    );
+  });
+
   it('redacts equivalent lowercase and mixed-case percent escapes', () => {
     const result = redactRemoteMcpCredentialEchoes({
       lower: 'abc%2fdef%3ahere',

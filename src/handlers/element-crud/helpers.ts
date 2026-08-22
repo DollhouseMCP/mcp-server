@@ -108,7 +108,7 @@ export function findOversizedDescriptionFields(
   path = 'input',
   maxLength = SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH
 ): string[] {
-  const descriptions: Array<{ readonly path: string; readonly length: number }> = [];
+  const descriptions: Array<{ readonly path: string; readonly bytes: number }> = [];
   const seen = new WeakSet<object>();
 
   const collect = (candidate: unknown, candidatePath: string): void => {
@@ -130,7 +130,7 @@ export function findOversizedDescriptionFields(
       }
 
       if (key === 'description' && typeof child === 'string') {
-        descriptions.push({ path: childPath, length: child.length });
+        descriptions.push({ path: childPath, bytes: Buffer.byteLength(child, 'utf8') });
       }
       collect(child, childPath);
     }
@@ -139,15 +139,15 @@ export function findOversizedDescriptionFields(
   collect(value, path);
 
   const errors = descriptions
-    .filter(description => description.length > maxLength)
+    .filter(description => description.bytes > maxLength)
     .map(description =>
-      `${description.path} exceeds maximum description length of ${maxLength} characters (frontmatter overhead reserved)`
+      `${description.path} exceeds maximum description length of ${maxLength} bytes (frontmatter overhead reserved)`
     );
-  const aggregateLength = descriptions.reduce((total, description) => total + description.length, 0);
-  if (descriptions.length > 1 && aggregateLength > maxLength) {
+  const aggregateBytes = descriptions.reduce((total, description) => total + description.bytes, 0);
+  if (descriptions.length > 1 && aggregateBytes > maxLength) {
     errors.push(
-      `${path} description fields total ${aggregateLength} characters, exceeding the aggregate ` +
-      `frontmatter description budget of ${maxLength} characters`
+      `${path} description fields total ${aggregateBytes} bytes, exceeding the aggregate ` +
+      `frontmatter description budget of ${maxLength} bytes`
     );
   }
 

@@ -18,6 +18,8 @@ const mockElementCRUD = {
   activateElement: jest.fn(),
   deactivateElement: jest.fn(),
   getActiveElements: jest.fn(),
+  getActiveElementsForPolicy: jest.fn(async () => []),
+  getPolicyElementsForReport: jest.fn(async () => []),
   validateElement: jest.fn(),
 };
 

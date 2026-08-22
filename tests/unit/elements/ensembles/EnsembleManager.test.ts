@@ -29,6 +29,7 @@ import { ValidationService } from '../../../../src/services/validation/Validatio
 import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispatcher.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 import { logger } from '../../../../src/utils/logger.js';
+import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 
 const LEGACY_SKILL_NAME = 'legacy-skill';
 
@@ -125,10 +126,9 @@ describe('EnsembleManager', () => {
       expect(ensemble.metadata.activationStrategy).toBe('sequential');
       expect(ensemble.metadata.elements).toHaveLength(1);
 
-      // CRITICAL: Verify file was saved to disk
-      expect(fileLockManager.atomicWriteFile).toHaveBeenCalled();
-      const writeCall = atomicWriteFileMock(fileLockManager).mock.calls[0];
-      const [actualPath, content] = writeCall as [string, string];
+      // Exclusive create writes directly with the filesystem's create-if-absent flag.
+      const actualPath = path.join(portfolioPath, 'ensembles', 'test-ensemble.md');
+      const content = await fs.readFile(actualPath, 'utf8');
 
       // Verify the filename
       expect(actualPath).toMatch(/test-ensemble\.md$/);
@@ -270,6 +270,25 @@ describe('EnsembleManager', () => {
   });
 
   describe('Import/Export', () => {
+    it('accepts ensemble frontmatter above the legacy 50KB cap up to 1 MiB', async () => {
+      const documentation = 'x'.repeat(60 * 1024);
+      const yamlContent = `---\nname: Large Ensemble\ndescription: Size policy test\ndocumentation: ${documentation}\nelements: []\n---\n`;
+
+      const ensemble = await ensembleManager.importElement(yamlContent, 'yaml');
+
+      expect(ensemble.metadata.name).toBe('Large Ensemble');
+      expect(Buffer.byteLength(yamlContent, 'utf8')).toBeGreaterThan(50 * 1024);
+      expect(Buffer.byteLength(yamlContent, 'utf8')).toBeLessThan(SECURITY_LIMITS.MAX_YAML_LENGTH);
+    });
+
+    it('rejects ensemble frontmatter above the shared 1 MiB ceiling', async () => {
+      const documentation = 'x'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH);
+      const yamlContent = `---\nname: Oversized Ensemble\ndocumentation: ${documentation}\nelements: []\n---\n`;
+
+      await expect(ensembleManager.importElement(yamlContent, 'yaml'))
+        .rejects.toThrow(/maximum|exceeds/i);
+    });
+
     it('should import ensemble from YAML', async () => {
       const yamlContent = `---
 name: Imported Ensemble
@@ -1067,10 +1086,10 @@ elements:
       expect(ensemble.metadata.name).toBe('Body Test');
 
       // Verify the written content includes a markdown body
-      const writeCall = atomicWriteFileMock(fileLockManager).mock.calls.at(
-        -1
+      const content = await fs.readFile(
+        path.join(portfolioPath, 'ensembles', 'body-test.md'),
+        'utf8',
       );
-      const [, content] = writeCall as [string, string];
 
       // File should have content after the closing ---
       const closingDelimiter = content.indexOf('\n---\n');

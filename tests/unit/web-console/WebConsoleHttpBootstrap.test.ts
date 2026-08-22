@@ -35,6 +35,7 @@ function env(overrides: Partial<WebConsoleHttpBootstrapEnv> = {}): WebConsoleHtt
     DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY: KEY_1,
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY: KEY_2,
     DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID: 'console-key-v1',
+    DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: undefined,
     DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY: KEY_3,
     DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE: '/deployment/replacement-readiness.json',
     DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID: undefined,
@@ -82,7 +83,35 @@ describe('WebConsoleHttpBootstrap', () => {
       keyId: 'console-key-v1',
       key: Buffer.alloc(32, 2),
     });
+    expect(options?.retainedSecretEncryptionKeys).toEqual([]);
     expect(options?.protectedCorrelationSelectorHmacKey).toEqual(Buffer.alloc(32, 3));
+  });
+
+  it('passes a validated retained AEAD key ring to the hosted registrar', () => {
+    const options = resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED:
+        `console-key-v0=${KEY_1},console-key-v0-legacy=${KEY_3}`,
+    }));
+
+    expect(options?.retainedSecretEncryptionKeys).toEqual([
+      { keyId: 'console-key-v0', key: Buffer.alloc(32, 1) },
+      { keyId: 'console-key-v0-legacy', key: Buffer.alloc(32, 3) },
+    ]);
+  });
+
+  it('rejects malformed, duplicate, and active retained AEAD key IDs', () => {
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: 'missing-separator',
+    }))).toThrow("must be 'keyId=base64key'");
+
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED:
+        `console-key-v0=${KEY_1},console-key-v0=${KEY_3}`,
+    }))).toThrow("duplicate or active key ID 'console-key-v0'");
+
+    expect(() => resolveWebConsoleHttpBootstrapOptions(env({
+      DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED: `console-key-v1=${KEY_1}`,
+    }))).toThrow("duplicate or active key ID 'console-key-v1'");
   });
 
   it('fails clearly when required hosted mount keys are missing or malformed', () => {

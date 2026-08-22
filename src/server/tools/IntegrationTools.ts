@@ -14,6 +14,7 @@ import type {
   AuthorizedIntegrationRemoteMcpBridge,
   IntegrationPolicyDenial,
 } from '../../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
+import { isWellFormedUnicode } from '../../web-console/stores/ConsoleStoreValidation.js';
 
 const PROVIDER_DESCRIPTION = 'Integration provider id.';
 
@@ -325,6 +326,8 @@ function promotedToolRegistration(
     handler: async (args: unknown) => {
       try {
         const input = readObject(args);
+        const query = readOptionalRecord(input.query);
+        assertRequiredQueryParameters(operation, query);
         const request = {
           provider: operation.gatewayRequest.provider,
           method: operation.gatewayRequest.method,
@@ -332,8 +335,11 @@ function promotedToolRegistration(
             operation.gatewayRequest.pathTemplate,
             readOptionalRecord(input.path_params),
           ),
-          query: readOptionalRecord(input.query),
+          baseUrl: operation.gatewayRequest.baseUrl,
+          query,
           body: input.body,
+          specContract: operation.specContract,
+          authMode: operation.authMode,
         };
         const outcome = await gateway.request(request);
         if (!outcome.ok) {
@@ -449,7 +455,7 @@ function promotedToolDescription(operation: IntegrationOperationDetails): string
 
 function promotedToolInputSchema(operation: IntegrationOperationDetails): ToolDefinition['inputSchema'] {
   const pathParameters = operation.parameters.filter(parameter => parameter.in === 'path');
-  const hasQueryParameters = operation.parameters.some(parameter => parameter.in === 'query');
+  const queryParameters = operation.parameters.filter(parameter => parameter.in === 'query');
   const properties: Record<string, object> = {};
   const required: string[] = [];
   if (pathParameters.length > 0) {
@@ -462,15 +468,28 @@ function promotedToolInputSchema(operation: IntegrationOperationDetails): ToolDe
           description: parameter.description ?? `Path parameter ${parameter.name}.`,
         },
       ])),
-      required: pathParameters.filter(parameter => parameter.required).map(parameter => parameter.name),
+      required: pathParameters.map(parameter => parameter.name),
     };
     required.push('path_params');
   }
-  if (hasQueryParameters) {
+  if (queryParameters.length > 0) {
+    const requiredQueryParameters = queryParameters
+      .filter(parameter => parameter.required)
+      .map(parameter => parameter.name);
     properties.query = {
       type: 'object',
       description: 'Primitive query parameters for this operation.',
+      properties: Object.fromEntries(queryParameters.map(parameter => [
+        parameter.name,
+        {
+          ...toolParameterSchema(parameter.schema),
+          description: parameter.description ?? `Query parameter ${parameter.name}.`,
+        },
+      ])),
+      ...(requiredQueryParameters.length > 0 ? { required: requiredQueryParameters } : {}),
+      additionalProperties: false,
     };
+    if (requiredQueryParameters.length > 0) required.push('query');
   }
   if (operation.requestBody) {
     properties.body = {
@@ -485,8 +504,35 @@ function promotedToolInputSchema(operation: IntegrationOperationDetails): ToolDe
   };
 }
 
+function toolParameterSchema(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? structuredClone(value as Record<string, unknown>)
+    : {};
+}
+
+function assertRequiredQueryParameters(
+  operation: IntegrationOperationDetails,
+  query: Readonly<Record<string, unknown>> | undefined,
+): void {
+  for (const parameter of operation.parameters) {
+    if (parameter.in !== 'query' || !parameter.required) continue;
+    const value = query?.[parameter.name];
+    if (!query ||
+        !Object.hasOwn(query, parameter.name) ||
+        value === undefined ||
+        value === null ||
+        (Array.isArray(value) && value.length === 0)) {
+      throw new IntegrationRequestError(
+        'invalid_integration_request',
+        `Missing required query.${parameter.name} for promoted integration operation.`,
+        400,
+      );
+    }
+  }
+}
+
 function applyPathParams(pathTemplate: string, pathParams: Readonly<Record<string, unknown>> | undefined): string {
-  return pathTemplate.replaceAll(/\{([^}]{1,256})\}/g, (_match, name: string) => {
+  const resolved = pathTemplate.replaceAll(/\{([^{}]{1,256})\}/g, (_match, name: string) => {
     const value = pathParams?.[name];
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
       throw new IntegrationRequestError(
@@ -495,8 +541,23 @@ function applyPathParams(pathTemplate: string, pathParams: Readonly<Record<strin
         400,
       );
     }
+    if (typeof value === 'string' && !isWellFormedUnicode(value)) {
+      throw new IntegrationRequestError(
+        'invalid_integration_request',
+        `path_params.${name} must contain well-formed Unicode.`,
+        400,
+      );
+    }
     return encodeURIComponent(String(value));
   });
+  if (resolved.includes('{') || resolved.includes('}')) {
+    throw new IntegrationRequestError(
+      'invalid_integration_request',
+      'Promoted integration operation contains an invalid path template.',
+      500,
+    );
+  }
+  return resolved;
 }
 
 function readObject(args: unknown): Record<string, unknown> {

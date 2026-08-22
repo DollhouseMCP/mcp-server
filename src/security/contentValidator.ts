@@ -489,9 +489,10 @@ export class ContentValidator {
     // while still allowing legitimate content with some Unicode overhead
     const DOS_PREVENTION_MULTIPLIER = 2;
     if (!options.skipSizeCheck) {
-      if (content.length > maxLength * DOS_PREVENTION_MULTIPLIER) {
+      const contentBytes = Buffer.byteLength(content, 'utf8');
+      if (contentBytes > maxLength * DOS_PREVENTION_MULTIPLIER) {
         throw new SecurityError(
-          `Content exceeds maximum length of ${maxLength} characters (${content.length} provided)`
+          `Content exceeds maximum length of ${maxLength} bytes (${contentBytes} provided)`
         );
       }
     }
@@ -505,9 +506,10 @@ export class ContentValidator {
     // This prevents bypass attacks using combining characters or zero-width chars
     // that would inflate raw length but collapse after normalization
     if (!options.skipSizeCheck) {
-      if (unicodeCheck.sanitized.length > maxLength) {
+      const normalizedBytes = Buffer.byteLength(unicodeCheck.sanitized, 'utf8');
+      if (normalizedBytes > maxLength) {
         throw new SecurityError(
-          `Content exceeds maximum length of ${maxLength} characters after normalization (${unicodeCheck.sanitized.length} provided)`
+          `Content exceeds maximum length of ${maxLength} bytes after normalization (${normalizedBytes} provided)`
         );
       }
     }
@@ -589,10 +591,10 @@ export class ContentValidator {
    * SECURITY FIX #364: Added YAML bomb detection to prevent denial of service
    *
    * @param yamlContent - YAML string to validate
-   * @param maxLength - Size cap for the content. Defaults to MAX_YAML_LENGTH (64KB,
+   * @param maxLength - Size cap for the content. Defaults to MAX_YAML_LENGTH (1 MiB,
    *   the frontmatter limit). Callers validating whole pure-YAML documents (e.g.
-   *   memory files, capped at 256KB — issue #2329) must pass their own limit.
-   *   Values above MAX_CONTENT_LENGTH (500KB) are clamped: an explicit maxLength
+   *   memory files, capped at 10 MiB — issue #2329) must pass their own limit.
+   *   Values above MAX_CONTENT_LENGTH (10 MiB) are clamped: an explicit maxLength
    *   overrides RegexValidator's complexity-based ReDoS caps, and the
    *   MALICIOUS_YAML_PATTERNS scan below is bounded by MAX_CONTENT_LENGTH, so
    *   larger content is rejected here rather than scanned or thrown on.
@@ -630,12 +632,13 @@ export class ContentValidator {
   }
 
   private static hasValidYamlLength(yamlContent: string, effectiveMaxLength: number): boolean {
-    if (yamlContent.length <= effectiveMaxLength) return true;
+    const contentBytes = Buffer.byteLength(yamlContent, 'utf8');
+    if (contentBytes <= effectiveMaxLength) return true;
     SecurityMonitor.logSecurityEvent({
       type: 'YAML_INJECTION_ATTEMPT',
       severity: 'HIGH',
       source: 'yaml_validation',
-      details: `YAML content exceeds maximum length: ${yamlContent.length} > ${effectiveMaxLength}`
+      details: `YAML content exceeds maximum length: ${contentBytes} > ${effectiveMaxLength}`
     });
     return false;
   }

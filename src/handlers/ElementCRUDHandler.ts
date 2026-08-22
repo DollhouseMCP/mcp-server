@@ -31,6 +31,7 @@ import { ElementNotFoundError } from '../utils/ErrorHandler.js';
 import { createElement as createElementCommand } from './element-crud/createElement.js';
 import { deleteElement as deleteElementCommand } from './element-crud/deleteElement.js';
 import { editElement as editElementCommand } from './element-crud/editElement.js';
+import { replaceElement as replaceElementCommand } from './element-crud/replaceElement.js';
 import { upgradeElement as upgradeElementCommand } from './element-crud/upgradeElement.js';
 import { listElements as listElementsCommand } from './element-crud/listElements.js';
 import { findElementFlexibly, sanitizeMetadata as sanitizeMetadataRecord } from './element-crud/helpers.js';
@@ -220,6 +221,10 @@ export class ElementCRUDHandler {
    */
   async editElement(args: {name: string; type: string; input: Record<string, unknown>}) {
     return editElementCommand(this.getContext(), args);
+  }
+
+  async replaceElement(args: {name: string; type: string; data: Record<string, unknown>}) {
+    return replaceElementCommand(this.getContext(), args);
   }
 
   /**

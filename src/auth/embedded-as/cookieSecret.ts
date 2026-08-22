@@ -22,7 +22,11 @@ import { randomBytes, randomUUID } from 'node:crypto';
 import { env } from '../../config/env.js';
 import { logger } from '../../utils/logger.js';
 import { resolveDataDirectory } from '../../paths/resolveDataDirectory.js';
-import type { ISigningKeyStore } from '../../storage/signingKeys/ISigningKeyStore.js';
+import type {
+  ISigningKeyStore,
+  SigningKeyWrite,
+} from '../../storage/signingKeys/ISigningKeyStore.js';
+import { signingKeyCanVerify } from '../../storage/signingKeys/signingKeyLifecycle.js';
 
 /**
  * Resolves to `<run-dir>/cookie-signing-secret.bin`. The run directory is
@@ -162,7 +166,7 @@ export function rotateCookieSecret(
 export async function loadOrGenerateCookieSigningKeysViaStore(
   store: ISigningKeyStore,
   options?: { envSecret?: string },
-): Promise<[string]> {
+): Promise<string[]> {
   // Env override path — same precedence as the file-based variant.
   const envSecret = options?.envSecret ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
   if (envSecret && envSecret.length > 0) {
@@ -178,10 +182,21 @@ export async function loadOrGenerateCookieSigningKeysViaStore(
     const stored = active.payload as { secret: string };
     if (typeof stored.secret === 'string' && stored.secret.length > 0) {
       const buf = Buffer.from(stored.secret, 'base64');
-      if (buf.length >= 32) return [stored.secret];
+      if (buf.length >= 32) {
+        const verificationKeys = (await store.listByKind('cookie'))
+          .filter(key => key.kid !== active.kid && signingKeyCanVerify(key))
+          .map(key => key.payload.secret)
+          .filter((secret): secret is string => typeof secret === 'string')
+          .filter(secret => Buffer.from(secret, 'base64').length >= 32);
+        return [stored.secret, ...verificationKeys];
+      }
       logger.warn(`[cookieSecret] active key in store is shorter than 32 bytes; regenerating. ` +
         `Any previous cookies signed with the prior key will be invalidated.`);
     }
+  }
+
+  if (!active && (await store.listByKind('cookie')).length > 0) {
+    throw new Error('No active cookie signing key is available; rotate a replacement explicitly');
   }
 
   // Generate fresh + rotate atomically into the store.
@@ -209,11 +224,16 @@ export async function rotateCookieSecretViaStore(
 ): Promise<void> {
   const envSecret = options?.envSecret ?? env.DOLLHOUSE_COOKIE_SIGNING_SECRET;
   if (envSecret) return;
+  await store.rotate(createFreshCookieSigningKeyWrite());
+  logger.warn('[cookieSecret] Rotated cookie signing key in store — prior cookies remain verification-only during grace');
+}
+
+/** Generate a fresh cookie-key write before entering an atomic multi-ring transition. */
+export function createFreshCookieSigningKeyWrite(): SigningKeyWrite {
   const fresh = randomBytes(32);
-  await store.rotate({
+  return {
     kid: `cookie-${randomUUID()}`,
     kind: 'cookie',
-    payload: { secret: fresh.toString('base64'), length: 32 },
-  });
-  logger.warn('[cookieSecret] Rotated cookie signing key in store — prior cookies invalidated');
+    payload: { secret: fresh.toString('base64'), length: fresh.length },
+  };
 }

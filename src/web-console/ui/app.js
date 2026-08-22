@@ -131,6 +131,7 @@ function ensureTabModule(name) {
       toast,
       viewSessionLogs,
       manifest: consoleMetadata.manifest,
+      limits: consoleMetadata.limits,
       roleCatalog: consoleMetadata.roleCatalog,
       hasRoute: consoleMetadata.hasRoute,
     });

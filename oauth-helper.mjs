@@ -7,8 +7,8 @@
  * It's spawned as a detached process when authentication is initiated, polls GitHub
  * for the OAuth token, stores it securely, and then exits.
  * 
- * Usage: DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE=<device_code> node oauth-helper.mjs <interval> <expires_in> <client_id>
- *   (device_code is passed via env, not argv, to keep the bearer secret out of ps/proc)
+ * Usage: printf '%s' <device_code> | node oauth-helper.mjs <interval> <expires_in> <client_id>
+ *   (device_code is passed through stdin, never argv or process environment)
  * 
  * This solves the MCP server lifecycle issue where the server may shut down
  * between tool calls, breaking background OAuth polling.
@@ -17,12 +17,15 @@
 import { dirname, join } from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
-import { homedir } from 'os';
+import { homedir, hostname } from 'os';
+import { randomUUID } from 'crypto';
+import { execFileSync } from 'child_process';
 
 // Constants
 const DEFAULT_POLL_INTERVAL = 5;
 const DEFAULT_EXPIRES_IN = 900; // 15 minutes
 const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
+const MAX_DEVICE_CODE_SIZE = 4096;
 const DOLLHOUSE_HOME_DIR = process.env.DOLLHOUSE_HOME_DIR || homedir();
 // Per-user paths: the server passes DOLLHOUSE_OAUTH_HELPER_AUTH_DIR / _LOG_FILE
 // resolved for the current user (hosted HTTP mode). Fall back to the legacy
@@ -33,12 +36,17 @@ const STATE_FILE = join(AUTH_DIR, 'oauth-helper-state.json');
 const RESULT_FILE = join(AUTH_DIR, 'oauth-helper-result.json');
 const LOG_FILE = process.env.DOLLHOUSE_OAUTH_HELPER_LOG_FILE || join(DOLLHOUSE_HOME_DIR, '.dollhouse', 'oauth-helper.log');
 const FLOW_ID = process.env.DOLLHOUSE_OAUTH_HELPER_FLOW_ID || '';
+const FLOW_LOCK_ID = process.env.DOLLHOUSE_OAUTH_HELPER_LOCK_ID || '';
 const TOKEN_URL = process.env.DOLLHOUSE_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token';
 const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
 const POST_HANDOFF_TEST_DELAY_MS = process.env.NODE_ENV === 'test'
   ? Number.parseInt(process.env.DOLLHOUSE_OAUTH_HELPER_TEST_POST_HANDOFF_DELAY_MS || '0', 10)
   : 0;
 const FLOW_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const FLOW_LOCK_FILE = join(AUTH_DIR, 'oauth-helper-flow.lock');
+const FLOW_LOCK_GUARD = `${FLOW_LOCK_FILE}.guard`;
+const RESULT_TEMP_SUFFIX = '.tmp';
+const DIRECTORY_SYNC_UNSUPPORTED = new Set(['EINVAL', 'ENOTSUP', 'EBADF', 'EISDIR', 'EPERM']);
 
 const RESULT_MESSAGES = {
   success: 'OAuth helper completed successfully.',
@@ -55,22 +63,37 @@ const RESULT_MESSAGES = {
 const ALLOWED_RESULT_ERROR_CODES = new Set(Object.keys(RESULT_MESSAGES));
 
 // Parse command line arguments. The device_code is a short-lived bearer secret
-// for the pending authorization, so it is passed via environment variable rather
-// than argv (argv is visible to other local processes via `ps` / /proc/<pid>/cmdline).
+// and arrives on stdin so it is absent from both argv and /proc/<pid>/environ.
 const args = process.argv.slice(2);
 if (args.length < 3) {
-  console.error('Usage: oauth-helper.mjs <interval> <expires_in> <client_id>  (device code via DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE)');
+  console.error('Usage: oauth-helper.mjs <interval> <expires_in> <client_id>  (device code via stdin)');
   process.exit(1);
 }
 
 const [intervalStr, expiresInStr, clientId] = args;
-const deviceCode = process.env.DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE || '';
+const stdinDeviceCode = (await readDeviceCodeFromStdin()).trim();
+const deviceCode = stdinDeviceCode ||
+  (process.env.NODE_ENV === 'test' ? process.env.DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE || '' : '');
 if (!deviceCode) {
-  console.error('OAUTH_HELPER: missing DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE environment variable');
+  console.error('OAUTH_HELPER: missing device code on stdin');
   process.exit(1);
 }
 const pollIntervalSeconds = Number.parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
 const expiresIn = Number.parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
+
+async function readDeviceCodeFromStdin() {
+  const chunks = [];
+  let length = 0;
+  for await (const chunk of process.stdin) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    length += buffer.length;
+    if (length > MAX_DEVICE_CODE_SIZE) {
+      throw new Error('OAUTH_HELPER: device code on stdin exceeds maximum size');
+    }
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
 
 // Validate client ID is provided (no hardcoded fallback)
 if (!clientId || clientId === 'undefined') {
@@ -172,7 +195,7 @@ async function storeToken(token) {
     const { writeHandoffToken } = await import(
       new URL('./dist/security/oauthHelperTokenHandoff.js', import.meta.url).href
     );
-    await writeHandoffToken(AUTH_DIR, FLOW_ID, token);
+    await writeHandoffToken(AUTH_DIR, FLOW_ID, token, Date.now() + expiresIn * 1000);
     await log('Token written to encrypted handoff for server import');
     return true;
   } catch (error) {
@@ -227,6 +250,154 @@ async function cleanupStateFile() {
   }
 }
 
+async function releaseFlowLock() {
+  if (!FLOW_ID_RE.test(FLOW_ID) || !FLOW_ID_RE.test(FLOW_LOCK_ID)) return;
+  try {
+    const { releaseOAuthHelperFlowLock } = await import(
+      new URL('./dist/security/oauthHelperTokenHandoff.js', import.meta.url).href
+    );
+    await releaseOAuthHelperFlowLock(AUTH_DIR, FLOW_ID, FLOW_LOCK_ID);
+  } catch {
+    // The lease expires independently; failure to release is non-fatal.
+  }
+}
+
+function releaseFlowLockSync() {
+  if (!FLOW_ID_RE.test(FLOW_ID) || !FLOW_ID_RE.test(FLOW_LOCK_ID)) return;
+  const guard = tryAcquireFlowLockGuardSync();
+  // Signal cleanup must never steal a guard from an in-flight server process.
+  // Leaving the lease to expire is safer than racing a successor lock.
+  if (!guard) return;
+  const claimedPath = `${FLOW_LOCK_FILE}.${randomUUID()}.release`;
+  let claimed = false;
+  try {
+    const lock = JSON.parse(fsSync.readFileSync(FLOW_LOCK_FILE, 'utf8'));
+    if (lock?.flowId !== FLOW_ID || lock?.lockId !== FLOW_LOCK_ID) return;
+    fsSync.renameSync(FLOW_LOCK_FILE, claimedPath);
+    claimed = true;
+    const claimedLock = JSON.parse(fsSync.readFileSync(claimedPath, 'utf8'));
+    if (claimedLock?.flowId === FLOW_ID && claimedLock?.lockId === FLOW_LOCK_ID) {
+      fsSync.unlinkSync(claimedPath);
+      claimed = false;
+      syncDirectorySync(AUTH_DIR);
+      return;
+    }
+  } catch {
+    // Ignore absent, malformed, or already-released locks during termination.
+  } finally {
+    if (claimed) restoreClaimedFlowLockSync(claimedPath);
+    releaseFlowLockGuardSync(guard);
+  }
+}
+
+function tryAcquireFlowLockGuardSync() {
+  const ownerToken = randomUUID();
+  const ownerMarkerName = `owner-${ownerToken}.json`;
+  const candidatePath = `${FLOW_LOCK_GUARD}.${ownerToken}.candidate`;
+  const candidateOwnerPath = join(candidatePath, ownerMarkerName);
+  const incarnation = readProcessIncarnationSync(process.pid);
+  try {
+    fsSync.mkdirSync(candidatePath, { mode: 0o700 });
+    const descriptor = fsSync.openSync(candidateOwnerPath, 'wx', 0o600);
+    try {
+      fsSync.writeFileSync(descriptor, JSON.stringify({
+        version: 1,
+        ownerToken,
+        host: hostname(),
+        pid: process.pid,
+        createdAt: Date.now(),
+        incarnation,
+      }), 'utf8');
+      fsSync.fsyncSync(descriptor);
+    } finally {
+      fsSync.closeSync(descriptor);
+    }
+    syncDirectorySync(candidatePath);
+    syncDirectorySync(AUTH_DIR);
+    fsSync.renameSync(candidatePath, FLOW_LOCK_GUARD);
+    syncDirectorySync(AUTH_DIR);
+    return { ownerPath: join(FLOW_LOCK_GUARD, ownerMarkerName), ownerToken };
+  } catch {
+    return null;
+  } finally {
+    try { fsSync.rmSync(candidatePath, { recursive: true, force: true }); } catch { /* best effort */ }
+  }
+}
+
+function readProcessIncarnationSync(pid) {
+  if (process.platform === 'linux') {
+    try {
+      const bootId = fsSync.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+      const stat = fsSync.readFileSync(`/proc/${pid}/stat`, 'utf8');
+      const closingParen = stat.lastIndexOf(')');
+      if (closingParen < 0) return null;
+      const fieldsAfterCommand = stat.slice(closingParen + 1).trim().split(/\s+/u);
+      const processStartId = fieldsAfterCommand[19];
+      if (!bootId || !processStartId || !/^[0-9]+$/u.test(processStartId)) return null;
+      return { source: 'linux-proc', bootId, processStartId };
+    } catch {
+      return null;
+    }
+  }
+  if (process.platform === 'darwin') {
+    try {
+      const bootId = normalizeProcessIdentityText(
+        execFileSync('/usr/sbin/sysctl', ['-n', 'kern.boottime'], {
+          encoding: 'utf8',
+          env: { LANG: 'C', LC_ALL: 'C', TZ: 'UTC' },
+        }),
+      );
+      const processStartId = normalizeProcessIdentityText(
+        execFileSync('/bin/ps', ['-p', String(pid), '-o', 'lstart='], {
+          encoding: 'utf8',
+          env: { LANG: 'C', LC_ALL: 'C', TZ: 'UTC' },
+        }),
+      );
+      if (!bootId || !processStartId) return null;
+      return { source: 'darwin-ps', bootId, processStartId };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function normalizeProcessIdentityText(value) {
+  return value.trim().replace(/\s+/gu, ' ');
+}
+
+function releaseFlowLockGuardSync(guard) {
+  const claimedMarker = join(FLOW_LOCK_GUARD, `.claim-${guard.ownerToken}`);
+  const quarantinedGuard = `${FLOW_LOCK_GUARD}.${guard.ownerToken}.released`;
+  try {
+    fsSync.renameSync(guard.ownerPath, claimedMarker);
+  } catch {
+    return;
+  }
+  try {
+    fsSync.renameSync(FLOW_LOCK_GUARD, quarantinedGuard);
+  } catch {
+    try { fsSync.renameSync(claimedMarker, guard.ownerPath); } catch { /* fail closed */ }
+    return;
+  }
+  syncDirectorySync(AUTH_DIR);
+  try { fsSync.rmSync(quarantinedGuard, { recursive: true, force: true }); } catch { /* no longer blocks */ }
+  syncDirectorySync(AUTH_DIR);
+}
+
+function restoreClaimedFlowLockSync(claimedPath) {
+  try {
+    fsSync.linkSync(claimedPath, FLOW_LOCK_FILE);
+  } catch (error) {
+    if (error?.code !== 'EEXIST') return;
+  }
+  try {
+    fsSync.unlinkSync(claimedPath);
+  } catch {
+    // The lease or its quarantine copy will expire independently.
+  }
+}
+
 function buildTerminalResult(status, attempts, errorCode = '') {
   const safeErrorCode = ALLOWED_RESULT_ERROR_CODES.has(errorCode) ? errorCode : 'fatal_error';
   const result = {
@@ -249,44 +420,134 @@ function buildTerminalResult(status, attempts, errorCode = '') {
 }
 
 async function writeTerminalResult(status, attempts, errorCode = '') {
+  const temporaryPath = `${RESULT_FILE}.${randomUUID()}${RESULT_TEMP_SUFFIX}`;
+  let handle;
   try {
     await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
     const { result, safeErrorCode } = buildTerminalResult(status, attempts, errorCode);
 
-    await fs.writeFile(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
+    handle = await fs.open(temporaryPath, 'wx', 0o600);
+    await handle.writeFile(JSON.stringify(result, null, 2), 'utf8');
+    await handle.sync();
+    await handle.close();
+    handle = undefined;
+    const guard = tryAcquireFlowLockGuardSync();
+    if (!guard) throw new Error('OAuth helper flow lock is busy');
+    try {
+      if (!flowLockBelongsToThisHelperSync()) {
+        throw new Error('OAuth helper no longer owns the active flow lock');
+      }
+      await fs.rename(temporaryPath, RESULT_FILE);
+      await syncDirectory(AUTH_DIR);
+    } finally {
+      releaseFlowLockGuardSync(guard);
+    }
     const resultSuffix = status === 'success' ? '' : `/${safeErrorCode}`;
     await log(`Terminal result written: ${status}${resultSuffix}`);
+    return true;
   } catch {
     await log('Failed to write terminal result');
+    return false;
+  } finally {
+    await handle?.close().catch(() => {});
+    await fs.unlink(temporaryPath).catch(() => {});
   }
 }
 
 function writeTerminalResultSync(status, attempts, errorCode = '') {
+  const temporaryPath = `${RESULT_FILE}.${randomUUID()}${RESULT_TEMP_SUFFIX}`;
+  let descriptor;
   try {
     fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
     const { result } = buildTerminalResult(status, attempts, errorCode);
 
-    fsSync.writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
+    descriptor = fsSync.openSync(temporaryPath, 'wx', 0o600);
+    fsSync.writeFileSync(descriptor, JSON.stringify(result, null, 2), 'utf8');
+    fsSync.fsyncSync(descriptor);
+    fsSync.closeSync(descriptor);
+    descriptor = undefined;
+    const guard = tryAcquireFlowLockGuardSync();
+    if (!guard) return false;
+    try {
+      if (!flowLockBelongsToThisHelperSync()) return false;
+      fsSync.renameSync(temporaryPath, RESULT_FILE);
+      syncDirectorySync(AUTH_DIR);
+    } finally {
+      releaseFlowLockGuardSync(guard);
+    }
+    return true;
   } catch {
     // Ignore cleanup/status errors during process termination
+    return false;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fsSync.closeSync(descriptor); } catch { /* already closed */ }
+    }
+    try { fsSync.unlinkSync(temporaryPath); } catch { /* published or never created */ }
+  }
+}
+
+async function syncDirectory(directoryPath) {
+  let handle;
+  try {
+    handle = await fs.open(directoryPath, 'r');
+    await handle.sync();
+  } catch (error) {
+    if (!DIRECTORY_SYNC_UNSUPPORTED.has(error?.code)) throw error;
+  } finally {
+    await handle?.close().catch(() => {});
+  }
+}
+
+function syncDirectorySync(directoryPath) {
+  let descriptor;
+  try {
+    descriptor = fsSync.openSync(directoryPath, 'r');
+    fsSync.fsyncSync(descriptor);
+  } catch (error) {
+    if (!DIRECTORY_SYNC_UNSUPPORTED.has(error?.code)) throw error;
+  } finally {
+    if (descriptor !== undefined) {
+      try { fsSync.closeSync(descriptor); } catch { /* already closed */ }
+    }
   }
 }
 
 async function pidFileBelongsToThisHelper() {
-  if (!FLOW_ID) return true;
   try {
-    const pid = (await fs.readFile(PID_FILE, 'utf8')).trim();
-    return pid === String(process.pid);
+    return pidRecordBelongsToThisHelper(JSON.parse(await fs.readFile(PID_FILE, 'utf8')));
   } catch {
     return false;
   }
 }
 
 function pidFileBelongsToThisHelperSync() {
-  if (!FLOW_ID) return fsSync.existsSync(PID_FILE);
   try {
-    const pid = fsSync.readFileSync(PID_FILE, 'utf8').trim();
-    return pid === String(process.pid);
+    return pidRecordBelongsToThisHelper(JSON.parse(fsSync.readFileSync(PID_FILE, 'utf8')));
+  } catch {
+    return false;
+  }
+}
+
+function pidRecordBelongsToThisHelper(record) {
+  const currentIncarnation = readProcessIncarnationSync(process.pid);
+  return record?.version === 1 && record.pid === process.pid &&
+    record.flowId === FLOW_ID && record.lockId === FLOW_LOCK_ID &&
+    currentIncarnation && sameProcessIncarnation(record.incarnation, currentIncarnation);
+}
+
+function sameProcessIncarnation(left, right) {
+  return left?.source === right?.source && left?.bootId === right?.bootId &&
+    left?.processStartId === right?.processStartId;
+}
+
+function flowLockBelongsToThisHelperSync() {
+  if (!FLOW_ID_RE.test(FLOW_ID) || !FLOW_ID_RE.test(FLOW_LOCK_ID)) return false;
+  try {
+    const lock = JSON.parse(fsSync.readFileSync(FLOW_LOCK_FILE, 'utf8'));
+    return lock?.flowId === FLOW_ID && lock?.lockId === FLOW_LOCK_ID &&
+      typeof lock.expiresAt === 'number' && Number.isFinite(lock.expiresAt) &&
+      lock.expiresAt > Date.now();
   } catch {
     return false;
   }
@@ -317,7 +578,17 @@ function stateFileBelongsToThisHelperSync() {
 async function writePidFile() {
   try {
     await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
-    await fs.writeFile(PID_FILE, process.pid.toString(), { mode: 0o600 });
+    const incarnation = readProcessIncarnationSync(process.pid);
+    if (!FLOW_ID_RE.test(FLOW_ID) || !FLOW_ID_RE.test(FLOW_LOCK_ID) || !incarnation) {
+      throw new Error('Cannot establish OAuth helper process ownership');
+    }
+    await fs.writeFile(PID_FILE, JSON.stringify({
+      version: 1,
+      pid: process.pid,
+      flowId: FLOW_ID,
+      lockId: FLOW_LOCK_ID,
+      incarnation,
+    }), { mode: 0o600 });
     await log(`PID file written: ${PID_FILE}`);
   } catch {
     await log('Failed to write PID file');
@@ -339,6 +610,34 @@ function hasCommittedHandoffSync() {
 }
 
 async function main() {
+  let attempts = 0;
+  let heartbeatInterval;
+  const finishOnSignal = () => {
+    const handoffCommitted = hasCommittedHandoffSync();
+    const status = handoffCommitted ? 'success' : 'failed';
+    const resultPublished = writeTerminalResultSync(
+      status,
+      attempts,
+      handoffCommitted ? 'success' : 'interrupted'
+    );
+    if (!handoffCommitted) {
+      cleanupStateFileSync();
+      releaseFlowLockSync();
+    }
+    cleanupPidFileSync();
+    process.exit(handoffCommitted && resultPublished ? 0 : 1);
+  };
+
+  // Install terminal handlers before publishing the PID readiness marker.
+  // A supervisor may signal immediately after observing that file.
+  process.on('exit', cleanupPidFileSync);
+  process.on('beforeExit', async () => {
+    await log('OAuth helper completing cleanup');
+    await cleanupPidFile();
+  });
+  process.on('SIGINT', finishOnSignal);
+  process.on('SIGTERM', finishOnSignal);
+
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
   await log(`[CONFIG] Poll interval: ${pollIntervalSeconds}s, Expires in: ${expiresIn}s`);
@@ -351,56 +650,31 @@ async function main() {
   
   // Write initial heartbeat
   let lastHeartbeat = Date.now();
-  const heartbeatInterval = setInterval(async () => {
+  heartbeatInterval = setInterval(async () => {
     await log(`[HEARTBEAT] Process alive - Memory: ${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`);
     lastHeartbeat = Date.now();
   }, 30000); // Every 30 seconds
   
   const startTime = Date.now();
   const timeout = startTime + (expiresIn * 1000);
-  let attempts = 0;
   let consecutiveErrors = 0;
   let currentPollIntervalMs = pollIntervalSeconds * 1000;
   const MAX_CONSECUTIVE_ERRORS = 5;
   
-  // Set up cleanup on exit - use synchronous cleanup for exit event
-  process.on('exit', () => {
-    cleanupPidFileSync();
-  });
-  
-  // Use beforeExit for async cleanup when possible
-  process.on('beforeExit', async () => {
-    await log('OAuth helper completing cleanup');
-    await cleanupPidFile();
-  });
-  
-  const finishOnSignal = () => {
-    // The final rename can become visible immediately before the await continuation
-    // updates `handoffWritten`. Treat that durable, flow-bound file as committed.
-    const handoffCommitted = hasCommittedHandoffSync();
-    const status = handoffCommitted ? 'success' : 'failed';
-    writeTerminalResultSync(status, attempts, handoffCommitted ? 'success' : 'interrupted');
-    if (!handoffCommitted) {
-      cleanupStateFileSync();
-    }
-    cleanupPidFileSync();
-    process.exit(handoffCommitted ? 0 : 1);
-  };
-
-  process.on('SIGINT', finishOnSignal);
-  
-  process.on('SIGTERM', finishOnSignal);
-
   async function finish(status, errorCode, exitCode) {
     clearInterval(heartbeatInterval);
-    await writeTerminalResult(status, attempts, errorCode);
+    const resultPublished = await writeTerminalResult(status, attempts, errorCode);
     // The server needs successful flow state to correlate and consume the
     // encrypted token handoff. Failed flows have no handoff to import.
     if (status !== 'success') {
       await cleanupStateFile();
+      await releaseFlowLock();
     }
     await cleanupPidFile();
-    process.exit(exitCode);
+    if (status === 'success' && resultPublished) {
+      console.log('✅ GitHub authentication successful! Token has been stored.');
+    }
+    process.exit(resultPublished ? exitCode : 1);
   }
   
   while (Date.now() < timeout) {
@@ -462,7 +736,6 @@ async function main() {
         if (stored) {
           await log('[SUCCESS] ✅ OAuth authentication completed successfully');
           await log(`[STATS] Total attempts: ${attempts}, Time elapsed: ${Math.round((Date.now() - startTime) / 1000)}s`);
-          console.log('✅ GitHub authentication successful! Token has been stored.');
           return finish('success', 'success', 0);
         } else {
           await log('[ERROR] ❌ Failed to store token');
@@ -518,10 +791,15 @@ main().catch(async (error) => {
   await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
   const handoffCommitted = hasCommittedHandoffSync();
-  await writeTerminalResult(handoffCommitted ? 'success' : 'failed', 0, handoffCommitted ? 'success' : 'fatal_error');
+  const resultPublished = await writeTerminalResult(
+    handoffCommitted ? 'success' : 'failed',
+    0,
+    handoffCommitted ? 'success' : 'fatal_error'
+  );
   if (!handoffCommitted) {
     await cleanupStateFile();
+    await releaseFlowLock();
   }
   await cleanupPidFile();
-  process.exit(handoffCommitted ? 0 : 1);
+  process.exit(handoffCommitted && resultPublished ? 0 : 1);
 });

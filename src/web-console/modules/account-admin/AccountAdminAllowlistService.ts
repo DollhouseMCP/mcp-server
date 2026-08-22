@@ -67,7 +67,7 @@ export class AccountAdminAllowlistService {
           operation: 'allowlist_add',
           kind: entry.kind,
         }));
-      });
+      }, actor);
       return { status: 201, body };
     } catch (error) {
       if (error instanceof ConsoleStoreConflictError) {
@@ -83,6 +83,7 @@ export class AccountAdminAllowlistService {
 
   async update(req: ConsoleRequest, route: ConsoleRouteDefinition, id: string): Promise<ConsoleHandlerResult> {
     assertUuid(id, 'id');
+    const actor = requireConsoleAuthentication(req);
     const occurredAt = this.now();
     const parsed = parseUpdateBody(req.body);
     if (parsed.kind === 'invalid') {
@@ -95,7 +96,7 @@ export class AccountAdminAllowlistService {
         operation: 'allowlist_update',
       }));
       return entry ? serializeAccountAllowlistEntry(entry) : null;
-    });
+    }, actor);
     return body
       ? { status: 200, body }
       : problem(404, 'not_found', 'Not found', 'Allowlist entry was not found.');
@@ -115,7 +116,7 @@ export class AccountAdminAllowlistService {
         operation: 'allowlist_remove',
       }));
       return !!entry;
-    });
+    }, actor);
     return removed
       ? { status: 204, body: null }
       : problem(404, 'not_found', 'Not found', 'Allowlist entry was not found.');

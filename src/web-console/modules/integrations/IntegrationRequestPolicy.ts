@@ -16,8 +16,14 @@ export interface IntegrationRequestPolicyInput {
   readonly provider: string;
   readonly method: string;
   readonly path: string;
+  readonly baseUrl?: string;
   readonly query?: Readonly<Record<string, unknown>>;
   readonly body?: unknown;
+  readonly descriptorId?: string;
+  readonly descriptorRoutingFingerprint?: string;
+  readonly resolvedUrl?: string;
+  readonly specHash?: string;
+  readonly authMode?: 'credentialed' | 'anonymous';
 }
 
 export interface IntegrationRequestPolicyDecision {
@@ -126,28 +132,37 @@ export class IntegrationRequestPolicyEnforcer {
    * evaluation being unavailable — fails closed to `false`, and the caller
    * skips discovery for that provider.
    */
-  async evaluateDiscovery(provider: string): Promise<boolean> {
+  async evaluateDiscovery(input: {
+    readonly provider: string;
+    readonly descriptorId: string;
+    readonly descriptorRoutingFingerprint: string;
+    readonly serverUrl: string;
+  }): Promise<boolean> {
     try {
       const toolInput = integrationToolInput({
-        provider,
+        provider: input.provider,
         method: 'GET',
         path: REMOTE_MCP_DISCOVERY_POLICY_PATH,
+        descriptorId: input.descriptorId,
+        descriptorRoutingFingerprint: input.descriptorRoutingFingerprint,
+        resolvedUrl: input.serverUrl,
+        authMode: 'credentialed',
       });
       const existingApproval = await this.checkExistingApproval(toolInput, 'read');
-      if (existingApproval) return this.auditDiscovery(provider, true);
+      if (existingApproval) return this.auditDiscovery(input.provider, true);
       const activeElements = await this.options.getActiveElements();
       const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
       if (elementDecision.behavior === 'deny' || elementDecision.behavior === 'confirm') {
-        return this.auditDiscovery(provider, false);
+        return this.auditDiscovery(input.provider, false);
       }
       const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
       const approvalPolicy = resolveCliApprovalPolicy(activeElements);
       return this.auditDiscovery(
-        provider,
+        input.provider,
         !approvalPolicy.requireApproval?.includes(classification.riskLevel as 'moderate' | 'dangerous'),
       );
     } catch {
-      return this.auditDiscovery(provider, false);
+      return this.auditDiscovery(input.provider, false);
     }
   }
 
@@ -227,8 +242,16 @@ function integrationToolInput(input: IntegrationRequestPolicyInput): Record<stri
     provider: input.provider,
     method,
     path: input.path,
+    ...(input.baseUrl ? { base_url: input.baseUrl } : {}),
     read_write_class: method === 'GET' ? 'read' : 'write',
     ...(input.query ? { query: input.query } : {}),
     ...(input.body === undefined ? {} : { body: input.body }),
+    ...(input.descriptorId ? { descriptor_id: input.descriptorId } : {}),
+    ...(input.descriptorRoutingFingerprint
+      ? { descriptor_routing_fingerprint: input.descriptorRoutingFingerprint }
+      : {}),
+    ...(input.resolvedUrl ? { resolved_url: input.resolvedUrl } : {}),
+    ...(input.specHash ? { spec_hash: input.specHash } : {}),
+    ...(input.authMode ? { auth_mode: input.authMode } : {}),
   };
 }

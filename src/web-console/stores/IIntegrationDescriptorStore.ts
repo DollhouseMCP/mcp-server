@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import {
   ConsoleStoreValidationError,
   assertDisplayString,
@@ -38,6 +40,8 @@ export interface IntegrationDescriptorRecord {
   /** Opaque logical revision; stable across at-rest ciphertext rewraps. */
   readonly clientSecretRevision: string | null;
   readonly credentialKeyVersion: string | null;
+  /** Monotonic deployment revision for curated seed data; null for legacy/BYO descriptors. */
+  readonly curatedSeedRevision?: number | null;
   readonly operationPromotion: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
   readonly updatedAt: Date;
@@ -80,18 +84,138 @@ export interface IntegrationDescriptorCreateInput {
   readonly clientSecretCiphertext?: Buffer | null;
   readonly clientSecretRevision?: string | null;
   readonly credentialKeyVersion?: string | null;
+  /** Optional positive integer. Once set, lower or missing curated revisions cannot overwrite it. */
+  readonly curatedSeedRevision?: number | null;
   readonly operationPromotion?: Readonly<Record<string, unknown>>;
   readonly createdAt: Date;
   readonly updatedAt: Date;
 }
 
 export interface IntegrationDescriptorUpsertOptions {
+  /** Reject an update if another mutation changed the descriptor after it was read. */
+  readonly expectedUpdatedAt?: Date;
   /**
    * Permit a proven-equal legacy secret to gain its first logical revision
    * without revoking descriptor bindings. Stores must verify that no other
    * routing-sensitive field changed before honoring this option.
    */
   readonly initializeClientSecretRevision?: boolean;
+  /**
+   * Retain the current curated seed fields while refreshing deployment-owned
+   * OAuth secret envelope at the same or an older seed revision. Logical
+   * client identity or secret changes require a newer explicit seed revision.
+   */
+  readonly refreshDeploymentCredentialsAtRetainedSeedRevision?: boolean;
+}
+
+/**
+ * The only routing-sensitive mutation allowed while credentials are cleanup
+ * only: adding a previously absent revocation endpoint. Every execution and
+ * token-exchange field must remain byte-for-byte equivalent.
+ */
+export function isCleanupRevocationEndpointRepair(
+  current: IntegrationDescriptorRecord,
+  proposed: IntegrationDescriptorRecord,
+): boolean {
+  const currentRevocationUrl = current.oauth?.tokenExchange.revocationUrl;
+  const proposedRevocationUrl = proposed.oauth?.tokenExchange.revocationUrl;
+  if (typeof currentRevocationUrl === 'string' && currentRevocationUrl.length > 0) return false;
+  if (typeof proposedRevocationUrl !== 'string' || proposedRevocationUrl.length === 0) return false;
+  const left = cleanupRepairRoutingShape(current);
+  const right = cleanupRepairRoutingShape(proposed);
+  return canonicalJsonValue(left) === canonicalJsonValue(right);
+}
+
+function cleanupRepairRoutingShape(descriptor: IntegrationDescriptorRecord): unknown {
+  const tokenExchange = { ...(descriptor.oauth?.tokenExchange ?? {}) };
+  delete tokenExchange.revocationUrl;
+  return {
+    provider: descriptor.provider,
+    authStrategy: descriptor.authStrategy,
+    apiHosts: descriptor.apiHosts,
+    oauth: descriptor.oauth ? { ...descriptor.oauth, tokenExchange } : null,
+    staticApiKey: descriptor.staticApiKey,
+    operationPromotion: descriptor.operationPromotion,
+    clientSecretRevision: descriptor.clientSecretRevision,
+  };
+}
+
+function canonicalJsonValue(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value);
+  if (Array.isArray(value)) return `[${value.map(canonicalJsonValue).join(',')}]`;
+  const record = value as Readonly<Record<string, unknown>>;
+  return `{${Object.keys(record).sort().map(key =>
+    `${JSON.stringify(key)}:${canonicalJsonValue(record[key])}`).join(',')}}`;
+}
+
+export interface CuratedIntegrationDeploymentState {
+  readonly provider: UserIntegrationProvider;
+  readonly seedRevision: number;
+  readonly enabled: boolean;
+  readonly updatedAt: Date;
+}
+
+export type CuratedIntegrationSeedDirective =
+  | {
+    readonly provider: UserIntegrationProvider;
+    readonly seedRevision: number;
+    readonly enabled: false;
+    readonly updatedAt: Date;
+  }
+  | {
+    readonly provider: UserIntegrationProvider;
+    readonly seedRevision: number | null;
+    readonly enabled: true;
+    readonly descriptor: IntegrationDescriptorCreateInput;
+    readonly upsertOptions?: IntegrationDescriptorUpsertOptions;
+    readonly updatedAt: Date;
+  };
+
+export interface CuratedIntegrationSeedResult {
+  readonly applied: boolean;
+  readonly enabled: boolean;
+  readonly seedRevision: number | null;
+  readonly descriptor: IntegrationDescriptorRecord | null;
+}
+
+export class CuratedIntegrationSeedConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'CuratedIntegrationSeedConflictError';
+  }
+}
+
+/** Routing mutation must wait until a consumed OAuth callback releases its completion lease. */
+export class IntegrationDescriptorMutationBusyError extends Error {
+  constructor() {
+    super('integration descriptor has an OAuth callback completing');
+    this.name = 'IntegrationDescriptorMutationBusyError';
+  }
+}
+
+export class IntegrationDescriptorRevisionConflictError extends Error {
+  constructor() {
+    super('integration descriptor changed after it was read');
+    this.name = 'IntegrationDescriptorRevisionConflictError';
+  }
+}
+
+/**
+ * Canonical lock identity for every mutation of one logical descriptor.
+ * Descriptor ids are generated storage identities, so locking by id does not
+ * serialize first insert, seed reconciliation, callback completion, and later
+ * updates of the same ownership/provider tuple.
+ */
+export function integrationDescriptorMutationKey(
+  identity: Pick<IntegrationDescriptorCreateInput, 'provider' | 'ownership' | 'ownerUserId'>,
+): string {
+  if (identity.ownership === 'curated') {
+    return `integration-descriptor:curated:${identity.provider}`;
+  }
+  if (!identity.ownerUserId) {
+    throw new ConsoleStoreValidationError('BYO descriptor mutation requires ownerUserId');
+  }
+  return `integration-descriptor:byo:${identity.ownerUserId}:${identity.provider}`;
 }
 
 export const INTEGRATION_DESCRIPTOR_PAGE_MAX_LIMIT = 100;
@@ -108,7 +232,23 @@ export interface IntegrationDescriptorPage {
   readonly nextCursor: string | null;
 }
 
+export interface IntegrationDescriptorCredentialFence {
+  hasCredentialMaterial(integrationDescriptorId: string): Promise<boolean>;
+  hasExecutableCredentialMaterial(integrationDescriptorId: string): Promise<boolean>;
+  revokeCredentiallessBindings(integrationDescriptorId: string, revokedAt: Date): Promise<void>;
+  /** Cancel pending callbacks; return false when a consumed callback is completing. */
+  fencePendingCallbacks?(integrationDescriptorId: string): Promise<boolean>;
+}
+
 export interface IIntegrationDescriptorStore {
+  /** In-memory composition hook; PostgreSQL performs this fence in its transaction. */
+  configureCredentialMutationFence?(fence: IntegrationDescriptorCredentialFence): void;
+  /** Optional in-memory fence used to serialize callback persistence with descriptor mutation. */
+  runIfCurrent?<T>(
+    descriptorId: string,
+    descriptorFingerprint: string,
+    operation: () => Promise<T>,
+  ): Promise<T | null>;
   /**
    * ALL descriptors visible to the user (curated + own BYO), ordered by
    * provider then id. Complete — implementations must iterate pages
@@ -139,10 +279,46 @@ export interface IIntegrationDescriptorStore {
   delete(id: string, ownerUserId: string): Promise<boolean>;
   /** Remove a deployment-owned curated descriptor by provider id. */
   deleteCurated(provider: UserIntegrationProvider): Promise<boolean>;
+  /**
+   * Atomically apply deployment intent for a curated seed. A disabled directive
+   * is a durable tombstone: it hides the curated descriptor without deleting it
+   * or any user integration credentials. Revisions are monotonic across replicas.
+   */
+  reconcileCuratedSeed(directive: CuratedIntegrationSeedDirective): Promise<CuratedIntegrationSeedResult>;
   upsert(
     input: IntegrationDescriptorCreateInput,
     options?: IntegrationDescriptorUpsertOptions,
   ): Promise<IntegrationDescriptorRecord>;
+}
+
+/**
+ * Verify that a retained-revision write changes deployment-owned OAuth
+ * credentials only. Seed-owned routing, presentation, and promotion fields
+ * remain protected by the monotonic curated revision.
+ */
+export function isRetainedSeedCredentialRefresh(
+  current: IntegrationDescriptorRecord,
+  input: IntegrationDescriptorCreateInput,
+): boolean {
+  if (current.authStrategy !== 'oauth2_authorization_code'
+      || input.authStrategy !== 'oauth2_authorization_code'
+      || !current.oauth
+      || !input.oauth) return false;
+  const { clientId: currentClientId, ...currentOAuthSeedFields } = current.oauth;
+  const { clientId: inputClientId, ...inputOAuthSeedFields } = input.oauth;
+  return input.provider === current.provider
+    && input.ownership === current.ownership
+    && input.ownerUserId === current.ownerUserId
+    && input.displayName === current.displayName
+    && input.category === current.category
+    && isDeepStrictEqual(input.apiHosts, current.apiHosts)
+    && isDeepStrictEqual(inputOAuthSeedFields, currentOAuthSeedFields)
+    && inputClientId === currentClientId
+    && (input.clientSecretRevision ?? null) === (current.clientSecretRevision ?? null)
+    && isDeepStrictEqual(input.staticApiKey ?? null, current.staticApiKey)
+    && (input.curatedSeedRevision ?? null) === (current.curatedSeedRevision ?? null)
+    && isDeepStrictEqual(input.operationPromotion ?? {}, current.operationPromotion)
+    && input.createdAt.getTime() === current.createdAt.getTime();
 }
 
 export function resolveDescriptorPageLimit(limit: number | undefined): number {
@@ -228,6 +404,7 @@ export function validateIntegrationDescriptorInput(input: IntegrationDescriptorC
     clientSecretCiphertext: input.clientSecretCiphertext ?? null,
     clientSecretRevision: input.clientSecretRevision ?? null,
     credentialKeyVersion: input.credentialKeyVersion ?? null,
+    curatedSeedRevision: input.curatedSeedRevision ?? null,
     operationPromotion: input.operationPromotion ?? {},
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
@@ -293,9 +470,23 @@ function validateIntegrationDescriptorShape(
     record.clientSecretRevision,
     record.credentialKeyVersion,
   );
+  validateCuratedSeedRevision(record.ownership, record.curatedSeedRevision ?? null);
   validateJsonRecord(record.operationPromotion, 'operationPromotion', 8192);
   if (record.updatedAt < record.createdAt) {
     throw new ConsoleStoreValidationError('updatedAt must be at or after createdAt');
+  }
+}
+
+function validateCuratedSeedRevision(
+  ownership: IntegrationDescriptorOwnership,
+  revision: number | null,
+): void {
+  if (revision === null) return;
+  if (ownership !== 'curated') {
+    throw new ConsoleStoreValidationError('curatedSeedRevision is only valid for curated descriptors');
+  }
+  if (!Number.isSafeInteger(revision) || revision < 1 || revision > 2_147_483_647) {
+    throw new ConsoleStoreValidationError('curatedSeedRevision must be a positive 32-bit integer');
   }
 }
 

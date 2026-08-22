@@ -55,6 +55,9 @@ export async function loadConsoleMetadata() {
   const routeKeys = new Set(routes.map(route => routeKey(route.method, route.path)));
   return Object.freeze({
     manifest: manifestResponse.body,
+    limits: Object.freeze({
+      portfolioRequestMaxBytes: Number(manifestResponse.body?.limits?.portfolio_request_max_bytes) || 1024 * 1024,
+    }),
     roleCatalog: roleCatalogResponse.body,
     hasRoute: (method, path) => routeKeys.has(routeKey(method, path)),
     hasRoutes: requiredRoutes => requiredRoutes.every(([method, path]) => routeKeys.has(routeKey(method, path))),

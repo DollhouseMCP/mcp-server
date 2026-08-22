@@ -82,7 +82,7 @@ export class CollectionInstallService {
     const tags = tagsFrom(validated.metadata);
 
     // The installer's own caps are looser than the console's portfolio record
-    // contract (name/displayName <= 200, tags <= 50 x 80 chars, content <= 1 MiB,
+    // contract (name/displayName <= 200, tags <= 50 x 80 chars, content <= 10 MiB,
     // metadata <= 64 KiB). Apply the SAME pre-write validation the direct create
     // route uses, so an out-of-contract catalog element 422s here instead of
     // being persisted by the manager-backed store and only failing afterwards

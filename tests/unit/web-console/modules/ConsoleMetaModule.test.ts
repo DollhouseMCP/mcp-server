@@ -38,7 +38,13 @@ describe('ConsoleMetaModule', () => {
     }).routes.find(candidate => candidate.path === '/api/v1/me/manifest');
     expect(calls).toBe(0);
     const result = await route?.handler(FAKE_REQUEST);
-    expect(result).toEqual({ status: 200, body: EMPTY_MANIFEST });
+    expect(result).toEqual({
+      status: 200,
+      body: {
+        ...EMPTY_MANIFEST,
+        limits: { portfolio_request_max_bytes: 1024 * 1024 },
+      },
+    });
     expect(calls).toBe(1);
   });
 

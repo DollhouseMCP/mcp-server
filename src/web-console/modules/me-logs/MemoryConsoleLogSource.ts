@@ -22,8 +22,9 @@ export function createMemoryConsoleLogSource(sink: QueryableLogSink): IConsoleLo
         correlationId: options.correlationId ?? undefined,
         sessionId: options.sessionId ?? undefined,
         since: options.since ?? undefined,
+        beforeTimestamp: options.beforeTimestamp ?? undefined,
+        beforeId: options.beforeId ?? undefined,
         limit: options.limit,
-        offset: options.offset,
       });
       return {
         entries: result.entries.map(entry => ({

@@ -458,8 +458,32 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._loader.load(filePath);
   }
 
-  async save(element: T, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+  async save(
+    element: T,
+    filePath: string,
+    options?: { exclusive?: boolean; durable?: boolean },
+  ): Promise<void> {
     return this._persister.save(element, filePath, options);
+  }
+
+  /** Whether this manager persists through a database-backed storage layer. */
+  isDatabaseBacked(): boolean {
+    return isWritableStorageLayer(this.storageLayer);
+  }
+
+  /** Save only if the durable element still matches the supplied snapshot. */
+  async saveReplacement(expected: T, replacement: T, filePath?: string): Promise<void> {
+    await this._persister.save(
+      replacement,
+      filePath ?? this.storageLayer.getPathByName(expected.metadata.name) ?? expected.metadata.name,
+      { expectedElement: expected },
+    );
+  }
+
+  /** Delete only if the durable element still matches the supplied snapshot. */
+  async deleteLoaded(element: T): Promise<void> {
+    const path = this.storageLayer.getPathByName(element.metadata.name) ?? element.metadata.name;
+    await this._persister.delete(path, element);
   }
 
   async delete(filePath: string): Promise<void> {

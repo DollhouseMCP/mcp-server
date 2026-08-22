@@ -20,6 +20,8 @@ export interface ConsoleSessionRecord {
   readonly idHash: Buffer;
   readonly userId: string;
   readonly authSub: string;
+  /** Principal authorization generation captured when the login completed. */
+  readonly authzVersion: number;
   readonly csrfTokenHash: Buffer;
   readonly grantedCapabilities: readonly ConsoleCapability[];
   readonly elevation: ConsoleSessionElevation | null;
@@ -84,6 +86,9 @@ export function validateConsoleSessionRecord(record: ConsoleSessionRecord): void
   assertUuid(record.userId, 'userId');
   if (record.authSub.trim() === '') {
     throw new ConsoleStoreValidationError('authSub must not be empty');
+  }
+  if (!Number.isSafeInteger(record.authzVersion) || record.authzVersion < 0) {
+    throw new ConsoleStoreValidationError('authzVersion must be a non-negative safe integer');
   }
   validateCapabilities(record.grantedCapabilities, 'grantedCapabilities');
   if (!record.grantedCapabilities.includes('console:self')) {

@@ -119,15 +119,17 @@ describe('MCP SDK Security', () => {
       expect(indexContent).toMatch(/new\s+StdioServerTransport\s*\(/);
     });
 
-    it('should use createMcpExpressApp for HTTP transport DNS rebinding protection', async () => {
+    it('should apply SDK host validation to the protected HTTP transport', async () => {
       const projectRoot = path.resolve(__dirname, '../..');
       const httpServerPath = path.join(projectRoot, 'src/server/StreamableHttpServer.ts');
       const httpServerContent = fs.readFileSync(httpServerPath, 'utf8');
 
-      // StreamableHttpServer.ts must use createMcpExpressApp() from the SDK,
-      // which enables DNS rebinding protection by default (CVE-2025-66414)
-      expect(httpServerContent).toContain('createMcpExpressApp');
-      expect(httpServerContent).toContain("from '@modelcontextprotocol/sdk/server/express.js'");
+      expect(httpServerContent).toContain('createProtectedMcpExpressApp');
+      expect(httpServerContent).toContain('hostHeaderValidation');
+      expect(httpServerContent).toContain('localhostHostValidation');
+      expect(httpServerContent).toContain(
+        "from '@modelcontextprotocol/sdk/server/middleware/hostHeaderValidation.js'",
+      );
     });
   });
 
@@ -191,19 +193,20 @@ describe('HTTP Transport Security (Phase 2)', () => {
    * These tests verify the HTTP transport implementation meets security requirements.
    *
    * Security measures:
-   * 1. createMcpExpressApp() enforces DNS rebinding protection by default
+   * 1. createProtectedMcpExpressApp() applies SDK host validation middleware
    * 2. Host allowlist via DOLLHOUSE_HTTP_ALLOWED_HOSTS
    * 3. Per-client rate limiting
    * 4. Default binding to 127.0.0.1 (localhost only)
    */
 
-  it('should use createMcpExpressApp for DNS rebinding protection', async () => {
+  it('should apply host validation in the protected MCP Express factory', async () => {
     const projectRoot = path.resolve(__dirname, '../..');
     const httpServerPath = path.join(projectRoot, 'src/server/StreamableHttpServer.ts');
     const httpServerContent = fs.readFileSync(httpServerPath, 'utf8');
 
-    // createMcpExpressApp() enables DNS rebinding protection by default
-    expect(httpServerContent).toContain('createMcpExpressApp');
+    expect(httpServerContent).toContain('createProtectedMcpExpressApp');
+    expect(httpServerContent).toContain('hostHeaderValidation');
+    expect(httpServerContent).toContain('localhostHostValidation');
   });
 
   it('should have hostHeaderValidation middleware available', async () => {

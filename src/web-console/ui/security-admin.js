@@ -13,6 +13,7 @@
  */
 
 import { del, get, post, put } from './api.js';
+import { createRequestOwner } from './polling.js';
 import { confirmDialog } from './ui-utils.js';
 import { escapeHtml, formatTimestamp, responseDetail } from './operations-ui.js';
 
@@ -110,11 +111,14 @@ function createSigningKeysView({ notify, canRotate, canRetire, canDelete }) {
   let receipt = null;
   let actionMessage = '';
   let busy = false;
+  const loadOwner = createRequestOwner();
 
   async function load() {
+    const requestClaim = loadOwner.claim();
     state = state === 'ready' ? 'ready' : 'loading';
     render();
     const response = await get(KEYS_PATH).catch(() => null);
+    if (!loadOwner.owns(requestClaim)) return;
     if (response?.status !== 200 || !Array.isArray(response.body?.kinds)) {
       state = 'error';
       message = elevationHint(response) ?? responseDetail(response, 'Signing keys could not be loaded.');
@@ -273,6 +277,7 @@ function createSigningKeysView({ notify, canRotate, canRetire, canDelete }) {
       if (state === 'idle') void load();
     },
     destroy() {
+      loadOwner.invalidate();
       container = null;
     },
   });

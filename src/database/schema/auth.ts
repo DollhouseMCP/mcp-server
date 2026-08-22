@@ -38,6 +38,7 @@ import {
   index,
   uniqueIndex,
   primaryKey,
+  check,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
@@ -100,6 +101,23 @@ export const authIdentityEvents = pgTable('auth_identity_events', {
   index('idx_auth_events_type').on(table.type),
   index('idx_auth_events_sub').on(table.sub),
   index('idx_auth_events_timestamp').on(table.timestamp),
+]);
+
+/**
+ * Durable, PII-free fences for identities an administrator explicitly
+ * unlinked or deleted. Without this marker, the next valid token for the same
+ * subject could silently recreate and relink the account.
+ */
+export const authSubjectRevocationFences = pgTable('auth_subject_revocation_fences', {
+  /** Lowercase SHA-256 hex digest of the canonical OAuth `sub`. */
+  subjectHash: varchar('subject_hash', { length: 64 }).primaryKey(),
+  revokedAt: timestamp('revoked_at', { withTimezone: true }).notNull(),
+  reason: varchar('reason', { length: 32 }).notNull(),
+}, (table) => [
+  check(
+    'auth_subject_revocation_fences_reason_check',
+    sql`${table.reason} IN ('identity_unlinked', 'account_deleted')`,
+  ),
 ]);
 
 /**

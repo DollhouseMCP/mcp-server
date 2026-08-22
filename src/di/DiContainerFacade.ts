@@ -22,6 +22,7 @@
 
 export interface DiContainerFacade {
   register<T>(name: string, factory: () => T, options?: { singleton?: boolean }): void;
+  registerInstance<T>(name: string, instance: T): void;
   resolve<T>(name: string): T;
   hasRegistration(name: string): boolean;
 }

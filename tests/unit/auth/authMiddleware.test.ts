@@ -1,7 +1,11 @@
 import { describe, it, expect, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
-import { createUnifiedAuthMiddleware, withJwtFallthrough } from '../../../src/auth/authMiddleware.js';
+import {
+  createUnifiedAuthMiddleware,
+  withJwtFallthrough,
+  type AuthClaimsAuthority,
+} from '../../../src/auth/authMiddleware.js';
 import type { IAuthProvider, AuthResult } from '../../../src/auth/IAuthProvider.js';
 
 function createMockProvider(validateFn: (token: string) => Promise<AuthResult>): IAuthProvider {
@@ -11,10 +15,14 @@ function createMockProvider(validateFn: (token: string) => Promise<AuthResult>):
   };
 }
 
-function createTestApp(provider: IAuthProvider, publicPaths?: string[]): express.Express {
+function createTestApp(
+  provider: IAuthProvider,
+  publicPaths?: string[],
+  claimsAuthority?: AuthClaimsAuthority,
+): express.Express {
   const app = express();
   app.use(express.json());
-  app.use('/api', createUnifiedAuthMiddleware({ provider, publicPaths }));
+  app.use('/api', createUnifiedAuthMiddleware({ provider, publicPaths, claimsAuthority }));
   app.get('/api/data', (_req, res) => {
     res.json({ data: 'protected', claims: res.locals.authClaims });
   });
@@ -64,6 +72,32 @@ describe('createUnifiedAuthMiddleware', () => {
       expect(res.body.claims.sub).toBe('alice');
       expect(res.body.claims.displayName).toBe('Alice');
       expect(res.body.claims.email).toBe('alice@example.com');
+    });
+
+    it('fails closed when the live account authority rejects an otherwise valid token', async () => {
+      const provider = createMockProvider(async () => ({ ok: true, claims: { sub: 'alice', iat: 123 } }));
+      const claimsAuthority: AuthClaimsAuthority = {
+        validateCurrentClaims: jest.fn(async () => ({ ok: false, reason: 'token predates current account authorization' })),
+      };
+      const res = await request(createTestApp(provider, undefined, claimsAuthority))
+        .get('/api/data')
+        .set('Authorization', 'Bearer valid-token');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toContain('token predates current account authorization');
+    });
+
+    it('fails closed when live account validation is unavailable', async () => {
+      const provider = createMockProvider(async () => ({ ok: true, claims: { sub: 'alice' } }));
+      const claimsAuthority: AuthClaimsAuthority = {
+        validateCurrentClaims: jest.fn(async () => { throw new Error('database unavailable'); }),
+      };
+      const res = await request(createTestApp(provider, undefined, claimsAuthority))
+        .get('/api/data')
+        .set('Authorization', 'Bearer valid-token');
+
+      expect(res.status).toBe(401);
+      expect(res.body.error).toContain('account validation unavailable');
     });
   });
 

@@ -291,6 +291,7 @@ export interface WebConsoleRegistrarOptions {
   readonly accountInviteIssuer?: IConsoleAccountInviteIssuer | null;
   readonly enableAccountAllowlistRoutes?: boolean;
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
+  readonly securityInvalidationAcknowledgementTimeoutMs?: number;
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly githubIntegrationProviderConfig?: GitHubAppIntegrationProviderConfig | null;
   /** Directory of curated integration descriptor seed files, loaded at bootstrap. */
@@ -415,14 +416,6 @@ export class WebConsoleRegistrar {
     const adminAuditQuery = resolveAdminAuditQuery(database, container, this.options);
     const approvalAuditQuery = resolveApprovalAuditQuery(database, container, this.options);
     const authenticationAuditQuery = resolveAuthenticationAuditQuery(database, container, this.options);
-    const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
-      database,
-      container,
-      accountAdminStore: stores.accountAdminStore,
-      accountAllowlistStore: stores.accountAllowlistStore,
-      securityInvalidationStore: stores.securityInvalidationStore,
-      adminAuditWriter,
-    });
     const registry = new ConsoleModuleRegistry();
     const consoleOAuthClient = resolveConsoleOAuthClient(container, this.options);
     const authStorage = resolveAuthStorage(container, this.options);
@@ -457,6 +450,24 @@ export class WebConsoleRegistrar {
       publicBaseUrl: integrationPublicBaseUrl,
     });
     const authPolicyStore = await resolveAuthPolicyStore(database, container, this.options);
+    const accountAdminMutationTransactionRunner = resolveAccountAdminMutationTransactionRunner({
+      database,
+      container,
+      accountAdminStore: stores.accountAdminStore,
+      accountAllowlistStore: stores.accountAllowlistStore,
+      securityInvalidationStore: stores.securityInvalidationStore,
+      adminAuditWriter,
+      signingKeyStore,
+      authPolicyStore,
+      factorStore: stores.factorStore,
+      integrationStore: stores.integrationStore,
+      loginTransactionStore: stores.loginTransactionStore,
+      runtimeSessionControlStore: stores.runtimeSessionControlStore,
+      operatorConfigStore,
+      inviteIssuer: accountInviteIssuer,
+      hasExplicitSigningKeyStore: this.options.signingKeyStore !== undefined,
+      hasExplicitAuthPolicyStore: this.options.authPolicyStore !== undefined,
+    });
     const activationProfile = resolveWebConsoleActivationProfile({
       activationProfile: this.options.activationProfile,
       deploymentSignal: this.options.deploymentSignal,
@@ -502,6 +513,7 @@ export class WebConsoleRegistrar {
     // lazily so it reflects every module registered after this point.
     registry.register(createConsoleMetaModule({
       getRouteManifest: () => registry.createRouteManifest(),
+      portfolioRequestMaxBytes: env.DOLLHOUSE_HTTP_BODY_LIMIT_BYTES,
     }));
     if (consoleOAuthClient && secretEncryption && integrationPublicBaseUrl) {
       registry.register(createConsoleBffAuthModule({
@@ -525,6 +537,7 @@ export class WebConsoleRegistrar {
       healthChecks: operationHealthChecks,
       telemetry: telemetryQuery,
       operatorConfigStore,
+      transactionRunner: accountAdminMutationTransactionRunner,
       systemMetrics: systemMetricsSource,
       now: this.options.now,
     }));
@@ -533,17 +546,20 @@ export class WebConsoleRegistrar {
       factorStore: stores.factorStore,
       invalidationStore: stores.securityInvalidationStore,
       authPolicyStore,
+      transactionRunner: accountAdminMutationTransactionRunner,
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, 'accountAdmin', () => createAccountAdminModule({
       accountAdminStore: stores.accountAdminStore,
       accountAllowlistStore: stores.accountAllowlistStore,
       sessionStore: stores.sessionStore,
+      securityInvalidationStore: stores.securityInvalidationStore,
       authStorage,
       accountInviteIssuer,
       oauthGrantRevocationService,
       runtimeSessionControlStore: stores.runtimeSessionControlStore,
       runtimeTerminationAcknowledgementTimeoutMs: this.options.runtimeTerminationAcknowledgementTimeoutMs,
+      securityInvalidationAcknowledgementTimeoutMs: this.options.securityInvalidationAcknowledgementTimeoutMs,
       accountAdminMutationTransactionRunner,
       enableAccountAllowlistRoutes: this.options.enableAccountAllowlistRoutes === true,
       now: this.options.now,
@@ -551,6 +567,7 @@ export class WebConsoleRegistrar {
     registerRouteModule(registry, this.options, 'runtimeSessions', () => createRuntimeSessionModule({
       runtimeStore: stores.runtimeSessionControlStore,
       accountAdminStore: stores.accountAdminStore,
+      transactionRunner: accountAdminMutationTransactionRunner,
       now: this.options.now,
     }));
     registerRouteModule(registry, this.options, 'activations', () => createActivationModule({
@@ -1121,6 +1138,7 @@ function createApiV1Mount(options: {
     protectedCorrelationRateLimiter: options.protectedCorrelationRateLimiter,
     collectionFetchRateLimiter: options.collectionFetchRateLimiter,
     idleTimeoutMs: options.options.consoleSessionIdleTimeoutMs ?? 30 * 60 * 1000,
+    bodyLimitBytes: env.DOLLHOUSE_HTTP_BODY_LIMIT_BYTES,
     now: options.options.now,
     reportInternalError: options.options.reportApiV1InternalError,
     userContext: options.userContext ?? undefined,
@@ -1479,14 +1497,43 @@ function resolveAccountAdminMutationTransactionRunner(options: {
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
   readonly adminAuditWriter: IAdminAuditWriter;
+  readonly signingKeyStore: ISigningKeyStore;
+  readonly authPolicyStore: IConsoleAuthPolicyStore;
+  readonly factorStore: IConsoleFactorStore;
+  readonly integrationStore: IUserIntegrationStore;
+  readonly loginTransactionStore: ILoginTransactionStore;
+  readonly runtimeSessionControlStore: IRuntimeSessionControlStore;
+  readonly operatorConfigStore: IOperatorConfigStore;
+  readonly inviteIssuer: IConsoleAccountInviteIssuer | null;
+  readonly hasExplicitSigningKeyStore: boolean;
+  readonly hasExplicitAuthPolicyStore: boolean;
 }): IAccountAdminMutationTransactionRunner {
+  if (options.container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner)) {
+    return markResolvedProductionAdapter(
+      options.container.resolve<IAccountAdminMutationTransactionRunner>(
+        WEB_CONSOLE_SERVICE_NAMES.accountAdminMutationTransactionRunner,
+      ),
+      'AccountAdminMutationTransactionRunner',
+    );
+  }
   if (options.database) {
     if (!options.container.hasRegistration('AuditHmacResolver')) {
       throw new Error('Web console PostgreSQL account-admin mutation transactions require AuditHmacResolver');
     }
+    if (options.hasExplicitSigningKeyStore || options.hasExplicitAuthPolicyStore) {
+      throw new Error(
+        'Web console PostgreSQL custom signing-key or auth-policy stores require a matching ' +
+        'WebConsoleAccountAdminMutationTransactionRunner registration',
+      );
+    }
     return markProductionAdapter(new PostgresAccountAdminMutationTransactionRunner({
       db: options.database,
       hmacKeyResolver: options.container.resolve<AdminAuditHmacKeyResolver>('AuditHmacResolver'),
+      signingKeyStore: options.signingKeyStore,
+      authPolicyStore: options.authPolicyStore,
+      runtimeSessionControlStore: options.runtimeSessionControlStore,
+      operatorConfigStore: options.operatorConfigStore,
+      inviteIssuer: options.inviteIssuer,
     }), 'PostgresAccountAdminMutationTransactionRunner');
   }
   return new InMemoryAccountAdminMutationTransactionRunner({
@@ -1494,6 +1541,14 @@ function resolveAccountAdminMutationTransactionRunner(options: {
     accountAllowlistStore: options.accountAllowlistStore,
     securityInvalidationStore: options.securityInvalidationStore,
     adminAuditWriter: options.adminAuditWriter,
+    signingKeyStore: options.signingKeyStore,
+    authPolicyStore: options.authPolicyStore,
+    factorStore: options.factorStore,
+    integrationStore: options.integrationStore,
+    loginTransactionStore: options.loginTransactionStore,
+    runtimeSessionControlStore: options.runtimeSessionControlStore,
+    operatorConfigStore: options.operatorConfigStore,
+    inviteIssuer: options.inviteIssuer,
   });
 }
 

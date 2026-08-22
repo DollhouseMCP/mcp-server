@@ -17,6 +17,7 @@ import { users } from '../../../src/database/schema/users.js';
 import { sessions } from '../../../src/database/schema/sessions.js';
 import { elements } from '../../../src/database/schema/elements.js';
 import { agentStates } from '../../../src/database/schema/agents.js';
+import { runtimeSessionPresence } from '../../../src/database/schema/webConsole.js';
 import type { UserIdResolver } from '../../../src/database/UserContext.js';
 
 /**
@@ -151,13 +152,16 @@ export async function cleanupTestAgentStates(userId: string): Promise<void> {
 export async function cleanupAllTestData(): Promise<void> {
   const { withUserContext } = await import('../../../src/database/rls.js');
   const db = getTestDb();
+  const adminDb = getTestAdminDb();
   if (testUserIdA) {
+    await adminDb.delete(runtimeSessionPresence).where(eq(runtimeSessionPresence.userId, testUserIdA));
     await withUserContext(db, testUserIdA, async (tx) => {
       await tx.delete(elements).where(eq(elements.userId, testUserIdA));
       await tx.delete(sessions).where(eq(sessions.userId, testUserIdA));
     });
   }
   if (testUserIdB) {
+    await adminDb.delete(runtimeSessionPresence).where(eq(runtimeSessionPresence.userId, testUserIdB));
     await withUserContext(db, testUserIdB, async (tx) => {
       await tx.delete(elements).where(eq(elements.userId, testUserIdB));
       await tx.delete(sessions).where(eq(sessions.userId, testUserIdB));

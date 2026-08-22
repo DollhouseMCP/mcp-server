@@ -36,8 +36,16 @@ export class PostgresAdminAuditWriter implements IAdminAuditWriter {
   ) {}
 
   async write(event: ConsoleAdminAuditEvent): Promise<void> {
-    await withSystemContext(this.db, tx => appendConsoleAdminAuditEventWithTx(tx, event, this.hmacKeyResolver));
+    const keyMaterial = await this.hmacKeyResolver.resolve();
+    await withSystemContext(this.db, tx => appendConsoleAdminAuditEventWithTx(tx, event, fixedKeyResolver(keyMaterial)));
   }
+}
+
+export function fixedKeyResolver(keyMaterial: AuditHmacKeyMaterial): AdminAuditHmacKeyResolver {
+  return {
+    resolve: () => Promise.resolve(keyMaterial),
+    resolveForKeyId: keyId => Promise.resolve(keyId === keyMaterial.keyId ? keyMaterial : null),
+  };
 }
 
 export async function appendConsoleAdminAuditEventWithTx(

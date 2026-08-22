@@ -45,11 +45,51 @@ export interface IntegrationTokenRefreshRequest {
 
 export interface IntegrationTokenRefreshResult {
   readonly accessToken: string;
+  /** Present when the refresh response changes or confirms the granted scope set. */
+  readonly authorizedPermissions?: Readonly<Record<string, unknown>>;
   /**
    * Undefined preserves the existing encrypted refresh token. Null clears it.
    * A string replaces it, which supports rotating refresh-token providers.
    */
   readonly refreshToken?: string | null;
+}
+
+/**
+ * A provider minted an access token but rejected another field in the same
+ * response. The refresh coordinator uses the captured credential only for
+ * best-effort revocation; it is never persisted or returned to a caller.
+ */
+export class MintedIntegrationCredentialsError extends Error {
+  constructor(
+    readonly accessToken: string,
+    readonly refreshToken: string | null,
+    options?: ErrorOptions,
+  ) {
+    super('integration_minted_credential_validation_failed', options);
+    this.name = 'MintedIntegrationCredentialsError';
+  }
+}
+
+export function isMintedIntegrationCredentialsError(
+  error: unknown,
+): error is MintedIntegrationCredentialsError {
+  return error instanceof MintedIntegrationCredentialsError;
+}
+
+/** A provider-confirmed credential failure that requires user reauthorization. */
+export class TerminalIntegrationRefreshError extends Error {
+  readonly terminal = true;
+
+  constructor(readonly oauthError: string) {
+    super('integration_oauth_refresh_terminal');
+    this.name = 'TerminalIntegrationRefreshError';
+  }
+}
+
+export function isTerminalIntegrationRefreshError(
+  error: unknown,
+): error is TerminalIntegrationRefreshError {
+  return error instanceof TerminalIntegrationRefreshError;
 }
 
 export interface IntegrationRevocationRequest {

@@ -3,12 +3,16 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
+import { logger } from '../../../utils/logger.js';
 import { isIntegrationApiHostAllowed } from '../../security/IntegrationApiHosts.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
+import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
 import { type IUserIntegrationStore, type UserIntegrationProvider, type UserIntegrationRecord, isIntegrationConnectedToDescriptor } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import { integrationDescriptorRoutingFingerprint } from './IntegrationDescriptorRoutingFingerprint.js';
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
+import { settleIntegrationCleanup } from './IntegrationCleanup.js';
 import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
 import {
   assertPublicResolvedHost,
@@ -45,6 +49,7 @@ interface RateLimitDecision {
 export interface IntegrationRequestGatewayOptions {
   readonly integrationStore: IUserIntegrationStore;
   readonly descriptorStore: IIntegrationDescriptorStore;
+  readonly specStore?: IIntegrationOpenApiSpecStore | null;
   readonly secretEncryption: ISecretEncryptionService;
   readonly contextTracker: ContextTracker;
   readonly tokenRefresh?: IntegrationTokenRefreshService | null;
@@ -63,8 +68,27 @@ export interface IntegrationRequestInput {
   readonly provider: string;
   readonly method: string;
   readonly path: string;
+  /** Validated OpenAPI server selected by the promoted-operation catalog. */
+  readonly baseUrl?: string;
   readonly query?: Readonly<Record<string, unknown>>;
   readonly body?: unknown;
+  readonly specContract?: {
+    readonly descriptorId: string;
+    readonly specHash: string;
+  };
+  readonly authMode?: 'credentialed' | 'anonymous';
+}
+
+export interface PreparedIntegrationRequest {
+  readonly input: IntegrationRequestInput;
+  readonly userId: string;
+  readonly sessionId: string | null;
+  readonly provider: UserIntegrationProvider;
+  readonly method: string;
+  readonly descriptorId: string;
+  readonly descriptorRoutingFingerprint: string;
+  readonly resolvedUrl: string;
+  readonly authMode: 'credentialed' | 'anonymous';
 }
 
 export interface IntegrationRequestResult {
@@ -122,9 +146,14 @@ export class IntegrationRequestGateway {
   }
 
   async request(input: IntegrationRequestInput): Promise<IntegrationRequestResult> {
+    return this.executePrepared(await this.prepareRequest(input));
+  }
+
+  async prepareRequest(input: IntegrationRequestInput): Promise<PreparedIntegrationRequest> {
     const session = this.options.contextTracker.requireSessionContext('IntegrationRequestGateway');
     const provider = normalizeProvider(input.provider);
     const method = normalizeMethod(input.method);
+    const preparedInput = snapshotIntegrationRequestInput(input, provider, method);
     let descriptor: IntegrationDescriptorRecord | null;
     try {
       descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, provider);
@@ -144,29 +173,77 @@ export class IntegrationRequestGateway {
       await this.auditDenied('unresolved', session.userId, session.sessionId, method, null, null, 'descriptor_not_found');
       throw new IntegrationRequestError('integration_descriptor_not_found', 'Integration descriptor was not found.', 404);
     }
-    const url = await this.buildAuditedUrl(descriptor, provider, session.userId, session.sessionId, method, input.path, input.query);
-    const requestContext: GatewayRequestContext = {
+    const url = await this.buildAuditedUrl(
+      descriptor,
       provider,
+      session.userId,
+      session.sessionId,
+      method,
+      preparedInput.path,
+      preparedInput.query,
+      preparedInput.baseUrl,
+    );
+    await this.assertSpecContract(preparedInput, descriptor);
+    return {
+      input: preparedInput,
       userId: session.userId,
       sessionId: session.sessionId,
+      provider,
       method,
+      descriptorId: descriptor.id,
+      descriptorRoutingFingerprint: integrationDescriptorRoutingFingerprint(descriptor),
+      resolvedUrl: url.toString(),
+      authMode: preparedInput.authMode ?? 'credentialed',
+    };
+  }
+
+  async executePrepared(plan: PreparedIntegrationRequest): Promise<IntegrationRequestResult> {
+    const session = this.options.contextTracker.requireSessionContext('IntegrationRequestGateway');
+    if (session.userId !== plan.userId || session.sessionId !== plan.sessionId) {
+      throw new IntegrationRequestError('integration_request_context_changed', 'Integration request context changed before execution.', 409);
+    }
+    const descriptor = await this.options.descriptorStore.findVisibleByProvider(session.userId, plan.provider);
+    if (!descriptor
+        || descriptor.id !== plan.descriptorId
+        || integrationDescriptorRoutingFingerprint(descriptor) !== plan.descriptorRoutingFingerprint) {
+      throw new IntegrationRequestError('integration_descriptor_changed', 'Integration descriptor changed after authorization.', 409);
+    }
+    await this.assertSpecContract(plan.input, descriptor);
+    const url = await this.buildAuditedUrl(
+      descriptor,
+      plan.provider,
+      session.userId,
+      session.sessionId,
+      plan.method,
+      plan.input.path,
+      plan.input.query,
+      plan.input.baseUrl,
+    );
+    if (url.toString() !== plan.resolvedUrl) {
+      throw new IntegrationRequestError('integration_destination_changed', 'Integration destination changed after authorization.', 409);
+    }
+    const requestContext: GatewayRequestContext = {
+      provider: plan.provider,
+      userId: session.userId,
+      sessionId: session.sessionId,
+      method: plan.method,
       url,
     };
-    const rateKey = `${session.userId}:${provider}:${url.hostname}`;
-    const rateLimit = await this.consumeAuditedRateLimit(provider, session.userId, session.sessionId, method, url, rateKey);
+    const rateKey = `${session.userId}:${plan.provider}:${url.hostname}`;
+    const rateLimit = await this.consumeAuditedRateLimit(plan.provider, session.userId, session.sessionId, plan.method, url, rateKey);
     if (!rateLimit) {
-      await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'rate_limited');
+      await this.auditDenied(plan.provider, session.userId, session.sessionId, plan.method, url.hostname, url.pathname, 'rate_limited');
       throw new IntegrationRequestError('integration_request_rate_limited', 'Integration request rate limit exceeded.', 429);
     }
     let record: UserIntegrationRecord | null;
     try {
-      record = await this.options.integrationStore.findByProvider(session.userId, provider);
+      record = await this.options.integrationStore.findByProvider(session.userId, plan.provider);
     } catch (error) {
       await this.auditLookupFailure({
         provider: descriptor.provider,
         userId: session.userId,
         sessionId: session.sessionId,
-        method,
+        method: plan.method,
         host: url.hostname,
         path: url.pathname,
         reason: 'credential_lookup_failed',
@@ -174,40 +251,58 @@ export class IntegrationRequestGateway {
       throw error;
     }
     if (!isIntegrationConnectedToDescriptor(record, descriptor.id)) {
-      await this.auditDenied(provider, session.userId, session.sessionId, method, url.hostname, url.pathname, 'credential_not_connected');
+      await this.auditDenied(plan.provider, session.userId, session.sessionId, plan.method, url.hostname, url.pathname, 'credential_not_connected');
       throw new IntegrationRequestError('integration_not_connected', 'Integration is not connected.', 409);
     }
-    const firstCredential = await this.decryptAuditedAccessToken(record, session.userId, session.sessionId, method, url, false);
-    const body = await this.serializeAuditedRequestBody(provider, session.userId, session.sessionId, method, url, input.body);
+    const firstCredential = plan.authMode === 'anonymous'
+      ? null
+      : await this.decryptAuditedAccessToken(record, session.userId, session.sessionId, plan.method, url, false);
+    const body = await this.serializeAuditedRequestBody(plan.provider, session.userId, session.sessionId, plan.method, url, plan.input.body);
     const first = await this.auditedSend(requestContext, descriptor, body, firstCredential, false);
-    if (first.status !== 401 || !this.options.tokenRefresh || !record.accessTokenCiphertext) {
-      return this.finish(provider, session.userId, session.sessionId, method, url, first, false);
+    if (plan.authMode === 'anonymous' || first.status !== 401 || !this.options.tokenRefresh || !record.accessTokenCiphertext) {
+      return this.finish(plan.provider, session.userId, session.sessionId, plan.method, url, first, false);
     }
 
-    const refresh = await this.refreshAudited(
-      this.options.tokenRefresh,
-      session.userId,
-      session.sessionId,
-      provider,
-      descriptor.id,
-      method,
+    const refresh = await this.refreshAudited({
+      tokenRefresh: this.options.tokenRefresh,
+      userId: session.userId,
+      sessionId: session.sessionId,
+      provider: plan.provider,
+      integrationDescriptorId: descriptor.id,
+      method: plan.method,
       url,
-      record.accessTokenCiphertext,
-    );
+      staleAccessTokenCiphertext: record.accessTokenCiphertext,
+      staleCredentialGeneration: record.credentialGeneration,
+      staleAuthorizedPermissions: record.authorizedPermissions,
+    });
     if (refresh.kind !== 'refreshed' && refresh.kind !== 'reused') {
-      await this.auditCredentialError(provider, session.userId, session.sessionId, method, url, 'refresh_failed');
+      await this.auditCredentialError(plan.provider, session.userId, session.sessionId, plan.method, url, 'refresh_failed');
       throw new IntegrationRequestError('integration_token_refresh_failed', 'Integration token refresh failed.', 502);
     }
-    const retryCredential = await this.decryptAuditedAccessToken(refresh.record, session.userId, session.sessionId, method, url, true);
+    const retryCredential = await this.decryptAuditedAccessToken(refresh.record, session.userId, session.sessionId, plan.method, url, true);
     const retry = await this.auditedSend(
       requestContext,
       descriptor,
       body,
       retryCredential,
       true,
-      [firstCredential],
+      firstCredential === null ? [] : [firstCredential],
     );
-    return this.finish(provider, session.userId, session.sessionId, method, url, retry, true);
+    return this.finish(plan.provider, session.userId, session.sessionId, plan.method, url, retry, true);
+  }
+
+  private async assertSpecContract(
+    input: IntegrationRequestInput,
+    descriptor: IntegrationDescriptorRecord,
+  ): Promise<void> {
+    if (!input.specContract) return;
+    if (input.specContract.descriptorId !== descriptor.id || !this.options.specStore) {
+      throw new IntegrationRequestError('integration_spec_changed', 'Integration operation specification changed.', 409);
+    }
+    const current = await this.options.specStore.findByDescriptorId(descriptor.id);
+    if (!current || current.specHash !== input.specContract.specHash) {
+      throw new IntegrationRequestError('integration_spec_changed', 'Integration operation specification changed.', 409);
+    }
   }
 
   private async buildAuditedUrl(
@@ -218,9 +313,10 @@ export class IntegrationRequestGateway {
     method: string,
     path: string,
     query: Readonly<Record<string, unknown>> | undefined,
+    baseUrl: string | undefined,
   ): Promise<URL> {
     try {
-      return buildAllowedUrl(descriptor, path, query);
+      return buildAllowedUrl(descriptor, path, query, baseUrl);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         await this.auditDenied(provider, userId, sessionId, method, null, null, error.code);
@@ -265,22 +361,38 @@ export class IntegrationRequestGateway {
     }
   }
 
-  private async refreshAudited(
-    tokenRefresh: IntegrationTokenRefreshService,
-    userId: string,
-    sessionId: string | null,
-    provider: UserIntegrationProvider,
-    integrationDescriptorId: string,
-    method: string,
-    url: URL,
-    staleAccessTokenCiphertext: Buffer,
-  ) {
+  private async refreshAudited(input: {
+    readonly tokenRefresh: IntegrationTokenRefreshService;
+    readonly userId: string;
+    readonly sessionId: string | null;
+    readonly provider: UserIntegrationProvider;
+    readonly integrationDescriptorId: string;
+    readonly method: string;
+    readonly url: URL;
+    readonly staleAccessTokenCiphertext: Buffer;
+    readonly staleCredentialGeneration: number;
+    readonly staleAuthorizedPermissions: Readonly<Record<string, unknown>>;
+  }) {
+    const {
+      tokenRefresh,
+      userId,
+      sessionId,
+      provider,
+      integrationDescriptorId,
+      method,
+      url,
+      staleAccessTokenCiphertext,
+      staleCredentialGeneration,
+      staleAuthorizedPermissions,
+    } = input;
     try {
       return await tokenRefresh.refreshOnDemand({
         userId,
         provider,
         integrationDescriptorId,
         staleAccessTokenCiphertext,
+        staleCredentialGeneration,
+        staleAuthorizedPermissions,
       });
     } catch (error) {
       await this.auditCredentialError(provider, userId, sessionId, method, url, error instanceof IntegrationRequestError ? error.code : 'refresh_failed', true);
@@ -292,7 +404,7 @@ export class IntegrationRequestGateway {
     ctx: GatewayRequestContext,
     descriptor: IntegrationDescriptorRecord,
     body: string | null,
-    credential: string,
+    credential: string | null,
     refreshed: boolean,
     previousCredentials: readonly string[] = [],
   ): Promise<IntegrationHttpResponse> {
@@ -323,13 +435,13 @@ export class IntegrationRequestGateway {
     url: URL,
     method: string,
     body: string | null,
-    credential: string,
+    credential: string | null,
     previousCredentials: readonly string[],
   ): Promise<IntegrationHttpResponse> {
     const headers = new Headers({ Accept: 'application/json' });
     if (body !== null) headers.set('Content-Type', 'application/json');
-    const effectiveInjection = injectCredential(descriptor, url, headers, credential);
-    const additionalCredentials = previousCredentials.map(previousCredential => {
+    const effectiveInjection = credential === null ? null : injectCredential(descriptor, url, headers, credential);
+    const additionalCredentials = credential === null ? [] : previousCredentials.map(previousCredential => {
       const redactionUrl = new URL(url);
       const redactionHeaders = new Headers({ Accept: 'application/json' });
       if (body !== null) redactionHeaders.set('Content-Type', 'application/json');
@@ -338,11 +450,19 @@ export class IntegrationRequestGateway {
         injection: injectCredential(descriptor, redactionUrl, redactionHeaders, previousCredential),
       };
     });
-    const credentialRedactions = buildCredentialRedactions(
-      credential,
-      effectiveInjection,
-      additionalCredentials,
-    );
+    const credentialRedactions: CredentialRedactions = credential === null || effectiveInjection === null
+      ? {
+        exact: new Set(),
+        percentExact: new Set(),
+        embedded: [],
+        semanticEmbedded: [],
+        percentEmbedded: [],
+        headers: [],
+        queries: [],
+        labelledValues: [],
+        boundedValues: [],
+      }
+      : buildCredentialRedactions(credential, effectiveInjection, additionalCredentials);
     const vetted = await assertIntegrationPublicHost(url.hostname, this.dnsLookupImpl);
     // Pin the connection to the vetted address so a second connect-time DNS
     // resolution cannot retarget the request (DNS-rebinding TOCTOU).
@@ -374,7 +494,11 @@ export class IntegrationRequestGateway {
       throw new IntegrationRequestError('integration_request_failed', 'Integration request failed.', 502);
     } finally {
       clearTimeout(timeout);
-      await outbound.close();
+      const cleanup = await settleIntegrationCleanup(
+        () => outbound.close(),
+        this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+      );
+      if (cleanup !== 'completed') logger.warn(`Integration outbound cleanup ${cleanup}`);
     }
   }
 
@@ -541,6 +665,36 @@ export class IntegrationRequestGateway {
   }
 }
 
+function snapshotIntegrationRequestInput(
+  input: IntegrationRequestInput,
+  provider: UserIntegrationProvider,
+  method: string,
+): IntegrationRequestInput {
+  try {
+    return freezeSnapshot({
+      provider,
+      method,
+      path: input.path,
+      ...(input.baseUrl === undefined ? {} : { baseUrl: input.baseUrl }),
+      ...(input.query === undefined ? {} : { query: freezeSnapshot(structuredClone(input.query)) }),
+      ...(input.body === undefined ? {} : { body: freezeSnapshot(structuredClone(input.body)) }),
+      ...(input.specContract === undefined ? {} : {
+        specContract: freezeSnapshot({ ...input.specContract }),
+      }),
+      ...(input.authMode === undefined ? {} : { authMode: input.authMode }),
+    });
+  } catch {
+    throw new IntegrationRequestError('invalid_integration_request', 'Integration request must contain cloneable data.', 400);
+  }
+}
+
+function freezeSnapshot<T>(value: T, seen: WeakSet<object> = new WeakSet()): T {
+  if (!value || typeof value !== 'object' || seen.has(value)) return value;
+  seen.add(value);
+  for (const nested of Object.values(value as Record<string, unknown>)) freezeSnapshot(nested, seen);
+  return Object.freeze(value);
+}
+
 export class IntegrationRequestError extends Error {
   constructor(
     readonly code: string,
@@ -632,12 +786,23 @@ function buildAllowedUrl(
   descriptor: IntegrationDescriptorRecord,
   path: string,
   query: Readonly<Record<string, unknown>> | undefined,
+  requestedBaseUrl?: string,
 ): URL {
-  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
+  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')
+      || path.includes('?') || path.includes('#')) {
     throw new IntegrationRequestError('invalid_integration_path', 'Integration request path must be an absolute path.', 400);
   }
-  const base = `https://${descriptor.apiHosts[0]}`;
-  const url = new URL(path, base);
+  const base = requestedBaseUrl ? new URL(requestedBaseUrl) : new URL(`https://${descriptor.apiHosts[0]}`);
+  if (base.protocol !== 'https:' || !isIntegrationApiHostAllowed(base.hostname, descriptor.apiHosts) ||
+      base.username || base.password || base.hash) {
+    throw new IntegrationRequestError('integration_host_not_allowed', 'Integration request host is not allowed.', 403);
+  }
+  const basePath = base.pathname === '/' ? '' : base.pathname.replace(/\/$/, '');
+  assertNoNormalizingPathSegments(`${basePath}${path}`);
+  const url = new URL(`${basePath}${path}`, base.origin);
+  for (const [key, value] of base.searchParams) {
+    url.searchParams.append(key, value);
+  }
   if (url.protocol !== 'https:' || !isIntegrationApiHostAllowed(url.hostname, descriptor.apiHosts)) {
     throw new IntegrationRequestError('integration_host_not_allowed', 'Integration request host is not allowed.', 403);
   }
@@ -646,6 +811,24 @@ function buildAllowedUrl(
   url.hash = '';
   addQuery(url, query);
   return url;
+}
+
+function assertNoNormalizingPathSegments(path: string): void {
+  try {
+    for (const segment of path.split('/')) {
+      const decoded = decodeURIComponent(segment);
+      if (decoded === '.' || decoded === '..' || decoded.includes('/') || decoded.includes('\\')) {
+        throw new IntegrationRequestError(
+          'invalid_integration_path',
+          'Integration request path must not contain ambiguous or normalizing segments.',
+          400,
+        );
+      }
+    }
+  } catch (error) {
+    if (error instanceof IntegrationRequestError) throw error;
+    throw new IntegrationRequestError('invalid_integration_path', 'Integration request path is malformed.', 400);
+  }
 }
 
 function addQuery(url: URL, query: Readonly<Record<string, unknown>> | undefined): void {

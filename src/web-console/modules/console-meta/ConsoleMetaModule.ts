@@ -32,6 +32,7 @@ export interface RoleCatalogDto {
 export interface ConsoleMetaModuleOptions {
   /** Resolved lazily at request time, after every module has registered. */
   readonly getRouteManifest: () => ConsoleRouteManifest;
+  readonly portfolioRequestMaxBytes?: number;
 }
 
 export function createConsoleMetaModule(options: ConsoleMetaModuleOptions): ConsoleModuleDescriptor {
@@ -50,7 +51,15 @@ export function createConsoleMetaModule(options: ConsoleMetaModuleOptions): Cons
         privacyClass: 'self_private',
         idempotency: 'not_applicable',
         privacyProjector: projectRouteManifest,
-        handler: () => Promise.resolve({ status: 200, body: options.getRouteManifest() }),
+        handler: () => Promise.resolve({
+          status: 200,
+          body: {
+            ...options.getRouteManifest(),
+            limits: {
+              portfolio_request_max_bytes: options.portfolioRequestMaxBytes ?? 1024 * 1024,
+            },
+          },
+        }),
       },
       {
         method: 'GET',
@@ -77,10 +86,16 @@ function buildRoleCatalog(): RoleCatalogDto {
 }
 
 export function projectRouteManifest(value: unknown): ConsoleRouteManifest {
-  const manifest = value as ConsoleRouteManifest;
+  const manifest = value as ConsoleRouteManifest & {
+    readonly limits?: { readonly portfolio_request_max_bytes?: unknown };
+  };
+  const configuredLimit = manifest.limits?.portfolio_request_max_bytes;
   return {
     apiVersion: 'v1',
     routes: (Array.isArray(manifest.routes) ? manifest.routes : []).map(projectManifestEntry),
+    ...(typeof configuredLimit === 'number' && Number.isSafeInteger(configuredLimit) && configuredLimit > 0
+      ? { limits: { portfolio_request_max_bytes: configuredLimit } }
+      : {}),
   };
 }
 

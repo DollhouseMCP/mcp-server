@@ -4,6 +4,7 @@ import {
   AeadSecretEncryptionService,
   ConfiguredOAuthIntegrationProvider,
   InMemoryIntegrationDescriptorStore,
+  InMemoryIntegrationOpenApiSpecStore,
   InMemoryUserIntegrationStore,
   IntegrationProviderRegistry,
   IntegrationTokenRefreshService,
@@ -189,6 +190,41 @@ describe('IntegrationRequestGateway', () => {
         result: 'success',
         status: 200,
       }),
+    ]);
+  });
+
+  it('does not replace a successful REST result when outbound cleanup fails', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(jsonResponse(200, { ok: true })),
+      close: () => Promise.reject(new Error('dispatcher cleanup failed')),
+    });
+
+    await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+    }))).resolves.toMatchObject({ status: 200, response: { ok: true } });
+  });
+
+  it('preserves fixed promoted-server query parameters when adding operation query parameters', async () => {
+    const fetches: string[] = [];
+    const gateway = gatewayFixture({
+      fetch: (url) => {
+        fetches.push(urlString(url));
+        return Promise.resolve(jsonResponse(200, { ok: true }));
+      },
+    });
+
+    await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      baseUrl: 'https://gmail.googleapis.com/api/v2?tenant=alpha',
+      path: '/users/me/messages',
+      query: { q: 'is:unread' },
+    }));
+
+    expect(fetches).toEqual([
+      'https://gmail.googleapis.com/api/v2/users/me/messages?tenant=alpha&q=is%3Aunread',
     ]);
   });
 
@@ -2048,6 +2084,13 @@ describe('IntegrationRequestGateway', () => {
       method: 'GET',
       path: 'https://evil.example/steal',
     }))).rejects.toMatchObject({ code: 'invalid_integration_path' });
+    for (const path of ['/safe/../restricted', '/safe/%2e%2e/restricted', '/safe/%2E./restricted']) {
+      await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+        provider: 'gmail',
+        method: 'GET',
+        path,
+      }))).rejects.toMatchObject({ code: 'invalid_integration_path' });
+    }
     await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
       provider: 'gmail',
       method: 'POST',
@@ -2069,6 +2112,139 @@ describe('IntegrationRequestGateway', () => {
       method: 'GET',
       path: '/ok',
     }))).rejects.toMatchObject({ code: 'integration_request_rate_limited' });
+  });
+
+  it('rejects a prepared request when descriptor routing changes before egress', async () => {
+    const fetch = jest.fn<PinnedFetch>().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const fixture = gatewayFixture({ fetch });
+    const plan = await runAsUser(fixture.contextTracker, () => fixture.gateway.prepareRequest({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/profile',
+    }));
+    const current = oauthDescriptor();
+    await fixture.descriptorStore.upsert({
+      ...current,
+      apiHosts: ['www.googleapis.com'],
+      updatedAt: new Date(NOW.getTime() + 1),
+    });
+
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.executePrepared(plan)))
+      .rejects.toMatchObject({ code: 'integration_descriptor_changed', status: 409 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a promoted operation when its stored OpenAPI contract changes', async () => {
+    const fixture = gatewayFixture({
+      fetch: jest.fn<PinnedFetch>().mockResolvedValue(jsonResponse(200, { ok: true })),
+    });
+    const descriptor = oauthDescriptor();
+    await fixture.specStore.upsert({
+      descriptorId: descriptor.id,
+      spec: { openapi: '3.1.0', paths: { '/profile': { get: {} } } },
+      specHash: 'a'.repeat(64),
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+    const plan = await runAsUser(fixture.contextTracker, () => fixture.gateway.prepareRequest({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/profile',
+      specContract: { descriptorId: descriptor.id, specHash: 'a'.repeat(64) },
+    }));
+    expect(Object.isFrozen(plan.input)).toBe(true);
+    expect(Object.isFrozen(plan.input.specContract)).toBe(true);
+    expect(() => {
+      (plan.input.specContract as { specHash: string }).specHash = 'b'.repeat(64);
+    }).toThrow(TypeError);
+    await fixture.specStore.upsert({
+      descriptorId: descriptor.id,
+      spec: { openapi: '3.1.0', paths: { '/profile-v2': { get: {} } } },
+      specHash: 'b'.repeat(64),
+      createdAt: NOW,
+      updatedAt: new Date(NOW.getTime() + 1),
+    });
+
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.executePrepared(plan)))
+      .rejects.toMatchObject({ code: 'integration_spec_changed', status: 409 });
+  });
+
+  it('does not inject stored credentials for explicitly anonymous operations', async () => {
+    const fetch = jest.fn<PinnedFetch>().mockImplementation((_url, init) => {
+      expect(new Headers(init?.headers).has('Authorization')).toBe(false);
+      return Promise.resolve(jsonResponse(200, { ok: true }));
+    });
+    const fixture = gatewayFixture({ fetch });
+
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/public-profile',
+      authMode: 'anonymous',
+    }))).resolves.toMatchObject({ status: 200 });
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('snapshots authMode before asynchronous descriptor resolution', async () => {
+    const fetch = jest.fn<PinnedFetch>().mockImplementation((_url, init) => {
+      expect(new Headers(init?.headers).has('Authorization')).toBe(true);
+      return Promise.resolve(jsonResponse(200, { ok: true }));
+    });
+    const fixture = gatewayFixture({ fetch });
+    const originalLookup = fixture.descriptorStore.findVisibleByProvider.bind(fixture.descriptorStore);
+    let releaseLookup!: () => void;
+    let markLookupEntered!: () => void;
+    const lookupEntered = new Promise<void>(resolve => { markLookupEntered = resolve; });
+    const lookupGate = new Promise<void>(resolve => { releaseLookup = resolve; });
+    jest.spyOn(fixture.descriptorStore, 'findVisibleByProvider').mockImplementation(async (userId, provider) => {
+      markLookupEntered();
+      await lookupGate;
+      return originalLookup(userId, provider);
+    });
+    const input: {
+      provider: string;
+      method: string;
+      path: string;
+      authMode: 'credentialed' | 'anonymous';
+    } = {
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+      authMode: 'credentialed',
+    };
+
+    const pendingPlan = runAsUser(fixture.contextTracker, () => fixture.gateway.prepareRequest(input));
+    await lookupEntered;
+    input.authMode = 'anonymous';
+    releaseLookup();
+    const plan = await pendingPlan;
+
+    expect(plan.authMode).toBe('credentialed');
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.executePrepared(plan)))
+      .resolves.toMatchObject({ status: 200 });
+  });
+
+  it('executes the prepared body and query snapshot when caller-owned values later mutate', async () => {
+    const fetch = jest.fn<PinnedFetch>().mockImplementation((url, init) => {
+      expect(urlString(url)).toContain('page=1');
+      expect(requestBodyString(init)).toBe('{"message":"approved"}');
+      return Promise.resolve(jsonResponse(200, { ok: true }));
+    });
+    const fixture = gatewayFixture({ fetch });
+    const query = { page: 1 };
+    const body = { message: 'approved' };
+    const plan = await runAsUser(fixture.contextTracker, () => fixture.gateway.prepareRequest({
+      provider: 'gmail',
+      method: 'POST',
+      path: '/messages',
+      query,
+      body,
+    }));
+    query.page = 2;
+    body.message = 'mutated-after-approval';
+
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.executePrepared(plan)))
+      .resolves.toMatchObject({ status: 200 });
   });
 
   it('uses a shared rate-limit store across gateway instances when provided', async () => {
@@ -2313,6 +2489,29 @@ describe('IntegrationRequestGateway', () => {
       'Bearer gmail-fresh-access-token',
     ]);
   });
+
+  it('blocks direct API requests after a curated provider is durably disabled', async () => {
+    const fetchImpl = jest.fn<PinnedFetch>().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const fixture = gatewayFixture({ fetch: fetchImpl });
+    await fixture.descriptorStore.reconcileCuratedSeed({
+      provider: 'gmail',
+      seedRevision: 1,
+      enabled: false,
+      updatedAt: NOW,
+    });
+
+    await expect(runAsUser(fixture.contextTracker, () => fixture.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+    }))).rejects.toMatchObject({
+      code: 'integration_descriptor_not_found',
+      status: 404,
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    await expect(fixture.integrationStore.findByProvider(USER_ID, 'gmail'))
+      .resolves.toMatchObject({ status: 'connected' });
+  });
 });
 
 function gatewayFixture(options: {
@@ -2320,6 +2519,7 @@ function gatewayFixture(options: {
   readonly records?: readonly UserIntegrationRecord[];
   readonly providers?: IntegrationProviderRegistry;
   readonly fetch?: PinnedFetch;
+  readonly close?: () => Promise<void>;
   readonly dnsLookup?: (hostname: string, options: { readonly all: true }) => Promise<readonly { readonly address: string; readonly family: number }[]>;
   readonly rateLimitStore?: IRateLimitStore;
   readonly rateLimit?: { readonly windowMs: number; readonly maxRequests: number };
@@ -2343,6 +2543,7 @@ function gatewayFixture(options: {
       ?? null,
   })));
   const descriptorStore = new InMemoryIntegrationDescriptorStore(descriptorRecords);
+  const specStore = new InMemoryIntegrationOpenApiSpecStore();
   const providers = options.providers ?? IntegrationProviderRegistry.empty();
   const audit = new FixtureAuditSink();
   // Adapt the plain fetch stub into the pinned-outbound seam, recording each pin
@@ -2352,12 +2553,13 @@ function gatewayFixture(options: {
   const pinnedOutbound = fetchStub
     ? (pin: OutboundPin) => {
         pins.push(pin);
-        return { fetch: fetchStub, close: () => Promise.resolve() };
+        return { fetch: fetchStub, close: options.close ?? (() => Promise.resolve()) };
       }
     : undefined;
   const gateway = new IntegrationRequestGateway({
     integrationStore,
     descriptorStore,
+    specStore,
     secretEncryption,
     contextTracker,
     tokenRefresh: new IntegrationTokenRefreshService({
@@ -2373,7 +2575,7 @@ function gatewayFixture(options: {
     rateLimitStore: options.rateLimitStore,
     rateLimit: options.rateLimit,
   });
-  return { gateway, contextTracker, audit, pins, descriptorStore, integrationStore };
+  return { gateway, contextTracker, audit, pins, descriptorStore, specStore, integrationStore };
 }
 
 function runAsUser<T>(contextTracker: ContextTracker, fn: () => Promise<T>): Promise<T> {

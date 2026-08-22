@@ -9,13 +9,30 @@
  */
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { ListResourcesRequestSchema, ReadResourceRequestSchema, ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import {
+  ListResourcesRequestSchema,
+  ReadResourceRequestSchema,
+  ErrorCode,
+  McpError,
+  type ListResourcesResult,
+  type ReadResourceResult,
+} from "@modelcontextprotocol/sdk/types.js";
 import { CapabilityIndexResource } from '../server/resources/CapabilityIndexResource.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { logger } from '../utils/logger.js';
 import { ErrorHandler } from '../utils/ErrorHandler.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
 import { FileLockManager } from '../security/fileLockManager.js';
+import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+
+interface ResourcesConfig {
+  advertise_resources?: boolean;
+  variants?: {
+    summary?: boolean;
+    full?: boolean;
+    stats?: boolean;
+  };
+}
 
 /**
  * Handler for MCP Resources protocol
@@ -42,7 +59,7 @@ export class ResourceHandler {
   async initialize(server: Server): Promise<void> {
     try {
       // Check if resources are enabled in configuration
-      const resourcesConfig = this.configManager.getSetting<any>('elements.enhanced_index.resources');
+      const resourcesConfig = this.configManager.getSetting<ResourcesConfig>('elements.enhanced_index.resources');
 
       if (!resourcesConfig?.advertise_resources) {
         logger.info('[ResourceHandler] MCP Resources disabled (future-proof implementation, opt-in required)');
@@ -70,7 +87,7 @@ export class ResourceHandler {
           throw new McpError(ErrorCode.InternalError, 'Resource handler not initialized');
         }
         const result = await this.capabilityIndexResource.listResources();
-        return result as any; // Type assertion needed for MCP SDK compatibility
+        return result as ListResourcesResult;
       });
 
       // Register ReadResourceRequest handler
@@ -78,8 +95,9 @@ export class ResourceHandler {
         if (!this.capabilityIndexResource) {
           throw new McpError(ErrorCode.InternalError, 'Resource handler not initialized');
         }
-        const result = await this.capabilityIndexResource.readResource(request.params.uri);
-        return result as any; // Type assertion needed for MCP SDK compatibility
+        const normalizedUri = UnicodeValidator.normalize(request.params.uri).normalizedContent;
+        const result = await this.capabilityIndexResource.readResource(normalizedUri);
+        return result as ReadResourceResult;
       });
 
       logger.debug('[ResourceHandler] MCP resource handlers registered successfully');

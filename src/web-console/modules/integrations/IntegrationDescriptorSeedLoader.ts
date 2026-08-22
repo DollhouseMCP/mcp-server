@@ -30,11 +30,13 @@ import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueVal
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import {
   type IIntegrationDescriptorStore,
+  type CuratedIntegrationSeedDirective,
   type IntegrationDescriptorCreateInput,
   type IntegrationDescriptorRecord,
   type IntegrationDescriptorUpsertOptions,
   type IntegrationPkceMode,
   type IntegrationRefreshMode,
+  IntegrationDescriptorMutationBusyError,
   validateIntegrationDescriptorInput,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
@@ -43,6 +45,7 @@ import { integrationDescriptorClientSecretContext } from './IntegrationSecretCon
 import { safeIntegrationAuditProvider } from './IntegrationSecurityAudit.js';
 
 const SEED_FILE_EXTENSION = '.json';
+const SEED_BUSY_RETRY_DELAYS_MS = [10, 20, 40] as const;
 
 /** `github` is owned by the built-in legacy provider; a curated seed must not shadow it. */
 const RESERVED_PROVIDER_IDS: ReadonlySet<string> = new Set(['github']);
@@ -181,38 +184,85 @@ export class IntegrationDescriptorSeedLoader {
     const curated = await this.descriptorStore.findCuratedByProvider(
       provider as UserIntegrationProvider,
     );
-    const prepared = this.toDescriptorInput(seed, provider, curated);
-    if (!prepared) {
-      // Provider ids are shared by curated and user-owned descriptors. Curated
-      // records win runtime resolution, so their active provider credentials
-      // must be revoked before removal or they could become usable under a
-      // newly revealed same-name BYO route. Without a persisted curated record,
-      // however, the credentials belong to the BYO route and stay untouched.
-      if (!curated) return null;
-
-      const revoked = await this.integrationStore.revokeAllByDescriptor(
-        curated.id,
-        this.now(),
-      );
-      const removed = await this.descriptorStore.deleteCurated(curated.provider);
-      if (!removed) {
-        throw new Error('curated integration descriptor disappeared during credential withdrawal');
+    const seedRevision = readSeedRevision(seed);
+    const enabled = readSeedEnabled(seed);
+    if (!enabled) {
+      if (seedRevision === null) {
+        throw new Error("disabled descriptor seed requires a positive integer 'revision'");
       }
+      const disabled = await this.reconcileWithBusyRetry({
+        provider: provider as UserIntegrationProvider,
+        seedRevision,
+        enabled: false,
+        updatedAt: this.now(),
+      });
+      const outcome = disabled.enabled ? 'ignored stale disable for' : 'globally disabled';
       SecurityMonitor.logSecurityEvent({
         type: 'INTEGRATION_SECURITY_DECISION',
         severity: 'MEDIUM',
         source: 'IntegrationDescriptorSeedLoader.processSeedFile',
-        details: `Curated integration disabled for provider ${safeIntegrationAuditProvider(curated.provider)}`,
+        details: `Curated integration ${outcome} provider ${safeIntegrationAuditProvider(provider)}`,
       });
-      logger.info(`[IntegrationDescriptorSeedLoader] Disabled curated provider '${safeIntegrationAuditProvider(curated.provider)}' because deployment credentials are unavailable`, {
-        revokedIntegrations: revoked,
+      logger.info(`[IntegrationDescriptorSeedLoader] Curated provider '${safeIntegrationAuditProvider(provider)}' disable directive processed`, {
+        seedRevision: disabled.seedRevision,
+        applied: disabled.applied,
+        enabled: disabled.enabled,
+      });
+      return null;
+    }
+    const retainsRevision = retainsCurrentSeedRevision(curated, seedRevision);
+    const prepared = retainsRevision
+      ? this.toRetainedRevisionInput(provider, curated)
+      : this.toDescriptorInput(seed, provider, curated);
+    if (!prepared) {
+      // Deployment credentials are replica-local. A replica that lacks them
+      // must not withdraw shared descriptors or user credentials that another
+      // healthy replica is serving.
+      SecurityMonitor.logSecurityEvent({
+        type: 'INTEGRATION_SECURITY_DECISION',
+        severity: 'MEDIUM',
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: `Curated integration unavailable on this replica for provider ${safeIntegrationAuditProvider(provider)}`,
+      });
+      logger.warn(`[IntegrationDescriptorSeedLoader] Curated provider '${safeIntegrationAuditProvider(provider)}' is unavailable on this replica because deployment credentials are absent`, {
+        descriptorPresent: curated !== null,
       });
       return null;
     }
 
     const { input, upsertOptions } = prepared;
     validateIntegrationDescriptorInput(input);
-    const record = await this.descriptorStore.upsert(input, upsertOptions);
+    let record: IntegrationDescriptorRecord | null;
+    try {
+      const reconciled = await this.reconcileWithBusyRetry({
+        provider: input.provider,
+        seedRevision,
+        enabled: true,
+        descriptor: input,
+        upsertOptions,
+        updatedAt: input.updatedAt,
+      });
+      record = reconciled.descriptor;
+    } catch (error) {
+      if (error instanceof IntegrationDescriptorMutationBusyError) {
+        SecurityMonitor.logSecurityEvent({
+          type: 'INTEGRATION_SECURITY_DECISION',
+          severity: 'MEDIUM',
+          source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+          details: `Curated integration descriptor mutation remained busy for provider ${safeIntegrationAuditProvider(provider)}`,
+        });
+      }
+      throw error;
+    }
+    if (!record) {
+      logger.warn(`[IntegrationDescriptorSeedLoader] Ignored stale enable seed for globally disabled provider '${safeIntegrationAuditProvider(provider)}'`, {
+        seedRevision,
+      });
+      return null;
+    }
+    if (retainsRevision) {
+      auditRetainedSeedRevision(provider, seedRevision, curated.curatedSeedRevision as number);
+    }
     SecurityMonitor.logSecurityEvent({
       type: 'INTEGRATION_SECURITY_DECISION',
       severity: 'LOW',
@@ -224,6 +274,56 @@ export class IntegrationDescriptorSeedLoader {
       authStrategy: input.authStrategy,
     });
     return record;
+  }
+
+  private toRetainedRevisionInput(
+    provider: string,
+    existing: IntegrationDescriptorRecord,
+  ): PreparedDescriptorInput | null {
+    if (existing.authStrategy !== 'oauth2_authorization_code' || !existing.oauth) {
+      return { input: descriptorRecordAsInput(existing, this.now()) };
+    }
+    const credentials = this.resolveCredentials(provider);
+    if (!credentials.clientId || !credentials.clientSecret) return null;
+    const encryptedSecret = this.resolveClientSecret(provider, credentials.clientSecret, existing);
+    const sameClientId = credentials.clientId === existing.oauth.clientId;
+    const sameLogicalSecret = existing.clientSecretRevision !== null
+      ? encryptedSecret.revision === existing.clientSecretRevision
+      : encryptedSecret.initializeRevision;
+    if (!sameClientId || !sameLogicalSecret) {
+      throw new Error(
+        `curated provider '${provider}' changes deployment OAuth credentials without a newer explicit seed revision`,
+      );
+    }
+    return {
+      input: {
+        ...descriptorRecordAsInput(existing, this.now()),
+        oauth: existing.oauth,
+        clientSecretCiphertext: existing.clientSecretRevision === null
+          ? existing.clientSecretCiphertext
+          : encryptedSecret.ciphertext,
+        clientSecretRevision: existing.clientSecretRevision,
+        credentialKeyVersion: existing.clientSecretRevision === null
+          ? existing.credentialKeyVersion
+          : encryptedSecret.keyVersion,
+      },
+      upsertOptions: { refreshDeploymentCredentialsAtRetainedSeedRevision: true },
+    };
+  }
+
+  private async reconcileWithBusyRetry(
+    directive: CuratedIntegrationSeedDirective,
+  ): ReturnType<IIntegrationDescriptorStore['reconcileCuratedSeed']> {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.descriptorStore.reconcileCuratedSeed(directive);
+      } catch (error) {
+        if (!(error instanceof IntegrationDescriptorMutationBusyError)) throw error;
+        const delay = SEED_BUSY_RETRY_DELAYS_MS[attempt];
+        if (delay === undefined) throw error;
+        await new Promise(resolve => setTimeout(resolve, delay));
+      }
+    }
   }
 
   /**
@@ -248,6 +348,7 @@ export class IntegrationDescriptorSeedLoader {
       category: readString(seed, 'category') ?? '',
       apiHosts: canonicalizeIntegrationApiHosts(readStringArray(seed, 'apiHosts')),
       operationPromotion: readRecord(seed, 'operationPromotion'),
+      curatedSeedRevision: readSeedRevision(seed),
       createdAt: timestamp,
       updatedAt: timestamp,
     };
@@ -396,6 +497,30 @@ export class IntegrationDescriptorSeedLoader {
   }
 }
 
+function descriptorRecordAsInput(
+  record: IntegrationDescriptorRecord,
+  updatedAt: Date,
+): IntegrationDescriptorCreateInput {
+  return {
+    provider: record.provider,
+    ownership: record.ownership,
+    ownerUserId: record.ownerUserId,
+    displayName: record.displayName,
+    category: record.category,
+    authStrategy: record.authStrategy,
+    apiHosts: [...record.apiHosts],
+    oauth: record.oauth,
+    staticApiKey: record.staticApiKey,
+    clientSecretCiphertext: record.clientSecretCiphertext,
+    clientSecretRevision: record.clientSecretRevision,
+    credentialKeyVersion: record.credentialKeyVersion,
+    curatedSeedRevision: record.curatedSeedRevision ?? null,
+    operationPromotion: record.operationPromotion,
+    createdAt: record.createdAt,
+    updatedAt,
+  };
+}
+
 // ── seed-object readers (defensive; validation does the real enforcement) ──
 
 function readRecord(value: unknown, key: string): Readonly<Record<string, unknown>> {
@@ -412,6 +537,51 @@ function asRecord(value: unknown): Readonly<Record<string, unknown>> {
 function readString(value: unknown, key: string): string | null {
   const field = asRecord(value)[key];
   return typeof field === 'string' ? field : null;
+}
+
+function readSeedRevision(value: unknown): number | null {
+  const revision = asRecord(value).revision;
+  if (revision === undefined || revision === null) return null;
+  if (!Number.isSafeInteger(revision) || (revision as number) < 1 || (revision as number) > 2_147_483_647) {
+    throw new Error("descriptor seed field 'revision' must be a positive 32-bit integer");
+  }
+  return revision as number;
+}
+
+function readSeedEnabled(value: unknown): boolean {
+  const enabled = asRecord(value).enabled;
+  if (enabled === undefined) return true;
+  if (typeof enabled !== 'boolean') {
+    throw new Error("descriptor seed field 'enabled' must be a boolean");
+  }
+  return enabled;
+}
+
+function retainsCurrentSeedRevision(
+  current: IntegrationDescriptorRecord | null,
+  proposedRevision: number | null,
+): current is IntegrationDescriptorRecord {
+  const currentRevision = current?.curatedSeedRevision ?? null;
+  return current !== null
+    && currentRevision !== null
+    && (proposedRevision === null || proposedRevision <= currentRevision);
+}
+
+function auditRetainedSeedRevision(
+  provider: string,
+  proposedRevision: number | null,
+  currentRevision: number,
+): void {
+  SecurityMonitor.logSecurityEvent({
+    type: 'INTEGRATION_SECURITY_DECISION',
+    severity: 'MEDIUM',
+    source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+    details: `Curated integration descriptor retained newer revision for provider ${safeIntegrationAuditProvider(provider)}`,
+  });
+  logger.warn(`[IntegrationDescriptorSeedLoader] Ignored stale descriptor seed for '${safeIntegrationAuditProvider(provider)}'`, {
+    proposedRevision,
+    currentRevision,
+  });
 }
 
 function readStringField(value: Readonly<Record<string, unknown>>, key: string): string {

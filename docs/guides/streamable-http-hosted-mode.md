@@ -63,6 +63,7 @@ Supporting endpoints:
 | `DOLLHOUSE_HTTP_ALLOWED_HOSTS` | *(unset)* | Comma-separated Host header allowlist for DNS rebinding protection |
 | `DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS` | `60000` | Rate limit window in milliseconds |
 | `DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS` | `300` | Max requests per client per window |
+| `DOLLHOUSE_HTTP_BODY_LIMIT_BYTES` | `1048576` | Maximum decoded JSON request body for MCP and console APIs (1 MiB default; 16 KiB-10 MiB) |
 | `DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS` | `900000` | Session idle timeout (15 minutes). 0 = no timeout |
 | `DOLLHOUSE_HTTP_SESSION_POOL_SIZE` | `0` | Pre-warmed session pool size. 0 = disabled |
 

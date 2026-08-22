@@ -41,7 +41,7 @@ version: 1.0.0
     });
 
     it('should reject content exceeding size limit', () => {
-      const largeContent = 'x'.repeat(2 * 1024 * 1024); // 2MB
+      const largeContent = 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
       
       expect(() => {
         SecureYamlParser.parse(largeContent);
@@ -50,13 +50,27 @@ version: 1.0.0
 
     it('should reject YAML exceeding size limit', () => {
       const largeYaml = `---
-data: ${'"x"'.repeat(100 * 1024)}
+data: ${'x'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH)}
 ---
 Content`;
       
       expect(() => {
         SecureYamlParser.parse(largeYaml);
       }).toThrow('YAML frontmatter exceeds maximum allowed size');
+    });
+
+    it('enforces full-document and frontmatter limits in UTF-8 bytes', () => {
+      expect(() => SecureYamlParser.parse('é'.repeat(51), {
+        maxContentSize: 100,
+      })).toThrow('Content exceeds maximum allowed size');
+
+      const multibyteFrontmatter = `---\nvalue: ${'é'.repeat(50)}\n---\n`;
+      expect(multibyteFrontmatter.length).toBeLessThan(120);
+      expect(() => SecureYamlParser.parse(multibyteFrontmatter, {
+        maxContentSize: 1024,
+        maxYamlSize: 100,
+        validateContent: false,
+      })).toThrow('YAML frontmatter exceeds maximum allowed size');
     });
 
     describe('malicious YAML detection', () => {
@@ -248,6 +262,15 @@ invalid_key: value
   });
 
   describe('parseRawYaml schema selection', () => {
+    it('enforces raw YAML limits in UTF-8 bytes', () => {
+      const yaml = `value: ${'é'.repeat(50)}\n`;
+      expect(yaml.length).toBeLessThan(100);
+      expect(() => SecureYamlParser.parseRawYaml(yaml, {
+        maxSize: 100,
+        schema: 'json',
+      })).toThrow('YAML content exceeds maximum allowed size');
+    });
+
     it('preserves scalar strings for legacy FAILSAFE config migration', () => {
       const result = SecureYamlParser.parseRawYaml('enabled: true\ncount: 3\n', {
         schema: 'failsafe',

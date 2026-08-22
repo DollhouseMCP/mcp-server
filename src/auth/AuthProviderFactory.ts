@@ -58,6 +58,8 @@ export interface AuthConfig {
   localDefaultSub?: string;
   publicBaseUrl?: string;
   mcpPath?: string;
+  /** Monotonic embedded-AS deployment epoch used to reject stale replicas. */
+  authGeneration?: number;
   /**
    * Auth methods exposed by the embedded AS. Defaults to ['trivial-consent']
    * which preserves the existing solo-localhost behavior. Ignored when
@@ -81,9 +83,9 @@ export interface AuthConfig {
    */
   database?: DatabaseInstance;
   /**
-   * Cycle 19 / security-#6: opt-in RFC 9068 `typ: at+jwt` enforcement on
-   * incoming OIDC-bridge tokens. Default false (compat with IdPs that
-   * don't stamp typ). Forwarded to `OidcAuthProvider`.
+   * RFC 9068 `typ: at+jwt` enforcement on incoming OIDC-bridge tokens.
+   * Secure default is true; false is an explicit compatibility opt-out.
+   * Forwarded to `OidcAuthProvider`.
    */
   oidcRequireAccessTokenTyp?: boolean;
   /**
@@ -282,6 +284,7 @@ async function createEmbeddedProvider(
     publicBaseUrl: config.publicBaseUrl,
     mcpPath: config.mcpPath,
     keyFilePath: config.localKeyFile,
+    authGeneration: config.authGeneration,
     methods: builtMethods,
     storage,
     // Phase 4.5: forwarded by AuthServiceRegistrar in DB mode; undefined
@@ -382,10 +385,10 @@ function warnAllowlistDisabledForSocial(
 }
 
 /**
- * Lazy factory for the shared InviteTokenStore used by local-password and
- * magic-link. The two methods must share the same secret so an invite
- * issued by one is verifiable by the other (closes the "two stores"
- * finding — single shared instance, single consumed-set).
+ * Lazy factory for InviteTokenStore instances used by local-password and
+ * magic-link. File mode reuses one stable instance. Durable mode reloads the
+ * active issuer and its verification ring for each operation so replicas adopt
+ * administrative rotation without restarting or splitting issuers/verifiers.
  *
  * Storage-backed consumed-jti enforcement (H5): passes the same storage
  * layer the AS uses so single-use survives restart on durable backends.
@@ -396,17 +399,20 @@ function makeInviteStoreFactory(
 ): () => Promise<InviteTokenStore> {
   let shared: InviteTokenStore | undefined;
   return async () => {
-    if (shared) return shared;
+    // File-backed keys are process-local and stable. Durable keys can rotate
+    // from another replica, so reload the active secret for every operation.
+    if (!config.signingKeyStore && shared) return shared;
     const {
       InviteTokenStore,
       loadOrGenerateInviteSecret,
-      loadOrGenerateInviteSecretViaStore,
+      loadInviteTokenStoreViaStore,
     } = await import('./embedded-as/inviteTokens.js');
-    const inviteSecret = config.signingKeyStore
-      ? await loadOrGenerateInviteSecretViaStore(config.signingKeyStore)
-      : loadOrGenerateInviteSecret();
-    shared = new InviteTokenStore(inviteSecret, storage);
-    return shared;
+    if (config.signingKeyStore) {
+      return loadInviteTokenStoreViaStore(config.signingKeyStore, storage);
+    }
+    const current = new InviteTokenStore(loadOrGenerateInviteSecret(), storage);
+    shared = current;
+    return current;
   };
 }
 
@@ -523,15 +529,17 @@ async function buildAuthMethod(
           'AuthServiceRegistrar constructs one from DOLLHOUSE_RATE_LIMIT_BACKEND (memory|postgres) — verify the registrar ran before createAuthProvider().',
         );
       }
-      const invites = await ensureInvites();
       const rateLimiter = new LocalLoginRateLimiter({
         storage,
         store: config.rateLimitStore,
         storeBackend: env.DOLLHOUSE_RATE_LIMIT_BACKEND,
       });
+      // Fail at startup if the durable invite key ring cannot be loaded.
+      // Operations still call ensureInvites again so replicas observe rotation.
+      await ensureInvites();
       return new LocalAccountMethod({
         storage,
-        invites,
+        invites: ensureInvites,
         rateLimiter,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,
         signInAllowlistAuthority: config.signInAllowlistAuthority,
@@ -566,11 +574,13 @@ async function buildAuthMethod(
       // late (on first user request) leaves operators chasing magic-link
       // emails that silently never arrive.
       await emailSender.verify();
-      const invites = await ensureInvites();
+      // Match local-password fail-fast behavior while retaining per-operation
+      // reloads of the durable issuer and verification ring.
+      await ensureInvites();
       const verifyUrl = `${baseUrl.replace(/\/$/, '')}/auth/email/verify`;
       return new MagicLinkMethod({
         storage,
-        invites,
+        invites: ensureInvites,
         emailSender,
         verifyUrl,
         allowlistRequired: env.DOLLHOUSE_AUTH_ALLOWLIST_REQUIRED,

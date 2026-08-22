@@ -8,6 +8,7 @@ import {
   InMemoryPortfolioSyncJobStore,
   InMemoryUserIntegrationStore,
   PortfolioElementVersionConflictError,
+  PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES,
   PORTFOLIO_ELEMENT_METADATA_MAX_BYTES,
   PORTFOLIO_ELEMENT_TAGS_MAX,
   type ConsolePortfolioElementDetailRecord,
@@ -16,6 +17,7 @@ import {
   type ConsoleHandlerResult,
   type IPortfolioElementStore,
   type IPortfolioSyncJobStore,
+  type IPortfolioActivityEventSink,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
   type UserIntegrationRecord,
@@ -97,6 +99,7 @@ function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIn
     accessTokenCiphertext: Buffer.from('encrypted-access-token'),
     refreshTokenCiphertext: null,
     credentialKeyVersion: null,
+    credentialGeneration: 0,
     status: 'connected',
     errorReason: null,
     connectedAt: NOW,
@@ -496,6 +499,24 @@ describe('PortfolioModule', () => {
     await expect(create.handler(consoleRequest({
       params: { type: 'skills' },
       body: {
+        name: 'oversized-content',
+        metadata: {},
+        content: 'x'.repeat(PORTFOLIO_ELEMENT_CONTENT_MAX_BYTES + 1),
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({
+          path: 'content',
+          code: 'too_large',
+          message: 'content must be at most 10 MiB.',
+        })],
+      },
+    });
+    await expect(create.handler(consoleRequest({
+      params: { type: 'skills' },
+      body: {
         name: 'too-many-tags',
         metadata: {},
         content: '# Too many tags',
@@ -690,6 +711,33 @@ describe('PortfolioModule', () => {
     const message = portfolioDeletionActivityMessage(events[0]);
     expect(message).toContain(CONTENT_HASH);
     expect(message).not.toContain('Owner private content.');
+  });
+
+  it('does not report a durable deletion as failed when the activity sink is unavailable', async () => {
+    const store = new InMemoryPortfolioElementStore([portfolioElement({ contentHash: CONTENT_HASH })]);
+    const failingSink: IPortfolioActivityEventSink = {
+      recordElementDeleted: () => Promise.reject(new Error('activity store unavailable')),
+    };
+    const module = createPortfolioModule({
+      portfolioStore: store,
+      integrationStore: new InMemoryUserIntegrationStore(),
+      syncJobStore: new InMemoryPortfolioSyncJobStore(),
+      enablePortfolioWriteRoutes: true,
+      now: () => NOW,
+      activityEventSink: failingSink,
+    });
+    const remove = findRoute(module.routes, ELEMENT_DETAIL_PATH, 'DELETE');
+    const detail = findRoute(module.routes, ELEMENT_DETAIL_PATH);
+    const current = await detail.handler(consoleRequest({
+      params: { type: 'skills', name: REVIEW_HELPER_NAME },
+    }));
+
+    await expect(remove.handler(consoleRequest({
+      params: { type: 'skills', name: REVIEW_HELPER_NAME },
+      headers: { 'if-match': responseEtag(current) },
+      consoleContext: { correlationId: CORRELATION_ID, receivedAt: NOW },
+    }))).resolves.toMatchObject({ status: 200, body: { deleted: true } });
+    await expect(store.findByName(USER_ID, 'skills', REVIEW_HELPER_NAME)).resolves.toBeNull();
   });
 
   it('builds a content-free deletion message with and without a content hash', () => {

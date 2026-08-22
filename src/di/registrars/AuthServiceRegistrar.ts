@@ -24,6 +24,7 @@ import type { IRateLimitStore } from '../../auth/embedded-as/storage/IRateLimitS
 import type { IAuthStorageLayer } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
 import type { AdminTotpService } from '../../auth/embedded-as/totp/AdminTotpService.js';
 import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
+import type { UserIdentityService } from '../../services/UserIdentityService.js';
 
 interface ProtectedResourceMetadataProvider extends IAuthProvider {
   getProtectedResourceMetadataUrl(): string;
@@ -142,6 +143,7 @@ export class AuthServiceRegistrar {
       localDefaultSub: env.DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB,
       publicBaseUrl: env.DOLLHOUSE_PUBLIC_BASE_URL,
       mcpPath: env.DOLLHOUSE_HTTP_MCP_PATH,
+      authGeneration: env.DOLLHOUSE_AUTH_GENERATION,
       methods: authMethods,
       database,
       storage: authStorage,
@@ -174,6 +176,9 @@ export class AuthServiceRegistrar {
 
     const middleware = createUnifiedAuthMiddleware({
       provider,
+      claimsAuthority: container.hasRegistration('UserIdentityService')
+        ? container.resolve<UserIdentityService>('UserIdentityService')
+        : undefined,
       publicPaths: ['/healthz', '/readyz', '/version'],
       protectedResourceMetadataUrl: hasProtectedResourceMetadata(provider)
         ? provider.getProtectedResourceMetadataUrl()
@@ -214,17 +219,18 @@ export class AuthServiceRegistrar {
     authStorage: IAuthStorageLayer | undefined,
   ): Promise<{ adminTotpService?: AdminTotpService; consoleIdentityResolver?: IConsoleIdentityResolver }> {
     if (env.DOLLHOUSE_AUTH_PROVIDER !== 'embedded' || !database || !authStorage) return {};
+    const { PostgresConsoleIdentityResolver } = await import('../../web-console/identity/PostgresConsoleIdentityResolver.js');
+    const consoleIdentityResolver = new PostgresConsoleIdentityResolver(database);
     const encryptionKey = env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY;
     if (!encryptionKey) {
       logger.debug(
         '[AuthServiceRegistrar] DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY unset — ' +
         'admin TOTP step-up routes will not mount',
       );
-      return {};
+      return { consoleIdentityResolver };
     }
     const { AdminTotpService } = await import('../../auth/embedded-as/totp/AdminTotpService.js');
     const { PostgresConsoleFactorStore } = await import('../../web-console/stores/PostgresConsoleFactorStore.js');
-    const { PostgresConsoleIdentityResolver } = await import('../../web-console/identity/PostgresConsoleIdentityResolver.js');
     const { AeadSecretEncryptionService } = await import('../../web-console/security/SecretEncryption.js');
     const retainedDecryptKeys = parseRetiredSecretKeys(
       env.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED,
@@ -240,7 +246,7 @@ export class AuthServiceRegistrar {
         factorStore: new PostgresConsoleFactorStore(database),
         secretEncryption,
       }),
-      consoleIdentityResolver: new PostgresConsoleIdentityResolver(database),
+      consoleIdentityResolver,
     };
   }
 }

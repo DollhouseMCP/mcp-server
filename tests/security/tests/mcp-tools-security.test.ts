@@ -5,6 +5,7 @@ import type { DollhouseContainer } from '../../../src/di/Container.js';
 import type { TokenManager } from '../../../src/security/tokenManager.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('MCP Tools Security Tests', () => {
   let server: InstanceType<typeof DollhouseMCPServer>;
@@ -249,8 +250,7 @@ describe('MCP Tools Security Tests', () => {
     test('should enforce size limits on persona content', async () => {
       SecurityTestPerformance.start();
 
-      // Create content that exceeds limits (1MB+)
-      const largeContent = 'x'.repeat(1024 * 1024 + 1);
+      const largeContent = 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
 
       // v2: Use createElement instead of createPersona
       const result = await server.createElement({
@@ -260,7 +260,7 @@ describe('MCP Tools Security Tests', () => {
         content: largeContent
       });
 
-      // SECURITY: Content over 500KB limit should be REJECTED (not accepted)
+      // SECURITY: Content above the 10 MiB persisted-element ceiling is rejected.
       // This validates that the security layer correctly enforces size limits
       expect(result.content[0].text).toMatch(/❌|Content too large/i);
 

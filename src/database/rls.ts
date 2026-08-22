@@ -10,8 +10,20 @@
  * @since v2.2.0 — Phase 4, Step 4.1
  */
 
-import { sql } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { DatabaseInstance } from './connection.js';
+import { users } from './schema/users.js';
+import {
+  InactiveUserLifecycleError,
+  lockActiveUserLifecycleWithTx,
+} from './authPrincipalLock.js';
+
+export class InactiveUserContextError extends InactiveUserLifecycleError {
+  constructor() {
+    super();
+    this.name = 'InactiveUserContextError';
+  }
+}
 
 /**
  * Execute a function within a database transaction scoped to a specific user.
@@ -37,6 +49,14 @@ export async function withUserContext<T>(
     // is reset at COMMIT/ROLLBACK, so it cannot leak across pooled connections.
     // userId is additionally pre-validated as a UUID v4 before reaching this call.
     await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId}, true)`);
+    // The app role intentionally has no UPDATE privilege on users, so use the
+    // shared transaction advisory lock rather than a row-locking SELECT.
+    try {
+      await lockActiveUserLifecycleWithTx(tx, userId);
+    } catch (error) {
+      if (error instanceof InactiveUserLifecycleError) throw new InactiveUserContextError();
+      throw error;
+    }
     return fn(tx);
   });
 }
@@ -59,6 +79,12 @@ export async function withUserRead<T>(
     // Parameterized set_config (see withUserContext for full rationale).
     await tx.execute(sql`SELECT set_config('app.current_user_id', ${userId}, true)`);
     await tx.execute(sql`SET TRANSACTION READ ONLY`);
+    const active = await tx.select({ id: users.id }).from(users).where(and(
+      eq(users.id, userId),
+      isNull(users.disabledAt),
+      isNull(users.deletedAt),
+    )).limit(1);
+    if (!active[0]) throw new InactiveUserContextError();
     return fn(tx);
   });
 }

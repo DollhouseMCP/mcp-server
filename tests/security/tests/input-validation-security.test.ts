@@ -7,6 +7,7 @@ import {
   validateUsername,
   validateCategory 
 } from '../../../src/security/InputValidator.js';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('Input Validation Security Tests', () => {
   describe('Command Injection Prevention', () => {
@@ -91,12 +92,12 @@ describe('Input Validation Security Tests', () => {
   
   describe('Size Limit Enforcement', () => {
     test('validateContentSize should reject oversized content', () => {
-      const largeContent = 'x'.repeat(1024 * 1024 + 1); // 1MB + 1
+      const largeContent = 'x'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 1);
       expect(() => validateContentSize(largeContent)).toThrow(/too large|size limit/i);
     });
     
     test('validateContentSize should accept content within limits', () => {
-      const validContent = 'x'.repeat(1024 * 400); // 400KB (well within 500KB limit)
+      const validContent = 'x'.repeat(1024 * 400);
       expect(() => validateContentSize(validContent)).not.toThrow();
     });
   });

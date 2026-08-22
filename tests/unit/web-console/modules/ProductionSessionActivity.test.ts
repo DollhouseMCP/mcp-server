@@ -1,7 +1,7 @@
 import { describe, expect, it, jest } from '@jest/globals';
 import { PermissionLevel, type CliApprovalRecord } from '../../../../src/handlers/mcp-aql/GatekeeperTypes.js';
 
-let tx: { insert: jest.Mock; select?: jest.Mock } | null = null;
+let tx: { insert: jest.Mock; select?: jest.Mock; execute?: jest.Mock } | null = null;
 const withSystemContextMock = jest.fn(async (
   db: unknown,
   callback: (transaction: unknown) => Promise<unknown>,
@@ -37,9 +37,12 @@ describe('production session activity adapters', () => {
     const selectChain = {
       from: jest.fn(() => selectChain),
       where: jest.fn(() => selectChain),
-      limit: jest.fn(() => Promise.resolve(selectRows)),
+      limit: jest.fn()
+        .mockResolvedValueOnce([{ id: USER_ID }])
+        .mockResolvedValueOnce(selectRows),
     };
     tx = {
+      execute: jest.fn(() => Promise.resolve([])),
       insert: jest.fn(() => insertChain),
       select: jest.fn(() => selectChain),
     };
@@ -59,7 +62,7 @@ describe('production session activity adapters', () => {
       occurredAt: NOW,
     });
 
-    expect(tx.select).toHaveBeenCalledTimes(1);
+    expect(tx.select).toHaveBeenCalledTimes(2);
     expect(tx.insert).toHaveBeenCalledTimes(2);
     expect(insertChain.values).toHaveBeenNthCalledWith(1, expect.objectContaining({
       userId: USER_ID,
@@ -82,6 +85,33 @@ describe('production session activity adapters', () => {
       correlationId: '018f3d47-73ae-7f10-a0de-0742618d4fd1',
     }));
     expect(insertChain.onConflictDoNothing).toHaveBeenCalledTimes(1);
+    tx = null;
+  });
+
+  it('rejects a late approval event after the user lifecycle closes', async () => {
+    tx = {
+      execute: jest.fn(() => Promise.resolve([])),
+      insert: jest.fn(),
+      select: jest.fn(() => ({
+        from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }),
+      })),
+    };
+    const sink = new PostgresSessionApprovalEventSink({} as never);
+
+    await expect(sink.recordApprovalDecision({
+      type: APPROVAL_DECIDED_EVENT,
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      approvalId: APPROVAL_ID,
+      decision: 'approved',
+      scope: 'session',
+      toolName: 'Bash',
+      operation: null,
+      decisionSource: 'user_prompt',
+      correlationId: '018f3d47-73ae-7f10-a0de-0742618d4fd1',
+      occurredAt: NOW,
+    })).rejects.toThrow('disabled, deleted, or missing');
+    expect(tx.insert).not.toHaveBeenCalled();
     tx = null;
   });
 

@@ -53,6 +53,8 @@ const state = {
 };
 let globalListenersBound = false;
 let governanceSections = [];
+let loadGeneration = 0;
+let loadController = null;
 
 export async function init(panelEl, ctx = {}) {
   host = panelEl;
@@ -95,25 +97,47 @@ function onElevationChanged(event) {
 /* ── Data ───────────────────────────────────────────────────────────────── */
 
 async function load() {
+  const generation = ++loadGeneration;
+  loadController?.abort();
+  const controller = new AbortController();
+  loadController = controller;
   state.loading = true;
   state.error = false;
   renderList();
-  const [usersRes, me] = await Promise.all([
-    get('/admin/accounts/users?limit=200').catch(() => null),
-    get('/auth/me').catch(() => null),
+  const [usersResult, me] = await Promise.all([
+    loadAllUsers(controller.signal).catch(() => null),
+    get('/auth/me', { signal: controller.signal }).catch(() => null),
   ]);
+  if (generation !== loadGeneration) return;
   state.actorCaps = me?.status === 200 && Array.isArray(me.body?.available_admin_capabilities)
     ? me.body.available_admin_capabilities : [];
-  if (usersRes?.status === 200 && Array.isArray(usersRes.body?.items)) {
-    state.users = usersRes.body.items;
+  if (usersResult) {
+    state.users = usersResult;
     state.error = false;
   } else {
     state.users = [];
     // A 401 step_up_required is handled by the shell; show a soft message here.
-    state.error = usersRes?.status !== 200;
+    state.error = true;
   }
   state.loading = false;
   renderList();
+}
+
+async function loadAllUsers(signal) {
+  const users = [];
+  const seenCursors = new Set();
+  let cursor = null;
+  do {
+    const query = new URLSearchParams({ limit: '200' });
+    if (cursor) query.set('cursor', cursor);
+    const response = await get(`/admin/accounts/users?${query.toString()}`, { signal });
+    if (response.status !== 200 || !Array.isArray(response.body?.items)) throw new Error('user_directory_unavailable');
+    users.push(...response.body.items);
+    cursor = typeof response.body?.page?.next_cursor === 'string' ? response.body.page.next_cursor : null;
+    if (cursor && seenCursors.has(cursor)) throw new Error('user_directory_cursor_loop');
+    if (cursor) seenCursors.add(cursor);
+  } while (cursor);
+  return users;
 }
 
 function canManageRole(role) {

@@ -358,6 +358,7 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT USAGE, SELECT ON SEQUENCES TO dollhouse_app;
 
 REVOKE INSERT, UPDATE, DELETE ON TABLE users FROM dollhouse_app;
+REVOKE INSERT, UPDATE, DELETE ON TABLE auth_subject_revocation_fences FROM dollhouse_app;
 
 DO $$
 BEGIN

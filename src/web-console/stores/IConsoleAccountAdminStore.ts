@@ -137,6 +137,19 @@ export interface IdentityMutationResult {
   readonly linkedUserId: string | null;
 }
 
+export interface IdentityLinkPreparationResult extends IdentityMutationResult {
+  readonly outcome:
+    | 'provisional'
+    | 'already_linked'
+    | 'linked_elsewhere'
+    | 'subject_deleted'
+    | 'not_found';
+}
+
+export interface IdentityLinkFinalizationResult extends IdentityMutationResult {
+  readonly outcome: 'finalized' | 'already_finalized' | 'subject_deleted' | 'not_found';
+}
+
 /** Keyset position for the unlinked-logins directory: `(created_at, sub)` of the prior page's last row. */
 export interface UnlinkedIdentityCursor {
   readonly createdAt: Date;
@@ -167,6 +180,29 @@ export interface PrincipalDeletionOutcome {
   readonly userId: string;
   readonly outcome: 'deleted' | 'anonymized';
   readonly authzVersion: number | null;
+  readonly browserSessionsRevoked?: number;
+  readonly oauthGrantFamiliesRevoked?: number;
+  /** Runtime targets captured inside the deletion transaction before presence rows are purged. */
+  readonly runtimeTerminationTargets?: readonly PrincipalRuntimeTerminationTarget[];
+}
+
+export interface PrincipalRuntimeTerminationTarget {
+  readonly sessionId: string;
+  readonly replicaId: string;
+}
+
+export class WouldOrphanAccountsAdminError extends Error {
+  constructor() {
+    super('Administrative mutation would leave zero enabled account administrators');
+    this.name = 'WouldOrphanAccountsAdminError';
+  }
+}
+
+export class CannotUnlinkLastIdentityError extends Error {
+  constructor() {
+    super('Cannot unlink the only login on an account');
+    this.name = 'CannotUnlinkLastIdentityError';
+  }
 }
 
 export interface IConsoleAccountAdminStore {
@@ -193,8 +229,15 @@ export interface IConsoleAccountAdminStore {
   listUnlinkedIdentities(query?: UnlinkedIdentityQuery): Promise<UnlinkedIdentityPage>;
   /** A single login by its `sub`, with its current link state. Null if unknown. */
   findIdentityBySub(sub: string): Promise<LinkedIdentity | null>;
-  /** Attach an unlinked login to this user. Returns null when the login is gone. */
-  linkIdentity(input: IdentityLinkInput): Promise<IdentityMutationResult | null>;
+  /** Whether durable authority fencing currently blocks this login subject. */
+  isIdentityRevocationFenced(sub: string): Promise<boolean>;
+  /**
+   * Attach an unlinked login provisionally while retaining a durable subject
+   * fence. A retry for the same linked-and-fenced identity is idempotent.
+   */
+  linkIdentity(input: IdentityLinkInput): Promise<IdentityLinkPreparationResult>;
+  /** Remove the provisional identity fence after runtime cleanup succeeds. */
+  finalizeIdentityLink(input: IdentityLinkInput): Promise<IdentityLinkFinalizationResult>;
   /** Detach a login from this user. Returns null when the login is gone. */
   unlinkIdentity(input: IdentityUnlinkInput): Promise<IdentityMutationResult | null>;
 }

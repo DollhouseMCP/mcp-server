@@ -15,6 +15,8 @@ export function createOperationalSessionsView(ctx = {}) {
   let selectedSession;
   let visible = false;
   const commands = new Map();
+  const terminationRequests = new Map();
+  let terminationRequestSequence = 0;
   let commandPoll;
   let listController;
   let detailController;
@@ -143,33 +145,45 @@ export function createOperationalSessionsView(ctx = {}) {
   }
 
   async function confirmTermination() {
-    if (!selectedSession) return;
+    const sessionId = selectedSession?.session_id;
+    if (!sessionId) return;
     const confirmed = await confirmDialog(
-      `Terminate runtime session ${selectedSession.session_id}? The owning client will be disconnected.`,
+      `Terminate runtime session ${sessionId}? The owning client will be disconnected.`,
       'Terminate session',
     );
     if (!confirmed) return;
-    await terminateSelectedSession();
+    await terminateSession(sessionId);
   }
 
-  async function terminateSelectedSession() {
-    const sessionId = selectedSession?.session_id;
-    if (!sessionId) return;
-    setDetailBusy(true);
+  async function terminateSession(sessionId) {
+    if (terminationRequests.has(sessionId)) return;
+    const requestId = ++terminationRequestSequence;
+    terminationRequests.set(sessionId, requestId);
+    if (isSelectedSession(sessionId)) setDetailBusy(true);
     try {
       const response = await del(`/admin/operate/sessions/${encodeURIComponent(sessionId)}`);
+      if (terminationRequests.get(sessionId) !== requestId) return;
       if (response.status !== 202 || !response.body?.command_id) {
-        showCommandMessage('The termination command was not accepted.', 'error');
+        if (isSelectedSession(sessionId)) {
+          showCommandMessage('The termination command was not accepted.', 'error');
+        }
         return;
       }
       const command = { ...response.body, session_id: sessionId, status: 'pending' };
       commands.set(sessionId, command);
-      renderCommandStatus();
-      pollCommand(sessionId, command.command_id);
+      if (isSelectedSession(sessionId)) {
+        renderCommandStatus();
+        pollCommand(sessionId, command.command_id);
+      }
     } catch {
-      showCommandMessage('The termination command could not reach the server.', 'error');
+      if (terminationRequests.get(sessionId) === requestId && isSelectedSession(sessionId)) {
+        showCommandMessage('The termination command could not reach the server.', 'error');
+      }
     } finally {
-      setDetailBusy(false);
+      if (terminationRequests.get(sessionId) === requestId) terminationRequests.delete(sessionId);
+      if (isSelectedSession(sessionId)) {
+        setDetailBusy(commands.get(sessionId)?.status === 'pending');
+      }
     }
   }
 
@@ -208,7 +222,10 @@ export function createOperationalSessionsView(ctx = {}) {
   function updateCommand(sessionId, commandId, next) {
     if (next?.command_id && next.command_id !== commandId) return;
     commands.set(sessionId, { ...next, command_id: commandId, session_id: sessionId });
-    if (isSelectedSession(sessionId)) renderCommandStatus();
+    if (isSelectedSession(sessionId)) {
+      renderCommandStatus();
+      setDetailBusy(next?.status === 'pending');
+    }
   }
 
   function renderList() {
@@ -235,7 +252,11 @@ export function createOperationalSessionsView(ctx = {}) {
       return;
     }
     const command = commands.get(selectedSession.session_id);
-    target.innerHTML = detailMarkup(selectedSession, canTerminate(ctx), command?.status === 'pending');
+    target.innerHTML = detailMarkup(
+      selectedSession,
+      canTerminate(ctx) && selectedSession.status === 'active',
+      command?.status === 'pending' || terminationRequests.has(selectedSession.session_id),
+    );
     renderCommandStatus();
   }
 

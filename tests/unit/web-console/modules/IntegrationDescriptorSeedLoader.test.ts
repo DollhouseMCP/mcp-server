@@ -13,6 +13,7 @@ import { HmacConsoleOpaqueValueService } from '../../../../src/web-console/secur
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import { InMemoryIntegrationDescriptorStore } from '../../../../src/web-console/stores/InMemoryIntegrationDescriptorStore.js';
 import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
+import { IntegrationDescriptorMutationBusyError } from '../../../../src/web-console/stores/IIntegrationDescriptorStore.js';
 
 const VISIBLE_USER = '11111111-1111-4111-8111-111111111111';
 const FIXED_NOW = new Date('2026-06-24T00:00:00.000Z');
@@ -117,6 +118,257 @@ function connectExampleCorp(
 }
 
 describe('IntegrationDescriptorSeedLoader', () => {
+  it('keeps the newer shared descriptor when a stale or legacy replica starts later', async () => {
+    const initialDir = await seedDirWith({
+      'examplecorp.json': {
+        ...OAUTH_SEED,
+        revision: 1,
+        apiHosts: ['initial.examplecorp.test'],
+      },
+    });
+    const currentDir = await seedDirWith({
+      'examplecorp.json': {
+        ...OAUTH_SEED,
+        revision: 2,
+        apiHosts: ['current.examplecorp.test'],
+      },
+    });
+    const staleDir = await seedDirWith({
+      'examplecorp.json': {
+        ...OAUTH_SEED,
+        revision: 1,
+        apiHosts: ['stale.examplecorp.test'],
+      },
+    });
+    const legacyDir = await seedDirWith({
+      'examplecorp.json': {
+        ...OAUTH_SEED,
+        apiHosts: ['legacy.examplecorp.test'],
+      },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const configuredCredentials = credentials({
+      examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+    });
+
+    await new IntegrationDescriptorSeedLoader(
+      initialDir,
+      store,
+      encryption,
+      configuredCredentials,
+      loaderOptions(),
+    ).loadSeeds();
+    await new IntegrationDescriptorSeedLoader(
+      currentDir,
+      store,
+      encryption,
+      configuredCredentials,
+      loaderOptions(),
+    ).loadSeeds();
+    await new IntegrationDescriptorSeedLoader(
+      staleDir,
+      store,
+      encryption,
+      configuredCredentials,
+      loaderOptions(),
+    ).loadSeeds();
+    await new IntegrationDescriptorSeedLoader(
+      legacyDir,
+      store,
+      encryption,
+      configuredCredentials,
+      loaderOptions(),
+    ).loadSeeds();
+
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toMatchObject({
+      curatedSeedRevision: 2,
+      apiHosts: ['current.examplecorp.test'],
+    });
+    expect(SecurityMonitor.getRecentEvents()).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+        details: expect.stringContaining('retained newer revision'),
+      }),
+    ]));
+  });
+
+  it('retains a newer static descriptor without invoking OAuth credential refresh rules', async () => {
+    const currentDir = await seedDirWith({
+      'examplekey.json': { ...STATIC_SEED, revision: 2, displayName: 'Current Key' },
+    });
+    const staleDir = await seedDirWith({
+      'examplekey.json': { ...STATIC_SEED, revision: 1, displayName: 'Stale Key' },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+
+    await new IntegrationDescriptorSeedLoader(
+      currentDir,
+      store,
+      newEncryption(),
+      credentials({}),
+      loaderOptions(),
+    ).loadSeeds();
+    const staleResult = await new IntegrationDescriptorSeedLoader(
+      staleDir,
+      store,
+      newEncryption(),
+      credentials({}),
+      loaderOptions(),
+    ).loadSeeds();
+
+    expect(staleResult).toMatchObject({ loaded: 1, failed: 0 });
+    await expect(store.findCuratedByProvider('examplekey')).resolves.toMatchObject({
+      curatedSeedRevision: 2,
+      displayName: 'Current Key',
+    });
+  });
+
+  it('rejects deployment OAuth credential changes from a stale seed revision', async () => {
+    const currentDir = await seedDirWith({
+      'examplecorp.json': {
+        ...OAUTH_SEED,
+        revision: 2,
+        displayName: 'Current Example Corp',
+        apiHosts: ['current.examplecorp.test'],
+      },
+    });
+    const staleDir = await seedDirWith({
+      'examplecorp.json': {
+        ...OAUTH_SEED,
+        revision: 1,
+        displayName: 'Stale Example Corp',
+        apiHosts: ['stale.examplecorp.test'],
+      },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+
+    const original = (await new IntegrationDescriptorSeedLoader(
+      currentDir,
+      store,
+      encryption,
+      credentials({
+        examplecorp: { clientId: 'current-client-id', clientSecret: 'current-secret' },
+      }),
+      loaderOptions(),
+    ).loadSeeds()).descriptors[0];
+    if (!original?.clientSecretCiphertext) throw new Error('expected original encrypted client secret');
+
+    const staleResult = await new IntegrationDescriptorSeedLoader(
+      staleDir,
+      store,
+      encryption,
+      credentials({
+        examplecorp: { clientId: 'rotated-client-id', clientSecret: 'rotated-secret' },
+      }),
+      loaderOptions(),
+    ).loadSeeds();
+    expect(staleResult).toMatchObject({ loaded: 0, failed: 1 });
+
+    const retained = await store.findCuratedByProvider('examplecorp');
+    expect(retained).toMatchObject({
+      id: original.id,
+      curatedSeedRevision: 2,
+      displayName: 'Current Example Corp',
+      apiHosts: ['current.examplecorp.test'],
+      oauth: expect.objectContaining({ clientId: 'current-client-id' }),
+    });
+    expect(retained?.clientSecretRevision).toBe(original.clientSecretRevision);
+    if (!retained?.clientSecretCiphertext) throw new Error('expected retained encrypted client secret');
+    const plaintext = encryption.decrypt(
+      retained.clientSecretCiphertext,
+      integrationDescriptorClientSecretContext({ provider: 'examplecorp', ownerUserId: null }),
+    );
+    expect(plaintext.toString('utf8')).toBe('current-secret');
+  });
+
+  it('accepts deployment OAuth credential changes with a newer explicit seed revision', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const revisionTwo = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 2 },
+    });
+    const revisionThree = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 3 },
+    });
+    await new IntegrationDescriptorSeedLoader(
+      revisionTwo,
+      store,
+      encryption,
+      credentials({ examplecorp: { clientId: 'client-v2', clientSecret: 'secret-v2' } }),
+      loaderOptions(),
+    ).loadSeeds();
+
+    const result = await new IntegrationDescriptorSeedLoader(
+      revisionThree,
+      store,
+      encryption,
+      credentials({ examplecorp: { clientId: 'client-v3', clientSecret: 'secret-v3' } }),
+      loaderOptions(),
+    ).loadSeeds();
+
+    expect(result).toMatchObject({ loaded: 1, failed: 0 });
+    expect(result.descriptors[0]).toMatchObject({
+      curatedSeedRevision: 3,
+      oauth: expect.objectContaining({ clientId: 'client-v3' }),
+    });
+  });
+
+  it('does not let the retained-revision credential option bypass seed field protection', async () => {
+    const dir = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 2 },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const record = (await new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      newEncryption(),
+      credentials({
+        examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+      }),
+      loaderOptions(),
+    ).loadSeeds()).descriptors[0];
+    if (!record) throw new Error('expected seeded descriptor');
+
+    await expect(store.upsert({
+      ...record,
+      displayName: 'Revision bypass attempt',
+      updatedAt: new Date(FIXED_NOW.getTime() + 1_000),
+    }, {
+      refreshDeploymentCredentialsAtRetainedSeedRevision: true,
+    })).rejects.toThrow('deployment OAuth credentials only');
+
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toMatchObject({
+      displayName: OAUTH_SEED.displayName,
+      curatedSeedRevision: 2,
+    });
+  });
+
+  it('keeps unversioned seed files backwards compatible before the first explicit revision', async () => {
+    const firstDir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
+    const secondDir = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, apiHosts: ['updated.examplecorp.test'] },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const configuredCredentials = credentials({
+      examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+    });
+
+    await new IntegrationDescriptorSeedLoader(
+      firstDir, store, encryption, configuredCredentials, loaderOptions(),
+    ).loadSeeds();
+    await new IntegrationDescriptorSeedLoader(
+      secondDir, store, encryption, configuredCredentials, loaderOptions(),
+    ).loadSeeds();
+
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toMatchObject({
+      curatedSeedRevision: null,
+      apiHosts: ['updated.examplecorp.test'],
+    });
+  });
+
   it('loads a curated OAuth descriptor, injecting clientId and encrypting the client secret', async () => {
     SecurityMonitor.clearAllEventsForTesting();
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
@@ -321,7 +573,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
     ).loadSeeds()).descriptors[0];
     if (!first) throw new Error('expected first descriptor');
     store.set({ ...first, clientSecretRevision: null });
-    const upsert = jest.spyOn(store, 'upsert');
+    const reconcile = jest.spyOn(store, 'reconcileCuratedSeed');
 
     await new IntegrationDescriptorSeedLoader(
       dir,
@@ -331,10 +583,10 @@ describe('IntegrationDescriptorSeedLoader', () => {
       loaderOptions(),
     ).loadSeeds();
 
-    expect(upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ clientSecretRevision: expect.any(String) }),
-      { initializeClientSecretRevision: true },
-    );
+    expect(reconcile).toHaveBeenCalledWith(expect.objectContaining({
+      descriptor: expect.objectContaining({ clientSecretRevision: expect.any(String) }),
+      upsertOptions: { initializeClientSecretRevision: true },
+    }));
   });
 
   it('rewraps unreadable curated OAuth ciphertext without rotating its logical revision', async () => {
@@ -475,7 +727,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(await store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).toBeNull();
   });
 
-  it('removes a previously persisted curated OAuth descriptor when credentials are withdrawn', async () => {
+  it('preserves shared curated state when credentials are unavailable on this replica', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const integrationStore = new InMemoryUserIntegrationStore();
@@ -511,8 +763,11 @@ describe('IntegrationDescriptorSeedLoader', () => {
       loaderOptions(integrationStore),
     );
     await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
-    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
-    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({ id: curated.id });
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      integrationDescriptorId: curated.id,
+      status: 'connected',
+    });
   });
 
   it('does not revoke a same-provider BYO integration when no curated descriptor exists', async () => {
@@ -546,7 +801,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
     });
   });
 
-  it('preserves same-provider BYO credentials when withdrawing a curated descriptor', async () => {
+  it('preserves both BYO credentials and the shared curated descriptor when local credentials are absent', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const integrationStore = new InMemoryUserIntegrationStore();
@@ -577,11 +832,8 @@ describe('IntegrationDescriptorSeedLoader', () => {
     );
 
     await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
-    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
-    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
-      id: byo.id,
-      ownership: 'byo',
-    });
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.not.toBeNull();
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.not.toBeNull();
     await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
       integrationDescriptorId: byo.id,
       status: 'connected',
@@ -589,7 +841,7 @@ describe('IntegrationDescriptorSeedLoader', () => {
     });
   });
 
-  it('revokes credentials before a same-provider BYO route is revealed', async () => {
+  it('does not revoke curated credentials when this replica lacks deployment credentials', async () => {
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
     const integrationStore = new InMemoryUserIntegrationStore();
@@ -622,15 +874,17 @@ describe('IntegrationDescriptorSeedLoader', () => {
     );
 
     await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
-    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.not.toBeNull();
     await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
-      ownership: 'byo',
-      apiHosts: ['byo.examplecorp.test'],
+      ownership: 'curated',
     });
-    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      integrationDescriptorId: curated.id,
+      status: 'connected',
+    });
   });
 
-  it('reports a failure when the curated descriptor disappears during withdrawal', async () => {
+  it('does not attempt shared descriptor deletion when local credentials are absent', async () => {
     SecurityMonitor.clearAllEventsForTesting();
     const dir = await seedDirWith({ 'examplecorp.json': OAUTH_SEED });
     const store = new InMemoryIntegrationDescriptorStore();
@@ -667,13 +921,203 @@ describe('IntegrationDescriptorSeedLoader', () => {
       loaderOptions(integrationStore),
     );
 
-    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 0, failed: 1 });
-    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
-    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(disabled.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    expect(store.deleteCurated).not.toHaveBeenCalled();
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.not.toBeNull();
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      integrationDescriptorId: curated.id,
+      status: 'connected',
+    });
     expect(SecurityMonitor.getRecentEvents()).toContainEqual(expect.objectContaining({
-      source: 'IntegrationDescriptorSeedLoader.loadSeeds',
-      details: 'Integration descriptor seed rejected for provider examplecorp',
+      source: 'IntegrationDescriptorSeedLoader.processSeedFile',
+      details: 'Curated integration unavailable on this replica for provider examplecorp',
     }));
+    expect(SecurityMonitor.getRecentEvents()).not.toContainEqual(expect.objectContaining({
+      source: 'IntegrationDescriptorSeedLoader.loadSeeds',
+    }));
+  });
+
+  it('globally disables only through a newer explicit seed while preserving descriptor and user credentials', async () => {
+    const enabledDir = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 1 },
+    });
+    const disabledDir = await seedDirWith({
+      'examplecorp.json': { provider: 'examplecorp', revision: 2, enabled: false },
+    });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
+    const encryption = newEncryption();
+    const configured = new IntegrationDescriptorSeedLoader(
+      enabledDir,
+      store,
+      encryption,
+      credentials({ examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' } }),
+      loaderOptions(integrationStore),
+    );
+    const descriptor = (await configured.loadSeeds()).descriptors[0];
+    if (!descriptor) throw new Error('expected configured descriptor');
+    await connectExampleCorp(integrationStore, {
+      descriptorId: descriptor.id,
+      accountLabel: 'preserved-user',
+      scopes: ['read'],
+      accessToken: 'encrypted-access',
+      refreshToken: 'encrypted-refresh',
+    });
+
+    const disabled = await new IntegrationDescriptorSeedLoader(
+      disabledDir,
+      store,
+      encryption,
+      credentials({}),
+      loaderOptions(integrationStore),
+    ).loadSeeds();
+
+    expect(disabled).toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toMatchObject({ id: descriptor.id });
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      integrationDescriptorId: descriptor.id,
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('encrypted-access'),
+      refreshTokenCiphertext: Buffer.from('encrypted-refresh'),
+    });
+  });
+
+  it('rejects same-revision re-enable, ignores stale re-enable, and accepts a newer configured revision', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const integrationStore = new InMemoryUserIntegrationStore();
+    const encryption = newEncryption();
+    const configuredCredentials = credentials({
+      examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+    });
+    const revisionOne = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 1 },
+    });
+    const revisionTwoDisabled = await seedDirWith({
+      'examplecorp.json': { provider: 'examplecorp', revision: 2, enabled: false },
+    });
+    const revisionTwoEnabled = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 2, enabled: true },
+    });
+    const staleEnabled = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 1, enabled: true },
+    });
+    const revisionThreeEnabled = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 3, enabled: true },
+    });
+    const first = (await new IntegrationDescriptorSeedLoader(
+      revisionOne, store, encryption, configuredCredentials, loaderOptions(integrationStore),
+    ).loadSeeds()).descriptors[0];
+    if (!first) throw new Error('expected configured descriptor');
+    await connectExampleCorp(integrationStore, {
+      descriptorId: first.id,
+      accountLabel: 'preserved-user',
+      scopes: ['read'],
+      accessToken: 'encrypted-access',
+    });
+    await new IntegrationDescriptorSeedLoader(
+      revisionTwoDisabled, store, encryption, credentials({}), loaderOptions(integrationStore),
+    ).loadSeeds();
+
+    await expect(new IntegrationDescriptorSeedLoader(
+      revisionTwoEnabled, store, encryption, configuredCredentials, loaderOptions(integrationStore),
+    ).loadSeeds()).resolves.toMatchObject({ loaded: 0, failed: 1 });
+    await expect(new IntegrationDescriptorSeedLoader(
+      staleEnabled, store, encryption, configuredCredentials, loaderOptions(integrationStore),
+    ).loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+
+    await expect(new IntegrationDescriptorSeedLoader(
+      revisionThreeEnabled, store, encryption, configuredCredentials, loaderOptions(integrationStore),
+    ).loadSeeds()).resolves.toMatchObject({ loaded: 1, failed: 0 });
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      id: first.id,
+      curatedSeedRevision: 3,
+    });
+    await expect(integrationStore.findByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      integrationDescriptorId: first.id,
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('encrypted-access'),
+    });
+  });
+
+  it('persists a disabled tombstone before a descriptor and prevents stale replica resurrection', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const disabled = await seedDirWith({
+      'examplecorp.json': { provider: 'examplecorp', revision: 5, enabled: false },
+    });
+    const stale = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 4, enabled: true },
+    });
+    const current = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 6, enabled: true },
+    });
+    const configuredCredentials = credentials({
+      examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+    });
+
+    await new IntegrationDescriptorSeedLoader(
+      disabled, store, encryption, credentials({}), loaderOptions(),
+    ).loadSeeds();
+    await expect(new IntegrationDescriptorSeedLoader(
+      stale, store, encryption, configuredCredentials, loaderOptions(),
+    ).loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 1, failed: 0 });
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.toBeNull();
+
+    await expect(new IntegrationDescriptorSeedLoader(
+      current, store, encryption, configuredCredentials, loaderOptions(),
+    ).loadSeeds()).resolves.toMatchObject({ loaded: 1, failed: 0 });
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toMatchObject({
+      curatedSeedRevision: 6,
+    });
+  });
+
+  it('serializes racing replica revisions so the highest disable wins', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const encryption = newEncryption();
+    const configuredCredentials = credentials({
+      examplecorp: { clientId: 'deployment-client-id', clientSecret: 'deployment-secret' },
+    });
+    const revisionOne = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 1 },
+    });
+    const revisionTwo = await seedDirWith({
+      'examplecorp.json': { ...OAUTH_SEED, revision: 2 },
+    });
+    const revisionThreeDisabled = await seedDirWith({
+      'examplecorp.json': { provider: 'examplecorp', revision: 3, enabled: false },
+    });
+    await new IntegrationDescriptorSeedLoader(
+      revisionOne, store, encryption, configuredCredentials, loaderOptions(),
+    ).loadSeeds();
+
+    await Promise.all([
+      new IntegrationDescriptorSeedLoader(
+        revisionTwo, store, encryption, configuredCredentials, loaderOptions(),
+      ).loadSeeds(),
+      new IntegrationDescriptorSeedLoader(
+        revisionThreeDisabled, store, encryption, credentials({}), loaderOptions(),
+      ).loadSeeds(),
+    ]);
+
+    await expect(store.findCuratedByProvider('examplecorp')).resolves.not.toBeNull();
+    await expect(store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).resolves.toBeNull();
+  });
+
+  it('rejects an unversioned explicit disable seed', async () => {
+    const dir = await seedDirWith({
+      'examplecorp.json': { provider: 'examplecorp', enabled: false },
+    });
+    const loader = new IntegrationDescriptorSeedLoader(
+      dir,
+      new InMemoryIntegrationDescriptorStore(),
+      newEncryption(),
+      credentials({}),
+      loaderOptions(),
+    );
+
+    await expect(loader.loadSeeds()).resolves.toMatchObject({ loaded: 0, skipped: 0, failed: 1 });
   });
 
   it('loads a curated static-API-key descriptor without deployment credentials', async () => {
@@ -782,6 +1226,29 @@ describe('IntegrationDescriptorSeedLoader', () => {
     expect(result.loaded).toBe(0);
     expect(result.failed).toBe(2);
     expect(await store.findVisibleByProvider(VISIBLE_USER, 'examplecorp')).toBeNull();
+  });
+
+  it('fails a seed after bounded busy retries instead of reporting stale state as loaded', async () => {
+    const dir = await seedDirWith({ 'examplekey.json': STATIC_SEED });
+    const store = new InMemoryIntegrationDescriptorStore();
+    const reconcile = jest.spyOn(store, 'reconcileCuratedSeed').mockRejectedValue(
+      new IntegrationDescriptorMutationBusyError(),
+    );
+    const loader = new IntegrationDescriptorSeedLoader(
+      dir,
+      store,
+      newEncryption(),
+      credentials({}),
+      loaderOptions(),
+    );
+
+    await expect(loader.loadSeeds()).resolves.toMatchObject({
+      loaded: 0,
+      skipped: 0,
+      failed: 1,
+      descriptors: [],
+    });
+    expect(reconcile).toHaveBeenCalledTimes(4);
   });
 
   it('is a no-op when the seed directory does not exist', async () => {

@@ -7,6 +7,7 @@ import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import {
   buildConfiguredIntegrationProviders,
   createEnvIntegrationDescriptorCredentialResolver,
+  createStoreIntegrationProviderResolver,
   loadCuratedIntegrationProviders,
 } from '../../../../src/web-console/modules/integrations/CuratedIntegrationProviders.js';
 import { integrationDescriptorClientSecretContext } from '../../../../src/web-console/modules/integrations/IntegrationSecretContext.js';
@@ -17,6 +18,7 @@ import {
 } from '../../../../src/web-console/stores/IIntegrationDescriptorStore.js';
 import { InMemoryIntegrationDescriptorStore } from '../../../../src/web-console/stores/InMemoryIntegrationDescriptorStore.js';
 import { InMemoryUserIntegrationStore } from '../../../../src/web-console/stores/InMemoryUserIntegrationStore.js';
+import type { PinnedOutboundFactory } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 
 const VISIBLE_USER = '11111111-1111-4111-8111-111111111111';
 const NOW = new Date('2026-06-24T00:00:00.000Z');
@@ -177,6 +179,48 @@ describe('loadCuratedIntegrationProviders', () => {
     expect(providers).toHaveLength(1);
     expect(providers[0]?.descriptor.id).toBe('examplecorp');
     expect(providers[0]?.credentialStrategy).toBe('oauth2_authorization_code');
+  });
+});
+
+describe('createStoreIntegrationProviderResolver', () => {
+  it('uses the reconciled persisted secret instead of current deployment environment credentials', async () => {
+    const enc = newEncryption();
+    const store = new InMemoryIntegrationDescriptorStore();
+    await store.upsert(oauthInput(enc, 'stored-secret'));
+    let requestBody = '';
+    const pinnedOutbound: PinnedOutboundFactory = () => ({
+      fetch: (_url, init) => {
+        requestBody = init?.body?.toString() ?? '';
+        return Promise.resolve(new Response(JSON.stringify({ access_token: 'access-token' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        }));
+      },
+      close: () => Promise.resolve(),
+    });
+    const resolve = createStoreIntegrationProviderResolver({
+      descriptorStore: store,
+      secretEncryption: enc,
+      outbound: {
+        pinnedOutbound,
+        dnsLookup: () => Promise.resolve([{ address: [8, 8, 8, 8].join('.'), family: 4 }]),
+      },
+    });
+
+    const provider = await resolve(VISIBLE_USER, 'examplecorp');
+    await provider?.exchangeAuthorizationCode?.({
+      code: 'authorization-code',
+      redirectUri: 'https://console.example.test/callback',
+      codeVerifier: 'verifier',
+      codeChallenge: 'challenge',
+      codeChallengeMethod: 'S256',
+      state: 'state',
+    });
+
+    expect(provider).toMatchObject({
+      credentialStrategy: 'oauth2_authorization_code',
+    });
+    expect(new URLSearchParams(requestBody).get('client_secret')).toBe('stored-secret');
   });
 });
 

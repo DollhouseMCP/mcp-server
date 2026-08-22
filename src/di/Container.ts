@@ -161,6 +161,58 @@ type LowLevelMcpServer = {
   connect(transport: unknown): Promise<void>;
 };
 
+type LowLevelRequestHandler = (...args: unknown[]) => unknown;
+
+class SessionRequestTracker {
+  private activeRequests = 0;
+  private readonly idleWaiters = new Set<() => void>();
+  private readonly activeRequestIds = new Map<string | number, number>();
+  private readonly requestWaiters = new Map<string | number, Set<() => void>>();
+
+  async run(requestId: string | number | null, handler: () => unknown): Promise<unknown> {
+    this.activeRequests += 1;
+    if (requestId !== null) {
+      this.activeRequestIds.set(requestId, (this.activeRequestIds.get(requestId) ?? 0) + 1);
+    }
+    try {
+      return await handler();
+    } finally {
+      this.activeRequests -= 1;
+      if (requestId !== null) this.releaseRequestId(requestId);
+      if (this.activeRequests === 0) {
+        for (const waiter of [...this.idleWaiters]) waiter();
+        this.idleWaiters.clear();
+      }
+    }
+  }
+
+  async waitForIdle(): Promise<void> {
+    if (this.activeRequests === 0) return;
+    await new Promise<void>(resolve => this.idleWaiters.add(resolve));
+  }
+
+  async waitForRequest(requestId: string | number): Promise<void> {
+    if (!this.activeRequestIds.has(requestId)) return;
+    await new Promise<void>(resolve => {
+      const waiters = this.requestWaiters.get(requestId) ?? new Set<() => void>();
+      waiters.add(resolve);
+      this.requestWaiters.set(requestId, waiters);
+    });
+  }
+
+  private releaseRequestId(requestId: string | number): void {
+    const remaining = (this.activeRequestIds.get(requestId) ?? 1) - 1;
+    if (remaining > 0) {
+      this.activeRequestIds.set(requestId, remaining);
+      return;
+    }
+    this.activeRequestIds.delete(requestId);
+    const waiters = this.requestWaiters.get(requestId);
+    this.requestWaiters.delete(requestId);
+    for (const waiter of waiters ?? []) waiter();
+  }
+}
+
 // State is owned by PersonaManager and services
 
 export interface HandlerBundle {
@@ -255,6 +307,13 @@ export class DollhouseContainer {
       instance: null,
       singleton: options.singleton ?? true
     });
+  }
+
+  public registerInstance<T>(name: string, instance: T): void {
+    this.register(name, () => instance);
+    const service = this.services.get(name);
+    if (!service) throw new Error(`Failed to register service instance: ${name}`);
+    service.instance = instance;
   }
 
   /**
@@ -968,7 +1027,9 @@ export class DollhouseContainer {
    * Used by web-only mode (--web) to get MCPAQLHandler without an MCP Server.
    * Issue #796: Split DI container bootstrap from transport connect.
    */
-  public async bootstrapHandlers(): Promise<HandlerBundle> {
+  public async bootstrapHandlers(options: {
+    deferUserScopedWarmup?: boolean;
+  } = {}): Promise<HandlerBundle> {
     if (!this.personasDir) {
       throw new Error("Persona directory not initialized. Call preparePortfolio() first.");
     }
@@ -1011,7 +1072,13 @@ export class DollhouseContainer {
       activePersonaAccessor
     );
 
-    await personaManager.reload();
+    if (options.deferUserScopedWarmup) {
+      logger.debug(
+        '[Container] Deferring persona cache warm-up until an authenticated database request has user context.',
+      );
+    } else {
+      await personaManager.reload();
+    }
 
     const elementCrudHandler = new ElementCRUDHandler(
       this.resolve('SkillManager'),
@@ -1266,7 +1333,12 @@ export class DollhouseContainer {
    * a ToolRegistry or Server — those are per-session (see createServerForHttpSession).
    */
   public async bootstrapHttpHandlers(): Promise<HandlerBundle> {
-    this.httpRootHandlerBundle ??= await this.bootstrapHandlers();
+    this.httpRootHandlerBundle ??= await this.bootstrapHandlers({
+      // Database-backed element storage requires a current user for every
+      // scan. The shared HTTP root has no authenticated user; request-time
+      // list/find operations populate the per-user cache namespace instead.
+      deferUserScopedWarmup: this.hasRegistration('DatabaseInstance'),
+    });
     return this.httpRootHandlerBundle;
   }
 
@@ -1283,6 +1355,8 @@ export class DollhouseContainer {
    */
   public async createServerForHttpSession(sessionContext: Readonly<SessionContext>): Promise<{
     server: LowLevelMcpServer;
+    waitForRequest: (requestId: string | number) => Promise<void>;
+    waitForIdle: () => Promise<void>;
     dispose: () => Promise<void>;
   }> {
     if (!this.httpRootHandlerBundle) {
@@ -1413,6 +1487,10 @@ export class DollhouseContainer {
     child.register('DangerZoneEnforcer', () => new DangerZoneEnforcer(
       this.resolve('FileOperationsService'), userSecurityDir
     ));
+    // Persisted blocks are user-scoped rather than connection-scoped. Restore
+    // them before exposing a replacement HTTP session so reconnecting cannot
+    // bypass an outstanding human-verification requirement.
+    await child.resolve<DangerZoneEnforcer>('DangerZoneEnforcer').initialize();
 
     // ── Per-session GitHub/portfolio coordinators ───────────────────
     // These services hold user-attributable state or capture TokenManager.
@@ -1529,6 +1607,20 @@ export class DollhouseContainer {
 
     // Wire up: setup server with tools
     const server = child.resolve<LowLevelMcpServer>('Server');
+    const requestTracker = new SessionRequestTracker();
+    const requestHandlerServer = server as unknown as {
+      setRequestHandler(schema: unknown, handler: LowLevelRequestHandler): void;
+    };
+    const setRequestHandler = requestHandlerServer.setRequestHandler.bind(requestHandlerServer);
+    requestHandlerServer.setRequestHandler = (schema, handler) => {
+      setRequestHandler(schema, (...args: unknown[]) => {
+        const extra = args[1] as { requestId?: unknown } | undefined;
+        const requestId = typeof extra?.requestId === 'string' || typeof extra?.requestId === 'number'
+          ? extra.requestId
+          : null;
+        return requestTracker.run(requestId, () => handler(...args));
+      });
+    };
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
     serverSetup.setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
@@ -1537,7 +1629,10 @@ export class DollhouseContainer {
 
     return {
       server,
+      waitForRequest: requestId => requestTracker.waitForRequest(requestId),
+      waitForIdle: () => requestTracker.waitForIdle(),
       dispose: async () => {
+        await requestTracker.waitForIdle();
         // Issue #1948: Child container disposal handles all session cleanup:
         // - Disposes session-scoped services (stores, GatekeeperSession, Server, etc.)
         // - Cleans up activation registry, Gatekeeper registry, MCPAQLHandler session state
@@ -1777,7 +1872,7 @@ export class DollhouseContainer {
     const gateway = this.resolveIntegrationRequestGateway();
     const catalog = this.resolveIntegrationOperationCatalog();
     const bridge = this.resolveIntegrationRemoteMcpBridge(
-      provider => policyEnforcer.evaluateDiscovery(provider),
+      input => policyEnforcer.evaluateDiscovery(input),
     );
     return {
       authorizedIntegrationGateway: gateway
@@ -1827,6 +1922,9 @@ export class DollhouseContainer {
     return new IntegrationRequestGateway({
       integrationStore,
       descriptorStore,
+      specStore: this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore)
+        ? this.resolve<IIntegrationOpenApiSpecStore>(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore)
+        : null,
       secretEncryption,
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
       tokenRefresh,
@@ -1908,7 +2006,7 @@ export class DollhouseContainer {
   }
 
   private resolveIntegrationRemoteMcpBridge(
-    discoveryGate: (provider: string) => Promise<boolean>,
+    discoveryGate: ConstructorParameters<typeof IntegrationRemoteMcpBridge>[0]['discoveryGate'],
   ): IntegrationRemoteMcpBridge | null {
     if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
         !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
@@ -2158,12 +2256,29 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    let authProviderFailure: unknown;
     try {
     // Close the HTTP server first so the port is freed immediately (#1856)
     try {
       const { shutdownWebServer } = await import('../web/server.js');
       shutdownWebServer();
     } catch { /* web server not started */ }
+
+    // Auth owns event-driven durable writes whose storage dependencies are
+    // registered in this same container. Drain it before the general parallel
+    // disposal phase can close those dependencies.
+    const authProvider = this.services.get('AuthProvider')?.instance as
+      { dispose?: () => Promise<void> } | undefined;
+    if (typeof authProvider?.dispose === 'function') {
+      try {
+        await authProvider.dispose();
+      } catch (error) {
+        authProviderFailure = error;
+        logger.error('Failed to drain AuthProvider before storage disposal', {
+          error: error instanceof Error ? error : new Error(String(error)),
+        });
+      }
+    }
 
     // Close MetricsManager before general disposal (flush final snapshot)
     try {
@@ -2177,7 +2292,7 @@ export class DollhouseContainer {
       cleanups.forEach(fn => fn());
     } catch { /* hooks not yet wired */ }
 
-    const disposalPromises = this.buildDisposalPromises();
+    const disposalPromises = this.buildDisposalPromises(new Set(['AuthProvider']));
     const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
     this.reportDisposalFailures(disposalPromises, results);
     } finally {
@@ -2185,25 +2300,35 @@ export class DollhouseContainer {
         SecurityMonitor.clearInstance(this.securityMonitorInstance);
       }
     }
+    if (authProviderFailure !== undefined) throw authProviderFailure;
   }
 
-  private buildDisposalPromises(): Array<{ name: string; promise: Promise<void> }> {
+  private buildDisposalPromises(
+    excludedNames: ReadonlySet<string> = new Set(),
+  ): Array<{ name: string; promise: Promise<void> }> {
     const promises: Array<{ name: string; promise: Promise<void> }> = [];
+    const scheduledInstances = new Set<unknown>();
     for (const [name, service] of this.services) {
+      if (excludedNames.has(name)) continue;
       if (!service.instance) continue;
       const instance = service.instance as any;
+      if (scheduledInstances.has(instance)) continue;
       // Priority: dispose > close > destroy > cleanup
       // dispose: standard DI lifecycle
       // close: stream-like objects (LogManager, MetricsManager)
       // destroy: timer-bearing objects (VerificationStore, ChallengeStore)
       // cleanup: sweep operations (non-destructive)
       if (typeof instance.dispose === 'function') {
+        scheduledInstances.add(instance);
         promises.push({ name, promise: Promise.resolve().then(() => instance.dispose()) });
       } else if (typeof instance.close === 'function') {
+        scheduledInstances.add(instance);
         promises.push({ name, promise: Promise.resolve().then(() => instance.close()) });
       } else if (typeof instance.destroy === 'function') {
+        scheduledInstances.add(instance);
         promises.push({ name, promise: Promise.resolve().then(() => instance.destroy()) });
       } else if (typeof instance.cleanup === 'function') {
+        scheduledInstances.add(instance);
         promises.push({ name, promise: Promise.resolve().then(() => instance.cleanup()) });
       }
     }

@@ -1,6 +1,8 @@
 import type {
   IRuntimeSessionControlStore,
+  RuntimeSessionPresence,
   RuntimeTerminationAck,
+  RuntimeTerminationCommand,
   RuntimeTerminationReason,
 } from '../../services/runtime/IRuntimeSessionControlStore.js';
 
@@ -28,11 +30,21 @@ export class AccountAdminRuntimeTerminationService {
     readonly requestedByUserId: string;
     readonly reason: Extract<RuntimeTerminationReason, 'admin_disabled' | 'credential_revoked'>;
   }): Promise<AccountRuntimeTerminationSummary> {
-    const sessions = await this.options.runtimeStore.listPresenceByUser(input.userId, {
-      now: this.now(),
-      limit: 500,
-    });
-    const commands = await Promise.all(sessions.map(session =>
+    const sessions = await this.snapshotPrincipalSessions(input.userId);
+    return this.terminateSessions({ ...input, sessions });
+  }
+
+  async snapshotPrincipalSessions(userId: string): Promise<readonly RuntimeTerminationTarget[]> {
+    const sessions = await this.options.runtimeStore.listAllPresenceByUser(userId, this.runtimeStoreNow());
+    return sessions.map(toTerminationTarget);
+  }
+
+  async terminateSessions(input: {
+    readonly sessions: readonly RuntimeTerminationTarget[];
+    readonly requestedByUserId: string;
+    readonly reason: Extract<RuntimeTerminationReason, 'admin_disabled' | 'credential_revoked'>;
+  }): Promise<AccountRuntimeTerminationSummary> {
+    const commands = await Promise.all(input.sessions.map(session =>
       this.options.runtimeStore.createTerminationCommand({
         sessionId: session.sessionId,
         targetReplicaId: session.replicaId,
@@ -40,6 +52,12 @@ export class AccountAdminRuntimeTerminationService {
         requestedAt: this.now(),
         requestedBy: { kind: 'admin', userId: input.requestedByUserId },
       })));
+    return this.awaitTerminationCommands(commands);
+  }
+
+  async awaitTerminationCommands(
+    commands: readonly Pick<RuntimeTerminationCommand, 'commandId'>[],
+  ): Promise<AccountRuntimeTerminationSummary> {
     const acks = await Promise.all(commands.map(command => this.waitForAck(command.commandId)));
     return summarizeAcks(acks);
   }
@@ -58,6 +76,16 @@ export class AccountAdminRuntimeTerminationService {
   private now(): Date {
     return this.options.now?.() ?? new Date();
   }
+
+  private runtimeStoreNow(): Date | undefined {
+    return this.options.now?.();
+  }
+}
+
+export type RuntimeTerminationTarget = Pick<RuntimeSessionPresence, 'sessionId' | 'replicaId'>;
+
+function toTerminationTarget(session: RuntimeSessionPresence): RuntimeTerminationTarget {
+  return { sessionId: session.sessionId, replicaId: session.replicaId };
 }
 
 export function emptyRuntimeTerminationSummary(): AccountRuntimeTerminationSummary {

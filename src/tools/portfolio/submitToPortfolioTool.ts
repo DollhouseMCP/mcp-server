@@ -40,6 +40,7 @@ import { EarlyTerminationSearch } from '../../utils/EarlyTerminationSearch.js';
 import { CollectionErrorCode, formatCollectionError } from '../../config/error-codes.js';
 import * as path from 'path';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { IFileOperationsService } from '../../services/FileOperationsService.js';
 import { PACKAGE_VERSION } from '../../generated/version.js';
 
@@ -507,7 +508,7 @@ export class SubmitToPortfolioTool {
       // Now: Uses SecureYamlParser.parse() which validates and sanitizes
       try {
         const parsed = SecureYamlParser.parse(content, {
-          maxYamlSize: 64 * 1024,  // 64KB limit for YAML
+          maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
           validateContent: false,    // Don't validate content field (just metadata)
           validateFields: false      // Don't enforce persona-specific rules
         });
@@ -534,7 +535,7 @@ export class SubmitToPortfolioTool {
             // Reconstruct full document for SecureYamlParser
             const fullContent = `---\n${frontmatterMatch[1]}\n---\n`;
             const parsed = SecureYamlParser.parse(fullContent, {
-              maxYamlSize: 64 * 1024,
+              maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
               validateContent: false,
               validateFields: false
             });

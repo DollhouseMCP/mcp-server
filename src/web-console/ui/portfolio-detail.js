@@ -17,16 +17,16 @@ const PLURAL_TO_SINGULAR = { personas: 'persona', skills: 'skill', templates: 't
 
 /* ── Memory rendering (pure YAML) — LIFTED VERBATIM from legacy app.js ─────── */
 
-const YAML_MAX_SIZE = 1024 * 512; // 512KB — generous but bounded
+const YAML_MAX_SIZE = 10 * 1024 * 1024;
 const MEMORY_MARKDOWN_FIELDS = new Set([
   'content', 'body', 'text', 'notes', 'summary', 'context', 'observations',
   'insights', 'instructions', 'thoughts', 'analysis', 'reflection', 'outcome',
   'details', 'log', 'data', 'value', 'message', 'description',
 ]);
 
-function safeParseYaml(content) {
+export function parseMemoryYamlForDetail(content) {
   if (!globalThis.jsyaml) return null;
-  if (typeof content !== 'string' || content.length > YAML_MAX_SIZE) return null;
+  if (typeof content !== 'string') return null;
   try {
     return parseBrowserYaml(content, { maxBytes: YAML_MAX_SIZE, schema: 'core' }) || null;
   } catch {
@@ -102,7 +102,7 @@ function prettyMemoryKey(key) {
 // Render a pure-YAML memory file: parse each field, detect markdown, render appropriately.
 function renderMemoryView(content) {
   let parsed;
-  parsed = safeParseYaml(content);
+  parsed = parseMemoryYamlForDetail(content);
   if (!parsed || typeof parsed !== 'object') {
     return `<pre class="element-source"><code class="element-code">${escapeHtml(content)}</code></pre>`;
   }

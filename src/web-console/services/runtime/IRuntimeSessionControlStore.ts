@@ -158,10 +158,18 @@ export interface RuntimeTerminationAckInput {
 export interface IRuntimeSessionControlStore {
   registerPresence(input: RuntimeSessionPresenceInput): Promise<RuntimeSessionPresence>;
   heartbeatPresence(input: RuntimeSessionHeartbeatInput): Promise<RuntimeSessionHeartbeatResult>;
-  markPresenceClosing(sessionId: string, closedAt: Date): Promise<RuntimeSessionPresence | null>;
+  markPresenceClosing(
+    sessionId: string,
+    replicaId: string,
+    closedAt: Date,
+  ): Promise<RuntimeSessionPresence | null>;
   sweepStalePresence(before?: Date): Promise<number>;
   findPresence(sessionId: string, now?: Date): Promise<RuntimeSessionPresence | null>;
+  /** Live operator-visible presence, including active and closing sessions. */
+  findOperationalPresence(sessionId: string, now?: Date): Promise<RuntimeSessionPresence | null>;
   listPresenceByUser(userId: string, query?: RuntimeSessionListQuery): Promise<RuntimeSessionPresence[]>;
+  /** Exhaustive active-session snapshot for security revocation workflows. */
+  listAllPresenceByUser(userId: string, now?: Date): Promise<RuntimeSessionPresence[]>;
   listOperationalPresence(query?: RuntimeOperationalListQuery): Promise<RuntimeOperationalPresencePage>;
   createTerminationCommand(input: RuntimeTerminationCommandInput): Promise<RuntimeTerminationCommand>;
   listPendingCommandsForReplica(

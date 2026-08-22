@@ -24,7 +24,7 @@ export function projectRuntimeSessionSelf(value: unknown): RuntimeSessionSelfDto
     last_active_at: stringField(record, 'last_active_at'),
     request_count: numberField(record, 'request_count'),
     error_count: numberField(record, 'error_count'),
-    status: 'active',
+    status: runtimeSessionStatusField(record),
   };
 }
 
@@ -42,7 +42,7 @@ export function projectRuntimeSessionAccount(value: unknown): RuntimeSessionAcco
     transport: 'streamable-http',
     created_at: stringField(record, 'created_at'),
     last_active_at: stringField(record, 'last_active_at'),
-    status: 'active',
+    status: runtimeSessionStatusField(record),
   };
 }
 
@@ -137,6 +137,11 @@ function stringField(record: Record<string, unknown>, key: string): string {
 function numberField(record: Record<string, unknown>, key: string): number {
   const value = record[key];
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0;
+}
+
+function runtimeSessionStatusField(record: Record<string, unknown>): RuntimeSessionSelfDto['status'] {
+  if (record.status === 'active' || record.status === 'closing') return record.status;
+  throw new Error('Runtime session projection received an unknown status');
 }
 
 function clientInfoField(record: Record<string, unknown>): RuntimeSessionSelfDto['client_info'] {

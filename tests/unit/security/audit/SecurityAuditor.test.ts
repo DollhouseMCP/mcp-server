@@ -3,11 +3,18 @@
  */
 
 import { describe, expect, beforeEach, afterEach, jest, test } from '@jest/globals';
-import { SecurityAuditor } from '../../../../src/security/audit/SecurityAuditor.js';
+import {
+  SecurityAuditor,
+  SecurityAuditFailure,
+} from '../../../../src/security/audit/SecurityAuditor.js';
 import { CodeScanner } from '../../../../src/security/audit/scanners/CodeScanner.js';
 import { SecurityRules } from '../../../../src/security/audit/rules/SecurityRules.js';
 import { suppressions as sourceSuppressions } from '../../../../src/security/audit/config/suppressions.js';
-import type { SecurityAuditConfig } from '../../../../src/security/audit/types.js';
+import type {
+  ScanResult,
+  SecurityAuditConfig,
+  SecurityScanner,
+} from '../../../../src/security/audit/types.js';
 import type { IFileOperationsService } from '../../../../src/services/FileOperationsService.js';
 import * as fs from 'fs/promises';
 import * as path from 'path';
@@ -30,6 +37,16 @@ function isFirstPartySourceGlob(value: string): boolean {
 function isBlanketVendorSuppression(value: string): boolean {
   const canonical = canonicalSuppressionPattern(value);
   return canonical.startsWith('src/web-console/ui/vendor/') && canonical.includes('*');
+}
+
+async function captureAuditFailure(audit: Promise<ScanResult>): Promise<SecurityAuditFailure> {
+  try {
+    await audit;
+  } catch (error) {
+    if (error instanceof SecurityAuditFailure) return error;
+    throw error;
+  }
+  throw new Error('Expected security audit to fail');
 }
 
 /**
@@ -114,6 +131,8 @@ describe('SecurityAuditor', () => {
       expect(defaultConfig.enabled).toBe(true);
       expect(defaultConfig.scanners.code.enabled).toBe(true);
       expect(defaultConfig.scanners.dependencies.enabled).toBe(true);
+      expect(defaultConfig.scanners.dependencies.severityThreshold).toBe('low');
+      expect(defaultConfig.reporting.failOnSeverity).toBe('high');
     });
 
     test('default scan excludes only the recorded vendored bundles, not first-party console code', async () => {
@@ -164,6 +183,30 @@ describe('SecurityAuditor', () => {
       expect(productionDirectoryGlobs).toEqual([]);
       expect(isFirstPartySourceGlob('src\\web-console\\**\\*.ts')).toBe(true);
       expect(isFirstPartySourceGlob('**/**/src/web-console/**/*.ts')).toBe(true);
+    });
+
+    test('built-in audit policy does not suppress first-party source directories', () => {
+      const broadFirstPartySuppressions = sourceSuppressions.filter(({ file }) => {
+        if (typeof file !== 'string') return false;
+        const canonical = canonicalSuppressionPattern(file);
+        return isFirstPartySourceGlob(file) ||
+          (canonical.startsWith('scripts/') && canonical.includes('*'));
+      });
+
+      expect(broadFirstPartySuppressions).toEqual([]);
+    });
+
+    test('built-in audit policy cannot suppress dependency or configuration findings by file type', () => {
+      const blanketDataSuppressions = sourceSuppressions.filter(({ rule, file }) =>
+        rule === '*' && typeof file === 'string' && [
+          '**/*.json',
+          '**/*.yml',
+          '**/*.yaml',
+          'package-lock.json',
+        ].includes(file),
+      );
+
+      expect(blanketDataSuppressions).toEqual([]);
     });
 
     test('should run audit on empty directory', async () => {
@@ -672,8 +715,14 @@ describe('SecurityAuditor', () => {
 
   describe('Suppression Rules', () => {
     test('should suppress findings based on configuration', async () => {
+      const defaultConfig = await SecurityAuditor.getDefaultConfig(mockFileOperations);
       const configWithSuppression: SecurityAuditConfig = {
-        ...await SecurityAuditor.getDefaultConfig(mockFileOperations),
+        ...defaultConfig,
+        scanners: {
+          ...defaultConfig.scanners,
+          dependencies: { ...defaultConfig.scanners.dependencies, enabled: false },
+          configuration: { ...defaultConfig.scanners.configuration, enabled: false },
+        },
         suppressions: [{
           rule: 'OWASP-A01-001',
           file: '*',
@@ -721,6 +770,52 @@ describe('SecurityAuditor', () => {
   });
 
   describe('Build Failure Logic', () => {
+    test('should fail closed when an enabled scanner cannot complete', async () => {
+      const failingScanner: SecurityScanner = {
+        name: 'FailingScanner',
+        isEnabled: () => true,
+        scan: async () => {
+          throw new Error('package-lock.json could not be parsed');
+        },
+      };
+      (auditor as unknown as { scanners: SecurityScanner[] }).scanners = [failingScanner];
+
+      const failure = await captureAuditFailure(auditor.audit(tempDir));
+
+      expect(failure.message).toMatch(
+        /Security audit failed closed: Scanner FailingScanner failed: package-lock\.json could not be parsed/,
+      );
+      expect(failure.result.errors).toContain(
+        'Scanner FailingScanner failed: package-lock.json could not be parsed',
+      );
+    });
+
+    test('should fail on a known dependency advisory below the global severity threshold', async () => {
+      const advisoryScanner: SecurityScanner = {
+        name: 'AdvisoryScanner',
+        isEnabled: () => true,
+        scan: async () => [{
+          ruleId: 'DEPENDENCY-BODY-PARSER-LIMIT-DOS',
+          severity: 'low',
+          message: 'body-parser is vulnerable',
+          file: 'package-lock.json',
+          remediation: 'Wait for the approved dependency update.',
+          confidence: 'high',
+        }],
+      };
+      (auditor as unknown as { scanners: SecurityScanner[] }).scanners = [advisoryScanner];
+
+      const failure = await captureAuditFailure(auditor.audit(tempDir));
+
+      expect(failure.message).toMatch(/Security audit failed: 1 known dependency advisories found/);
+      expect(failure.result.findings).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          ruleId: 'DEPENDENCY-BODY-PARSER-LIMIT-DOS',
+          severity: 'low',
+        }),
+      ]));
+    });
+
     test('should fail build on critical findings', async () => {
       const code = `const password = "${VULNERABLE_PATTERNS.HARDCODED_SECRET}";`;
       await fs.writeFile(path.join(tempDir, 'critical.js'), code);
@@ -729,10 +824,16 @@ describe('SecurityAuditor', () => {
     });
 
     test('should not fail build on low severity findings', async () => {
+      const defaultConfig = await SecurityAuditor.getDefaultConfig(mockFileOperations);
       const configLowSeverity: SecurityAuditConfig = {
-        ...await SecurityAuditor.getDefaultConfig(mockFileOperations),
+        ...defaultConfig,
+        scanners: {
+          ...defaultConfig.scanners,
+          dependencies: { ...defaultConfig.scanners.dependencies, enabled: false },
+          configuration: { ...defaultConfig.scanners.configuration, enabled: false },
+        },
         reporting: {
-          ...(await SecurityAuditor.getDefaultConfig(mockFileOperations)).reporting,
+          ...defaultConfig.reporting,
           failOnSeverity: 'critical'
         }
       };

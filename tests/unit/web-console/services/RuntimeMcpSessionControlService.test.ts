@@ -15,6 +15,30 @@ const COMMAND_ID = '7257f15c-0f26-4cfc-a578-4dbbf60dc723';
 const T0 = new Date('2026-05-28T12:00:00.000Z');
 
 describe('RuntimeMcpSessionControlService', () => {
+  it('does not let a stale replica close a successor replica presence', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+    const basePresence = {
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      transport: 'streamable-http' as const,
+      clientInfo: null,
+      startedAt: T0,
+      lastActiveAt: T0,
+      leaseUntil: new Date(T0.getTime() + 60_000),
+    };
+    await store.registerPresence({ ...basePresence, replicaId: 'replica-a' });
+    await store.registerPresence({ ...basePresence, replicaId: 'replica-b' });
+
+    await expect(store.markPresenceClosing(SESSION_ID, 'replica-a', new Date(T0.getTime() + 1)))
+      .resolves.toBeNull();
+    await expect(store.findPresence(SESSION_ID, T0)).resolves.toMatchObject({
+      replicaId: 'replica-b',
+      status: 'active',
+      closedAt: null,
+    });
+  });
+
   it('registers presence and heartbeats replica-owned request counters', async () => {
     const store = new InMemoryRuntimeSessionControlStore();
     let now = T0;
@@ -46,6 +70,23 @@ describe('RuntimeMcpSessionControlService', () => {
       accountCorrelationId: ACCOUNT_CORRELATION_ID,
       clientInfo: { name: 'test-client', version: '1.0.0' },
     });
+  });
+
+  it('does not publish a local session when durable registration fails', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+    jest.spyOn(store, 'registerPresence').mockRejectedValueOnce(new Error('presence database unavailable'));
+    const service = new RuntimeMcpSessionControlService({
+      store,
+      replicaId: 'replica-a',
+      now: () => T0,
+    });
+
+    await expect(service.registerSession({
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+    })).rejects.toThrow('presence database unavailable');
+    expect(service.getLocalSessionCount()).toBe(0);
   });
 
   it('keeps an idle-but-connected session visible across the transport lifetime', async () => {
@@ -202,5 +243,63 @@ describe('RuntimeMcpSessionControlService', () => {
       result: 'failed',
       errorCode: 'local_termination_failed',
     });
+  });
+
+  it('times out a stuck terminator and continues with later commands', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+    const service = new RuntimeMcpSessionControlService({
+      store,
+      replicaId: 'replica-a',
+      now: () => T0,
+      terminationTimeoutMs: 5,
+    });
+    const secondCommandId = 'e9f34f39-37c2-4f17-991b-b6d434696bc7';
+    await store.createTerminationCommand({
+      commandId: COMMAND_ID,
+      sessionId: 'stuck-session',
+      targetReplicaId: 'replica-a',
+      reason: 'operator_terminated',
+      requestedAt: T0,
+      requestedBy: { kind: 'operator', userId: USER_ID },
+    });
+    await store.createTerminationCommand({
+      commandId: secondCommandId,
+      sessionId: 'next-session',
+      targetReplicaId: 'replica-a',
+      reason: 'operator_terminated',
+      requestedAt: new Date(T0.getTime() + 1),
+      requestedBy: { kind: 'operator', userId: USER_ID },
+    });
+
+    const terminateLocalSession = jest.fn((sessionId: string) => sessionId === 'stuck-session'
+      ? new Promise<'terminated'>(() => {})
+      : Promise.resolve('terminated' as const));
+    await expect(service.reconcilePendingCommands({ terminateLocalSession })).resolves.toBe(1);
+
+    await expect(store.getCommandAck(COMMAND_ID)).resolves.toBeNull();
+    await expect(store.getCommandAck(secondCommandId)).resolves.toMatchObject({ result: 'terminated' });
+
+    await expect(service.reconcilePendingCommands({
+      terminateLocalSession: jest.fn(() => Promise.resolve('terminated' as const)),
+    })).resolves.toBe(1);
+    await expect(store.getCommandAck(COMMAND_ID)).resolves.toMatchObject({ result: 'terminated' });
+  });
+
+  it('leaves an explicitly retryable local disposal pending', async () => {
+    const store = new InMemoryRuntimeSessionControlStore();
+    const service = new RuntimeMcpSessionControlService({ store, replicaId: 'replica-a', now: () => T0 });
+    await store.createTerminationCommand({
+      commandId: COMMAND_ID,
+      sessionId: SESSION_ID,
+      targetReplicaId: 'replica-a',
+      reason: 'credential_revoked',
+      requestedAt: T0,
+      requestedBy: { kind: 'admin', userId: USER_ID },
+    });
+
+    await expect(service.reconcilePendingCommands({
+      terminateLocalSession: jest.fn(() => Promise.resolve('retry' as const)),
+    })).resolves.toBe(0);
+    await expect(store.getCommandAck(COMMAND_ID)).resolves.toBeNull();
   });
 });

@@ -11,7 +11,9 @@
  * @since v2.2.0 — Phase 4, Step 4.3
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { createHash } from 'node:crypto';
+import yaml from 'js-yaml';
 import { eq, and, gt, lt, sql, desc, inArray, arrayOverlaps } from 'drizzle-orm';
 import type { DatabaseInstance } from '../database/connection.js';
 import { withUserContext, withUserRead } from '../database/rls.js';
@@ -26,7 +28,11 @@ import { validateMemoryControlFields } from '../elements/memories/memoryYamlVali
 import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js';
 import { logger } from '../utils/logger.js';
 import type { ElementIndexEntry } from './types.js';
-import type { ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
+import {
+  StorageAlreadyExistsError,
+  type ElementWriteMetadata,
+  type WriteContentOptions,
+} from './IStorageLayer.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
@@ -65,11 +71,74 @@ export interface MemoryEntryQueryOptions {
   limit?: number;
 }
 
+export class MemoryPersistenceConflictError extends Error {
+  readonly code = 'MEMORY_PERSISTENCE_CONFLICT';
+
+  constructor(name: string) {
+    super(`Memory '${name}' changed or was deleted in another session; reload it before saving again`);
+    this.name = 'MemoryPersistenceConflictError';
+  }
+}
+
+export interface MemoryStorageRevision {
+  readonly userId: string;
+  readonly elementId: string;
+  readonly name: string;
+  readonly contentHash: string;
+}
+
+interface MemoryRevisionScope {
+  readonly expected?: MemoryStorageRevision;
+  observed?: MemoryStorageRevision;
+  persisted?: MemoryStorageRevision;
+}
+
+interface LockedMemoryParent {
+  readonly id: string;
+  readonly name: string;
+  readonly rawContent: string;
+}
+
+interface NormalizedMemoryEntryRow {
+  readonly entryId: string;
+  readonly timestamp: Date;
+  readonly content: string;
+  readonly sanitizedContent: string | null;
+  readonly sanitizedPatterns: unknown;
+  readonly tags: unknown;
+  readonly entryMetadata: unknown;
+  readonly privacyLevel: string | null;
+  readonly trustLevel: string | null;
+  readonly source: string | null;
+  readonly expiresAt: Date | null;
+}
+
+export interface MemoryRevisionResult<T> {
+  readonly result: T;
+  readonly revision?: MemoryStorageRevision;
+}
+
 // ── Implementation ──────────────────────────────────────────────────
 
 export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
+  private readonly revisionScope = new AsyncLocalStorage<MemoryRevisionScope>();
+
   constructor(db: DatabaseInstance, getCurrentUserId: UserIdResolver) {
     super(db, getCurrentUserId, 'memories');
+  }
+
+  /**
+   * Bind a database load/save/delete pipeline to one loaded revision. The scope
+   * is async-local so concurrent requests using this singleton storage layer do
+   * not overwrite each other's optimistic-concurrency token.
+   */
+  async runWithRevisionTracking<T>(
+    operation: () => Promise<T>,
+    expected?: MemoryStorageRevision,
+  ): Promise<MemoryRevisionResult<T>> {
+    const scope: MemoryRevisionScope = { expected };
+    const result = await this.revisionScope.run(scope, operation);
+    return { result, revision: scope.persisted ?? scope.observed ?? expected };
   }
 
   /**
@@ -176,25 +245,54 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
         } catch (err) {
           if (isUniqueViolation(err)) {
             const label = options?.elementLabel ?? 'Memory';
-            throw new Error(`${label} '${elementName}' already exists`);
+            throw new StorageAlreadyExistsError(label, elementName);
           }
           throw err;
         }
       } else {
-        rows = await tx
-          .insert(elements)
-          .values(values)
-          .onConflictDoUpdate({
-            target: [elements.userId, elements.elementType, elements.name],
-            set: buildUpdateSet(),
-          })
-          .returning({ id: elements.id });
+        const expected = this.revisionScope.getStore()?.expected;
+        if (expected) {
+          if (expected.userId !== this.userId) {
+            throw new MemoryPersistenceConflictError(elementName);
+          }
+          rows = await tx
+            .update(elements)
+            .set({ ...buildUpdateSet(), name: elementName })
+            .where(and(
+              eq(elements.userId, this.userId),
+              eq(elements.id, expected.elementId),
+              eq(elements.elementType, 'memories'),
+              eq(elements.contentHash, expected.contentHash),
+            ))
+            .returning({ id: elements.id });
+          if (!rows[0]) throw new MemoryPersistenceConflictError(elementName);
+        } else {
+          // Callers that did not load this row are imports/synchronizers. Keep
+          // their intentional upsert behavior; loaded interactive sessions use
+          // the hash-fenced update above and cannot resurrect a deleted row.
+          rows = await tx
+            .insert(elements)
+            .values(values)
+            .onConflictDoUpdate({
+              target: [elements.userId, elements.elementType, elements.name],
+              set: buildUpdateSet(),
+            })
+            .returning({ id: elements.id });
+        }
       }
 
       const row = rows[0];
       if (!row) {
         throw new Error(`[${STORE_NAME}] Upsert returned no row for memories/${elementName}`);
       }
+
+      // Serialize full-document replacement with entry-level writes. The
+      // element row is the shared lock for every mutation of its normalized
+      // memory_entries children.
+      await tx.select({ id: elements.id }).from(elements).where(and(
+        eq(elements.id, row.id),
+        eq(elements.userId, this.userId),
+      )).for('update');
 
       // Replace tags
       const tags = metadata.tags.length > 0 ? metadata.tags : (extracted.tags ?? []);
@@ -206,7 +304,17 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       return row.id;
     });
 
+    this.markDurableMutation();
     this.setIndex(elementName, elementId);
+    const scope = this.revisionScope.getStore();
+    if (scope) {
+      scope.persisted = {
+        userId: this.userId,
+        elementId,
+        name: elementName,
+        contentHash,
+      };
+    }
 
     this.logPersistEvent('ELEMENT_EDITED', 'LOW', `${STORE_NAME}.writeContent`,
       `Memory persisted to database: ${elementName}`,
@@ -217,16 +325,29 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
 
   async deleteContent(_elementType: string, name: string): Promise<void> {
     await withUserContext(this.db, this.userId, async (tx) => {
-      await tx
+      const scope = this.revisionScope.getStore();
+      const expected = scope?.expected ?? scope?.observed;
+      if (expected && expected.userId !== this.userId) {
+        throw new MemoryPersistenceConflictError(name);
+      }
+      const conditions = [
+        eq(elements.userId, this.userId),
+        eq(elements.elementType, 'memories'),
+        eq(elements.name, name),
+      ];
+      if (expected) {
+        conditions.push(eq(elements.id, expected.elementId));
+        conditions.push(eq(elements.contentHash, expected.contentHash));
+      }
+      const deleted = await tx
         .delete(elements)
-        .where(and(
-          eq(elements.userId, this.userId),
-          eq(elements.elementType, 'memories'),
-          eq(elements.name, name),
-        ));
+        .where(and(...conditions))
+        .returning({ id: elements.id });
+      if (expected && !deleted[0]) throw new MemoryPersistenceConflictError(name);
       // Cascade handles memory_entries deletion
     });
 
+    this.markDurableMutation();
     this.removeIndex(name);
 
     this.logPersistEvent('ELEMENT_DELETED', 'MEDIUM', `${STORE_NAME}.deleteContent`,
@@ -234,10 +355,46 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       { name });
   }
 
+  override async readContent(relativePath: string): Promise<string> {
+    const row = await withUserRead(this.db, this.userId, async (tx) => {
+      const rows = await tx
+        .select({
+          rawContent: elements.rawContent,
+          contentHash: elements.contentHash,
+          name: elements.name,
+          userId: elements.userId,
+        })
+        .from(elements)
+        .where(eq(elements.id, relativePath))
+        .limit(1);
+      return rows.at(0) ?? null;
+    });
+
+    if (!row) {
+      const error = new Error(`Element not found: ${relativePath}`) as NodeJS.ErrnoException;
+      error.code = 'ENOENT';
+      throw error;
+    }
+    if (row.userId === this.userId) {
+      const scope = this.revisionScope.getStore();
+      if (scope) {
+        scope.observed = {
+          userId: row.userId,
+          elementId: relativePath,
+          name: row.name,
+          contentHash: row.contentHash,
+        };
+      }
+      this.setIndex(row.name, relativePath);
+    }
+    return row.rawContent;
+  }
+
   // ── Entry-Level Operations ────────────────────────────────────────
 
   async addEntry(memoryElementId: string, entry: MemoryEntryData): Promise<void> {
     await withUserContext(this.db, this.userId, async (tx) => {
+      const parent = await this.lockMemoryParent(tx, memoryElementId);
       // Single source of truth for the column values — both the insert values
       // and the upsert SET reuse it. Identity columns (memoryId, entryId) are
       // stripped from the SET via the buildUpdateSet closure pattern (same
@@ -266,6 +423,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
         target: [memoryEntries.memoryId, memoryEntries.entryId],
         set: buildUpdateSet(),
       });
+      await this.rewriteParentFromNormalizedEntries(tx, parent);
     });
   }
 
@@ -315,7 +473,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
         })
         .from(memoryEntries)
         .where(and(...conditions))
-        .orderBy(desc(memoryEntries.timestamp))
+        .orderBy(desc(memoryEntries.timestamp), desc(memoryEntries.entryId))
         .limit(options?.limit ?? DEFAULT_ENTRY_QUERY_LIMIT);
 
       return rows.map(row => ({
@@ -338,6 +496,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
 
   async removeEntry(memoryElementId: string, entryId: string): Promise<void> {
     await withUserContext(this.db, this.userId, async (tx) => {
+      const parent = await this.lockMemoryParent(tx, memoryElementId);
       // Defense-in-depth: include userId even though RLS enforces it.
       await tx
         .delete(memoryEntries)
@@ -346,23 +505,152 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
           eq(memoryEntries.memoryId, memoryElementId),
           eq(memoryEntries.entryId, entryId),
         ));
+      await this.rewriteParentFromNormalizedEntries(tx, parent);
     });
   }
 
   async purgeExpiredEntries(): Promise<number> {
     return withUserContext(this.db, this.userId, async (tx) => {
-      const deleted = await tx
-        .delete(memoryEntries)
+      const affected = await tx
+        .select({ memoryId: memoryEntries.memoryId })
+        .from(memoryEntries)
         .where(and(
           eq(memoryEntries.userId, this.userId),
           sql`${memoryEntries.expiresAt} IS NOT NULL AND ${memoryEntries.expiresAt} < NOW()`,
         ))
-        .returning({ id: memoryEntries.id });
-      return deleted.length;
+        .groupBy(memoryEntries.memoryId)
+        .orderBy(memoryEntries.memoryId);
+      let deletedCount = 0;
+      for (const { memoryId } of affected) {
+        const parent = await this.lockMemoryParent(tx, memoryId);
+        const deleted = await tx
+          .delete(memoryEntries)
+          .where(and(
+            eq(memoryEntries.userId, this.userId),
+            eq(memoryEntries.memoryId, memoryId),
+            sql`${memoryEntries.expiresAt} IS NOT NULL AND ${memoryEntries.expiresAt} < NOW()`,
+          ))
+          .returning({ id: memoryEntries.id });
+        deletedCount += deleted.length;
+        await this.rewriteParentFromNormalizedEntries(tx, parent);
+      }
+      return deletedCount;
     });
   }
 
   // ── Private ───────────────────────────────────────────────────────
+
+  private async lockMemoryParent(
+    tx: DrizzleTx,
+    memoryElementId: string,
+  ): Promise<LockedMemoryParent> {
+    const rows = await tx.select({
+      id: elements.id,
+      name: elements.name,
+      rawContent: elements.rawContent,
+    }).from(elements).where(and(
+      eq(elements.id, memoryElementId),
+      eq(elements.userId, this.userId),
+      eq(elements.elementType, 'memories'),
+    )).for('update').limit(1);
+    const parent = rows[0];
+    if (!parent) {
+      throw new Error(`[${STORE_NAME}] Memory element ${memoryElementId} was not found`);
+    }
+    return parent;
+  }
+
+  private async readNormalizedEntriesInTx(
+    tx: DrizzleTx,
+    memoryElementId: string,
+  ): Promise<NormalizedMemoryEntryRow[]> {
+    return tx.select({
+      entryId: memoryEntries.entryId,
+      timestamp: memoryEntries.timestamp,
+      content: memoryEntries.content,
+      sanitizedContent: memoryEntries.sanitizedContent,
+      sanitizedPatterns: memoryEntries.sanitizedPatterns,
+      tags: memoryEntries.tags,
+      entryMetadata: memoryEntries.entryMetadata,
+      privacyLevel: memoryEntries.privacyLevel,
+      trustLevel: memoryEntries.trustLevel,
+      source: memoryEntries.source,
+      expiresAt: memoryEntries.expiresAt,
+    }).from(memoryEntries).where(and(
+      eq(memoryEntries.userId, this.userId),
+      eq(memoryEntries.memoryId, memoryElementId),
+    )).orderBy(memoryEntries.timestamp, memoryEntries.entryId);
+  }
+
+  private async rewriteParentFromNormalizedEntries(
+    tx: DrizzleTx,
+    parent: LockedMemoryParent,
+  ): Promise<void> {
+    const parsed = SecureYamlParser.parseRawYaml(parent.rawContent, {
+      maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      contentPolicy: 'structure-only',
+    });
+    if (!validateMemoryControlFields(parsed)) {
+      throw new Error('Malicious memory control content detected');
+    }
+    const rows = await this.readNormalizedEntriesInTx(tx, parent.id);
+    const serializedEntries = rows.map(row => ({
+      id: row.entryId,
+      timestamp: row.timestamp.toISOString(),
+      content: row.content,
+      ...(row.sanitizedContent ? { sanitizedContent: row.sanitizedContent } : {}),
+      ...(row.sanitizedPatterns && typeof row.sanitizedPatterns === 'object'
+        ? { sanitizedPatterns: row.sanitizedPatterns } : {}),
+      tags: Array.isArray(row.tags) ? row.tags : [],
+      metadata: row.entryMetadata && typeof row.entryMetadata === 'object'
+        ? row.entryMetadata : {},
+      ...(row.privacyLevel ? { privacyLevel: row.privacyLevel } : {}),
+      ...(row.trustLevel ? { trustLevel: row.trustLevel } : {}),
+      ...(row.source ? { source: row.source } : {}),
+      ...(row.expiresAt ? { expiresAt: row.expiresAt.toISOString() } : {}),
+    }));
+    parsed.entries = serializedEntries;
+    const timestamps = rows.map(row => row.timestamp.getTime());
+    const stats = parsed.stats && typeof parsed.stats === 'object' && !Array.isArray(parsed.stats)
+      ? parsed.stats as Record<string, unknown>
+      : {};
+    stats.totalEntries = rows.length;
+    stats.totalSize = rows.reduce((total, row) => total + Buffer.byteLength(row.content, 'utf8'), 0);
+    stats.oldestEntry = timestamps.length > 0
+      ? new Date(Math.min(...timestamps)).toISOString()
+      : undefined;
+    stats.newestEntry = timestamps.length > 0
+      ? new Date(Math.max(...timestamps)).toISOString()
+      : undefined;
+    parsed.stats = stats;
+    const rawContent = yaml.dump(parsed, {
+      schema: yaml.JSON_SCHEMA,
+      noRefs: true,
+      skipInvalid: false,
+      sortKeys: true,
+    });
+    const byteSize = Buffer.byteLength(rawContent, 'utf8');
+    if (byteSize > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+      throw new Error(
+        `[${STORE_NAME}] Memory '${parent.name}' exceeds maximum YAML size ` +
+        `of ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes`,
+      );
+    }
+    const contentHash = createHash('sha256').update(rawContent, 'utf8').digest('hex');
+    const updated = await tx.update(elements).set({
+      rawContent,
+      contentHash,
+      byteSize,
+      updatedAt: sql`NOW()`,
+    }).where(and(
+      eq(elements.id, parent.id),
+      eq(elements.userId, this.userId),
+      eq(elements.elementType, 'memories'),
+    )).returning({ id: elements.id });
+    if (!updated[0]) {
+      throw new MemoryPersistenceConflictError(parent.name);
+    }
+  }
 
   /**
    * Sync entries from YAML content into memory_entries table.
@@ -384,17 +672,20 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
         throw new Error('Malicious memory control content detected');
       }
     } catch (err) {
-      // Parse failure drops entries silently — element row still persists.
-      // Log so operators see skipped entry sync and can investigate corrupted YAML.
+      // Throw so the surrounding transaction rolls back the element, tags, and
+      // normalized entries together. Committing only the canonical row would
+      // leave entry queries serving stale data from the previous revision.
       logger.warn(
-        `[${STORE_NAME}] syncEntriesInTx: YAML parse failed for memory ${memoryElementId}, entries not synced`,
+        `[${STORE_NAME}] syncEntriesInTx: YAML parse failed for memory ${memoryElementId}; rolling back`,
         { error: err instanceof Error ? err.message : String(err) },
       );
-      return;
+      throw err;
     }
 
     const entries = parsed.entries;
-    if (!Array.isArray(entries)) return;
+    if (entries !== undefined && !Array.isArray(entries)) {
+      throw new Error(`[${STORE_NAME}] Memory entries must be an array`);
+    }
 
     // Defense-in-depth: include userId alongside the RLS context. Every other
     // DELETE in this module does the same — syncEntriesInTx is the last one
@@ -404,7 +695,7 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
       eq(memoryEntries.memoryId, memoryElementId),
     ));
 
-    if (entries.length === 0) return;
+    if (!entries || entries.length === 0) return;
 
     const rows = entries.flatMap((entry, idx) => {
       if (!entry || typeof entry !== 'object') return [];

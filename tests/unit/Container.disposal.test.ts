@@ -49,6 +49,38 @@ describe('Container Disposal - Error Scenarios', () => {
   });
 
   describe('Happy Path - All Services Dispose Successfully', () => {
+    it('drains the auth provider before storage disposal starts', async () => {
+      const order: string[] = [];
+      const authProvider = {
+        dispose: jest.fn().mockImplementation(async () => {
+          order.push('auth');
+        }),
+      };
+      const database = {
+        dispose: jest.fn().mockImplementation(async () => {
+          order.push('database');
+        }),
+      };
+      (container as any).services.set('AuthProvider', { instance: authProvider });
+      (container as any).services.set('Database', { instance: database });
+
+      await container.dispose();
+
+      expect(order).toEqual(['auth', 'database']);
+      expect(authProvider.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('still disposes storage but propagates a failed auth drain', async () => {
+      const database = { dispose: jest.fn().mockResolvedValue(undefined) };
+      (container as any).services.set('AuthProvider', {
+        instance: { dispose: jest.fn().mockRejectedValue(new Error('audit drain failed')) },
+      });
+      (container as any).services.set('Database', { instance: database });
+
+      await expect(container.dispose()).rejects.toThrow('audit drain failed');
+      expect(database.dispose).toHaveBeenCalledTimes(1);
+    });
+
     it('should dispose all services without errors', async () => {
       // Create mock services with successful dispose
       const mockService1 = {
@@ -73,6 +105,17 @@ describe('Container Disposal - Error Scenarios', () => {
       expect(mockService1.dispose).toHaveBeenCalledTimes(1);
       expect(mockService2.dispose).toHaveBeenCalledTimes(1);
       expect(mockService3.cleanup).toHaveBeenCalledTimes(1);
+    });
+
+    it('disposes registered pool owners without resolving them and closes aliases once', async () => {
+      const sharedConnection = { close: jest.fn().mockResolvedValue(undefined) };
+
+      container.registerInstance('DatabaseConnection', sharedConnection);
+      container.registerInstance('SystemDatabaseConnection', sharedConnection);
+
+      await container.dispose();
+
+      expect(sharedConnection.close).toHaveBeenCalledTimes(1);
     });
 
     it('should dispose services in parallel for performance', async () => {

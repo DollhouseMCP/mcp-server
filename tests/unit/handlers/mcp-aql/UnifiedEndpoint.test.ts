@@ -50,6 +50,13 @@ describe('UnifiedEndpoint', () => {
         save: jest.fn().mockResolvedValue(undefined),
         // Issue #2329: addEntry pre-flights persistence before reporting success
         assertPersistable: jest.fn().mockResolvedValue(undefined),
+        getMemoryStateToken: jest.fn().mockResolvedValue('stable-memory-state'),
+        getMemoryProbeToken: jest.fn().mockReturnValue('stable-memory-probe'),
+        isMemoryDeletedAt: jest.fn().mockResolvedValue(false),
+        isDatabaseBacked: jest.fn().mockReturnValue(false),
+        recoverMemoryPersistenceConflict: jest.fn(),
+        runFileMutationExclusive: jest.fn(async (memory, operation) => operation(memory)),
+        runFileDeleteExclusive: jest.fn(async (_memoryName, operation) => operation()),
       },
       agentManager: {
         canonicalizeExecutionName: jest.fn((name: string) => name),

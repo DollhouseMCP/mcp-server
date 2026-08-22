@@ -77,6 +77,17 @@ describe('ConsoleStoreCleanupScheduler', () => {
     expect(cleanupStores.idempotencyStore.sweepExpired).toHaveBeenCalledWith(NOW);
   });
 
+  it('lets the durable runtime store use its authority clock by default', async () => {
+    const runtime = jest.fn(() => Promise.resolve(2));
+    const cleanupStores = stores({ runtime });
+    const scheduler = new ConsoleStoreCleanupScheduler({ stores: cleanupStores });
+
+    await expect(scheduler.runOnce()).resolves.toMatchObject({
+      removed: { runtimeSessionPresence: 2 },
+    });
+    expect(runtime).toHaveBeenCalledWith(undefined);
+  });
+
   it('skips overlapping cleanup runs', async () => {
     let releaseSessionSweep: (() => void) | undefined;
     const sessions = jest.fn(() => new Promise<number>(resolve => {

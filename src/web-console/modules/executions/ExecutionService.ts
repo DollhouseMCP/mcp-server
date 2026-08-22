@@ -52,12 +52,16 @@ export class ExecutionService {
   }
 
   private async isOwnedActiveSession(userId: string, sessionId: string): Promise<boolean> {
-    const session = await this.options.runtimeStore.findPresence(sessionId, this.now());
+    const session = await this.options.runtimeStore.findPresence(sessionId, this.runtimeStoreNow());
     return session?.userId === userId;
   }
 
   private now(): Date {
     return this.options.now?.() ?? new Date();
+  }
+
+  private runtimeStoreNow(): Date | undefined {
+    return this.options.now?.();
   }
 }
 

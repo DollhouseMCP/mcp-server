@@ -32,6 +32,7 @@ export const DEFAULT_RUNTIME_SESSION_LEASE_MS = 15 * 60_000;
 export const RUNTIME_PRESENCE_LEASE_GRACE_MS = 60_000;
 
 export const DEFAULT_RUNTIME_COMMAND_BATCH_LIMIT = 100;
+export const DEFAULT_RUNTIME_TERMINATION_TIMEOUT_MS = 5_000;
 
 /**
  * Sizes the presence lease from the transport idle timeout so presence
@@ -52,7 +53,7 @@ export interface RuntimeMcpSessionRegistration {
   readonly clientInfo?: RuntimeClientInfo | null;
 }
 
-export type RuntimeLocalTerminationResult = 'terminated' | 'already_absent';
+export type RuntimeLocalTerminationResult = 'terminated' | 'already_absent' | 'retry';
 
 export interface RuntimeMcpSessionTerminator {
   terminateLocalSession(sessionId: string): Promise<RuntimeLocalTerminationResult>;
@@ -64,6 +65,8 @@ export interface RuntimeMcpSessionControlServiceOptions {
   readonly now?: () => Date;
   readonly leaseDurationMs?: number;
   readonly commandBatchLimit?: number;
+  /** Bounds one local terminator so a stuck session cannot block later commands. */
+  readonly terminationTimeoutMs?: number;
 }
 
 interface LocalRuntimeSession {
@@ -83,6 +86,7 @@ export class RuntimeMcpSessionControlService {
   private readonly now: () => Date;
   private readonly leaseDurationMs: number;
   private readonly commandBatchLimit: number;
+  private readonly terminationTimeoutMs: number;
   private readonly sessions = new Map<string, LocalRuntimeSession>();
 
   constructor(options: RuntimeMcpSessionControlServiceOptions) {
@@ -91,11 +95,15 @@ export class RuntimeMcpSessionControlService {
     this.now = options.now ?? (() => new Date());
     this.leaseDurationMs = options.leaseDurationMs ?? DEFAULT_RUNTIME_SESSION_LEASE_MS;
     this.commandBatchLimit = options.commandBatchLimit ?? DEFAULT_RUNTIME_COMMAND_BATCH_LIMIT;
+    this.terminationTimeoutMs = options.terminationTimeoutMs ?? DEFAULT_RUNTIME_TERMINATION_TIMEOUT_MS;
     if (!Number.isSafeInteger(this.leaseDurationMs) || this.leaseDurationMs <= 0) {
       throw new Error('Runtime session lease duration must be a positive integer number of milliseconds');
     }
     if (!Number.isInteger(this.commandBatchLimit) || this.commandBatchLimit < 1 || this.commandBatchLimit > 500) {
       throw new Error('Runtime command batch limit must be between 1 and 500');
+    }
+    if (!Number.isSafeInteger(this.terminationTimeoutMs) || this.terminationTimeoutMs <= 0) {
+      throw new Error('Runtime termination timeout must be a positive integer number of milliseconds');
     }
   }
 
@@ -119,7 +127,6 @@ export class RuntimeMcpSessionControlService {
       requestCount: 0,
       errorCount: 0,
     };
-    this.sessions.set(input.sessionId, session);
     await this.store.registerPresence({
       sessionId: input.sessionId,
       userId: input.userId,
@@ -133,6 +140,9 @@ export class RuntimeMcpSessionControlService {
       errorCount: 0,
       leaseUntil: this.leaseUntil(now),
     });
+    // Publish local ownership only after durable registration succeeds. The
+    // HTTP caller can retry a failed registration without leaving a phantom.
+    this.sessions.set(input.sessionId, session);
   }
 
   async recordActivity(sessionId: string, outcome: 'ok' | 'error' = 'ok'): Promise<RuntimeSessionHeartbeatResult | null> {
@@ -182,7 +192,7 @@ export class RuntimeMcpSessionControlService {
 
   async markSessionDisposed(sessionId: string): Promise<void> {
     this.sessions.delete(sessionId);
-    await this.store.markPresenceClosing(sessionId, this.now());
+    await this.store.markPresenceClosing(sessionId, this.replicaId, this.now());
   }
 
   async reconcilePendingCommands(terminator: RuntimeMcpSessionTerminator): Promise<number> {
@@ -195,7 +205,21 @@ export class RuntimeMcpSessionControlService {
       let result: RuntimeTerminationAckResult;
       let errorCode: string | null = null;
       try {
-        const termination = await terminator.terminateLocalSession(command.sessionId);
+        const termination = await withTimeout(
+          terminator.terminateLocalSession(command.sessionId),
+          this.terminationTimeoutMs,
+        );
+        if (!termination || termination === 'retry') {
+          logger.warn('[RuntimeMcpSessionControl] Runtime termination remains pending', {
+            commandId: command.commandId,
+            sessionId: command.sessionId,
+            replicaId: this.replicaId,
+            reason: termination === 'retry' ? 'local_termination_retry' : 'local_termination_timeout',
+          });
+          // Do not publish a terminal acknowledgement. The durable command
+          // remains pending and a later poll can finish the same disposal.
+          continue;
+        }
         result = termination === 'terminated' ? 'terminated' : 'already_absent';
       } catch (error) {
         result = 'failed';
@@ -237,5 +261,20 @@ export class RuntimeMcpSessionControlService {
       errorCount: session.errorCount,
       leaseUntil: this.leaseUntil(session.lastActiveAt),
     });
+  }
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | null> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<null>(resolve => {
+        timer = setTimeout(() => resolve(null), timeoutMs);
+        timer.unref();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }

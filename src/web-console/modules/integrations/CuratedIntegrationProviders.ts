@@ -111,6 +111,12 @@ export type IntegrationProviderResolver = (
   providerId: UserIntegrationProvider,
 ) => Promise<IIntegrationProvider | null>;
 
+export type IntegrationCleanupProviderResolver = (
+  userId: string,
+  providerId: UserIntegrationProvider,
+  integrationDescriptorId: string,
+) => Promise<IIntegrationProvider | null>;
+
 export function createStoreIntegrationProviderResolver(params: {
   readonly descriptorStore: IIntegrationDescriptorStore;
   readonly secretEncryption: ISecretEncryptionService;
@@ -120,13 +126,45 @@ export function createStoreIntegrationProviderResolver(params: {
     const descriptor = await params.descriptorStore.findVisibleByProvider(userId, providerId);
     if (!descriptor) return null;
     try {
-      const provider = buildIntegrationProviderFromDescriptor(descriptor, params.secretEncryption, params.outbound ?? {});
+      const provider = buildIntegrationProviderFromDescriptor(
+        descriptor,
+        params.secretEncryption,
+        params.outbound ?? {},
+      );
       auditProviderBuild(descriptor.provider, provider ? 'configured' : 'unsupported');
       return provider;
     } catch (err) {
       auditProviderBuild(descriptor.provider, 'failed');
       logger.error(
         `[CuratedIntegrationProviders] Per-request provider build failed for '${descriptor.provider}'`,
+        { error: err instanceof Error ? err.message : String(err) },
+      );
+      return null;
+    }
+  };
+}
+
+export function createStoreIntegrationCleanupProviderResolver(params: {
+  readonly descriptorStore: IIntegrationDescriptorStore;
+  readonly secretEncryption: ISecretEncryptionService;
+  readonly outbound?: CuratedProviderOutboundOptions;
+}): IntegrationCleanupProviderResolver {
+  return async (userId, providerId, integrationDescriptorId) => {
+    const curated = await params.descriptorStore.findCuratedByProvider(providerId);
+    const descriptor = curated?.id === integrationDescriptorId
+      ? curated
+      : await params.descriptorStore.findById(integrationDescriptorId, userId);
+    if (!descriptor || descriptor.provider !== providerId) return null;
+    try {
+      return buildIntegrationProviderFromDescriptor(
+        descriptor,
+        params.secretEncryption,
+        params.outbound ?? {},
+      );
+    } catch (err) {
+      auditProviderBuild(descriptor.provider, 'failed');
+      logger.error(
+        `[CuratedIntegrationProviders] Cleanup provider build failed for '${descriptor.provider}'`,
         { error: err instanceof Error ? err.message : String(err) },
       );
       return null;
@@ -143,10 +181,11 @@ export function buildIntegrationProviderFromDescriptor(
     return new StaticApiKeyIntegrationProvider(descriptor);
   }
   if (descriptor.authStrategy === 'oauth2_authorization_code') {
-    if (!descriptor.clientSecretCiphertext) return null;
+    const ciphertext = descriptor.clientSecretCiphertext;
+    if (!ciphertext) return null;
     const clientSecret = secretEncryption
       .decrypt(
-        descriptor.clientSecretCiphertext,
+        ciphertext,
         integrationDescriptorClientSecretContext({
           provider: descriptor.provider,
           ownerUserId: descriptor.ownerUserId,

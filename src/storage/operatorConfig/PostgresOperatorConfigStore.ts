@@ -6,10 +6,9 @@
  * run inside `withSystemContext` — operator config is system-level
  * state, not per-user tenant data, so RLS context is cleared.
  *
- * Atomicity: `save()` issues a single `INSERT ... ON CONFLICT (id) DO
- * UPDATE` statement. Two concurrent writers cannot create duplicate
- * rows (the singleton constraint plus the conflict target serializes
- * them at the database level).
+ * Atomicity: unconditional saves use `INSERT ... ON CONFLICT (id) DO UPDATE`.
+ * Compare-and-swap saves first materialize and lock the singleton row so two
+ * first writers cannot both compare against a shared synthetic default.
  *
  * @module storage/operatorConfig/PostgresOperatorConfigStore
  */
@@ -17,6 +16,7 @@
 import { eq } from 'drizzle-orm';
 
 import type { DatabaseInstance } from '../../database/connection.js';
+import type { DrizzleTx } from '../../database/db-utils.js';
 import { withSystemContext } from '../../database/admin.js';
 import { operatorSettings } from '../../database/schema/index.js';
 import type { IOperatorConfigStore, OperatorConfig } from './IOperatorConfigStore.js';
@@ -48,19 +48,29 @@ export class PostgresOperatorConfigStore implements IOperatorConfigStore {
   }
 
   async load(): Promise<OperatorConfig> {
-    const rows = await withSystemContext(this.db, (tx) =>
-      tx.select().from(operatorSettings).where(eq(operatorSettings.id, 1)).limit(1),
-    );
-    const row = rows.at(0);
-    if (!row) return cloneDefault();
-    return rowToConfig(row);
+    return withSystemContext(this.db, loadOperatorConfigWithTx);
   }
 
   async save(
     config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number },
     options: { readonly expectedUpdatedAt?: number } = {},
   ): Promise<void> {
-    let expectedUpdatedAt = options.expectedUpdatedAt;
+    await withSystemContext(this.db, tx => saveOperatorConfigWithTx(tx, config, options));
+  }
+}
+
+export async function loadOperatorConfigWithTx(tx: DrizzleTx): Promise<OperatorConfig> {
+  const rows = await tx.select().from(operatorSettings).where(eq(operatorSettings.id, 1)).limit(1);
+  const row = rows.at(0);
+  return row ? rowToConfig(row) : cloneDefault();
+}
+
+export async function saveOperatorConfigWithTx(
+  tx: DrizzleTx,
+  config: Omit<OperatorConfig, 'updatedAt'> & { updatedAt?: number },
+  options: { readonly expectedUpdatedAt?: number } = {},
+): Promise<void> {
+    const expectedUpdatedAt = options.expectedUpdatedAt;
     const initialNow = new Date();
     const writeRow = {
       id: 1,
@@ -72,27 +82,32 @@ export class PostgresOperatorConfigStore implements IOperatorConfigStore {
       updatedAt: initialNow,
     };
 
-    await withSystemContext(this.db, async (tx) => {
-      if (expectedUpdatedAt === undefined) {
-        const rows = await tx
-          .select({ updatedAt: operatorSettings.updatedAt })
-          .from(operatorSettings)
-          .where(eq(operatorSettings.id, 1))
-          .limit(1);
-        expectedUpdatedAt = rows.at(0)?.updatedAt.getTime();
-        if (expectedUpdatedAt !== undefined) {
-          writeRow.updatedAt = new Date(Math.max(Date.now(), expectedUpdatedAt + 1));
-        }
-      } else {
-        const lockedRows = await tx
-          .select({ updatedAt: operatorSettings.updatedAt })
-          .from(operatorSettings)
-          .where(eq(operatorSettings.id, 1))
-          .for('update');
-        const currentUpdatedAt = lockedRows.at(0)?.updatedAt.getTime() ?? DEFAULT_OPERATOR_CONFIG.updatedAt;
-        if (currentUpdatedAt !== expectedUpdatedAt) throw new OperatorConfigConflictError();
-        writeRow.updatedAt = new Date(Math.max(Date.now(), currentUpdatedAt + 1));
-      }
+    // Materialize and lock the singleton for every write. This makes the
+    // timestamp an actual revision token even for concurrent unconditional
+    // writes; without the lock, two writers can publish different documents
+    // with the same millisecond value and defeat a later CAS.
+    await tx
+      .insert(operatorSettings)
+      .values({
+        id: 1,
+        enhancedIndexConfig: DEFAULT_OPERATOR_CONFIG.enhancedIndexConfig,
+        consoleConfig: DEFAULT_OPERATOR_CONFIG.consoleConfig,
+        licenseConfig: DEFAULT_OPERATOR_CONFIG.licenseConfig,
+        defaultsConfig: DEFAULT_OPERATOR_CONFIG.defaultsConfig,
+        configVersion: DEFAULT_OPERATOR_CONFIG.configVersion,
+        updatedAt: new Date(DEFAULT_OPERATOR_CONFIG.updatedAt),
+      })
+      .onConflictDoNothing();
+    const lockedRows = await tx
+      .select({ updatedAt: operatorSettings.updatedAt })
+      .from(operatorSettings)
+      .where(eq(operatorSettings.id, 1))
+      .for('update');
+    const currentUpdatedAt = lockedRows.at(0)?.updatedAt.getTime() ?? DEFAULT_OPERATOR_CONFIG.updatedAt;
+    if (expectedUpdatedAt !== undefined && currentUpdatedAt !== expectedUpdatedAt) {
+      throw new OperatorConfigConflictError();
+    }
+    writeRow.updatedAt = new Date(Math.max(Date.now(), currentUpdatedAt + 1));
       await tx
         .insert(operatorSettings)
         .values(writeRow)
@@ -107,8 +122,6 @@ export class PostgresOperatorConfigStore implements IOperatorConfigStore {
             updatedAt: writeRow.updatedAt,
           },
         });
-    });
-  }
 }
 
 function cloneDefault(): OperatorConfig {

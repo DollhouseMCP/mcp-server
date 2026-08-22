@@ -1,4 +1,5 @@
 name: Publish to GitHub Packages
+run-name: Publish to GitHub Packages ${{ inputs.correlation_id || github.event.release.tag_name || github.ref_name }}
 
 # This workflow publishes the package to GitHub Packages Registry when a version tag is pushed.
 # It includes duplicate publication prevention to handle cases where:
@@ -28,22 +29,62 @@ on:
         required: false
         type: boolean
         default: true
+      correlation_id:
+        description: 'Optional orchestrator correlation id'
+        required: false
+        type: string
 
 permissions:
   contents: read
   packages: write
 
+# The protected dist-tags are shared mutable registry state. Serialize every
+# publication so the version comparison and the subsequent tag mutation form
+# one decision window rather than a cross-run check-then-publish race.
+concurrency:
+  group: publish-github-packages-protected-channels
+  cancel-in-progress: false
+
 jobs:
   publish-gpr:
     name: Publish to GitHub Packages
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
+    environment: release-publish
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.release.tag_name || github.ref }}
+          fetch-depth: 0
+
+      - name: Verify immutable release source
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run != true }}
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_TAG: ${{ github.event.release.tag_name || github.ref_name }}
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          EXPECTED_TAG="v${VERSION}"
+          if [[ "${EVENT_TAG}" != "${EXPECTED_TAG}" || "${GITHUB_REF}" != "refs/tags/${EXPECTED_TAG}" ]]; then
+            echo "::error::Live GitHub Packages publication requires immutable tag ${EXPECTED_TAG}; got ${GITHUB_REF}"
+            exit 1
+          fi
+          test "$(git rev-parse HEAD)" = "$(git rev-parse "refs/tags/${EXPECTED_TAG}^{commit}")" || exit 1
+          release_json=$(gh release view "${EXPECTED_TAG}" --json tagName,isDraft,isPrerelease)
+          test "$(jq -r '.tagName' <<<"${release_json}")" = "${EXPECTED_TAG}" || exit 1
+          test "$(jq -r '.isDraft' <<<"${release_json}")" = "false" || exit 1
+          VERSION_IS_PRERELEASE=false
+          [[ "${VERSION}" == *-* ]] && VERSION_IS_PRERELEASE=true
+          test "$(jq -r '.isPrerelease' <<<"${release_json}")" = "${VERSION_IS_PRERELEASE}" || {
+            echo "::error::Version ${VERSION} does not match the GitHub release channel"
+            exit 1
+          }
 
       - name: Setup Node.js for GitHub Packages
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: '20.x'
           registry-url: 'https://npm.pkg.github.com'
@@ -86,22 +127,32 @@ jobs:
 
           echo "Checking if version $PACKAGE_VERSION is already published..."
 
-          # Try to fetch package info from GitHub Packages
-          # Capture both stdout and exit code to distinguish between errors
-          if npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>&1 | grep -q "$PACKAGE_VERSION"; then
-            echo "✓ Version $PACKAGE_VERSION already exists on GitHub Packages"
-            echo "already_published=true" >> $GITHUB_OUTPUT
-          else
-            # Check if it was an authentication error vs package not found
-            CHECK_OUTPUT=$(npm view @DollhouseMCP/mcp-server@$PACKAGE_VERSION --registry=https://npm.pkg.github.com version 2>&1 || true)
-            if echo "$CHECK_OUTPUT" | grep -qi "unauthorized\|forbidden\|authentication"; then
-              echo "⚠️ Warning: Authentication issue checking package existence"
-              echo "Proceeding with publication attempt (will fail safely if already exists)"
-              echo "already_published=false" >> $GITHUB_OUTPUT
-            else
-              echo "✓ Version $PACKAGE_VERSION not found, proceeding with publication"
-              echo "already_published=false" >> $GITHUB_OUTPUT
+          # Keep stdout separate from diagnostics: npm's E404 message repeats the
+          # requested version and must never be mistaken for a successful lookup.
+          NPM_VIEW_STDERR=$(mktemp "${RUNNER_TEMP:-/tmp}/dollhouse-npm-view.XXXXXX")
+          trap 'rm -f "$NPM_VIEW_STDERR"' EXIT
+          set +e
+          PUBLISHED_VERSION=$(npm view "@DollhouseMCP/mcp-server@${PACKAGE_VERSION}" version \
+            --registry=https://npm.pkg.github.com --silent 2>"$NPM_VIEW_STDERR")
+          NPM_VIEW_STATUS=$?
+          set -e
+          NPM_VIEW_ERROR=$(<"$NPM_VIEW_STDERR")
+          PUBLISHED_VERSION=$(printf '%s' "$PUBLISHED_VERSION" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+
+          if [[ "$NPM_VIEW_STATUS" -eq 0 ]]; then
+            if [[ "$PUBLISHED_VERSION" != "$PACKAGE_VERSION" ]]; then
+              echo "::error::GitHub Packages returned unexpected version output: ${PUBLISHED_VERSION:-<empty>}"
+              exit 1
             fi
+            echo "✓ Version $PACKAGE_VERSION already exists on GitHub Packages"
+            echo "already_published=true" >> "$GITHUB_OUTPUT"
+          elif grep -Eqi '(^|[[:space:]])E404([[:space:]]|$)|404 Not Found|is not in this registry' <<<"$NPM_VIEW_ERROR"; then
+            echo "✓ Version $PACKAGE_VERSION not found, proceeding with publication"
+            echo "already_published=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Unable to determine whether version $PACKAGE_VERSION exists on GitHub Packages"
+            printf '%s\n' "$NPM_VIEW_ERROR" >&2
+            exit 1
           fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -151,14 +202,85 @@ jobs:
             exit 1
           fi
 
+      - name: Resolve protected channel publication mode
+        id: protected_channel
+        if: ${{ steps.check_version.outputs.already_published == 'false' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
+        shell: bash
+        env:
+          DIST_TAG: ${{ steps.package_dist_tag.outputs.dist_tag }}
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          PACKAGE='@DollhouseMCP/mcp-server'
+          TARGET=$(node -p "require('./package.json').version")
+          DIST_TAG_STDERR=$(mktemp "${RUNNER_TEMP:-/tmp}/dollhouse-dist-tags.XXXXXX")
+          trap 'rm -f "$DIST_TAG_STDERR"' EXIT
+
+          set +e
+          DIST_TAGS=$(npm view "${PACKAGE}" dist-tags --json \
+            --registry=https://npm.pkg.github.com --silent 2>"$DIST_TAG_STDERR")
+          DIST_TAGS_STATUS=$?
+          set -e
+
+          if [[ "$DIST_TAGS_STATUS" -eq 0 ]]; then
+            CURRENT=$(printf '%s' "$DIST_TAGS" | node -e \
+              'const fs=require("fs"); const input=fs.readFileSync(0,"utf8"); const tags=input ? JSON.parse(input) : {}; process.stdout.write(tags[process.env.DIST_TAG] || "");')
+          elif grep -Eqi '(^|[[:space:]])E404([[:space:]]|$)|404 Not Found|is not in this registry' "$DIST_TAG_STDERR"; then
+            CURRENT=''
+          else
+            echo "::error::Unable to inspect the protected GitHub Packages ${DIST_TAG} channel"
+            cat "$DIST_TAG_STDERR" >&2
+            exit 1
+          fi
+
+          PUBLISH_TAG="$DIST_TAG"
+          TEMPORARY=false
+          if [[ -n "$CURRENT" && "$CURRENT" != "$TARGET" ]]; then
+            ORDER=$(node scripts/compare-semver.mjs "$CURRENT" "$TARGET")
+            if [[ "$ORDER" == '1' ]]; then
+              # Publish the immutable version without moving a newer protected
+              # channel backward. The temporary tag is removed immediately;
+              # the exact package version remains installable.
+              PUBLISH_TAG='dollhouse-temporary'
+              TEMPORARY=true
+            fi
+          elif [[ "$CURRENT" == "$TARGET" ]]; then
+            echo "::error::Protected channel ${DIST_TAG} references ${TARGET}, but the exact-version lookup reported it missing"
+            exit 1
+          fi
+
+          echo "publish_tag=${PUBLISH_TAG}" >> "$GITHUB_OUTPUT"
+          echo "temporary_publish_tag=${TEMPORARY}" >> "$GITHUB_OUTPUT"
+
       - name: Publish to GitHub Packages
         if: ${{ steps.check_version.outputs.already_published == 'false' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
+          set -euo pipefail
           # Publish to GitHub Packages
           # Registry is configured via setup-node step's registry-url parameter
           # NODE_AUTH_TOKEN provides authentication to GitHub Packages
-          npm publish --tag "${{ steps.package_dist_tag.outputs.dist_tag }}"
+          PUBLISH_TAG="${{ steps.protected_channel.outputs.publish_tag }}"
+          test -n "$PUBLISH_TAG"
+          if [[ "${{ steps.protected_channel.outputs.temporary_publish_tag }}" == 'true' ]]; then
+            # The package's prepublishOnly guard intentionally accepts only its
+            # protected release channel. Run that complete preparation under the
+            # validated channel, then publish the prepared tree without rerunning
+            # lifecycle scripts under the temporary tag.
+            cleanup_prepared_publish() {
+              npm dist-tag rm '@DollhouseMCP/mcp-server' "$PUBLISH_TAG" \
+                --registry=https://npm.pkg.github.com >/dev/null 2>&1 || true
+              npm run postpublish >/dev/null 2>&1 || true
+            }
+            trap cleanup_prepared_publish EXIT
+            npm_config_tag="${{ steps.package_dist_tag.outputs.dist_tag }}" npm run prepublishOnly
+            npm publish --ignore-scripts --tag "$PUBLISH_TAG"
+            npm dist-tag rm '@DollhouseMCP/mcp-server' "$PUBLISH_TAG" --registry=https://npm.pkg.github.com
+            npm run postpublish
+            trap - EXIT
+          else
+            npm publish --tag "$PUBLISH_TAG"
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -174,12 +296,37 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Skip publication (already exists)
-        if: steps.check_version.outputs.already_published == 'true'
+      - name: Reconcile dist-tag for existing publication
+        if: ${{ steps.check_version.outputs.already_published == 'true' && (github.event_name != 'workflow_dispatch' || inputs.dry_run != true) }}
         shell: bash
         run: |
+          set -euo pipefail
           echo "⏭️ Skipping publication - version already exists on GitHub Packages"
           echo "This is expected if the tag was re-pushed or if multiple commits reference the same tag"
+          TARGET=$(node -p "require('./package.json').version")
+          DIST_TAG="${{ steps.package_dist_tag.outputs.dist_tag }}"
+          CURRENT=$(npm view @DollhouseMCP/mcp-server dist-tags --json --registry=https://npm.pkg.github.com | node -pe "JSON.parse(require('fs').readFileSync(0,'utf8'))['${DIST_TAG}'] || ''")
+
+          if [[ -n "${CURRENT}" && "${CURRENT}" != "${TARGET}" ]]; then
+            ORDER=$(node scripts/compare-semver.mjs "${CURRENT}" "${TARGET}")
+            if [[ "${ORDER}" == "1" ]]; then
+              echo "Preserving newer ${DIST_TAG} dist-tag ${CURRENT}; refusing to move it backward to ${TARGET}"
+              exit 0
+            fi
+          fi
+
+          if [[ "${CURRENT}" != "${TARGET}" ]]; then
+            npm dist-tag add "@DollhouseMCP/mcp-server@${TARGET}" "${DIST_TAG}" --registry=https://npm.pkg.github.com
+          fi
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Dry run for existing publication
+        if: ${{ steps.check_version.outputs.already_published == 'true' && github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+        shell: bash
+        run: |
+          echo "DRY RUN MODE - version already exists; no GitHub Packages dist-tags were changed"
+          echo "Would inspect dist-tag: ${{ steps.package_dist_tag.outputs.dist_tag }}"
 
 
       - name: Restore original package.json

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, jest } from '@jest/globals';
 
-import { pollUntilTerminal } from '../../../../src/web-console/ui/polling';
+import { createRequestOwner, pollUntilTerminal } from '../../../../src/web-console/ui/polling';
 
 describe('web-console polling utilities', () => {
   afterEach(() => {
@@ -15,6 +15,17 @@ describe('web-console polling utilities', () => {
       status: { status: 'terminated' },
     });
     expect(readStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it('accepts only the latest request claim and invalidates claims on teardown', () => {
+    const owner = createRequestOwner();
+    const first = owner.claim();
+    const second = owner.claim();
+
+    expect(owner.owns(first)).toBe(false);
+    expect(owner.owns(second)).toBe(true);
+    owner.invalidate();
+    expect(owner.owns(second)).toBe(false);
   });
 
   it('continues from pending to a terminal status', async () => {

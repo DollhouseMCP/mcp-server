@@ -1134,7 +1134,7 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
     persona.unique_id = metadata.unique_id ?? validatedInputs.uniqueId;
     persona.id = persona.unique_id;
 
-    await super.save(persona, persona.filename);
+    await super.save(persona, persona.filename, { exclusive: true });
     // Note: reload() intentionally NOT called here (Issue #491).
     // save() already caches the element correctly. reload() would clear the
     // cache and rebuild with different IDs, making the persona invisible.

@@ -23,6 +23,18 @@ import { ErrorHandler } from '../../utils/ErrorHandler.js';
 import * as path from 'path';
 import { IFileOperationsService } from '../../services/FileOperationsService.js';
 
+/**
+ * Failing audit result that remains machine-readable by CLI and CI callers.
+ * Security gates must fail closed without discarding the findings that caused
+ * the failure.
+ */
+export class SecurityAuditFailure extends Error {
+  constructor(message: string, readonly result: ScanResult) {
+    super(message);
+    this.name = 'SecurityAuditFailure';
+  }
+}
+
 export class SecurityAuditor {
   private config: SecurityAuditConfig;
   private scanners: SecurityScanner[] = [];
@@ -134,9 +146,32 @@ export class SecurityAuditor {
     // Generate reports
     await this.generateReports(result);
 
+    // A scanner that did not complete cannot establish a clean result. Treat
+    // scanner/runtime failures as gate failures rather than silently accepting
+    // the findings produced by the remaining scanners.
+    if (result.errors?.length) {
+      throw new SecurityAuditFailure(
+        `Security audit failed closed: ${result.errors.join('; ')}`,
+        result,
+      );
+    }
+
+    const dependencyAdvisories = result.findings.filter(({ ruleId }) =>
+      ruleId.startsWith('DEPENDENCY-') && ruleId !== 'DEPENDENCY-DISALLOWED-LICENSE',
+    );
+    if (dependencyAdvisories.length > 0) {
+      throw new SecurityAuditFailure(
+        `Security audit failed: ${dependencyAdvisories.length} known dependency advisories found`,
+        result,
+      );
+    }
+
     // Check if build should fail
     if (this.shouldFailBuild(result)) {
-      throw new Error(`Security audit failed: ${result.summary.bySeverity.critical} critical, ${result.summary.bySeverity.high} high severity issues found`);
+      throw new SecurityAuditFailure(
+        `Security audit failed: ${result.summary.bySeverity.critical} critical, ${result.summary.bySeverity.high} high severity issues found`,
+        result,
+      );
     }
 
     return result;
@@ -375,9 +410,34 @@ export class SecurityAuditor {
         },
         dependencies: {
           enabled: true,
-          severityThreshold: 'high',
+          severityThreshold: 'low',
           checkLicenses: true,
-          allowedLicenses: ['MIT', 'Apache-2.0', 'BSD-3-Clause', 'ISC', 'AGPL-3.0']
+          allowedLicenses: [
+            '0BSD',
+            'AGPL-3.0',
+            'AGPL-3.0-or-later',
+            'Apache-2.0',
+            'BSD-2-Clause',
+            'BSD-3-Clause',
+            'BlueOak-1.0.0',
+            'CC-BY-4.0',
+            'CC0-1.0',
+            'ISC',
+            'MIT',
+            'MIT-0',
+            'MPL-2.0',
+            'Python-2.0',
+            'Unlicense',
+            'WTFPL',
+          ],
+          // MCP Inspector packages publish a transitional marker in their
+          // manifests. Their bundled LICENSE grants Apache-2.0 or MIT terms.
+          licenseOverrides: {
+            '@modelcontextprotocol/inspector': 'Apache-2.0 OR MIT',
+            '@modelcontextprotocol/inspector-cli': 'Apache-2.0 OR MIT',
+            '@modelcontextprotocol/inspector-client': 'Apache-2.0 OR MIT',
+            '@modelcontextprotocol/inspector-server': 'Apache-2.0 OR MIT',
+          },
         },
         configuration: {
           enabled: true,

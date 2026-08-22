@@ -22,6 +22,7 @@ import { logger } from '../utils/logger.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SECURITY_LIMITS } from '../security/constants.js';
 import { MetadataService } from '../services/MetadataService.js';
 
 /**
@@ -332,7 +333,7 @@ export abstract class BaseElement implements IElement {
     // HIGH SEVERITY FIX: Use SecureYamlParser instead of yaml.load to prevent code execution
     try {
       SecureYamlParser.parse(yamlFrontmatter, {
-        maxYamlSize: 64 * 1024, // 64KB limit for frontmatter
+        maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
         validateContent: true
       });
     } catch (error) {

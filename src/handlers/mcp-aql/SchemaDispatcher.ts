@@ -906,21 +906,21 @@ async function handleImportElement(
     throw new Error('Invalid export package: missing element data');
   }
 
-  // Check if element already exists when overwrite is false
-  if (!overwrite) {
-    try {
-      const existing = await handler.getElementDetails(elementName, elementType);
-      if (existing) {
-        throw new Error(
-          `Element '${elementName}' already exists. Use overwrite: true to replace.`
-        );
-      }
-    } catch (e) {
-      // Element doesn't exist, which is what we want
-      if (!(e instanceof Error) || !e.message.includes('not found')) {
-        throw e;
-      }
-    }
+  let existing: unknown = null;
+  try {
+    existing = await handler.getElementDetails(elementName, elementType);
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.toLowerCase().includes('not found')) throw error;
+  }
+  if (existing && !overwrite) {
+    throw new Error(`Element '${elementName}' already exists. Use overwrite: true to replace.`);
+  }
+  if (existing && overwrite) {
+    return handler.replaceElement({
+      name: elementName,
+      type: elementType,
+      data: elementData,
+    });
   }
 
   // Create the element

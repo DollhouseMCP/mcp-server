@@ -1,6 +1,7 @@
 import { sessionActivityEvents } from '../../../database/schema/index.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
 import { withSystemContext } from '../../../database/admin.js';
+import { lockActiveUserLifecycleWithTx } from '../../../database/authPrincipalLock.js';
 import type { ConsolePortfolioElementType } from '../../stores/IPortfolioElementStore.js';
 
 /**
@@ -58,6 +59,7 @@ export class PostgresPortfolioActivityEventSink implements IPortfolioActivityEve
 
   async recordElementDeleted(event: PortfolioElementDeletedEvent): Promise<void> {
     await withSystemContext(this.db, async (tx) => {
+      await lockActiveUserLifecycleWithTx(tx, event.userId);
       await tx.insert(sessionActivityEvents).values({
         userId: event.userId,
         sessionId: event.consoleSessionId,

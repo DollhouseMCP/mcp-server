@@ -597,5 +597,16 @@ describe('GitHubAuthManager', () => {
         else process.env.GITHUB_TOKEN = originalEnv;
       }
     });
+
+    it.each([
+      ['same-length', 'ghp_imported_tokem'],
+      ['different-length', 'ghp_other'],
+    ])('rejects a %s token mismatch during session-store read-back', async (_kind, storedToken) => {
+      mockTokenManagerInstance.storeGitHubToken.mockResolvedValue();
+      mockTokenManagerInstance.retrieveGitHubToken.mockResolvedValue(storedToken);
+
+      await expect(authManager.importOAuthHelperToken('ghp_imported_token'))
+        .rejects.toThrow(/token store|read-back|match/i);
+    });
   });
 });

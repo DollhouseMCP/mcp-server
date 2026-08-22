@@ -37,7 +37,7 @@ describe('Template', () => {
     });
 
     it('should enforce template size limit', () => {
-      const largeContent = 'x'.repeat(101 * 1024); // 101KB
+      const largeContent = 'x'.repeat(10 * 1024 * 1024 + 1);
       
       expect(() => {
         new Template({ name: 'Large' }, largeContent, metadataService);

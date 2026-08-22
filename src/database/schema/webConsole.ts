@@ -100,6 +100,7 @@ export const consoleSessions = pgTable('console_sessions', {
   idHash: bytea('id_hash').primaryKey(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   authSub: text('auth_sub').notNull(),
+  authzVersion: integer('authz_version').notNull().default(0),
   csrfTokenHash: bytea('csrf_token_hash').notNull(),
   grantedCapabilities: text('granted_capabilities').array().notNull(),
   elevatedCapabilities: text('elevated_capabilities').array().notNull(),
@@ -161,7 +162,7 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
 ]);
 
 export type UserIntegrationProvider = string & { readonly __brand: 'UserIntegrationProvider' };
-export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
+export type UserIntegrationStatus = 'connected' | 'cleanup_pending' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'
   | 'token_refresh_failed'
@@ -186,15 +187,28 @@ export const userIntegrations = pgTable('user_integrations', {
   accessTokenCiphertext: bytea('access_token_ciphertext'),
   refreshTokenCiphertext: bytea('refresh_token_ciphertext'),
   credentialKeyVersion: text('credential_key_version'),
+  credentialGeneration: integer('credential_generation').notNull().default(0),
+  refreshFence: integer('refresh_fence').notNull().default(0),
+  refreshLeaseId: uuid('refresh_lease_id'),
+  refreshLeaseExpiresAt: timestamp('refresh_lease_expires_at', { withTimezone: true }),
   status: text('status').$type<UserIntegrationStatus>().notNull(),
   errorReason: text('error_reason').$type<UserIntegrationErrorReason>(),
+  authorizationStartedAt: timestamp('authorization_started_at', { withTimezone: true }),
   connectedAt: timestamp('connected_at', { withTimezone: true }),
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 }, (table) => [
   check('user_integrations_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
-  check('user_integrations_status_check', sql`${table.status} IN ('connected', 'revoked', 'error')`),
-  check('user_integrations_shape_check', sql`
+  check('user_integrations_status_check', sql`${table.status} IN ('connected', 'cleanup_pending', 'revoked', 'error')`),
+  check('user_integrations_refresh_state_check', sql`
+    ${table.credentialGeneration} >= 0
+    AND ${table.refreshFence} >= 0
+    AND (
+      (${table.refreshLeaseId} IS NULL AND ${table.refreshLeaseExpiresAt} IS NULL)
+      OR (${table.refreshLeaseId} IS NOT NULL AND ${table.refreshLeaseExpiresAt} IS NOT NULL)
+    )
+  `),
+  check('user_integrations_shape_check', sql`(
     (${table.externalAccountLabel} IS NULL OR (
       btrim(${table.externalAccountLabel}) <> ''
       AND char_length(${table.externalAccountLabel}) <= 200
@@ -242,13 +256,12 @@ export const userIntegrations = pgTable('user_integrations', {
         ${table.provider} <> 'github'
         AND (${table.authorizedPermissions} ?& array['scopes'])
         AND (${table.authorizedPermissions} - 'scopes') = '{}'::jsonb
-        AND jsonb_typeof(${table.authorizedPermissions}->'scopes') = 'array'
-        AND jsonb_array_length(${table.authorizedPermissions}->'scopes') <= 100
+        AND "dollhouse_valid_integration_scopes"(${table.authorizedPermissions}->'scopes')
       )
     )
     AND (
-      (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)
-      OR (${table.status} <> 'revoked')
+      (${table.status} IN ('cleanup_pending', 'revoked') AND ${table.revokedAt} IS NOT NULL)
+      OR (${table.status} NOT IN ('cleanup_pending', 'revoked'))
     )
     AND (
       (${table.status} = 'error'
@@ -259,14 +272,24 @@ export const userIntegrations = pgTable('user_integrations', {
           'scope_denied',
           'provider_unavailable'
         ))
-      OR (${table.status} <> 'error' AND ${table.errorReason} IS NULL)
+      OR (${table.status} = 'cleanup_pending' AND ${table.errorReason} = 'revocation_failed')
+      OR (${table.status} NOT IN ('error', 'cleanup_pending') AND ${table.errorReason} IS NULL)
+    )
+    AND (
+      ${table.status} <> 'cleanup_pending'
+      OR ${table.accessTokenCiphertext} IS NOT NULL
+      OR ${table.refreshTokenCiphertext} IS NOT NULL
+    )
+    AND (
+      ${table.status} <> 'connected'
+      OR (${table.authorizationStartedAt} IS NOT NULL AND ${table.connectedAt} IS NOT NULL)
     )
     AND (
       ${table.provider} = 'github'
       OR ${table.integrationDescriptorId} IS NOT NULL
       OR ${table.revokedAt} IS NOT NULL
     )
-  `),
+  ) IS TRUE`),
   uniqueIndex('idx_user_integrations_active_provider_unique')
     .on(table.userId, table.provider)
     .where(sql`${table.revokedAt} IS NULL`),
@@ -288,6 +311,7 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
   clientSecretCiphertext: bytea('client_secret_ciphertext'),
   clientSecretRevision: uuid('client_secret_revision'),
   credentialKeyVersion: text('credential_key_version'),
+  curatedSeedRevision: integer('curated_seed_revision'),
   operationPromotion: jsonb('operation_promotion').notNull().default({}),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
@@ -310,6 +334,10 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
     ))
     AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.clientSecretRevision} IS NULL)
     AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.credentialKeyVersion} IS NULL)
+    AND (${table.curatedSeedRevision} IS NULL OR (
+      ${table.ownership} = 'curated'
+      AND ${table.curatedSeedRevision} > 0
+    ))
     AND (
       (${table.ownership} = 'curated' AND ${table.ownerUserId} IS NULL)
       OR (${table.ownership} = 'byo' AND ${table.ownerUserId} IS NOT NULL)
@@ -337,6 +365,17 @@ export const integrationProviderDescriptors = pgTable('integration_provider_desc
     .on(table.ownerUserId, table.provider)
     .where(sql`${table.ownership} = 'byo'`),
   index('idx_integration_provider_descriptors_owner').on(table.ownerUserId),
+]);
+
+/** Durable deployment intent for curated providers, including disable tombstones. */
+export const integrationCuratedProviderState = pgTable('integration_curated_provider_state', {
+  provider: text('provider').primaryKey(),
+  seedRevision: integer('seed_revision').notNull(),
+  enabled: boolean('enabled').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+}, (table) => [
+  check('integration_curated_provider_state_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
+  check('integration_curated_provider_state_revision_check', sql`${table.seedRevision} > 0`),
 ]);
 
 export const integrationOpenApiSpecs = pgTable('integration_openapi_specs', {

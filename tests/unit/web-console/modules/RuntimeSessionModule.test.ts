@@ -11,6 +11,12 @@ import {
   type ConsoleRequest,
   type ConsoleRouteDefinition,
 } from '../../../../src/web-console/index.js';
+import { InMemoryAccountAdminMutationTransactionRunner } from '../../../../src/web-console/modules/account-admin/AccountAdminMutationTransaction.js';
+import { InMemoryConsoleAccountAllowlistStore } from '../../../../src/web-console/stores/InMemoryConsoleAccountAllowlistStore.js';
+import { InMemoryConsoleSecurityInvalidationStore } from '../../../../src/web-console/services/invalidation/InMemoryConsoleSecurityInvalidationStore.js';
+import { InMemoryAdminAuditWriter } from '../../../../src/web-console/audit/InMemoryAdminAuditWriter.js';
+import { InMemoryOperatorConfigStore } from '../../../../src/storage/operatorConfig/InMemoryOperatorConfigStore.js';
+import type { ConsoleAdminAuditEvent } from '../../../../src/web-console/audit/IAdminAuditWriter.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
@@ -28,6 +34,19 @@ function accountStore(): InMemoryConsoleAccountAdminStore {
     principal(USER_ID, ACCOUNT_CORRELATION_ID),
     principal(SECOND_USER_ID, SECOND_ACCOUNT_CORRELATION_ID),
   ]);
+}
+
+function runtimeTransactionRunner(
+  runtimeStore: InMemoryRuntimeSessionControlStore,
+): InMemoryAccountAdminMutationTransactionRunner {
+  return new InMemoryAccountAdminMutationTransactionRunner({
+    accountAdminStore: accountStore(),
+    accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+    securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+    adminAuditWriter: new InMemoryAdminAuditWriter(),
+    runtimeSessionControlStore: runtimeStore,
+    operatorConfigStore: new InMemoryOperatorConfigStore(),
+  });
 }
 
 function principal(userId: string, accountCorrelationId: string) {
@@ -77,6 +96,7 @@ async function fixture() {
   const module = createRuntimeSessionModule({
     runtimeStore,
     accountAdminStore: accountStore(),
+    transactionRunner: runtimeTransactionRunner(runtimeStore),
     now: () => NOW,
   });
   return { module, runtimeStore };
@@ -122,6 +142,92 @@ function request(overrides: Partial<ConsoleRequest> = {}): ConsoleRequest {
 }
 
 describe('RuntimeSessionModule', () => {
+  it('keeps transactional admin routes mounted and rolls back a termination command when audit append fails', async () => {
+    const runtimeStore = new InMemoryRuntimeSessionControlStore();
+    await runtimeStore.registerPresence({
+      sessionId: SESSION_ID,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    });
+    const accounts = accountStore();
+    const auditWriter = new FailingAdminAuditWriter();
+    const transactionRunner = new InMemoryAccountAdminMutationTransactionRunner({
+      accountAdminStore: accounts,
+      accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
+      securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
+      adminAuditWriter: auditWriter,
+      runtimeSessionControlStore: runtimeStore,
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+    });
+    const module = createRuntimeSessionModule({
+      runtimeStore,
+      accountAdminStore: accounts,
+      transactionRunner,
+      now: () => NOW,
+    });
+    const route = findRoute(
+      module.routes,
+      'DELETE',
+      '/api/v1/admin/accounts/users/:user_id/sessions/:session_id',
+    );
+
+    expect(route.auditExecution).toBe('handler_transaction');
+    await expect(route.handler(request({ params: { user_id: USER_ID, session_id: SESSION_ID } })))
+      .rejects.toThrow('fixture audit append failed');
+    await expect(runtimeStore.listPendingCommandsForReplica('replica-a')).resolves.toEqual([]);
+  });
+
+  it('lists and revokes every user session beyond the store page cap', async () => {
+    const runtimeStore = new InMemoryRuntimeSessionControlStore();
+    await Promise.all(Array.from({ length: 525 }, (_, index) => runtimeStore.registerPresence({
+      sessionId: `bulk-session-${String(index).padStart(4, '0')}`,
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: `replica-${index % 3}`,
+      transport: RUNTIME_TRANSPORT,
+      startedAt: NOW,
+      lastActiveAt: NOW,
+      leaseUntil: FIVE_MINUTES,
+    })));
+
+    const module = createRuntimeSessionModule({
+      runtimeStore,
+      accountAdminStore: accountStore(),
+      transactionRunner: runtimeTransactionRunner(runtimeStore),
+      now: () => NOW,
+    });
+    const selfListRoute = findRoute(module.routes, 'GET', '/api/v1/me/sessions');
+    const accountListRoute = findRoute(
+      module.routes,
+      'GET',
+      '/api/v1/admin/accounts/users/:user_id/sessions',
+    );
+    const revokeAllRoute = findRoute(
+      module.routes,
+      'POST',
+      '/api/v1/admin/accounts/users/:user_id/sessions/revoke-all',
+    );
+
+    const selfResult = await selfListRoute.handler(request());
+    expect((selfResult.body as { sessions: unknown[] }).sessions).toHaveLength(525);
+    const accountResult = await accountListRoute.handler(request({ params: { user_id: USER_ID } }));
+    expect((accountResult.body as { sessions: unknown[] }).sessions).toHaveLength(525);
+    await expect(revokeAllRoute.handler(request({ params: { user_id: USER_ID } })))
+      .resolves.toMatchObject({ status: 202, body: { requested: 525 } });
+
+    const queued = await Promise.all([
+      runtimeStore.listPendingCommandsForReplica('replica-0', { limit: 500 }),
+      runtimeStore.listPendingCommandsForReplica('replica-1', { limit: 500 }),
+      runtimeStore.listPendingCommandsForReplica('replica-2', { limit: 500 }),
+    ]);
+    expect(queued.flat()).toHaveLength(525);
+  });
+
   it('registers self, account-admin, and operator runtime-session routes with expected policies', async () => {
     const registry = new ConsoleModuleRegistry();
     registry.register((await fixture()).module);
@@ -311,6 +417,7 @@ describe('RuntimeSessionModule', () => {
     const module = createRuntimeSessionModule({
       runtimeStore,
       accountAdminStore: accountStore(),
+      transactionRunner: runtimeTransactionRunner(runtimeStore),
       now: () => NOW,
     });
     const revokeAllRoute = findRoute(
@@ -404,6 +511,19 @@ describe('RuntimeSessionModule', () => {
       reason: 'unexpected_reason',
       status: 'accepted',
     })).toThrow('unknown reason');
+    expect(() => projectRuntimeSessionOperational({
+      session_id: SESSION_ID,
+      transport: RUNTIME_TRANSPORT,
+      created_at: NOW.toISOString(),
+      last_active_at: NOW.toISOString(),
+      status: 'unknown',
+      account_correlation_id: ACCOUNT_CORRELATION_ID,
+      replica_id: 'replica-a',
+      request_count: 1,
+      error_count: 0,
+      lease_until: FIVE_MINUTES.toISOString(),
+      client_info: null,
+    })).toThrow('unknown status');
   });
 
   it('preserves every runtime termination reason without lossy fallback', () => {
@@ -540,6 +660,7 @@ describe('RuntimeSessionModule', () => {
     const module = createRuntimeSessionModule({
       runtimeStore,
       accountAdminStore: accountStore(),
+      transactionRunner: runtimeTransactionRunner(runtimeStore),
       now: () => NOW,
     });
     const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
@@ -585,10 +706,11 @@ describe('RuntimeSessionModule', () => {
       lastActiveAt: NOW,
       leaseUntil: FIVE_MINUTES,
     });
-    await runtimeStore.markPresenceClosing('mcp-session-y', NOW);
+    await runtimeStore.markPresenceClosing('mcp-session-y', 'replica-b', NOW);
     const module = createRuntimeSessionModule({
       runtimeStore,
       accountAdminStore: accountStore(),
+      transactionRunner: runtimeTransactionRunner(runtimeStore),
       now: () => NOW,
     });
     const listRoute = findRoute(module.routes, 'GET', OPERATE_SESSIONS_PATH);
@@ -601,10 +723,30 @@ describe('RuntimeSessionModule', () => {
     expect((byStatusClosing.body as { items: Array<{ session_id: string }> }).items.map(item => item.session_id))
       .toEqual(['mcp-session-y']);
 
-    // Default (no status filter) only surfaces active sessions.
-    const defaultActive = await listRoute.handler(request());
-    expect((defaultActive.body as { items: Array<{ session_id: string }> }).items.map(item => item.session_id))
-      .toEqual(['mcp-session-x']);
+    // Default (no status filter) honestly represents "All statuses".
+    const allStatuses = await listRoute.handler(request());
+    expect((allStatuses.body as { items: Array<{ session_id: string; status: string }> }).items)
+      .toEqual(expect.arrayContaining([
+        expect.objectContaining({ session_id: 'mcp-session-x', status: 'active' }),
+        expect.objectContaining({ session_id: 'mcp-session-y', status: 'closing' }),
+      ]));
+
+    const showRoute = findRoute(module.routes, 'GET', '/api/v1/admin/operate/sessions/:session_id');
+    await expect(showRoute.handler(request({ params: { session_id: 'mcp-session-y' } })))
+      .resolves.toMatchObject({ status: 200, body: { session_id: 'mcp-session-y', status: 'closing' } });
+
+    await runtimeStore.registerPresence({
+      sessionId: 'mcp-session-expired',
+      userId: USER_ID,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      replicaId: 'replica-a',
+      transport: RUNTIME_TRANSPORT,
+      startedAt: new Date(NOW.getTime() - 3_000),
+      lastActiveAt: new Date(NOW.getTime() - 2_000),
+      leaseUntil: new Date(NOW.getTime() - 1_000),
+    });
+    await expect(showRoute.handler(request({ params: { session_id: 'mcp-session-expired' } })))
+      .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
   });
 
   it('treats a garbage session-list cursor as the first page rather than erroring', async () => {
@@ -627,3 +769,9 @@ describe('RuntimeSessionModule', () => {
     expect((result.body as { code: string }).code).toBe('invalid_request');
   });
 });
+
+class FailingAdminAuditWriter extends InMemoryAdminAuditWriter {
+  override write(_event: ConsoleAdminAuditEvent): Promise<void> {
+    return Promise.reject(new Error('fixture audit append failed'));
+  }
+}

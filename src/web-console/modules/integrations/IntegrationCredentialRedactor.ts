@@ -1,5 +1,9 @@
 const REDACTED = '[redacted]';
-const MIN_EMBEDDED_CREDENTIAL_LENGTH = 8;
+export const MIN_EMBEDDED_CREDENTIAL_LENGTH = 8;
+
+export function isSafelyRedactableCredential(value: string): boolean {
+  return value.length >= MIN_EMBEDDED_CREDENTIAL_LENGTH;
+}
 
 export interface EffectiveCredentialInjection {
   readonly location: 'header' | 'query';

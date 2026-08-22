@@ -135,6 +135,12 @@ describe('PostgresSessionActivationEventSink', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     transaction = {
+      execute: jest.fn(() => Promise.resolve([])),
+      select: jest.fn(() => ({
+        from: () => ({
+          where: () => ({ limit: () => Promise.resolve([{ id: USER_ID }]) }),
+        }),
+      })),
       insert: jest.fn(),
     };
   });
@@ -164,5 +170,23 @@ describe('PostgresSessionActivationEventSink', () => {
       action: 'activated',
       occurredAt: NOW,
     });
+  });
+
+  it('rejects a late activation event after the user lifecycle closes', async () => {
+    transaction.select.mockReturnValue({
+      from: () => ({ where: () => ({ limit: () => Promise.resolve([]) }) }),
+    });
+    const sink = new PostgresSessionActivationEventSink({} as never);
+
+    await expect(sink.recordActivationChanged({
+      type: 'console.session.activation.changed.v1',
+      userId: USER_ID,
+      sessionId: SESSION_ID,
+      elementType: 'personas',
+      elementName: 'analyst',
+      action: 'activated',
+      occurredAt: NOW,
+    })).rejects.toThrow('disabled, deleted, or missing');
+    expect(transaction.insert).not.toHaveBeenCalled();
   });
 });

@@ -70,6 +70,7 @@ import type { IVerificationNotifier } from '../../services/VerificationNotifier.
 import { generateDisplayCode } from '@dollhousemcp/safety';
 import { randomUUID } from 'node:crypto';
 import type { ElementCRUDHandler } from '../ElementCRUDHandler.js';
+import { findElementFlexibly } from '../element-crud/helpers.js';
 import type { MemoryManager } from '../../elements/memories/MemoryManager.js';
 import type { AgentManager } from '../../elements/agents/AgentManager.js';
 import type { CircuitBreakerState } from '../../elements/agents/resilienceEvaluator.js';
@@ -704,15 +705,14 @@ export class MCPAQLHandler {
    * Issue #452: Provides element context for Layer 2 (element policy resolution).
    * Issue #449: Includes executing agents alongside personas/skills/ensembles.
    *
-   * @returns Array of active elements with their gatekeeper policies, or empty
-   *          array if gathering fails (fail-open: only route policies apply).
+   * @returns Array of active elements with their gatekeeper policies.
+   * @throws when policy state cannot be established so enforcement fails closed.
    */
   private async getActiveElements(sessionId?: string): Promise<ActiveElement[]> {
-    try {
-      const rawElements = sessionId
-        ? await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId)
-        : await this.handlers.elementCRUD.getActiveElementsForPolicy();
-      const activeElements: ActiveElement[] = rawElements.map((el) => ({
+    const rawElements = sessionId
+      ? await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId)
+      : await this.handlers.elementCRUD.getActiveElementsForPolicy();
+    const activeElements: ActiveElement[] = rawElements.map((el) => ({
         type: el.type,
         name: el.name,
         metadata: {
@@ -723,27 +723,21 @@ export class MCPAQLHandler {
         },
       }));
 
-      // Issue #449: Include executing agents with gatekeeper policies
-      if (!sessionId) {
-        for (const [, agentEntry] of this.executingAgents) {
-          activeElements.push({
-            type: 'agent',
+    // Issue #449: Include executing agents with gatekeeper policies
+    if (!sessionId) {
+      for (const [, agentEntry] of this.executingAgents) {
+        activeElements.push({
+          type: 'agent',
+          name: agentEntry.name,
+          metadata: {
             name: agentEntry.name,
-            metadata: {
-              name: agentEntry.name,
-              gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
-            },
-          });
-        }
+            gatekeeper: agentEntry.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'],
+          },
+        });
       }
-
-      return activeElements;
-    } catch (error) {
-      // Fail open — if we can't gather active elements, enforce without them
-      // This means only route validation and default policies will apply
-      logger.warn('Failed to gather active elements for Gatekeeper policy evaluation', { error, sessionId });
-      return [];
     }
+
+    return activeElements;
   }
 
   /**
@@ -953,11 +947,18 @@ export class MCPAQLHandler {
       const mergedParams = route.implicitParams
         ? { ...route.implicitParams, ...params }
         : params ?? {};
-      const rawData = await this.dispatch(route.handler, {
+      const deleteMemoryName = await this.deletedMemoryName(operation, elementType, mergedParams);
+      const dispatchParams = deleteMemoryName
+        ? { ...mergedParams, element_name: deleteMemoryName }
+        : mergedParams;
+      const dispatchOperation = () => this.dispatch(route.handler, {
         operation,
         elementType,
-        params: mergedParams,
+        params: dispatchParams,
       });
+      const rawData = deleteMemoryName
+        ? await this.memorySaveHandler.runDeleteExclusive(deleteMemoryName, dispatchOperation)
+        : await dispatchOperation();
       this.cleanupDeletedMemoryBookkeeping(operation, elementType, mergedParams);
 
       // Step 5: Apply field selection (Issue #202)
@@ -982,6 +983,21 @@ export class MCPAQLHandler {
       this.logOperationFailure(endpoint, operationName, message, isSecurityViolation, error);
       return this.failure(message, startTime);
     }
+  }
+
+  private async deletedMemoryName(
+    operation: string,
+    elementType: AqlElementType | undefined,
+    params: Record<string, unknown>,
+  ): Promise<string | null> {
+    if (operation !== 'delete_element') return null;
+    const rawType = (elementType ?? params.element_type ?? params.type) as string | undefined;
+    if (!rawType || normalizeMCPAQLElementType(rawType) !== AqlElementType.Memory) return null;
+    const name = params.element_name ?? params.name;
+    if (typeof name !== 'string' || name.length === 0) return null;
+    const memories = await this.handlers.memoryManager.list();
+    const resolved = Array.isArray(memories) ? findElementFlexibly(name, memories) : undefined;
+    return resolved?.metadata.name ?? name;
   }
 
   private invalidInputFailure(input: unknown, startTime: number): OperationFailure {

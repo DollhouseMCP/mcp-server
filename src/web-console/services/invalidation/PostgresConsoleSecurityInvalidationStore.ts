@@ -79,22 +79,28 @@ export class PostgresConsoleSecurityInvalidationStore implements IConsoleSecurit
 
   async acquireReplicaLease(input: ReplicaLease): Promise<void> {
     validateReplicaLease(input);
+    const leaseDurationMs = input.leaseUntil.getTime() - input.renewedAt.getTime();
     await withSystemContext(this.db, tx =>
-      tx.insert(securityInvalidationReplicaLeases).values(input).onConflictDoUpdate({
+      tx.insert(securityInvalidationReplicaLeases).values({
+        replicaId: input.replicaId,
+        renewedAt: sql<Date>`statement_timestamp()`,
+        leaseUntil: sql<Date>`statement_timestamp() + (${leaseDurationMs} * interval '1 millisecond')`,
+      }).onConflictDoUpdate({
         target: securityInvalidationReplicaLeases.replicaId,
         set: {
-          leaseUntil: input.leaseUntil,
-          renewedAt: input.renewedAt,
+          renewedAt: sql<Date>`statement_timestamp()`,
+          leaseUntil: sql<Date>`statement_timestamp() + (${leaseDurationMs} * interval '1 millisecond')`,
         },
       }),
     );
   }
 
-  async listLiveReplicaIds(at: Date = new Date()): Promise<string[]> {
+  async listLiveReplicaIds(at?: Date): Promise<string[]> {
+    const cutoff = at ?? sql<Date>`statement_timestamp()`;
     const rows = await withSystemContext(this.db, tx =>
       tx.select({ replicaId: securityInvalidationReplicaLeases.replicaId })
         .from(securityInvalidationReplicaLeases)
-        .where(gt(securityInvalidationReplicaLeases.leaseUntil, at))
+        .where(gt(securityInvalidationReplicaLeases.leaseUntil, cutoff))
         .orderBy(securityInvalidationReplicaLeases.replicaId),
     );
     return rows.map(row => row.replicaId);

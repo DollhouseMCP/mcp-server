@@ -5,6 +5,7 @@
 
 import { Memory } from '../../../../src/elements/memories/Memory.js';
 import { MemoryManager } from '../../../../src/elements/memories/MemoryManager.js';
+import { MEMORY_CONSTANTS } from '../../../../src/elements/memories/constants.js';
 import { DollhouseContainer } from '../../../../src/di/Container.js';
 import { PortfolioManager } from '../../../../src/portfolio/PortfolioManager.js';
 import { FileOperationsService } from '../../../../src/services/FileOperationsService.js';
@@ -347,7 +348,7 @@ describe('Memory Concurrent Access', () => {
       // Final state check
       const stats = loadMemory.getStats();
       expect(stats.totalEntries).toBeLessThanOrEqual(1000);
-      expect(stats.totalSize).toBeLessThan(1024 * 1024); // Under 1MB limit
+      expect(stats.totalSize).toBeLessThan(MEMORY_CONSTANTS.MAX_MEMORY_SIZE);
     });
   });
 });

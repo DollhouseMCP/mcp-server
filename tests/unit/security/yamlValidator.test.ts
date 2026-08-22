@@ -1,5 +1,6 @@
 import { describe, test, expect, beforeEach } from '@jest/globals';
 import { YamlValidator } from '../../../src/security/yamlValidator.js';
+import { SECURITY_LIMITS } from '../../../src/security/constants.js';
 
 describe('YamlValidator', () => {
   beforeEach(() => {
@@ -28,7 +29,7 @@ category: educational
     });
 
     test('should throw on content exceeding size limit', () => {
-      const largeContent = 'a'.repeat(65537); // > 64KB
+      const largeContent = 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1);
       expect(() => YamlValidator.parsePersonaMetadataSafely(largeContent)).toThrow('YAML content too large');
     });
 

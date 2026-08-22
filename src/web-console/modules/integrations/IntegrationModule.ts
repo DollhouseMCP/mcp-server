@@ -8,6 +8,7 @@ import type { IUserIntegrationStore, UserIntegrationProvider } from '../../store
 import type { IGitHubIntegrationProvider } from './GitHubIntegrationProvider.js';
 import {
   createStoreIntegrationProviderResolver,
+  createStoreIntegrationCleanupProviderResolver,
   type CuratedProviderOutboundOptions,
   type IntegrationProviderResolver,
 } from './CuratedIntegrationProviders.js';
@@ -32,6 +33,7 @@ import {
   projectIntegrationOpenApiSpecMetadata,
   projectIntegrationSpecOperations,
 } from './IntegrationPrivacyProjectors.js';
+import { attachSharedInMemoryTransactionGate } from '../../../utils/InMemoryTransactionGate.js';
 
 const SELF_CAPABILITY = 'console:self';
 
@@ -58,6 +60,7 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
       : createUnavailableGitHubIntegrationProvider(serializeGitHubIntegrationStatus),
     ...(options.configuredProviders ?? []),
   ]);
+  configureInMemoryDescriptorFences(options);
   const resolveProvider: IntegrationProviderResolver | null =
     options.descriptorStore && options.secretEncryption
       ? createStoreIntegrationProviderResolver({
@@ -66,10 +69,18 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
         outbound: options.providerOutbound,
       })
       : null;
+  const resolveCleanupProvider = options.descriptorStore && options.secretEncryption
+    ? createStoreIntegrationCleanupProviderResolver({
+        descriptorStore: options.descriptorStore,
+        secretEncryption: options.secretEncryption,
+        outbound: options.providerOutbound,
+      })
+    : null;
   const service = new IntegrationService({
     store: options.integrationStore,
     providers,
     resolveProvider,
+    resolveCleanupProvider,
     loginTransactions: options.loginTransactions,
     opaqueValues: options.opaqueValues,
     secretEncryption: options.secretEncryption,
@@ -162,6 +173,65 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
       ...perRequestProviderRoutes(options, service, resolveProvider !== null),
     ],
   };
+}
+
+function configureInMemoryDescriptorFences(options: IntegrationModuleOptions): void {
+  attachSharedInMemoryTransactionGate([
+    options.integrationStore,
+    options.descriptorStore,
+    options.loginTransactions,
+  ]);
+  const fencePendingCallbacks = options.loginTransactions
+    ?.fenceIntegrationAuthorizationsByDescriptor;
+  const configureCredentialMutationFence = options.descriptorStore
+    ?.configureCredentialMutationFence;
+  if (configureCredentialMutationFence) {
+    if (options.loginTransactions && !fencePendingCallbacks) {
+      throw new Error('login transaction store must support descriptor callback fencing');
+    }
+    configureCredentialMutationFence.call(options.descriptorStore, {
+      hasCredentialMaterial: integrationDescriptorId =>
+        options.integrationStore.hasCredentialMaterialByDescriptor(integrationDescriptorId),
+      hasExecutableCredentialMaterial: integrationDescriptorId =>
+        options.integrationStore.hasExecutableCredentialMaterialByDescriptor(integrationDescriptorId),
+      revokeCredentiallessBindings: async (integrationDescriptorId, revokedAt) => {
+        await options.integrationStore.revokeAllByDescriptor(integrationDescriptorId, revokedAt);
+      },
+      ...(fencePendingCallbacks ? {
+        fencePendingCallbacks: (integrationDescriptorId: string) =>
+          fencePendingCallbacks.call(options.loginTransactions, integrationDescriptorId),
+      } : {}),
+    });
+  }
+  const configure = options.integrationStore.configureDescriptorCallbackFence;
+  if (configure && options.descriptorStore?.runIfCurrent) {
+    configure.call(options.integrationStore, {
+      runIfCurrent: options.descriptorStore.runIfCurrent.bind(options.descriptorStore),
+    });
+  } else if (configure) {
+    const configuredFingerprints = new Map(
+      (options.configuredProviders ?? []).flatMap(provider => {
+        const id = provider.integrationDescriptorId;
+        const fingerprint = provider.integrationDescriptorFingerprint;
+        return id && fingerprint ? [[id, fingerprint] as const] : [];
+      }),
+    );
+    configure.call(options.integrationStore, {
+      async runIfCurrent(descriptorId, descriptorFingerprint, operation) {
+        return configuredFingerprints.get(descriptorId) === descriptorFingerprint
+          ? operation()
+          : null;
+      },
+    });
+  }
+  const freshness = options.loginTransactions?.hasNewerIntegrationAuthorization;
+  const completionCurrent = options.loginTransactions?.isIntegrationAuthorizationCompletionCurrent;
+  if (freshness && completionCurrent && options.integrationStore.configureAuthorizationFreshnessFence) {
+    options.integrationStore.configureAuthorizationFreshnessFence({
+      hasNewerAuthorization: freshness.bind(options.loginTransactions),
+      isCompletionCurrent: completionCurrent.bind(options.loginTransactions),
+    });
+  }
 }
 
 /**

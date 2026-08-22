@@ -2,8 +2,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import yaml from 'js-yaml';
 import type { IElement } from '../../types/elements/IElement.js';
 import type { BaseElementManager } from '../../elements/base/BaseElementManager.js';
+import type { Memory } from '../../elements/memories/Memory.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { logger } from '../../utils/logger.js';
+import { AsyncKeyedLock } from '../../utils/AsyncKeyedLock.js';
 import {
   canonicalizePortfolioElementName,
   clonePortfolioElementDetailRecord,
@@ -22,6 +24,8 @@ import {
   type IPortfolioElementStore,
   validatePortfolioElementDetailRecord,
 } from './IPortfolioElementStore.js';
+import { StorageAlreadyExistsError, StorageVersionConflictError } from '../../storage/IStorageLayer.js';
+import { MemoryPersistenceConflictError } from '../../storage/DatabaseMemoryStorageLayer.js';
 
 type PortfolioElementManager = Pick<BaseElementManager<IElement>,
   | 'findByName'
@@ -38,6 +42,20 @@ interface StorageSerializationCapable {
   readonly serializeElement?: (element: IElement) => Promise<string>;
 }
 
+interface DurableConcurrencyManager extends PortfolioElementManager {
+  isDatabaseBacked(): boolean;
+  saveReplacement(expected: IElement, replacement: IElement, filePath?: string): Promise<void>;
+  deleteLoaded(element: IElement): Promise<void>;
+}
+
+interface ConcurrencyAwareMemoryManager extends PortfolioElementManager {
+  isDatabaseBacked(): boolean;
+  runFileMutationExclusive<T>(memory: Memory, operation: (current: Memory) => Promise<T>): Promise<T>;
+  runFileDeleteExclusive<T>(memoryName: string, operation: (current?: Memory) => Promise<T>): Promise<T>;
+  saveReplacement(expected: Memory, replacement: Memory, filePath?: string): Promise<void>;
+  deleteLoaded(memory: Memory): Promise<void>;
+}
+
 export type ManagerBackedPortfolioManagers = Readonly<Record<ConsolePortfolioElementType, PortfolioElementManager>>;
 
 export interface ManagerBackedPortfolioElementStoreOptions {
@@ -46,6 +64,8 @@ export interface ManagerBackedPortfolioElementStoreOptions {
 }
 
 export class ManagerBackedPortfolioElementStore implements IPortfolioElementStore {
+  private readonly mutationLock = new AsyncKeyedLock();
+
   constructor(private readonly options: ManagerBackedPortfolioElementStoreOptions) {}
 
   async summarizeByUser(userId: string): Promise<readonly ConsolePortfolioElementSummaryRecord[]> {
@@ -91,62 +111,116 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     canonicalName: string,
   ): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(userId);
-    const element = await this.findElement(type, canonicalName);
+    let element = await this.findElement(type, canonicalName);
     if (!element) return null;
+    const manager = this.manager(type);
+    if (isConcurrencyAwareMemoryManager(type, manager) && !manager.isDatabaseBacked()) {
+      element = await manager.runFileMutationExclusive(element as Memory, current => Promise.resolve(current));
+    }
     return clonePortfolioElementDetailRecord(await this.toRecord(userId, type, element));
   }
 
   async create(input: ConsolePortfolioElementCreateInput): Promise<ConsolePortfolioElementDetailRecord> {
     this.assertAmbientUser(input.userId);
-    const manager = this.manager(input.type);
     const canonicalName = canonicalizePortfolioElementName(input.name);
+    return this.mutationLock.runExclusive(this.mutationKey(input.userId, input.type, canonicalName), async () => {
+    const manager = this.manager(input.type);
     if (await this.findElement(input.type, canonicalName)) {
       throw new PortfolioElementAlreadyExistsError();
     }
     const element = await manager.importElement(rawContentFromInput(input, input.type), managerFormatForType(input.type));
-    await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
+    try {
+      await manager.save(element, elementPath(manager, canonicalName), { exclusive: true });
+    } catch (error) {
+      if (isAlreadyExistsError(error)) throw new PortfolioElementAlreadyExistsError();
+      throw error;
+    }
     // Re-read the persisted element so the returned record (and its ETag) match
     // what a subsequent GET produces — the persist/reload round-trip can
     // normalize content, so hashing the pre-save in-memory element would yield
     // an ETag the next conditional write rejects with 412.
     const persisted = (await this.findElement(input.type, canonicalName)) ?? element;
     return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
+    });
   }
 
   async update(input: ConsolePortfolioElementUpdateInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
-    const manager = this.manager(input.type);
-    const existing = await this.findElement(input.type, input.canonicalName);
-    if (!existing) return null;
-    const existingRecord = await this.toRecord(input.userId, input.type, existing);
-    this.assertExpectedHash(input.expectedContentHash, existingRecord);
+    return this.mutationLock.runExclusive(this.mutationKey(input.userId, input.type, input.canonicalName), async () => {
+      const manager = this.manager(input.type);
+      const existing = await this.findElement(input.type, input.canonicalName);
+      if (!existing) return null;
+      const updateCurrent = async (current: IElement) => {
+        const existingRecord = await this.toRecord(input.userId, input.type, current);
+        this.assertExpectedHash(input.expectedContentHash, existingRecord);
 
-    const updatedRaw = rawContentFromInput({
-      name: existingRecord.name,
-      displayName: input.displayName === undefined ? existingRecord.displayName : input.displayName,
-      metadata: input.metadata ?? existingRecord.metadata,
-      content: input.content ?? existingRecord.content,
-      tags: input.tags ?? existingRecord.tags,
-    }, input.type);
-    const updated = await manager.importElement(updatedRaw, managerFormatForType(input.type));
-    await manager.save(updated, elementPath(manager, existingRecord.canonicalName));
-    // Re-read so the returned record/ETag match a subsequent GET (see create()).
-    const persisted = (await this.findElement(input.type, existingRecord.canonicalName)) ?? updated;
-    return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
+        const updatedRaw = rawContentFromInput({
+          name: existingRecord.name,
+          displayName: input.displayName === undefined ? existingRecord.displayName : input.displayName,
+          metadata: input.metadata ?? existingRecord.metadata,
+          content: input.content ?? existingRecord.content,
+          tags: input.tags ?? existingRecord.tags,
+        }, input.type);
+        const updated = await manager.importElement(updatedRaw, managerFormatForType(input.type));
+        const updatedCanonicalName = canonicalizePortfolioElementName(updated.metadata.name);
+        const targetPath = elementPath(manager, updatedCanonicalName);
+        if (isConcurrencyCapableManager(manager) || isConcurrencyAwareMemoryManager(input.type, manager)) {
+          await manager.saveReplacement(current as Memory, updated as Memory, targetPath);
+        } else {
+          await manager.save(updated, targetPath);
+        }
+        // Re-read so the returned record/ETag match a subsequent GET (see create()).
+        const persisted = (await this.findElement(input.type, updatedCanonicalName)) ?? updated;
+        return clonePortfolioElementDetailRecord(await this.toRecord(input.userId, input.type, persisted));
+      };
+
+      try {
+        if (isConcurrencyAwareMemoryManager(input.type, manager) && !manager.isDatabaseBacked()) {
+          return await manager.runFileMutationExclusive(existing as Memory, updateCurrent);
+        }
+        return await updateCurrent(existing);
+      } catch (error) {
+        if (isDurableMutationConflict(error)) throw new PortfolioElementVersionConflictError();
+        throw error;
+      }
+    });
   }
 
   async delete(input: ConsolePortfolioElementDeleteInput): Promise<ConsolePortfolioElementDetailRecord | null> {
     this.assertAmbientUser(input.userId);
-    const manager = this.manager(input.type);
-    const existing = await this.findElement(input.type, input.canonicalName);
-    if (!existing) return null;
-    const existingRecord = await this.toRecord(input.userId, input.type, existing);
-    this.assertExpectedHash(input.expectedContentHash, existingRecord);
-    await manager.delete(elementPath(manager, existingRecord.canonicalName));
-    return clonePortfolioElementDetailRecord({
-      ...existingRecord,
-      updatedAt: input.now,
+    return this.mutationLock.runExclusive(this.mutationKey(input.userId, input.type, input.canonicalName), async () => {
+      const manager = this.manager(input.type);
+      const existing = await this.findElement(input.type, input.canonicalName);
+      if (!existing) return null;
+      const deleteCurrent = async (current: IElement) => {
+        const existingRecord = await this.toRecord(input.userId, input.type, current);
+        this.assertExpectedHash(input.expectedContentHash, existingRecord);
+        if (isConcurrencyCapableManager(manager) || isConcurrencyAwareMemoryManager(input.type, manager)) {
+          await manager.deleteLoaded(current as Memory);
+        } else {
+          await manager.delete(elementPath(manager, existingRecord.canonicalName));
+        }
+        return clonePortfolioElementDetailRecord({
+          ...existingRecord,
+          updatedAt: input.now,
+        });
+      };
+
+      try {
+        if (isConcurrencyAwareMemoryManager(input.type, manager) && !manager.isDatabaseBacked()) {
+          return await manager.runFileDeleteExclusive(existing.metadata.name, current =>
+            current ? deleteCurrent(current) : Promise.resolve(null));
+        }
+        return await deleteCurrent(existing);
+      } catch (error) {
+        if (isDurableMutationConflict(error)) throw new PortfolioElementVersionConflictError();
+        throw error;
+      }
     });
+  }
+
+  private mutationKey(userId: string, type: ConsolePortfolioElementType, canonicalName: string): string {
+    return `${userId}:${type}:${canonicalizePortfolioElementName(canonicalName)}`;
   }
 
   private manager(type: ConsolePortfolioElementType): PortfolioElementManager {
@@ -250,6 +324,42 @@ export class ManagerBackedPortfolioElementStore implements IPortfolioElementStor
     }
     return manager.exportElement(element, managerFormatForType(type));
   }
+}
+
+function isDurableMutationConflict(error: unknown): boolean {
+  return error instanceof StorageVersionConflictError
+    || error instanceof StorageAlreadyExistsError
+    || error instanceof MemoryPersistenceConflictError
+    || (error as NodeJS.ErrnoException | undefined)?.code === 'ENOENT'
+    || (error as { code?: unknown } | undefined)?.code === '23505'
+    || (error instanceof Error
+      && (error as Error & { code?: string }).code === 'MEMORY_PERSISTENCE_CONFLICT');
+}
+
+function isAlreadyExistsError(error: unknown): boolean {
+  return error instanceof StorageAlreadyExistsError
+    || (error as NodeJS.ErrnoException | undefined)?.code === 'EEXIST'
+    || (error as { code?: unknown } | undefined)?.code === '23505';
+}
+
+function isConcurrencyAwareMemoryManager(
+  type: ConsolePortfolioElementType,
+  manager: PortfolioElementManager,
+): manager is ConcurrencyAwareMemoryManager {
+  const candidate = manager as Partial<ConcurrencyAwareMemoryManager>;
+  return type === 'memories'
+    && typeof candidate.isDatabaseBacked === 'function'
+    && typeof candidate.runFileMutationExclusive === 'function'
+    && typeof candidate.runFileDeleteExclusive === 'function'
+    && typeof candidate.saveReplacement === 'function'
+    && typeof candidate.deleteLoaded === 'function';
+}
+
+function isConcurrencyCapableManager(manager: PortfolioElementManager): manager is DurableConcurrencyManager {
+  const candidate = manager as Partial<DurableConcurrencyManager>;
+  return typeof candidate.isDatabaseBacked === 'function'
+    && typeof candidate.saveReplacement === 'function'
+    && typeof candidate.deleteLoaded === 'function';
 }
 
 function rawContentFromInput(input: {

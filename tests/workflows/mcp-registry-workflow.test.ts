@@ -330,16 +330,15 @@ describe('MCP Registry Workflow Configuration', () => {
       workflowContent = readFileSync(WORKFLOW_FILE, 'utf-8');
     });
 
-    test('should use pinned action versions', () => {
-      // Check for @v4 style pinning (not @main or @latest)
-      const actionRegex = /uses:.*@v\d+/g;
-      const matches = workflowContent.match(actionRegex);
-      expect(matches).not.toBeNull();
-      expect(matches!.length).toBeGreaterThan(0);
+    test('should pin actions to immutable commits with version comments', () => {
+      const actionLines = workflowContent
+        .split('\n')
+        .filter(line => /^\s*uses:\s*[^.]/.test(line));
 
-      // Ensure no @main or @latest
-      expect(workflowContent).not.toMatch(/uses:.*@main/);
-      expect(workflowContent).not.toMatch(/uses:.*@latest/);
+      expect(actionLines.length).toBeGreaterThan(0);
+      for (const line of actionLines) {
+        expect(line).toMatch(/uses:\s*[\w.-]+\/[\w./-]+@[a-f0-9]{40}\s+#\s+v\d+(?:\.\d+){0,2}/);
+      }
     });
 
     test('should specify Node.js version', () => {

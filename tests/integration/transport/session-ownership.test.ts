@@ -19,6 +19,8 @@ import * as path from 'node:path';
 import * as net from 'node:net';
 import type { AddressInfo } from 'node:net';
 import { EmbeddedAuthorizationServer } from '../../../src/auth/embedded-as/EmbeddedAuthorizationServer.js';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { TrivialConsentMethod } from '../../../src/auth/embedded-as/methods/TrivialConsentMethod.js';
 import { InMemoryAuthStorageLayer } from '../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 import { createUnifiedAuthMiddleware } from '../../../src/auth/authMiddleware.js';
@@ -80,6 +82,8 @@ describe('StreamableHTTP session-to-subject binding (H7)', () => {
   let mcpUrl: string;
   let tokenForUserA: string;
   let tokenForUserB: string;
+  let canonicalUserIds: Map<string, string>;
+  let authorizationGenerations: Map<string, number>;
 
   beforeEach(async () => {
     testDir = await fs.mkdtemp(path.join(os.tmpdir(), 'session-binding-'));
@@ -97,14 +101,25 @@ describe('StreamableHTTP session-to-subject binding (H7)', () => {
       methods: [new TrivialConsentMethod({ defaultSubject: 'unused' })],
       storage: new InMemoryAuthStorageLayer(),
     });
+    canonicalUserIds = new Map([
+      ['local_user-a', '018f3d47-73ae-7f10-a0de-0742618d4fb1'],
+      ['local_user-b', '118f3d47-73ae-7f10-a0de-0742618d4fb2'],
+    ]);
+    authorizationGenerations = new Map([
+      ['local_user-a', 1],
+      ['local_user-b', 1],
+    ]);
 
     runtime = await createStreamableHttpRuntime(
       async (transport, authClaims) => {
-        // Minimal session attachment: connect, expose a single tool list
-        // so dispatch has something to do, and dispose on close.
-        await transport.start();
+        const server = new Server(
+          { name: 'session-binding-test', version: '0.0.1' },
+          { capabilities: { tools: {} } },
+        );
+        server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [] }));
+        await server.connect(transport);
         return {
-          dispose: async () => { /* nothing extra to tear down */ },
+          dispose: async () => server.close(),
           authClaims,
         } as never; // Loose any: the test only asserts HTTP status codes.
       },
@@ -120,6 +135,15 @@ describe('StreamableHTTP session-to-subject binding (H7)', () => {
         authMiddleware: createUnifiedAuthMiddleware({
           provider,
           protectedResourceMetadataUrl: provider.getProtectedResourceMetadataUrl(),
+          claimsAuthority: {
+            validateCurrentClaims: async claims => {
+              const userId = canonicalUserIds.get(claims.sub);
+              if (!userId) return { ok: false, reason: 'account unavailable' };
+              claims.userId = userId;
+              claims.authzVersion = authorizationGenerations.get(claims.sub) ?? 1;
+              return { ok: true };
+            },
+          },
         }),
       },
     );
@@ -168,6 +192,40 @@ describe('StreamableHTTP session-to-subject binding (H7)', () => {
     expect(dispatchResp.status).toBe(403);
     const body = await dispatchResp.json() as { error?: { message?: string } };
     expect(body.error?.message ?? '').toMatch(/Session does not belong to the authenticated user/);
+  }, 20_000);
+
+  it('rejects an existing session after the same subject is relinked to another account', async () => {
+    const aSession = await initializeWithToken(tokenForUserA);
+    expect(aSession.status).toBe(200);
+    expect(aSession.sessionId).toBeTruthy();
+
+    canonicalUserIds.set('local_user-a', '218f3d47-73ae-7f10-a0de-0742618d4fb3');
+    const response = await postJson(mcpUrl, TOOL_LIST_BODY, {
+      Authorization: `Bearer ${tokenForUserA}`,
+      'mcp-session-id': aSession.sessionId!,
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { message: expect.stringMatching(/Session does not belong/u) },
+    });
+  }, 20_000);
+
+  it('rejects an existing session after the principal authorization generation changes', async () => {
+    const aSession = await initializeWithToken(tokenForUserA);
+    expect(aSession.status).toBe(200);
+    expect(aSession.sessionId).toBeTruthy();
+
+    authorizationGenerations.set('local_user-a', 2);
+    const response = await postJson(mcpUrl, TOOL_LIST_BODY, {
+      Authorization: `Bearer ${tokenForUserA}`,
+      'mcp-session-id': aSession.sessionId!,
+    });
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { message: expect.stringMatching(/Session does not belong/u) },
+    });
   }, 20_000);
 
   it('user B cannot SSE-attach (GET) to user A\'s session', async () => {

@@ -52,6 +52,7 @@ export class ConsoleStoreCleanupScheduler {
   private readonly stores: ConsoleStoreCleanupStores;
   private readonly intervalMs: number;
   private readonly now: () => Date;
+  private readonly runtimeNow?: () => Date;
   private readonly reportError?: (error: ConsoleStoreCleanupError) => void;
   private running = false;
 
@@ -62,6 +63,7 @@ export class ConsoleStoreCleanupScheduler {
     }
     this.stores = options.stores;
     this.now = options.now ?? (() => new Date());
+    this.runtimeNow = options.now;
     this.reportError = options.reportError;
   }
 
@@ -104,7 +106,7 @@ export class ConsoleStoreCleanupScheduler {
       if (this.stores.runtimeSessionControlStore) {
         removed.runtimeSessionPresence = await this.sweepRuntimePresence(
           this.stores.runtimeSessionControlStore,
-          before,
+          this.runtimeNow?.(),
           errors,
         );
       }
@@ -132,7 +134,7 @@ export class ConsoleStoreCleanupScheduler {
 
   private async sweepRuntimePresence(
     store: RuntimePresenceSweepStore,
-    before: Date,
+    before: Date | undefined,
     errors: ConsoleStoreCleanupError[],
   ): Promise<number> {
     try {

@@ -4,6 +4,8 @@
  */
 
 import * as path from 'node:path';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { isDeepStrictEqual } from 'node:util';
 
 import { Agent } from './Agent.js';
 import {
@@ -49,9 +51,20 @@ import {
 } from './safetyTierService.js';
 import type { ElementManagerDeps } from '../base/BaseElementManager.js';
 import { BaseElementManager } from '../base/BaseElementManager.js';
-import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { getElementPersistenceRevision } from '../base/ElementPersistenceRevision.js';
+import {
+  isCompareAndSwapStorageLayer,
+  isWritableStorageLayer,
+} from '../../storage/IStorageLayer.js';
 import { AGENT_STATE_MAX_YAML_SIZE, FileAgentStateStore } from '../../storage/FileAgentStateStore.js';
-import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
+import type { AgentStateKey, IAgentStateStore } from '../../storage/IAgentStateStore.js';
+import {
+  AgentSnapshotReplacementJournal,
+  canonicalAgentMutationIdentity,
+  type IAgentSnapshotReplacementJournal,
+  type AgentSnapshotReplacementJournalEntry,
+  type AgentSnapshotReplacementRecord,
+} from './AgentSnapshotReplacementJournal.js';
 
 /**
  * Minimal interface for an element manager resolved by name.
@@ -72,6 +85,7 @@ export interface ResolvedElementManager {
 export interface AgentManagerDeps extends ElementManagerDeps {
   baseDir: string;
   stateStore?: IAgentStateStore;
+  replacementJournal?: IAgentSnapshotReplacementJournal;
   /** Issue #1948: Resolves any element manager by name (for element-agnostic activation). */
   elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
   /** Issue #1948: DangerZoneEnforcer for autonomy evaluation. */
@@ -97,11 +111,14 @@ import { ElementMessages } from '../../utils/elementMessages.js';
 import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
+import { afterAgentReplacementCommit } from '../../storage/AgentReplacementTransactionContext.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
-const MAX_YAML_SIZE = AGENT_STATE_MAX_YAML_SIZE;
-const MAX_FILE_SIZE = 100 * 1024;
+const MAX_AGENT_STATE_YAML_SIZE = AGENT_STATE_MAX_YAML_SIZE;
+const PROCESS_AGENT_STATE_OPERATION_LOCK = new AsyncKeyedLock();
+const PROCESS_AGENT_REPLACEMENT_RECOVERY_LOCK = new AsyncKeyedLock();
+const PROCESS_AGENT_LOCK_CONTEXT = new AsyncLocalStorage<ReadonlySet<string>>();
 
 // Issue #83: Centralized active element limits (configurable via env vars)
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
@@ -145,6 +162,17 @@ export interface ExecutionGenerationObservation {
   release: () => void;
 }
 
+function cloneAgentState(state: Readonly<AgentState>, stateVersion: number): AgentState {
+  return {
+    ...structuredClone(state),
+    stateVersion,
+  };
+}
+
+function statesMatch(left: AgentState | null, right: AgentState | null): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateCache: Map<string, AgentState> = new Map();
   private readonly stateStore: IAgentStateStore;
@@ -152,7 +180,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly recoverySourceAgents = new WeakMap<Agent, Agent>();
   private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   // Covers direct/legacy manager entry points that bypass AgentExecutionHandler.
-  private readonly stateOperationLock = new AsyncKeyedLock();
+  private readonly stateOperationLock = PROCESS_AGENT_STATE_OPERATION_LOCK;
+  private readonly replacementRecoveryLock = PROCESS_AGENT_REPLACEMENT_RECOVERY_LOCK;
   private readonly triggerValidationService: TriggerValidationService;
   private readonly validationService: ValidationService;
   private readonly serializationService: SerializationService;
@@ -165,6 +194,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private _dangerZoneEnforcer?: DangerZoneBlocker;
   private _verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
   private static warnedDbModeOrphanedStateFiles = false;
+  private readonly replacementJournal: IAgentSnapshotReplacementJournal;
 
   constructor(deps: AgentManagerDeps) {
     const elementDirOverride = path.join(deps.baseDir, ElementType.AGENT);
@@ -193,6 +223,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     this.serializationService = deps.serializationService;
     this.metadataService = deps.metadataService;
     this.stateStore = deps.stateStore || this.createDefaultStateStore(deps);
+    if (isWritableStorageLayer(this.storageLayer) && !deps.replacementJournal) {
+      throw new Error('Database agent storage requires a durable database replacement journal');
+    }
+    this.replacementJournal = deps.replacementJournal || this.createDefaultReplacementJournal();
     // Issue #1948: Instance-injected dependencies (replaces static resolvers)
     this._elementManagerResolver = deps.elementManagerResolver;
     this._dangerZoneEnforcer = deps.dangerZoneEnforcer;
@@ -207,6 +241,10 @@ export class AgentManager extends BaseElementManager<Agent> {
     return path.join(this.elementDir, STATE_DIRECTORY);
   }
 
+  private get replacementJournalDir(): string {
+    return path.join(this.stateDir, '.replacements');
+  }
+
   private createDefaultStateStore(deps: AgentManagerDeps): IAgentStateStore {
     return new FileAgentStateStore({
       stateDir: () => this.stateDir,
@@ -214,8 +252,12 @@ export class AgentManager extends BaseElementManager<Agent> {
       fileOperations: deps.fileOperationsService,
       serializationService: deps.serializationService,
       stateCache: this.stateCache,
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: MAX_AGENT_STATE_YAML_SIZE,
     });
+  }
+
+  private createDefaultReplacementJournal(): IAgentSnapshotReplacementJournal {
+    return new AgentSnapshotReplacementJournal(() => this.replacementJournalDir);
   }
 
   /** Issue #1946: Per-session activation state via base class helper. */
@@ -254,6 +296,8 @@ export class AgentManager extends BaseElementManager<Agent> {
   async initialize(): Promise<void> {
     await this.fileOperations.createDirectory(this.elementDir);
     await this.fileOperations.createDirectory(this.stateDir);
+    await this.replacementJournal.initialize();
+    await this.recoverPendingSnapshotReplacements();
     logger.info('AgentManager initialized', { path: this.elementDir });
   }
 
@@ -549,9 +593,23 @@ export class AgentManager extends BaseElementManager<Agent> {
     content?: string
   ): Promise<boolean> {
     const sanitizedName = sanitizeInput(name, 100);
+    return this.runSerializedAgentStateOperation(
+      sanitizedName,
+      async () => {
+        await this.recoverPendingSnapshotReplacements(sanitizedName);
+        return this.updateUnlocked(sanitizedName, updates, content);
+      },
+    );
+  }
+
+  private async updateUnlocked(
+    sanitizedName: string,
+    updates: Partial<AgentMetadata>,
+    content?: string,
+  ): Promise<boolean> {
     const agent = await this.read(sanitizedName);
     if (!agent) {
-      logger.warn(`Agent not found for update: ${name}`);
+      logger.warn(`Agent not found for update: ${sanitizedName}`);
       return false;
     }
 
@@ -622,7 +680,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       };
     }
 
-    await this.save(agent, this.getFilename(sanitizedName));
+    await this.saveUnlocked(agent, this.getFilename(sanitizedName));
     logger.info(`Agent updated: ${sanitizedName}`);
     return true;
   }
@@ -670,7 +728,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // Use SerializationService for frontmatter parsing
     const result = this.serializationService.parseFrontmatter(data, {
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
       validateContent: false,
       source: 'AgentManager.importElement'
     });
@@ -708,6 +766,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * work (path normalization, size guard, state hydration) runs around it.
    */
   override async load(filePath: string): Promise<Agent> {
+    await this.recoverPendingSnapshotReplacements(this.stripExtension(filePath));
     const sanitizedInput = sanitizeInput(filePath, 255);
 
     // DB mode: the storage layer indexes by UUID, not filesystem path. Pass the
@@ -742,11 +801,11 @@ export class AgentManager extends BaseElementManager<Agent> {
    * diagnostic we want to preserve for operators and callers.
    */
   protected override parseContent(content: string): { data: Record<string, unknown>; content: string } {
-    if (content.length > MAX_FILE_SIZE) {
-      throw new Error(`Agent file exceeds maximum size of ${MAX_FILE_SIZE} bytes`);
+    if (content.length > SECURITY_LIMITS.MAX_FILE_SIZE) {
+      throw new Error(`Agent file exceeds maximum size of ${SECURITY_LIMITS.MAX_FILE_SIZE} bytes`);
     }
     const result = this.serializationService.parseFrontmatter(content, {
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
       validateContent: false,
       source: 'AgentManager.parseContent',
     });
@@ -789,6 +848,20 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Override BaseElementManager.save to persist state when required.
    */
   override async save(agent: Agent, filePath: string, options?: { exclusive?: boolean }): Promise<void> {
+    await this.runSerializedAgentStateOperation(
+      agent.metadata.name,
+      async () => {
+        await this.recoverPendingSnapshotReplacements(agent.metadata.name);
+        await this.saveUnlocked(agent, filePath, options);
+      },
+    );
+  }
+
+  private async saveUnlocked(
+    agent: Agent,
+    filePath: string,
+    options?: { exclusive?: boolean },
+  ): Promise<void> {
     // In DB mode, filePath is a UUID — pass it through unchanged. Appending
     // `.md` would break storage-layer lookups which index by UUID, not path.
     // In file mode, normalize to a `<name>.md` filename for on-disk storage.
@@ -806,10 +879,555 @@ export class AgentManager extends BaseElementManager<Agent> {
         ? agent.metadata.name
         : this.stripExtension(sanitizedPath);
       const newVersion = await this.saveAgentState(agent, stateName, agent.getState());
-      agent[COMMIT_PERSISTED_VERSION](newVersion);  // Sync agent's internal version (Issue #123 fix)
-      agent.markStatePersisted();
-      this.hydratedAgents.add(agent);
+      const commitState = () => {
+        agent[COMMIT_PERSISTED_VERSION](newVersion);
+        agent.markStatePersisted();
+        this.hydratedAgents.add(agent);
+      };
+      if (!afterAgentReplacementCommit(commitState)) commitState();
     }
+  }
+
+  /**
+   * Replace an agent definition and make the sidecar state match the imported
+   * snapshot. Ordinary save intentionally leaves clean runtime state alone;
+   * snapshot replacement must instead remove omitted state or force an included
+   * state snapshot through the optimistic state-store contract.
+   */
+  async replaceFromSnapshot(
+    agent: Agent,
+    filePath: string,
+    options: { readonly stateIncluded: boolean; readonly expected?: Agent },
+  ): Promise<void> {
+    await this.runSerializedAgentStateOperation(agent.metadata.name, async () => {
+      await this.recoverPendingSnapshotReplacements(agent.metadata.name);
+      const isDb = isWritableStorageLayer(this.storageLayer);
+      const sanitizedPath = isDb
+        ? sanitizeInput(filePath, 255)
+        : this.normalizeAgentFilePath(filePath);
+      const previousAgent = await this.read(agent.metadata.name);
+      if (!previousAgent) {
+        throw new ElementNotFoundError(this.getElementLabel(), agent.metadata.name);
+      }
+
+      const stateName = isDb ? previousAgent.metadata.name : this.stripExtension(sanitizedPath);
+      const stateKey = {
+        name: stateName,
+        agentElementId: this.getAgentElementId(previousAgent, stateName),
+        sessionId: isDb
+          ? this.contextTracker?.getSessionContext()?.sessionId
+          : undefined,
+      };
+      const persistencePath = isDb ? stateKey.agentElementId : sanitizedPath;
+      const previousState = await this.stateStore.load(stateKey, { strict: true });
+      const expectedVersion = previousState?.stateVersion ?? 0;
+      const intendedState = options.stateIncluded
+        ? cloneAgentState(agent.getState(), expectedVersion)
+        : null;
+      const previousDefinition = await this.readExactDefinition(persistencePath, isDb);
+      if (options.expected) {
+        const expectedRevision = getElementPersistenceRevision(options.expected);
+        const expectedMatches = expectedRevision
+          ? expectedRevision.rawContent === previousDefinition
+          : options.expected.serializeToJSON() === previousAgent.serializeToJSON();
+        if (!expectedMatches) {
+          throw new Error(`Agent definition changed concurrently while replacing '${agent.metadata.name}'`);
+        }
+      }
+      const intendedDefinition = await this.serializeElement(agent);
+      const journal = await this.replacementJournal.create({
+        agentName: agent.metadata.name,
+        filePath: persistencePath,
+        isDatabaseMode: isDb,
+        stateKey,
+        stateIncluded: options.stateIncluded,
+        previousAgentJson: previousAgent.serializeToJSON(),
+        intendedAgentJson: agent.serializeToJSON(),
+        previousDefinition,
+        intendedDefinition,
+        previousState,
+        intendedState,
+      });
+      let definitionWriteAttempted = false;
+      let appliedState: AgentState | null | undefined;
+
+      try {
+        const stateMutation = await this.replacementJournal.runWhileOwned(journal, async () => {
+          if (!options.stateIncluded) {
+            await this.stateStore.delete(stateKey, {
+              expectedVersion,
+              requireExisting: previousState !== null,
+            });
+            return { appliedState: null, persistedVersion: 0 } as const;
+          } else {
+            if (!intendedState) {
+              throw new Error('Agent snapshot replacement is missing its intended state');
+            }
+            const replacementState = cloneAgentState(intendedState, expectedVersion);
+            const persistedVersion = await this.stateStore.save(
+              stateKey,
+              replacementState,
+              expectedVersion,
+              { preserveSessionCount: true },
+            );
+            return {
+              appliedState: cloneAgentState(replacementState, persistedVersion),
+              persistedVersion,
+            } as const;
+          }
+        });
+        if (isDb) {
+          afterAgentReplacementCommit(() => {
+            agent[COMMIT_PERSISTED_VERSION](stateMutation.persistedVersion);
+          });
+        } else {
+          appliedState = stateMutation.appliedState;
+          agent[COMMIT_PERSISTED_VERSION](stateMutation.persistedVersion);
+        }
+
+        const definitionReplaced = await this.replacementJournal.runWhileOwned(journal, async () => {
+          if (!isDb) definitionWriteAttempted = true;
+          return this.compareAndSwapDefinition(
+            persistencePath,
+            previousDefinition,
+            intendedDefinition,
+            agent,
+            isDb,
+          );
+        });
+        if (!definitionReplaced) {
+          throw new Error(`Agent definition changed concurrently while replacing '${agent.metadata.name}'`);
+        }
+
+        await this.replacementJournal.assertOwnership(journal);
+        const finalizeAgent = () => {
+          agent.markStatePersisted();
+          this.hydratedAgents.add(agent);
+        };
+        if (!afterAgentReplacementCommit(finalizeAgent)) finalizeAgent();
+        await this.replacementJournal.remove(journal.journalPath, journal.record.leaseToken);
+      } catch (error) {
+        if (isDb) throw error;
+        const rollbackErrors: unknown[] = [];
+        if (definitionWriteAttempted) {
+          try {
+            const restored = await this.replacementJournal.runWhileOwned(journal, () =>
+              this.compareAndSwapDefinition(
+                persistencePath,
+                intendedDefinition,
+                previousDefinition,
+                previousAgent,
+                isDb,
+              )
+            );
+            if (!restored) {
+              throw new Error(
+                `Agent definition changed concurrently while rolling back '${agent.metadata.name}'`,
+              );
+            }
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (appliedState !== undefined) {
+          const stateToRestoreFrom = appliedState;
+          try {
+            const restoredState = await this.replacementJournal.runWhileOwned(journal, () =>
+              this.restoreAgentStateSnapshot(
+                stateKey,
+                previousState,
+                stateToRestoreFrom,
+              )
+            );
+            this.applyRestoredAgentState(previousAgent, restoredState);
+          } catch (rollbackError) {
+            rollbackErrors.push(rollbackError);
+          }
+        }
+        if (rollbackErrors.length > 0) {
+          await this.releaseReplacementOwnership(
+            journal,
+            [error, ...rollbackErrors],
+            `Agent snapshot replacement rollback failed for '${agent.metadata.name}'`,
+          );
+          throw new AggregateError(
+            [error, ...rollbackErrors],
+            `Agent snapshot replacement rollback failed for '${agent.metadata.name}'`,
+          );
+        }
+        try {
+          await this.replacementJournal.remove(journal.journalPath, journal.record.leaseToken);
+        } catch (journalError) {
+          await this.releaseReplacementOwnership(
+            journal,
+            [error, journalError],
+            `Agent snapshot replacement journal cleanup failed for '${agent.metadata.name}'`,
+          );
+          throw new AggregateError(
+            [error, journalError],
+            `Agent snapshot replacement journal cleanup failed for '${agent.metadata.name}'`,
+          );
+        }
+        throw error;
+      }
+    });
+  }
+
+  private async recoverPendingSnapshotReplacements(blockedAgentName?: string): Promise<void> {
+    const entries = await this.replacementRecoveryLock.runExclusive(
+      this.replacementJournalDir,
+      () => this.replacementJournal.list(),
+    );
+    for (const entry of entries) {
+      const matchesBlockedAgent = blockedAgentName === undefined || this.replacementEntryMatchesAgent(
+        entry,
+        blockedAgentName,
+      );
+      if (!matchesBlockedAgent) continue;
+      const claimedEntry = await this.replacementJournal.claimForRecovery(entry);
+      if (!claimedEntry) {
+        if (blockedAgentName !== undefined) {
+          throw new Error(
+            `Agent snapshot replacement is still active for '${entry.record.agentName}'`,
+          );
+        }
+        continue;
+      }
+      await this.runSerializedAgentStateOperation(
+        claimedEntry.record.agentName,
+        async () => {
+          try {
+            await this.replacementJournal.assertOwnership(claimedEntry);
+            await this.recoverSnapshotReplacement(claimedEntry);
+          } catch (error) {
+            if (blockedAgentName !== undefined) {
+              await this.releaseReplacementOwnership(
+                claimedEntry,
+                [error],
+                `Agent snapshot replacement recovery failed for '${claimedEntry.record.agentName}'`,
+              );
+              throw error;
+            }
+            if (this.isTerminalReplacementRecoveryError(error)) {
+              await this.replacementJournal.quarantine(
+                claimedEntry,
+                error instanceof Error ? error.message : String(error),
+              );
+              logger.error('Quarantined unrecoverable agent snapshot replacement', {
+                agentName: claimedEntry.record.agentName,
+                operationId: claimedEntry.record.operationId,
+                error,
+              });
+            } else {
+              await this.releaseReplacementOwnership(
+                claimedEntry,
+                [error],
+                `Deferred agent snapshot replacement recovery failed for '${claimedEntry.record.agentName}'`,
+              );
+              logger.warn('Deferred failed agent snapshot replacement recovery', {
+                agentName: claimedEntry.record.agentName,
+                operationId: claimedEntry.record.operationId,
+                error,
+              });
+            }
+          }
+        },
+      );
+    }
+  }
+
+  private async releaseReplacementOwnership(
+    entry: AgentSnapshotReplacementJournalEntry,
+    causes: readonly unknown[],
+    message: string,
+  ): Promise<void> {
+    try {
+      await this.replacementJournal.releaseOwnership(entry);
+    } catch (releaseError) {
+      throw new AggregateError(
+        [...causes, releaseError],
+        `${message}; durable ownership release failed`,
+      );
+    }
+  }
+
+  private async recoverSnapshotReplacement(
+    entry: AgentSnapshotReplacementJournalEntry,
+  ): Promise<void> {
+    await this.replacementJournal.runWhileOwned(entry, () =>
+      this.recoverSnapshotReplacementWhileOwned(entry)
+    );
+    await this.replacementJournal.assertOwnership(entry);
+    await this.replacementJournal.remove(entry.journalPath, entry.record.leaseToken);
+    logger.warn('Recovered interrupted agent snapshot replacement', {
+      agentName: entry.record.agentName,
+      operationId: entry.record.operationId,
+    });
+  }
+
+  private async recoverSnapshotReplacementWhileOwned(
+    entry: AgentSnapshotReplacementJournalEntry,
+  ): Promise<void> {
+    const { record } = entry;
+    const isDb = isWritableStorageLayer(this.storageLayer);
+    if (record.isDatabaseMode !== isDb) {
+      throw new Error(
+        `Cannot recover agent replacement '${record.agentName}' after storage mode changed`,
+      );
+    }
+
+    const expectedPath = isDb
+      ? sanitizeInput(record.filePath, 255)
+      : this.normalizeAgentFilePath(record.filePath);
+    if (expectedPath !== record.filePath) {
+      throw new Error(`Agent replacement journal has an invalid path for '${record.agentName}'`);
+    }
+    if (
+      !record.stateKey.name ||
+      !record.stateKey.agentElementId ||
+      record.stateKey.agentElementId.length > 255 ||
+      record.stateIncluded !== (record.intendedState !== null)
+    ) {
+      throw new Error(`Agent replacement journal has invalid state identity for '${record.agentName}'`);
+    }
+
+    const previousAgent = this.deserializeJournalAgent(record.previousAgentJson, record.agentName);
+    this.deserializeJournalAgent(record.intendedAgentJson, record.agentName);
+    const previousState = this.deserializeJournalState(
+      record.previousAgentJson,
+      record.previousState,
+      record.agentName,
+    );
+    const intendedState = this.deserializeJournalState(
+      record.intendedAgentJson,
+      record.intendedState,
+      record.agentName,
+    );
+
+    const currentDefinition = await this.readExactDefinition(record.filePath, isDb);
+    const definitionIsPrevious = currentDefinition === record.previousDefinition;
+    const definitionIsIntended = currentDefinition === record.intendedDefinition;
+    if (!definitionIsPrevious && !definitionIsIntended) {
+      throw new Error(
+        `Agent definition changed outside pending replacement '${record.agentName}'`,
+      );
+    }
+
+    const currentState = await this.stateStore.load(record.stateKey, { strict: true });
+    const stateIsPrevious = this.agentStatePayloadsMatch(currentState, previousState);
+    const stateIsIntended = this.agentStatePayloadsMatch(currentState, intendedState);
+    if (!stateIsPrevious && !stateIsIntended) {
+      throw new Error(
+        `Agent state changed outside pending replacement '${record.agentName}'`,
+      );
+    }
+
+    if (!definitionIsPrevious) {
+      const restored = await this.compareAndSwapDefinition(
+        record.filePath,
+        record.intendedDefinition,
+        record.previousDefinition,
+        previousAgent,
+        isDb,
+      );
+      if (!restored) {
+        throw new Error(`Agent definition changed during recovery '${record.agentName}'`);
+      }
+    }
+    if (!stateIsPrevious) {
+      await this.restoreJournaledAgentState(record, previousState, currentState);
+    }
+
+  }
+
+  private replacementEntryMatchesAgent(
+    entry: AgentSnapshotReplacementJournalEntry,
+    agentName: string,
+  ): boolean {
+    return this.canonicalizeExecutionName(entry.record.agentName) ===
+      this.canonicalizeExecutionName(agentName) || entry.record.filePath === agentName;
+  }
+
+  private isTerminalReplacementRecoveryError(error: unknown): boolean {
+    if (!(error instanceof Error)) return false;
+    return [
+      'after storage mode changed',
+      'journal has an invalid',
+      'journal identity mismatch',
+      'definition changed outside pending replacement',
+      'state changed outside pending replacement',
+    ].some(fragment => error.message.includes(fragment));
+  }
+
+  private deserializeJournalAgent(serialized: string, expectedName: string): Agent {
+    const parsed: unknown = JSON.parse(serialized);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw new Error(`Agent replacement journal has invalid agent data for '${expectedName}'`);
+    }
+    const metadata = (parsed as { metadata?: unknown }).metadata;
+    if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) {
+      throw new Error(`Agent replacement journal has invalid metadata for '${expectedName}'`);
+    }
+    const agent = new Agent(metadata as AgentMetadata, this.metadataService);
+    agent.deserialize(serialized);
+    if (agent.metadata.name !== expectedName) {
+      throw new Error(`Agent replacement journal identity mismatch for '${expectedName}'`);
+    }
+    return agent;
+  }
+
+  private async readExactDefinition(filePath: string, isDb: boolean): Promise<string> {
+    if (isDb) {
+      if (!isWritableStorageLayer(this.storageLayer)) {
+        throw new Error('Database agent storage is not writable');
+      }
+      return this.storageLayer.readContent(filePath);
+    }
+    return this.fileOperations.readFile(
+      this.resolveAbsolutePath(filePath),
+      { encoding: 'utf-8' },
+    );
+  }
+
+  private async compareAndSwapDefinition(
+    filePath: string,
+    expectedContent: string,
+    replacementContent: string,
+    agent: Agent,
+    isDb: boolean,
+  ): Promise<boolean> {
+    this.validateSerializedContent(replacementContent);
+    if (isDb) {
+      if (!isCompareAndSwapStorageLayer(this.storageLayer)) {
+        throw new Error('Database agent storage does not support atomic content replacement');
+      }
+      const replaced = await this.storageLayer.compareAndSwapContent(
+        this.elementType,
+        filePath,
+        agent.metadata.name,
+        expectedContent,
+        replacementContent,
+        {
+          author: agent.metadata.author ?? '',
+          version: agent.metadata.version ?? '1.0.0',
+          description: agent.metadata.description,
+          tags: agent.metadata.tags ?? [],
+        },
+      );
+      if (replaced) {
+        const updateCache = () => this.cacheElement(agent, filePath);
+        if (!afterAgentReplacementCommit(updateCache)) updateCache();
+      }
+      return replaced;
+    }
+
+    const absolutePath = this.resolveAbsolutePath(filePath);
+    return this.fileLockManager.withLock(`element:${absolutePath}`, async () => {
+      const current = await this.fileOperations.readFile(absolutePath, { encoding: 'utf-8' });
+      if (current !== expectedContent) return false;
+      await this.fileOperations.writeFile(absolutePath, replacementContent, {
+        encoding: 'utf-8',
+        durable: true,
+      });
+      this.cacheElement(agent, filePath);
+      await this.storageLayer.notifySaved(filePath, absolutePath);
+      return true;
+    });
+  }
+
+  private deserializeJournalState(
+    serializedAgent: string,
+    state: AgentState | null,
+    expectedName: string,
+  ): AgentState | null {
+    if (!state) return null;
+    const parsed = JSON.parse(serializedAgent) as Record<string, unknown>;
+    parsed.state = state;
+    return this.deserializeJournalAgent(JSON.stringify(parsed), expectedName).getState();
+  }
+
+  private agentStatePayloadsMatch(
+    left: AgentState | null,
+    right: AgentState | null,
+  ): boolean {
+    if (!left || !right) return left === right;
+    return isDeepStrictEqual(
+      this.statePayloadForRecovery(left),
+      this.statePayloadForRecovery(right),
+    );
+  }
+
+  private statePayloadForRecovery(state: AgentState): Record<string, unknown> {
+    const cloned = structuredClone(state) as unknown as Record<string, unknown>;
+    delete cloned.stateVersion;
+    return cloned;
+  }
+
+  private async restoreJournaledAgentState(
+    record: AgentSnapshotReplacementRecord,
+    previousState: AgentState | null,
+    currentState: AgentState | null,
+  ): Promise<void> {
+    if (!previousState) {
+      if (currentState) {
+        await this.stateStore.delete(record.stateKey, {
+          expectedVersion: currentState.stateVersion,
+          requireExisting: true,
+        });
+      }
+      return;
+    }
+    const expectedVersion = currentState?.stateVersion ?? 0;
+    const rollbackState = cloneAgentState(previousState, expectedVersion);
+    await this.stateStore.save(record.stateKey, rollbackState, expectedVersion, {
+      requireExisting: currentState !== null,
+      preserveSessionCount: true,
+    });
+  }
+
+  private async restoreAgentStateSnapshot(
+    key: AgentStateKey,
+    previousState: AgentState | null,
+    appliedState: AgentState | null,
+  ): Promise<AgentState | null> {
+    const currentState = await this.stateStore.load(key, { strict: true });
+    const appliedVersionStillCurrent = appliedState === null
+      ? currentState === null
+      : currentState?.stateVersion === appliedState.stateVersion;
+    if (!appliedVersionStillCurrent) {
+      throw new Error(`Agent state changed concurrently while replacing '${key.name}'`);
+    }
+    if (statesMatch(currentState, previousState)) return currentState;
+
+    if (!previousState) {
+      if (currentState) {
+        await this.stateStore.delete(key, {
+          expectedVersion: currentState.stateVersion,
+          requireExisting: true,
+        });
+      }
+      return null;
+    }
+
+    const expectedVersion = currentState?.stateVersion ?? 0;
+    const rollbackState = cloneAgentState(previousState, expectedVersion);
+    const persistedVersion = await this.stateStore.save(key, rollbackState, expectedVersion, {
+      requireExisting: currentState !== null,
+      preserveSessionCount: true,
+    });
+    return cloneAgentState(rollbackState, persistedVersion);
+  }
+
+  private applyRestoredAgentState(agent: Agent, restoredState: AgentState | null): void {
+    const state = restoredState ?? {
+      goals: [],
+      decisions: [],
+      context: {},
+      lastActive: new Date(),
+      sessionCount: 0,
+      stateVersion: 0,
+    };
+    this.applyPersistedAgentState(agent, state);
   }
 
   /**
@@ -824,6 +1442,13 @@ export class AgentManager extends BaseElementManager<Agent> {
    * @throws Error if agent not found or save fails
    */
   async persistState(name: string): Promise<boolean> {
+    return this.runSerializedAgentStateOperation(name, async () => {
+      await this.recoverPendingSnapshotReplacements(name);
+      return this.persistStateUnlocked(name);
+    });
+  }
+
+  private async persistStateUnlocked(name: string): Promise<boolean> {
     const agent = await this.read(name);
     if (!agent) {
       throw new Error(`Agent not found: ${name}`);
@@ -834,9 +1459,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     const newVersion = await this.saveAgentState(agent, name, agent.getState());
-    agent[COMMIT_PERSISTED_VERSION](newVersion);
-    agent.markStatePersisted();
-    this.hydratedAgents.add(agent);
+    const commitState = () => {
+      agent[COMMIT_PERSISTED_VERSION](newVersion);
+      agent.markStatePersisted();
+      this.hydratedAgents.add(agent);
+    };
+    if (!afterAgentReplacementCommit(commitState)) commitState();
     return true;
   }
 
@@ -847,6 +1475,33 @@ export class AgentManager extends BaseElementManager<Agent> {
    * the normalized filename used for state file creation/loading.
    */
   override async delete(filePath: string): Promise<void> {
+    const operationName = await this.resolveAgentMutationName(filePath);
+    await this.runSerializedAgentStateOperation(
+      operationName,
+      async () => {
+        await this.recoverPendingSnapshotReplacements(operationName);
+        await this.deleteUnlocked(filePath, operationName);
+      },
+    );
+  }
+
+  private async resolveAgentMutationName(identifier: string): Promise<string> {
+    const sanitizedIdentifier = sanitizeInput(identifier, 255);
+    if (!isWritableStorageLayer(this.storageLayer)) {
+      return this.stripExtension(sanitizedIdentifier);
+    }
+    let indexedName = this.storageLayer.getNameById?.(sanitizedIdentifier);
+    if (!indexedName) {
+      indexedName = await this.storageLayer.resolveNameById(sanitizedIdentifier);
+    }
+    if (!indexedName && !this.storageLayer.hasCompletedScan()) {
+      await this.storageLayer.scan();
+      indexedName = this.storageLayer.getNameById?.(sanitizedIdentifier);
+    }
+    return indexedName ?? this.stripExtension(sanitizedIdentifier);
+  }
+
+  private async deleteUnlocked(filePath: string, resolvedName?: string): Promise<void> {
     // DB mode: filePath is a UUID, don't force `.md` extension.
     const isDb = isWritableStorageLayer(this.storageLayer);
     const sanitizedPath = isDb
@@ -857,21 +1512,21 @@ export class AgentManager extends BaseElementManager<Agent> {
     // DB callers may still supply the canonical filename used by the portfolio
     // adapter. Resolve it by logical name so we can recover elements.id before
     // deleting the associated UUID-keyed state rows.
-    const lookupPath = isDb ? this.stripExtension(sanitizedPath) : sanitizedPath;
+    const lookupPath = isDb ? (resolvedName ?? this.stripExtension(sanitizedPath)) : sanitizedPath;
     const existing = isDb
       ? await this.findByName(lookupPath).catch(() => null)
       : await this.load(lookupPath).catch(() => null);
     const name = isDb
-      ? existing?.metadata.name ?? sanitizedPath
+      ? existing?.metadata.name ?? resolvedName ?? sanitizedPath
       : this.stripExtension(sanitizedPath);
     // Agent.id is a logical runtime identifier, not necessarily elements.id.
     // The DB storage index maps the resolved metadata name to the actual UUID
     // path used by the elements and agent_states foreign-key columns.
-    const indexedElementId = isDb && existing
-      ? this.storageLayer.getPathByName(existing.metadata.name)
+    const indexedElementId = isDb
+      ? this.storageLayer.getPathByName(name)
       : undefined;
     const agentElementId = indexedElementId ?? existing?.id ?? sanitizedPath;
-    await super.delete(sanitizedPath);
+    await super.delete(isDb ? agentElementId : sanitizedPath);
 
     await this.stateStore.delete({ name, agentElementId });
   }
@@ -1131,8 +1786,16 @@ export class AgentManager extends BaseElementManager<Agent> {
     name: string,
     operation: () => Promise<T>,
   ): Promise<T> {
-    const operationKey = this.getAgentStateOperationKey(name);
-    return this.stateOperationLock.runExclusive(operationKey, operation);
+    const canonicalName = this.canonicalizeExecutionName(name);
+    const operationKey = this.getAgentStateOperationKey(canonicalName);
+    const heldLocks = PROCESS_AGENT_LOCK_CONTEXT.getStore();
+    if (heldLocks?.has(operationKey)) return operation();
+    return this.stateOperationLock.runExclusive(operationKey, () =>
+      PROCESS_AGENT_LOCK_CONTEXT.run(
+        new Set([...(heldLocks ?? []), operationKey]),
+        () => this.replacementJournal.runWithAgentMutationGate(canonicalName, operation),
+      ),
+    );
   }
 
   private getAgentStateOperationKey(name: string): string {
@@ -1208,7 +1871,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   /** Canonical identity shared by agent lookup and execution lifecycle state. */
   public canonicalizeExecutionName(name: string): string {
-    return this.normalizeFilename(name) || 'unnamed';
+    return canonicalAgentMutationIdentity(name);
   }
 
   private getExecutionGenerationKey(name: string): string {
@@ -2131,9 +2794,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       agentElementId: this.getAgentElementId(agent, name),
     });
     if (!state) {
-      if (isWritableStorageLayer(this.storageLayer)) {
-        agent[COMMIT_PERSISTED_VERSION](0);
-      }
+      // IAgentStateStore reserves version 0 for a first save in every backend.
+      // File-mode agents historically initialize at 1 in memory, so normalize
+      // an absent sidecar before the first mutation just as database mode does.
+      agent[COMMIT_PERSISTED_VERSION](0);
       this.hydratedAgents.add(agent);
       return;
     }
@@ -2276,7 +2940,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       fileOperations: this.fileOperations,
       serializationService: this.serializationService,
       stateCache: this.stateCache,
-      maxYamlSize: MAX_YAML_SIZE,
+      maxYamlSize: MAX_AGENT_STATE_YAML_SIZE,
     });
     await defaultFileStore.warnIfOrphanedStateFiles();
   }

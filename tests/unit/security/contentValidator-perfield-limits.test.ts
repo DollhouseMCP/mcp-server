@@ -61,7 +61,7 @@ describe('ContentValidator.validateMetadata per-field length limits', () => {
       ).toBeUndefined();
     });
 
-    it('rejects instructions only when over MAX_CONTENT_LENGTH (500KB)', () => {
+    it('rejects instructions only when over MAX_CONTENT_LENGTH (10 MiB)', () => {
       const metadata = {
         name: 'huge-persona',
         instructions: 'a'.repeat(SECURITY_LIMITS.MAX_CONTENT_LENGTH + 10),

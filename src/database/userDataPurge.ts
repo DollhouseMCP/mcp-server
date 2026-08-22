@@ -1,6 +1,7 @@
 import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm';
 import {
   accountAllowlistEntries,
+  agentReplacementJournals,
   approvalAuditEvents,
   authAllowlist,
   authIdentityEvents,
@@ -38,30 +39,72 @@ import {
  * `userDataPurge.drift.test.ts` fails if any table that cascades off `users.id` is neither
  * purged here nor removed transitively (see {@link USER_SCOPED_CASCADE_VIA_PARENT}).
  */
-export async function purgeUserScopedData(tx: DrizzleTx, userId: string): Promise<void> {
+export interface UserScopedPurgeSummary {
+  readonly browserSessionsRevoked: number;
+  readonly runtimeTerminationTargets: readonly UserRuntimeTerminationTarget[];
+}
+
+export interface UserRuntimeTerminationTarget {
+  readonly sessionId: string;
+  readonly replicaId: string;
+}
+
+export async function purgeUserScopedData(tx: DrizzleTx, userId: string): Promise<UserScopedPurgeSummary> {
+  const browserSessionCounts = await tx.select({
+    count: sql<number>`count(*)::int`,
+  }).from(consoleSessions).where(eq(consoleSessions.userId, userId));
+  const runtimeTerminationTargets = await tx.select({
+    sessionId: runtimeSessionPresence.sessionId,
+    replicaId: runtimeSessionPresence.replicaId,
+  }).from(runtimeSessionPresence).where(and(
+    eq(runtimeSessionPresence.userId, userId),
+    eq(runtimeSessionPresence.status, 'active'),
+  ));
   // portfolio_sync_jobs RESTRICT-references user_integrations, so it must precede it.
+  await tx.delete(agentReplacementJournals).where(eq(agentReplacementJournals.userId, userId));
   await tx.delete(sessionActivityEvents).where(eq(sessionActivityEvents.userId, userId));
   await tx.delete(portfolioSyncJobs).where(eq(portfolioSyncJobs.userId, userId));
-  await tx.delete(userIntegrations).where(eq(userIntegrations.userId, userId));
   await tx.delete(userOauthTokens).where(eq(userOauthTokens.userId, userId));
+  // Match descriptor mutation's descriptor -> callback -> credential lock order.
+  // Lock both owned descriptors and curated descriptors referenced by this
+  // principal's callbacks before deleting either side of that relationship.
+  await tx.execute(sql`
+    SELECT id
+    FROM integration_provider_descriptors
+    WHERE owner_user_id = ${userId}
+       OR id IN (
+         SELECT integration_descriptor_id
+         FROM console_login_transactions
+         WHERE user_id = ${userId}
+           AND integration_descriptor_id IS NOT NULL
+       )
+    ORDER BY id
+    FOR UPDATE
+  `);
   await tx.delete(integrationProviderDescriptors).where(eq(integrationProviderDescriptors.ownerUserId, userId));
+  await tx.delete(consoleLoginTransactions).where(eq(consoleLoginTransactions.userId, userId));
+  await tx.delete(userIntegrations).where(eq(userIntegrations.userId, userId));
   await tx.delete(securityInvalidationEvents).where(eq(securityInvalidationEvents.userId, userId));
   await tx.delete(runtimeSessionPresence).where(eq(runtimeSessionPresence.userId, userId));
   await tx.delete(sessionActivationEvents).where(eq(sessionActivationEvents.userId, userId));
   // approval_audit_events is the user's OWN gatekeeper approval decisions (cascade-off-users), not
   // the retained tamper-evident admin_audit chain — so it is erased with the account.
   await tx.delete(approvalAuditEvents).where(eq(approvalAuditEvents.userId, userId));
-  await tx.delete(consoleLoginTransactions).where(eq(consoleLoginTransactions.userId, userId));
   await tx.delete(consoleSessions).where(eq(consoleSessions.userId, userId));
   await tx.delete(sessions).where(eq(sessions.userId, userId));
   await tx.delete(userSettings).where(eq(userSettings.userId, userId));
   // elements last: cascades element_tags, element_relationships, memory_entries,
   // agent_states, ensemble_members, and element_provenance via elements.id.
   await tx.delete(elements).where(eq(elements.userId, userId));
+  return {
+    browserSessionsRevoked: Number(browserSessionCounts[0]?.count ?? 0),
+    runtimeTerminationTargets,
+  };
 }
 
 /** Physical table names purged directly by {@link purgeUserScopedData}. */
 export const USER_SCOPED_CASCADE_PURGE_TABLES: readonly string[] = [
+  'agent_replacement_journals',
   'session_activity_events',
   'portfolio_sync_jobs',
   'user_integrations',
@@ -222,15 +265,18 @@ export async function purgeNonCascadeUserIdentity(
   identity: DeletionIdentity,
   revokedByUserId: string,
   revokedAt: Date,
-): Promise<void> {
+): Promise<{ readonly oauthGrantFamiliesRevoked: number }> {
   await lockAuthPrincipalsWithTx(tx, identity.subs);
   const tombstones = identity.accountAllowlistIdentities;
   await lockAuthAllowlistIdentitiesWithTx(tx, tombstones);
+  let grantCount = 0;
   for (const sub of identity.subs) {
-    // The bootstrap claim is an authorization grant keyed outside the user
-    // tables. Clear it atomically with principal deletion so the deleted
-    // bootstrap identity cannot pass the allowlist gate and recreate itself.
-    await tx.delete(authKv).where(and(
+    // Keep bootstrap completed so deleting its original admin cannot make a
+    // configured server unready or reopen first-admin claiming. Remove only
+    // the deleted identity's authorization claim.
+    await tx.update(authKv).set({
+      payload: sql`jsonb_set(${authKv.payload} - 'adminSub' - 'adminMethod', '{completed}', 'true'::jsonb, true)`,
+    }).where(and(
       eq(authKv.model, 'AuthBootstrap'),
       eq(authKv.id, 'state'),
       sql`${authKv.payload}->>'adminSub' = ${sub}`,
@@ -244,6 +290,7 @@ export async function purgeNonCascadeUserIdentity(
     // subjects, each with a handful of grants.
     const grants = await tx.select({ id: authKv.id }).from(authKv)
       .where(and(eq(authKv.model, 'Grant'), sql`${authKv.payload}->>'accountId' = ${sub}`));
+    grantCount += grants.length;
     for (const grant of grants) {
       await tx.delete(authKv).where(sql`${authKv.payload}->>'grantId' = ${grant.id}`);
     }
@@ -297,4 +344,5 @@ export async function purgeNonCascadeUserIdentity(
       })));
     }
   }
+  return { oauthGrantFamiliesRevoked: grantCount };
 }

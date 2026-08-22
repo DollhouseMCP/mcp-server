@@ -9,6 +9,7 @@
 
 import express, { Router } from 'express';
 import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { logger } from '../../utils/logger.js';
 import type { MCPAQLHandler } from '../../handlers/mcp-aql/MCPAQLHandler.js';
 import { formatPermissionResponse } from '../../handlers/mcp-aql/evaluatePermission.js';
@@ -375,13 +376,16 @@ function extractKnownPolicySessions(elements: Array<Record<string, unknown>>): K
   return knownSessions.sort((a, b) => a.sessionId.localeCompare(b.sessionId));
 }
 
-async function selfHealLatestPermissionPortFile(port: number | undefined): Promise<void> {
+async function selfHealLatestPermissionPortFile(
+  port: number | undefined,
+  customRunDir?: string,
+): Promise<void> {
   if (typeof port !== 'number' || !Number.isInteger(port) || port <= 0) {
     return;
   }
 
   try {
-    await ensureLatestPortFile(port);
+    await ensureLatestPortFile(port, customRunDir);
   } catch (err) {
     logger.debug('[WebUI/Gateway] Could not refresh permission-server.port', {
       error: err instanceof Error ? err.message : String(err),
@@ -428,6 +432,9 @@ export function registerPermissionRoutes(
   options: RegisterPermissionRoutesOptions = {},
 ): void {
   const authorityHomeDir = options.homeDir ?? homedir();
+  const permissionRunDir = options.homeDir
+    ? join(authorityHomeDir, '.dollhouse', 'run')
+    : undefined;
   const autoRepairHookAssets = options.autoRepairHookAssets ?? process.env.NODE_ENV !== 'test';
   const decisionTracker = createPermissionDecisionTracker();
   /**
@@ -441,7 +448,7 @@ export function registerPermissionRoutes(
     PERMISSION_ROUTE_RATE_LIMIT_WINDOW_MS,
   );
   router.post('/evaluate_permission', express.json(), async (req, res) => {
-    await selfHealLatestPermissionPortFile(req.socket.localPort);
+    await selfHealLatestPermissionPortFile(req.socket.localPort, permissionRunDir);
 
     const body = req.body as {
       tool_name?: string;
@@ -525,7 +532,7 @@ export function registerPermissionRoutes(
    */
   router.get('/permissions/status', async (req, res) => {
     try {
-      await selfHealLatestPermissionPortFile(req.socket.localPort);
+      await selfHealLatestPermissionPortFile(req.socket.localPort, permissionRunDir);
 
       const sessionId = typeof req.query['sessionId'] === 'string' && req.query['sessionId']
         ? req.query['sessionId']

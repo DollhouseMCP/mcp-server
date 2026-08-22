@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@jest/globals';
+import { inspect } from 'node:util';
 import { eq } from 'drizzle-orm';
 
 import {
@@ -9,6 +10,7 @@ import {
 import {
   approvalAuditEvents,
   accountAllowlistEntries,
+  agentReplacementJournals,
   authAllowlist,
   authIdentityEvents,
   authKv,
@@ -35,6 +37,7 @@ const DELETED_AT = new Date('2026-08-19T12:00:00.000Z');
 function captureTx(
   grantRows: readonly { id: string }[] = [],
   accountAllowlistRows: readonly { kind: string; normalizedValue: string }[] = [],
+  runtimeRows: readonly { sessionId: string; replicaId: string }[] = [],
 ) {
   const deletes: { readonly table: unknown; readonly predicate: unknown }[] = [];
   const updates: { readonly table: unknown; readonly values: unknown; readonly predicate: unknown }[] = [];
@@ -48,7 +51,11 @@ function captureTx(
     select: () => ({
       from: (table: unknown) => ({
         where: () => Promise.resolve(
-          table === accountAllowlistEntries ? accountAllowlistRows : grantRows,
+          table === accountAllowlistEntries
+            ? accountAllowlistRows
+            : table === runtimeSessionPresence
+              ? runtimeRows
+              : grantRows,
         ),
       }),
     }),
@@ -162,14 +169,17 @@ describe('collectDeletionIdentity', () => {
 });
 
 describe('purgeUserScopedData', () => {
-  it('purges the whole user-owned cascade closure, scoped to the user, sync-jobs before integrations', async () => {
-    const { tx, deletes } = captureTx();
+  it('purges the whole user-owned cascade closure in dependency and lifecycle lock order', async () => {
+    const runtimeTargets = [{ sessionId: 'mcp-session-1', replicaId: 'replica-a' }];
+    const { tx, deletes, executes } = captureTx([], [], runtimeTargets);
 
-    await purgeUserScopedData(tx, USER_ID);
+    await expect(purgeUserScopedData(tx, USER_ID)).resolves.toMatchObject({
+      runtimeTerminationTargets: runtimeTargets,
+    });
 
     const tables = deletes.map(d => d.table);
     for (const table of [
-      sessionActivityEvents, portfolioSyncJobs, userIntegrations, userOauthTokens,
+      agentReplacementJournals, sessionActivityEvents, portfolioSyncJobs, userIntegrations, userOauthTokens,
       integrationProviderDescriptors, securityInvalidationEvents, runtimeSessionPresence,
       sessionActivationEvents, approvalAuditEvents, consoleLoginTransactions, consoleSessions,
       sessions, userSettings, elements,
@@ -182,6 +192,10 @@ describe('purgeUserScopedData', () => {
       .toEqual(eq(integrationProviderDescriptors.ownerUserId, USER_ID));
     // Ordering: RESTRICT dependency.
     expect(tables.indexOf(portfolioSyncJobs)).toBeLessThan(tables.indexOf(userIntegrations));
+    expect(tables.indexOf(integrationProviderDescriptors)).toBeLessThan(tables.indexOf(userIntegrations));
+    expect(tables.indexOf(integrationProviderDescriptors)).toBeLessThan(tables.indexOf(consoleLoginTransactions));
+    expect(tables.indexOf(consoleLoginTransactions)).toBeLessThan(tables.indexOf(userIntegrations));
+    expect(inspect(executes, { depth: 12 })).toContain('FOR UPDATE');
   });
 });
 
@@ -221,11 +235,12 @@ describe('purgeNonCascadeUserIdentity', () => {
       ],
     }, ADMIN_ID, DELETED_AT);
 
-    // Each subject clears a matching bootstrap claim and its account-linked K/V rows.
-    expect(deletes.filter(d => d.table === authKv)).toHaveLength(4);
+    // Each subject scrubs its bootstrap identity claim and clears account-linked K/V rows.
+    expect(deletes.filter(d => d.table === authKv)).toHaveLength(2);
+    expect(updates.filter(d => d.table === authKv)).toHaveLength(2);
     expect(deletes.filter(d => d.table === authIdentityEvents)).toHaveLength(1);
     expect(deletes.filter(d => d.table === authAllowlist)).toHaveLength(1);
-    expect(updates).toEqual([
+    expect(updates.filter(d => d.table === accountAllowlistEntries)).toEqual([
       expect.objectContaining({
         table: accountAllowlistEntries,
         values: expect.objectContaining({
@@ -269,7 +284,7 @@ describe('purgeNonCascadeUserIdentity', () => {
   });
 
   it('also purges auth_kv rows linked to the account\'s grants by grantId', async () => {
-    const { tx, deletes } = captureTx([{ id: 'grant-1' }, { id: 'grant-2' }]);
+    const { tx, deletes, updates } = captureTx([{ id: 'grant-1' }, { id: 'grant-2' }]);
 
     await purgeNonCascadeUserIdentity(
       tx,
@@ -278,8 +293,9 @@ describe('purgeNonCascadeUserIdentity', () => {
       DELETED_AT,
     );
 
-    // one subject → bootstrap claim + two grant-linked deletes + one accountId delete.
-    expect(deletes.filter(d => d.table === authKv)).toHaveLength(4);
+    // one subject → bootstrap claim scrub + two grant-linked deletes + one accountId delete.
+    expect(deletes.filter(d => d.table === authKv)).toHaveLength(3);
+    expect(updates.filter(d => d.table === authKv)).toHaveLength(1);
   });
 
   it('deletes nothing when the account has no resolvable identity', async () => {

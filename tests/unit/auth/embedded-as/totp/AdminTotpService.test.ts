@@ -80,7 +80,10 @@ describe('AdminTotpService', () => {
       enrolled: true,
       factorType: 'totp',
       enrolledAt: NOW,
+      lastUsedAt: new Date('2026-05-27T12:00:29.999Z'),
     });
+    await expect(service.prove(USER_ID, totpCodeAt(begin.secretBase32)))
+      .resolves.toEqual({ ok: false });
     await expect(service.confirmEnrollment(USER_ID, begin.pendingId, totpCodeAt(begin.secretBase32)))
       .rejects.toMatchObject({ code: 'pending_not_found' });
   });
@@ -127,7 +130,10 @@ describe('AdminTotpService', () => {
     current = FIVE_MINUTES;
     await expect(service.prove(USER_ID, totpCodeAt(begin.secretBase32, FIVE_MINUTES.getTime())))
       .resolves.toEqual({ ok: true, method: 'totp', authTime: FIVE_MINUTES });
-    expect((await factors.getTotpStatus(USER_ID)).lastUsedAt).toEqual(FIVE_MINUTES);
+    expect((await factors.getTotpStatus(USER_ID)).lastUsedAt)
+      .toEqual(new Date('2026-05-27T12:05:29.999Z'));
+    await expect(service.prove(USER_ID, totpCodeAt(begin.secretBase32, FIVE_MINUTES.getTime())))
+      .resolves.toEqual({ ok: false });
   });
 
   it('consumes backup codes once and rejects replay', async () => {
@@ -142,14 +148,19 @@ describe('AdminTotpService', () => {
   });
 
   it('disables an active factor only after a valid proof', async () => {
-    const { service, factors } = createService();
+    let current = NOW;
+    const { service, factors } = createService(() => current);
     const begin = await service.beginEnrollment(USER_ID, TOTP_LABEL);
     await service.confirmEnrollment(USER_ID, begin.pendingId, totpCodeAt(begin.secretBase32));
 
     await expect(service.disable(USER_ID, '000000')).resolves.toBe(false);
     expect((await factors.getTotpStatus(USER_ID)).enrolled).toBe(true);
 
-    await expect(service.disable(USER_ID, totpCodeAt(begin.secretBase32))).resolves.toBe(true);
+    current = FIVE_MINUTES;
+    await expect(service.disable(
+      USER_ID,
+      totpCodeAt(begin.secretBase32, FIVE_MINUTES.getTime()),
+    )).resolves.toBe(true);
     expect((await factors.getTotpStatus(USER_ID)).enrolled).toBe(false);
   });
 

@@ -1,6 +1,6 @@
 # Beta Release and Deployment CD
 
-The beta branch has two manual release/deployment buttons:
+The beta lane is designed around two manual release/deployment buttons:
 
 - **Deploy Beta to Alpha VPS** updates or verifies the hosted alpha server at
   `https://mcp.dollhousemcp.com`.
@@ -9,6 +9,26 @@ The beta branch has two manual release/deployment buttons:
 
 Both workflows are intentionally manual. They are the beta lane's CD surface; CI
 still runs on PRs before anything reaches `beta`.
+
+> **Default-branch prerequisite:** GitHub registers `workflow_dispatch` only
+> when the dispatcher file exists on the repository's default branch. The beta
+> publishing implementation lives in
+> `.github/workflows/publish-beta-release.yml` as a reusable workflow. This change
+> includes the thin `.github/workflows/publish-beta.yml` dispatcher; both reviewed
+> workflow files must reach `main` before the button becomes available.
+> That thin dispatcher must expose the three documented inputs, grant only
+> `actions: write` and `contents: write`, guard
+> `github.ref == 'refs/heads/main'`, and call the reusable workflow at an
+> immutable reviewed revision. For a same-repository dispatcher, use
+> `uses: ./.github/workflows/publish-beta-release.yml`; GitHub resolves that
+> local reusable workflow from the exact caller commit. Never call mutable
+> `@main` or `@beta` workflow code with the dispatcher's write token. Until
+> that main PR is merged, GitHub will not display a working
+> **Publish Beta** button. Merging only this beta-side work does not satisfy
+> that prerequisite. Do not remove the dispatcher while the reusable workflow is
+> present; that would leave operators without a manual beta publication path.
+
+The dispatcher's reusable-workflow call must pass `source_ref: beta` explicitly.
 
 ## Deploy Beta to Alpha VPS
 
@@ -40,23 +60,27 @@ Optional `alpha` environment variables:
 | `DOLLHOUSE_ALPHA_HOSTNAME` | `mcp.dollhousemcp.com` |
 | `DOLLHOUSE_ALPHA_CADDY_TRUSTED_PROXIES` | unset |
 
-Keep the `alpha` environment protected with required reviewer approval until the
-hosted deployment path has proved boring.
+Protect the `alpha` environment with required reviewer approval and restrict its
+deployment branches to `beta`. The workflow also rejects dispatches whose own
+run ref is not `refs/heads/beta`, but the environment restriction is the trust
+boundary because branch-authored workflow code can change its own shell guards.
 
 ## Publish Beta Release
 
-Workflow: `.github/workflows/publish-beta-release.yml`
+Default-branch dispatcher: `.github/workflows/publish-beta.yml`
+
+Reusable beta implementation: `.github/workflows/publish-beta-release.yml`
 
 Use this after a PR has already updated `package.json` and `manifest.json` to an
 exact beta version such as `2.1.0-beta` or `2.1.0-beta.1`.
 
 The workflow validates that:
 
-- it is run from the `beta` branch
+- the reusable workflow is given the explicit `beta` source branch
 - the input version matches `package.json`
 - `manifest.json` matches `package.json`
-- the version is a `-beta.` prerelease
-- the tag, GitHub release, and npm version do not already exist
+- the version is strict SemVer with a `beta` prerelease identifier
+- any existing tag, GitHub release, or npm version is a safe, matching retry state
 - the default branch release workflows are prerelease-safe
 
 The final default-branch check matters because GitHub release/tag events are
@@ -85,6 +109,20 @@ OIDC diagnostics. Manual GitHub Packages runs default to `dry_run: true`; tag
 pushes still publish normally after duplicate-version checks pass.
 
 The MCP Registry workflow skips GitHub prereleases.
+
+## Protected Publishing Environments
+
+The npm, GitHub Packages, MCP Registry, and MCPB jobs use the
+`release-publish` environment. Configure it before publishing:
+
+- require reviewer approval
+- allow only `main` and protected release tags matching `v*`
+- configure npm Trusted Publishing for the `release-publish` environment
+
+Manual publish dispatches are accepted only when the workflow run itself comes
+from `main`. Release-triggered jobs must come from an allowed protected tag.
+The protected environment is the authoritative control; workflow-level ref
+checks are defense in depth and are not a substitute for environment rules.
 
 ## Dist-Tag Policy
 

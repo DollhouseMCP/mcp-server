@@ -7,6 +7,7 @@ import { Persona, PersonaMetadata } from '../../types/persona.js';
 import { ExportedPersona, ExportBundle } from './PersonaExporter.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { ContentValidator } from '../../security/contentValidator.js';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { validateFilename, validatePath, validateContentSize } from '../../security/InputValidator.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
 import { generateUniqueId } from '../../utils/filesystem.js';
@@ -158,7 +159,7 @@ export class PersonaImporter {
   private async importFromMarkdown(content: string, existingPersonas: PersonaMap, overwrite: boolean): Promise<ImportResult> {
     try {
       // Validate content size
-      validateContentSize(content, 100 * 1024); // 100KB limit
+      validateContentSize(content, SECURITY_LIMITS.MAX_CONTENT_LENGTH);
 
       // Try to parse as markdown with frontmatter
       const { data, content: mdContent } = SecureYamlParser.safeMatter(content);

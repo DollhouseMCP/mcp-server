@@ -357,8 +357,15 @@ jobs:
           set +e  # Don't exit on error, we want to analyze it
 
           echo "\n🔄 Executing MCP Server Test..."
-          docker_output=$(timeout $TIMEOUT_DURATION sh -c "echo '$MCP_JSON_REQUEST' | $DOCKER_CMD 2>&1" || true)
+          docker_output=$(timeout "$TIMEOUT_DURATION" sh -c "echo '$MCP_JSON_REQUEST' | $DOCKER_CMD 2>&1")
           test_exit_code=$?
+          set -e
+
+          if [[ $test_exit_code -ne 0 && $test_exit_code -ne 124 ]]; then
+            echo "::error::MCP initialize container exited with unexpected status ${test_exit_code}"
+            echo "$docker_output"
+            exit 1
+          fi
 
           TEST_END=$(date +%s)
           TEST_DURATION=$((TEST_END - TEST_START))
@@ -512,7 +519,7 @@ jobs:
           set +e  # Don't exit on error, we want to analyze it
 
           echo "\n🔄 Executing Tools/List Test..."
-          docker_output=$(timeout $TIMEOUT_DURATION sh -c "printf '%s\\n' '$INIT_JSON_REQUEST' '$INITIALIZED_NOTIFICATION' '$TOOLS_JSON_REQUEST' | \
+          docker_output=$(timeout "$TIMEOUT_DURATION" sh -c "printf '%s\\n' '$INIT_JSON_REQUEST' '$INITIALIZED_NOTIFICATION' '$TOOLS_JSON_REQUEST' | \
             docker run -i \
             --platform ${{ matrix.platform }} \
             --user 1001:1001 \
@@ -525,9 +532,16 @@ jobs:
             --env DOLLHOUSE_PORTFOLIO_DIR=/app/tmp/portfolio \
             --env DOLLHOUSE_CACHE_DIR=/app/tmp/cache \
             --env NODE_ENV=test \
-            dollhousemcp:latest-${PLATFORM_TAG} 2>&1" || true)
+            dollhousemcp:latest-${PLATFORM_TAG} 2>&1")
 
           tools_exit_code=$?
+          set -e
+
+          if [[ $tools_exit_code -ne 0 && $tools_exit_code -ne 124 ]]; then
+            echo "::error::MCP tools/list container exited with unexpected status ${tools_exit_code}"
+            echo "$docker_output"
+            exit 1
+          fi
           TOOLS_END=$(date +%s)
           TOOLS_DURATION=$((TOOLS_END - TOOLS_START))
 
@@ -637,6 +651,39 @@ jobs:
           echo "Platform: ${{ matrix.platform }}"
           echo "All tests passed successfully"
 
+  permission-hook-integration:
+    name: Permission Hook Docker Integration
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      DOCKER_AVAILABLE: 'true'
+      TEST_PERSONAS_DIR: ${{ github.workspace }}/test-personas
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: '20.x'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify Docker daemon
+        run: docker info
+
+      - name: Run permission hook Docker integration
+        run: npm run test:integration:hooks:docker -- --runInBand
+
   docker-compose-test:
     name: Docker Compose Test
     permissions:
@@ -684,8 +731,16 @@ jobs:
           echo "⏳ Running MCP server via Docker Compose with initialize command..."
           # Portfolio directory is already set to /app/tmp/portfolio in docker-compose.yml
           # Use timeout since MCP server runs indefinitely
-          docker_output=$(timeout 10 sh -c 'printf "%s\n" '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm --interactive -T dollhousemcp 2>&1' || true)
+          set +e
+          docker_output=$(timeout 10 sh -c 'printf "%s\n" '"'"'{"jsonrpc":"2.0","method":"initialize","params":{"protocolVersion":"1.0.0","capabilities":{},"clientInfo":{"name":"test","version":"1.0.0"}},"id":1}'"'"' | docker compose --project-name "$COMPOSE_PROJECT_NAME" --file docker/docker-compose.yml run --rm --interactive -T dollhousemcp 2>&1')
           exit_code=$?
+          set -e
+
+          if [[ $exit_code -ne 0 && $exit_code -ne 124 ]]; then
+            echo "::error::Docker Compose initialize exited with unexpected status ${exit_code}"
+            echo "$docker_output"
+            exit 1
+          fi
 
           echo "Docker Compose run completed with exit code: $exit_code"
           echo "Output captured:"

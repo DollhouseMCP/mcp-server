@@ -295,8 +295,8 @@ function runScenario(scenario: Scenario): {
     env: {
       ...process.env,
       FAKE_BIN_DIRECTORY: shellBinDirectory,
-      GITHUB_REF_NAME: 'beta',
-      GITHUB_SHA: expectedSha,
+      SOURCE_REF: 'beta',
+      SOURCE_SHA: expectedSha,
       GITHUB_OUTPUT: outputPath,
       INPUT_VERSION: packageVersion,
       FAKE_TAG_OBJECT: scenario.tagTarget ? 'a'.repeat(40) : '',

@@ -103,7 +103,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
 
   it('end-to-end: invite redemption → access token → validate', async () => {
     // Operator issues an invite via the method's API (CLI equivalent).
-    const inviteUrl = method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
+    const inviteUrl = await method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
     const inviteToken = inviteTokenFromUrl(inviteUrl);
 
     // Begin OAuth flow.
@@ -209,7 +209,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     // access token they receive carries roles:['admin'].
     await storage.markBootstrapComplete('local_admin', 'local-password');
 
-    const inviteUrl = method.issueInvite('local_admin', 'admin@example.com', REDIRECT_URI);
+    const inviteUrl = await method.issueInvite('local_admin', 'admin@example.com', REDIRECT_URI);
     const inviteToken = inviteTokenFromUrl(inviteUrl);
 
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);
@@ -282,7 +282,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
     // plain account — nothing about it confers admin.
     await storage.markBootstrapComplete('local_admin', 'local-password');
 
-    const inviteUrl = method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
+    const inviteUrl = await method.issueInvite('local_alice', 'alice@example.com', REDIRECT_URI);
     const inviteToken = inviteTokenFromUrl(inviteUrl);
     await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
@@ -293,7 +293,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
 
   it('login flow with existing account → access token', async () => {
     // First, redeem an invite to set up the account out-of-band.
-    const inviteUrl = method.issueInvite('local_bob', 'bob@example.com', REDIRECT_URI);
+    const inviteUrl = await method.issueInvite('local_bob', 'bob@example.com', REDIRECT_URI);
     const inviteToken = inviteTokenFromUrl(inviteUrl);
     await method.consumeInvite(inviteToken, VALID_PASSWORD);
 
@@ -347,7 +347,7 @@ describe('LocalAccountMethod — OAuth E2E', () => {
 
   it('rate-limit: 5 wrong-password attempts lock the account (must-fix #16)', async () => {
     // Set up the account.
-    const inviteUrl = method.issueInvite('local_carol', 'carol@example.com', REDIRECT_URI);
+    const inviteUrl = await method.issueInvite('local_carol', 'carol@example.com', REDIRECT_URI);
     const inviteToken = inviteTokenFromUrl(inviteUrl);
     await method.consumeInvite(inviteToken, VALID_PASSWORD);
 

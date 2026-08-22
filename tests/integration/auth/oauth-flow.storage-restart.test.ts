@@ -131,7 +131,7 @@ describe('Filesystem storage — AS restart durability', () => {
     harness = boot1.harness;
     const authServer = await fetchAuthServerMetadata(harness.baseUrl);
 
-    const inviteUrl = boot1.method.issueInvite('local_persisted', 'persist@example.com', REDIRECT_URI);
+    const inviteUrl = await boot1.method.issueInvite('local_persisted', 'persist@example.com', REDIRECT_URI);
     const inviteToken = new URL(inviteUrl).searchParams.get('invite')!;
 
     const flow1 = await startAuthorizeFlow({

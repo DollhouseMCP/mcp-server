@@ -4,6 +4,23 @@ export function isAbortError(error) {
   return error instanceof Error && error.name === 'AbortError';
 }
 
+/** Ignore completions from requests superseded by a newer request or teardown. */
+export function createRequestOwner() {
+  let generation = 0;
+  return Object.freeze({
+    claim() {
+      generation += 1;
+      return generation;
+    },
+    owns(claim) {
+      return claim === generation;
+    },
+    invalidate() {
+      generation += 1;
+    },
+  });
+}
+
 export function createVisiblePoller(task, { intervalMs = 5_000, onError = () => {} } = {}) {
   let active = false;
   let timer;

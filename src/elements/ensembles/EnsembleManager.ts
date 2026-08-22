@@ -637,7 +637,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       } else {
         // Parse YAML/Markdown using SerializationService
         const result = this.serializationService.parseFrontmatter(data, {
-          maxYamlSize: 50000, // 50KB limit for ensemble files
+          maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
           validateContent: true,
           source: 'EnsembleManager.importElement'
         });
@@ -811,7 +811,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     }
 
     // Save to disk
-    await this.save(ensemble, filename);
+    await this.save(ensemble, filename, { exclusive: true });
     // Note: No reload() here — save() caches the element correctly.
     // See Issue #491 for why PersonaManager's reload-after-create was removed.
 
@@ -840,7 +840,11 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   /**
    * Override save to validate before persisting
    */
-  override async save(element: Ensemble, filePath: string): Promise<void> {
+  override async save(
+    element: Ensemble,
+    filePath: string,
+    options?: { exclusive?: boolean; durable?: boolean },
+  ): Promise<void> {
     // Validate ensemble before saving
     const validationResult = this.validate(element);
     if (!validationResult.valid) {
@@ -849,7 +853,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     }
 
     // Call base implementation
-    await super.save(element, filePath);
+    await super.save(element, filePath, options);
   }
 
   /**

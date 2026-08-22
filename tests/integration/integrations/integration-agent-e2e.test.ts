@@ -105,6 +105,10 @@ describe('Integrations v2 — connect→agent end-to-end (real MCP transport)', 
     const response = await client.callTool('regenerate_integration_skill', { provider: BYO_PROVIDER });
 
     expect(response.ok).toBe(true);
-    expect(response.result).toMatchObject({ portfolioName: BYO_SKILL });
+    expect(response.result).toMatchObject({
+      portfolioName: BYO_SKILL,
+      portfolioAction: 'skipped',
+      written: false,
+    });
   });
 });

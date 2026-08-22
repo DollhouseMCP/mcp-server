@@ -13,6 +13,7 @@
  */
 
 import { z } from 'zod';
+import { isValidEnvelopeKeyId } from '../security/envelopeKeyId.js';
 
 /**
  * Parse a boolean env var correctly. z.coerce.boolean() uses JavaScript's
@@ -45,6 +46,31 @@ function parseAllowedHosts(rawValue: string | undefined): string[] | undefined {
   return hosts.length > 0 ? hosts : undefined;
 }
 
+const masterEncryptionKeyIdSchema = z.string().trim().refine(isValidEnvelopeKeyId, {
+  message: 'DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID must be nonempty, at most 255 UTF-8 bytes, ' +
+    "and use only ASCII letters, digits, '.', '_', ':', or '-'",
+});
+
+const retiredMasterEncryptionKeysSchema = z.string().trim().optional()
+  .superRefine((value, context) => {
+    if (!value) return;
+    for (const [index, rawEntry] of value.split(',').entries()) {
+      const entry = rawEntry.trim();
+      if (!entry) continue;
+      const separator = entry.indexOf('=');
+      const keyId = separator > 0 ? entry.slice(0, separator).trim() : '';
+      if (!isValidEnvelopeKeyId(keyId)) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED entry ${index + 1} ` +
+            'must have a nonempty key ID of at most 255 UTF-8 bytes using only ' +
+            "ASCII letters, digits, '.', '_', ':', or '-'",
+        });
+      }
+    }
+  })
+  .transform(value => value || undefined);
+
 // Load .env files with priority: .env.local (personal) > .env (shared defaults)
 // Both files are optional - no error if either doesn't exist
 //
@@ -73,7 +99,7 @@ if (isWebSilent) process.stderr.write = originalStderrWrite;
 /**
  * Environment variable schema with validation
  */
-const envSchema = z.object({
+export const envSchema = z.object({
   // ============================================================================
   // Environment
   // ============================================================================
@@ -124,6 +150,8 @@ const envSchema = z.object({
   DOLLHOUSE_HTTP_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().min(0).default(60000),
   /** Maximum requests per client per rate limit window. */
   DOLLHOUSE_HTTP_RATE_LIMIT_MAX_REQUESTS: z.coerce.number().int().min(0).default(300),
+  /** Maximum decoded JSON body accepted by the MCP HTTP endpoint. */
+  DOLLHOUSE_HTTP_BODY_LIMIT_BYTES: z.coerce.number().int().min(16 * 1024).max(10 * 1024 * 1024).default(1024 * 1024),
   /** Session idle timeout in milliseconds (0 = no timeout). */
   DOLLHOUSE_HTTP_SESSION_IDLE_TIMEOUT_MS: z.coerce.number().int().min(0).default(900000),
   /** Pre-warmed session pool size (0 = disabled). */
@@ -194,6 +222,14 @@ const envSchema = z.object({
    * instances share the secret.
    */
   DOLLHOUSE_INVITE_TOKEN_SECRET: z.string().trim().optional()
+    .refine(
+      value => value === undefined || value === '' || /^(?:[0-9a-fA-F]{2}){16,}$/u.test(value),
+      {
+        message:
+          'DOLLHOUSE_INVITE_TOKEN_SECRET must be an even-length hexadecimal string ' +
+          'that decodes to at least 16 bytes (32 hex characters)',
+      },
+    )
     .transform(v => (v && v.length > 0) ? v : undefined),
   // SMTP for the magic-link auth method (must-fix #10 STARTTLS-mandatory).
   DOLLHOUSE_SMTP_HOST: z.string().trim().optional().transform(v => v || undefined),
@@ -224,6 +260,15 @@ const envSchema = z.object({
   /** Base64-encoded 32-byte key used to wrap DB-stored OAuth token DEKs. Required in database mode. */
   DOLLHOUSE_MASTER_ENCRYPTION_KEY: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
+  /** Version ID embedded in newly encrypted PostgreSQL signing-key payloads. */
+  DOLLHOUSE_MASTER_ENCRYPTION_KEY_ID: masterEncryptionKeyIdSchema.default('master-v1'),
+  /**
+   * Prior or staged master keys retained for signing-key payload decryption.
+   * Format: `keyId=base64key,keyId2=base64key2`.
+   */
+  DOLLHOUSE_MASTER_ENCRYPTION_KEYS_RETIRED: retiredMasterEncryptionKeysSchema,
+  /** Explicitly rewrap PostgreSQL signing-key payloads under the active master key at startup. */
+  DOLLHOUSE_SIGNING_KEY_REWRAP_ON_STARTUP: envBool(false),
 
   // ============================================================================
   // Auth Storage Configuration (§8.1)
@@ -466,6 +511,31 @@ const envSchema = z.object({
   /** Auth provider: 'local' (self-signed JWTs), 'embedded' (Dollhouse OAuth AS), or 'oidc' (external IdP). */
   DOLLHOUSE_AUTH_PROVIDER: z.enum(['local', 'embedded', 'oidc']).default('local'),
   /**
+   * Positive monotonic deployment epoch for embedded-AS mode and credential changes.
+   * Leave unset for legacy single-replica behavior. Once configured, increment
+   * it for every provider, method, issuer, cookie-secret, or invite-secret
+   * change so stale replicas cannot transition shared authorization state back.
+   */
+  DOLLHOUSE_AUTH_GENERATION: z.preprocess(
+    value => typeof value === 'string' && value.trim().length === 0 ? undefined : value,
+    z.string().trim().optional()
+      .refine(value => value === undefined || /^[1-9][0-9]*$/u.test(value), {
+        message: 'DOLLHOUSE_AUTH_GENERATION must be a positive integer',
+      })
+      .transform((value, context) => {
+        if (value === undefined) return undefined;
+        const generation = Number(value);
+        if (!Number.isSafeInteger(generation)) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'DOLLHOUSE_AUTH_GENERATION must be a safe integer',
+          });
+          return z.NEVER;
+        }
+        return generation;
+      }),
+  ),
+  /**
    * Comma-separated list of auth methods exposed by the embedded AS.
    * Recognized values (per docs/PRODUCTION-AUTH-ARCHITECTURE.md §8.1):
    * 'trivial-consent', 'github', 'local-password', 'magic-link'.
@@ -491,15 +561,12 @@ const envSchema = z.object({
   DOLLHOUSE_AUTH_JWKS_URI: z.string().optional(),
 
   /**
-   * Cycle 19 / security-#6: enforce RFC 9068 `typ: at+jwt` on OIDC-bridge
-   * tokens. Default false because many managed IdPs (Auth0, Okta, Keycloak,
-   * AWS Cognito) don't stamp typ on access tokens by default; hard-requiring
-   * it would break those deployments. Operators whose IdP DOES stamp typ
-   * should enable this to close the id-token-as-access-token gap (where an
-   * id_token issued for the same audience with `mcp` scope would otherwise
-   * pass the resource-server check).
+   * Enforce RFC 9068 `typ: at+jwt` on OIDC-bridge tokens. Secure-by-default:
+   * operators whose IdP omits typ must make an explicit compatibility choice
+   * by setting this to false. Disabling it can allow an ID token issued for the
+   * same audience with `mcp` scope to cross the resource-server boundary.
    */
-  DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP: envBool(false),
+  DOLLHOUSE_AUTH_OIDC_REQUIRE_TYP: envBool(true),
 
   /**
    * Cycle 24 / smoke-test escape hatch: allow open Dynamic Client Registration

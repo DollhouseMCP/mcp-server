@@ -12,6 +12,13 @@ import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdmi
 import { boundedString, firstQueryValue } from '../../platform/ConsoleListQuery.js';
 import { isUuid } from '../../stores/ConsoleStoreValidation.js';
 import { requireConsoleAuthentication } from '../../middleware/ConsoleAuthentication.js';
+import { buildConsoleAdminAuditEvent } from '../../middleware/ConsoleAdminAudit.js';
+import type { ConsoleAdminAuditResult } from '../../audit/IAdminAuditWriter.js';
+import type {
+  AccountAdminMutationTransactionContext,
+  IAccountAdminMutationTransactionRunner,
+} from '../account-admin/AccountAdminMutationTransaction.js';
+import type { ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
 import { RuntimeSessionService, type OperationalSessionListQuery } from './RuntimeSessionService.js';
 import {
   projectRuntimeCommandStatus,
@@ -35,6 +42,7 @@ const RUNTIME_COMMAND_NOT_FOUND_DETAIL = 'Runtime termination command was not fo
 export interface RuntimeSessionModuleOptions {
   readonly runtimeStore: IRuntimeSessionControlStore;
   readonly accountAdminStore: IConsoleAccountAdminStore;
+  readonly transactionRunner: IAccountAdminMutationTransactionRunner;
   readonly now?: () => Date;
 }
 
@@ -120,7 +128,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       privacyProjector: projectRuntimeSessionAccountList,
       handler: req => listAccountSessions(req, service),
     },
-    {
+    transactionalRuntimeRoute({
       method: 'DELETE',
       path: '/api/v1/admin/accounts/users/:user_id/sessions/:session_id',
       audience: 'admin',
@@ -130,9 +138,8 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       idempotency: 'required',
       auditOperation: 'accounts.users.sessions.terminate',
       privacyProjector: projectRuntimeTermination,
-      handler: req => terminateAccountSession(req, service),
-    },
-    {
+    }, (req, route) => terminateAccountSession(req, service, options.transactionRunner, route, options.now)),
+    transactionalRuntimeRoute({
       method: 'POST',
       path: '/api/v1/admin/accounts/users/:user_id/sessions/revoke-all',
       audience: 'admin',
@@ -142,8 +149,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       idempotency: 'required',
       auditOperation: 'accounts.users.sessions.revoke_all',
       privacyProjector: projectRuntimeRevokeAll,
-      handler: req => revokeAllAccountSessions(req, service),
-    },
+    }, (req, route) => revokeAllAccountSessions(req, service, options.transactionRunner, route, options.now)),
     {
       method: 'GET',
       path: '/api/v1/admin/operate/sessions',
@@ -180,7 +186,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       privacyProjector: projectRuntimeSessionOperational,
       handler: req => getOperationalSession(req, service),
     },
-    {
+    transactionalRuntimeRoute({
       method: 'DELETE',
       path: '/api/v1/admin/operate/sessions/:session_id',
       audience: 'admin',
@@ -190,8 +196,7 @@ export function createRuntimeSessionModule(options: RuntimeSessionModuleOptions)
       idempotency: 'required',
       auditOperation: 'operate.sessions.terminate',
       privacyProjector: projectRuntimeTermination,
-      handler: req => terminateOperationalSession(req, service),
-    },
+    }, (req, route) => terminateOperationalSession(req, service, options.transactionRunner, route, options.now)),
   ];
   return {
     id: 'runtimeSessions',
@@ -241,20 +246,36 @@ async function listAccountSessions(req: ConsoleRequest, service: RuntimeSessionS
   return sessions ? { status: 200, body: { sessions } } : notFound('User principal was not found.');
 }
 
-async function terminateAccountSession(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
+async function terminateAccountSession(
+  req: ConsoleRequest,
+  service: RuntimeSessionService,
+  transactionRunner: IAccountAdminMutationTransactionRunner,
+  route: ConsoleRouteDefinition,
+  now?: () => Date,
+): Promise<ConsoleHandlerResult> {
   const userId = requiredParam(req, 'user_id');
   const sessionId = requiredParam(req, SESSION_ID_PARAM);
-  if (!userId) return invalidParam('user_id');
-  if (!sessionId) return invalidParam(SESSION_ID_PARAM);
-  const body = await service.terminateAccountSession(userId, sessionId);
-  return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  return runAuditedRuntimeMutation(transactionRunner, req, route, now, { targetUserId: userId, resourceId: sessionId }, async tx => {
+    if (!userId) return invalidParam('user_id');
+    if (!sessionId) return invalidParam(SESSION_ID_PARAM);
+    const body = await service.terminateAccountSession(userId, sessionId, tx);
+    return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  });
 }
 
-async function revokeAllAccountSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
+async function revokeAllAccountSessions(
+  req: ConsoleRequest,
+  service: RuntimeSessionService,
+  transactionRunner: IAccountAdminMutationTransactionRunner,
+  route: ConsoleRouteDefinition,
+  now?: () => Date,
+): Promise<ConsoleHandlerResult> {
   const userId = requiredParam(req, 'user_id');
-  if (!userId) return invalidParam('user_id');
-  const body = await service.revokeAllAccountSessions(userId);
-  return body ? { status: 202, body } : notFound('User principal was not found.');
+  return runAuditedRuntimeMutation(transactionRunner, req, route, now, { targetUserId: userId, resourceId: userId }, async tx => {
+    if (!userId) return invalidParam('user_id');
+    const body = await service.revokeAllAccountSessions(userId, tx);
+    return body ? { status: 202, body } : notFound('User principal was not found.');
+  });
 }
 
 async function listOperationalSessions(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
@@ -310,12 +331,74 @@ function parseOperationalListQuery(
   return { kind: 'valid', value };
 }
 
-async function terminateOperationalSession(req: ConsoleRequest, service: RuntimeSessionService): Promise<ConsoleHandlerResult> {
+async function terminateOperationalSession(
+  req: ConsoleRequest,
+  service: RuntimeSessionService,
+  transactionRunner: IAccountAdminMutationTransactionRunner,
+  route: ConsoleRouteDefinition,
+  now?: () => Date,
+): Promise<ConsoleHandlerResult> {
   const sessionId = requiredParam(req, SESSION_ID_PARAM);
-  if (!sessionId) return invalidParam(SESSION_ID_PARAM);
   const actor = requireConsoleAuthentication(req);
-  const body = await service.terminateOperationalSession(sessionId, actor.userId);
-  return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  return runAuditedRuntimeMutation(transactionRunner, req, route, now, { resourceId: sessionId }, async tx => {
+    if (!sessionId) return invalidParam(SESSION_ID_PARAM);
+    const body = await service.terminateOperationalSession(sessionId, actor.userId, tx);
+    return body ? { status: 202, body } : notFound(RUNTIME_SESSION_NOT_FOUND_DETAIL);
+  });
+}
+
+function transactionalRuntimeRoute(
+  definition: Omit<ConsoleRouteDefinition, 'auditExecution' | 'handler'>,
+  handler: (req: ConsoleRequest, route: ConsoleRouteDefinition) => Promise<ConsoleHandlerResult>,
+): ConsoleRouteDefinition {
+  let route!: ConsoleRouteDefinition;
+  route = {
+    ...definition,
+    auditExecution: 'handler_transaction',
+    handler: req => handler(req, route),
+  };
+  return route;
+}
+
+async function runAuditedRuntimeMutation(
+  transactionRunner: IAccountAdminMutationTransactionRunner,
+  req: ConsoleRequest,
+  route: ConsoleRouteDefinition,
+  now: (() => Date) | undefined,
+  target: { readonly targetUserId?: string | null; readonly resourceId: string | null },
+  operation: (tx: AccountAdminMutationTransactionContext) => Promise<ConsoleHandlerResult>,
+): Promise<ConsoleHandlerResult> {
+  return transactionRunner.run(async tx => {
+    const result = await operation(tx);
+    const audit = auditResultForStatus(result.status);
+    await tx.writeAdminAuditEvent(buildConsoleAdminAuditEvent(
+      route,
+      route.auditOperation ?? '',
+      req,
+      audit.result,
+      audit.errorCode,
+      now?.() ?? new Date(),
+      {
+        resourceKind: 'runtime_session',
+        resourceId: target.resourceId,
+        targetUserId: target.targetUserId ?? null,
+        argsRedacted: {},
+        resultDetailRedacted: null,
+      },
+    ));
+    return result;
+  }, requireConsoleAuthentication(req));
+}
+
+function auditResultForStatus(status: number): {
+  readonly result: ConsoleAdminAuditResult;
+  readonly errorCode: string | null;
+} {
+  if (status >= 200 && status < 300) return { result: 'approved', errorCode: null };
+  if (status === 409) return { result: 'conflict', errorCode: 'conflict' };
+  if (status === 404) return { result: 'failed', errorCode: 'not_found' };
+  if (status >= 400 && status < 500) return { result: 'rejected', errorCode: 'invalid_request' };
+  return { result: 'failed', errorCode: 'internal_error' };
 }
 
 function requiredParam(req: ConsoleRequest, name: string): string | null {

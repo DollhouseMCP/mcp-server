@@ -24,6 +24,7 @@ import type {
   IdempotencyCompletion,
   IdempotencyRequestIdentity,
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
+import { integrationDescriptorRoutingFingerprint } from '../../../../src/web-console/modules/integrations/IntegrationDescriptorRoutingFingerprint.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const READ_ISSUES_SCOPE = 'read:issues';
@@ -56,6 +57,7 @@ function session(overrides: Partial<ConsoleSessionRecord> = {}): ConsoleSessionR
     idHash: hash(1),
     userId: USER_ID,
     authSub: 'github_user-7',
+    authzVersion: 0,
     csrfTokenHash: hash(2),
     grantedCapabilities: [SELF_CAPABILITY],
     elevation: null,
@@ -103,6 +105,7 @@ function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIn
     accessTokenCiphertext: Buffer.from('encrypted-access-token'),
     refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
     credentialKeyVersion: 'integration-key-v1',
+    credentialGeneration: 0,
     status: 'connected',
     errorReason: null,
     connectedAt: NOW,
@@ -445,6 +448,26 @@ describe('InMemoryLoginTransactionStore', () => {
       expiresAt: new Date('2026-05-26T12:09:00.001Z'),
     }))).rejects.toThrow('invalid completion lease');
   });
+
+  it('fences pending descriptor callbacks but refuses to interrupt consumed completion', async () => {
+    const store = new InMemoryLoginTransactionStore(() => FOUR_MINUTES);
+    const descriptorFlow = loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+    });
+    await store.create(descriptorFlow);
+    await expect(store.fenceIntegrationAuthorizationsByDescriptor(DESCRIPTOR_ID)).resolves.toBe(true);
+    await expect(store.findByIdHash(descriptorFlow.idHash)).resolves.toBeNull();
+
+    const consumedFlow = { ...descriptorFlow, idHash: hash(6) };
+    await store.create(consumedFlow);
+    await store.consume(consumedFlow.idHash, consumedFlow.stateHash, FOUR_MINUTES);
+    await expect(store.fenceIntegrationAuthorizationsByDescriptor(DESCRIPTOR_ID)).resolves.toBe(false);
+    await expect(store.findByIdHash(consumedFlow.idHash)).resolves.toMatchObject({ consumedAt: FOUR_MINUTES });
+  });
 });
 
 describe('InMemoryUserIntegrationStore', () => {
@@ -521,6 +544,8 @@ describe('InMemoryUserIntegrationStore', () => {
       provider: 'linear',
       integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      staleCredentialGeneration: 0,
+      staleAuthorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
       refreshedAt: FIVE_MINUTES,
       refresh,
     });
@@ -529,6 +554,8 @@ describe('InMemoryUserIntegrationStore', () => {
       provider: 'linear',
       integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      staleCredentialGeneration: 0,
+      staleAuthorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
       refreshedAt: FIVE_MINUTES,
       refresh,
     });
@@ -561,6 +588,8 @@ describe('InMemoryUserIntegrationStore', () => {
       provider: 'linear',
       integrationDescriptorId: null,
       staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      staleCredentialGeneration: 0,
+      staleAuthorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
       refreshedAt: FIVE_MINUTES,
       refresh: () => Promise.resolve({ kind: 'failed' as const, errorReason: 'token_refresh_failed' }),
     })).resolves.toMatchObject({
@@ -574,7 +603,69 @@ describe('InMemoryUserIntegrationStore', () => {
     });
   });
 
-  it('revokes and clears only active credentials bound to a withdrawn descriptor', async () => {
+  it('does not let a stale disconnect revoke a newer credential generation', async () => {
+    const original = userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    });
+    const store = new InMemoryUserIntegrationStore([original]);
+
+    await store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: null,
+      staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      staleCredentialGeneration: 0,
+      staleAuthorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      refreshedAt: FIVE_MINUTES,
+      refresh: () => Promise.resolve({
+        kind: 'refreshed' as const,
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+      }),
+    });
+
+    await expect(store.disconnect({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationId: original.id,
+      credentialGeneration: 0,
+      revokedAt: ONE_HOUR,
+    })).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      id: original.id,
+      credentialGeneration: 1,
+      status: 'connected',
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+    });
+  });
+
+  it('fails descriptor callback persistence closed without a current-descriptor fence', async () => {
+    const store = new InMemoryUserIntegrationStore();
+
+    await expect(store.connectDescriptorCallback({
+      transactionIdHash: hash(3),
+      descriptorId: DESCRIPTOR_ID,
+      descriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+      authorizationStartedAt: NOW,
+      connection: {
+        userId: USER_ID,
+        provider: 'linear',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        externalAccountLabel: 'alice',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access'),
+        refreshTokenCiphertext: Buffer.from('encrypted-refresh'),
+        connectedAt: NOW,
+      },
+    })).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+  });
+
+  it('revokes locally and preserves cleanup handles bound to a withdrawn descriptor', async () => {
     const store = new InMemoryUserIntegrationStore([
       userIntegration({
         provider: 'linear',
@@ -597,6 +688,9 @@ describe('InMemoryUserIntegrationStore', () => {
     await expect(store.revokeAllByDescriptor(DESCRIPTOR_ID, FIVE_MINUTES)).resolves.toBe(2);
     await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
     await expect(store.findByProvider(SECOND_USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.listCredentialCleanup(USER_ID, 'linear')).resolves.toEqual([
+      expect.objectContaining({ status: 'cleanup_pending', accessTokenCiphertext: expect.any(Buffer) }),
+    ]);
     await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({ status: 'connected' });
   });
 
@@ -658,6 +752,113 @@ describe('InMemoryUserIntegrationStore', () => {
 });
 
 describe('InMemoryIntegrationDescriptorStore', () => {
+  it('permanently fences pre-disable callbacks even after restoring the curated descriptor', async () => {
+    const loginStore = new InMemoryLoginTransactionStore(() => FOUR_MINUTES);
+    const descriptorStore = new InMemoryIntegrationDescriptorStore();
+    descriptorStore.configureCredentialMutationFence({
+      hasCredentialMaterial: () => Promise.resolve(false),
+      hasExecutableCredentialMaterial: () => Promise.resolve(false),
+      revokeCredentiallessBindings: () => Promise.resolve(),
+      fencePendingCallbacks: descriptorId =>
+        loginStore.fenceIntegrationAuthorizationsByDescriptor(descriptorId),
+    });
+    const curated = {
+      ...oauthDescriptorInput({
+        ownership: 'curated' as const,
+        ownerUserId: null,
+        curatedSeedRevision: 1,
+      }),
+    };
+    const enabled = await descriptorStore.reconcileCuratedSeed({
+      provider: 'gmail', seedRevision: 1, enabled: true, descriptor: curated, updatedAt: NOW,
+    });
+    const descriptor = enabled.descriptor;
+    if (!descriptor) throw new Error('expected curated descriptor');
+    const callback = loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: descriptor.id,
+      integrationDescriptorFingerprint: integrationDescriptorRoutingFingerprint(descriptor),
+    });
+    await loginStore.create(callback);
+
+    await descriptorStore.reconcileCuratedSeed({
+      provider: 'gmail', seedRevision: 2, enabled: false, updatedAt: NOW,
+    });
+    await descriptorStore.reconcileCuratedSeed({
+      provider: 'gmail', seedRevision: 3, enabled: true,
+      descriptor: { ...curated, curatedSeedRevision: 3 }, updatedAt: NOW,
+    });
+
+    await expect(loginStore.findByIdHash(callback.idHash)).resolves.toBeNull();
+  });
+
+  it('fences callback persistence against a stale descriptor fingerprint', async () => {
+    const descriptorStore = new InMemoryIntegrationDescriptorStore();
+    const descriptor = await descriptorStore.upsert(oauthDescriptorInput());
+    const staleFingerprint = integrationDescriptorRoutingFingerprint(descriptor);
+    await descriptorStore.upsert(oauthDescriptorInput({ apiHosts: ['mail.example.test'] }));
+    const integrationStore = new InMemoryUserIntegrationStore();
+    integrationStore.configureDescriptorCallbackFence(descriptorStore);
+
+    await expect(integrationStore.connectDescriptorCallback({
+      transactionIdHash: hash(3),
+      descriptorId: descriptor.id,
+      descriptorFingerprint: staleFingerprint,
+      authorizationStartedAt: NOW,
+      connection: {
+        userId: USER_ID,
+        provider: descriptor.provider,
+        integrationDescriptorId: descriptor.id,
+        externalAccountLabel: 'alice@example.test',
+        externalInstallationId: null,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+        accessTokenCiphertext: Buffer.from('encrypted-access'),
+        refreshTokenCiphertext: Buffer.from('encrypted-refresh'),
+        connectedAt: NOW,
+      },
+    })).resolves.toBeNull();
+    await expect(integrationStore.findByProvider(USER_ID, descriptor.provider)).resolves.toBeNull();
+  });
+
+  it('serializes curated upserts with callback completion on the canonical descriptor identity', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const input = oauthDescriptorInput({
+      ownership: 'curated',
+      ownerUserId: null,
+      curatedSeedRevision: 1,
+    });
+    const descriptor = await store.upsert(input);
+    const fingerprint = integrationDescriptorRoutingFingerprint(descriptor);
+    let releaseCallback!: () => void;
+    let markCallbackEntered!: () => void;
+    const callbackEntered = new Promise<void>(resolve => { markCallbackEntered = resolve; });
+    const callbackRelease = new Promise<void>(resolve => { releaseCallback = resolve; });
+    const callback = store.runIfCurrent(descriptor.id, fingerprint, async () => {
+      markCallbackEntered();
+      await callbackRelease;
+      return true;
+    });
+    await callbackEntered;
+
+    let mutationSettled = false;
+    const mutation = store.upsert({
+      ...input,
+      curatedSeedRevision: 2,
+      apiHosts: ['mail.example.test'],
+    }).finally(() => { mutationSettled = true; });
+    await Promise.resolve();
+    expect(mutationSettled).toBe(false);
+
+    releaseCallback();
+    await expect(callback).resolves.toBe(true);
+    await expect(mutation).resolves.toMatchObject({
+      curatedSeedRevision: 2,
+      apiHosts: ['mail.example.test'],
+    });
+  });
+
   it('stores visible curated and BYO descriptors and clones encrypted client secrets', async () => {
     const store = new InMemoryIntegrationDescriptorStore();
     const created = await store.upsert(oauthDescriptorInput());
@@ -748,6 +949,53 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await store.upsert(oauthDescriptorInput({ provider: 'shared' }));
 
     await expect(store.findCuratedByProvider('shared')).resolves.toBeNull();
+  });
+
+  it('keeps durable curated disable state monotonic while preserving stored descriptors', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const curated = {
+      ...oauthDescriptorInput({
+        ownership: 'curated' as const,
+        ownerUserId: null,
+        curatedSeedRevision: 1,
+      }),
+    };
+    const enabled = await store.reconcileCuratedSeed({
+      provider: 'gmail',
+      seedRevision: 1,
+      enabled: true,
+      descriptor: curated,
+      updatedAt: NOW,
+    });
+    await store.reconcileCuratedSeed({
+      provider: 'gmail',
+      seedRevision: 2,
+      enabled: false,
+      updatedAt: NOW,
+    });
+
+    await expect(store.findVisibleByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.findCuratedByProvider('gmail')).resolves.toMatchObject({ id: enabled.descriptor?.id });
+
+    const [staleEnable, newerDisable] = await Promise.all([
+      store.reconcileCuratedSeed({
+        provider: 'gmail',
+        seedRevision: 3,
+        enabled: true,
+        descriptor: { ...curated, curatedSeedRevision: 3 },
+        updatedAt: NOW,
+      }),
+      store.reconcileCuratedSeed({
+        provider: 'gmail',
+        seedRevision: 4,
+        enabled: false,
+        updatedAt: NOW,
+      }),
+    ]);
+
+    expect(staleEnable.enabled).toBe(true);
+    expect(newerDisable).toMatchObject({ applied: true, enabled: false, seedRevision: 4 });
+    await expect(store.findVisibleByProvider(USER_ID, 'gmail')).resolves.toBeNull();
   });
 
   it('rejects invalid pagination limits and cursors', async () => {
@@ -1093,6 +1341,18 @@ describe('InMemoryConsoleFactorStore', () => {
     expect(await store.markTotpUsed(USER_ID, FACTOR_ID, FIVE_MINUTES)).toBe(false);
   });
 
+  it('rejects a same-step proof timestamp written by an older replica', async () => {
+    const store = new InMemoryConsoleFactorStore();
+    await store.createTotpFactor(totpFactor(), [hash(11)]);
+    const legacyProofTime = new Date('2026-05-27T14:05:05.000Z');
+    const sameStepEnd = new Date('2026-05-27T14:05:29.999Z');
+    const nextStepEnd = new Date('2026-05-27T14:05:59.999Z');
+
+    expect(await store.markTotpUsed(USER_ID, FACTOR_ID, legacyProofTime)).toBe(true);
+    expect(await store.markTotpUsed(USER_ID, FACTOR_ID, sameStepEnd)).toBe(false);
+    expect(await store.markTotpUsed(USER_ID, FACTOR_ID, nextStepEnd)).toBe(true);
+  });
+
   it('atomically consumes active backup codes once', async () => {
     const store = new InMemoryConsoleFactorStore();
     await store.createTotpFactor(totpFactor(), [hash(11), hash(12)]);
@@ -1138,6 +1398,66 @@ describe('InMemoryConsoleIdentityResolver', () => {
 });
 
 describe('InMemoryConsoleAccountAdminStore', () => {
+  it('bumps account authorization when identities are linked or unlinked', async () => {
+    const store = new InMemoryConsoleAccountAdminStore([principal()], [
+      {
+        sub: 'github_user-7', provider: 'github', externalSub: 'user-7',
+        email: null, emailVerified: false, displayName: null,
+        linkedUserId: USER_ID, createdAt: NOW, lastAuthAt: null,
+      },
+      {
+        sub: 'github_user-9', provider: 'github', externalSub: 'user-9',
+        email: null, emailVerified: false, displayName: null,
+        linkedUserId: null, createdAt: FIVE_MINUTES, lastAuthAt: null,
+      },
+    ]);
+
+    await expect(store.linkIdentity({ userId: USER_ID, sub: 'github_user-9', linkedAt: FIVE_MINUTES }))
+      .resolves.toMatchObject({ outcome: 'provisional', linkedUserId: USER_ID });
+    expect((await store.findPrincipal(USER_ID))?.authzVersion).toBe(2);
+
+    await expect(store.finalizeIdentityLink({ userId: USER_ID, sub: 'github_user-9', linkedAt: FIVE_MINUTES }))
+      .resolves.toMatchObject({ outcome: 'finalized', linkedUserId: USER_ID });
+    await expect(store.finalizeIdentityLink({ userId: USER_ID, sub: 'github_user-9', linkedAt: FIVE_MINUTES }))
+      .resolves.toMatchObject({ outcome: 'already_finalized', linkedUserId: USER_ID });
+    expect((await store.findPrincipal(USER_ID))?.authzVersion).toBe(3);
+
+    await expect(store.unlinkIdentity({ userId: USER_ID, sub: 'github_user-9', unlinkedAt: THIRTY_MINUTES }))
+      .resolves.toMatchObject({ linkedUserId: null });
+    expect((await store.findPrincipal(USER_ID))?.authzVersion).toBe(4);
+  });
+
+  it('retains an account-deletion fence when the deleted login row can be recreated', async () => {
+    const targetUserId = SECOND_USER_ID;
+    const store = new InMemoryConsoleAccountAdminStore([
+      principal(),
+      principal({
+        userId: targetUserId,
+        primarySub: 'github_deleted-user',
+        username: 'deleted-user',
+        roles: [],
+        accountCorrelationId: '11df9917-b534-4014-a03f-e2eb1f0c6fef',
+      }),
+    ], [{
+      sub: 'github_deleted-user', provider: 'github', externalSub: 'deleted-user',
+      email: null, emailVerified: false, displayName: null,
+      linkedUserId: targetUserId, createdAt: NOW, lastAuthAt: null,
+    }]);
+
+    await expect(store.deletePrincipal({
+      userId: targetUserId,
+      deletedAt: NOW,
+      deletedByUserId: USER_ID,
+    })).resolves.toMatchObject({ outcome: 'deleted' });
+    await expect(store.findIdentityBySub('github_deleted-user')).resolves.toMatchObject({ linkedUserId: null });
+    await expect(store.isIdentityRevocationFenced('github_deleted-user')).resolves.toBe(true);
+    await expect(store.linkIdentity({
+      userId: USER_ID,
+      sub: 'github_deleted-user',
+      linkedAt: FIVE_MINUTES,
+    })).resolves.toMatchObject({ outcome: 'subject_deleted', linkedUserId: null });
+  });
+
   it('projects principal metadata only and manages active role history', async () => {
     const store = new InMemoryConsoleAccountAdminStore([
       principal(),
@@ -1567,8 +1887,11 @@ describe('InMemoryRuntimeSessionControlStore', () => {
     await expect(store.findPresence(RUNTIME_SESSION_ID, THIRTY_MINUTES)).resolves.toBeNull();
     await expect(store.findPresence(RUNTIME_SESSION_ID, ONE_HOUR)).resolves.toBeNull();
 
-    const closing = await store.markPresenceClosing(RUNTIME_SESSION_ID, THIRTY_MINUTES);
+    const closing = await store.markPresenceClosing(RUNTIME_SESSION_ID, 'replica-a', THIRTY_MINUTES);
     expect(closing).toMatchObject({ status: 'closing', closedAt: THIRTY_MINUTES });
+    await expect(store.findOperationalPresence(RUNTIME_SESSION_ID, FIVE_MINUTES))
+      .resolves.toMatchObject({ status: 'closing' });
+    await expect(store.findOperationalPresence(RUNTIME_SESSION_ID, ONE_HOUR)).resolves.toBeNull();
     await expect(store.heartbeatPresence({
       sessionId: RUNTIME_SESSION_ID,
       replicaId: 'replica-a',

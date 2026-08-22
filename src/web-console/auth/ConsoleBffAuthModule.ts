@@ -23,7 +23,7 @@ import type {
   ConsoleRequest,
 } from '../platform/ConsolePlatformTypes.js';
 import { CONSOLE_CAPABILITIES } from '../platform/ConsolePlatformTypes.js';
-import { capabilitiesForRoles } from '../modules/account-admin/AccountAdminRoleAuthority.js';
+import { capabilitiesForRoles } from '../platform/ConsoleRoleCapabilities.js';
 import { normalizeConsoleReturnPath } from '../platform/ConsoleReturnPaths.js';
 import type { IConsoleOAuthClient } from './IConsoleOAuthClient.js';
 
@@ -228,6 +228,7 @@ class ConsoleBffAuthService {
       idHash: this.options.opaqueValues.hashOpaqueValue(sessionValue),
       userId: principal.userId,
       authSub: principal.sub,
+      authzVersion: principal.authzVersion,
       csrfTokenHash: this.options.opaqueValues.hashOpaqueValue(csrfValue),
       grantedCapabilities: [SELF_CAPABILITY],
       elevation: null,
@@ -260,6 +261,15 @@ class ConsoleBffAuthService {
         userId: authentication.userId,
       });
       return invalidCapability();
+    }
+    const principal = await this.options.identityResolver.resolveEnabledPrincipal(authentication.authSub);
+    if (principal?.userId !== authentication.userId ||
+        !capabilitiesForRoles(principal.roles ?? []).includes(capability)) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: capability not role-entitled', {
+        userId: authentication.userId,
+        requestedCapability: capability,
+      });
+      return forbiddenCapability();
     }
     const now = this.now();
     const transactionId = this.options.opaqueValues.createOpaqueValue();
@@ -384,17 +394,18 @@ class ConsoleBffAuthService {
       });
       return failedCallback();
     }
-    // One step-up elevates the session to the principal's FULL role-entitled
-    // admin capability set (e.g. an `admin` gets operate + accounts + audit +
-    // security at once) instead of only the requested capability — so a single
-    // step-up unlocks all admin surfaces the role allows. Falls back to the
-    // requested capability when the principal carries no recognized roles.
+    // Re-check live role entitlement after the external proof. Roles can change
+    // while the user is completing the OAuth/TOTP interaction.
     const roleCapabilities = capabilitiesForRoles(principal.roles ?? []);
-    const elevationCapabilities = roleCapabilities.length > 0
-      ? roleCapabilities
-      : [transaction.requestedCapability];
+    if (!roleCapabilities.includes(transaction.requestedCapability)) {
+      logConsoleAuthEvent('OPERATION_FAILED', 'MEDIUM', 'Console step-up rejected: role entitlement changed', {
+        userId: authentication.userId,
+        requestedCapability: transaction.requestedCapability,
+      });
+      return failedCallback();
+    }
     const attached = await this.options.sessionStore.setElevation(authentication.sessionIdHash, {
-      capabilities: elevationCapabilities,
+      capabilities: roleCapabilities,
       expiresAt: new Date(now.getTime() + ELEVATION_TTL_MAX_MS),
       acr: claims.acr,
       amr: claims.amr,
@@ -543,6 +554,19 @@ function invalidCapability(): ConsoleHandlerResult {
       status: 400,
       code: 'invalid_capability',
       detail: 'Step-up requires a valid administrative console capability.',
+    },
+  };
+}
+
+function forbiddenCapability(): ConsoleHandlerResult {
+  return {
+    status: 403,
+    body: {
+      type: 'about:blank',
+      title: 'Forbidden',
+      status: 403,
+      code: 'insufficient_role_authority',
+      detail: 'Your active administrative roles do not grant that capability.',
     },
   };
 }

@@ -55,7 +55,12 @@ export function createBoundedRemoteMcpFetch(
   maxBytes: number,
 ): PinnedFetch {
   return async (input, init) => {
-    const response = await pinnedFetch(input, init);
+    const response = await pinnedFetch(input, {
+      ...init,
+      // The DNS pin and public-host guard apply only to the original endpoint.
+      // Following a redirect could otherwise reach an unvetted destination.
+      redirect: 'error',
+    });
     const method = (init?.method ?? 'GET').toUpperCase();
     if (method === 'POST') return boundRemoteMcpResponse(response, maxBytes, false);
     if (method === 'GET') return boundRemoteMcpResponse(response, maxBytes, true);

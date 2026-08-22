@@ -38,6 +38,7 @@ export type WebConsoleHttpBootstrapEnv = Pick<
   | 'DOLLHOUSE_WEB_CONSOLE_OPAQUE_HMAC_KEY'
   | 'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY'
   | 'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID'
+  | 'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED'
   | 'DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY'
   | 'DOLLHOUSE_WEB_CONSOLE_REPLACEMENT_READINESS_EVIDENCE'
   | 'DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID'
@@ -106,6 +107,11 @@ export function resolveWebConsoleHttpBootstrapOptions(
         'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY',
       ),
     },
+    retainedSecretEncryptionKeys: decodeRetainedBase64Keys(
+      sourceEnv.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED,
+      sourceEnv.DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEY_ID,
+      'DOLLHOUSE_WEB_CONSOLE_SECRET_ENCRYPTION_KEYS_RETIRED',
+    ),
     protectedCorrelationSelectorHmacKey: decodeBase64Key(
       sourceEnv.DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY,
       'DOLLHOUSE_WEB_CONSOLE_PROTECTED_CORRELATION_HMAC_KEY',
@@ -186,6 +192,30 @@ function decodeBase64Key(value: string | undefined, name: string): Buffer {
     throw new Error(`${name} must decode to exactly ${REQUIRED_KEY_BYTES} bytes`);
   }
   return decoded;
+}
+
+function decodeRetainedBase64Keys(
+  value: string | undefined,
+  activeKeyId: string,
+  name: string,
+): { keyId: string; key: Buffer }[] {
+  if (!value) return [];
+  const seen = new Set([activeKeyId]);
+  return value.split(',').map(rawEntry => rawEntry.trim()).filter(Boolean).map(entry => {
+    const separator = entry.indexOf('=');
+    if (separator <= 0) {
+      throw new Error(`${name} entry '${entry}' must be 'keyId=base64key'`);
+    }
+    const keyId = entry.slice(0, separator).trim();
+    if (!keyId || seen.has(keyId)) {
+      throw new Error(`${name} contains duplicate or active key ID '${keyId}'`);
+    }
+    seen.add(keyId);
+    return {
+      keyId,
+      key: decodeBase64Key(entry.slice(separator + 1).trim(), `${name} entry '${keyId}'`),
+    };
+  });
 }
 
 function normalizeAuthMethods(methods: readonly string[] | undefined): readonly AuthMethodId[] {

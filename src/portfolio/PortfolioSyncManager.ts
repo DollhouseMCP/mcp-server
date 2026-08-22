@@ -21,6 +21,7 @@ import { TokenManager } from '../security/tokenManager.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
+import { SECURITY_LIMITS } from '../security/constants.js';
 import { ElementType } from './types.js';
 import { PortfolioElementAdapter } from '../tools/portfolio/PortfolioElementAdapter.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
@@ -535,7 +536,7 @@ export class PortfolioSyncManager {
       }
 
       const parsed = SecureYamlParser.parse(content, {
-        maxYamlSize: 64 * 1024,
+        maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
         validateContent: false,
         validateFields: false
       });
@@ -730,7 +731,7 @@ export class PortfolioSyncManager {
     try {
       const content = await this.fileOperations.readFile(localPath, { source: 'PortfolioSyncManager.compareVersions' });
       const parsed = SecureYamlParser.parse(content, {
-        maxYamlSize: 64 * 1024,
+        maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
         validateContent: false,
         validateFields: false
       });
@@ -1112,7 +1113,7 @@ export class PortfolioSyncManager {
   private extractMetadata(content: string): { version?: string } {
     try {
       const parsed = SecureYamlParser.parse(content, {
-        maxYamlSize: 64 * 1024,
+        maxYamlSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
         validateContent: false,
         validateFields: false
       });
