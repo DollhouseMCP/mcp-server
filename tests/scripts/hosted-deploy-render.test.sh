@@ -6,6 +6,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOSTED_DEPLOY="${REPO_ROOT}/scripts/hosted-deploy.sh"
 TMP_ROOT="$(mktemp -d)"
+ENTERPRISE_MODE_ENV_LINE='DOLLHOUSE_HOSTED_MODE=enterprise'
 
 cleanup() {
   if [[ -n "${TMP_ROOT:-}" && -d "${TMP_ROOT}" && "${TMP_ROOT}" == "${TMPDIR:-/tmp}"* ]]; then
@@ -325,7 +326,7 @@ DOLLHOUSE_HOSTED_DEPLOY_DIR="${AUTH_GENERATION_DEPLOY_DIR}" \
 DOLLHOUSE_HOSTED_MODE=enterprise \
 DOLLHOUSE_HOSTED_HOSTNAME=mcp.example.com \
   bash "${HOSTED_DEPLOY}" render
-assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${AUTH_GENERATION_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
 assert_contains "${AUTH_GENERATION_ENV_FILE}" 'DOLLHOUSE_AUTH_GENERATION=7'
 assert_contains "${AUTH_GENERATION_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_GENERATION: "7"'
 
@@ -653,7 +654,7 @@ assert_contains "${LAN_COMPOSE_FILE}" '      - "0.0.0.0:80:80"'
 assert_contains "${LAN_COMPOSE_FILE}" '      - "0.0.0.0:443:443"'
 assert_contains "${LAN_CADDY_FILE}" 'lanbox.local {'
 assert_not_contains "${LAN_CADDY_FILE}" "${LAN_CADDY_SITE}"
-assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${LAN_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_PROXY_MODE=caddy-tls'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_HOSTED_BIND_ADDRESS=0.0.0.0'
 assert_contains "${LAN_ENV_FILE}" 'DOLLHOUSE_PUBLIC_BASE_URL=https://lanbox.local'
@@ -808,7 +809,7 @@ assert_contains "${RESTATED_MODE_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_PROVIDER: oidc'
 assert_contains "${RESTATED_MODE_COMPOSE_FILE}" 'DOLLHOUSE_AUTH_METHODS: ""'
 assert_contains "${RESTATED_MODE_COMPOSE_FILE}" '      - "127.0.0.1:8080:80"'
 assert_contains "${RESTATED_MODE_COMPOSE_FILE}" '      - "127.0.0.1:8443:443"'
-assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${RESTATED_MODE_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
 assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_BIND_ADDRESS=127.0.0.1'
 assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_HTTP_BIND_PORT=8080'
 assert_contains "${RESTATED_MODE_ENV_FILE}" 'DOLLHOUSE_HOSTED_HTTPS_BIND_PORT=8443'
@@ -849,7 +850,7 @@ assert_contains "${ENTERPRISE_COMPOSE_FILE}" '      - "0.0.0.0:80:80"'
 assert_contains "${ENTERPRISE_COMPOSE_FILE}" '      - "0.0.0.0:443:443"'
 assert_contains "${ENTERPRISE_CADDY_FILE}" 'mcp.enterprise.test {'
 assert_contains "${ENTERPRISE_CADDY_FILE}" 'header_up X-Forwarded-Proto https'
-assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_HOSTED_MODE=enterprise'
+assert_contains "${ENTERPRISE_ENV_FILE}" "${ENTERPRISE_MODE_ENV_LINE}"
 assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_AUTH_PROVIDER=oidc'
 assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_AUTH_ISSUER=https://idp.enterprise.test'
 assert_contains "${ENTERPRISE_ENV_FILE}" 'DOLLHOUSE_AUTH_AUDIENCE=dollhouse-mcp'
