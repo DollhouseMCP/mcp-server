@@ -251,6 +251,7 @@ describe('GitHub Workflow Validation', () => {
       expect(checkout?.with?.ref).toBe('${{ github.event.pull_request.head.sha }}');
       expect(checkout?.with?.['fetch-depth']).toBe(0);
       expect(checkout?.with?.['persist-credentials']).toBe(false);
+      expect(workflow.jobs['claude-review'].permissions?.['id-token']).toBeUndefined();
       expect(verifyCheckout?.run).toContain('git rev-parse HEAD');
       expect(verifyCheckout?.run).toContain("--jq '.head.sha'");
       expect(verifyCheckout?.run).toContain('EXPECTED_HEAD_SHA');
