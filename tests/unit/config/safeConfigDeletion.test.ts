@@ -17,16 +17,16 @@ describe('safeConfigDeletion', () => {
       expect(() => parseSafeConfigPath(path)).toThrow(/Forbidden property/);
     });
 
-    it.each(['', '.user', 'user.', 'user..name', 'user.%zz'])('rejects malformed path %s', path => {
+    it.each(['', '.user', 'user.', 'user..name'])('rejects malformed path %s', path => {
       expect(() => parseSafeConfigPath(path)).toThrow();
     });
 
-    it('preserves valid custom segments', () => {
-      expect(parseSafeConfigPath('display.custom-theme.value')).toEqual([
-        'display',
-        'custom-theme',
-        'value',
-      ]);
+    it.each([
+      'display.custom-theme.value',
+      'display.custom.discount%',
+      'display.custom.%zz',
+    ])('preserves valid custom path %s', path => {
+      expect(parseSafeConfigPath(path)).toEqual(path.split('.'));
     });
   });
 
@@ -57,6 +57,16 @@ describe('safeConfigDeletion', () => {
         previousValue: 'value',
       });
       expect(root.custom).not.toHaveProperty('leaf');
+    });
+
+    it('deletes a custom property containing a literal percent sign', () => {
+      const root = { custom: { 'discount%': 'value' } };
+
+      expect(deleteOwnConfigLeaf(root, ['custom', 'discount%'])).toEqual({
+        kind: 'deleted',
+        previousValue: 'value',
+      });
+      expect(root.custom).not.toHaveProperty('discount%');
     });
 
     it('supports null-prototype objects', () => {

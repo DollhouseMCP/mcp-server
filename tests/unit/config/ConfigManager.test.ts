@@ -347,6 +347,27 @@ describe('ConfigManager', () => {
       });
     });
 
+    it('deletes a custom leaf containing a literal percent sign', async () => {
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      await userStore.save('00000000-0000-0000-0000-000000000000', {
+        githubConfig: {}, syncConfig: {}, autoloadConfig: {}, retentionConfig: {},
+        wizardConfig: {}, displayConfig: { custom: { 'discount%': 'value', keep: true } },
+        collectionConfig: {}, autoActivateConfig: {}, sourcePriorityConfig: {},
+        userIdentityConfig: {}, configVersion: 1,
+      });
+      const manager = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await manager.initialize();
+
+      await expect(manager.deleteSetting('display.custom.discount%')).resolves.toMatchObject({
+        success: true,
+        previousValue: 'value',
+      });
+      const stored = await userStore.load('00000000-0000-0000-0000-000000000000');
+      expect(stored.displayConfig).toMatchObject({ custom: { keep: true } });
+      expect((stored.displayConfig.custom as Record<string, unknown>)).not.toHaveProperty('discount%');
+    });
+
     it('should reject __proto__ in resetConfig section', async () => {
         mockFileOperations.exists.mockResolvedValue(false);
         mockFileOperations.createDirectory.mockResolvedValue(undefined);

@@ -114,7 +114,9 @@ function assertSafeSegment(segment: string): void {
     try {
       decoded = decodeURIComponent(candidate);
     } catch {
-      throw new Error('Configuration path contains invalid percent encoding.');
+      // A literal percent sign is valid in a custom config key. Since the
+      // segment cannot be decoded, it cannot resolve to a hidden forbidden key.
+      return;
     }
     if (decoded === candidate) return;
     candidate = decoded;
