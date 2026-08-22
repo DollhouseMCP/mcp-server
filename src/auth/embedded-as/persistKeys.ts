@@ -141,9 +141,10 @@ export async function rotateSigningKey(keyFilePath: string): Promise<void> {
 // Key behavior preserved across both backends:
 //   - First start: generate a fresh ES256 keypair, persist, return.
 //   - Subsequent starts: load existing key, return.
-//   - Rotation (mode-fingerprint mismatch): atomically replace the active
-//     key with a fresh one. Old kid no longer publishes on /jwks; previously
-//     issued JWTs fail validation on next request (must-fix #14).
+//   - Rotation (public mode change or authorization-generation increase):
+//     atomically replace the active key with a fresh one. Old kid no longer
+//     publishes on /jwks; previously issued JWTs fail validation on next
+//     request (must-fix #14).
 
 /**
  * Store-backed equivalent of `loadOrGenerateSigningJwks`. Reads the active

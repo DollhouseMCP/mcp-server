@@ -20,12 +20,12 @@
  * accumulates without deletion.
  *
  * Why this exists: in filesystem mode with a non-persistent run dir
- * (tmpfs, ephemeral container storage), every restart regenerates the
- * JWKS keyfile → fresh `kid` → mode-fingerprint mismatch in
- * `EmbeddedAuthorizationServer.initialize()` → all OAuth state wiped →
- * users must re-authenticate. DB-backed keys survive container restart
- * AND let multiple replicas share signing material (the `L-R8-*`
- * multi-replica HA items).
+ * (tmpfs, ephemeral container storage), every restart loses the JWKS keyfile
+ * and OAuth K/V state. The fresh `kid` cannot validate prior tokens, and the
+ * prior sessions and grants no longer exist, so users must re-authenticate.
+ * Secret material is deliberately excluded from the public mode fingerprint.
+ * DB-backed keys survive container restart AND let multiple replicas share
+ * signing material (the `L-R8-*` multi-replica HA items).
  *
  * Three backends (InMemory + Filesystem + Postgres), backend selected by
  * `createSigningKeyStore`. Pairs with the auth storage backend selector

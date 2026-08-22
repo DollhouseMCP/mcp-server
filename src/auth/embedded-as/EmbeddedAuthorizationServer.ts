@@ -245,7 +245,7 @@ export interface EmbeddedAuthorizationServerOptions {
    * Phase 4.5: optional injected ISigningKeyStore. When present,
    * `initialize()` loads JWKS + cookie keys from the store (postgres- or
    * filesystem-backed per `DOLLHOUSE_AUTH_STORAGE_BACKEND`) and the
-   * mode-fingerprint mismatch path rotates them via the store. When
+   * authorization-transition path rotates them via the store. When
    * absent, falls back to the legacy file-based persistKeys / cookieSecret
    * paths — same dual-mode pattern §8.1's auth K/V uses.
    *

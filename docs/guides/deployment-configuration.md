@@ -1074,8 +1074,9 @@ See `/dollhouse/docs/SECTION-8.1-DR-RUNBOOK.md` (filesystem-only) for backup/res
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Comma-separated list. Recognized: `github`, `magic-link`, `local-password`, `trivial-consent`. Multi-method deployments expose all configured methods at the same `/interaction` endpoint. |
+| `DOLLHOUSE_AUTH_GENERATION` | `0` | Monotonic global authorization-invalidation generation. Increment when rotating the cookie signing secret or intentionally invalidating every session and grant. All replicas must use the same value. Never decrement it during rollback; startup refuses a value below the persisted generation. |
 | `DOLLHOUSE_PUBLIC_BASE_URL` | *(derived from bind)* | Public-facing base URL of this server. **Required behind a reverse proxy** so issued JWTs and `/.well-known/*` documents advertise the correct public origin. |
-| `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | One of `memory`, `filesystem`, `postgres`. `postgres` requires `DOLLHOUSE_STORAGE_BACKEND=database` and `DOLLHOUSE_DATABASE_URL` to be set. |
+| `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | One of `memory`, `filesystem`, `postgres`. Memory and filesystem auth storage are single-process backends. Multi-process or multi-replica deployments must use `postgres`, which requires `DOLLHOUSE_STORAGE_BACKEND=database`, `DOLLHOUSE_DATABASE_URL`, and `DOLLHOUSE_DATABASE_POOL_SIZE` of at least `2` (one connection fences an authorization transition while another performs its work). |
 | `DOLLHOUSE_RATE_LIMIT_BACKEND` | `memory` | One of `memory`, `postgres`. Use `postgres` for multi-replica deployments so local-password and magic-link limits are shared across replicas. |
 | `DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT` | `false` | When `true`, CLI approval audit records retain raw tool input detail. Default `false` stores only redacted digest + HMAC hash. |
 | `DOLLHOUSE_AUDIT_HMAC_SECRET` | *(auto-generated)* | Hex-encoded secret (≥32 bytes) for HMAC-SHA256 audit-input hashes. Generate via `openssl rand -hex 32`; when unset the server persists an auto-generated key. |
@@ -1396,6 +1397,7 @@ All variables are optional unless marked **required**. Variables with no default
 | `DOLLHOUSE_AUTH_LOCAL_KEY_FILE` | `~/.dollhouse/run/auth-keypair.json` | Key pair file for the local provider. Auto-generated on first use. |
 | `DOLLHOUSE_AUTH_LOCAL_DEFAULT_SUB` | *(OS username)* | Subject used for the startup convenience token printed to stderr. |
 | `DOLLHOUSE_AUTH_METHODS` | `trivial-consent` | Embedded AS only. Comma-separated: `github`, `magic-link`, `local-password`, `trivial-consent`. |
+| `DOLLHOUSE_AUTH_GENERATION` | `0` | Embedded AS only. Monotonic global invalidation generation. All replicas must agree; never decrement during rollback. |
 | `DOLLHOUSE_AUTH_STORAGE_BACKEND` | `filesystem` | Embedded AS only. One of `memory`, `filesystem`, `postgres`. |
 | `DOLLHOUSE_RATE_LIMIT_BACKEND` | `memory` | Auth rate-limit backend. Set `postgres` for multi-replica HA. |
 | `DOLLHOUSE_AUDIT_RETAIN_RAW_INPUT` | `false` | Retain raw CLI approval tool inputs. Secure default stores digest/hash only. |
