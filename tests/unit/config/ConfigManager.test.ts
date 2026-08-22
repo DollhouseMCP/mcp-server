@@ -315,6 +315,38 @@ describe('ConfigManager', () => {
       await expect(configManager.updateSetting('sync.prototype.polluted', 'evil')).rejects.toThrow();
     });
 
+    it.each([
+      '__proto__.polluted',
+      'user.CONSTRUCTOR.polluted',
+      'sync.%70rototype.polluted',
+    ])('should reject dangerous deleteSetting path %s', async path => {
+      await expect(configManager.deleteSetting(path)).rejects.toThrow();
+    });
+
+    it('deletes a valid custom leaf through the store boundary and remains idempotent', async () => {
+      const operatorStore = new InMemoryOperatorConfigStore();
+      const userStore = new InMemoryUserConfigStore();
+      await userStore.save('00000000-0000-0000-0000-000000000000', {
+        githubConfig: {}, syncConfig: {}, autoloadConfig: {}, retentionConfig: {},
+        wizardConfig: {}, displayConfig: { custom: { obsolete: 'value', keep: true } },
+        collectionConfig: {}, autoActivateConfig: {}, sourcePriorityConfig: {},
+        userIdentityConfig: {}, configVersion: 1,
+      });
+      const manager = new ConfigManager(mockFileOperations, mockOs, operatorStore, userStore, null);
+      await manager.initialize();
+
+      const deleted = await manager.deleteSetting('display.custom.obsolete');
+      expect(deleted).toMatchObject({ success: true, previousValue: 'value' });
+      const stored = await userStore.load('00000000-0000-0000-0000-000000000000');
+      expect(stored.displayConfig).toMatchObject({ custom: { keep: true } });
+      expect((stored.displayConfig.custom as Record<string, unknown>)).not.toHaveProperty('obsolete');
+
+      await expect(manager.deleteSetting('display.custom.obsolete')).resolves.toMatchObject({
+        success: true,
+        message: expect.stringContaining('already unset'),
+      });
+    });
+
     it('should reject __proto__ in resetConfig section', async () => {
         mockFileOperations.exists.mockResolvedValue(false);
         mockFileOperations.createDirectory.mockResolvedValue(undefined);
