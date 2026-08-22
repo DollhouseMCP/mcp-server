@@ -168,22 +168,19 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
     expect(eventsAfterSecond.length).toBe(1);
     const event = eventsAfterSecond[0];
     const details = event.details as Record<string, unknown>;
-    // Sanity-check the shape so a regression dropping `cleared`,
-    // `previous`, or `current` fails loudly.
+    // Sanity-check the non-secret transition audit shape. The v1
+    // `previous` value was a verifier derived from the cookie secret and must
+    // not be persisted or copied into audit events.
     expect(typeof event.timestamp).toBe('number');
     expect(typeof details.cleared).toBe('number');
-    expect(details.previous).toBeDefined();
     expect(details.current).toBeDefined();
-    expect(details.previous).not.toEqual(details.current);
+    expect(details.reason).toBe('mode-change');
+    expect(details.authorizationGeneration).toBe(0);
+    expect(typeof details.transitionId).toBe('string');
+    expect(details.previous).toBeUndefined();
 
-    // Cycle 22 / cycle-21 test-coverage HIGH: pin causality by
-    // computing the expected fingerprints from the same inputs the
-    // production code uses. If a future refactor decouples the issuer
-    // dimension from the fingerprint computation, the expected hash
-    // here will no longer match the recorded `current` and this
-    // assertion fails — making the silent-decoupling drift visible.
-    // Without this, `previous !== current` only proves the two opaque
-    // SHA-256 hashes differ, not that the issuer dimension drove it.
+    // Pin the issuer contribution using the same public-only input shape as
+    // production. Signing kids and cookie keys intentionally do not appear.
     const { computeFingerprint } = await import(
       '../../../../src/auth/embedded-as/modeFingerprint.js'
     );
@@ -191,18 +188,55 @@ describe('EmbeddedAuthorizationServer.ensureInitialized — H15', () => {
       provider: 'embedded',
       methodIds: ['trivial-consent'],
     };
-    // The test can't reconstruct primaryKid + primaryCookieKey
-    // (file-derived, lifecycle-dependent) but it CAN assert the
-    // issuer-derived component: compute fingerprints with each issuer
-    // holding everything else equal, and confirm the recorded
-    // current matches the second-AS issuer-set.
-    const fp1 = computeFingerprint({ ...baseInputs, issuer: 'http://127.0.0.1:65530', primaryKid: '', primaryCookieKey: '' });
-    const fp2 = computeFingerprint({ ...baseInputs, issuer: 'http://127.0.0.1:65531', primaryKid: '', primaryCookieKey: '' });
-    // The actual recorded fingerprints include the kid + cookieKey, so
-    // they won't equal fp1/fp2 directly. But fp1 vs fp2 must differ
-    // (issuer is the only changed input) — pins the issuer-dimension
-    // contribution to the fingerprint hash.
+    const fp1 = computeFingerprint({
+      ...baseInputs,
+      issuer: 'http://127.0.0.1:65530',
+      authorizationGeneration: 0,
+    });
+    const fp2 = computeFingerprint({
+      ...baseInputs,
+      issuer: 'http://127.0.0.1:65531',
+      authorizationGeneration: 0,
+    });
     expect(fp1).not.toBe(fp2);
+    expect(details.current).toBe(fp2);
+  });
+
+  it('generation increase invalidates state and rotates the signing key', async () => {
+    const sharedStorage = new InMemoryAuthStorageLayer();
+    const sharedKeyPath = path.join(tmpDir, 'generation-key.json');
+    const options = {
+      publicBaseUrl: 'http://127.0.0.1:65530',
+      keyFilePath: sharedKeyPath,
+      methods: [new TrivialConsentMethod({ defaultSubject: 'generation-test' })],
+      storage: sharedStorage,
+    };
+    const firstServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 0,
+    });
+    await firstServer.validate('warmup-not-a-real-token').catch(() => {});
+    const firstKey = JSON.parse(await fs.readFile(sharedKeyPath, 'utf8')) as { kid: string };
+    await sharedStorage.genericSet('Session', 'generation-session', { uid: 'old-session' });
+
+    const secondServer = new EmbeddedAuthorizationServer({
+      ...options,
+      authorizationGeneration: 1,
+    });
+    await secondServer.validate('warmup-not-a-real-token').catch(() => {});
+    const secondKey = JSON.parse(await fs.readFile(sharedKeyPath, 'utf8')) as { kid: string };
+
+    expect(secondKey.kid).not.toBe(firstKey.kid);
+    expect(await sharedStorage.genericGet('Session', 'generation-session')).toBeNull();
+    const events = await sharedStorage.listIdentityEvents({
+      type: 'auth.mode_switch_invalidation',
+    });
+    expect(events).toHaveLength(1);
+    expect(events[0]?.details).toMatchObject({
+      reason: 'generation-increase',
+      previousAuthorizationGeneration: 0,
+      authorizationGeneration: 1,
+    });
   });
 
   it('repeated init failures keep producing fresh attempts (no stale rejection)', async () => {

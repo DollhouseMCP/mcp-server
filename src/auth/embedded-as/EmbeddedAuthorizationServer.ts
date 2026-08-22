@@ -65,8 +65,7 @@ import {
 } from './totp/AdminTotpInteractionRoutes.js';
 import type { IConsoleIdentityResolver } from '../../web-console/identity/IConsoleIdentityResolver.js';
 import {
-  checkModeFingerprint,
-  persistModeFingerprint,
+  reconcileModeFingerprint,
   OAUTH_STATE_MODELS,
 } from './modeFingerprint.js';
 import {
@@ -219,6 +218,13 @@ export interface EmbeddedAuthorizationServerOptions {
   cookieSecretEnvOverride?: string;
 
   /**
+   * Test injection point for the monotonic authorization invalidation
+   * generation. Production callers omit this and use
+   * `DOLLHOUSE_AUTH_GENERATION`.
+   */
+  authorizationGeneration?: number;
+
+  /**
    * Cycle 24 test injection + operator escape hatch. When set, overrides
    * `env.DOLLHOUSE_AUTH_OPEN_DCR` to control whether `/reg` (Dynamic
    * Client Registration) requires an Initial Access Token. Default
@@ -272,6 +278,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
   private readonly refreshRotationGraceMs: number | undefined;
   private readonly refreshRotationCheckIpUa: boolean;
   private readonly cookieSecretEnvOverride: string | undefined;
+  private readonly authorizationGeneration: number;
   private readonly openDCR: boolean;
   private readonly rateLimitStore: IRateLimitStore | null;
   private readonly signingKeyStore: ISigningKeyStore | null;
@@ -313,6 +320,7 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
     this.refreshRotationGraceMs = options.refreshRotationGraceMs;
     this.refreshRotationCheckIpUa = options.refreshRotationCheckIpUa ?? false;
     this.cookieSecretEnvOverride = options.cookieSecretEnvOverride;
+    this.authorizationGeneration = options.authorizationGeneration ?? env.DOLLHOUSE_AUTH_GENERATION;
     this.openDCR = options.openDCR ?? env.DOLLHOUSE_AUTH_OPEN_DCR;
     this.rateLimitStore = options.rateLimitStore ?? null;
     this.signingKeyStore = options.signingKeyStore ?? null;
@@ -721,11 +729,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       ? await loadOrGenerateSigningJwksViaStore(this.signingKeyStore)
       : await loadOrGenerateSigningJwks(this.keyFilePath);
 
-    // Mode-switch invalidation. The split API (checkModeFingerprint +
-    // persistModeFingerprint) lets the AS and out-of-band tooling (dashboard,
-    // ops scripts) compute "did the mode change?" the same way. On mismatch
-    // we rotate three things — K/V state, cookie secret, AND the JWKS signing
-    // key — then persist the fingerprint reflecting the post-rotation state.
+    // Authorization-mode invalidation is coordinated through a persisted,
+    // versioned transition record. Its identity contains public mode config
+    // only; secret rotation is requested explicitly by incrementing
+    // DOLLHOUSE_AUTH_GENERATION.
     let cookieKeys = this.signingKeyStore
       ? await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride })
       : loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
@@ -763,29 +770,10 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
       provider: 'embedded',
       methodIds: this.methods.map((m) => m.id),
       issuer: this.issuer,
-      primaryKid: keyset.kid,
-      primaryCookieKey: cookieKeys[0],
+      authorizationGeneration: this.authorizationGeneration,
     };
-    const fingerprintResult = await checkModeFingerprint(this.storage, fingerprintInputs);
-
-    if (fingerprintResult.firstRun) {
-      // First run: nothing to invalidate, just record the fingerprint.
-      await persistModeFingerprint(this.storage, fingerprintInputs);
-    } else if (fingerprintResult.changed) {
-      // Invalidate FIRST, then persist the new fingerprint. Persisting
-      // before clearing would leave stale tokens valid against the new
-      // mode if a crash hit between the two. Clear-then-persist is
-      // crash-safe: a crash mid-sequence means the next boot recomputes
-      // `changed: true` and re-runs the idempotent clear.
-      // Cycle 24 / cycle-23 code LOW: forward cookieSecretEnvOverride
-      // to the mode-switch rotation calls so tests that exercise this
-      // path with the override observe the same env-driven semantics
-      // as the initial load. Production callers don't set the override,
-      // so this is a no-op outside tests.
+    await reconcileModeFingerprint(this.storage, fingerprintInputs, async (transition) => {
       const cleared = await this.storage.clearGenericByModels(OAUTH_STATE_MODELS);
-      // Phase 4.5: rotate via store when injected, else legacy file path.
-      // The store's rotate() is atomic (mark-old-inactive + insert-new in one
-      // transaction); the file path is unlink + regenerate-on-next-load.
       if (this.signingKeyStore) {
         await rotateCookieSecretViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
         cookieKeys = await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride });
@@ -802,28 +790,34 @@ export class EmbeddedAuthorizationServer implements IAuthProvider {
         await rotateSigningKey(this.keyFilePath);
         keyset = await loadOrGenerateSigningJwks(this.keyFilePath);
       }
-      // Persist with the post-rotation cookie key + new kid so the
-      // next boot sees a stable fingerprint that already reflects the
-      // rotation. Done LAST so a crash before this point re-triggers
-      // the invalidation on next boot rather than skipping it.
-      await persistModeFingerprint(this.storage, {
-        ...fingerprintInputs,
-        primaryKid: keyset.kid,
-        primaryCookieKey: cookieKeys[0],
-      });
       await this.storage.recordIdentityEvent({
         type: 'auth.mode_switch_invalidation',
         details: {
           cleared,
-          previous: fingerprintResult.previous,
-          current: fingerprintResult.current,
+          current: transition.current,
+          reason: transition.reason,
+          transitionId: transition.transitionId,
+          authorizationGeneration: transition.authorizationGeneration,
+          previousAuthorizationGeneration: transition.previousAuthorizationGeneration,
         },
         timestamp: Date.now(),
       });
       logger.warn('[EmbeddedAuthorizationServer] mode-switch detected; OAuth state cleared, cookie secret rotated', {
         cleared,
+        reason: transition.reason,
+        authorizationGeneration: transition.authorizationGeneration,
       });
-    }
+    });
+
+    // A peer may have owned and completed the transition while this replica
+    // waited. Reload unconditionally so the provider never starts with the
+    // pre-transition keys it loaded above.
+    keyset = this.signingKeyStore
+      ? await loadOrGenerateSigningJwksViaStore(this.signingKeyStore)
+      : await loadOrGenerateSigningJwks(this.keyFilePath);
+    cookieKeys = this.signingKeyStore
+      ? await loadOrGenerateCookieSigningKeysViaStore(this.signingKeyStore, { envSecret: this.cookieSecretEnvOverride })
+      : loadOrGenerateCookieSigningKeys(undefined, { envSecret: this.cookieSecretEnvOverride });
 
     const adapterFactory = createOidcAdapterFactory(this.storage, {
       refreshRotationGraceMs: this.refreshRotationGraceMs,

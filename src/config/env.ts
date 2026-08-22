@@ -466,6 +466,13 @@ const envSchema = z.object({
   DOLLHOUSE_AUTH_METHODS: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined),
 
+  /**
+   * Monotonic authorization invalidation generation. Increment for an
+   * operator-managed auth-secret rotation or intentional global sign-out.
+   * All replicas must use the same value; rollbacks must never decrement it.
+   */
+  DOLLHOUSE_AUTH_GENERATION: z.coerce.number().int().min(0).safe().default(0),
+
   /** OIDC issuer URL (required when provider=oidc). */
   DOLLHOUSE_AUTH_ISSUER: z.string().optional(),
 

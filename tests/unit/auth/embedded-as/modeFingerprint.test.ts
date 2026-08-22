@@ -1,201 +1,258 @@
-/**
- * modeFingerprint — must-fix #14 mode-switch invalidation.
- *
- * Asserts the fingerprint algorithm and the persistence-comparison
- * helper. End-to-end behavior (clearing OAuth state + rotating cookie
- * secret) is exercised via the EmbeddedAuthorizationServer initialize
- * path; this file covers the building blocks.
- */
-
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import {
   computeFingerprint,
-  checkModeFingerprint,
-  persistModeFingerprint,
+  reconcileModeFingerprint,
+  FINGERPRINT_MODEL,
+  FINGERPRINT_KEY,
+  MODE_FINGERPRINT_VERSION,
   OAUTH_STATE_MODELS,
+  type TransitioningModeFingerprintRecord,
 } from '../../../../src/auth/embedded-as/modeFingerprint.js';
 import { InMemoryAuthStorageLayer } from '../../../../src/auth/embedded-as/storage/InMemoryAuthStorageLayer.js';
 
 const baseInputs = {
   provider: 'embedded',
   methodIds: ['github', 'magic-link'] as const,
-  issuer: 'http://127.0.0.1:3000',
-  primaryKid: 'kid-abc',
-  primaryCookieKey: 'cookie-key-1',
+  issuer: 'https://mcp.example.com',
+  authorizationGeneration: 0,
 };
 
+const noOpInvalidation = async () => {};
+
 describe('computeFingerprint', () => {
-  it('is deterministic — same inputs yield the same fingerprint', () => {
-    expect(computeFingerprint(baseInputs)).toBe(computeFingerprint(baseInputs));
+  it('is deterministic and method-order independent', () => {
+    expect(computeFingerprint(baseInputs)).toBe(computeFingerprint({
+      ...baseInputs,
+      methodIds: ['magic-link', 'github'],
+    }));
   });
 
-  it('is order-insensitive on methodIds — sort canonicalizes', () => {
-    const a = computeFingerprint({ ...baseInputs, methodIds: ['github', 'magic-link'] });
-    const b = computeFingerprint({ ...baseInputs, methodIds: ['magic-link', 'github'] });
-    expect(a).toBe(b);
+  it.each([
+    [{ provider: 'oidc' }, 'provider'],
+    [{ methodIds: ['github'] }, 'methods'],
+    [{ issuer: 'https://other.example.com' }, 'issuer'],
+  ] as const)('changes when public %s identity changes', (change) => {
+    expect(computeFingerprint(baseInputs)).not.toBe(computeFingerprint({
+      ...baseInputs,
+      ...change,
+    }));
   });
 
-  it('changes when provider changes', () => {
-    const a = computeFingerprint(baseInputs);
-    const b = computeFingerprint({ ...baseInputs, provider: 'oidc' });
-    expect(a).not.toBe(b);
+  it('does not change with authorization generation', () => {
+    expect(computeFingerprint(baseInputs)).toBe(computeFingerprint({
+      ...baseInputs,
+      authorizationGeneration: 99,
+    }));
   });
 
-  it('changes when methodIds change', () => {
-    const a = computeFingerprint(baseInputs);
-    const b = computeFingerprint({ ...baseInputs, methodIds: ['github'] });
-    expect(a).not.toBe(b);
-  });
-
-  it('changes when issuer changes', () => {
-    const a = computeFingerprint(baseInputs);
-    const b = computeFingerprint({ ...baseInputs, issuer: 'http://127.0.0.1:4000' });
-    expect(a).not.toBe(b);
-  });
-
-  it('changes when primary kid changes', () => {
-    const a = computeFingerprint(baseInputs);
-    const b = computeFingerprint({ ...baseInputs, primaryKid: 'kid-xyz' });
-    expect(a).not.toBe(b);
-  });
-
-  it('changes when primary cookie key changes', () => {
-    const a = computeFingerprint(baseInputs);
-    const b = computeFingerprint({ ...baseInputs, primaryCookieKey: 'cookie-key-2' });
-    expect(a).not.toBe(b);
-  });
-
-  it('does not include the cookie key verbatim — fingerprint is safe to log', () => {
-    const fp = computeFingerprint({ ...baseInputs, primaryCookieKey: 'super-secret-cookie-key' });
-    expect(fp).not.toContain('super-secret-cookie-key');
+  it('rejects invalid generations', () => {
+    expect(() => computeFingerprint({ ...baseInputs, authorizationGeneration: -1 })).toThrow(
+      'non-negative safe integer',
+    );
   });
 });
 
-/**
- * The split API (checkModeFingerprint + persistModeFingerprint) lets the caller
- * run invalidation work BETWEEN the read and the write — a crash mid-sequence
- * then re-runs the idempotent invalidation on next boot. Replaces the earlier
- * combined `checkAndPersistModeFingerprint` which persisted before the caller's
- * invalidation could run.
- */
-describe('checkModeFingerprint + persistModeFingerprint', () => {
+describe('reconcileModeFingerprint', () => {
   let storage: InMemoryAuthStorageLayer;
 
   beforeEach(() => {
     storage = new InMemoryAuthStorageLayer();
   });
 
-  it('first run: changed=false, firstRun=true, NOTHING persisted yet', async () => {
-    const result = await checkModeFingerprint(storage, baseInputs);
-    expect(result.firstRun).toBe(true);
-    expect(result.changed).toBe(false);
-    expect(result.current).toBeTruthy();
-    // Critical contract: storage is untouched until persistModeFingerprint
-    // is called explicitly.
-    expect(await storage.genericGet('AuthModeFingerprint', 'current')).toBeNull();
+  it('atomically records a stable v2 record on first run without invalidating', async () => {
+    const invalidate = jest.fn<() => Promise<void>>(async () => {});
+    const result = await reconcileModeFingerprint(storage, baseInputs, invalidate);
+
+    expect(result).toMatchObject({ changed: false, firstRun: true });
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(await storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY)).toEqual({
+      version: MODE_FINGERPRINT_VERSION,
+      status: 'stable',
+      fingerprint: computeFingerprint(baseInputs),
+      authorizationGeneration: 0,
+    });
   });
 
-  it('persistModeFingerprint writes the fingerprint to storage', async () => {
-    await persistModeFingerprint(storage, baseInputs);
-    const stored = (await storage.genericGet('AuthModeFingerprint', 'current')) as
-      | { fingerprint?: string } | null;
-    expect(stored?.fingerprint).toBe(computeFingerprint(baseInputs));
+  it('leaves an unchanged restart alone', async () => {
+    await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    const invalidate = jest.fn<() => Promise<void>>(async () => {});
+
+    const result = await reconcileModeFingerprint(storage, baseInputs, invalidate);
+    expect(result).toMatchObject({ changed: false, firstRun: false });
+    expect(invalidate).not.toHaveBeenCalled();
   });
 
-  it('changed=true without persistModeFingerprint: next call STILL reports changed=true', async () => {
-    // The crash-safety contract: if the caller's invalidation work runs
-    // between check and persist, and the process crashes mid-sequence,
-    // the next boot must observe the unchanged stored fingerprint and
-    // re-fire the invalidation.
-    await persistModeFingerprint(storage, baseInputs);
-    const newInputs = { ...baseInputs, methodIds: ['local-password'] as const };
-    const first = await checkModeFingerprint(storage, newInputs);
-    expect(first.changed).toBe(true);
-    expect(first.previous).toBe(computeFingerprint(baseInputs));
-    expect(first.current).toBe(computeFingerprint(newInputs));
+  it('claims and completes a public mode change', async () => {
+    await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    const contexts: unknown[] = [];
+    const changedInputs = { ...baseInputs, methodIds: ['local-password'] };
 
-    // Caller crashed before calling persistModeFingerprint. Next boot:
-    const second = await checkModeFingerprint(storage, newInputs);
-    expect(second.changed).toBe(true);
-    expect(second.previous).toBe(computeFingerprint(baseInputs));
-    expect(second.current).toBe(computeFingerprint(newInputs));
+    const result = await reconcileModeFingerprint(storage, changedInputs, async (context) => {
+      contexts.push(context);
+      const pending = await storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY);
+      expect(pending).toMatchObject({ status: 'transitioning', reason: 'mode-change' });
+    });
+
+    expect(result).toMatchObject({ changed: true, reason: 'mode-change' });
+    expect(contexts).toHaveLength(1);
+    expect(await storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY)).toMatchObject({
+      status: 'stable',
+      fingerprint: computeFingerprint(changedInputs),
+    });
   });
 
-  it('changed=true → caller persists → subsequent checks are stable (changed=false)', async () => {
-    await persistModeFingerprint(storage, baseInputs);
-    const newInputs = { ...baseInputs, methodIds: ['local-password'] as const };
-    const result = await checkModeFingerprint(storage, newInputs);
-    expect(result.changed).toBe(true);
+  it('uses a generation increase for deliberate global invalidation', async () => {
+    await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    const result = await reconcileModeFingerprint(
+      storage,
+      { ...baseInputs, authorizationGeneration: 1 },
+      noOpInvalidation,
+    );
 
-    // Caller's invalidation runs, then persists.
-    await persistModeFingerprint(storage, newInputs);
-
-    const stable = await checkModeFingerprint(storage, newInputs);
-    expect(stable.changed).toBe(false);
-    expect(stable.firstRun).toBe(false);
+    expect(result).toMatchObject({ changed: true, reason: 'generation-increase' });
   });
 
-  it('persistModeFingerprint is idempotent on identical inputs', async () => {
-    await persistModeFingerprint(storage, baseInputs);
-    await persistModeFingerprint(storage, baseInputs);
-    const stored = (await storage.genericGet('AuthModeFingerprint', 'current')) as
-      | { fingerprint?: string } | null;
-    expect(stored?.fingerprint).toBe(computeFingerprint(baseInputs));
+  it('performs one transition when mode and generation change together', async () => {
+    await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    const invalidate = jest.fn<() => Promise<void>>(async () => {});
+    const result = await reconcileModeFingerprint(storage, {
+      ...baseInputs,
+      issuer: 'https://new.example.com',
+      authorizationGeneration: 1,
+    }, invalidate);
+
+    expect(result).toMatchObject({ changed: true, reason: 'mode-change' });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('migrates a legacy secret-derived record with one conservative invalidation', async () => {
+    const legacyVerifier = 'legacy-secret-derived-verifier';
+    await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, { fingerprint: legacyVerifier });
+    const contexts: unknown[] = [];
+
+    await reconcileModeFingerprint(storage, baseInputs, async (context) => {
+      contexts.push(context);
+      expect(JSON.stringify(context)).not.toContain(legacyVerifier);
+    });
+    await reconcileModeFingerprint(storage, baseInputs, async () => {
+      throw new Error('migration must not repeat');
+    });
+
+    expect(contexts).toHaveLength(1);
+    expect(JSON.stringify(await storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY)))
+      .not.toContain(legacyVerifier);
+  });
+
+  it('treats malformed records as a conservative legacy migration', async () => {
+    await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, { version: 2, status: 'surprise' });
+    const result = await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    expect(result).toMatchObject({ changed: true, reason: 'legacy-migration' });
+  });
+
+  it('rejects a generation rollback', async () => {
+    await reconcileModeFingerprint(
+      storage,
+      { ...baseInputs, authorizationGeneration: 3 },
+      noOpInvalidation,
+    );
+    await expect(reconcileModeFingerprint(
+      storage,
+      { ...baseInputs, authorizationGeneration: 2 },
+      noOpInvalidation,
+    )).rejects.toThrow('rollback refused');
+  });
+
+  it('lets exactly one replica own a concurrent transition', async () => {
+    await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    let releaseWinner: (() => void) | undefined;
+    const winnerBlocked = new Promise<void>((resolve) => { releaseWinner = resolve; });
+    let winnerStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { winnerStarted = resolve; });
+    const invalidate = jest.fn<() => Promise<void>>(async () => {
+      winnerStarted?.();
+      await winnerBlocked;
+    });
+    const nextInputs = { ...baseInputs, authorizationGeneration: 1 };
+    const options = { pollIntervalMs: 1, transitionWaitMs: 1_000 };
+
+    const first = reconcileModeFingerprint(storage, nextInputs, invalidate, options);
+    await started;
+    const second = reconcileModeFingerprint(storage, nextInputs, invalidate, options);
+    releaseWinner?.();
+    const results = await Promise.all([first, second]);
+
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    expect(results.filter((result) => result.changed)).toHaveLength(1);
+  });
+
+  it('recovers a stale transition after a crashed owner', async () => {
+    const fingerprint = computeFingerprint(baseInputs);
+    const pending: TransitioningModeFingerprintRecord = {
+      version: MODE_FINGERPRINT_VERSION,
+      status: 'transitioning',
+      fingerprint,
+      authorizationGeneration: 0,
+      transitionId: 'crashed-owner',
+      transitionStartedAt: 1_000,
+      reason: 'legacy-migration',
+    };
+    await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, pending);
+    const invalidate = jest.fn<() => Promise<void>>(async () => {});
+
+    const result = await reconcileModeFingerprint(storage, baseInputs, invalidate, {
+      now: () => 40_000,
+      transitionLeaseMs: 30_000,
+      createTransitionId: () => 'recovery-owner',
+    });
+    expect(result).toMatchObject({ changed: true, transitionId: 'recovery-owner' });
+    expect(invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves a visible transition when invalidation fails', async () => {
+    await reconcileModeFingerprint(storage, baseInputs, noOpInvalidation);
+    await expect(reconcileModeFingerprint(
+      storage,
+      { ...baseInputs, authorizationGeneration: 1 },
+      async () => { throw new Error('rotation failed'); },
+    )).rejects.toThrow('rotation failed');
+
+    expect(await storage.genericGet(FINGERPRINT_MODEL, FINGERPRINT_KEY)).toMatchObject({
+      status: 'transitioning',
+      authorizationGeneration: 1,
+    });
+  });
+
+  it('rejects conflicting replica configuration during an active transition', async () => {
+    const pending: TransitioningModeFingerprintRecord = {
+      version: MODE_FINGERPRINT_VERSION,
+      status: 'transitioning',
+      fingerprint: computeFingerprint(baseInputs),
+      authorizationGeneration: 0,
+      transitionId: 'active-owner',
+      transitionStartedAt: Date.now(),
+      reason: 'mode-change',
+    };
+    await storage.genericSet(FINGERPRINT_MODEL, FINGERPRINT_KEY, pending);
+
+    await expect(reconcileModeFingerprint(
+      storage,
+      { ...baseInputs, issuer: 'https://conflict.example.com' },
+      noOpInvalidation,
+    )).rejects.toThrow('Conflicting authorization mode transition');
   });
 });
 
 describe('OAUTH_STATE_MODELS', () => {
-  it('lists the K/V models that must be cleared on mode switch', () => {
-    expect(OAUTH_STATE_MODELS).toContain('Session');
-    expect(OAUTH_STATE_MODELS).toContain('Grant');
-    expect(OAUTH_STATE_MODELS).toContain('AccessToken');
-    expect(OAUTH_STATE_MODELS).toContain('RefreshToken');
-    expect(OAUTH_STATE_MODELS).toContain('AuthorizationCode');
-    expect(OAUTH_STATE_MODELS).toContain('Interaction');
-    expect(OAUTH_STATE_MODELS).toContain('AdminStepUpClaims');
-    expect(OAUTH_STATE_MODELS).toContain('AdminStepUpPending');
-    expect(OAUTH_STATE_MODELS).toContain('AdminTotpRouteCsrf');
-    expect(OAUTH_STATE_MODELS).toContain('ConsoleTotpEnrollment');
-  });
-
-  it('does NOT include AuthModeFingerprint (that record persists across mode switches)', () => {
-    expect(OAUTH_STATE_MODELS).not.toContain('AuthModeFingerprint');
-  });
-});
-
-describe('IAuthStorageLayer.clearGenericByModels (used by mode-switch path)', () => {
-  let storage: InMemoryAuthStorageLayer;
-
-  beforeEach(() => {
-    storage = new InMemoryAuthStorageLayer();
-  });
-
-  it('clears entries across the listed models and returns the count', async () => {
-    await storage.genericSet('Session', 's-1', { v: 1 });
-    await storage.genericSet('Session', 's-2', { v: 2 });
-    await storage.genericSet('Grant', 'g-1', { v: 3 });
-    await storage.genericSet('AccessToken', 't-1', { v: 4 });
-    // A model we're NOT clearing
-    await storage.genericSet('Survives', 'x-1', { v: 5 });
-
-    const cleared = await storage.clearGenericByModels(['Session', 'Grant', 'AccessToken']);
-    expect(cleared).toBe(4);
-
-    expect(await storage.genericGet('Session', 's-1')).toBeNull();
-    expect(await storage.genericGet('Session', 's-2')).toBeNull();
-    expect(await storage.genericGet('Grant', 'g-1')).toBeNull();
-    expect(await storage.genericGet('AccessToken', 't-1')).toBeNull();
-    // Untouched
-    expect(await storage.genericGet('Survives', 'x-1')).toEqual({ v: 5 });
-  });
-
-  it('returns 0 when no entries match', async () => {
-    expect(await storage.clearGenericByModels(['Session'])).toBe(0);
-  });
-
-  it('handles empty model list', async () => {
-    await storage.genericSet('Session', 's-1', { v: 1 });
-    expect(await storage.clearGenericByModels([])).toBe(0);
-    expect(await storage.genericGet('Session', 's-1')).toEqual({ v: 1 });
+  it('covers authorization state but not the transition record itself', () => {
+    expect(OAUTH_STATE_MODELS).toEqual(expect.arrayContaining([
+      'Session',
+      'Grant',
+      'AccessToken',
+      'RefreshToken',
+      'AuthorizationCode',
+      'Interaction',
+      'ReplayDetection',
+    ]));
+    expect(OAUTH_STATE_MODELS).not.toContain(FINGERPRINT_MODEL);
   });
 });
