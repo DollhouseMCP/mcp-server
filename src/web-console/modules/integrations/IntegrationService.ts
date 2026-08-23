@@ -96,7 +96,7 @@ export class IntegrationService {
     await deps.loginTransactions.create({
       idHash: deps.opaqueValues.hashOpaqueValue(transactionId),
       flowKind: 'integration_link',
-      stateHash: deps.opaqueValues.hashOpaqueValue(state),
+      stateHash: hashProviderState(deps.opaqueValues, providerId, state),
       pkceVerifierEnc,
       userId: auth.userId,
       consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
@@ -150,7 +150,7 @@ export class IntegrationService {
     const now = this.now();
     const transaction = await deps.loginTransactions.consume(
       idHash,
-      deps.opaqueValues.hashOpaqueValue(state),
+      hashProviderState(deps.opaqueValues, providerId, state),
       now,
     );
     if (transaction?.flowKind !== 'integration_link') {
@@ -472,9 +472,16 @@ function readBodyAccountLabel(body: unknown): string | null {
 function readStaticApiKey(body: unknown): string | null {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
   if (typeof record.api_key !== 'string') return null;
-  const value = record.api_key.trim();
-  if (value.length === 0 || Buffer.byteLength(value, 'utf8') > 8192) return null;
-  return value;
+  if (record.api_key.trim().length === 0 || Buffer.byteLength(record.api_key, 'utf8') > 8192) return null;
+  return record.api_key;
+}
+
+function hashProviderState(
+  opaqueValues: IConsoleOpaqueValueService,
+  providerId: UserIntegrationProvider,
+  state: string,
+): Buffer {
+  return opaqueValues.hashOpaqueValue(`${providerId.length}:${providerId}:${state}`);
 }
 
 function singleQueryValue(value: unknown): string | null {

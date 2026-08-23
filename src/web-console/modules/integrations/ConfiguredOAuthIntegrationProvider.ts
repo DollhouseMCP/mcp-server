@@ -26,6 +26,7 @@ import {
   canonicalizeIntegrationApiHost,
   IntegrationApiHostValidationError,
 } from '../../security/IntegrationApiHosts.js';
+import { assertDisplayString } from '../../stores/ConsoleStoreValidation.js';
 import { readBoundedResponseText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
@@ -124,10 +125,11 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_exchange_failed');
+    const metadata = validatedTokenResponseMetadata(body, oauth.scopes, oauth.accountLabel);
     return {
-      accountLabel: accountLabelFromTokenResponse(body, oauth.accountLabel),
+      accountLabel: metadata.accountLabel,
       externalInstallationId: null,
-      authorizedPermissions: { scopes: grantedScopesFromTokenResponse(body, oauth.scopes) },
+      authorizedPermissions: { scopes: metadata.scopes },
       accessToken,
       refreshToken: readString(body, 'refresh_token'),
     };
@@ -157,22 +159,27 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
   }
 
   async revokeCredentials(request: IntegrationRevocationRequest): Promise<void> {
-    if (!request.accessToken) return;
     const oauth = this.oauthDescriptor();
     const revocationUrl = readString(oauth.tokenExchange, 'revocationUrl');
     if (!revocationUrl) return;
-    const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
-      ...credentialedTokenRequestInit(
-        { token: request.accessToken },
-        oauth.clientId,
-        this.config.clientSecret,
-        oauth.tokenExchange,
-      ),
-      signal: AbortSignal.timeout(this.timeoutMs),
-      redirect: 'error',
-    });
-    if (!response.ok && response.status !== 404) {
-      throw new Error('configured_oauth_revocation_failed');
+    const tokens = [
+      request.refreshToken ? { token: request.refreshToken, hint: 'refresh_token' } : null,
+      request.accessToken && request.accessToken !== request.refreshToken
+        ? { token: request.accessToken, hint: 'access_token' }
+        : null,
+    ].filter((candidate): candidate is { readonly token: string; readonly hint: string } => candidate !== null);
+    for (const { token, hint } of tokens) {
+      const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
+        ...credentialedTokenRequestInit(
+          { token, token_type_hint: hint },
+          oauth.clientId,
+          this.config.clientSecret,
+          oauth.tokenExchange,
+        ),
+        signal: AbortSignal.timeout(this.timeoutMs),
+        redirect: 'error',
+      });
+      if (!response.ok) throw new Error('configured_oauth_revocation_failed');
     }
   }
 
@@ -280,7 +287,10 @@ function credentialedTokenRequestInit(
     'Content-Type': 'application/x-www-form-urlencoded',
   };
   if (clientAuth === 'basic') {
-    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64');
+    const basicAuth = Buffer.from(
+      `${formEncodeComponent(clientId)}:${formEncodeComponent(clientSecret)}`,
+      'utf8',
+    ).toString('base64');
     headers.Authorization = `Basic ${basicAuth}`;
   }
   return {
@@ -298,11 +308,34 @@ function accountLabelFromTokenResponse(
   return field ? readString(body, field) : null;
 }
 
+function validatedTokenResponseMetadata(
+  body: unknown,
+  requestedScopes: readonly string[],
+  accountLabel: Readonly<Record<string, unknown>>,
+): { readonly accountLabel: string | null; readonly scopes: readonly string[] } {
+  try {
+    const label = accountLabelFromTokenResponse(body, accountLabel);
+    if (label !== null) assertDisplayString(label, 'externalAccountLabel', 200);
+    const scopes = grantedScopesFromTokenResponse(body, requestedScopes);
+    if (scopes.length > 100 || Buffer.byteLength(JSON.stringify({ scopes }), 'utf8') > 4096) {
+      throw new Error('configured OAuth scope grant exceeds storage limits');
+    }
+    for (const scope of scopes) assertDisplayString(scope, 'authorizedPermissions.scopes entry', 200);
+    return { accountLabel: label, scopes };
+  } catch {
+    throw new Error('configured_oauth_token_exchange_failed');
+  }
+}
+
 function grantedScopesFromTokenResponse(body: unknown, requestedScopes: readonly string[]): readonly string[] {
   const scope = readRecord(body).scope;
   if (scope === undefined) return requestedScopes;
   if (typeof scope !== 'string') throw new Error('configured_oauth_token_exchange_failed');
   return [...new Set(scope.split(/\s+/u).filter(Boolean))];
+}
+
+function formEncodeComponent(value: string): string {
+  return new URLSearchParams({ value }).toString().slice('value='.length);
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {

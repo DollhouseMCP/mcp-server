@@ -40,6 +40,7 @@ const GITHUB_CALLBACK_PATH = '/api/v1/me/integrations/github/callback';
 const GMAIL_PATH = '/api/v1/me/integrations/gmail';
 const GMAIL_CONNECT_PATH = '/api/v1/me/integrations/gmail/connect';
 const GMAIL_CALLBACK_PATH = '/api/v1/me/integrations/gmail/callback';
+const CALENDAR_CALLBACK_PATH = '/api/v1/me/integrations/calendar/callback';
 const AIRTABLE_PATH = '/api/v1/me/integrations/airtable';
 const AIRTABLE_CONNECT_PATH = '/api/v1/me/integrations/airtable/connect';
 const PUBLIC_BASE_URL = 'https://console.example';
@@ -639,7 +640,7 @@ describe('IntegrationModule', () => {
     await loginTransactions.create({
       idHash: opaqueValues.hashOpaqueValue(transactionId),
       flowKind: 'integration_link',
-      stateHash: opaqueValues.hashOpaqueValue(state),
+      stateHash: opaqueValues.hashOpaqueValue(`${'github'.length}:github:${state}`),
       pkceVerifierEnc: secretEncryption.encrypt(Buffer.from('pkce-verifier', 'utf8'), {
         secretClass: 'pkce_verifier',
         ownerId: 'integration:wrong-transaction',
@@ -877,6 +878,50 @@ describe('IntegrationModule', () => {
     expect(JSON.stringify(status.body)).not.toContain('ciphertext');
   });
 
+  it('binds a configured OAuth transaction to the provider callback route', async () => {
+    const fetchImpl = jest.fn<typeof fetch>(() => Promise.resolve(new Response(JSON.stringify({
+      access_token: 'should-not-be-used',
+    }), { status: 200 })));
+    const gmail = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      ...configuredOAuthNetwork(fetchImpl),
+    });
+    const calendar = new ConfiguredOAuthIntegrationProvider({
+      descriptor: calendarDescriptorFixture(),
+      clientSecret: 'calendar-client-secret',
+      ...configuredOAuthNetwork(fetchImpl),
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      loginTransactions: new InMemoryLoginTransactionStore(),
+      opaqueValues: new HmacConsoleOpaqueValueService(Buffer.alloc(32, 8)),
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [gmail, calendar],
+      publicBaseUrl: PUBLIC_BASE_URL,
+      now: () => NOW,
+    });
+    const connect = findRoute(module.routes, GMAIL_CONNECT_PATH, 'POST');
+    const wrongCallback = findRoute(module.routes, CALENDAR_CALLBACK_PATH);
+    const started = await connect.handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const state = new URL(String((started.body as { authorize_url: string }).authorize_url))
+      .searchParams.get('state');
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+
+    await expect(wrongCallback.handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }))).resolves.toMatchObject({ status: 302 });
+    await expect(store.findByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'calendar')).resolves.toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('stores and revokes static API key credentials without OAuth', async () => {
     const provider = new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture());
     const store = new InMemoryUserIntegrationStore();
@@ -895,7 +940,7 @@ describe('IntegrationModule', () => {
 
     const connected = await connect.handler(consoleRequest({
       body: {
-        api_key: 'airtable-api-key-secret',
+        api_key: '  airtable-api-key-secret\t',
         account_label: 'Alice Airtable',
       },
     }));
@@ -921,7 +966,7 @@ describe('IntegrationModule', () => {
     expect(secretEncryption.decrypt(stored?.accessTokenCiphertext ?? Buffer.alloc(0), {
       secretClass: 'integration_access_token',
       ownerId: `airtable:${USER_ID}`,
-    }).toString('utf8')).toBe('airtable-api-key-secret');
+    }).toString('utf8')).toBe('  airtable-api-key-secret\t');
 
     const revoked = await disconnect.handler(consoleRequest());
 
@@ -1119,6 +1164,17 @@ function staticApiKeyDescriptorFixture(): IntegrationDescriptorRecord {
     operationPromotion: {},
     createdAt: NOW,
     updatedAt: NOW,
+  };
+}
+
+function calendarDescriptorFixture(): IntegrationDescriptorRecord {
+  const base = oauthDescriptorFixture();
+  return {
+    ...base,
+    id: '00000000-0000-4000-8000-000000000103',
+    provider: 'calendar',
+    displayName: 'Calendar',
+    apiHosts: ['calendar.googleapis.com'],
   };
 }
 

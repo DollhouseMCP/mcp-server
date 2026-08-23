@@ -55,6 +55,7 @@ function providerWith(input: {
   readonly dnsLookup: DnsLookup;
   readonly fetch?: PinnedFetch;
   readonly descriptor?: IntegrationDescriptorRecord;
+  readonly clientSecret?: string;
 }) {
   const pins: OutboundPin[] = [];
   const fetchCalls: Array<{
@@ -83,7 +84,7 @@ function providerWith(input: {
   });
   const provider = new ConfiguredOAuthIntegrationProvider({
     descriptor: input.descriptor ?? descriptor(),
-    clientSecret: 'gmail-client-secret',
+    clientSecret: input.clientSecret ?? 'gmail-client-secret',
     pinnedOutbound: factory as unknown as PinnedOutboundFactory,
     dnsLookup: input.dnsLookup,
   });
@@ -173,7 +174,11 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     await expect(provider.refreshCredentials({ refreshToken: 'refresh-token' })).resolves.toMatchObject({
       accessToken: 'fresh-access-token',
     });
-    await expect(provider.revokeCredentials({ accessToken: 'access-token' })).resolves.toBeUndefined();
+    await expect(provider.revokeCredentials({
+      accessToken: 'access-token',
+      refreshToken: null,
+      externalInstallationId: null,
+    })).resolves.toBeUndefined();
 
     expect(pins).toEqual(Array.from({ length: 3 }, () => ({
       hostname: TOKEN_HOST,
@@ -205,6 +210,29 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(fetchCalls[0].body).not.toContain('client_secret=');
   });
 
+  it('form-encodes reserved characters in HTTP Basic client credentials', async () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider, fetchCalls } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      clientSecret: 'secret% value',
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          clientId: 'client:id',
+          tokenExchange: { ...base.oauth.tokenExchange, clientAuth: 'basic' },
+        },
+      },
+    });
+
+    await provider.exchangeAuthorizationCode(EXCHANGE_REQUEST);
+
+    expect(fetchCalls[0].authorization).toBe(
+      `Basic ${Buffer.from('client%3Aid:secret%25+value', 'utf8').toString('base64')}`,
+    );
+  });
+
   it('honors HTTP Basic client auth during revocation', async () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');
@@ -219,12 +247,44 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
       },
     });
 
-    await provider.revokeCredentials({ accessToken: 'access-token' });
+    await provider.revokeCredentials({
+      accessToken: 'access-token',
+      refreshToken: null,
+      externalInstallationId: null,
+    });
 
     expect(fetchCalls[0].authorization).toBe(
       `Basic ${Buffer.from('gmail-client-id:gmail-client-secret', 'utf8').toString('base64')}`,
     );
-    expect(fetchCalls[0].body).toBe('token=access-token');
+    expect(fetchCalls[0].body).toBe('token=access-token&token_type_hint=access_token');
+  });
+
+  it('revokes refresh credentials before access credentials', async () => {
+    const { provider, fetchCalls } = providerWith({ dnsLookup: lookupReturning(PUBLIC_ADDRESS) });
+
+    await provider.revokeCredentials({
+      accessToken: 'access-token',
+      refreshToken: 'refresh-token',
+      externalInstallationId: null,
+    });
+
+    expect(fetchCalls.map(call => call.body)).toEqual([
+      'token=refresh-token&token_type_hint=refresh_token&client_id=gmail-client-id&client_secret=gmail-client-secret',
+      'token=access-token&token_type_hint=access_token&client_id=gmail-client-id&client_secret=gmail-client-secret',
+    ]);
+  });
+
+  it('treats a missing revocation endpoint response as failure', async () => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response('{}', { status: 404 })),
+    });
+
+    await expect(provider.revokeCredentials({
+      accessToken: 'access-token',
+      refreshToken: null,
+      externalInstallationId: null,
+    })).rejects.toThrow('configured_oauth_revocation_failed');
   });
 
   it('records scopes returned by the provider instead of overstating the grant', async () => {
@@ -239,6 +299,22 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)).resolves.toMatchObject({
       authorizedPermissions: { scopes: ['gmail.metadata', 'gmail.readonly'] },
     });
+  });
+
+  it.each([
+    [{ access_token: 'fresh-access-token', email: 'x'.repeat(201) }],
+    [{
+      access_token: 'fresh-access-token',
+      scope: Array.from({ length: 101 }, (_, index) => `scope-${index}`).join(' '),
+    }],
+  ])('rejects token-response metadata that cannot be stored safely', async responseBody => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(JSON.stringify(responseBody), { status: 200 })),
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST))
+      .rejects.toThrow('configured_oauth_token_exchange_failed');
   });
 
   it('fails closed when refresh is unsupported', async () => {
