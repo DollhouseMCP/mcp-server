@@ -38,6 +38,7 @@ export interface IntegrationDescriptorRecord {
 }
 
 export interface IntegrationOAuthDescriptor {
+  readonly clientId: string;
   readonly authorizationUrl: string;
   readonly tokenUrl: string;
   readonly scopes: readonly string[];
@@ -174,6 +175,7 @@ function validateAuthStrategy(record: Pick<
 }
 
 function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor): void {
+  assertDisplayString(oauth.clientId, 'oauth.clientId', 200);
   validatePublicHttpsUrl(oauth.authorizationUrl, 'oauth.authorizationUrl');
   validatePublicHttpsUrl(oauth.tokenUrl, 'oauth.tokenUrl');
   const pkce: string = oauth.pkce;

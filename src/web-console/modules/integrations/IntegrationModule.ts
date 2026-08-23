@@ -1,4 +1,4 @@
-import type { ConsoleModuleDescriptor } from '../../platform/ConsolePlatformTypes.js';
+import type { ConsoleModuleDescriptor, ConsoleRouteDefinition } from '../../platform/ConsolePlatformTypes.js';
 import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueValues.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
@@ -7,6 +7,7 @@ import type { IGitHubIntegrationProvider } from './GitHubIntegrationProvider.js'
 import {
   createGitHubIntegrationProvider,
   createUnavailableGitHubIntegrationProvider,
+  type IIntegrationProvider,
 } from './IntegrationProvider.js';
 import { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 import type { IIntegrationSecurityEventSink } from './IntegrationSecurityEvents.js';
@@ -14,6 +15,7 @@ import { IntegrationService } from './IntegrationService.js';
 import { serializeGitHubIntegrationStatus } from './IntegrationDtos.js';
 import {
   projectGitHubIntegrationStatus,
+  projectConfiguredIntegrationStatus,
   projectIntegrationConnect,
   projectIntegrationList,
 } from './IntegrationPrivacyProjectors.js';
@@ -26,6 +28,7 @@ export interface IntegrationModuleOptions {
   readonly opaqueValues?: IConsoleOpaqueValueService | null;
   readonly secretEncryption?: ISecretEncryptionService | null;
   readonly githubProvider?: IGitHubIntegrationProvider | null;
+  readonly configuredProviders?: readonly IIntegrationProvider[];
   readonly publicBaseUrl?: string | null;
   readonly securityEventSink?: IIntegrationSecurityEventSink | null;
   readonly now?: () => Date;
@@ -36,6 +39,7 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
     options.githubProvider
       ? createGitHubIntegrationProvider(options.githubProvider, serializeGitHubIntegrationStatus)
       : createUnavailableGitHubIntegrationProvider(serializeGitHubIntegrationStatus),
+    ...(options.configuredProviders ?? []),
   ]);
   const service = new IntegrationService({
     store: options.integrationStore,
@@ -124,6 +128,70 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
         privacyProjector: projectGitHubIntegrationStatus,
         handler: req => service.disconnectGitHub(req),
       },
+      ...configuredProviderRoutes(options.configuredProviders ?? [], service),
     ],
   };
+}
+
+function configuredProviderRoutes(
+  providers: readonly IIntegrationProvider[],
+  service: IntegrationService,
+): ConsoleModuleDescriptor['routes'] {
+  return providers.flatMap(provider => {
+    const basePath = `/api/v1/me/integrations/${provider.descriptor.id}`;
+    const routes: ConsoleRouteDefinition[] = [
+      {
+        method: 'GET',
+        path: basePath,
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        privacyProjector: projectConfiguredIntegrationStatus,
+        handler: req => service.getProvider(req, provider.descriptor.id),
+      },
+      {
+        method: 'POST',
+        path: `${basePath}/connect`,
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'required',
+        privacyProjector: provider.credentialStrategy === 'static_api_key'
+          ? projectConfiguredIntegrationStatus
+          : projectIntegrationConnect,
+        handler: req => service.connectProvider(req, provider.descriptor.id),
+      },
+      {
+        method: 'DELETE',
+        path: basePath,
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'authenticated_user',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'required',
+        privacyProjector: projectConfiguredIntegrationStatus,
+        handler: req => service.disconnectProvider(req, provider.descriptor.id),
+      },
+    ];
+    if (provider.credentialStrategy === 'oauth2_authorization_code') {
+      routes.push({
+        method: 'GET',
+        path: `${basePath}/callback`,
+        audience: 'self',
+        requiredCapability: SELF_CAPABILITY,
+        ownership: 'flow_transaction',
+        elevation: 'none',
+        privacyClass: 'self_private',
+        idempotency: 'not_applicable',
+        handler: req => service.completeProviderCallback(req, provider.descriptor.id),
+      });
+    }
+    return routes;
+  });
 }
