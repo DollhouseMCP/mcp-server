@@ -84,6 +84,25 @@ export interface RuntimeSessionListQuery {
   readonly now?: Date;
 }
 
+/** Keyset position for the cross-user operational sessions list: `(last_active_at, session_id)` of the prior page's last row. */
+export interface RuntimeOperationalCursor {
+  readonly lastActiveAt: Date;
+  readonly sessionId: string;
+}
+
+export interface RuntimeOperationalListQuery {
+  readonly limit?: number;
+  readonly now?: Date;
+  readonly after?: RuntimeOperationalCursor;
+  readonly userId?: string;
+  readonly status?: RuntimeSessionStatus;
+}
+
+export interface RuntimeOperationalPresencePage {
+  readonly items: RuntimeSessionPresence[];
+  readonly nextCursor: RuntimeOperationalCursor | null;
+}
+
 export interface RuntimeTerminationCommand {
   readonly commandId: string;
   readonly kind: 'terminate_session';
@@ -143,7 +162,7 @@ export interface IRuntimeSessionControlStore {
   sweepStalePresence(before?: Date): Promise<number>;
   findPresence(sessionId: string, now?: Date): Promise<RuntimeSessionPresence | null>;
   listPresenceByUser(userId: string, query?: RuntimeSessionListQuery): Promise<RuntimeSessionPresence[]>;
-  listOperationalPresence(query?: RuntimeSessionListQuery): Promise<RuntimeSessionPresence[]>;
+  listOperationalPresence(query?: RuntimeOperationalListQuery): Promise<RuntimeOperationalPresencePage>;
   createTerminationCommand(input: RuntimeTerminationCommandInput): Promise<RuntimeTerminationCommand>;
   listPendingCommandsForReplica(
     replicaId: string,
@@ -151,6 +170,8 @@ export interface IRuntimeSessionControlStore {
   ): Promise<RuntimeTerminationCommand[]>;
   acknowledgeCommand(input: RuntimeTerminationAckInput): Promise<boolean>;
   getCommandAck(commandId: string): Promise<RuntimeTerminationAck | null>;
+  /** The termination command row by id (for command-status ownership checks). Null when unknown. */
+  getCommand(commandId: string): Promise<RuntimeTerminationCommand | null>;
 }
 
 const STATUSES = ['active', 'closing'] as const satisfies readonly RuntimeSessionStatus[];
@@ -222,6 +243,34 @@ export function validateRuntimeListQuery(query: RuntimeSessionListQuery = {}): R
     limit,
     now: query.now ?? new Date(),
   };
+}
+
+export interface ValidatedRuntimeOperationalListQuery {
+  readonly limit: number;
+  readonly now: Date;
+  readonly after: RuntimeOperationalCursor | undefined;
+  readonly userId: string | undefined;
+  readonly status: RuntimeSessionStatus | undefined;
+}
+
+export function validateRuntimeOperationalListQuery(
+  query: RuntimeOperationalListQuery = {},
+): ValidatedRuntimeOperationalListQuery {
+  const limit = query.limit ?? 100;
+  if (!Number.isInteger(limit) || limit < 1 || limit > 500) {
+    throw new ConsoleStoreValidationError('runtime session list limit must be between 1 and 500');
+  }
+  if (query.userId !== undefined) assertUuid(query.userId, 'userId');
+  if (query.status !== undefined && !isRuntimeSessionStatus(query.status)) {
+    throw new ConsoleStoreValidationError(`unknown runtime session status '${query.status}'`);
+  }
+  if (query.after !== undefined) {
+    validateSessionId(query.after.sessionId);
+    if (!(query.after.lastActiveAt instanceof Date) || Number.isNaN(query.after.lastActiveAt.getTime())) {
+      throw new ConsoleStoreValidationError('after.lastActiveAt must be a valid date');
+    }
+  }
+  return { limit, now: query.now ?? new Date(), after: query.after, userId: query.userId, status: query.status };
 }
 
 export function validateSessionId(sessionId: string): void {

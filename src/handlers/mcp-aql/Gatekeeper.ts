@@ -502,6 +502,31 @@ export class Gatekeeper {
   }
 
   /**
+   * Check if a CLI tool call has a valid approval for this exact input.
+   * Use for server-side tools where approval granularity matters.
+   */
+  async checkCliApprovalForInput(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    options: { readonly allowToolSession?: boolean } = {},
+  ): Promise<CliApprovalRecord | undefined> {
+    const session = this.resolveSession();
+    const record = await session.checkCliApprovalForInput(toolName, toolInput, options);
+
+    if (record) {
+      SecurityMonitor.logSecurityEvent({
+        type: 'CLI_APPROVAL_CONSUMED',
+        severity: 'LOW',
+        source: 'Gatekeeper.checkCliApprovalForInput',
+        details: `Input-scoped CLI approval consumed for ${toolName} (scope: ${record.scope})`,
+        additionalData: { requestId: record.requestId, toolName, scope: record.scope, sessionId: session.sessionId },
+      });
+    }
+
+    return record;
+  }
+
+  /**
    * Get all pending CLI approval requests.
    */
   getPendingCliApprovals(): CliApprovalRecord[] {

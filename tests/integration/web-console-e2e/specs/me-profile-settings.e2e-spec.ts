@@ -1,3 +1,5 @@
+import { beforeAll, describe, expect, it } from '@jest/globals';
+
 import { setupWorld, type World } from '../harness/world.js';
 
 let world: World;

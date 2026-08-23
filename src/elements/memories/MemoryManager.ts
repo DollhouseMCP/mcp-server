@@ -40,7 +40,7 @@ import { TriggerValidationService } from '../../services/validation/TriggerValid
 import { ValidationService } from '../../services/validation/ValidationService.js';
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
-import * as path from 'path';
+import * as path from 'node:path';
 import * as fs from 'node:fs/promises';
 import * as crypto from 'crypto';
 import { ElementMessages } from '../../utils/elementMessages.js';
@@ -741,22 +741,37 @@ export class MemoryManager extends BaseElementManager<Memory> {
    * Memories are pure YAML (no frontmatter delimiters), so they need different
    * validation than frontmatter-based elements. The base class validateSerializedContent
    * handles frontmatter elements; this override handles pure YAML memories.
-   * Shared by save() (via super.save) and assertPersistable() so the pre-flight
-   * check and the actual write can never disagree.
+   *
+   * Called by the base class from super.save() before any write. Delegates to
+   * validateSerializedMemoryYaml so the on-save check and the assertPersistable()
+   * preflight can never disagree.
    */
   protected override validateSerializedContent(content: string): void {
+    this.validateSerializedMemoryYaml(content);
+  }
+
+  /**
+   * Validation applied to serialized memory YAML before any disk write.
+   * Shared by save() (via validateSerializedContent) and assertPersistable() so the
+   * pre-flight check and the actual write can never disagree.
+   *
+   * Checks: size enforcement (Fix #916/#918), YAML bomb detection (Fix #908/#918),
+   * and gatekeeper policy validation.
+   */
+  private validateSerializedMemoryYaml(yamlContent: string): void {
     // Fix #916/#918, tightened for #2329: cap at MAX_YAML_SIZE (256KB) — the same
     // limit parseContent() enforces on load. The previous 2MB cap allowed writing
     // files the loader would then reject.
-    if (content.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
+    if (yamlContent.length > MEMORY_CONSTANTS.MAX_YAML_SIZE) {
       SecurityMonitor.logSecurityEvent({
         type: MEMORY_SECURITY_EVENTS.MEMORY_SAVE_FAILED,
         severity: 'HIGH',
-        source: 'MemoryManager.validateSerializedContent',
-        details: `Memory exceeds maximum serialized size (${content.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
+        source: 'MemoryManager.validateSerializedMemoryYaml',
+        details: `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE})`,
+        metadata: { contentLength: yamlContent.length, limit: MEMORY_CONSTANTS.MAX_YAML_SIZE }
       });
       throw new Error(
-        `Memory exceeds maximum serialized size (${content.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
+        `Memory exceeds maximum serialized size (${yamlContent.length} > ${MEMORY_CONSTANTS.MAX_YAML_SIZE} bytes). ` +
         `This memory is full — start a new memory for additional entries.`
       );
     }
@@ -766,19 +781,15 @@ export class MemoryManager extends BaseElementManager<Memory> {
     // limit), so every save of a memory whose serialized YAML exceeded 64KB threw
     // here, and the deferred save path swallowed the error while addEntry kept
     // reporting success. The cap now matches the memory size limit enforced above
-    // and on load. parseRawYaml runs ContentValidator.validateYamlContent with the
-    // same cap internally (Fix #908/#918), so bomb detection covers every size —
-    // the previous `<= MAX_YAML_LENGTH` guard skipped it for content over 64KB.
+    // and on load. parseRawYaml applies safe-schema parsing plus expanded-graph
+    // complexity limits with the same cap internally. Scalar entry text is
+    // governed by memory policy, while control fields remain subject to the
+    // content scanner below.
     const validationStart = Date.now();
-    // Entries are stored as UNTRUSTED and scanned asynchronously (#1315).
-    // Blocking every append on all historical prose lets scanner-rule changes
-    // permanently brick an append-only memory (#2440). Keep structural YAML,
-    // Unicode, bomb, safe-schema, size, and Gatekeeper validation enabled.
-    const parsedYaml = SecureYamlParser.parseRawYaml(
-      content,
-      MEMORY_CONSTANTS.MAX_YAML_SIZE,
-      { detectContentPatterns: false },
-    );
+    const parsedYaml = SecureYamlParser.parseRawYaml(yamlContent, {
+      maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+      contentPolicy: 'structure-only',
+    });
     if (!validateMemoryControlFields(parsedYaml)) {
       throw new Error(
         'Malicious YAML content detected in memory metadata, instructions, or auxiliary entry fields'
@@ -786,7 +797,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     }
     const validationMs = Date.now() - validationStart;
     if (validationMs > 50) {
-      logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${content.length} bytes`);
+      logger.warn(`[MemoryManager] Write-path YAML validation took ${validationMs}ms for ${yamlContent.length} bytes`);
     }
     const gatekeeperErrors = [
       ...getGatekeeperAuthoringErrors(parsedYaml),
@@ -2084,7 +2095,7 @@ export class MemoryManager extends BaseElementManager<Memory> {
     let sanitizedDescription = '';
     if (metadataSource.description) {
       const descResult = this.validationService.validateAndSanitizeInput(metadataSource.description, {
-        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+        maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
         allowSpaces: true,
         fieldType: 'description'
       });

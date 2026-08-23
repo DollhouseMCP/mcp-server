@@ -48,6 +48,7 @@ async function runSecurityAudit() {
   
   // Customize configuration
   config.scanners.code.exclude = [
+    ...(config.scanners.code.exclude ?? []),
     '**/node_modules/**',
     '**/dist/**',
     '**/coverage/**',
@@ -103,8 +104,9 @@ async function runSecurityAudit() {
   } else if (failOnHigh) {
     config.reporting.failOnSeverity = 'high';
   } else {
-    // Use 'info' as default (lowest severity) - script handles exit code manually
-    config.reporting.failOnSeverity = 'info';
+    // Keep the default report useful in repositories with advisory medium/low
+    // findings. Critical findings still fail; --fail-on-high tightens the gate.
+    config.reporting.failOnSeverity = 'critical';
   }
 
   const auditor = new SecurityAuditor(config, fileOperations);

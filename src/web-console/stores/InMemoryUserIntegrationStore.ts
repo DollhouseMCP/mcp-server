@@ -2,11 +2,14 @@ import { randomUUID } from 'node:crypto';
 
 import {
   cloneUserIntegrationRecord,
+  GITHUB_USER_INTEGRATION_PROVIDER,
   type IUserIntegrationStore,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
   type UserIntegrationErrorInput,
   type UserIntegrationProvider,
+  type UserIntegrationRefreshInput,
+  type UserIntegrationRefreshResult,
   type UserIntegrationRecord,
   validateUserIntegrationRecord,
 } from './IUserIntegrationStore.js';
@@ -15,6 +18,7 @@ import { assertUuid } from './ConsoleStoreValidation.js';
 export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   private readonly records = new Map<string, UserIntegrationRecord>();
   private readonly activeProviderIndex = new Map<string, string>();
+  private readonly refreshLocks = new Map<string, Promise<void>>();
 
   constructor(records: readonly UserIntegrationRecord[] = []) {
     for (const record of records) {
@@ -45,12 +49,13 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       id: randomUUID(),
       userId: input.userId,
       provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId ?? null,
       externalAccountLabel: input.externalAccountLabel,
       externalInstallationId: input.externalInstallationId,
       authorizedPermissions: input.authorizedPermissions,
       accessTokenCiphertext: input.accessTokenCiphertext,
       refreshTokenCiphertext: input.refreshTokenCiphertext,
-      credentialKeyVersion: null,
+      credentialKeyVersion: input.credentialKeyVersion ?? null,
       status: 'connected',
       errorReason: null,
       connectedAt: input.connectedAt,
@@ -61,6 +66,25 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     return cloneUserIntegrationRecord(record);
   }
 
+  async refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
+    assertUuid(input.userId, 'userId');
+    const key = activeProviderKey(input.userId, input.provider);
+    const previous = this.refreshLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const tail = previous.catch(() => { /* ignore prior holder rejection */ }).then(() => current);
+    this.refreshLocks.set(key, tail);
+    await previous.catch(() => { /* ignore prior holder rejection */ });
+    try {
+      return await this.refreshLocked(input);
+    } finally {
+      release();
+      if (this.refreshLocks.get(key) === tail) this.refreshLocks.delete(key);
+    }
+  }
+
   async recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord> {
     await Promise.resolve();
     this.clearActive(input.userId, input.provider, input.occurredAt);
@@ -68,9 +92,10 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       id: randomUUID(),
       userId: input.userId,
       provider: input.provider,
+      integrationDescriptorId: input.integrationDescriptorId ?? null,
       externalAccountLabel: null,
       externalInstallationId: null,
-      authorizedPermissions: defaultAuthorizedPermissions(),
+      authorizedPermissions: defaultAuthorizedPermissions(input.provider),
       accessTokenCiphertext: null,
       refreshTokenCiphertext: null,
       credentialKeyVersion: null,
@@ -101,6 +126,26 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     return cloneUserIntegrationRecord(disconnected);
   }
 
+  async revokeAllByDescriptor(integrationDescriptorId: string, revokedAt: Date): Promise<number> {
+    await Promise.resolve();
+    assertUuid(integrationDescriptorId, 'integrationDescriptorId');
+    let revoked = 0;
+    for (const record of this.records.values()) {
+      if (record.integrationDescriptorId !== integrationDescriptorId || record.revokedAt !== null) continue;
+      this.records.set(record.id, cloneUserIntegrationRecord({
+        ...record,
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status: 'revoked',
+        errorReason: null,
+        revokedAt,
+      }));
+      this.activeProviderIndex.delete(activeProviderKey(record.userId, record.provider));
+      revoked++;
+    }
+    return revoked;
+  }
+
   set(record: UserIntegrationRecord): void {
     validateUserIntegrationRecord(record);
     const cloned = cloneUserIntegrationRecord(record);
@@ -127,13 +172,48 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     }
     this.activeProviderIndex.delete(key);
   }
+
+  private async refreshLocked(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
+    const activeId = this.activeProviderIndex.get(activeProviderKey(input.userId, input.provider));
+    const active = activeId ? this.records.get(activeId) : null;
+    if (active?.status !== 'connected' || active.revokedAt !== null || !active.accessTokenCiphertext
+        || (active.integrationDescriptorId ?? null) !== input.integrationDescriptorId) {
+      return { kind: 'missing', record: null };
+    }
+    if (!active.accessTokenCiphertext.equals(input.staleAccessTokenCiphertext)) {
+      return { kind: 'reused', record: cloneUserIntegrationRecord(active) };
+    }
+    const decision = await input.refresh(cloneUserIntegrationRecord(active));
+    const updated: UserIntegrationRecord = decision.kind === 'refreshed'
+      ? {
+          ...active,
+          accessTokenCiphertext: decision.accessTokenCiphertext,
+          refreshTokenCiphertext: decision.refreshTokenCiphertext,
+          credentialKeyVersion: decision.credentialKeyVersion ?? active.credentialKeyVersion,
+          status: 'connected',
+          errorReason: null,
+        }
+      : {
+          ...active,
+          status: 'error',
+          errorReason: decision.errorReason,
+        };
+    this.set(updated);
+    return {
+      kind: decision.kind,
+      record: cloneUserIntegrationRecord(updated),
+    };
+  }
 }
 
-function defaultAuthorizedPermissions(): Readonly<Record<string, unknown>> {
-  return {
-    repository_selection: 'unknown',
-    permissions: { contents: 'none' },
-  };
+function defaultAuthorizedPermissions(provider: UserIntegrationProvider): Readonly<Record<string, unknown>> {
+  if (provider === GITHUB_USER_INTEGRATION_PROVIDER) {
+    return {
+      repository_selection: 'unknown',
+      permissions: { contents: 'none' },
+    };
+  }
+  return { scopes: [] };
 }
 
 function activeProviderKey(userId: string, provider: UserIntegrationProvider): string {

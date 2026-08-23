@@ -14,6 +14,7 @@ import { ValidationService, type ValidationResult as InputValidationResult } fro
 import { TriggerValidationService } from './TriggerValidationService.js';
 import { MetadataService } from '../MetadataService.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
+import type { ContentValidatorOptions } from '../../security/contentValidator.js';
 import { InputNormalizer } from '../../security/InputNormalizer.js';
 import {
   ElementValidator,
@@ -427,9 +428,10 @@ export class GenericElementValidator implements ElementValidator {
       return ValidatorHelpers.fail(["Description must be a string"]);
     }
 
-    if (description.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+    if (description.length > SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH) {
       return ValidatorHelpers.fail([
-        `Description exceeds maximum YAML/frontmatter length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
+        `Description exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters ` +
+        '(frontmatter overhead reserved)'
       ]);
     }
 
@@ -452,7 +454,7 @@ export class GenericElementValidator implements ElementValidator {
 
   private sanitizeDescriptionInput(description: string): InputValidationResult {
     return this.validationService.validateAndSanitizeInput(description, {
-      maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
+      maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
       allowSpaces: true,
       fieldType: 'description'
     });
@@ -483,7 +485,8 @@ export class GenericElementValidator implements ElementValidator {
 
     // Use ValidationService for content validation
     const result = this.validationService.validateContent(content, {
-      maxLength: max
+      maxLength: max,
+      contentContext: this.contentValidationContext(),
     });
 
     if (!result.isValid) {
@@ -502,6 +505,23 @@ export class GenericElementValidator implements ElementValidator {
       errors: [],
       warnings
     };
+  }
+
+  private contentValidationContext(): ContentValidatorOptions['contentContext'] {
+    switch (this.elementType) {
+      case ElementType.PERSONA:
+        return 'persona';
+      case ElementType.SKILL:
+        return 'skill';
+      case ElementType.TEMPLATE:
+        return 'template';
+      case ElementType.AGENT:
+        return 'agent';
+      case ElementType.MEMORY:
+        return 'memory';
+      default:
+        return undefined;
+    }
   }
 
   /**

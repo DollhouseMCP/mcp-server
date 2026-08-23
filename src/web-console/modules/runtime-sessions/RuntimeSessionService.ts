@@ -1,15 +1,29 @@
 import type {
+  IRuntimeSessionControlStore,
+  RuntimeOperationalCursor,
   RuntimeSessionPresence,
+  RuntimeTerminationAck,
   RuntimeTerminationReason,
- IRuntimeSessionControlStore } from '../../services/runtime/IRuntimeSessionControlStore.js';
+} from '../../services/runtime/IRuntimeSessionControlStore.js';
+import { decodeConsoleCursor, encodeConsoleCursor } from '../../platform/ConsoleCursor.js';
 import type { IConsoleAccountAdminStore } from '../../stores/IConsoleAccountAdminStore.js';
 import type {
   RuntimeSessionAccountDto,
   RuntimeSessionOperationalDto,
+  RuntimeSessionOperationalListDto,
   RuntimeSessionRevokeAllDto,
   RuntimeSessionSelfDto,
   RuntimeTerminationAcceptedDto,
+  RuntimeTerminationCommandStatusDto,
 } from './RuntimeSessionDtos.js';
+import type { RuntimeSessionStatus } from '../../../database/schema/index.js';
+
+export interface OperationalSessionListQuery {
+  readonly limit?: number;
+  readonly cursor?: string | null;
+  readonly userId?: string;
+  readonly status?: RuntimeSessionStatus;
+}
 
 export class RuntimeSessionService {
   constructor(private readonly options: {
@@ -64,14 +78,48 @@ export class RuntimeSessionService {
     };
   }
 
-  async listOperationalSessions(): Promise<RuntimeSessionOperationalDto[]> {
-    const sessions = await this.options.runtimeStore.listOperationalPresence({ now: this.now() });
-    return sessions.map(toOperationalDto);
+  async listOperationalSessions(
+    query: OperationalSessionListQuery = {},
+  ): Promise<RuntimeSessionOperationalListDto> {
+    const limit = query.limit ?? 100;
+    const after = decodeOperationalCursor(query.cursor ?? null);
+    const page = await this.options.runtimeStore.listOperationalPresence({
+      now: this.now(),
+      limit,
+      after: after ?? undefined,
+      userId: query.userId,
+      status: query.status,
+    });
+    return {
+      items: page.items.map(toOperationalDto),
+      page: {
+        limit,
+        cursor: query.cursor ?? null,
+        next_cursor: page.nextCursor ? encodeOperationalCursor(page.nextCursor) : null,
+      },
+    };
   }
 
   async getOperationalSession(sessionId: string): Promise<RuntimeSessionOperationalDto | null> {
     const session = await this.options.runtimeStore.findPresence(sessionId, this.now());
     return session ? toOperationalDto(session) : null;
+  }
+
+  /** Operator-facing termination command status (any command). Null when the command id is unknown. */
+  async getCommandStatus(commandId: string): Promise<RuntimeTerminationCommandStatusDto | null> {
+    const command = await this.options.runtimeStore.getCommand(commandId);
+    if (!command) return null;
+    return toCommandStatusDto(commandId, await this.options.runtimeStore.getCommandAck(commandId));
+  }
+
+  /** Self-facing command status: only the caller's own termination commands are visible. */
+  async getSelfCommandStatus(
+    userId: string,
+    commandId: string,
+  ): Promise<RuntimeTerminationCommandStatusDto | null> {
+    const command = await this.options.runtimeStore.getCommand(commandId);
+    if (command?.requestedBy.userId !== userId) return null;
+    return toCommandStatusDto(commandId, await this.options.runtimeStore.getCommandAck(commandId));
   }
 
   async terminateOperationalSession(sessionId: string, operatorUserId: string): Promise<RuntimeTerminationAcceptedDto | null> {
@@ -144,4 +192,37 @@ function toOperationalDto(session: RuntimeSessionPresence): RuntimeSessionOperat
     lease_until: session.leaseUntil.toISOString(),
     client_info: session.clientInfo ? { ...session.clientInfo } : null,
   };
+}
+
+function toCommandStatusDto(
+  commandId: string,
+  ack: RuntimeTerminationAck | null,
+): RuntimeTerminationCommandStatusDto {
+  if (!ack) {
+    return { command_id: commandId, status: 'pending', acknowledged_at: null, replica_id: null, error_code: null };
+  }
+  return {
+    command_id: commandId,
+    status: ack.result,
+    acknowledged_at: ack.acknowledgedAt.toISOString(),
+    replica_id: ack.replicaId,
+    error_code: ack.errorCode,
+  };
+}
+
+function encodeOperationalCursor(cursor: RuntimeOperationalCursor): string {
+  return encodeConsoleCursor({ t: cursor.lastActiveAt.toISOString(), s: cursor.sessionId });
+}
+
+/** Foreign/garbage tokens decode to null so traversal restarts from the first page (§5.3). */
+function decodeOperationalCursor(token: string | null): RuntimeOperationalCursor | null {
+  if (!token) return null;
+  const payload = decodeConsoleCursor(token);
+  const lastActiveRaw = payload?.t;
+  const sessionId = payload?.s;
+  if (typeof lastActiveRaw !== 'string' || typeof sessionId !== 'string' || sessionId.length === 0 || sessionId.length > 200) {
+    return null;
+  }
+  const lastActiveAt = new Date(lastActiveRaw);
+  return Number.isNaN(lastActiveAt.getTime()) ? null : { lastActiveAt, sessionId };
 }

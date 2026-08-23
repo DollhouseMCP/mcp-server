@@ -89,7 +89,11 @@ export class AccountAdminDeletionService {
     let deletion: PrincipalDeletionOutcome;
     try {
       deletion = await this.options.transactionRunner.run(async tx => {
-        const result = await tx.deletePrincipal({ userId, deletedAt: occurredAt });
+        const result = await tx.deletePrincipal({
+          userId,
+          deletedByUserId: actor.userId,
+          deletedAt: occurredAt,
+        });
         if (!result) throw new PrincipalVanishedError();
         // The tombstone row still exists and can anchor an acknowledged
         // invalidation; a hard-deleted user has nothing left to invalidate.

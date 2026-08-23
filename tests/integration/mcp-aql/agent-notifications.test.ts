@@ -9,7 +9,7 @@
  * @since v2.1.0 - Agent Notification System
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { DollhouseMCPServer } from '../../../src/index.js';
 import { DollhouseContainer } from '../../../src/di/Container.js';
 import { MCPAQLHandler } from '../../../src/handlers/mcp-aql/MCPAQLHandler.js';
@@ -88,7 +88,12 @@ describe('Agent Notification System', () => {
     });
   }
 
-  async function recordStep(name: string, step: string, outcome: 'success' | 'failure' | 'partial' = 'success') {
+  async function recordStep(
+    name: string,
+    step: string,
+    outcome: 'success' | 'failure' | 'partial' = 'success',
+    overrides: Record<string, unknown> = {},
+  ) {
     return mcpAqlHandler.handleCreate({
       operation: 'record_execution_step',
       params: {
@@ -97,7 +102,28 @@ describe('Agent Notification System', () => {
         outcome,
         findings: `Results for: ${step}`,
         confidence: 0.85,
+        ...overrides,
       },
+    });
+  }
+
+  function injectBeetlejuiceBlockOnNextStep(options: {
+    readonly goalId?: string;
+    readonly sessionId?: string;
+  } = {}) {
+    const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+    const recordAgentStep = agentManager.recordAgentStep.bind(agentManager);
+    return jest.spyOn(agentManager, 'recordAgentStep').mockImplementationOnce(async params => {
+      const result = await recordAgentStep(params);
+      dangerZone.block(
+        params.agentName,
+        'Beetlejuice test trigger',
+        ['beetlejuice_beetlejuice_beetlejuice'],
+        'beetlejuice-verification-id',
+        { goalId: options.goalId ?? params.goalId },
+        options.sessionId,
+      );
+      return result;
     });
   }
 
@@ -314,8 +340,8 @@ describe('Agent Notification System', () => {
     });
   });
 
-  describe('DangerZone broadcast', () => {
-    it('should broadcast danger_zone notification to other executing agents', async () => {
+  describe('DangerZone notification isolation', () => {
+    it('should not leak a danger_zone notification to another agent', async () => {
       const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
 
       // Ensure no stale blocks from prior runs
@@ -340,32 +366,116 @@ describe('Agent Notification System', () => {
         // Block the first agent via DangerZoneEnforcer directly
         dangerZone.block(
           'dz-blocked-agent',
-          'Dangerous pattern detected in agent actions',
-          ['rm -rf /'],
+          'Beetlejuice test trigger',
+          ['beetlejuice_beetlejuice_beetlejuice'],
           'verify-test-123'
         );
 
-        // Record step on the OBSERVER agent — should receive danger_zone notification
+        // Record a clean step on the observer. The other agent's block remains
+        // enforced, but it is not part of this execution response.
         const stepResult = await recordStep('dz-observer-agent', 'Checking for alerts');
         expect(stepResult.success).toBe(true);
 
         const notifications = getNotifications(stepResult);
-        expect(notifications).toBeDefined();
-
-        const dangerNotification = notifications!.find(
+        const dangerNotification = notifications?.find(
           (n: Record<string, unknown>) => n.type === 'danger_zone'
         );
-        expect(dangerNotification).toBeDefined();
-        expect(dangerNotification!.message).toContain('dz-blocked-agent');
-        expect(dangerNotification!.message).toContain('danger zone');
-
-        const metadata = dangerNotification!.metadata as Record<string, unknown>;
-        expect(metadata.agentName).toBe('dz-blocked-agent');
-        expect(metadata.reason).toContain('Dangerous pattern');
-        expect(metadata.verificationId).toBe('verify-test-123');
+        expect(dangerNotification).toBeUndefined();
+        expect(dangerZone.check('dz-blocked-agent').blocked).toBe(true);
       } finally {
         // Always clean up the block regardless of test outcome
-        dangerZone.unblock('dz-blocked-agent');
+        dangerZone.unblock('dz-blocked-agent', 'verify-test-123');
+      }
+    });
+
+    it('should report a current-agent danger_zone event with its source timestamp', async () => {
+      const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+      await createAgent('dz-current-agent', {
+        gatekeeper: { allow: ['*'] },
+        autonomy: { maxAutonomousSteps: 0 },
+      });
+      const execResult = await executeAgent('dz-current-agent');
+      expect(execResult.success).toBe(true);
+
+      const recordSpy = injectBeetlejuiceBlockOnNextStep();
+
+      try {
+        const stepResult = await recordStep(
+          'dz-current-agent',
+          'Recorded a safe test step',
+          'success',
+        );
+        expect(stepResult.success).toBe(true);
+
+        const notifications = getNotifications(stepResult);
+        const dangerNotification = notifications?.find(
+          (notification: Record<string, unknown>) => notification.type === 'danger_zone',
+        );
+        expect(dangerNotification).toBeDefined();
+
+        const blockCheck = dangerZone.check('dz-current-agent');
+        const metadata = dangerNotification!.metadata as Record<string, unknown>;
+        const resultData = stepResult.data as Record<string, unknown>;
+        const decision = resultData.decision as Record<string, unknown>;
+        expect(blockCheck.blocked).toBe(true);
+        expect(dangerNotification!.timestamp).toBe(blockCheck.blockedAt);
+        expect(metadata.agentName).toBe('dz-current-agent');
+        expect(metadata.eventId).toBe(blockCheck.eventId);
+        expect(metadata.goalId).toBe(decision.goalId);
+        expect(metadata.verificationId).toBe(blockCheck.verificationId);
+      } finally {
+        recordSpy.mockRestore();
+        dangerZone.unblock('dz-current-agent', 'beetlejuice-verification-id');
+      }
+    });
+
+    it('should not report a block owned by another goal', async () => {
+      const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+      await createAgent('dz-goal-scope-agent', {
+        gatekeeper: { allow: ['*'] },
+        autonomy: { maxAutonomousSteps: 0 },
+      });
+      expect((await executeAgent('dz-goal-scope-agent')).success).toBe(true);
+      const recordSpy = injectBeetlejuiceBlockOnNextStep({ goalId: 'another-goal' });
+
+      try {
+        const stepResult = await recordStep('dz-goal-scope-agent', 'Recorded a safe test step');
+        const dangerNotification = getNotifications(stepResult)?.find(
+          notification => notification.type === 'danger_zone',
+        );
+        expect(stepResult.success).toBe(true);
+        expect(dangerNotification).toBeUndefined();
+        expect(dangerZone.check('dz-goal-scope-agent').blocked).toBe(true);
+      } finally {
+        recordSpy.mockRestore();
+        dangerZone.unblock('dz-goal-scope-agent', 'beetlejuice-verification-id');
+      }
+    });
+
+    it('should not report a block owned by another session', async () => {
+      const dangerZone = container.resolve<DangerZoneEnforcer>('DangerZoneEnforcer');
+      await createAgent('dz-session-scope-agent', {
+        gatekeeper: { allow: ['*'] },
+        autonomy: { maxAutonomousSteps: 0 },
+      });
+      expect((await executeAgent('dz-session-scope-agent')).success).toBe(true);
+      const recordSpy = injectBeetlejuiceBlockOnNextStep({ sessionId: 'another-session' });
+
+      try {
+        const stepResult = await recordStep('dz-session-scope-agent', 'Recorded a safe test step');
+        const dangerNotification = getNotifications(stepResult)?.find(
+          notification => notification.type === 'danger_zone',
+        );
+        expect(stepResult.success).toBe(true);
+        expect(dangerNotification).toBeUndefined();
+        expect(dangerZone.check('dz-session-scope-agent').blocked).toBe(true);
+      } finally {
+        recordSpy.mockRestore();
+        dangerZone.unblock(
+          'dz-session-scope-agent',
+          'beetlejuice-verification-id',
+          'another-session',
+        );
       }
     });
   });

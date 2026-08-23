@@ -17,6 +17,7 @@ import {
   type ISystemMetricsSource,
   type OperationsHealthChecks,
 } from '../../../../src/web-console/index.js';
+import { OPERATION_HEALTH_COMPONENTS } from '../../../../src/web-console/modules/operations/OperationsHealth.js';
 
 const NOW = new Date('2026-05-29T10:30:00.000Z');
 const MUST_NOT_LEAK = 'must-not-leak';
@@ -589,10 +590,12 @@ describe('OperationsModule', () => {
   it('bounds operational log limits for invalid and extreme requests', async () => {
     const route = findRoute(createModule(HEALTH_CHECKS, createTelemetry(150)).routes, 'GET', OPERATE_LOGS_PATH);
 
+    // Sub-1 and unparsable limits are invalid input → the endpoint default
+    // (shared ConsoleQueryParams semantics), not a clamp to 1.
     await expect(route.handler({ query: { limit: '0' }, params: {} } as never))
-      .resolves.toMatchObject({ body: { items: expect.arrayContaining([expect.any(Object)]), page: { limit: 1 } } });
+      .resolves.toMatchObject({ body: { items: expect.arrayContaining([expect.any(Object)]), page: { limit: 100 } } });
     await expect(route.handler({ query: { limit: '-10' }, params: {} } as never))
-      .resolves.toMatchObject({ body: { page: { limit: 1 } } });
+      .resolves.toMatchObject({ body: { page: { limit: 100 } } });
     await expect(route.handler({ query: { limit: '1000' }, params: {} } as never))
       .resolves.toMatchObject({ body: { items: expect.any(Array), page: { limit: 100 } } });
     await expect(route.handler({ query: { limit: 'not-a-number' }, params: {} } as never))
@@ -751,8 +754,9 @@ describe('OperationsModule', () => {
     const result = await route.handler({ query: {}, params: {} } as never);
 
     expect(result.status).toBe(200);
+    // Cursor-family envelope; ring-buffer anchors stay top-level.
     expect(projectSystemMetrics(result.body)).toEqual({
-      snapshots: [{
+      items: [{
         id: 'snap-1',
         timestamp: NOW.toISOString(),
         duration_ms: 5,
@@ -762,13 +766,49 @@ describe('OperationsModule', () => {
           { name: 'op.latency', source: 'perf', unit: 'ms', type: 'histogram', value: { count: 3, sum: 30, min: 5, p95: 20 } },
         ],
       }],
-      total: 1,
-      has_more: false,
-      limit: 50,
-      offset: 0,
+      page: { limit: 50, cursor: null, next_cursor: null },
       oldest_available: NOW.toISOString(),
       newest_available: NOW.toISOString(),
     });
+  });
+
+  it('walks System A pages through opaque cursors, never raw offsets', async () => {
+    const source: ISystemMetricsSource = {
+      query: (options) => ({
+        snapshots: [{
+          id: `snap-${(options?.offset ?? 0) + 1}`,
+          timestamp: NOW.toISOString(),
+          durationMs: 5,
+          errors: [],
+          metrics: [],
+        }],
+        total: 2,
+        hasMore: (options?.offset ?? 0) === 0,
+        limit: 1,
+        offset: options?.offset ?? 0,
+        oldestAvailable: NOW.toISOString(),
+        newestAvailable: NOW.toISOString(),
+      }),
+    };
+    const route = findRoute(createOperationsModule({
+      healthChecks: HEALTH_CHECKS,
+      telemetry: createTelemetry(),
+      operatorConfigStore: new InMemoryOperatorConfigStore(),
+      systemMetrics: source,
+      now: () => NOW,
+    }).routes, 'GET', SYSTEM_METRICS_PATH);
+
+    const first = projectSystemMetrics((await route.handler({ query: { limit: '1' }, params: {} } as never)).body);
+    expect(first.items[0].id).toBe('snap-1');
+    expect(first.page.next_cursor).not.toBeNull();
+    // The cursor is opaque — the raw offset never appears as a query param.
+    const second = projectSystemMetrics((await route.handler({
+      query: { limit: '1', cursor: first.page.next_cursor },
+      params: {},
+    } as never)).body);
+    expect(second.items[0].id).toBe('snap-2');
+    expect(second.page.cursor).toBe(first.page.next_cursor);
+    expect(second.page.next_cursor).toBeNull();
   });
 
   it('returns an empty System A result when metrics collection is disabled (no sink)', async () => {
@@ -777,7 +817,10 @@ describe('OperationsModule', () => {
     const result = await route.handler({ query: {}, params: {} } as never);
 
     expect(result.status).toBe(200);
-    expect(projectSystemMetrics(result.body)).toMatchObject({ snapshots: [], total: 0, has_more: false });
+    expect(projectSystemMetrics(result.body)).toMatchObject({
+      items: [],
+      page: { cursor: null, next_cursor: null },
+    });
   });
 
   it('streams operational metrics through SSE update events with allowlisted payloads', async () => {
@@ -905,6 +948,78 @@ describe('OperationsModule', () => {
         },
       }],
     });
+  });
+
+  it('drops telemetry codes that are not well-formed stable identifiers (fail-closed)', () => {
+    const projected = projectOperationalLogs({
+      items: [{
+        ts: NOW.toISOString(),
+        level: 'error',
+        subsystem: 'user report: crash in payment flow',
+        event: 'evt@example.com',
+        correlation_id: 'correlation-9',
+        account_correlation_id: 'account-9',
+        session_id: 'session-9',
+        replica: 'replica-a',
+        duration_ms: 3,
+        status_code: 500,
+        error_code: `contains spaces ${'x'.repeat(80)}`,
+      }],
+      page: { limit: 1, cursor: null, next_cursor: null },
+    });
+    expect(projected.items[0]).toMatchObject({
+      subsystem: '',
+      event: '',
+      replica: 'replica-a',
+      error_code: null,
+      correlation_id: 'correlation-9',
+      session_id: 'session-9',
+    });
+
+    const metrics = projectOperationalMetrics({
+      checked_at: NOW.toISOString(),
+      metrics: [{
+        name: RUNTIME_ERRORS_METRIC,
+        kind: 'counter',
+        value: 1,
+        unit: 'count',
+        dimensions: {
+          subsystem: 'runtime',
+          event: 'has space',
+          error_code: 'ok_code',
+          transport: 'tcp/secure',
+          latency_bucket: 'not a bucket!!',
+          account_correlation_id: 'account-4',
+        },
+      }],
+    });
+    expect(metrics.metrics[0].dimensions).toEqual({
+      subsystem: 'runtime',
+      error_code: 'ok_code',
+      transport: 'tcp/secure',
+      account_correlation_id: 'account-4',
+    });
+  });
+
+  it('accepts every health component the builder can emit (no silent drift to the fallback)', () => {
+    for (const component of OPERATION_HEALTH_COMPONENTS) {
+      const projected = projectOperationHealthComponent({
+        component,
+        status: 'ok',
+        checked_at: NOW.toISOString(),
+        failure_codes: [],
+      });
+      expect(projected.component).toBe(component);
+    }
+    // A component the builder never emits is coerced to a valid member (defensive), not passed through.
+    const coerced = projectOperationHealthComponent({
+      component: 'queue_processor',
+      status: 'ok',
+      checked_at: NOW.toISOString(),
+      failure_codes: [],
+    });
+    expect(OPERATION_HEALTH_COMPONENTS).toContain(coerced.component);
+    expect(coerced.component).not.toBe('queue_processor');
   });
 
   it('projects health by allowlist rather than source object shape', () => {

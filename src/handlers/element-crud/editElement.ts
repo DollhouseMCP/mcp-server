@@ -99,7 +99,7 @@ function getMaxLengthForFieldType(fieldType: ValidationFieldType): number {
     case 'name':
       return SECURITY_LIMITS.MAX_NAME_LENGTH;
     case 'description':
-      return SECURITY_LIMITS.MAX_YAML_LENGTH;
+      return SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH;
     case 'content':
       return SECURITY_LIMITS.MAX_CONTENT_LENGTH;
     case 'filename':
@@ -809,6 +809,18 @@ export async function editElement(
 
   // Deep merge the update into the element with security options
   const mergedData = deepMerge(editableElement, updateObj, MERGE_OPTIONS);
+  const mergedDescriptionErrors = findOversizedDescriptionFields(
+    mergedData.metadata,
+    'element.metadata'
+  );
+  if (mergedDescriptionErrors.length > 0) {
+    const formattedDescriptionErrors = mergedDescriptionErrors
+      .map(descriptionError => `  • ${descriptionError}`)
+      .join('\n');
+    return error(
+      `Description length validation failed:\n${formattedDescriptionErrors}`
+    );
+  }
 
   // Apply merged data back to element
   for (const [key, value] of Object.entries(mergedData)) {

@@ -1,4 +1,4 @@
-import { describe, expect, it } from '@jest/globals';
+import { describe, expect, it, jest } from '@jest/globals';
 import express from 'express';
 import request from 'supertest';
 import { Secret, TOTP } from 'otpauth';
@@ -67,6 +67,16 @@ function buildFixture(options: { disabled?: boolean; unauthenticated?: boolean; 
 }
 
 describe('AdminTotpInteractionRoutes', () => {
+  it('normalizes the human-visible enrollment label without changing opaque TOTP values', async () => {
+    const { app, service } = buildFixture();
+    const beginEnrollment = jest.spyOn(service, 'beginEnrollment');
+
+    const response = await request(app).get('/auth/totp/enroll?label=Admin%E2%80%8B%20Console');
+
+    expect(response.status).toBe(200);
+    expect(beginEnrollment).toHaveBeenCalledWith(USER_ID, 'Admin Console');
+  });
+
   it('enrollment confirm creates an active factor and one-time backup codes', async () => {
     const { app, service, factors } = buildFixture();
 

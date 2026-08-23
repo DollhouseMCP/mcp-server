@@ -183,7 +183,9 @@ describe('Index Performance Optimization Tests', () => {
         await unifiedIndexManager.search({
           query: `memory_test_${i}`,
           pageSize: 100,
-          includeLocal: true
+          includeLocal: true,
+          includeGitHub: false,
+          includeCollection: false,
         });
       }
 

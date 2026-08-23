@@ -5,6 +5,7 @@
 import * as path from 'path';
 import { SECURITY_LIMITS, VALIDATION_PATTERNS } from './constants.js';
 // VALID_CATEGORIES import removed — categories are deprecated (see constants.ts)
+import { isPublicIpAddress, parseIpAddress } from './ipAddressClassifier.js';
 import { RegexValidator } from './regexValidator.js';
 import { ErrorHandler, ErrorCategory } from '../utils/ErrorHandler.js';
 import { ValidationErrorCodes } from '../utils/errorCodes.js';
@@ -21,7 +22,6 @@ const SHELL_METACHAR_DISPLAY_REGEX = /[;&|`$()]/g; // Core shell metacharacters 
 const RTL_ZEROWIDTH_REGEX = /[\u200B\u200C\u200D\u2060\u202E\uFEFF]/g;
 const COLLECTION_PATH_CHAR_REGEX = /[a-zA-Z0-9\/\-_.]/;
 const VALID_COLLECTION_PATH_REGEX = /^[a-zA-Z0-9\/\-_.]*$/;
-const IPV4_REGEX = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
 const DECIMAL_IP_REGEX = /^\d{8,10}$/;
 const HEX_IP_REGEX = /^0x[0-9a-f]{1,8}$/i;
 const OCTAL_IP_REGEX = /^0[0-7]{8,11}$/;
@@ -281,54 +281,17 @@ export class MCPInputValidator {
   }
 
   /**
-   * Check if hostname is a private IP address (IPv4 and IPv6)
+   * Check if hostname is a private IP address (IPv4 and IPv6).
+   * Judged from canonical byte form so no textual variant (hex-mapped,
+   * long-form mapped, v4-compatible, NAT64, 6to4, full 127/8) slips through.
+   * IPv6 URL hostnames arrive bracketed; strip before classifying.
    */
   private static isPrivateIP(hostname: string): boolean {
-    // Check for localhost variations
-    if (['localhost', '127.0.0.1', '::1'].includes(hostname)) {
+    if (hostname === 'localhost') {
       return true;
     }
-
-    // Check for private IPv4 ranges
-    const ipv4Match = hostname.match(IPV4_REGEX);
-    
-    if (ipv4Match) {
-      const [, a, b] = ipv4Match.map(Number);
-      
-      // 10.0.0.0/8
-      if (a === 10) return true;
-      
-      // 172.16.0.0/12
-      if (a === 172 && b >= 16 && b <= 31) return true;
-      
-      // 192.168.0.0/16
-      if (a === 192 && b === 168) return true;
-      
-      // 169.254.0.0/16 (link-local)
-      if (a === 169 && b === 254) return true;
-    }
-
-    // Check for private IPv6 ranges
-    const ipv6Lower = hostname.toLowerCase();
-    
-    // fc00::/7 - Unique Local Addresses (ULA)
-    if (ipv6Lower.startsWith('fc') || ipv6Lower.startsWith('fd')) {
-      return true;
-    }
-    
-    // fe80::/10 - Link-Local Addresses
-    // IPv6 link-local addresses are fe80::/10, meaning the valid range is fe80 through febf
-    const fe80Range = Number.parseInt(ipv6Lower.substring(0, 4), 16);
-    if (fe80Range >= 0xfe80 && fe80Range <= 0xfebf) {
-      return true;
-    }
-    
-    // Additional IPv6 localhost formats
-    if (['::1', '0:0:0:0:0:0:0:1'].includes(ipv6Lower)) {
-      return true;
-    }
-
-    return false;
+    const literal = hostname.replace(/^\[/, '').replace(/\]$/, '');
+    return parseIpAddress(literal) !== null && !isPublicIpAddress(literal);
   }
 
   /**

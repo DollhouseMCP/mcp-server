@@ -80,12 +80,14 @@ describe('DangerZoneEnforcer', () => {
       enforcer.block(
         'test-agent',
         'Danger zone pattern matched',
-        ['rm -rf', 'drop database']
+        ['beetlejuice_beetlejuice_beetlejuice']
       );
 
       const result = enforcer.check('test-agent');
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Danger zone pattern matched');
+      expect(result.eventId).toMatch(/^[0-9a-f-]{36}$/);
+      expect(new Date(result.blockedAt ?? '').toISOString()).toBe(result.blockedAt);
     });
 
     it('should include verification ID if provided', () => {
@@ -103,7 +105,12 @@ describe('DangerZoneEnforcer', () => {
     });
 
     it('should log enriched security event on block', () => {
-      enforcer.block('my-agent', 'test reason', ['rm -rf', 'drop db'], 'v-1');
+      enforcer.block(
+        'my-agent',
+        'test reason',
+        ['beetlejuice_beetlejuice_beetlejuice'],
+        'v-1',
+      );
 
       expect(mockLogSecurityEvent).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -114,7 +121,7 @@ describe('DangerZoneEnforcer', () => {
           additionalData: expect.objectContaining({
             agentName: 'my-agent',
             reason: 'test reason',
-            triggeredPatterns: ['rm -rf', 'drop db'],
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
             verificationId: 'v-1',
             totalActiveBlocks: 1,
           }),
@@ -436,9 +443,10 @@ describe('DangerZoneEnforcer', () => {
         blocks: {
           'agent-x': {
             reason: 'Previous session block',
-            triggeredPatterns: ['rm -rf'],
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
             blockedAt: '2026-01-01T00:00:00.000Z',
             verificationId: 'v-abc',
+            goalId: 'goal-abc',
           },
         },
       });
@@ -451,6 +459,33 @@ describe('DangerZoneEnforcer', () => {
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Previous session block');
       expect(result.verificationId).toBe('v-abc');
+      expect(result.eventId).toBe('v-abc');
+      expect(result.goalId).toBe('goal-abc');
+      expect(result.blockedAt).toBe('2026-01-01T00:00:00.000Z');
+    });
+
+    it('should preserve a block with a safe timestamp when persisted blockedAt is invalid', async () => {
+      const persistedData = JSON.stringify({
+        version: 1,
+        blocks: {
+          'agent-invalid-time': {
+            reason: 'Previous session block',
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
+            blockedAt: 'not-a-timestamp',
+            verificationId: 'v-invalid-time',
+          },
+        },
+      });
+
+      const fileOps = createMockFileOps({ readFileResult: persistedData });
+      const instance = new DangerZoneEnforcer(fileOps, '/tmp/test-security');
+      await instance.initialize();
+
+      expect(instance.check('agent-invalid-time')).toEqual(expect.objectContaining({
+        blocked: true,
+        blockedAt: '1970-01-01T00:00:00.000Z',
+        verificationId: 'v-invalid-time',
+      }));
     });
 
     it('should start with empty blocks when file is missing', async () => {
@@ -502,7 +537,13 @@ describe('DangerZoneEnforcer', () => {
         });
 
       const instance1 = new DangerZoneEnforcer(writeFileOps, '/tmp/test-security');
-      instance1.block('agent-survive', 'Persist test', ['pattern-a'], 'verify-survive');
+      instance1.block(
+        'agent-survive',
+        'Persist test',
+        ['pattern-a'],
+        'verify-survive',
+        { goalId: 'goal-survive' },
+      );
 
       // Wait for fire-and-forget persist
       await new Promise(resolve => setTimeout(resolve, 50));
@@ -518,6 +559,9 @@ describe('DangerZoneEnforcer', () => {
       expect(result.blocked).toBe(true);
       expect(result.reason).toBe('Persist test');
       expect(result.verificationId).toBe('verify-survive');
+      expect(result.eventId).toBeDefined();
+      expect(result.goalId).toBe('goal-survive');
+      expect(result.blockedAt).toBeDefined();
     });
   });
 
@@ -626,13 +670,13 @@ describe('DangerZoneEnforcer', () => {
       enforcer.block(
         'audit-agent',
         'Danger zone pattern matched',
-        ['rm -rf'],
+        ['beetlejuice_beetlejuice_beetlejuice'],
         'v-audit',
         {
           stepNumber: 3,
           currentStepDescription: 'Execute shell command',
           currentStepOutcome: 'success',
-          nextActionHint: 'rm -rf /tmp/data',
+          nextActionHint: 'beetlejuice_beetlejuice_beetlejuice',
           riskScore: 92,
           goalDescription: 'Clean up temporary files',
           goalId: 'goal-abc-123',
@@ -648,13 +692,13 @@ describe('DangerZoneEnforcer', () => {
           additionalData: expect.objectContaining({
             agentName: 'audit-agent',
             reason: 'Danger zone pattern matched',
-            triggeredPatterns: ['rm -rf'],
+            triggeredPatterns: ['beetlejuice_beetlejuice_beetlejuice'],
             verificationId: 'v-audit',
             totalActiveBlocks: 1,
             stepNumber: 3,
             currentStepDescription: 'Execute shell command',
             currentStepOutcome: 'success',
-            nextActionHint: 'rm -rf /tmp/data',
+            nextActionHint: 'beetlejuice_beetlejuice_beetlejuice',
             riskScore: 92,
             goalDescription: 'Clean up temporary files',
             goalId: 'goal-abc-123',

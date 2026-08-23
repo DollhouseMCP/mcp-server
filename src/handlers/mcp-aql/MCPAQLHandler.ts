@@ -21,12 +21,11 @@
  * - data: never (discriminated union enforces this)
  */
 
-import { CRUDEndpoint } from './OperationRouter.js';
-import { Gatekeeper } from './Gatekeeper.js';
+import { type CRUDEndpoint, getRoute } from './OperationRouter.js';
+import type { Gatekeeper } from './Gatekeeper.js';
 import { type ActiveElement, canOperationBeElevated } from './policies/index.js';
 import { isGatekeeperInfraOperation, getGatekeeperDiagnostics } from './policies/ElementPolicies.js';
 import { PermissionLevel, GatekeeperErrorCode, type GatekeeperDecision } from './GatekeeperTypes.js';
-import { getRoute } from './OperationRouter.js';
 import { IntrospectionResolver } from './IntrospectionResolver.js';
 import { SchemaDispatcher } from './SchemaDispatcher.js';
 import { SearchHandler } from './SearchHandler.js';
@@ -34,22 +33,24 @@ import { ElementCRUDDispatcher } from './ElementCRUDDispatcher.js';
 import { ConfigDispatcher } from './ConfigDispatcher.js';
 import { AgentExecutionHandler } from './AgentExecutionHandler.js';
 import { GatekeeperHandler } from './GatekeeperHandler.js';
-import { MemorySaveHandler } from './MemorySaveHandler.js';
+import { MemorySaveHandler, type SaveContextScope } from './MemorySaveHandler.js';
 import { buildOperationSummary } from './OperationSummary.js';
 import { applyFieldSelection } from './FieldSelection.js';
 import { initializeNormalizers } from './normalizers/index.js';
 import {
-  OperationInput,
-  OperationResult,
-  OperationSuccess,
-  OperationFailure,
-  ResponseMeta,
+  type OperationInput,
+  type OperationResult,
+  type OperationSuccess,
+  type OperationFailure,
+  type ResponseMeta,
   parseOperationInput,
   describeInvalidInput,
-  BatchRequest,
-  BatchResult,
-  BatchOperationResult,
+  type BatchRequest,
+  type BatchResult,
+  type BatchOperationResult,
   isBatchRequest,
+  ElementType as AqlElementType,
+  normalizeMCPAQLElementType,
 } from './types.js';
 import {
   type ExecutingAgentEntry,
@@ -89,8 +90,10 @@ import type { MetricQueryOptions, MetricType } from '../../metrics/types.js';
 import type { PerformanceMonitor } from '../../utils/PerformanceMonitor.js';
 import type { OperationMetricsTracker } from '../../metrics/OperationMetricsTracker.js';
 import type { GatekeeperMetricsTracker } from '../../metrics/GatekeeperMetricsTracker.js';
-import { ElementType, type PortfolioManager } from '../../portfolio/PortfolioManager.js';
-import { normalizeElementType } from '../../utils/elementTypeNormalization.js';
+import type { ElementType, PortfolioManager } from '../../portfolio/PortfolioManager.js';
+import type { CacheMemoryBudget } from '../../cache/CacheMemoryBudget.js';
+import type { MemoryMetricsSink } from '../../metrics/sinks/MemoryMetricsSink.js';
+import type { SessionActivationRegistry } from '../../state/SessionActivationState.js';
 import { getAutonomyMetrics } from '../../elements/agents/autonomyEvaluator.js';
 import type { AutonomyMetricsSnapshot } from '../../elements/agents/autonomyEvaluator.js';
 
@@ -387,7 +390,7 @@ export interface HandlerRegistry {
   personaHandler?: PersonaHandler;
   syncHandler?: SyncHandler;
   buildInfoService?: BuildInfoService;
-  cacheMemoryBudget?: import('../../cache/CacheMemoryBudget.js').CacheMemoryBudget;
+  cacheMemoryBudget?: CacheMemoryBudget;
   gatekeeper: Gatekeeper;
   // Issue #402: DI-injected danger zone enforcer (replaces singleton import)
   dangerZoneEnforcer?: DangerZoneEnforcer;
@@ -399,7 +402,7 @@ export interface HandlerRegistry {
   // Issue #528: MemoryLogSink for CRUDE-routed query_logs
   memorySink?: MemoryLogSink;
   // Metrics: MemoryMetricsSink for CRUDE-routed query_metrics
-  metricsSink?: import('../../metrics/sinks/MemoryMetricsSink.js').MemoryMetricsSink;
+  metricsSink?: MemoryMetricsSink;
   // Search metrics: PerformanceMonitor for recordSearch()
   performanceMonitor?: PerformanceMonitor;
   // Operation metrics: OperationMetricsTracker for CRUD operation stats
@@ -410,7 +413,7 @@ export interface HandlerRegistry {
   circuitBreaker?: CircuitBreakerState;
   resilienceMetrics?: ResilienceMetricsTracker;
   // Identity: session activation registry for HTTP identity checks
-  activationRegistry?: import('../../state/SessionActivationState.js').SessionActivationRegistry;
+  activationRegistry?: SessionActivationRegistry;
   // Flag: database storage backend is active
   isDbMode?: boolean;
 }
@@ -435,7 +438,7 @@ export interface HandlerRegistry {
  * Keeps coupling loose — only requires what MCPAQLHandler actually needs.
  * Issue #301: Request correlation support.
  */
-export interface CorrelationIdProvider {
+export interface CorrelationIdProvider extends SaveContextScope {
   getCorrelationId(): string | undefined;
   getSessionContext?(): { sessionId: string } | undefined;
 }
@@ -522,14 +525,17 @@ export class MCPAQLHandler {
     // Initialize normalizers for schema-driven operations (Issue #243)
     initializeNormalizers();
     // Issue #452: Store Gatekeeper instance for policy enforcement
-    if (!handlers.gatekeeper) {
+    const gatekeeper = handlers.gatekeeper as Gatekeeper | undefined;
+    if (!gatekeeper) {
       throw new Error('Gatekeeper instance is required in HandlerRegistry. Provide one via the DI container.');
     }
-    this.gatekeeper = handlers.gatekeeper;
+    this.gatekeeper = gatekeeper;
     this.searchHandler = new SearchHandler(handlers);
     this.elementCRUDDispatcher = new ElementCRUDDispatcher(handlers);
     this.configDispatcher = new ConfigDispatcher(handlers);
-    this.memorySaveHandler = new MemorySaveHandler(handlers, (name) => this.sessionKey(name));
+    // Pass the context tracker so pending memory saves can re-establish their
+    // per-user context during a shutdown flush (#2329 multi-user correctness).
+    this.memorySaveHandler = new MemorySaveHandler(handlers, (name) => this.sessionKey(name), contextTracker);
     this.agentExecutionHandler = new AgentExecutionHandler(
       handlers,
       this.executingAgents,
@@ -625,6 +631,11 @@ export class MCPAQLHandler {
    * disconnect, causing a slow memory leak in long-running HTTP servers.
    *
    * Called by DollhouseContainer.createServerForHttpSession()'s dispose callback.
+   *
+   * Issue #2329: the memory handler's session cleanup is deliberately
+   * non-writing — it leaves each pending save's debounce timer to fire in its
+   * propagated per-user context (a write from this context-less disposal path
+   * would land in the flat shared dir). So this stays synchronous bookkeeping.
    */
   cleanupSession(sessionId: string): void {
     const prefix = `${sessionId}:`;
@@ -640,6 +651,30 @@ export class MCPAQLHandler {
     this.deadlockReliefIssuanceLimiters.delete(sessionId);
     this.permissionPromptLimiters.delete(sessionId);
     this.cliApprovalLimiters.delete(sessionId);
+  }
+
+  /**
+   * Issue #2329: after a successful delete_element of a memory, delegate to the
+   * memory handler to drop its save bookkeeping. Kept thin here — all durability
+   * state lives in MemorySaveHandler; this only recognizes the delete and the
+   * element type. elementType is already the resolved MCP-AQL enum from
+   * executeOperation (the same type resolveInputElementType returns).
+   */
+  private cleanupDeletedMemoryBookkeeping(
+    operation: string,
+    elementType: AqlElementType | undefined,
+    params: Record<string, unknown>,
+  ): void {
+    if (operation !== 'delete_element') return;
+    // The type may arrive as the resolved top-level elementType OR inside params
+    // (element_type/type), and as a plural alias ('memories'); resolve from all
+    // three and normalize so both singular and plural forms clean up the ledger.
+    const rawType = (elementType ?? params.element_type ?? params.type) as string | undefined;
+    if (!rawType || normalizeMCPAQLElementType(rawType) !== AqlElementType.Memory) return;
+    const name = (params.element_name ?? params.name) as string | undefined;
+    if (name) {
+      this.memorySaveHandler.cleanupDeletedMemory(name);
+    }
   }
 
   /**
@@ -682,8 +717,8 @@ export class MCPAQLHandler {
         name: el.name,
         metadata: {
           name: el.name,
-          description: (el.metadata.description as string) ?? undefined,
-          gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          description: el.metadata.description as string | undefined,
+          gatekeeper: el.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
           ...this.copyGatekeeperDiagnostics(el.metadata),
         },
       }));
@@ -711,6 +746,14 @@ export class MCPAQLHandler {
     }
   }
 
+  /**
+   * Expose the current policy context for non-MCPAQL server tools that still
+   * need Gatekeeper externalRestrictions enforcement.
+   */
+  async getActiveElementsForGatekeeperPolicy(): Promise<ActiveElement[]> {
+    return this.getActiveElements();
+  }
+
   private async getPolicyReportElements(sessionId?: string): Promise<ActiveElement[]> {
     try {
       const rawElements = await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId);
@@ -719,8 +762,8 @@ export class MCPAQLHandler {
         name: el.name,
         metadata: {
           name: el.name,
-          description: (el.metadata.description as string) ?? undefined,
-          gatekeeper: el.metadata?.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
+          description: el.metadata.description as string | undefined,
+          gatekeeper: el.metadata.gatekeeper as ActiveElement['metadata']['gatekeeper'] ?? undefined,
           ...this.copyGatekeeperDiagnostics(el.metadata),
           ...(Array.isArray((el as { sessionIds?: string[] }).sessionIds)
             ? { sessionIds: (el as { sessionIds?: string[] }).sessionIds }
@@ -1006,7 +1049,7 @@ export class MCPAQLHandler {
     this.agentExecutionHandler.recordGatekeeperBlock(
       operation,
       elementType,
-      decision.reason ?? 'Operation blocked by policy',
+      (decision.reason as string | undefined) ?? 'Operation blocked by policy',
       decision.permissionLevel
     );
     throw new Error(`[Gatekeeper] ${decision.reason}`);
@@ -1251,7 +1294,7 @@ export class MCPAQLHandler {
     if (SchemaDispatcher.canDispatch(operation)) {
       return SchemaDispatcher.dispatch(
         operation,
-        (params as Record<string, unknown>) || {},
+        params || {},
         this.handlers,
         input
       );
@@ -1281,7 +1324,7 @@ export class MCPAQLHandler {
       Metrics: () => this.dispatchMetrics(method, p),
       Browser: () => this.dispatchBrowser(method, p),
     };
-    const dispatcher = dispatchers[module];
+    const dispatcher = dispatchers[module] as (() => unknown) | undefined;
     if (!dispatcher) {
       throw new Error(`Unknown handler module: ${module}`);
     }
@@ -1304,27 +1347,6 @@ export class MCPAQLHandler {
 
   async flushPendingSaves(): Promise<void> {
     await this.memorySaveHandler.flushPendingSaves();
-  }
-
-  /**
-   * Issue #2329 (Codex review): a successfully deleted memory must drop its
-   * save bookkeeping — a retained failure-ledger instance or pending debounce
-   * timer would otherwise re-save the in-RAM state and resurrect the deleted
-   * file. Called after dispatch in executeOperation so the schema-dispatch,
-   * legacy, and batch paths are all covered.
-   */
-  private cleanupDeletedMemoryBookkeeping(
-    operation: string,
-    elementType: string | undefined,
-    params: Record<string, unknown> | undefined,
-  ): void {
-    if (operation !== 'delete_element') return;
-    const p = params ?? {};
-    const type = (elementType ?? p.element_type ?? p.type) as string | undefined;
-    const name = (p.element_name ?? p.name) as string | undefined;
-    if (name && normalizeElementType(type) === ElementType.MEMORY) {
-      this.memorySaveHandler.clearMemorySaveBookkeeping(name);
-    }
   }
 
   private get saveFrequencyCounters(): Map<string, unknown> {
@@ -1358,16 +1380,13 @@ export class MCPAQLHandler {
       'the name of the agent to execute'
     );
 
-    switch (method) {
-      case 'execute':
-        return manager.executeAgent(
-          agentName,
-          params.parameters as Record<string, unknown>
-        );
-
-      default:
-        throw new Error(`Unknown Agent method: ${method}`);
+    if (method === 'execute') {
+      return manager.executeAgent(
+        agentName,
+        params.parameters as Record<string, unknown>
+      );
     }
+    throw new Error(`Unknown Agent method: ${method}`);
   }
 
   /**
@@ -1386,18 +1405,15 @@ export class MCPAQLHandler {
       'the name of the template to render'
     );
 
-    switch (method) {
-      case 'render':
-        return renderer.render(
-          templateName,
-          params.variables as Record<string, unknown>,
-          params.section as 'template' | 'style' | 'script' | undefined,
-          params.all_sections as boolean | undefined
-        );
-
-      default:
-        throw new Error(`Unknown Template method: ${method}`);
+    if (method === 'render') {
+      return renderer.render(
+        templateName,
+        params.variables as Record<string, unknown>,
+        params.section as 'template' | 'style' | 'script' | undefined,
+        params.all_sections as boolean | undefined
+      );
     }
+    throw new Error(`Unknown Template method: ${method}`);
   }
 
   /**
@@ -1473,13 +1489,10 @@ export class MCPAQLHandler {
     method: string,
     params: Record<string, unknown>
   ): unknown {
-    switch (method) {
-      case 'resolve':
-        return IntrospectionResolver.resolve(params);
-
-      default:
-        throw new Error(`Unknown Introspection method: ${method}`);
+    if (method === 'resolve') {
+      return IntrospectionResolver.resolve(params);
     }
+    throw new Error(`Unknown Introspection method: ${method}`);
   }
 
   // ============================================================================
@@ -1669,8 +1682,8 @@ export class MCPAQLHandler {
         return handler.findSimilarElements({
           elementName: params.element_name as string,
           elementType: params.element_type as string | undefined,
-          limit: (params.limit as number) ?? 10,
-          threshold: (params.threshold as number) ?? 0.5,
+          limit: (params.limit as number | undefined) ?? 10,
+          threshold: (params.threshold as number | undefined) ?? 0.5,
         });
 
       case 'getRelationships':
@@ -1683,7 +1696,7 @@ export class MCPAQLHandler {
       case 'searchByVerb':
         return handler.searchByVerb({
           verb: params.verb as string,
-          limit: (params.limit as number) ?? 20,
+          limit: (params.limit as number | undefined) ?? 20,
         });
 
       case 'getStats':
@@ -1706,20 +1719,16 @@ export class MCPAQLHandler {
       throw new Error('Persona operations not available: PersonaHandler not configured');
     }
 
-    switch (method) {
-      case 'import': {
-        // Issue #323: Validate source parameter before use
-        const source = validateRequiredString(
-          params,
-          'source',
-          'URL or file path to import persona from'
-        );
-        return handler.importPersona(source, params.overwrite as boolean | undefined);
-      }
-
-      default:
-        throw new Error(`Unknown Persona method: ${method}`);
+    if (method === 'import') {
+      // Issue #323: Validate source parameter before use
+      const source = validateRequiredString(
+        params,
+        'source',
+        'URL or file path to import persona from'
+      );
+      return handler.importPersona(source, params.overwrite as boolean | undefined);
     }
+    throw new Error(`Unknown Persona method: ${method}`);
   }
 
   private challengeIsForDeadlockRelief(challenge: { reason: string } | undefined): boolean {
@@ -1960,26 +1969,23 @@ export class MCPAQLHandler {
       throw new Error('MemoryLogSink not available — logging query requires memory sink');
     }
 
-    switch (method) {
-      case 'query': {
-        const options = validateLogQueryParams(params);
-        // Session-scoped log filtering: auto-inject the calling session's ID
-        // when no explicit sessionId is provided, and reject cross-session
-        // queries when a session context is active.
-        const callerSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
-        if (callerSessionId) {
-          // Enforce session boundary — callers cannot read other sessions' logs
-          if (options.sessionId && options.sessionId !== callerSessionId) {
-            throw new Error('Cannot query logs for a different session');
-          }
-          options.sessionId = callerSessionId;
+    if (method === 'query') {
+      const options = validateLogQueryParams(params);
+      // Session-scoped log filtering: auto-inject the calling session's ID
+      // when no explicit sessionId is provided, and reject cross-session
+      // queries when a session context is active.
+      const callerSessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+      if (callerSessionId) {
+        // Enforce session boundary — callers cannot read other sessions' logs
+        if (options.sessionId && options.sessionId !== callerSessionId) {
+          throw new Error('Cannot query logs for a different session');
         }
-        const result = this.handlers.memorySink.query(options);
-        return { _type: 'LogQueryResult', ...result };
+        options.sessionId = callerSessionId;
       }
-      default:
-        throw new Error(`Unknown Logging method: ${method}`);
+      const result = this.handlers.memorySink.query(options);
+      return { _type: 'LogQueryResult', ...result };
     }
+    throw new Error(`Unknown Logging method: ${method}`);
   }
 
   /**

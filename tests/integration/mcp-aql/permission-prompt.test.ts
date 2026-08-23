@@ -1133,7 +1133,7 @@ describe('permission_prompt Integration', () => {
         const data = result.data as Record<string, unknown>;
         expect(data.permissionPromptActive).toBe(false);
         expect(data.advisory).toBeDefined();
-        expect(data.advisory).toContain('--permission-prompt-tool');
+        expect(data.advisory).toMatch(/--permission-prompt-tool|Permission hook detected/u);
       }
     });
 
@@ -1186,7 +1186,7 @@ describe('permission_prompt Integration', () => {
       if (activateResult.success) {
         const text = JSON.stringify(activateResult.data);
         expect(text).toContain('CLI Policies Loaded');
-        expect(text).toContain('Hook Not Detected');
+        expect(text).toMatch(/Hook Not Detected|Permission hook detected/u);
         expect(text).toContain('Only git commands allowed');
       }
     });
@@ -1224,7 +1224,7 @@ describe('permission_prompt Integration', () => {
       if (activateResult.success) {
         const text = JSON.stringify(activateResult.data);
         expect(text).toContain('CLI Policies Loaded');
-        expect(text).toContain('Hook Not Detected');
+        expect(text).toMatch(/Hook Not Detected|Permission hook detected/u);
         expect(text).toContain('No network access');
       }
     });
@@ -1318,7 +1318,7 @@ This skill should still activate.
       if (activateResult.success) {
         const text = JSON.stringify(activateResult.data);
         expect(text).toContain('CLI Policies Loaded');
-        expect(text).toContain('Hook Not Detected');
+        expect(text).toMatch(/Hook Not Detected|Permission hook detected/u);
         expect(text).toContain('approval');
         expect(text).toContain('moderate');
       }

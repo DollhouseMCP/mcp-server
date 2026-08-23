@@ -2,9 +2,8 @@
  * Tool Registry for managing MCP tool definitions and handlers
  */
 
-import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
-import { Tool } from "@modelcontextprotocol/sdk/types.js";
-import { ToolDefinition, ToolHandler } from "./types/ToolTypes.js";
+import type { Tool } from "@modelcontextprotocol/sdk/types.js";
+import type { ToolDefinition, ToolHandler } from "./types/ToolTypes.js";
 import { getAuthTools } from "../server/tools/AuthTools.js";
 import { getCollectionTools } from "../server/tools/CollectionTools.js";
 import { getConfigToolsV2 } from "../server/tools/ConfigToolsV2.js";
@@ -16,6 +15,7 @@ import type { BuildInfoService } from "../services/BuildInfoService.js";
 import { getPersonaExportImportTools } from "../server/tools/PersonaTools.js";
 import { getPortfolioTools } from "../server/tools/PortfolioTools.js";
 import { getMCPAQLTools } from "../server/tools/MCPAQLTools.js";
+import { getIntegrationTools, getPromotedIntegrationTools, getRemoteMcpBridgeTools } from "../server/tools/IntegrationTools.js";
 import type { PersonaHandler } from './PersonaHandler.js';
 import type { ElementCRUDHandler } from './ElementCRUDHandler.js';
 import type { CollectionHandler } from './CollectionHandler.js';
@@ -25,13 +25,24 @@ import type { ConfigHandler } from './ConfigHandler.js';
 import type { SyncHandler } from './SyncHandlerV2.js';
 import type { EnhancedIndexHandler } from './EnhancedIndexHandler.js';
 import type { MCPAQLHandler } from './mcp-aql/MCPAQLHandler.js';
+import type {
+  AuthorizedIntegrationGateway,
+  AuthorizedIntegrationOperationCatalog,
+  AuthorizedIntegrationRemoteMcpBridge,
+} from '../web-console/modules/integrations/AuthorizedIntegrationGateway.js';
 
 // Re-export types for backward compatibility
 export type { ToolDefinition, ToolHandler };
 
+export type ToolRegistryChangeReason = 'registered' | 'unregistered';
+export type ToolRegistryChangeListener = (event: {
+  readonly reason: ToolRegistryChangeReason;
+  readonly toolNames: readonly string[];
+}) => void;
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
-  constructor(_server: Server) {}
+  private readonly changeListeners = new Set<ToolRegistryChangeListener>();
 
   /**
    * Register a tool with its definition and handler
@@ -41,13 +52,39 @@ export class ToolRegistry {
       tool.handler = handler;
     }
     this.tools.set(tool.name, tool);
+    this.emitChange('registered', [tool.name]);
   }
 
   /**
    * Register multiple tools at once
    */
   registerMany(tools: Array<{ tool: ToolDefinition; handler?: ToolHandler }>): void {
-    tools.forEach(({ tool, handler }) => this.register(tool, handler));
+    const toolNames: string[] = [];
+    tools.forEach(({ tool, handler }) => {
+      if (handler) {
+        tool.handler = handler;
+      }
+      this.tools.set(tool.name, tool);
+      toolNames.push(tool.name);
+    });
+    if (toolNames.length > 0) {
+      this.emitChange('registered', toolNames);
+    }
+  }
+
+  unregister(name: string): boolean {
+    const removed = this.tools.delete(name);
+    if (removed) {
+      this.emitChange('unregistered', [name]);
+    }
+    return removed;
+  }
+
+  onChange(listener: ToolRegistryChangeListener): () => void {
+    this.changeListeners.add(listener);
+    return () => {
+      this.changeListeners.delete(listener);
+    };
   }
 
   registerPersonaTools(handler: PersonaHandler): void {
@@ -87,6 +124,33 @@ export class ToolRegistry {
 
   registerMCPAQLTools(handler: MCPAQLHandler): void {
     this.registerMany(getMCPAQLTools(handler));
+  }
+
+  registerIntegrationTools(
+    gateway: AuthorizedIntegrationGateway,
+    operationCatalog?: AuthorizedIntegrationOperationCatalog | null,
+  ): void {
+    this.registerMany(getIntegrationTools(gateway, operationCatalog));
+  }
+
+  async registerPromotedIntegrationTools(
+    gateway: AuthorizedIntegrationGateway,
+    operationCatalog: AuthorizedIntegrationOperationCatalog,
+  ): Promise<void> {
+    this.registerMany(await getPromotedIntegrationTools(
+      gateway,
+      operationCatalog,
+      new Set(this.tools.keys()),
+    ));
+  }
+
+  async registerRemoteMcpBridgeTools(
+    bridge: AuthorizedIntegrationRemoteMcpBridge,
+  ): Promise<void> {
+    this.registerMany(await getRemoteMcpBridgeTools(
+      bridge,
+      new Set(this.tools.keys()),
+    ));
   }
 
   /**
@@ -160,5 +224,11 @@ export class ToolRegistry {
       total: toolStats.reduce((sum, t) => sum + t.tokens, 0),
       count: tools.length
     };
+  }
+
+  private emitChange(reason: ToolRegistryChangeReason, toolNames: readonly string[]): void {
+    for (const listener of this.changeListeners) {
+      listener({ reason, toolNames });
+    }
   }
 }

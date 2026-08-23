@@ -22,6 +22,7 @@ import { isUniqueViolation, type DrizzleTx } from '../database/db-utils.js';
 import { MemoryMetadataExtractor } from './MemoryMetadataExtractor.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { MEMORY_CONSTANTS } from '../elements/memories/constants.js';
+import { validateMemoryControlFields } from '../elements/memories/memoryYamlValidation.js';
 import { AbstractDatabaseStorageLayer } from './AbstractDatabaseStorageLayer.js';
 import { logger } from '../utils/logger.js';
 import type { ElementIndexEntry } from './types.js';
@@ -375,10 +376,13 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
   ): Promise<void> {
     let parsed: Record<string, unknown>;
     try {
-      // Issue #2329: cap matches the memory save/load limit (256KB) — the old
-      // 64KB frontmatter cap made entry sync silently skip for grown memories,
-      // leaving memory_entries stale while the element row persisted.
-      parsed = SecureYamlParser.parseRawYaml(yamlContent, MEMORY_CONSTANTS.MAX_YAML_SIZE);
+      parsed = SecureYamlParser.parseRawYaml(yamlContent, {
+        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+        contentPolicy: 'structure-only',
+      });
+      if (!validateMemoryControlFields(parsed)) {
+        throw new Error('Malicious memory control content detected');
+      }
     } catch (err) {
       // Parse failure drops entries silently — element row still persists.
       // Log so operators see skipped entry sync and can investigate corrupted YAML.
@@ -458,9 +462,13 @@ export class DatabaseMemoryStorageLayer extends AbstractDatabaseStorageLayer {
 
   private extractMemoryMetadata(content: string): Record<string, unknown> {
     try {
-      // Issue #2329: same cap as save/load — a 64KB cap here returned empty
-      // metadata for any memory that grew past it.
-      const parsed = SecureYamlParser.parseRawYaml(content, MEMORY_CONSTANTS.MAX_YAML_SIZE);
+      const parsed = SecureYamlParser.parseRawYaml(content, {
+        maxSize: MEMORY_CONSTANTS.MAX_YAML_SIZE,
+        contentPolicy: 'structure-only',
+      });
+      if (!validateMemoryControlFields(parsed)) {
+        return {};
+      }
       const { name, description, version, author, tags, entries, stats, ...rest } = parsed;
       const metadataObj = (rest.metadata && typeof rest.metadata === 'object' && !Array.isArray(rest.metadata))
         ? rest.metadata as Record<string, unknown>

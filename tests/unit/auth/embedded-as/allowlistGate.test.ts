@@ -13,9 +13,10 @@
  * identity values for operator diagnostics.
  */
 
-import { describe, it, expect, beforeEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import {
   checkAllowlistGate,
+  provisionAccountThroughAllowlistGate,
   renderAllowlistDeniedPage,
   withSignInAllowlistAuthority,
   type SignInAllowlistAuthority,
@@ -103,6 +104,20 @@ describe('checkAllowlistGate — decision matrix', () => {
         { storage, required: true },
       );
       expect(result.allowed).toBe(true);
+    });
+
+    it('keeps look-alike Unicode email principals distinct', async () => {
+      const cyrillicAlice = '\u0430lice@example.com';
+      await storage.allowlistAdd({ kind: 'email', value: cyrillicAlice });
+
+      await expect(storage.allowlistMatchesIdentity({ email: cyrillicAlice })).resolves.toBe(true);
+      await expect(storage.allowlistMatchesIdentity({ email: ALICE_EMAIL })).resolves.toBe(false);
+    });
+
+    it('matches canonically equivalent Unicode email encodings', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'jose\u0301@example.com' });
+
+      await expect(storage.allowlistMatchesIdentity({ email: 'jos\u00e9@example.com' })).resolves.toBe(true);
     });
 
     it('uses an injected sign-in authority instead of the legacy storage allowlist', async () => {
@@ -267,6 +282,90 @@ describe('checkAllowlistGate — decision matrix', () => {
   });
 });
 
+describe('provisionAccountThroughAllowlistGate', () => {
+  it('delegates gate evaluation and persistence to an atomic authority when available', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const provisionAccountIfAllowed = jest.fn<SignInAllowlistAuthority['provisionAccountIfAllowed']>()
+      .mockResolvedValue({ allowed: true });
+    const authority: SignInAllowlistAuthority = {
+      ...fixedAuthority({ entries: 1, matches: true }),
+      provisionAccountIfAllowed,
+    };
+    const account = {
+      sub: 'github_42',
+      provider: 'github',
+      externalSub: '42',
+      emailVerified: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const successAuditEvent = {
+      type: 'auth.social.identity_changed',
+      sub: account.sub,
+      timestamp: 1,
+    };
+
+    await expect(provisionAccountThroughAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority, required: true },
+      account,
+      successAuditEvent,
+    )).resolves.toEqual({ allowed: true });
+
+    expect(provisionAccountIfAllowed).toHaveBeenCalledWith(expect.objectContaining({
+      account,
+      successAuditEvent,
+    }));
+    await expect(storage.getAccount('github_42')).resolves.toBeNull();
+  });
+
+  it('retains the gate-then-upsert fallback for non-transactional authorities', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const account = {
+      sub: 'github_42',
+      provider: 'github',
+      externalSub: '42',
+      emailVerified: true,
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const successAuditEvent = {
+      type: 'auth.social.identity_changed',
+      sub: account.sub,
+      timestamp: 1,
+    };
+
+    await expect(provisionAccountThroughAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority: fixedAuthority({ entries: 1, matches: true }), required: true },
+      account,
+      successAuditEvent,
+    )).resolves.toEqual({ allowed: true });
+
+    await expect(storage.getAccount('github_42')).resolves.toMatchObject(account);
+    await expect(storage.listIdentityEvents({ type: successAuditEvent.type }))
+      .resolves.toEqual([successAuditEvent]);
+  });
+});
+
+describe('revoked identity tombstones', () => {
+  it('denies a matching revoked identity before permissive empty-list fallback', async () => {
+    const storage = new InMemoryAuthStorageLayer();
+    const authority: SignInAllowlistAuthority = {
+      ...fixedAuthority({ entries: 0, matches: false }),
+      deniesIdentity: () => Promise.resolve(true),
+    };
+
+    await expect(checkAllowlistGate(
+      { sub: 'github_42', method: 'github', githubId: '42' },
+      { storage, authority, required: false },
+    )).resolves.toEqual({
+      allowed: false,
+      reason: 'This identity is not on the sign-in allowlist.',
+    });
+  });
+});
+
 function fixedAuthority(options: {
   readonly entries: number;
   readonly matches: boolean;
@@ -302,10 +401,14 @@ describe('renderAllowlistDeniedPage', () => {
     expect(html).not.toMatch(/github_/);
   });
 
-  it('escapes operator-supplied contact note', () => {
-    const html = renderAllowlistDeniedPage('<script>alert("xss")</script>');
-    expect(html).not.toMatch(/<script>/);
-    expect(html).toMatch(/&lt;script&gt;/);
+  it.each([
+    '<script>alert("xss")</script>',
+    '<SCRIPT>alert("xss")</SCRIPT>',
+    '<ScRiPt data-test="xss">alert("xss")</sCrIpT>',
+  ])('escapes operator-supplied contact note: %s', contactNote => {
+    const html = renderAllowlistDeniedPage(contactNote);
+    expect(html).not.toMatch(/<script(?:\s|>)/i);
+    expect(html).toMatch(/&lt;script(?:\s|&gt;)/i);
     expect(html).toMatch(/&quot;|alert\(/);
   });
 

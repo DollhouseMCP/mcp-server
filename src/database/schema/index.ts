@@ -29,11 +29,14 @@ export { authAllowlist } from './authAllowlist.js';
 export type { AuthAllowlistKind, AuthAllowlistEntry } from './authAllowlist.js';
 export {
   userAdminRoles,
+  accountAllowlistAuthorityOrderSequence,
   accountAllowlistEntries,
   consoleSessions,
   consoleAuthPolicy,
   consoleLoginTransactions,
   userIntegrations,
+  integrationProviderDescriptors,
+  integrationOpenApiSpecs,
   portfolioSyncJobs,
   idempotencyRecords,
   accountFactors,
@@ -59,6 +62,8 @@ export type {
   UserIntegrationProvider,
   UserIntegrationErrorReason,
   UserIntegrationStatus,
+  IntegrationDescriptorOwnership,
+  IntegrationAuthStrategy,
   PortfolioSyncDirection,
   PortfolioSyncConflictPolicy,
   PortfolioSyncJobStatus,

@@ -43,7 +43,11 @@ import { renderClientConsentForIdentity } from '../InteractionRouter.js';
 import type { IAuthStorageLayer } from '../storage/IAuthStorageLayer.js';
 import type { IRateLimitStore } from '../storage/IRateLimitStore.js';
 import type { InviteTokenStore } from '../inviteTokens.js';
-import { checkAllowlistGate, renderAllowlistDeniedPage, type SignInAllowlistAuthority } from '../allowlistGate.js';
+import {
+  provisionAccountThroughAllowlistGate,
+  renderAllowlistDeniedPage,
+  type SignInAllowlistAuthority,
+} from '../allowlistGate.js';
 import { normalizeIp } from '../rateLimit.js';
 
 const PROVIDER_NAME = 'magic-link' as const;
@@ -339,18 +343,30 @@ export class MagicLinkMethod implements IAuthMethod {
     // passes via checkAllowlistGate's rule 1. The token has already been
     // consumed at this point (consume.ok above), so a denied user can't
     // replay the link.
-    const gate = await checkAllowlistGate(
-      {
-        sub,
-        method: PROVIDER_NAME,
-        email,
-        provider: PROVIDER_NAME,
-        externalSub: hashEmail(email),
-      },
+    const gateIdentity = {
+      sub,
+      method: PROVIDER_NAME,
+      email,
+      provider: PROVIDER_NAME,
+      externalSub: hashEmail(email),
+    };
+    const existing = await this.options.storage.getAccount(sub);
+    const gate = await provisionAccountThroughAllowlistGate(
+      gateIdentity,
       {
         storage: this.options.storage,
         authority: this.options.signInAllowlistAuthority,
         required: this.options.allowlistRequired ?? false,
+      },
+      {
+        sub,
+        provider: PROVIDER_NAME,
+        externalSub: hashEmail(email),
+        email,
+        emailVerified: true,
+        displayName: existing?.displayName ?? email,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
       },
     );
     if (!gate.allowed) {
@@ -359,18 +375,6 @@ export class MagicLinkMethod implements IAuthMethod {
 
     // Admin is provisioned per-user in `user_admin_roles` by the bootstrap CLI
     // (linked on first login), not stamped onto the auth account.
-    const existing = await this.options.storage.getAccount(sub);
-    await this.options.storage.upsertAccount({
-      sub,
-      provider: PROVIDER_NAME,
-      externalSub: hashEmail(email),
-      email,
-      emailVerified: true,
-      displayName: existing?.displayName ?? email,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    });
-
     return {
       kind: 'ok',
       interactionId: consume.payload.interactionId,

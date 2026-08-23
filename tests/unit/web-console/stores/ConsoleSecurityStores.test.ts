@@ -8,6 +8,8 @@ import {
   InMemoryConsoleAccountAdminStore,
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
+  InMemoryIntegrationDescriptorStore,
+  InMemoryIntegrationOpenApiSpecStore,
   InMemoryUserIntegrationStore,
   isUniqueViolation,
 } from '../../../../src/web-console/stores/index.js';
@@ -24,7 +26,12 @@ import type {
 } from '../../../../src/web-console/stores/IIdempotencyStore.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
+const READ_ISSUES_SCOPE = 'read:issues';
+const STALE_ACCESS_TOKEN = 'stale-access';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
+const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
+const DESCRIPTOR_FINGERPRINT = 'b'.repeat(64);
+const SPEC_HASH = 'a'.repeat(64);
 const FACTOR_ID = 'cd8f6d0e-7294-42bc-9e01-094890a820a8';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
@@ -101,6 +108,51 @@ function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIn
     connectedAt: NOW,
     lastSyncAt: null,
     revokedAt: null,
+    ...overrides,
+  };
+}
+
+function oauthDescriptorInput(overrides: Partial<Parameters<InMemoryIntegrationDescriptorStore['upsert']>[0]> = {}) {
+  return {
+    provider: 'gmail',
+    ownership: 'byo' as const,
+    ownerUserId: USER_ID,
+    displayName: 'Gmail',
+    category: 'email',
+    authStrategy: 'oauth2_authorization_code' as const,
+    apiHosts: ['gmail.googleapis.com'],
+    oauth: {
+      clientId: 'gmail-client-id',
+      authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      pkce: 'required' as const,
+      refresh: 'rotating' as const,
+      tokenExchange: { style: 'form' },
+      accountLabel: { field: 'email' },
+    },
+    staticApiKey: null,
+    clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    clientSecretRevision: '00000000-0000-4000-8000-000000000201',
+    credentialKeyVersion: 'integration-key-v1',
+    operationPromotion: { operations: ['gmail.users.messages.list'] },
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function openApiSpecInput(overrides: Partial<Parameters<InMemoryIntegrationOpenApiSpecStore['upsert']>[0]> = {}) {
+  return {
+    descriptorId: DESCRIPTOR_ID,
+    spec: {
+      openapi: '3.1.0',
+      paths: {},
+    },
+    sourceUrl: 'https://gmail.googleapis.com/openapi.json',
+    specHash: SPEC_HASH,
+    createdAt: NOW,
+    updatedAt: NOW,
     ...overrides,
   };
 }
@@ -320,6 +372,18 @@ describe('InMemoryLoginTransactionStore', () => {
     expect(await store.consume(hash(3), hash(4), FOUR_MINUTES)).toBeNull();
   });
 
+  it('completes consumed state while retaining it for replay classification', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    await store.create(loginTransaction());
+    await store.consume(hash(3), hash(4), FOUR_MINUTES);
+
+    await expect(store.completeConsumed(hash(3))).resolves.toBe(true);
+    await expect(store.findByIdHash(hash(3))).resolves.toMatchObject({
+      consumedAt: FOUR_MINUTES,
+      expiresAt: FOUR_MINUTES,
+    });
+  });
+
   it('requires bound elevated flows and a short relative return target', async () => {
     const store = new InMemoryLoginTransactionStore();
     await expect(store.create(loginTransaction({
@@ -334,15 +398,52 @@ describe('InMemoryLoginTransactionStore', () => {
       .rejects.toThrow('expire within 10 minutes');
     await expect(store.create(loginTransaction({ pkceVerifierEnc: Buffer.alloc(0) })))
       .rejects.toThrow('encrypted ciphertext');
+    await expect(store.create(loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+    }))).rejects.toThrow('integrationDescriptorFingerprint');
+    await expect(store.create(loginTransaction({
+      flowKind: 'integration_link',
+      userId: USER_ID,
+      consoleSessionIdHash: hash(5),
+      integrationDescriptorId: DESCRIPTOR_ID,
+      integrationDescriptorFingerprint: DESCRIPTOR_FINGERPRINT,
+    }))).resolves.toBeUndefined();
   });
 
-  it('removes expired and consumed transient transactions', async () => {
+  it('retains in-flight consumed transactions until completion or expiry', async () => {
     const store = new InMemoryLoginTransactionStore();
     await store.create(loginTransaction());
     await store.create(loginTransaction({ idHash: hash(6) }));
     await store.consume(hash(6), hash(4), FOUR_MINUTES);
 
-    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(2);
+    expect(await store.sweepExpired(FOUR_MINUTES)).toBe(0);
+    await store.completeConsumed(hash(6));
+    expect(await store.sweepExpired(FOUR_MINUTES)).toBe(1);
+    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(1);
+  });
+
+  it('retains a callback consumed just before its original deadline through the completion lease', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    const consumedAt = new Date(FIVE_MINUTES.getTime() - 1);
+    await store.create(loginTransaction());
+
+    const consumed = await store.consume(hash(3), hash(4), consumedAt);
+
+    expect(consumed?.expiresAt.getTime()).toBeGreaterThan(FIVE_MINUTES.getTime());
+    expect(await store.sweepExpired(FIVE_MINUTES)).toBe(0);
+    await store.completeConsumed(hash(3));
+    expect(await store.sweepExpired(consumedAt)).toBe(1);
+  });
+
+  it('rejects consumed transactions whose completion lease exceeds five minutes', async () => {
+    const store = new InMemoryLoginTransactionStore();
+    await expect(store.create(loginTransaction({
+      consumedAt: FOUR_MINUTES,
+      expiresAt: new Date('2026-05-26T12:09:00.001Z'),
+    }))).rejects.toThrow('invalid completion lease');
   });
 });
 
@@ -375,6 +476,130 @@ describe('InMemoryUserIntegrationStore', () => {
       .toEqual(Buffer.from('encrypted-access-token'));
   });
 
+  it('stores generic provider integrations with scopes-only permission details', async () => {
+    const generic = userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: [READ_ISSUES_SCOPE, 'write:comments'],
+      },
+    });
+    const store = new InMemoryUserIntegrationStore([generic]);
+
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: [READ_ISSUES_SCOPE, 'write:comments'],
+      },
+    });
+  });
+
+  it('serializes concurrent refresh and lets the losing caller reuse the fresh token', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+    let refreshCalls = 0;
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>(resolve => {
+      releaseRefresh = resolve;
+    });
+    const refresh = async () => {
+      refreshCalls += 1;
+      await refreshGate;
+      return {
+        kind: 'refreshed' as const,
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        credentialKeyVersion: 'integration-key-v2',
+      };
+    };
+
+    const first = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: null,
+      staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      refreshedAt: FIVE_MINUTES,
+      refresh,
+    });
+    const second = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: null,
+      staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      refreshedAt: FIVE_MINUTES,
+      refresh,
+    });
+    await Promise.resolve();
+    releaseRefresh();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ kind: 'refreshed' }),
+      expect.objectContaining({ kind: 'reused' }),
+    ]);
+    expect(refreshCalls).toBe(1);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      status: 'connected',
+      credentialKeyVersion: 'integration-key-v2',
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+    });
+  });
+
+  it('records refresh failure without deleting the previous encrypted credential', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      accessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      integrationDescriptorId: null,
+      staleAccessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+      refreshedAt: FIVE_MINUTES,
+      refresh: () => Promise.resolve({ kind: 'failed' as const, errorReason: 'token_refresh_failed' }),
+    })).resolves.toMatchObject({
+      kind: 'failed',
+      record: {
+        status: 'error',
+        errorReason: 'token_refresh_failed',
+        accessTokenCiphertext: Buffer.from(STALE_ACCESS_TOKEN),
+        refreshTokenCiphertext: Buffer.from('stale-refresh'),
+      },
+    });
+  });
+
+  it('revokes and clears only active credentials bound to a withdrawn descriptor', async () => {
+    const store = new InMemoryUserIntegrationStore([
+      userIntegration({
+        provider: 'linear',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      }),
+      userIntegration({
+        id: '45e22a52-dc56-4cd0-9d13-b2802524fbd4',
+        userId: SECOND_USER_ID,
+        provider: 'linear',
+        integrationDescriptorId: DESCRIPTOR_ID,
+        authorizedPermissions: { scopes: [READ_ISSUES_SCOPE] },
+      }),
+      userIntegration({
+        id: '55e22a52-dc56-4cd0-9d13-b2802524fbd5',
+        provider: 'github',
+      }),
+    ]);
+
+    await expect(store.revokeAllByDescriptor(DESCRIPTOR_ID, FIVE_MINUTES)).resolves.toBe(2);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(SECOND_USER_ID, 'linear')).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({ status: 'connected' });
+  });
+
   it('validates integration records before storing them', () => {
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
       authorizedPermissions: {
@@ -400,9 +625,338 @@ describe('InMemoryUserIntegrationStore', () => {
       accessTokenCiphertext: Buffer.alloc(0),
     })])).toThrow(ConsoleStoreValidationError);
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'GitHub',
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'x',
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read' },
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: [READ_ISSUES_SCOPE],
+        token: 'plaintext-token',
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: [''],
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
       status: 'revoked',
       revokedAt: null,
     })])).toThrow(ConsoleStoreValidationError);
+  });
+});
+
+describe('InMemoryIntegrationDescriptorStore', () => {
+  it('stores visible curated and BYO descriptors and clones encrypted client secrets', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const created = await store.upsert(oauthDescriptorInput());
+
+    created.clientSecretCiphertext?.fill(0);
+
+    const found = await store.findVisibleByProvider(USER_ID, 'gmail');
+    expect(found).toMatchObject({
+      provider: 'gmail',
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+      authStrategy: 'oauth2_authorization_code',
+      apiHosts: ['gmail.googleapis.com'],
+    });
+    expect(found?.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
+    await expect(store.findVisibleByProvider(SECOND_USER_ID, 'gmail')).resolves.toBeNull();
+  });
+
+  it('paginates visible descriptors with a stable (provider, id) cursor and keeps listVisible complete', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const providers = ['svc-a', 'svc-b', 'svc-c', 'svc-d', 'svc-e'];
+    for (const provider of providers) {
+      await store.upsert(oauthDescriptorInput({ provider }));
+    }
+
+    const first = await store.listVisiblePage(USER_ID, { limit: 2 });
+    expect(first.items.map(item => item.provider)).toEqual(['svc-a', 'svc-b']);
+    expect(first.nextCursor).not.toBeNull();
+
+    const second = await store.listVisiblePage(USER_ID, { limit: 2, cursor: first.nextCursor });
+    expect(second.items.map(item => item.provider)).toEqual(['svc-c', 'svc-d']);
+
+    const third = await store.listVisiblePage(USER_ID, { limit: 2, cursor: second.nextCursor });
+    expect(third.items.map(item => item.provider)).toEqual(['svc-e']);
+    expect(third.nextCursor).toBeNull();
+
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(5);
+    await expect(store.listVisiblePage(SECOND_USER_ID, { limit: 2 }))
+      .resolves.toMatchObject({ items: [], nextCursor: null });
+  });
+
+  it('paginates without dropping rows whose provider ids sort differently under localeCompare vs code point', async () => {
+    // `_`/`-` order differently under ICU localeCompare than by code point.
+    // The sort comparator and the keyset cursor MUST agree or a boundary row
+    // vanishes from every later page. These ids diverge between the two orders.
+    const store = new InMemoryIntegrationDescriptorStore();
+    const providers = ['a-n', 'a560', 'a7m', 'a_d3w', 'a_kdr', 'a_x'];
+    for (const provider of providers) {
+      await store.upsert(oauthDescriptorInput({ provider }));
+    }
+
+    const collected: string[] = [];
+    let cursor: string | null = null;
+    do {
+      const page = await store.listVisiblePage(USER_ID, { limit: 2, cursor });
+      collected.push(...page.items.map(item => item.provider));
+      cursor = page.nextCursor;
+    } while (cursor);
+
+    // Every id appears exactly once across the paged walk — none skipped.
+    const byName = (left: string, right: string): number => left.localeCompare(right);
+    expect([...collected].sort(byName)).toEqual([...providers].sort(byName));
+    expect(new Set(collected).size).toBe(providers.length);
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(providers.length);
+  });
+
+  it('resolves curated strictly over a same-provider BYO descriptor', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    // BYO authored first, curated seeded second — order must not decide the winner.
+    await store.upsert(oauthDescriptorInput({ provider: 'shared', apiHosts: ['byo.example.com'] }));
+    await store.upsert({
+      ...oauthDescriptorInput({ provider: 'shared', apiHosts: ['curated.example.com'] }),
+      ownership: 'curated',
+      ownerUserId: null,
+    });
+
+    const resolved = await store.findVisibleByProvider(USER_ID, 'shared');
+    expect(resolved).toMatchObject({ ownership: 'curated', apiHosts: ['curated.example.com'] });
+    await expect(store.findCuratedByProvider('shared')).resolves.toMatchObject({
+      ownership: 'curated',
+      ownerUserId: null,
+      apiHosts: ['curated.example.com'],
+    });
+  });
+
+  it('does not resolve a same-provider BYO descriptor as curated', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    await store.upsert(oauthDescriptorInput({ provider: 'shared' }));
+
+    await expect(store.findCuratedByProvider('shared')).resolves.toBeNull();
+  });
+
+  it('rejects invalid pagination limits and cursors', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+
+    await expect(store.listVisiblePage(USER_ID, { limit: 0 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { limit: 101 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { limit: 1.5 })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { cursor: 'garbage' })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.listVisiblePage(USER_ID, { cursor: 'svc-a:not-a-uuid' })).rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it('scopes findById to the BYO owner and fails closed everywhere else', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const byo = await store.upsert(oauthDescriptorInput());
+    const curated = await store.upsert(oauthDescriptorInput({
+      provider: 'shared-svc',
+      ownership: 'curated' as const,
+      ownerUserId: null,
+    }));
+
+    await expect(store.findById(byo.id, USER_ID)).resolves.toMatchObject({
+      id: byo.id,
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+    });
+    // Non-owner, curated-by-id, and unknown id are indistinguishable: null.
+    await expect(store.findById(byo.id, SECOND_USER_ID)).resolves.toBeNull();
+    await expect(store.findById(curated.id, USER_ID)).resolves.toBeNull();
+    await expect(store.findById(DESCRIPTOR_ID, USER_ID)).resolves.toBeNull();
+    await expect(store.findById('not-a-uuid', USER_ID)).rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it('deletes only owned BYO descriptors', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const byo = await store.upsert(oauthDescriptorInput());
+    const curated = await store.upsert(oauthDescriptorInput({
+      provider: 'shared-svc',
+      ownership: 'curated' as const,
+      ownerUserId: null,
+    }));
+
+    await expect(store.delete(byo.id, SECOND_USER_ID)).resolves.toBe(false);
+    await expect(store.delete(curated.id, USER_ID)).resolves.toBe(false);
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(2);
+
+    await expect(store.delete(byo.id, USER_ID)).resolves.toBe(true);
+    await expect(store.delete(byo.id, USER_ID)).resolves.toBe(false);
+    await expect(store.findVisibleByProvider(USER_ID, 'gmail')).resolves.toBeNull();
+    await expect(store.listVisible(USER_ID)).resolves.toHaveLength(1);
+  });
+
+  it('validates descriptor ownership, hosts, URLs, and auth strategy shape', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+
+    await expect(store.upsert(oauthDescriptorInput({
+      ownerUserId: null,
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['localhost'],
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['api.company.corp'],
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['API.Example.com'],
+    }))).rejects.toThrow('apiHosts must contain unique canonical hostnames');
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['api.example.com', 'api.example.com'],
+    }))).rejects.toThrow('apiHosts must contain unique canonical hostnames');
+    const baseOauth = oauthDescriptorInput().oauth;
+    if (!baseOauth) throw new Error('fixture oauth missing');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...baseOauth,
+        tokenUrl: 'http://oauth2.googleapis.com/token',
+      },
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert({
+      ...oauthDescriptorInput(),
+      authStrategy: 'static_api_key',
+    })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert({
+      provider: 'airtable',
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+      displayName: 'Airtable',
+      category: 'database',
+      authStrategy: 'static_api_key',
+      apiHosts: ['api.airtable.com'],
+      staticApiKey: { injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' } },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    })).resolves.toMatchObject({ provider: 'airtable' });
+  });
+
+  it('keeps legacy private-suffix descriptors readable without permitting new writes', async () => {
+    const base = oauthDescriptorInput();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const legacyRecord = {
+      id: DESCRIPTOR_ID,
+      ...base,
+      apiHosts: ['api.company.corp'],
+      oauth: {
+        ...base.oauth,
+        authorizationUrl: 'https://auth.company.corp/authorize',
+        tokenUrl: 'https://auth.company.corp/token',
+      },
+    };
+    const store = new InMemoryIntegrationDescriptorStore([legacyRecord]);
+
+    await expect(store.listVisible(USER_ID)).resolves.toEqual([
+      expect.objectContaining({ id: DESCRIPTOR_ID, apiHosts: ['api.company.corp'] }),
+    ]);
+    await expect(store.upsert({ ...base, apiHosts: ['api.company.corp'] }))
+      .rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it('validates basic static-key injection: fixed Authorization header, no prefix', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const basicInput = (injection: { location: 'basic'; name: string; valuePrefix: string | null }) => ({
+      provider: 'twilio',
+      ownership: 'byo' as const,
+      ownerUserId: USER_ID,
+      displayName: 'Twilio',
+      category: 'messaging',
+      authStrategy: 'static_api_key' as const,
+      apiHosts: ['api.twilio.example'],
+      staticApiKey: { injection },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    await expect(store.upsert(basicInput({ location: 'basic', name: 'Authorization', valuePrefix: null })))
+      .resolves.toMatchObject({ staticApiKey: { injection: { location: 'basic' } } });
+    await expect(store.upsert(basicInput({ location: 'basic', name: 'X-Custom', valuePrefix: null })))
+      .rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(basicInput({ location: 'basic', name: 'Authorization', valuePrefix: 'Basic ' })))
+      .rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it.each(['\ud800', '\udc00'])('rejects malformed Unicode in stored static-key injection descriptors', async malformed => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const input = (name: string, valuePrefix: string | null) => ({
+      provider: 'airtable',
+      ownership: 'byo' as const,
+      ownerUserId: USER_ID,
+      displayName: 'Airtable',
+      category: 'database',
+      authStrategy: 'static_api_key' as const,
+      apiHosts: ['api.airtable.example'],
+      staticApiKey: { injection: { location: 'query' as const, name, valuePrefix } },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    });
+
+    await expect(store.upsert(input(`key${malformed}`, null))).rejects.toThrow('well-formed Unicode');
+    await expect(store.upsert(input('key', `prefix${malformed}`))).rejects.toThrow('well-formed Unicode');
+  });
+});
+
+describe('InMemoryIntegrationOpenApiSpecStore', () => {
+  it('stores and clones OpenAPI specs', async () => {
+    const store = new InMemoryIntegrationOpenApiSpecStore();
+    const created = await store.upsert(openApiSpecInput());
+
+    (created.spec.paths as Record<string, unknown>).tampered = true;
+
+    await expect(store.findByDescriptorId(DESCRIPTOR_ID)).resolves.toMatchObject({
+      descriptorId: DESCRIPTOR_ID,
+      specHash: SPEC_HASH,
+      spec: {
+        openapi: '3.1.0',
+        paths: {},
+      },
+    });
+  });
+
+  it('deletes specs by descriptor id and reports whether one existed', async () => {
+    const store = new InMemoryIntegrationOpenApiSpecStore();
+    await store.upsert(openApiSpecInput());
+
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(true);
+    await expect(store.findByDescriptorId(DESCRIPTOR_ID)).resolves.toBeNull();
+    await expect(store.deleteByDescriptorId(DESCRIPTOR_ID)).resolves.toBe(false);
+    await expect(store.deleteByDescriptorId('not-a-uuid')).rejects.toThrow(ConsoleStoreValidationError);
+  });
+
+  it('rejects invalid OpenAPI specs and non-HTTPS source URLs', async () => {
+    const store = new InMemoryIntegrationOpenApiSpecStore();
+
+    await expect(store.upsert(openApiSpecInput({
+      spec: { swagger: '2.0', paths: {} },
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(openApiSpecInput({
+      sourceUrl: 'http://example.com/openapi.json',
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(openApiSpecInput({
+      specHash: 'not-a-hash',
+    }))).rejects.toThrow(ConsoleStoreValidationError);
   });
 });
 
@@ -808,25 +1362,55 @@ describe('InMemoryConsoleAccountAllowlistStore', () => {
     })).rejects.toThrow('revokedByUserId must be a UUID');
   });
 
-  it('security-normalizes account allowlist values before storage and matching', async () => {
+  it('rejects non-ASCII GitHub usernames instead of rewriting confusables', async () => {
     const store = new InMemoryConsoleAccountAllowlistStore();
 
-    const entry = await store.add({
+    await expect(store.add({
       kind: 'github_username',
       value: 'ｍick',
       createdByUserId: USER_ID,
       createdAt: FIVE_MINUTES,
-    });
+    })).rejects.toThrow('valid GitHub username');
+  });
 
-    expect(entry.displayValue).toBe('mick');
-    expect(entry.normalizedValue).toBe('mick');
-    await expect(store.matchesIdentity({ githubUsername: 'mick' })).resolves.toBe(true);
-    await expect(store.add({
-      kind: 'github_username',
-      value: 'mick',
+  it('preserves distinct Unicode email principals while canonicalizing NFC', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore();
+    const cyrillicAlice = '\u0430lice@example.test';
+    const entry = await store.add({
+      kind: 'email',
+      value: cyrillicAlice,
       createdByUserId: USER_ID,
       createdAt: FIVE_MINUTES,
-    })).rejects.toThrow('active allowlist entry already exists');
+    });
+
+    expect(entry.displayValue).toBe(cyrillicAlice);
+    expect(entry.normalizedValue).toBe(cyrillicAlice);
+    await expect(store.matchesIdentity({ email: cyrillicAlice })).resolves.toBe(true);
+    await expect(store.matchesIdentity({ email: 'alice@example.test' })).resolves.toBe(false);
+    await expect(store.matchesIdentity({ email: '\u0410lice@example.test' })).resolves.toBe(false);
+  });
+
+  it('uses the preserved display identity for legacy Unicode-cased rows', async () => {
+    const store = new InMemoryConsoleAccountAllowlistStore([{
+      id: FACTOR_ID,
+      kind: 'email',
+      normalizedValue: '\u00e4lice@example.test',
+      displayValue: '\u00c4lice@example.test',
+      note: null,
+      createdByUserId: USER_ID,
+      createdAt: FIVE_MINUTES,
+      revokedByUserId: null,
+      revokedAt: null,
+    }]);
+
+    await expect(store.matchesIdentity({ email: '\u00c4lice@example.test' })).resolves.toBe(true);
+    await expect(store.matchesIdentity({ email: '\u00e4lice@example.test' })).resolves.toBe(false);
+    await expect(store.add({
+      kind: 'email',
+      value: '\u00c4lice@example.test',
+      createdByUserId: USER_ID,
+      createdAt: THIRTY_MINUTES,
+    })).rejects.toThrow('already exists');
   });
 });
 
@@ -979,7 +1563,7 @@ describe('InMemoryRuntimeSessionControlStore', () => {
       },
     });
     await expect(store.listPresenceByUser(USER_ID, { now: FIVE_MINUTES })).resolves.toHaveLength(1);
-    await expect(store.listOperationalPresence({ now: FIVE_MINUTES })).resolves.toHaveLength(1);
+    expect((await store.listOperationalPresence({ now: FIVE_MINUTES })).items).toHaveLength(1);
     await expect(store.findPresence(RUNTIME_SESSION_ID, THIRTY_MINUTES)).resolves.toBeNull();
     await expect(store.findPresence(RUNTIME_SESSION_ID, ONE_HOUR)).resolves.toBeNull();
 
@@ -1059,9 +1643,10 @@ describe('InMemoryRuntimeSessionControlStore', () => {
     ]);
     await expect(store.sweepStalePresence(FIVE_MINUTES)).resolves.toBe(0);
     await expect(store.sweepStalePresence(THIRTY_MINUTES)).resolves.toBe(1);
-    await expect(store.listOperationalPresence({ now: THIRTY_MINUTES })).resolves.toEqual([
-      expect.objectContaining({ sessionId: RUNTIME_SESSION_ID, replicaId: 'replica-b' }),
-    ]);
+    await expect(store.listOperationalPresence({ now: THIRTY_MINUTES })).resolves.toEqual({
+      items: [expect.objectContaining({ sessionId: RUNTIME_SESSION_ID, replicaId: 'replica-b' })],
+      nextCursor: null,
+    });
   });
 
   it('persists pending termination commands and idempotent acknowledgements', async () => {

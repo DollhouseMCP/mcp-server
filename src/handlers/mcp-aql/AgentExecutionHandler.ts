@@ -378,7 +378,7 @@ export class AgentExecutionHandler {
     });
 
     const finalResult = this.evaluateResilience(elementName, updateResult, params.outcome as string) ?? updateResult;
-    this.attachNotifications(elementName, finalResult);
+    this.attachNotifications(elementName, ownedGoalId, finalResult);
     return { _type: 'StepResult', ...finalResult };
   }
 
@@ -402,12 +402,16 @@ export class AgentExecutionHandler {
     return value;
   }
 
-  private attachNotifications(agentName: string, result: Record<string, unknown>): void {
+  private attachNotifications(
+    agentName: string,
+    goalId: string,
+    result: Record<string, unknown>,
+  ): void {
     const autonomy = result.autonomy as Record<string, unknown> | undefined;
     if (!autonomy) {
       return;
     }
-    const notifications = this.collectNotifications(agentName, autonomy);
+    const notifications = this.collectNotifications(agentName, goalId, autonomy);
     if (notifications.length > 0) {
       autonomy.notifications = notifications;
     }
@@ -824,11 +828,15 @@ export class AgentExecutionHandler {
     };
   }
 
-  private collectNotifications(agentName: string, autonomy: Record<string, unknown>): AgentNotification[] {
+  private collectNotifications(
+    agentName: string,
+    goalId: string,
+    autonomy: Record<string, unknown>,
+  ): AgentNotification[] {
     return [
       ...this.collectGatekeeperNotifications(agentName),
       ...this.collectAutonomyNotifications(autonomy),
-      ...this.collectDangerZoneNotifications(),
+      ...this.collectDangerZoneNotifications(agentName, goalId),
     ];
   }
 
@@ -871,24 +879,40 @@ export class AgentExecutionHandler {
     }] : [];
   }
 
-  private collectDangerZoneNotifications(): AgentNotification[] {
+  private collectDangerZoneNotifications(agentName: string, goalId: string): AgentNotification[] {
     const enforcer = this.handlers.dangerZoneEnforcer;
-    if (!enforcer?.hasBlockedAgents()) {
+    if (!enforcer) {
       return [];
     }
-    return enforcer.getBlockedAgents().flatMap(blockedAgent => {
-      const blockCheck = enforcer.check(blockedAgent);
-      return blockCheck.blocked ? [{
-        type: 'danger_zone',
-        message: `Agent '${blockedAgent}' is blocked due to danger zone trigger: ${blockCheck.reason}`,
-        metadata: {
-          agentName: blockedAgent,
-          reason: blockCheck.reason,
-          verificationId: blockCheck.verificationId,
-        },
-        timestamp: new Date().toISOString(),
-      }] : [];
-    });
+
+    const blockCheck = enforcer.check(agentName);
+    const sessionId = this.contextTracker?.getSessionContext?.()?.sessionId;
+    // Execution responses are not a global operator feed: only return the block
+    // created for this agent's active goal in this exact session. Undefined
+    // session IDs match for stdio, but a session-owned block is suppressed when
+    // runtime context is unavailable. Legacy blocks without goal ownership are
+    // likewise enforced without being replayed as fresh goal notifications.
+    if (
+      !blockCheck.blocked ||
+      blockCheck.sessionId !== sessionId ||
+      blockCheck.goalId !== goalId ||
+      !blockCheck.blockedAt
+    ) {
+      return [];
+    }
+
+    return [{
+      type: 'danger_zone',
+      message: `Agent '${agentName}' is blocked due to danger zone trigger: ${blockCheck.reason}`,
+      metadata: {
+        agentName,
+        eventId: blockCheck.eventId,
+        goalId,
+        reason: blockCheck.reason,
+        verificationId: blockCheck.verificationId,
+      },
+      timestamp: blockCheck.blockedAt,
+    }];
   }
 
   private evaluateResilience(

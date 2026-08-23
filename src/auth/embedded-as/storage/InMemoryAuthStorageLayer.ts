@@ -23,6 +23,7 @@
 import { randomUUID } from 'node:crypto';
 import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../../../utils/logger.js';
+import { normalizeAuthAllowlistValue } from '../allowlistIdentity.js';
 import type {
   AllowlistAddInput,
   AllowlistMatchValues,
@@ -332,7 +333,7 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
-    const value = input.value.toLowerCase();
+    const value = normalizeAuthAllowlistValue(input.kind, input.value);
     const idxKey = allowlistIndexKey(input.kind, value);
     if (this.allowlistByKindValue.has(idxKey)) {
       throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
@@ -367,13 +368,19 @@ export class InMemoryAuthStorageLayer implements IAuthStorageLayer {
   }
 
   async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
-    if (values.email && this.allowlistByKindValue.has(allowlistIndexKey('email', values.email.toLowerCase()))) {
+    if (values.email && this.allowlistByKindValue.has(allowlistIndexKey('email', normalizeAuthAllowlistValue('email', values.email)))) {
       return true;
     }
-    if (values.githubUsername && this.allowlistByKindValue.has(allowlistIndexKey('github_username', values.githubUsername.toLowerCase()))) {
+    if (values.githubUsername && this.allowlistByKindValue.has(allowlistIndexKey(
+      'github_username',
+      normalizeAuthAllowlistValue('github_username', values.githubUsername)
+    ))) {
       return true;
     }
-    if (values.githubId && this.allowlistByKindValue.has(allowlistIndexKey('github_id', values.githubId))) {
+    if (values.githubId && this.allowlistByKindValue.has(allowlistIndexKey(
+      'github_id',
+      normalizeAuthAllowlistValue('github_id', values.githubId)
+    ))) {
       return true;
     }
     return false;

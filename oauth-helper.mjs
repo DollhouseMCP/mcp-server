@@ -7,7 +7,8 @@
  * It's spawned as a detached process when authentication is initiated, polls GitHub
  * for the OAuth token, stores it securely, and then exits.
  * 
- * Usage: node oauth-helper.mjs <device_code> <interval> <expires_in> <client_id>
+ * Usage: DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE=<device_code> node oauth-helper.mjs <interval> <expires_in> <client_id>
+ *   (device_code is passed via env, not argv, to keep the bearer secret out of ps/proc)
  * 
  * This solves the MCP server lifecycle issue where the server may shut down
  * between tool calls, breaking background OAuth polling.
@@ -22,11 +23,10 @@ import { homedir } from 'os';
 const DEFAULT_POLL_INTERVAL = 5;
 const DEFAULT_EXPIRES_IN = 900; // 15 minutes
 const MAX_TOKEN_SIZE = 10000; // Maximum reasonable token size
-
-// User-scoped runtime files. The parent process passes these when the helper
-// is launched from a per-user session; standalone legacy launches keep the
-// historical operator-home locations.
 const DOLLHOUSE_HOME_DIR = process.env.DOLLHOUSE_HOME_DIR || homedir();
+// Per-user paths: the server passes DOLLHOUSE_OAUTH_HELPER_AUTH_DIR / _LOG_FILE
+// resolved for the current user (hosted HTTP mode). Fall back to the legacy
+// global home layout for standalone/operator use.
 const AUTH_DIR = process.env.DOLLHOUSE_OAUTH_HELPER_AUTH_DIR || join(DOLLHOUSE_HOME_DIR, '.dollhouse', '.auth');
 const PID_FILE = join(AUTH_DIR, 'oauth-helper.pid');
 const STATE_FILE = join(AUTH_DIR, 'oauth-helper-state.json');
@@ -35,6 +35,10 @@ const LOG_FILE = process.env.DOLLHOUSE_OAUTH_HELPER_LOG_FILE || join(DOLLHOUSE_H
 const FLOW_ID = process.env.DOLLHOUSE_OAUTH_HELPER_FLOW_ID || '';
 const TOKEN_URL = process.env.DOLLHOUSE_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token';
 const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
+const POST_HANDOFF_TEST_DELAY_MS = process.env.NODE_ENV === 'test'
+  ? Number.parseInt(process.env.DOLLHOUSE_OAUTH_HELPER_TEST_POST_HANDOFF_DELAY_MS || '0', 10)
+  : 0;
+const FLOW_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const RESULT_MESSAGES = {
   success: 'OAuth helper completed successfully.',
@@ -50,14 +54,21 @@ const RESULT_MESSAGES = {
 
 const ALLOWED_RESULT_ERROR_CODES = new Set(Object.keys(RESULT_MESSAGES));
 
-// Parse command line arguments
+// Parse command line arguments. The device_code is a short-lived bearer secret
+// for the pending authorization, so it is passed via environment variable rather
+// than argv (argv is visible to other local processes via `ps` / /proc/<pid>/cmdline).
 const args = process.argv.slice(2);
-if (args.length < 4) {
-  console.error('Usage: oauth-helper.mjs <device_code> <interval> <expires_in> <client_id>');
+if (args.length < 3) {
+  console.error('Usage: oauth-helper.mjs <interval> <expires_in> <client_id>  (device code via DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE)');
   process.exit(1);
 }
 
-const [deviceCode, intervalStr, expiresInStr, clientId] = args;
+const [intervalStr, expiresInStr, clientId] = args;
+const deviceCode = process.env.DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE || '';
+if (!deviceCode) {
+  console.error('OAUTH_HELPER: missing DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE environment variable');
+  process.exit(1);
+}
 const pollIntervalSeconds = Number.parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
 const expiresIn = Number.parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 
@@ -144,50 +155,30 @@ async function storeToken(token) {
     await log('Invalid token size');
     throw new Error('Invalid token received');
   }
-  
+
+  // The detached helper runs outside the server's DI/session context and cannot
+  // write the session's ITokenStore — in database mode it has no DB pool, master
+  // key, or RLS context. It therefore writes the token to an encrypted, per-user,
+  // flow-bound handoff file; the server validates the matching terminal result
+  // and flow id, then stores the token through the session's TokenManager (file
+  // or database) and deletes the handoff. A flow id is mandatory: without it the
+  // server cannot correlate or read the handoff, so there is nothing to hand off.
+  if (!FLOW_ID) {
+    await log('No flow id provided; cannot hand the token to the server securely');
+    throw new Error('Missing OAuth helper flow id');
+  }
+
   try {
-    // Import the compiled TokenManager
-    const { TokenManager } = await import(new URL('./dist/security/tokenManager.js', import.meta.url).href);
-    
-    // Passing file operations selects TokenManager's file-backed secure storage overload.
-    const tokenManager = new TokenManager(createHelperFileOperations(), AUTH_DIR);
-    await tokenManager.storeGitHubToken(token);
-    await log('Token stored successfully using TokenManager');
+    const { writeHandoffToken } = await import(
+      new URL('./dist/security/oauthHelperTokenHandoff.js', import.meta.url).href
+    );
+    await writeHandoffToken(AUTH_DIR, FLOW_ID, token);
+    await log('Token written to encrypted handoff for server import');
     return true;
   } catch (error) {
-    await log(`Failed to store token using TokenManager: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
+    await log(`Failed to write token handoff: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
     throw error;
   }
-}
-
-function createHelperFileOperations() {
-  // Paths are fixed by AUTH_DIR constants/env, so this standalone helper only
-  // needs the small FileOperations surface TokenManager uses for secure storage.
-  return {
-    async createDirectory(directoryPath) {
-      await fs.mkdir(directoryPath, { recursive: true });
-    },
-    async readFile(filePath) {
-      return fs.readFile(filePath, 'utf8');
-    },
-    async writeFile(filePath, content) {
-      await fs.writeFile(filePath, content, { encoding: 'utf8' });
-    },
-    async deleteFile(filePath) {
-      await fs.unlink(filePath);
-    },
-    async chmod(filePath, mode) {
-      await fs.chmod(filePath, mode);
-    },
-    async exists(filePath) {
-      try {
-        await fs.access(filePath);
-        return true;
-      } catch {
-        return false;
-      }
-    }
-  };
 }
 
 function cleanupPidFileSync() {
@@ -333,6 +324,20 @@ async function writePidFile() {
   }
 }
 
+let handoffWritten = false;
+
+function hasCommittedHandoffSync() {
+  if (handoffWritten) return true;
+  if (!FLOW_ID_RE.test(FLOW_ID)) return false;
+  try {
+    const handoffPath = join(AUTH_DIR, `oauth-helper-token-${FLOW_ID}.enc`);
+    const stat = fsSync.statSync(handoffPath);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
 async function main() {
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
@@ -369,24 +374,31 @@ async function main() {
     await cleanupPidFile();
   });
   
-  process.on('SIGINT', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
+  const finishOnSignal = () => {
+    // The final rename can become visible immediately before the await continuation
+    // updates `handoffWritten`. Treat that durable, flow-bound file as committed.
+    const handoffCommitted = hasCommittedHandoffSync();
+    const status = handoffCommitted ? 'success' : 'failed';
+    writeTerminalResultSync(status, attempts, handoffCommitted ? 'success' : 'interrupted');
+    if (!handoffCommitted) {
+      cleanupStateFileSync();
+    }
     cleanupPidFileSync();
-    process.exit(1);
-  });
+    process.exit(handoffCommitted ? 0 : 1);
+  };
+
+  process.on('SIGINT', finishOnSignal);
   
-  process.on('SIGTERM', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
-    cleanupPidFileSync();
-    process.exit(1);
-  });
+  process.on('SIGTERM', finishOnSignal);
 
   async function finish(status, errorCode, exitCode) {
     clearInterval(heartbeatInterval);
     await writeTerminalResult(status, attempts, errorCode);
-    await cleanupStateFile();
+    // The server needs successful flow state to correlate and consume the
+    // encrypted token handoff. Failed flows have no handoff to import.
+    if (status !== 'success') {
+      await cleanupStateFile();
+    }
     await cleanupPidFile();
     process.exit(exitCode);
   }
@@ -438,6 +450,10 @@ async function main() {
         let stored = false;
         try {
           stored = await storeToken(response.access_token);
+          handoffWritten = stored;
+          if (handoffWritten && POST_HANDOFF_TEST_DELAY_MS > 0) {
+            await sleep(POST_HANDOFF_TEST_DELAY_MS);
+          }
         } catch {
           console.error('OAUTH_TOKEN_STORAGE_FAILED: Failed to store authentication token securely');
           return finish('failed', 'token_storage_failed', 1);
@@ -501,8 +517,11 @@ async function main() {
 main().catch(async (error) => {
   await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
-  await writeTerminalResult('failed', 0, 'fatal_error');
-  await cleanupStateFile();
+  const handoffCommitted = hasCommittedHandoffSync();
+  await writeTerminalResult(handoffCommitted ? 'success' : 'failed', 0, handoffCommitted ? 'success' : 'fatal_error');
+  if (!handoffCommitted) {
+    await cleanupStateFile();
+  }
   await cleanupPidFile();
-  process.exit(1);
+  process.exit(handoffCommitted ? 0 : 1);
 });

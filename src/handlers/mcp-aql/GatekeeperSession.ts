@@ -291,11 +291,13 @@ export class GatekeeperSession {
     this.touch();
 
     const key = this.getConfirmationKey(operation, elementType);
+    let resolvedKey = key;
     let confirmation = this.state.confirmations.get(key);
 
     // Fall back to unscoped confirmation when element-type-scoped key not found.
     // A session-wide confirmation for "create_element" covers "create_element:skill" etc.
     if (!confirmation && elementType) {
+      resolvedKey = operation;
       confirmation = this.state.confirmations.get(operation);
     }
 
@@ -308,11 +310,10 @@ export class GatekeeperSession {
 
     // For CONFIRM_SINGLE_USE, invalidate after first use
     if (confirmation.permissionLevel === 'CONFIRM_SINGLE_USE') {
-      const deleteKey = this.state.confirmations.has(key) ? key : operation;
-      this.state.confirmations.delete(deleteKey);
+      this.state.confirmations.delete(resolvedKey);
 
       if (this.confirmationStore) {
-        this.confirmationStore.deleteConfirmation(deleteKey);
+        this.confirmationStore.deleteConfirmation(resolvedKey);
         this.persistToStore();
       }
     }
@@ -563,6 +564,76 @@ export class GatekeeperSession {
     }
 
     return undefined;
+  }
+
+  /**
+   * Check if a CLI tool call has a valid approval for this exact input.
+   *
+   * Session-scoped approvals intentionally remain tool-wide. Single-use
+   * approvals compare the HMAC recorded at approval-request creation so
+   * provider/path/body-scoped tools cannot reuse approval for a different
+   * request.
+   */
+  async checkCliApprovalForInput(
+    toolName: string,
+    toolInput: Record<string, unknown>,
+    options: { readonly allowToolSession?: boolean } = {},
+  ): Promise<CliApprovalRecord | undefined> {
+    this.touch();
+    this.expireStaleApprovals();
+
+    const sessionApproval = options.allowToolSession === false
+      ? undefined
+      : this.state.cliSessionApprovals.get(toolName);
+    if (sessionApproval) {
+      if (!isUsableCliApproval(sessionApproval)) {
+        this.state.cliSessionApprovals.delete(toolName);
+        return undefined;
+      }
+      return sessionApproval;
+    }
+
+    if (!this.auditHmacResolver) {
+      throw new Error(
+        'GatekeeperSession.checkCliApprovalForInput requires an AuditHmacResolver. ' +
+        'Inject one via the constructor so input-scoped approvals can be verified.',
+      );
+    }
+    const inputHash = (await redactToolInput(toolName, toolInput, this.auditHmacResolver)).hash;
+    return this.matchInputScopedCliApproval(toolName, inputHash, options.allowToolSession !== false);
+  }
+
+  private matchInputScopedCliApproval(
+    toolName: string,
+    inputHash: string,
+    allowToolSession: boolean,
+  ): CliApprovalRecord | undefined {
+    for (const [, record] of this.state.cliApprovals) {
+      if (!allowToolSession && record.scope !== 'single') {
+        continue;
+      }
+      if (
+        record.toolName === toolName &&
+        record.toolInputHash === inputHash &&
+        !record.consumed &&
+        isUsableCliApproval(record)
+      ) {
+        this.consumeIfSingleUseCliApproval(record);
+        return record;
+      }
+    }
+    return undefined;
+  }
+
+  private consumeIfSingleUseCliApproval(record: CliApprovalRecord): void {
+    if (record.scope !== 'single') {
+      return;
+    }
+    record.consumed = true;
+    if (this.confirmationStore) {
+      this.confirmationStore.saveCliApproval(record.requestId, record);
+      this.persistToStore();
+    }
   }
 
   /**

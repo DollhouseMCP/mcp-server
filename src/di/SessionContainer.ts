@@ -150,6 +150,9 @@ export class SessionContainer {
   private cleanupSharedState(): void {
     this.safeCleanup('SessionActivationRegistry', (svc: SessionActivationRegistry) => svc.dispose(this.sessionId));
     this.safeCleanup('gatekeeper', (svc: { disposeSession(id: string): void }) => svc.disposeSession(this.sessionId));
+    // Issue #2329: cleanupSession is deliberately non-writing (it leaves pending
+    // memory-save timers to fire in their per-user context), so this is a
+    // synchronous bookkeeping cleanup — nothing to await.
     this.safeCleanup('mcpAqlHandler', (svc: { cleanupSession(id: string): void }) => svc.cleanupSession(this.sessionId));
   }
 

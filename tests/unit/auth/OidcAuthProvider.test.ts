@@ -26,6 +26,7 @@ import {
 } from 'jose';
 import { OidcAuthProvider } from '../../../src/auth/OidcAuthProvider.js';
 import { SecurityMonitor } from '../../../src/security/securityMonitor.js';
+import { logger } from '../../../src/utils/logger.js';
 
 const ISSUER = 'https://tenant.example.com/';
 const AUDIENCE = 'mcp-resource';
@@ -255,6 +256,35 @@ describe('OidcAuthProvider — typed error classification (Cycle-11 H11-1)', () 
   });
 
   describe('cycle 19 / security-#6: opt-in RFC 9068 typ enforcement', () => {
+    it('warns when typ enforcement is disabled for a non-local issuer', () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      new OidcAuthProvider({
+        issuer: ISSUER,
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      });
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Access-token typ enforcement is disabled'),
+        { issuer: ISSUER }
+      );
+      warnSpy.mockRestore();
+    });
+
+    it('does not warn for a loopback issuer', () => {
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      new OidcAuthProvider({
+        issuer: 'http://127.0.0.1:8080/',
+        audience: AUDIENCE,
+        jwksGetter: verifyJwks,
+      });
+
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
+    });
+
     it('default (option off): accepts a token with no typ header (compat with most IdPs)', async () => {
       // The cycle 19 fix is opt-in. Default behavior must preserve
       // compat with Auth0/Okta/Keycloak/Cognito, which typically don't

@@ -227,10 +227,10 @@ describe('GenericElementValidator', () => {
         expect(result.errors).toEqual([]);
       });
 
-      it('should reject descriptions exceeding the YAML frontmatter limit before sanitizer truncation', async () => {
+      it('should reject descriptions that consume reserved frontmatter overhead before sanitizer truncation', async () => {
         const data = {
           name: 'Test Skill',
-          description: 'a'.repeat(SECURITY_LIMITS.MAX_YAML_LENGTH + 1),
+          description: 'a'.repeat(SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH + 1),
           content: 'Test content'
         };
 
@@ -238,7 +238,8 @@ describe('GenericElementValidator', () => {
 
         expect(result.isValid).toBe(false);
         expect(result.errors).toContain(
-          `Description exceeds maximum YAML/frontmatter length of ${SECURITY_LIMITS.MAX_YAML_LENGTH} characters`
+          `Description exceeds maximum length of ${SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH} characters ` +
+          '(frontmatter overhead reserved)'
         );
       });
 

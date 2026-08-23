@@ -16,6 +16,9 @@ import { join, dirname, sep } from 'node:path';
 import { homedir, platform, tmpdir } from 'node:os';
 import { PackageResourceLocator } from '../../paths/PackageResourceLocator.js';
 
+// Integration resolves the package root via PackageResourceLocator rather than
+// import.meta.url/__dirname (#2339 must not reintroduce cwd/module-URL path
+// assumptions). sep/tmpdir are used by the NVM launcher self-heal below.
 const _locator = new PackageResourceLocator();
 import { logger } from '../../utils/logger.js';
 import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';

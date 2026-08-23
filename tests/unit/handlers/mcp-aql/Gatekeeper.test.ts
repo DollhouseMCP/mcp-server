@@ -712,6 +712,15 @@ describe('Gatekeeper', () => {
       expect(confirmation2).toBeUndefined();
     });
 
+    it('consumes the exact unscoped confirmation selected by scoped fallback', () => {
+      session.recordConfirmation('create_element', PermissionLevel.CONFIRM_SINGLE_USE);
+      session.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION, 'persona');
+
+      expect(session.checkConfirmation('create_element', 'skill')).toBeDefined();
+      expect(session.peekConfirmation('create_element')).toBeUndefined();
+      expect(session.peekConfirmation('create_element', 'persona')).toBeDefined();
+    });
+
     it('should keep session confirmations', () => {
       session.recordConfirmation('create_element', PermissionLevel.CONFIRM_SESSION);
 

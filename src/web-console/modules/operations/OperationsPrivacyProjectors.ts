@@ -23,6 +23,7 @@ import {
   stringField,
   type UnknownRecord,
 } from '../../platform/ConsoleProjectorHelpers.js';
+import { OPERATION_HEALTH_COMPONENTS } from './OperationsHealth.js';
 
 export function projectOperationHealthSummary(value: unknown): OperationHealthSummaryDto {
   const record = objectValue(value);
@@ -39,7 +40,7 @@ export function projectOperationHealthComponent(value: unknown): OperationHealth
     component: componentField(record, 'component'),
     status: healthStatusField(record, 'status'),
     checked_at: stringField(record, 'checked_at'),
-    failure_codes: arrayValue(record.failure_codes).filter((item): item is string => typeof item === 'string'),
+    failure_codes: arrayValue(record.failure_codes).filter(isStableCode),
   };
 }
 
@@ -101,15 +102,15 @@ export function projectOperationalLog(value: unknown): OperationalLogDto {
   return {
     ts: stringField(record, 'ts'),
     level: logLevelField(record, 'level'),
-    subsystem: stringField(record, 'subsystem'),
-    event: stringField(record, 'event'),
+    subsystem: stableCodeField(record, 'subsystem'),
+    event: stableCodeField(record, 'event'),
     correlation_id: nullableStringField(record, 'correlation_id'),
     account_correlation_id: nullableStringField(record, 'account_correlation_id'),
     session_id: nullableStringField(record, 'session_id'),
-    replica: stringField(record, 'replica'),
+    replica: stableCodeField(record, 'replica'),
     duration_ms: nullableNumberField(record, 'duration_ms'),
     status_code: nullableNumberField(record, 'status_code'),
-    error_code: nullableStringField(record, 'error_code'),
+    error_code: nullableStableCodeField(record, 'error_code'),
   };
 }
 
@@ -122,13 +123,13 @@ export function projectOperationalMetric(value: unknown): OperationalMetricDto {
     value: numberField(record, 'value'),
     unit: stringField(record, 'unit'),
     dimensions: {
-      ...optionalString(dimensions, 'subsystem'),
-      ...optionalString(dimensions, 'event'),
-      ...optionalString(dimensions, 'status_family'),
-      ...optionalString(dimensions, 'error_code'),
-      ...optionalString(dimensions, 'replica'),
-      ...optionalString(dimensions, 'transport'),
-      ...optionalString(dimensions, 'latency_bucket'),
+      ...optionalStableCode(dimensions, 'subsystem'),
+      ...optionalStableCode(dimensions, 'event'),
+      ...optionalStableCode(dimensions, 'status_family'),
+      ...optionalStableCode(dimensions, 'error_code'),
+      ...optionalStableCode(dimensions, 'replica'),
+      ...optionalStableCode(dimensions, 'transport'),
+      ...optionalStableCode(dimensions, 'latency_bucket'),
       ...optionalString(dimensions, 'account_correlation_id'),
     },
   };
@@ -154,17 +155,37 @@ function optionalNumber(record: UnknownRecord, key: string): Record<string, numb
   return typeof value === 'number' && Number.isFinite(value) ? { [key]: value } : {};
 }
 
+// Stable-code contract for operator-facing telemetry codes. Operator surfaces forward
+// these free-string fields to admins, so a value that isn't a bounded, well-formed
+// identifier is treated as absent (fail-closed) rather than passed through — a future
+// telemetry producer must not be able to leak user content or PII through them.
+const STABLE_CODE_PATTERN = /^[A-Za-z0-9][\w.:/-]{0,63}$/u;
+
+function isStableCode(value: unknown): value is string {
+  return typeof value === 'string' && STABLE_CODE_PATTERN.test(value);
+}
+
+function stableCodeField(record: UnknownRecord, key: string): string {
+  const value = record[key];
+  return isStableCode(value) ? value : '';
+}
+
+function nullableStableCodeField(record: UnknownRecord, key: string): string | null {
+  const value = record[key];
+  return isStableCode(value) ? value : null;
+}
+
+function optionalStableCode(record: UnknownRecord, key: string): Record<string, string> {
+  const value = record[key];
+  return isStableCode(value) ? { [key]: value } : {};
+}
+
 function componentField(record: UnknownRecord, key: string): OperationHealthComponentDto['component'] {
   const value = record[key];
-  if (
-    value === 'database' ||
-    value === 'auth_server' ||
-    value === 'gatekeeper' ||
-    value === 'runtime_control' ||
-    value === 'security_invalidation' ||
-    value === 'api_mount'
-  ) {
-    return value;
+  // Derive the allowlist from the single source of truth so a new component added to the health
+  // builder can't silently coerce to the fallback (see OperationsHealth.OPERATION_HEALTH_COMPONENTS).
+  if (typeof value === 'string' && (OPERATION_HEALTH_COMPONENTS as readonly string[]).includes(value)) {
+    return value as OperationHealthComponentDto['component'];
   }
   return 'api_mount';
 }
@@ -218,12 +239,14 @@ function cloneAllowedValue(value: unknown): unknown {
 // is forwarded.
 export function projectSystemMetrics(value: unknown): SystemMetricsResponseDto {
   const record = objectValue(value);
+  const page = objectValue(record.page);
   return {
-    snapshots: arrayValue(record.snapshots).map(projectSystemMetricSnapshot),
-    total: numberField(record, 'total'),
-    has_more: record.hasMore === true,
-    limit: numberField(record, 'limit'),
-    offset: numberField(record, 'offset'),
+    items: arrayValue(record.items).map(projectSystemMetricSnapshot),
+    page: {
+      limit: numberField(page, 'limit'),
+      cursor: nullableStringField(page, 'cursor'),
+      next_cursor: nullableStringField(page, 'next_cursor'),
+    },
     oldest_available: stringField(record, 'oldestAvailable'),
     newest_available: stringField(record, 'newestAvailable'),
   };

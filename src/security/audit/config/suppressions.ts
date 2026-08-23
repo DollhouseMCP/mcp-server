@@ -211,6 +211,11 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-005',
+    file: 'src/web-console/ui/yaml-safety.js',
+    reason: 'Browser security boundary for YAML: enforces UTF-8 byte limits, bounded anchor/alias amplification, acyclic bounded output, and an explicit safe schema before returning parsed data.'
+  },
+  {
+    rule: 'DMCP-SEC-005',
     file: 'src/elements/skills/SkillManager.ts',
     reason: 'Uses yaml.load with FAILSAFE_SCHEMA and size validation - equivalent security to SecureYamlParser for raw YAML import'
   },
@@ -278,15 +283,6 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-005',
     file: 'src/web-console/ui/portfolio-detail.js',
     reason: 'Client-side browser JavaScript. SecureYamlParser is a Node.js module unavailable in the browser; js-yaml CORE_SCHEMA avoids custom executable types and only renders server-supplied portfolio detail content.'
-  },
-
-  // ========================================
-  // Vendored Browser Library False Positives
-  // ========================================
-  {
-    rule: '*',
-    file: 'src/web-console/ui/vendor/**/*',
-    reason: 'Vendored minified browser libraries are pinned third-party assets; dependency provenance and updates are handled outside the project source-code pattern scanner.'
   },
 
   // ========================================

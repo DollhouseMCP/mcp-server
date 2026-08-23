@@ -4,7 +4,7 @@
 
 First versioned build of the 2.1 beta line. Not published to npm; deployed to the hosted beta environment.
 
-- Package the web console UI: `src/web-console/ui` is copied into `dist/web-console/ui` during postbuild, included in the package file list, and required by the asset verifier — `/ui/` no longer depends on a manual hot-copy into the running image. (#2312)
+- Package the web console UI: `src/web-console/ui` is copied into `dist/web-console/ui` during postbuild, included in the package file list, and required by the asset verifier - `/ui/` no longer depends on a manual hot-copy into the running image. (#2312)
 - Port the memory silent-save-loss fix (#2329) with hardened recovery paths and deleted-memory ledger guards. (#2336, #2337)
 - Port the OAuth helper token handoff hardening. (#2325 ports)
 - Port the NVM launcher config self-heal and test isolation. (#2338, #2340)
@@ -13,6 +13,21 @@ First versioned build of the 2.1 beta line. Not published to npm; deployed to th
 ## [2.1.0-beta] - 2026-06-25
 
 Start beta line for 2.1 hosted HTTP and expanded description limits.
+
+## [2.0.38] - 2026-07-04
+
+- Close the remaining symlink containment bypasses for convert CLI output paths. Output directories that do not exist yet are vetted through their nearest existing ancestor (#2342, #2343), and output bases are now contained canonically: relative outputs (including the default) must truly resolve inside the working directory even when a symlink tries to redirect them, and explicit outside destinations disclose their real location when a symlink diverts them (#2344, #2346).
+
+## [2.0.37] - 2026-07-04
+
+- Fix MCP client configs (Claude Desktop, Cursor, Windsurf, LM Studio, Gemini CLI, VS Code, Cline) left pointing at a dead NVM launcher wrapper: the server now self-heals broken entries on startup — restoring bare `npx` when NVM is absent, or regenerating the real wrapper when NVM is present — and refuses to ever persist a temp-directory wrapper into a client config. Also isolates the test suite so it can no longer write to real client configs. (#2338, #2339)
+- Harden path containment to reject symlink-based escapes from allowed directories, and preserve element metadata and base-path handling through edit operations. (#2334)
+- Tighten content validator input-length checks and make ensemble element updates explicit. (#2334)
+
+## [2.0.36] - 2026-07-03
+
+- Fix silent memory data loss: `addEntry` reported success while entries were never persisted when a memory's serialized YAML exceeded 64KB. Saves now persist correctly and surface errors instead of failing silently. (#2329, #2330, #2332)
+- Fix GitHub OAuth helper token handoff so the helper stores tokens through TokenManager instead of plaintext fallback files, with hardened result/state handling, slow_down backoff, and sanitized diagnostics. (#2325)
 
 ## [2.0.35] - 2026-06-23
 

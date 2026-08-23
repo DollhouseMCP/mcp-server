@@ -2,13 +2,18 @@
  * Security-related constants and limits
  */
 
+const MAX_YAML_LENGTH = 64 * 1024;
+// Real serialization with maximum identity fields and 20 representative tags
+// uses about 2.6 KiB; 4 KiB leaves additional headroom for format metadata.
+const FRONTMATTER_METADATA_RESERVE = 4 * 1024;
+
 // Security and performance limits
 export const SECURITY_LIMITS = {
   MAX_PERSONA_SIZE_BYTES: 1024 * 1024 * 2,  // 2MB max persona file size
   MAX_FILENAME_LENGTH: 255,                  // Max filename length
   MAX_PATH_DEPTH: 10,                       // Max directory depth for paths
   MAX_CONTENT_LENGTH: 500000,               // Max element content length (500KB, ~1-5ms regex scan)
-  MAX_YAML_LENGTH: 64 * 1024,               // Max YAML frontmatter length (64KB)
+  MAX_YAML_LENGTH,                           // Max YAML frontmatter length (64KB)
   MAX_METADATA_FIELD_LENGTH: 1024,          // Max individual metadata field length (1KB)
   MAX_FILE_SIZE: 1024 * 1024 * 2,          // Max file size (2MB)
   RATE_LIMIT_REQUESTS: 100,                 // Max requests per window
@@ -20,8 +25,10 @@ export const SECURITY_LIMITS = {
   // Field-level validation limits — used across element managers and validators.
   // Centralized here so a single change applies everywhere and grep finds all usages.
   MAX_NAME_LENGTH: 100,                     // Element name field
-  MAX_DESCRIPTION_LENGTH: 64 * 1024,        // Description fields may use the full YAML/frontmatter budget
-  MAX_DOCUMENTATION_FIELD_LENGTH: 64 * 1024, // Nested help/example docs in YAML/frontmatter
+  // Long-form metadata fields share the YAML document with required structural
+  // fields, so they cannot consume the entire frontmatter budget by themselves.
+  MAX_DESCRIPTION_LENGTH: MAX_YAML_LENGTH - FRONTMATTER_METADATA_RESERVE,
+  MAX_DOCUMENTATION_FIELD_LENGTH: MAX_YAML_LENGTH - FRONTMATTER_METADATA_RESERVE,
   MAX_ENUM_FIELD_LENGTH: 20,                // Short enum-like fields (strategy, role, activation)
   MAX_TAG_LENGTH: 50,                       // Individual tag / category values
   MAX_COMMAND_ARG_LENGTH: 1000,             // CLI command argument validation

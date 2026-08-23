@@ -24,6 +24,18 @@ function sourcePathForBin(binPath: string): string | null {
 }
 
 describe('published CLI bin dependencies', () => {
+  it('gives every packaged JavaScript bin a Node shebang', () => {
+    const packageJson = readPackageJson();
+    const binsWithoutNodeShebang = Object.entries(packageJson.bin ?? {})
+      .map(([name, binPath]) => ({ name, sourcePath: sourcePathForBin(binPath) }))
+      .filter((entry): entry is { name: string; sourcePath: string } => entry.sourcePath !== null)
+      .filter(entry => !readFileSync(entry.sourcePath, 'utf8').startsWith('#!/usr/bin/env node\n'))
+      .map(entry => entry.name)
+      .sort();
+
+    expect(binsWithoutNodeShebang).toEqual([]);
+  });
+
   it('declares commander as a production dependency for packaged bins that import it', () => {
     const packageJson = readPackageJson();
     const binEntries = Object.entries(packageJson.bin ?? {});

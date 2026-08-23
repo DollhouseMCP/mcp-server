@@ -9,11 +9,13 @@ import {
   type WebConsoleReplacementLiveCheck,
 } from '../../../src/web-console/index.js';
 
+const PRE_REPLACEMENT = 'pre-replacement';
+
 describe('WebConsoleReplacementReadiness', () => {
   it('passes only when local composition and every selected-deployment check are ready', () => {
     const result = verifyWebConsoleReplacementReadiness({
       composition: composition(),
-      phase: 'pre-replacement',
+      phase: PRE_REPLACEMENT,
       liveChecks: readyLiveChecks(),
     });
 
@@ -32,7 +34,7 @@ describe('WebConsoleReplacementReadiness', () => {
   it('fails closed for missing or failed selected-deployment checks', () => {
     const result = verifyWebConsoleReplacementReadiness({
       composition: composition(),
-      phase: 'pre-replacement',
+      phase: PRE_REPLACEMENT,
       liveChecks: readyLiveChecks({
         omit: 'portfolio_sync_live_repository',
         fail: 'security_invalidation_multi_replica',
@@ -55,7 +57,7 @@ describe('WebConsoleReplacementReadiness', () => {
   it('distinguishes pre-replacement and active replacement route state', () => {
     const preReplacement = verifyWebConsoleReplacementReadiness({
       composition: composition({ routesMounted: true }),
-      phase: 'pre-replacement',
+      phase: PRE_REPLACEMENT,
       liveChecks: readyLiveChecks(),
     });
     const activeReplacement = verifyWebConsoleReplacementReadiness({
@@ -74,7 +76,7 @@ describe('WebConsoleReplacementReadiness', () => {
   it('requires the complete v1 route surface registered for M7 replacement', () => {
     const result = verifyWebConsoleReplacementReadiness({
       composition: composition({ registeredModules: WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS.slice(1) }),
-      phase: 'pre-replacement',
+      phase: PRE_REPLACEMENT,
       liveChecks: readyLiveChecks(),
     });
 
@@ -82,6 +84,21 @@ describe('WebConsoleReplacementReadiness', () => {
     expect(result.failures).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: 'complete_v1_route_surface_registered' }),
     ]));
+  });
+
+  it('does not require optional default-off modules (collection) for replacement', () => {
+    // Regression: collection is a default-off feature module. A console that
+    // leaves it off must still be a valid, ready replacement — so it must never
+    // appear in the required-for-replacement set (or the app fails to start in a
+    // production deployment that hasn't opted into it).
+    expect(WEB_CONSOLE_REPLACEMENT_REQUIRED_ROUTE_MODULE_IDS).not.toContain('collection');
+
+    const result = verifyWebConsoleReplacementReadiness({
+      composition: composition(), // default registered modules: baseline, no collection
+      phase: PRE_REPLACEMENT,
+      liveChecks: readyLiveChecks(),
+    });
+    expect(result.ready).toBe(true);
   });
 });
 
