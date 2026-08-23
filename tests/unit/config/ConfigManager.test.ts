@@ -129,6 +129,92 @@ describe('ConfigManager', () => {
     });
   });
 
+  describe('Safe Setting Reads', () => {
+    const setCachedConfig = (value: unknown): void => {
+      expect(Reflect.set(configManager, 'config', value)).toBe(true);
+    };
+
+    it('reads normal and null-prototype configuration values', () => {
+      const nested = Object.assign(Object.create(null) as Record<string, unknown>, {
+        leaf: 'value',
+      });
+      setCachedConfig({ nested });
+
+      expect(configManager.getSetting('nested.leaf')).toBe('value');
+    });
+
+    it('returns the default for inherited properties and unsafe intermediate objects', () => {
+      const nested = Object.create({ leaf: 'inherited' }) as Record<string, unknown>;
+      setCachedConfig({ nested });
+
+      expect(configManager.getSetting('nested.leaf', 'fallback')).toBe('fallback');
+    });
+
+    it('does not expose properties from Array.prototype stored as config data', () => {
+      setCachedConfig({ values: Array.prototype });
+
+      expect(configManager.getSetting('values.map', 'fallback')).toBe('fallback');
+    });
+
+    it('does not invoke intermediate or leaf accessors', () => {
+      const intermediateGetter = jest.fn(() => ({ leaf: 'value' }));
+      const leafGetter = jest.fn(() => 'value');
+      const root: Record<string, unknown> = {};
+      const nested: Record<string, unknown> = {};
+      Object.defineProperty(root, 'accessor', { get: intermediateGetter });
+      Object.defineProperty(nested, 'leaf', { get: leafGetter });
+      Object.defineProperty(root, 'nested', { value: nested, enumerable: true });
+      setCachedConfig(root);
+
+      expect(configManager.getSetting('accessor.leaf', 'fallback')).toBe('fallback');
+      expect(configManager.getSetting('nested.leaf', 'fallback')).toBe('fallback');
+      expect(intermediateGetter).not.toHaveBeenCalled();
+      expect(leafGetter).not.toHaveBeenCalled();
+    });
+
+    it('returns the default when a hostile object rejects reflection', () => {
+      const { proxy, revoke } = Proxy.revocable({}, {});
+      setCachedConfig({ nested: proxy });
+      revoke();
+
+      expect(configManager.getSetting('nested.leaf', 'fallback')).toBe('fallback');
+    });
+
+    it.each([
+      '__proto__.polluted',
+      'user.CONSTRUCTOR.polluted',
+      'sync. prototype .polluted',
+      'user.%63onstructor.polluted',
+      'user.%2563onstructor.polluted',
+      'user.ｐｒｏｔｏｔｙｐｅ.polluted',
+      '',
+      '.user',
+      'user.',
+      'user..name',
+    ])('returns the default for malformed or dangerous path %s', path => {
+      const forbiddenGetter = jest.fn(() => ({ polluted: true }));
+      const root: Record<string, unknown> = {};
+      Object.defineProperty(root, 'constructor', { get: forbiddenGetter });
+      setCachedConfig(root);
+
+      expect(configManager.getSetting(path, 'fallback')).toBe('fallback');
+      expect(forbiddenGetter).not.toHaveBeenCalled();
+    });
+
+    it('preserves leaf arrays, objects, and explicitly stored undefined values', () => {
+      const values = ['one', 'two'];
+      const section = { enabled: true };
+      setCachedConfig({ values, section, explicitUndefined: undefined });
+
+      expect(configManager.getSetting('values')).toBe(values);
+      expect(configManager.getSetting('values.0')).toBe('one');
+      expect(configManager.getSetting('values.map', 'fallback')).toBe('fallback');
+      expect(configManager.getSetting('section')).toBe(section);
+      expect(configManager.getSetting('explicitUndefined', 'fallback')).toBeUndefined();
+      expect(configManager.getSetting('missing', 'fallback')).toBe('fallback');
+    });
+  });
+
   describe('OAuth Client ID Management', () => {
     it('should save and retrieve GitHub client ID', async () => {
       // Phase 4.5: persistence verified by reading back through the

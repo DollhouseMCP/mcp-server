@@ -10,6 +10,11 @@ export type ConfigDeletionResult =
   | { kind: 'section' }
   | { kind: 'unsafe'; reason: string };
 
+export type ConfigReadResult =
+  | { kind: 'found'; value: unknown }
+  | { kind: 'missing' }
+  | { kind: 'unsafe'; reason: string };
+
 /**
  * Parse a dot-notation config path while rejecting prototype-related
  * segments before any object traversal occurs.
@@ -27,6 +32,53 @@ export function parseSafeConfigPath(path: string): readonly string[] {
     assertSafeSegment(segment);
   }
   return segments;
+}
+
+/**
+ * Read a config path without following inherited properties or invoking accessors.
+ */
+export function readOwnConfigValue(
+  root: unknown,
+  segments: readonly string[],
+): ConfigReadResult {
+  if (segments.length === 0) {
+    return { kind: 'unsafe', reason: 'Configuration path has no leaf segment.' };
+  }
+  for (const segment of segments) {
+    assertSafeSegment(segment);
+  }
+
+  let current = asAllowedConfigRecord(root);
+  if (!current) {
+    return { kind: 'unsafe', reason: 'Configuration root is not a plain object.' };
+  }
+
+  for (let index = 0; index < segments.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(current, segments[index]);
+    if (!descriptor) return { kind: 'missing' };
+    if (!isDataDescriptor(descriptor)) {
+      return {
+        kind: 'unsafe',
+        reason: index === segments.length - 1
+          ? 'Configuration leaf is an accessor property.'
+          : 'Configuration path crosses an accessor property.',
+      };
+    }
+
+    if (index === segments.length - 1) {
+      return { kind: 'found', value: descriptor.value };
+    }
+
+    current = asAllowedConfigReadContainer(descriptor.value);
+    if (!current) {
+      return {
+        kind: 'unsafe',
+        reason: 'Configuration path crosses a non-plain object.',
+      };
+    }
+  }
+
+  return { kind: 'missing' };
 }
 
 /**
@@ -134,6 +186,15 @@ function asAllowedConfigRecord(value: unknown): MutableConfigRecord | null {
   if (prototype !== Object.prototype && prototype !== null) return null;
   if (isPrototypeObject(value)) return null;
   return value as MutableConfigRecord;
+}
+
+function asAllowedConfigReadContainer(value: unknown): MutableConfigRecord | null {
+  // Arrays are valid config containers for indexed reads, but Array.prototype
+  // is itself an array and must never be exposed as configuration data.
+  if (Array.isArray(value)) {
+    return isPrototypeObject(value) ? null : value as unknown as MutableConfigRecord;
+  }
+  return asAllowedConfigRecord(value);
 }
 
 function isPrototypeObject(value: object): boolean {
