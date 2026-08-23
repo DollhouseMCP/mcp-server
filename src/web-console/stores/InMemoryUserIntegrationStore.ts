@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   cloneUserIntegrationRecord,
+  GITHUB_USER_INTEGRATION_PROVIDER,
   type IUserIntegrationStore,
   type UserIntegrationConnectInput,
   type UserIntegrationDisconnectInput,
@@ -70,7 +71,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       provider: input.provider,
       externalAccountLabel: null,
       externalInstallationId: null,
-      authorizedPermissions: defaultAuthorizedPermissions(),
+      authorizedPermissions: defaultAuthorizedPermissions(input.provider),
       accessTokenCiphertext: null,
       refreshTokenCiphertext: null,
       credentialKeyVersion: null,
@@ -129,11 +130,14 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   }
 }
 
-function defaultAuthorizedPermissions(): Readonly<Record<string, unknown>> {
-  return {
-    repository_selection: 'unknown',
-    permissions: { contents: 'none' },
-  };
+function defaultAuthorizedPermissions(provider: UserIntegrationProvider): Readonly<Record<string, unknown>> {
+  if (provider === GITHUB_USER_INTEGRATION_PROVIDER) {
+    return {
+      repository_selection: 'unknown',
+      permissions: { contents: 'none' },
+    };
+  }
+  return { scopes: [] };
 }
 
 function activeProviderKey(userId: string, provider: UserIntegrationProvider): string {

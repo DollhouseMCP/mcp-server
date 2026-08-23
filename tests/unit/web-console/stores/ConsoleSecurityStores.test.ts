@@ -8,6 +8,8 @@ import {
   InMemoryConsoleAccountAdminStore,
   InMemoryIdempotencyStore,
   InMemoryLoginTransactionStore,
+  InMemoryIntegrationDescriptorStore,
+  InMemoryIntegrationOpenApiSpecStore,
   InMemoryUserIntegrationStore,
   isUniqueViolation,
 } from '../../../../src/web-console/stores/index.js';
@@ -25,6 +27,8 @@ import type {
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SECOND_USER_ID = '718c692b-d62b-418b-a495-8255e125ff51';
+const DESCRIPTOR_ID = '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d';
+const SPEC_HASH = 'a'.repeat(64);
 const FACTOR_ID = 'cd8f6d0e-7294-42bc-9e01-094890a820a8';
 const BEFORE_NOW = new Date('2026-05-26T11:59:00.000Z');
 const NOW = new Date('2026-05-26T12:00:00.000Z');
@@ -101,6 +105,49 @@ function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIn
     connectedAt: NOW,
     lastSyncAt: null,
     revokedAt: null,
+    ...overrides,
+  };
+}
+
+function oauthDescriptorInput(overrides: Partial<Parameters<InMemoryIntegrationDescriptorStore['upsert']>[0]> = {}) {
+  return {
+    provider: 'gmail',
+    ownership: 'byo' as const,
+    ownerUserId: USER_ID,
+    displayName: 'Gmail',
+    category: 'email',
+    authStrategy: 'oauth2_authorization_code' as const,
+    apiHosts: ['gmail.googleapis.com'],
+    oauth: {
+      authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+      tokenUrl: 'https://oauth2.googleapis.com/token',
+      scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
+      pkce: 'required' as const,
+      refresh: 'rotating' as const,
+      tokenExchange: { style: 'form' },
+      accountLabel: { field: 'email' },
+    },
+    staticApiKey: null,
+    clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+    credentialKeyVersion: 'integration-key-v1',
+    operationPromotion: { operations: ['gmail.users.messages.list'] },
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...overrides,
+  };
+}
+
+function openApiSpecInput(overrides: Partial<Parameters<InMemoryIntegrationOpenApiSpecStore['upsert']>[0]> = {}) {
+  return {
+    descriptorId: DESCRIPTOR_ID,
+    spec: {
+      openapi: '3.1.0',
+      paths: {},
+    },
+    sourceUrl: 'https://gmail.googleapis.com/openapi.json',
+    specHash: SPEC_HASH,
+    createdAt: NOW,
+    updatedAt: NOW,
     ...overrides,
   };
 }
@@ -375,6 +422,23 @@ describe('InMemoryUserIntegrationStore', () => {
       .toEqual(Buffer.from('encrypted-access-token'));
   });
 
+  it('stores generic provider integrations with scopes-only permission details', async () => {
+    const generic = userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: ['read:issues', 'write:comments'],
+      },
+    });
+    const store = new InMemoryUserIntegrationStore([generic]);
+
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: ['read:issues', 'write:comments'],
+      },
+    });
+  });
+
   it('validates integration records before storing them', () => {
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
       authorizedPermissions: {
@@ -400,9 +464,123 @@ describe('InMemoryUserIntegrationStore', () => {
       accessTokenCiphertext: Buffer.alloc(0),
     })])).toThrow(ConsoleStoreValidationError);
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'GitHub',
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'x',
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        repository_selection: 'selected',
+        permissions: { contents: 'read' },
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: ['read:issues'],
+        token: 'plaintext-token',
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: {
+        scopes: [''],
+      },
+    })])).toThrow(ConsoleStoreValidationError);
+    expect(() => new InMemoryUserIntegrationStore([userIntegration({
       status: 'revoked',
       revokedAt: null,
     })])).toThrow(ConsoleStoreValidationError);
+  });
+});
+
+describe('InMemoryIntegrationDescriptorStore', () => {
+  it('stores visible curated and BYO descriptors and clones encrypted client secrets', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+    const created = await store.upsert(oauthDescriptorInput());
+
+    created.clientSecretCiphertext?.fill(0);
+
+    const found = await store.findVisibleByProvider(USER_ID, 'gmail');
+    expect(found).toMatchObject({
+      provider: 'gmail',
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+      authStrategy: 'oauth2_authorization_code',
+      apiHosts: ['gmail.googleapis.com'],
+    });
+    expect(found?.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
+    await expect(store.findVisibleByProvider(SECOND_USER_ID, 'gmail')).resolves.toBeNull();
+  });
+
+  it('validates descriptor ownership, hosts, URLs, and auth strategy shape', async () => {
+    const store = new InMemoryIntegrationDescriptorStore();
+
+    await expect(store.upsert(oauthDescriptorInput({
+      ownerUserId: null,
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      apiHosts: ['localhost'],
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenUrl: 'http://oauth2.googleapis.com/token',
+      },
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert({
+      ...oauthDescriptorInput(),
+      authStrategy: 'static_api_key',
+    })).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert({
+      provider: 'airtable',
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+      displayName: 'Airtable',
+      category: 'database',
+      authStrategy: 'static_api_key',
+      apiHosts: ['api.airtable.com'],
+      staticApiKey: { injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' } },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: NOW,
+      updatedAt: NOW,
+    })).resolves.toMatchObject({ provider: 'airtable' });
+  });
+});
+
+describe('InMemoryIntegrationOpenApiSpecStore', () => {
+  it('stores and clones OpenAPI specs', async () => {
+    const store = new InMemoryIntegrationOpenApiSpecStore();
+    const created = await store.upsert(openApiSpecInput());
+
+    (created.spec.paths as Record<string, unknown>).tampered = true;
+
+    await expect(store.findByDescriptorId(DESCRIPTOR_ID)).resolves.toMatchObject({
+      descriptorId: DESCRIPTOR_ID,
+      specHash: SPEC_HASH,
+      spec: {
+        openapi: '3.1.0',
+        paths: {},
+      },
+    });
+  });
+
+  it('rejects invalid OpenAPI specs and non-HTTPS source URLs', async () => {
+    const store = new InMemoryIntegrationOpenApiSpecStore();
+
+    await expect(store.upsert(openApiSpecInput({
+      spec: { swagger: '2.0', paths: {} },
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(openApiSpecInput({
+      sourceUrl: 'http://example.com/openapi.json',
+    }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(openApiSpecInput({
+      specHash: 'not-a-hash',
+    }))).rejects.toThrow(ConsoleStoreValidationError);
   });
 });
 
