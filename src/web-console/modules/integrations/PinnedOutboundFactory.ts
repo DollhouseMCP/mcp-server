@@ -31,6 +31,8 @@ export function createPinnedOutboundFactory(): PinnedOutboundFactory {
     const pinnedFetch: PinnedFetch = async (input, init) => {
       const response = await undiciFetch(input, {
         ...(init as UndiciRequestInit),
+        // A credential-bearing request must never be replayed to a redirect target.
+        redirect: 'error',
         dispatcher,
       });
       return response as unknown as Response;

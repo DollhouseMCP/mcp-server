@@ -46,17 +46,14 @@ describe('createPinnedOutboundFactory', () => {
     }
   });
 
-  it('honors redirect:error without visiting the redirect target', async () => {
+  it('rejects redirects by default without visiting the redirect target', async () => {
     const outbound = createPinnedOutboundFactory()({
       hostname: PINNED_HOSTNAME,
       address: LOOPBACK,
       family: 4,
     });
     try {
-      await expect(outbound.fetch(
-        `http://${PINNED_HOSTNAME}:${port}/redirect`,
-        { redirect: 'error' },
-      )).rejects.toThrow();
+      await expect(outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/redirect`)).rejects.toThrow();
       expect(seenPaths).not.toContain('/redirect-target');
     } finally {
       await outbound.close();

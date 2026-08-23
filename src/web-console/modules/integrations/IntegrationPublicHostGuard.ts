@@ -1,7 +1,5 @@
 import { isPublicIpAddress } from '../../../security/ipAddressClassifier.js';
 
-export { isPublicIpAddress };
-
 export type DnsLookup = (hostname: string, options: { readonly all: true }) => Promise<readonly DnsLookupAddress[]>;
 
 export interface DnsLookupAddress {
@@ -20,7 +18,10 @@ export class PublicHostGuardError extends Error {
   }
 }
 
-/** Resolve once and return the vetted address that the connection must use. */
+/**
+ * Resolve an already-canonicalized, allowlisted hostname once and return the
+ * vetted address that the connection must use.
+ */
 export async function assertPublicResolvedHost(hostname: string, lookup: DnsLookup): Promise<DnsLookupAddress> {
   let addresses: readonly DnsLookupAddress[];
   try {

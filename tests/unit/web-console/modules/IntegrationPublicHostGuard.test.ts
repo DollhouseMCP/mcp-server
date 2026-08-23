@@ -26,6 +26,13 @@ describe('assertPublicResolvedHost', () => {
     });
   });
 
+  it('rejects a mixed public and private DNS answer set', async () => {
+    await expectRejection(() => Promise.resolve([
+      { address: '93.184.216.34', family: 4 },
+      { address: '10.0.0.5', family: 4 },
+    ]), 'not_allowed');
+  });
+
   it.each(['10.0.0.5', '::ffff:7f00:1', '64:ff9b::a9fe:a9fe'])(
     'rejects non-public or wrapped address %s',
     async address => {
