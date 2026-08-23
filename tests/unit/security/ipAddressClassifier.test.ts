@@ -31,6 +31,8 @@ describe('ipAddressClassifier', () => {
     '2001:2::1',
     '2001:5::1',
     '2001:10::1',
+    '2001:20::1',
+    '2001:30::1',
     '2001:40::1',
     '2001:db8::1',
     '2002:808:808::',
@@ -66,8 +68,6 @@ describe('ipAddressClassifier', () => {
     '2001:1::3',
     '2001:3::1',
     '2001:4:112::1',
-    '2001:20::1',
-    '2001:30::1',
   ])('allows public address %s', address => {
     expect(isPublicIpAddress(address)).toBe(true);
   });

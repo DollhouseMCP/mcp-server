@@ -48,8 +48,6 @@ const GLOBALLY_REACHABLE_IANA_PROTOCOL_ASSIGNMENTS: readonly IpPrefix[] = [
   { bytes: [0x20, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3], bits: 128 },
   { bytes: [0x20, 0x01, 0x00, 0x03], bits: 32 },
   { bytes: [0x20, 0x01, 0x00, 0x04, 0x01, 0x12], bits: 48 },
-  { bytes: [0x20, 0x01, 0x00, 0x20], bits: 28 },
-  { bytes: [0x20, 0x01, 0x00, 0x30], bits: 28 },
 ];
 const IPV4_MAPPED_PREFIX: IpPrefix = {
   bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff],
