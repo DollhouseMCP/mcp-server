@@ -981,6 +981,27 @@ describe('IntegrationModule', () => {
     await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
   });
 
+  it('rejects malformed static API key account labels before persistence', async () => {
+    const store = new InMemoryUserIntegrationStore();
+    const module = createIntegrationModule({
+      integrationStore: store,
+      secretEncryption: new AeadSecretEncryptionService({
+        keyId: 'integration-test-key',
+        key: Buffer.alloc(32, 9),
+      }),
+      configuredProviders: [new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture())],
+      now: () => NOW,
+    });
+
+    await expect(findRoute(module.routes, AIRTABLE_CONNECT_PATH, 'POST').handler(consoleRequest({
+      body: { api_key: 'valid-secret', account_label: 'invalid\u0000label' },
+    }))).resolves.toMatchObject({
+      status: 400,
+      body: { code: 'invalid_account_label' },
+    });
+    await expect(store.findByProvider(USER_ID, 'airtable')).resolves.toBeNull();
+  });
+
   it('refreshes configured OAuth tokens through store-level single-flight helper', async () => {
     const securityLogSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
     const fetchCalls: Array<{ readonly url: string; readonly init: RequestInit | undefined }> = [];
@@ -989,6 +1010,7 @@ describe('IntegrationModule', () => {
       return new Response(JSON.stringify({
         access_token: 'gmail-fresh-access-token',
         refresh_token: 'gmail-rotated-refresh-token',
+        scope: 'gmail.metadata',
       }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
@@ -1040,6 +1062,7 @@ describe('IntegrationModule', () => {
         provider: 'gmail',
         status: 'connected',
         errorReason: null,
+        authorizedPermissions: { scopes: ['gmail.metadata'] },
       },
     });
     expect(fetchCalls[0]?.url).toBe('https://accounts.example/oauth/token');

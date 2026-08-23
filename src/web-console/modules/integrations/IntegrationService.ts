@@ -16,6 +16,7 @@ import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueVal
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import { assertDisplayString } from '../../stores/ConsoleStoreValidation.js';
 import {
   serializeIntegrationList,
 } from './IntegrationDtos.js';
@@ -343,11 +344,15 @@ export class IntegrationService {
     const { provider, secretEncryption } = deps;
     const apiKey = readStaticApiKey(req.body);
     if (!apiKey) return badRequest('invalid_static_api_key', 'A non-empty api_key is required.');
+    const accountLabel = readBodyAccountLabel(req.body);
+    if (accountLabel === undefined) {
+      return badRequest('invalid_account_label', 'account_label must be a printable string up to 200 characters.');
+    }
     const connectedAt = this.now();
     const record = await this.options.store.connect({
       userId: auth.userId,
       provider: provider.descriptor.id,
-      externalAccountLabel: readBodyAccountLabel(req.body),
+      externalAccountLabel: accountLabel,
       externalInstallationId: null,
       authorizedPermissions: { scopes: [] },
       accessTokenCiphertext: secretEncryption.encrypt(
@@ -462,11 +467,18 @@ function readBodyReturnTo(body: unknown): string {
   return normalizeConsoleReturnPath(record.return_to, INTEGRATION_PATH);
 }
 
-function readBodyAccountLabel(body: unknown): string | null {
+function readBodyAccountLabel(body: unknown): string | null | undefined {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
-  return typeof record.account_label === 'string' && record.account_label.trim() !== ''
-    ? record.account_label.trim().slice(0, 200)
-    : null;
+  if (record.account_label === undefined || record.account_label === null) return null;
+  if (typeof record.account_label !== 'string') return undefined;
+  const label = record.account_label.trim();
+  if (label === '') return null;
+  try {
+    assertDisplayString(label, 'account_label', 200);
+    return label;
+  } catch {
+    return undefined;
+  }
 }
 
 function readStaticApiKey(body: unknown): string | null {

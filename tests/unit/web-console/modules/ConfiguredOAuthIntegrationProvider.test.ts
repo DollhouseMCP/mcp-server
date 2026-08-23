@@ -188,6 +188,35 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(fetchCalls.map(call => call.redirect)).toEqual(['error', 'error', 'error']);
   });
 
+  it('returns narrowed scopes supplied by the provider during refresh', async () => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(JSON.stringify({
+        access_token: 'fresh-access-token',
+        scope: 'gmail.metadata',
+      }), { status: 200 })),
+    });
+
+    await expect(provider.refreshCredentials({
+      refreshToken: 'refresh-token',
+      authorizedPermissions: { scopes: ['gmail.readonly'] },
+    })).resolves.toMatchObject({
+      accessToken: 'fresh-access-token',
+      authorizedPermissions: { scopes: ['gmail.metadata'] },
+    });
+  });
+
+  it('preserves recorded permissions when a refresh response omits scope', async () => {
+    const { provider } = providerWith({ dnsLookup: lookupReturning(PUBLIC_ADDRESS) });
+
+    const refreshed = await provider.refreshCredentials({
+      refreshToken: 'refresh-token',
+      authorizedPermissions: { scopes: ['gmail.readonly'] },
+    });
+
+    expect(refreshed).not.toHaveProperty('authorizedPermissions');
+  });
+
   it('uses HTTP Basic client auth without duplicating credentials in the form body', async () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');

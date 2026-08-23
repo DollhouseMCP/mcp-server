@@ -49,6 +49,8 @@ export interface IntegrationTokenRefreshRequest {
 
 export interface IntegrationTokenRefreshResult {
   readonly accessToken: string;
+  /** Undefined preserves the permissions recorded for the existing grant. */
+  readonly authorizedPermissions?: Readonly<Record<string, unknown>>;
   /**
    * Undefined preserves the existing encrypted refresh token. Null clears it.
    * A string replaces it, which supports rotating refresh-token providers.

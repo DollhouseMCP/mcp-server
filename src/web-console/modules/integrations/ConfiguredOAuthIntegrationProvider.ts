@@ -152,8 +152,17 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_refresh_failed');
+    let authorizedPermissions: Readonly<Record<string, unknown>> | undefined;
+    try {
+      if (readRecord(body).scope !== undefined) {
+        authorizedPermissions = { scopes: validatedGrantedScopes(body, []) };
+      }
+    } catch {
+      throw new Error('configured_oauth_token_refresh_failed');
+    }
     return {
       accessToken,
+      ...(authorizedPermissions ? { authorizedPermissions } : {}),
       refreshToken: readString(body, 'refresh_token') ?? undefined,
     };
   }
@@ -316,15 +325,20 @@ function validatedTokenResponseMetadata(
   try {
     const label = accountLabelFromTokenResponse(body, accountLabel);
     if (label !== null) assertDisplayString(label, 'externalAccountLabel', 200);
-    const scopes = grantedScopesFromTokenResponse(body, requestedScopes);
-    if (scopes.length > 100 || Buffer.byteLength(JSON.stringify({ scopes }), 'utf8') > 4096) {
-      throw new Error('configured OAuth scope grant exceeds storage limits');
-    }
-    for (const scope of scopes) assertDisplayString(scope, 'authorizedPermissions.scopes entry', 200);
+    const scopes = validatedGrantedScopes(body, requestedScopes);
     return { accountLabel: label, scopes };
   } catch {
     throw new Error('configured_oauth_token_exchange_failed');
   }
+}
+
+function validatedGrantedScopes(body: unknown, fallback: readonly string[]): readonly string[] {
+  const scopes = grantedScopesFromTokenResponse(body, fallback);
+  if (scopes.length > 100 || Buffer.byteLength(JSON.stringify({ scopes }), 'utf8') > 4096) {
+    throw new Error('configured OAuth scope grant exceeds storage limits');
+  }
+  for (const scope of scopes) assertDisplayString(scope, 'authorizedPermissions.scopes entry', 200);
+  return scopes;
 }
 
 function grantedScopesFromTokenResponse(body: unknown, requestedScopes: readonly string[]): readonly string[] {

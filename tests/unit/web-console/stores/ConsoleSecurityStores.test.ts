@@ -459,6 +459,7 @@ describe('InMemoryUserIntegrationStore', () => {
         kind: 'refreshed' as const,
         accessTokenCiphertext: Buffer.from('fresh-access'),
         refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        authorizedPermissions: { scopes: ['read:issues'] },
         credentialKeyVersion: 'integration-key-v2',
       };
     };
@@ -490,6 +491,7 @@ describe('InMemoryUserIntegrationStore', () => {
       credentialKeyVersion: 'integration-key-v2',
       accessTokenCiphertext: Buffer.from('fresh-access'),
       refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+      authorizedPermissions: { scopes: ['read:issues'] },
     });
   });
 

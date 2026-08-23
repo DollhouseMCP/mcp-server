@@ -70,6 +70,7 @@ export type UserIntegrationRefreshDecision =
       readonly kind: 'refreshed';
       readonly accessTokenCiphertext: Buffer;
       readonly refreshTokenCiphertext: Buffer | null;
+      readonly authorizedPermissions?: Readonly<Record<string, unknown>>;
       readonly credentialKeyVersion?: string | null;
     }
   | {

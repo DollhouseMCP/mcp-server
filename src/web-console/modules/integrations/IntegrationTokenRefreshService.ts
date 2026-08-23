@@ -75,6 +75,7 @@ export class IntegrationTokenRefreshService {
               integrationSecretContext('access_token', input.userId, input.provider),
             ),
             refreshTokenCiphertext: nextRefreshTokenCiphertext,
+            authorizedPermissions: refreshed.authorizedPermissions,
             credentialKeyVersion: record.credentialKeyVersion,
           };
         } catch {

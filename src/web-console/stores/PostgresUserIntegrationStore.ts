@@ -18,6 +18,10 @@ import {
 } from './IUserIntegrationStore.js';
 import { assertUuid } from './ConsoleStoreValidation.js';
 
+// The visible descriptor query returns at most 100 configured providers, and
+// the built-in GitHub provider occupies one additional catalog slot.
+const MAX_USER_INTEGRATIONS_PER_USER = 101;
+
 export class PostgresUserIntegrationStore implements IUserIntegrationStore {
   constructor(private readonly db: DatabaseInstance) {}
 
@@ -27,7 +31,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
       tx.select().from(userIntegrations).where(and(
         eq(userIntegrations.userId, userId),
         isNull(userIntegrations.revokedAt),
-      )).orderBy(asc(userIntegrations.provider)).limit(25),
+      )).orderBy(asc(userIntegrations.provider)).limit(MAX_USER_INTEGRATIONS_PER_USER),
     );
     return rows.map(fromRow);
   }
@@ -112,10 +116,22 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         return { kind: 'reused' as const, record: locked };
       }
       const decision = await input.refresh(locked);
+      if (decision.kind === 'refreshed') {
+        validateUserIntegrationRecord({
+          ...locked,
+          accessTokenCiphertext: decision.accessTokenCiphertext,
+          refreshTokenCiphertext: decision.refreshTokenCiphertext,
+          authorizedPermissions: decision.authorizedPermissions ?? locked.authorizedPermissions,
+          credentialKeyVersion: decision.credentialKeyVersion ?? locked.credentialKeyVersion,
+          status: 'connected',
+          errorReason: null,
+        });
+      }
       const update = decision.kind === 'refreshed'
         ? {
             accessTokenCiphertext: decision.accessTokenCiphertext,
             refreshTokenCiphertext: decision.refreshTokenCiphertext,
+            authorizedPermissions: decision.authorizedPermissions ?? locked.authorizedPermissions,
             credentialKeyVersion: decision.credentialKeyVersion ?? locked.credentialKeyVersion,
             status: 'connected' as const,
             errorReason: null,

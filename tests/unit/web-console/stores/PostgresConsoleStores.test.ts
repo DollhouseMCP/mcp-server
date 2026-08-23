@@ -670,7 +670,7 @@ describe('PostgresUserIntegrationStore', () => {
       externalAccountLabel: 'alice',
     });
     expect(row.accessTokenCiphertext).toEqual(Buffer.from('encrypted-access-token'));
-    expect(chain.limit).toHaveBeenCalledWith(25);
+    expect(chain.limit).toHaveBeenCalledWith(101);
   });
 
   it('finds one active provider integration for a user', async () => {
@@ -737,7 +737,7 @@ describe('PostgresUserIntegrationStore', () => {
     });
     transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
       provider: 'linear',
-      authorizedPermissions: { scopes: ['read:issues'] },
+      authorizedPermissions: { scopes: ['read:issues', 'write:issues'] },
       accessTokenCiphertext: Buffer.from('stale-access'),
       refreshTokenCiphertext: Buffer.from('stale-refresh'),
     })]));
@@ -753,18 +753,24 @@ describe('PostgresUserIntegrationStore', () => {
         kind: 'refreshed',
         accessTokenCiphertext: Buffer.from('fresh-access'),
         refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        authorizedPermissions: { scopes: ['read:issues'] },
         credentialKeyVersion: 'integration-key-v2',
       }),
     })).resolves.toMatchObject({
       kind: 'refreshed',
       record: {
         accessTokenCiphertext: Buffer.from('fresh-access'),
+        authorizedPermissions: { scopes: ['read:issues'] },
         credentialKeyVersion: 'integration-key-v2',
       },
     });
     const lockSql = transaction.execute.mock.calls[0]?.[0] as { queryChunks?: readonly unknown[] };
     expect(JSON.stringify(lockSql.queryChunks)).toContain('FOR UPDATE');
     expect(transaction.update).toHaveBeenCalledTimes(1);
+    const updateChain = transaction.update.mock.results[0]?.value as ReturnType<typeof returningChain>;
+    expect(updateChain.set).toHaveBeenCalledWith(expect.objectContaining({
+      authorizedPermissions: { scopes: ['read:issues'] },
+    }));
   });
 
   it('reuses a row refreshed by an earlier locked caller', async () => {

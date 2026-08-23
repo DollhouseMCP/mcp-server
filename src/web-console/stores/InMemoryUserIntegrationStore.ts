@@ -167,6 +167,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
           ...active,
           accessTokenCiphertext: decision.accessTokenCiphertext,
           refreshTokenCiphertext: decision.refreshTokenCiphertext,
+          authorizedPermissions: decision.authorizedPermissions ?? active.authorizedPermissions,
           credentialKeyVersion: decision.credentialKeyVersion ?? active.credentialKeyVersion,
           status: 'connected',
           errorReason: null,
