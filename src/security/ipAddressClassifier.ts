@@ -22,7 +22,9 @@ const NON_PUBLIC_IPV4_RANGES: readonly Ipv4RangePredicate[] = [
   bytes => bytes[0] === 100 && bytes[1] >= 64 && bytes[1] <= 127,
   bytes => bytes[0] === 169 && bytes[1] === 254,
   bytes => bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31,
-  bytes => bytes[0] === 192 && bytes[1] === 0,
+  bytes => bytes[0] === 192 && bytes[1] === 0 && bytes[2] === 0 &&
+    bytes[3] !== 9 && bytes[3] !== 10,
+  bytes => bytes[0] === 192 && bytes[1] === 0 && bytes[2] === 2,
   bytes => bytes[0] === 192 && bytes[1] === 88 && bytes[2] === 99,
   bytes => bytes[0] === 192 && bytes[1] === 168,
   bytes => bytes[0] === 198 && (bytes[1] === 18 || bytes[1] === 19),
