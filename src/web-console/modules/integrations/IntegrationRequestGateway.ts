@@ -186,12 +186,8 @@ export class IntegrationRequestGateway {
 
     const refresh = await this.refreshAudited(
       this.options.tokenRefresh,
-      session.userId,
-      session.sessionId,
-      provider,
+      requestContext,
       descriptor.id,
-      method,
-      url,
       record.accessTokenCiphertext,
     );
     if (refresh.kind !== 'refreshed' && refresh.kind !== 'reused') {
@@ -267,23 +263,27 @@ export class IntegrationRequestGateway {
 
   private async refreshAudited(
     tokenRefresh: IntegrationTokenRefreshService,
-    userId: string,
-    sessionId: string | null,
-    provider: UserIntegrationProvider,
+    ctx: GatewayRequestContext,
     integrationDescriptorId: string,
-    method: string,
-    url: URL,
     staleAccessTokenCiphertext: Buffer,
   ) {
     try {
       return await tokenRefresh.refreshOnDemand({
-        userId,
-        provider,
+        userId: ctx.userId,
+        provider: ctx.provider,
         integrationDescriptorId,
         staleAccessTokenCiphertext,
       });
     } catch (error) {
-      await this.auditCredentialError(provider, userId, sessionId, method, url, error instanceof IntegrationRequestError ? error.code : 'refresh_failed', true);
+      await this.auditCredentialError(
+        ctx.provider,
+        ctx.userId,
+        ctx.sessionId,
+        ctx.method,
+        ctx.url,
+        error instanceof IntegrationRequestError ? error.code : 'refresh_failed',
+        true,
+      );
       throw error;
     }
   }
@@ -558,7 +558,7 @@ interface IntegrationHttpResponse {
 }
 
 interface GatewayRequestContext {
-  readonly provider: string;
+  readonly provider: UserIntegrationProvider;
   readonly userId: string;
   readonly sessionId: string | null;
   readonly method: string;
