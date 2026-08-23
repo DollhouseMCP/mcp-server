@@ -9,9 +9,10 @@ import {
 const HOSTNAME = 'api.example.com';
 
 async function expectRejection(lookup: DnsLookup, reason: 'resolution_failed' | 'not_allowed'): Promise<void> {
-  const outcome = assertPublicResolvedHost(HOSTNAME, lookup);
-  await expect(outcome).rejects.toBeInstanceOf(PublicHostGuardError);
-  await expect(outcome).rejects.toMatchObject({ reason });
+  await expect(assertPublicResolvedHost(HOSTNAME, lookup)).rejects.toMatchObject({
+    name: PublicHostGuardError.name,
+    reason,
+  });
 }
 
 describe('assertPublicResolvedHost', () => {
@@ -43,5 +44,12 @@ describe('assertPublicResolvedHost', () => {
   it('maps empty and failed resolution to fail-closed reasons', async () => {
     await expectRejection(() => Promise.resolve([]), 'not_allowed');
     await expectRejection(() => Promise.reject(new Error('ENOTFOUND')), 'resolution_failed');
+  });
+
+  it('rejects a DNS answer whose family does not match its address', async () => {
+    await expectRejection(
+      () => Promise.resolve([{ address: '93.184.216.34', family: 6 }]),
+      'not_allowed',
+    );
   });
 });

@@ -10,6 +10,11 @@ const HEXTET_PATTERN = /^[0-9a-f]{1,4}$/i;
 const IPV4_OCTET_PATTERN = /^\d{1,3}$/;
 type Ipv4RangePredicate = (bytes: Uint8Array) => boolean;
 
+interface IpPrefix {
+  readonly bytes: readonly number[];
+  readonly bits: number;
+}
+
 const NON_PUBLIC_IPV4_RANGES: readonly Ipv4RangePredicate[] = [
   bytes => bytes[0] === 0,
   bytes => bytes[0] === 10,
@@ -18,12 +23,42 @@ const NON_PUBLIC_IPV4_RANGES: readonly Ipv4RangePredicate[] = [
   bytes => bytes[0] === 169 && bytes[1] === 254,
   bytes => bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31,
   bytes => bytes[0] === 192 && bytes[1] === 0,
+  bytes => bytes[0] === 192 && bytes[1] === 88 && bytes[2] === 99,
   bytes => bytes[0] === 192 && bytes[1] === 168,
   bytes => bytes[0] === 198 && (bytes[1] === 18 || bytes[1] === 19),
   bytes => bytes[0] === 198 && bytes[1] === 51 && bytes[2] === 100,
   bytes => bytes[0] === 203 && bytes[1] === 0 && bytes[2] === 113,
   bytes => bytes[0] >= 224,
 ];
+
+// Keep the fail-closed exceptions aligned with the IANA IPv6 Special-Purpose Address Registry.
+const IPV6_GLOBAL_UNICAST: IpPrefix = { bytes: [0x20], bits: 3 };
+const IPV6_IANA_PROTOCOL_ASSIGNMENTS: IpPrefix = { bytes: [0x20, 0x01, 0x00], bits: 23 };
+const IPV6_DOCUMENTATION: readonly IpPrefix[] = [
+  { bytes: [0x20, 0x01, 0x0d, 0xb8], bits: 32 },
+  { bytes: [0x3f, 0xff, 0x00], bits: 20 },
+];
+const IPV6_DEPRECATED_OR_TRANSITION: readonly IpPrefix[] = [
+  { bytes: [0x20, 0x02], bits: 16 },
+  { bytes: [0x3f, 0xfe], bits: 16 },
+];
+const GLOBALLY_REACHABLE_IANA_PROTOCOL_ASSIGNMENTS: readonly IpPrefix[] = [
+  { bytes: [0x20, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], bits: 128 },
+  { bytes: [0x20, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], bits: 128 },
+  { bytes: [0x20, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3], bits: 128 },
+  { bytes: [0x20, 0x01, 0x00, 0x03], bits: 32 },
+  { bytes: [0x20, 0x01, 0x00, 0x04, 0x01, 0x12], bits: 48 },
+  { bytes: [0x20, 0x01, 0x00, 0x20], bits: 28 },
+  { bytes: [0x20, 0x01, 0x00, 0x30], bits: 28 },
+];
+const IPV4_MAPPED_PREFIX: IpPrefix = {
+  bytes: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff],
+  bits: 96,
+};
+const WELL_KNOWN_NAT64_PREFIX: IpPrefix = {
+  bytes: [0x00, 0x64, 0xff, 0x9b, 0, 0, 0, 0, 0, 0, 0, 0],
+  bits: 96,
+};
 
 export interface CanonicalIpAddress {
   readonly family: 4 | 6;
@@ -126,26 +161,33 @@ function isPublicIpv4Bytes(bytes: Uint8Array): boolean {
 }
 
 function isPublicIpv6Bytes(bytes: Uint8Array): boolean {
-  const embedded = extractEmbeddedIpv4(bytes);
+  const embedded = extractPubliclyRoutableEmbeddedIpv4(bytes);
   if (embedded !== null) return isPublicIpv4Bytes(embedded);
-  const [first, second, third, fourth] = bytes;
-  if ((first & 0xfe) === 0xfc) return false;
-  if (first === 0xfe && (second & 0xc0) === 0x80) return false;
-  if (first === 0xff) return false;
-  if (first === 0x20 && second === 0x01 && third === 0x0d && fourth === 0xb8) return false;
+  if (!matchesPrefix(bytes, IPV6_GLOBAL_UNICAST)) return false;
+  if (matchesPrefix(bytes, IPV6_IANA_PROTOCOL_ASSIGNMENTS)) {
+    return GLOBALLY_REACHABLE_IANA_PROTOCOL_ASSIGNMENTS.some(prefix => matchesPrefix(bytes, prefix));
+  }
+  if (IPV6_DOCUMENTATION.some(prefix => matchesPrefix(bytes, prefix))) return false;
+  if (IPV6_DEPRECATED_OR_TRANSITION.some(prefix => matchesPrefix(bytes, prefix))) return false;
   return true;
 }
 
-function extractEmbeddedIpv4(bytes: Uint8Array): Uint8Array | null {
-  if (hasZeroPrefix(bytes, 10) && bytes[10] === 0xff && bytes[11] === 0xff) return bytes.slice(12);
-  if (hasZeroPrefix(bytes, 12)) return bytes.slice(12);
-  if (bytes[0] === 0x00 && bytes[1] === 0x64 && bytes[2] === 0xff && bytes[3] === 0x9b) {
-    const wellKnown = bytes[4] === 0 && bytes[5] === 0 && hasZeroRange(bytes, 6, 12);
-    const localUse = bytes[4] === 0 && bytes[5] === 1;
-    if (wellKnown || localUse) return bytes.slice(12);
+function extractPubliclyRoutableEmbeddedIpv4(bytes: Uint8Array): Uint8Array | null {
+  if (matchesPrefix(bytes, IPV4_MAPPED_PREFIX) || matchesPrefix(bytes, WELL_KNOWN_NAT64_PREFIX)) {
+    return bytes.slice(12);
   }
-  if (bytes[0] === 0x20 && bytes[1] === 0x02) return bytes.slice(2, 6);
   return null;
+}
+
+function matchesPrefix(address: Uint8Array, prefix: IpPrefix): boolean {
+  const completeBytes = Math.floor(prefix.bits / 8);
+  for (let index = 0; index < completeBytes; index += 1) {
+    if (address[index] !== prefix.bytes[index]) return false;
+  }
+  const remainingBits = prefix.bits % 8;
+  if (remainingBits === 0) return true;
+  const mask = (0xff << (8 - remainingBits)) & 0xff;
+  return (address[completeBytes] & mask) === ((prefix.bytes[completeBytes] ?? 0) & mask);
 }
 
 function hasZeroPrefix(bytes: Uint8Array, length: number): boolean {
