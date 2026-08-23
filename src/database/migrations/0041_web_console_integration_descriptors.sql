@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS "integration_provider_descriptors" (
   CONSTRAINT "integration_provider_descriptors_provider_check"
     CHECK ("provider" ~ '^[a-z][a-z0-9_-]{1,63}$'),
   CONSTRAINT "integration_provider_descriptors_ownership_check"
-    CHECK ("ownership" IN ('curated', 'byo')),
+    CHECK ("ownership" IN ('curated', 'byo')), -- NOSONAR: immutable constraint repeats enum literals intentionally
   CONSTRAINT "integration_provider_descriptors_auth_strategy_check"
     CHECK ("auth_strategy" IN ('oauth2_authorization_code', 'static_api_key', 'coded')),
   CONSTRAINT "integration_provider_descriptors_shape_check"
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS "integration_provider_descriptors" (
       AND char_length("category") <= 80
       AND jsonb_typeof("api_hosts") = 'array'
       AND jsonb_array_length("api_hosts") BETWEEN 1 AND 25
-      AND jsonb_typeof("operation_promotion") = 'object'
+      AND jsonb_typeof("operation_promotion") = 'object' -- NOSONAR: immutable constraint repeats JSON type literals intentionally
       AND char_length("operation_promotion"::text) <= 8192
       AND ("credential_key_version" IS NULL OR (
         btrim("credential_key_version") <> ''

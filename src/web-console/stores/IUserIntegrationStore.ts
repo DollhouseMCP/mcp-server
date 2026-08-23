@@ -7,8 +7,9 @@ import {
   cloneBuffer,
   cloneDate,
 } from './ConsoleStoreValidation.js';
+import type { UserIntegrationProvider } from '../../database/schema/webConsole.js';
 
-export type UserIntegrationProvider = string;
+export type { UserIntegrationProvider };
 export const GITHUB_USER_INTEGRATION_PROVIDER = 'github' as const;
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
