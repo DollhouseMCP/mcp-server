@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, or } from 'drizzle-orm';
+import { and, asc, eq, or, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -42,46 +42,37 @@ export class PostgresIntegrationDescriptorStore implements IIntegrationDescripto
           eq(integrationProviderDescriptors.ownership, 'curated'),
           eq(integrationProviderDescriptors.ownerUserId, userId),
         ),
-      )).limit(1),
+      )).limit(2),
     );
-    return rows[0] ? fromDescriptorRow(rows[0]) : null;
+    const preferred = rows.find(row => row.ownership === 'byo' && row.ownerUserId === userId)
+      ?? rows.find(row => row.ownership === 'curated');
+    return preferred ? fromDescriptorRow(preferred) : null;
   }
 
   async upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord> {
     validateIntegrationDescriptorInput(input);
-    const rows = await withSystemContext(this.db, async tx => {
-      const existing = await tx.select().from(integrationProviderDescriptors).where(descriptorIdentity(input)).limit(1);
-      const values = toDescriptorValues(input, existing[0]?.createdAt ?? input.createdAt);
-      if (existing[0]) {
-        return tx.update(integrationProviderDescriptors)
-          .set(values)
-          .where(eq(integrationProviderDescriptors.id, existing[0].id))
-          .returning();
+    const rows = await withSystemContext(this.db, tx => {
+      const insert = tx.insert(integrationProviderDescriptors).values(toDescriptorInsertValues(input));
+      const set = toDescriptorUpdateValues(input);
+      if (input.ownership === 'curated') {
+        return insert.onConflictDoUpdate({
+          target: integrationProviderDescriptors.provider,
+          targetWhere: sql`${integrationProviderDescriptors.ownership} = 'curated'`,
+          set,
+        }).returning();
       }
-      return tx.insert(integrationProviderDescriptors).values(values).returning();
+      return insert.onConflictDoUpdate({
+        target: [integrationProviderDescriptors.ownerUserId, integrationProviderDescriptors.provider],
+        targetWhere: sql`${integrationProviderDescriptors.ownership} = 'byo'`,
+        set,
+      }).returning();
     });
     if (!rows[0]) throw new Error('PostgreSQL did not return integration descriptor row');
     return fromDescriptorRow(rows[0]);
   }
 }
 
-function descriptorIdentity(input: IntegrationDescriptorCreateInput) {
-  if (input.ownership === 'curated') {
-    return and(
-      eq(integrationProviderDescriptors.provider, input.provider),
-      eq(integrationProviderDescriptors.ownership, 'curated'),
-      isNull(integrationProviderDescriptors.ownerUserId),
-    );
-  }
-  if (!input.ownerUserId) throw new Error('validated BYO descriptor missing ownerUserId');
-  return and(
-    eq(integrationProviderDescriptors.provider, input.provider),
-    eq(integrationProviderDescriptors.ownership, 'byo'),
-    eq(integrationProviderDescriptors.ownerUserId, input.ownerUserId),
-  );
-}
-
-function toDescriptorValues(input: IntegrationDescriptorCreateInput, createdAt: Date) {
+function toDescriptorInsertValues(input: IntegrationDescriptorCreateInput) {
   return {
     provider: input.provider,
     ownership: input.ownership,
@@ -95,8 +86,24 @@ function toDescriptorValues(input: IntegrationDescriptorCreateInput, createdAt: 
     clientSecretCiphertext: input.clientSecretCiphertext ? Buffer.from(input.clientSecretCiphertext) : null,
     credentialKeyVersion: input.credentialKeyVersion ?? null,
     operationPromotion: cloneJsonValue(input.operationPromotion ?? {}),
-    createdAt,
+    createdAt: input.createdAt,
     updatedAt: input.updatedAt,
+  };
+}
+
+function toDescriptorUpdateValues(input: IntegrationDescriptorCreateInput) {
+  const values = toDescriptorInsertValues(input);
+  return {
+    displayName: values.displayName,
+    category: values.category,
+    authStrategy: values.authStrategy,
+    apiHosts: values.apiHosts,
+    oauth: values.oauth,
+    staticApiKey: values.staticApiKey,
+    clientSecretCiphertext: values.clientSecretCiphertext,
+    credentialKeyVersion: values.credentialKeyVersion,
+    operationPromotion: values.operationPromotion,
+    updatedAt: values.updatedAt,
   };
 }
 
