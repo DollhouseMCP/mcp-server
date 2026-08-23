@@ -144,7 +144,7 @@ function validationStatus(value: unknown): ConsolePortfolioValidationStatus {
 }
 
 function syncJobStatus(value: unknown): PortfolioSyncJobDto['status'] {
-  if (value === 'running' || value === 'succeeded' || value === 'failed' || value === 'cancelled') return value;
+  if (value === 'running' || value === 'succeeded' || value === 'failed') return value;
   return 'queued';
 }
 

@@ -119,6 +119,45 @@ function page<TSource, TItem>(
   };
 }
 
+export type ApprovalAuditVerification =
+  | { readonly available: false }
+  | {
+    readonly available: true;
+    readonly verified: boolean;
+    readonly chainKeyId: string;
+    readonly chainPrev: string | null;
+    readonly chainHmac: string;
+  };
+
+/**
+ * Map a verification result to the integrity block. A `verified` status is only ever
+ * produced by a real verification returning `available && verified`; every other case is
+ * honestly `not_available`. This is the single place the integrity block is built, so a
+ * `verified` status cannot be hand-written at a call site.
+ */
+export function integrityFromApprovalAuditVerification(
+  verification: ApprovalAuditVerification,
+): ApprovalAuditEventDto['integrity'] {
+  if (verification.available && verification.verified) {
+    return {
+      status: 'verified',
+      chain_key_id: verification.chainKeyId,
+      chain_prev: verification.chainPrev,
+      chain_hmac: verification.chainHmac,
+    };
+  }
+  return { status: 'not_available', chain_key_id: null, chain_prev: null, chain_hmac: null };
+}
+
+/**
+ * approval_audit_events (migration 0036) stores no hash-chain material, so verification is
+ * unavailable for every row today. When a durable hash-chained approval-audit backend is
+ * wired, compute the chain HMAC here and return `{ available: true, verified: <hmac check>, ... }`.
+ */
+function verifyApprovalAuditRow(_row: ApprovalAuditDbRow): ApprovalAuditVerification {
+  return { available: false };
+}
+
 function toApprovalAuditDto(row: ApprovalAuditDbRow): ApprovalAuditEventDto {
   return {
     id: row.id,
@@ -130,12 +169,7 @@ function toApprovalAuditDto(row: ApprovalAuditDbRow): ApprovalAuditEventDto {
     result: row.result,
     decision_source: row.decision_source,
     correlation_id: row.correlation_id,
-    integrity: {
-      status: 'not_available',
-      chain_key_id: null,
-      chain_prev: null,
-      chain_hmac: null,
-    },
+    integrity: integrityFromApprovalAuditVerification(verifyApprovalAuditRow(row)),
   };
 }
 

@@ -696,6 +696,8 @@ export interface AgentNotification {
   message: string;
   /** Structured metadata for programmatic consumption */
   metadata?: {
+    /** Stable source event identifier */
+    eventId?: string;
     /** The MCP-AQL operation that was blocked */
     operation?: string;
     /** Element type involved in the block */
@@ -706,8 +708,10 @@ export interface AgentNotification {
     level?: string;
     /** Verification ID (for danger_zone blocks) */
     verificationId?: string;
-    /** Agent name (used in danger_zone broadcasts to identify which agent is blocked) */
+    /** Agent name associated with a danger_zone notification */
     agentName?: string;
+    /** Goal that produced the notification */
+    goalId?: string;
   };
   /** ISO 8601 timestamp when the event occurred */
   timestamp: string;

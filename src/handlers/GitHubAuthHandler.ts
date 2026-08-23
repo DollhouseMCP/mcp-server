@@ -6,19 +6,20 @@
  * @security-audit-suppress DMCP-SEC-006
  */
 
-import { GitHubAuthManager, DeviceCodeResponse } from '../auth/GitHubAuthManager.js';
+import type { GitHubAuthManager, DeviceCodeResponse } from '../auth/GitHubAuthManager.js';
 import { ConfigManager } from '../config/ConfigManager.js';
 import { logger } from '../utils/logger.js';
 import { PackageResourceLocator } from '../paths/PackageResourceLocator.js';
 import * as path from 'path';
 import { homedir } from 'os';
-import { randomUUID } from 'node:crypto';
 import * as child_process from 'child_process';
-import { InitializationService } from '../services/InitializationService.js';
-import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
+import { randomUUID } from 'node:crypto';
+import type { InitializationService } from '../services/InitializationService.js';
+import type { PersonaIndicatorService } from '../services/PersonaIndicatorService.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { FileOperationsService } from '../services/FileOperationsService.js';
+import type { FileOperationsService } from '../services/FileOperationsService.js';
 import type { PathService } from '../paths/PathService.js';
+import { readHandoffToken, deleteHandoffToken, sweepHandoffArtifacts } from '../security/oauthHelperTokenHandoff.js';
 
 const UNKNOWN_ERROR = 'Unknown error';
 
@@ -42,6 +43,25 @@ interface OAuthHelperState {
     expiresAt: string;
 }
 
+interface OAuthHelperHealth {
+    exists: boolean;
+    isActive: boolean;
+    expired: boolean;
+    processAlive: boolean;
+    hasResult: boolean;
+    hasLog: boolean;
+    userCode: string;
+    timeRemaining: number;
+    pid: number;
+    startTime: Date | null;
+    expiresAt: Date | null;
+    completedAt: Date | null;
+    resultStatus: OAuthHelperTerminalStatus | null;
+    resultMessage: string;
+    resultAttempts?: number;
+    errorLog: string;
+}
+
 export class GitHubAuthHandler {
     constructor(
         private readonly githubAuthManager: GitHubAuthManager,
@@ -63,7 +83,6 @@ export class GitHubAuthHandler {
     async setupGitHubAuth() {
         await this.ensureInitialized();
         try {
-          await this.cleanupLegacyPendingToken('setupGitHubAuth');
           const currentStatus = await this.githubAuthManager.getAuthStatus();
           if (currentStatus.isAuthenticated) {
             return this.alreadyConnectedResponse(currentStatus);
@@ -179,8 +198,12 @@ export class GitHubAuthHandler {
         let helperPath: string | null = null;
         try {
           helperPath = await this.findOAuthHelperPath();
-          this.logSpawningOAuthHelper(helperPath, clientId, deviceResponse);
           const flowId = randomUUID();
+          // Clear any artifacts from a prior flow so a stale success result or
+          // leftover handoff cannot be mistaken for this flow's outcome.
+          await this.clearOAuthHelperResult();
+          await sweepHandoffArtifacts(this.getOAuthHelperAuthDir());
+          this.logSpawningOAuthHelper(helperPath, clientId, deviceResponse);
           const helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId, flowId);
           helper.unref();
           this.logOAuthHelperSpawned(helper.pid, deviceResponse);
@@ -221,7 +244,7 @@ export class GitHubAuthHandler {
     private logSpawningOAuthHelper(helperPath: string, clientId: string, deviceResponse: DeviceCodeResponse): void {
         logger.debug('OAUTH_STEP_6: Spawning helper process', {
           helperPath,
-          clientId: clientId?.substring(0, 8) + '...',
+          clientId: clientId.substring(0, 8) + '...',
           deviceCode: deviceResponse.device_code.substring(0, 8) + '...'
         });
     }
@@ -237,11 +260,12 @@ export class GitHubAuthHandler {
 
     private async writeOAuthHelperState(pid: number | undefined, deviceResponse: DeviceCodeResponse, flowId: string): Promise<void> {
         const stateFile = this.getOAuthHelperStateFile();
-        const resultFile = this.getOAuthHelperResultFile();
         const stateDir = path.dirname(stateFile);
         await this.fileOperations.createDirectory(stateDir);
-        await this.fileOperations.deleteFile(resultFile).catch(() => {});
 
+        // Issue #2334: never persist device_code — it is a bearer secret for the
+        // pending authorization and is not needed after spawn. The flowId
+        // correlates the helper's terminal result and token handoff to this flow.
         const state = {
           pid,
           flowId,
@@ -256,13 +280,12 @@ export class GitHubAuthHandler {
     }
 
     private oauthHelperLaunchFailedResponse(spawnError: unknown, helperPath: string | null, clientId: string) {
-        const spawnErr = spawnError as NodeJS.ErrnoException;
         logger.error('OAUTH_INDEX_2774: Failed to spawn OAuth helper process', {
           error: spawnError,
           helperPath,
-          clientId: clientId?.substring(0, 8) + '...',
-          errorCode: spawnErr.code,
-          syscall: spawnErr.syscall
+          clientId: clientId.substring(0, 8) + '...',
+          errorCode: (spawnError as NodeJS.ErrnoException | undefined)?.code,
+          syscall: (spawnError as NodeJS.ErrnoException | undefined)?.syscall
         });
 
         const errorDetail = this.formatOAuthHelperSpawnError(spawnError, helperPath);
@@ -300,7 +323,10 @@ export class GitHubAuthHandler {
     async checkGitHubAuth() {
         await this.ensureInitialized();
         try {
-          const removedLegacyPendingToken = await this.cleanupLegacyPendingToken('checkGitHubAuth');
+          // Issue #2334: a completed helper flow leaves an encrypted token handoff
+          // the server must import before the token is retrievable. Do this first
+          // so getAuthStatus() below reflects a just-finished authorization.
+          await this.importCompletedOAuthHandoff();
           const helperHealth = await this.checkOAuthHelperHealth();
           const status = await this.githubAuthManager.getAuthStatus();
 
@@ -308,25 +334,19 @@ export class GitHubAuthHandler {
             await this.cleanupOAuthHelperStateIfPresent(helperHealth.exists);
             return this.githubConnectedResponse(status);
           }
-          if (helperHealth.resultStatus === 'success') {
-            return this.githubAuthCompletedButTokenUnavailableResponse(removedLegacyPendingToken);
-          }
-          if (helperHealth.resultStatus) {
-            return this.githubAuthTerminalResultResponse(helperHealth, removedLegacyPendingToken);
-          }
+          if (helperHealth.resultStatus === 'success') return await this.oauthHelperCompletedResponse();
+          if (helperHealth.resultStatus) return await this.oauthHelperTerminalFailureResponse(helperHealth);
           if (helperHealth.isActive) return this.githubAuthInProgressResponse(helperHealth);
           if (helperHealth.exists && helperHealth.expired) return this.githubAuthExpiredResponse(helperHealth);
           if (status.hasToken) return this.invalidTokenResponse();
-          return this.notConnectedResponse(removedLegacyPendingToken);
+          return await this.notConnectedResponse();
         } catch (error) {
           logger.error('Failed to check GitHub auth', { error });
           return {
             content: [{
               type: "text",
-              text: this.prefix(
-                `❌ **Unable to Check Authentication**\n\n` +
-                `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
-              )
+              text: this.prefix(`❌ **Unable to Check Authentication**\n\n`) +
+                    `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
             }]
           };
         }
@@ -335,9 +355,7 @@ export class GitHubAuthHandler {
     private async cleanupOAuthHelperStateIfPresent(exists: boolean): Promise<void> {
         if (!exists) return;
         const stateFile = this.getOAuthHelperStateFile();
-        const resultFile = this.getOAuthHelperResultFile();
         await this.fileOperations.deleteFile(stateFile).catch(() => {}); // Preserve error swallowing pattern
-        await this.fileOperations.deleteFile(resultFile).catch(() => {});
     }
 
     private githubConnectedResponse(status: Awaited<ReturnType<GitHubAuthManager['getAuthStatus']>>) {
@@ -358,11 +376,11 @@ export class GitHubAuthHandler {
         };
     }
 
-    private githubAuthCompletedButTokenUnavailableResponse(removedLegacyPendingToken: boolean) {
+    private async oauthHelperCompletedResponse() {
+        const removedLegacyPendingToken = await this.cleanupLegacyPendingToken('checkGitHubAuth');
         const legacyNotice = removedLegacyPendingToken
           ? `\n\nA stale plaintext OAuth fallback file from an earlier failed flow was removed.`
           : '';
-
         return {
           content: [{
             type: "text",
@@ -377,11 +395,9 @@ export class GitHubAuthHandler {
         };
     }
 
-    private githubAuthTerminalResultResponse(
-        helperHealth: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>,
-        removedLegacyPendingToken: boolean,
-    ) {
+    private async oauthHelperTerminalFailureResponse(helperHealth: OAuthHelperHealth) {
         const statusLabel = this.formatOAuthHelperTerminalStatus(helperHealth.resultStatus ?? 'failed');
+        const removedLegacyPendingToken = await this.cleanupLegacyPendingToken('checkGitHubAuth');
         const lines = [
           `${statusLabel.icon} **GitHub Authentication ${statusLabel.title}**`,
           '',
@@ -408,7 +424,7 @@ export class GitHubAuthHandler {
         };
     }
 
-    private githubAuthInProgressResponse(helperHealth: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>) {
+    private githubAuthInProgressResponse(helperHealth: OAuthHelperHealth) {
         return {
           content: [{
             type: "text",
@@ -429,7 +445,7 @@ export class GitHubAuthHandler {
         };
     }
 
-    private githubAuthExpiredResponse(helperHealth: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>) {
+    private githubAuthExpiredResponse(helperHealth: OAuthHelperHealth) {
         const lines = [
           '⏱️ **Authentication Expired**',
           '',
@@ -457,35 +473,31 @@ export class GitHubAuthHandler {
         return {
           content: [{
             type: "text",
-            text: this.prefix(
-              `⚠️ **GitHub Token Invalid**\n\n` +
-              `A GitHub token was found but it appears to be invalid or expired.\n\n` +
-              `**To fix this:**\n` +
-              `1. Say "set up GitHub" to authenticate again\n` +
-              `2. Or check your GITHUB_TOKEN environment variable\n\n` +
-              `Note: Browse and install still work without authentication!`
-            )
+            text: this.prefix(`⚠️ **GitHub Token Invalid**\n\n`) +
+                  `A GitHub token was found but it appears to be invalid or expired.\n\n` +
+                  `**To fix this:**\n` +
+                  `1. Say "set up GitHub" to authenticate again\n` +
+                  `2. Or check your GITHUB_TOKEN environment variable\n\n` +
+                  `Note: Browse and install still work without authentication!`
           }]
         };
     }
 
-    private notConnectedResponse(removedLegacyPendingToken: boolean = false) {
+    private async notConnectedResponse() {
+        const removedLegacyPendingToken = await this.cleanupLegacyPendingToken('checkGitHubAuth');
         const legacyNotice = removedLegacyPendingToken
           ? `\n\nA stale plaintext OAuth fallback file from an earlier failed flow was removed. Please run \`setup_github_auth\` again to reconnect.`
           : '';
-
         return {
           content: [{
             type: "text",
-            text: this.prefix(
-              `🔒 **Not Connected to GitHub**\n\n` +
-              `You're not currently authenticated with GitHub.\n\n` +
-              `**What works without auth:**\n` +
-              `✅ Browse the public collection\n` +
-              `✅ Install community content\n` +
-              `❌ Submit your own content (requires auth)\n\n` +
-              `To connect, just say "set up GitHub" or "connect to GitHub"${legacyNotice}`
-            )
+            text: this.prefix(`🔒 **Not Connected to GitHub**\n\n`) +
+                  `You're not currently authenticated with GitHub.\n\n` +
+                  `**What works without auth:**\n` +
+                  `✅ Browse the public collection\n` +
+                  `✅ Install community content\n` +
+                  `❌ Submit your own content (requires auth)\n\n` +
+                  `To connect, just say "set up GitHub" or "connect to GitHub"${legacyNotice}`
           }]
         };
     }
@@ -517,16 +529,14 @@ export class GitHubAuthHandler {
           return {
             content: [{
               type: "text",
-              text: this.prefix(
-                `❌ **Failed to Get OAuth Helper Status**\n\n` +
-                `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
-              )
+              text: this.prefix(`❌ **Failed to Get OAuth Helper Status**\n\n`) +
+                    `Error: ${error instanceof Error ? error.message : UNKNOWN_ERROR}`
             }]
           };
         }
     }
 
-    private formatOAuthHelperStatus(health: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>): string {
+    private formatOAuthHelperStatus(health: OAuthHelperHealth): string {
         let statusText = `📊 **OAuth Helper Process Diagnostics**\n\n`;
         if (!health.exists) return statusText + this.formatNoOAuthHelperStatus();
         if (health.resultStatus) return statusText + this.formatTerminalOAuthHelperStatus(health);
@@ -541,7 +551,29 @@ export class GitHubAuthHandler {
           `No active authentication process. Run \`setup_github_auth\` to start one.\n`;
     }
 
-    private formatActiveOAuthHelperStatus(health: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>): string {
+    private formatTerminalOAuthHelperStatus(health: OAuthHelperHealth): string {
+        const statusLabel = this.formatOAuthHelperTerminalStatus(health.resultStatus ?? 'failed');
+        let statusText = `**Status:** ${statusLabel.icon} ${statusLabel.title.toUpperCase()}\n`;
+        if (health.userCode) {
+          statusText += `**User Code:** ${health.userCode}\n`;
+        }
+        if (health.pid) {
+          statusText += `**Process ID:** ${health.pid}\n`;
+        }
+        if (health.completedAt) {
+          statusText += `**Completed:** ${health.completedAt.toLocaleString()}\n`;
+        }
+        if (health.resultAttempts !== undefined) {
+          statusText += `**Attempts:** ${health.resultAttempts}\n`;
+        }
+        const resultMessage = this.sanitizeOAuthHelperResultMessage(health.resultMessage);
+        if (resultMessage) {
+          statusText += `**Result:** ${resultMessage}\n`;
+        }
+        return statusText + '\n';
+    }
+
+    private formatActiveOAuthHelperStatus(health: OAuthHelperHealth): string {
         let statusText = `**Status:** 🟢 ACTIVE - Authentication in progress\n` +
           `**User Code:** ${health.userCode}\n` +
           `**Process ID:** ${health.pid}\n` +
@@ -558,7 +590,7 @@ export class GitHubAuthHandler {
         return statusText;
     }
 
-    private formatExpiredOAuthHelperStatus(health: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>): string {
+    private formatExpiredOAuthHelperStatus(health: OAuthHelperHealth): string {
         return `**Status:** 🔴 EXPIRED\n` +
           `**User Code:** ${health.userCode} (expired)\n` +
           `**Process ID:** ${health.pid}\n` +
@@ -567,20 +599,8 @@ export class GitHubAuthHandler {
           `The authentication request has expired. Run \`setup_github_auth\` to try again.\n\n`;
     }
 
-    private formatTerminalOAuthHelperStatus(health: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>): string {
-        const statusLabel = this.formatOAuthHelperTerminalStatus(health.resultStatus ?? 'failed');
-        let statusText = `**Status:** ${statusLabel.icon} ${statusLabel.title.toUpperCase()}\n`;
-        if (health.userCode) statusText += `**User Code:** ${health.userCode}\n`;
-        if (health.pid) statusText += `**Process ID:** ${health.pid}\n`;
-        if (health.completedAt) statusText += `**Completed:** ${health.completedAt.toLocaleString()}\n`;
-        if (health.resultAttempts !== undefined) statusText += `**Attempts:** ${health.resultAttempts}\n`;
-        const resultMessage = this.sanitizeOAuthHelperResultMessage(health.resultMessage);
-        if (resultMessage) statusText += `**Result:** ${resultMessage}\n`;
-        return `${statusText}\n`;
-    }
-
     private formatOAuthHelperFileLocations(
-        health: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>,
+        health: OAuthHelperHealth,
         stateFile: string,
         resultFile: string,
         logFile: string,
@@ -616,30 +636,26 @@ export class GitHubAuthHandler {
     }
 
     private formatOAuthHelperTroubleshooting(
-        health: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>,
+        health: OAuthHelperHealth,
         logFile: string,
     ): string {
         if (!health.exists || health.processAlive || health.expired || health.resultStatus) return '';
-        const retryStep = health.hasLog ? 3 : 2;
-        const clientIdStep = health.hasLog ? 4 : 3;
-        const networkStep = health.hasLog ? 5 : 4;
-
         return `**🔧 Troubleshooting Tips:**\n` +
           `1. The helper process may have crashed\n` +
-          (health.hasLog ? `2. Check the log file for errors: ${logFile}\n` : '') +
-          `${retryStep}. Try running \`setup_github_auth\` again\n` +
-          `${clientIdStep}. Ensure DOLLHOUSE_GITHUB_CLIENT_ID is set\n` +
-          `${networkStep}. Check your internet connection\n`;
+          `2. Check the log file for errors: ${logFile}\n` +
+          `3. Try running \`setup_github_auth\` again\n` +
+          `4. Ensure DOLLHOUSE_GITHUB_CLIENT_ID is set\n` +
+          `5. Check your internet connection\n`;
     }
 
     private formatOAuthHelperCleanup(
-        health: Awaited<ReturnType<GitHubAuthHandler['checkOAuthHelperHealth']>>,
+        health: OAuthHelperHealth,
         stateFile: string,
         resultFile: string,
         logFile: string,
         pidFile: string,
     ): string {
-        if (!health.exists || (!health.expired && health.processAlive && !health.resultStatus)) return '';
+        if (!health.exists || (!health.expired && health.processAlive)) return '';
         return `\n**🧹 Manual Cleanup (if needed):**\n` +
           '```bash\n' +
           `rm "${stateFile}"\n` +
@@ -649,22 +665,16 @@ export class GitHubAuthHandler {
           '```\n';
     }
 
-    private async checkOAuthHelperHealth() {
+    private async checkOAuthHelperHealth(): Promise<OAuthHelperHealth> {
         const logFile = this.getOAuthHelperLogFile();
         const health = this.emptyOAuthHelperHealth();
-
-        const state = await this.readOAuthHelperState();
-        if (state) {
-          this.populateOAuthHelperHealth(health, state);
-        }
-
         const result = await this.readOAuthHelperResult();
-        if (result && (!state || this.oauthHelperResultMatchesState(result, state))) {
-          this.populateOAuthHelperResult(health, result);
-        }
+        const state = await this.readValidatedOAuthHelperState();
 
         if (state) {
-          this.updateOAuthHelperActivity(health);
+          this.applyOAuthHelperState(health, state, result);
+        } else if (result) {
+          this.populateOAuthHelperResult(health, result);
         }
 
         health.hasLog = await this.fileOperations.exists(logFile);
@@ -673,7 +683,7 @@ export class GitHubAuthHandler {
         return health;
     }
 
-    private emptyOAuthHelperHealth() {
+    private emptyOAuthHelperHealth(): OAuthHelperHealth {
         return {
           exists: false,
           isActive: false,
@@ -684,35 +694,22 @@ export class GitHubAuthHandler {
           userCode: '',
           timeRemaining: 0,
           pid: 0,
-          startTime: null as Date | null,
-          expiresAt: null as Date | null,
-          completedAt: null as Date | null,
-          resultStatus: null as OAuthHelperTerminalStatus | null,
+          startTime: null,
+          expiresAt: null,
+          completedAt: null,
+          resultStatus: null,
           resultMessage: '',
-          resultAttempts: undefined as number | undefined,
+          resultAttempts: undefined,
           errorLog: ''
         };
     }
 
-    private populateOAuthHelperResult(
-        health: ReturnType<GitHubAuthHandler['emptyOAuthHelperHealth']>,
-        result: OAuthHelperTerminalResult,
-    ): void {
-        health.exists = true;
-        health.hasResult = true;
-        health.resultStatus = result.status;
-        health.resultMessage = result.message ?? '';
-        health.resultAttempts = result.attempts;
-        health.completedAt = result.completedAt ? new Date(result.completedAt) : null;
-    }
-
     private async readOAuthHelperResult(): Promise<OAuthHelperTerminalResult | null> {
-        const resultFile = this.getOAuthHelperResultFile();
         try {
-          const resultData = await this.fileOperations.readFile(resultFile, {
+          const raw = await this.fileOperations.readFile(this.getOAuthHelperResultFile(), {
             source: 'GitHubAuthHandler.checkOAuthHelperHealth'
           });
-          return this.normalizeOAuthHelperResult(JSON.parse(resultData));
+          return this.normalizeOAuthHelperResult(JSON.parse(raw));
         } catch (error) {
           if (!this.isFileNotFoundError(error)) {
             logger.debug('Error reading OAuth helper result', { error });
@@ -721,40 +718,53 @@ export class GitHubAuthHandler {
         }
     }
 
-    private async readOAuthHelperState(): Promise<OAuthHelperState | null> {
+    private async readOAuthHelperState(): Promise<any> {
         const stateFile = this.getOAuthHelperStateFile();
+        const stateData = await this.fileOperations.readFile(stateFile, {
+          source: 'GitHubAuthHandler.checkOAuthHelperHealth'
+        });
+        return JSON.parse(stateData);
+    }
+
+    private async readValidatedOAuthHelperState(): Promise<OAuthHelperState | null> {
         try {
-          const stateData = await this.fileOperations.readFile(stateFile, {
-            source: 'GitHubAuthHandler.checkOAuthHelperHealth'
-          });
-          const parsed = JSON.parse(stateData);
-          if (this.isOAuthHelperState(parsed)) return parsed;
-          logger.debug('OAuth helper state file had invalid shape');
+          const parsed = await this.readOAuthHelperState();
+          if (!this.isOAuthHelperState(parsed)) {
+            logger.debug('OAuth helper state file had invalid shape');
+            return null;
+          }
+          return parsed;
         } catch (error) {
           if (!this.isFileNotFoundError(error)) {
             logger.debug('Error reading OAuth helper state', { error });
           }
+          return null;
         }
-        return null;
     }
 
-    private populateOAuthHelperHealth(
-        health: ReturnType<GitHubAuthHandler['emptyOAuthHelperHealth']>,
+    private applyOAuthHelperState(
+        health: OAuthHelperHealth,
         state: OAuthHelperState,
+        result: OAuthHelperTerminalResult | null,
     ): void {
         health.exists = true;
         health.pid = state.pid;
         health.userCode = state.userCode;
         health.startTime = new Date(state.startTime);
         health.expiresAt = new Date(state.expiresAt);
+
+        if (result && this.oauthHelperResultMatchesState(result, state)) {
+          this.populateOAuthHelperResult(health, result);
+        }
+
+        this.updateOAuthHelperActivity(health);
     }
 
-    private updateOAuthHelperActivity(health: ReturnType<GitHubAuthHandler['emptyOAuthHelperHealth']>): void {
+    private updateOAuthHelperActivity(health: OAuthHelperHealth): void {
         if (health.resultStatus) {
           health.isActive = false;
           return;
         }
-
         const now = new Date();
         if (health.expiresAt && health.expiresAt > now) {
           health.isActive = true;
@@ -766,26 +776,26 @@ export class GitHubAuthHandler {
     }
 
     private isOAuthHelperProcessAlive(pid: number): boolean {
+        // On Windows, process.kill(pid, 0) is not reliable for existence checks;
+        // assume alive when the state file exists and has not expired.
         if (process.platform === 'win32') return true;
         try {
-          process.kill(pid, 0);
+          process.kill(pid, 0); // Signal 0 checks existence without killing
           return true;
         } catch (error) {
+          // EPERM means the process exists but is owned by another user — treat
+          // it as alive rather than crashed.
           return this.isProcessPermissionError(error);
         }
     }
 
-    private isProcessPermissionError(error: unknown): boolean {
-        return error instanceof Error &&
-          'code' in error &&
-          (error as NodeJS.ErrnoException).code === 'EPERM';
-    }
-
     private async readOAuthHelperErrorLogIfNeeded(
-        health: ReturnType<GitHubAuthHandler['emptyOAuthHelperHealth']>,
+        health: OAuthHelperHealth,
         logFile: string,
     ): Promise<string> {
-        if (!health.hasLog || (health.processAlive && !health.expired && !health.resultStatus)) return '';
+        const shouldRead = health.hasLog &&
+          (!health.processAlive || health.expired || Boolean(health.resultStatus));
+        if (!shouldRead) return '';
         try {
           const logContent = await this.fileOperations.readFile(logFile, {
             source: 'GitHubAuthHandler.checkOAuthHelperHealth'
@@ -877,7 +887,7 @@ export class GitHubAuthHandler {
         }).join('');
 
         return withoutControlCharacters
-          .replace(/\s+/g, ' ')
+          .replaceAll(/\s+/g, ' ')
           .trim()
           .slice(0, 500);
     }
@@ -890,6 +900,24 @@ export class GitHubAuthHandler {
         return typeof value === 'number' &&
           Number.isSafeInteger(value) &&
           value > 0;
+    }
+
+    private isProcessPermissionError(error: unknown): boolean {
+        return error instanceof Error &&
+          'code' in error &&
+          (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
+
+    private populateOAuthHelperResult(
+        health: OAuthHelperHealth,
+        result: OAuthHelperTerminalResult,
+    ): void {
+        health.exists = true;
+        health.hasResult = true;
+        health.resultStatus = result.status;
+        health.resultMessage = result.message ?? '';
+        health.resultAttempts = result.attempts;
+        health.completedAt = result.completedAt ? new Date(result.completedAt) : null;
     }
 
     private oauthHelperResultMatchesState(result: OAuthHelperTerminalResult, state: OAuthHelperState): boolean {
@@ -1090,7 +1118,6 @@ export class GitHubAuthHandler {
     private spawnHelperProcess(helperPath: string, deviceResponse: DeviceCodeResponse, clientId: string, flowId: string) {
         return child_process.spawn('node', [
             helperPath,
-            deviceResponse.device_code,
             (deviceResponse.interval || 5).toString(),
             deviceResponse.expires_in.toString(),
             clientId
@@ -1102,7 +1129,10 @@ export class GitHubAuthHandler {
                 ...process.env,
                 DOLLHOUSE_OAUTH_HELPER_AUTH_DIR: this.getOAuthHelperAuthDir(),
                 DOLLHOUSE_OAUTH_HELPER_LOG_FILE: this.getOAuthHelperLogFile(),
-                DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId
+                DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId,
+                // device_code is a bearer secret — pass via env, not argv (which is
+                // visible to other local processes via `ps` / /proc/<pid>/cmdline).
+                DOLLHOUSE_OAUTH_HELPER_DEVICE_CODE: deviceResponse.device_code
             }
         });
     }
@@ -1122,12 +1152,87 @@ export class GitHubAuthHandler {
         return path.join(this.getOAuthHelperAuthDir(), 'oauth-helper-result.json');
     }
 
+    private async clearOAuthHelperResult(): Promise<void> {
+        await this.fileOperations.deleteFile(this.getOAuthHelperResultFile()).catch(() => {});
+    }
+
+    /**
+     * Issue #2334: import a completed OAuth device flow.
+     *
+     * The detached helper writes an encrypted, flow-bound token handoff plus a
+     * terminal result file; it cannot write the session's ITokenStore itself
+     * (outside the DI/session context — no DB pool, master key, or RLS context in
+     * database mode). When the result reports success for the current flow, the
+     * server reads the handoff, stores the token through the session TokenManager
+     * (file OR database), verifies retrieval, then deletes the handoff, result,
+     * and state. Anything that does not correlate — missing or mismatched flow
+     * id, non-success status — is left for the status path to report and is never
+     * trusted as a token source.
+     */
+    private async importCompletedOAuthHandoff(): Promise<void> {
+        let result: OAuthHelperTerminalResult | null = null;
+        try {
+          const raw = await this.fileOperations.readFile(this.getOAuthHelperResultFile(), {
+            source: 'GitHubAuthHandler.importCompletedOAuthHandoff'
+          });
+          // Validate the result shape/status through the same normalizer the
+          // status path uses, rather than trusting a loose JSON.parse.
+          result = this.normalizeOAuthHelperResult(JSON.parse(raw));
+        } catch {
+          return; // no result yet, or unreadable — nothing to import
+        }
+        if (!result) return;
+        if (result.status !== 'success' || typeof result.flowId !== 'string') return;
+
+        // Correlate the result to the state written before spawning. A result
+        // whose flow id does not match the current state belongs to a different
+        // (older or foreign) flow and must not be trusted.
+        let state: { flowId?: string } | null = null;
+        try {
+          state = await this.readOAuthHelperState();
+        } catch {
+          return;
+        }
+        if (state?.flowId !== result.flowId) return;
+
+        const authDir = this.getOAuthHelperAuthDir();
+        const flowId = result.flowId;
+        let token: string | null = null;
+        try {
+          token = await readHandoffToken(authDir, flowId);
+        } catch (error) {
+          logger.error('OAuth helper token handoff could not be read', {
+            error: error instanceof Error ? error.message : UNKNOWN_ERROR
+          });
+        }
+        if (!token) return;
+
+        try {
+          await this.githubAuthManager.importOAuthHelperToken(token);
+          SecurityMonitor.logSecurityEvent({
+            type: 'TOKEN_VALIDATION_SUCCESS',
+            severity: 'LOW',
+            source: 'GitHubAuthHandler.importCompletedOAuthHandoff',
+            details: 'Imported OAuth helper token handoff into the session token store'
+          });
+        } catch (error) {
+          logger.error('Failed to import OAuth helper token handoff', {
+            error: error instanceof Error ? error.message : UNKNOWN_ERROR
+          });
+        } finally {
+          // Whether or not storage succeeded, remove the at-rest handoff and the
+          // consumed result. On failure the user can simply retry the flow;
+          // leaving the token on disk is the larger risk.
+          await deleteHandoffToken(authDir, flowId);
+          await this.clearOAuthHelperResult();
+          await this.cleanupOAuthHelperStateIfPresent(true);
+        }
+    }
+
     private getOAuthHelperLogFile(): string {
         if (this.pathService) {
             return path.join(this.getOAuthHelperAuthDir(), 'oauth-helper.log');
         }
-        // Preserve the legacy standalone helper log path; PathService deployments
-        // pass a per-session log path to the helper through its environment.
         return path.join(this.getDollhouseHomeDir(), '.dollhouse', 'oauth-helper.log');
     }
 

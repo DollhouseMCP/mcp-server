@@ -173,11 +173,10 @@ export class MemoryMetadataExtractor {
    */
   private static tryParseYamlObject(content: string): { data?: Record<string, unknown>; errorMessage?: string } {
     try {
-      const data = SecureYamlParser.parseRawYaml(
-        content,
-        MemoryMetadataExtractor.MAX_YAML_SIZE,
-        { detectContentPatterns: false },
-      );
+      const data = SecureYamlParser.parseRawYaml(content, {
+        maxSize: MemoryMetadataExtractor.MAX_YAML_SIZE,
+        contentPolicy: 'structure-only',
+      });
       if (!validateMemoryControlFields(data)) {
         return { errorMessage: 'Malicious memory control content detected' };
       }

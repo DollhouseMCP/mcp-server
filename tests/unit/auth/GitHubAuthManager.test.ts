@@ -21,6 +21,7 @@ jest.mock('../../../src/security/securityMonitor.js', () => ({
 // Create a mock TokenManager instance with all required methods
 const mockTokenManagerInstance = {
   getGitHubTokenAsync: jest.fn(),
+  retrieveGitHubToken: jest.fn(),
   storeGitHubToken: jest.fn(),
   removeStoredToken: jest.fn(),
   validateToken: jest.fn(),
@@ -131,6 +132,7 @@ describe('GitHubAuthManager', () => {
 
     // Reset all mocked TokenManager methods
     mockTokenManagerInstance.getGitHubTokenAsync.mockReset();
+    mockTokenManagerInstance.retrieveGitHubToken.mockReset();
     mockTokenManagerInstance.storeGitHubToken.mockReset();
     mockTokenManagerInstance.removeStoredToken.mockReset();
     mockTokenManagerInstance.validateToken.mockReset();
@@ -565,6 +567,35 @@ describe('GitHubAuthManager', () => {
       );
 
       expect(mockFetch).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('importOAuthHelperToken (#2334 server-side handoff import)', () => {
+    it('stores the token and confirms it through the session store', async () => {
+      mockTokenManagerInstance.storeGitHubToken.mockResolvedValue();
+      mockTokenManagerInstance.retrieveGitHubToken.mockResolvedValue('ghp_imported_token');
+
+      await expect(authManager.importOAuthHelperToken('ghp_imported_token')).resolves.toBeUndefined();
+      expect(mockTokenManagerInstance.storeGitHubToken).toHaveBeenCalledWith('ghp_imported_token');
+      expect(mockTokenManagerInstance.retrieveGitHubToken).toHaveBeenCalled();
+    });
+
+    it('throws when the store cannot retrieve the token even if GITHUB_TOKEN is set in env (#5)', async () => {
+      // Store write "resolves" but the session store has nothing (e.g. a silently
+      // failed database write). An env var must NOT be allowed to mask this.
+      mockTokenManagerInstance.storeGitHubToken.mockResolvedValue();
+      mockTokenManagerInstance.retrieveGitHubToken.mockResolvedValue(null);
+      const originalEnv = process.env.GITHUB_TOKEN;
+      process.env.GITHUB_TOKEN = 'ghp_env_would_have_masked_this';
+      try {
+        await expect(authManager.importOAuthHelperToken('ghp_imported_token'))
+          .rejects.toThrow(/token store|retrievable/i);
+        // Must verify via the store-only path, never the env-first getGitHubTokenAsync.
+        expect(mockTokenManagerInstance.getGitHubTokenAsync).not.toHaveBeenCalled();
+      } finally {
+        if (originalEnv === undefined) delete process.env.GITHUB_TOKEN;
+        else process.env.GITHUB_TOKEN = originalEnv;
+      }
     });
   });
 });

@@ -216,19 +216,13 @@ export class SecurityAuditor {
 
   private matchesConfiguredSuppression(finding: SecurityFinding): boolean {
     if (!finding.file || !this.config.suppressions?.length) return false;
+    const findingFile = finding.file;
 
-    for (const suppression of this.config.suppressions) {
-      if (suppression.rule !== '*' && suppression.rule !== finding.ruleId) {
-        continue;
-      }
-      if (!suppression.file) {
-        return true;
-      }
-      if (configuredSuppressionFileMatches(suppression.file, finding.file)) {
-        return true;
-      }
-    }
-    return false;
+    return this.config.suppressions.some(suppression => {
+      if (suppression.rule !== '*' && suppression.rule !== finding.ruleId) return false;
+      if (!suppression.file) return true;
+      return configuredSuppressionFileMatches(suppression.file, findingFile);
+    });
   }
 
   /**
@@ -370,7 +364,14 @@ export class SecurityAuditor {
         code: {
           enabled: true,
           rules: ['OWASP-Top-10', 'CWE-Top-25', 'DollhouseMCP-Security'],
-          exclude: ['**/node_modules/**', '**/dist/**', '**/coverage/**']
+          exclude: [
+            '**/node_modules/**',
+            '**/dist/**',
+            '**/coverage/**',
+            'src/web-console/ui/vendor/purify.min.js',
+            'src/web-console/ui/vendor/marked.min.js',
+            'src/web-console/ui/vendor/js-yaml.min.js'
+          ]
         },
         dependencies: {
           enabled: true,

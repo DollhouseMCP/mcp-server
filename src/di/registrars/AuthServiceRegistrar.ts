@@ -197,9 +197,9 @@ export class AuthServiceRegistrar {
     const { ConsoleAccountAllowlistSignInAuthority } = await import(
       '../../web-console/services/account-allowlist/ConsoleAccountAllowlistSignInAuthority.js'
     );
-    return new ConsoleAccountAllowlistSignInAuthority(
-      new PostgresConsoleAccountAllowlistStore(database),
-    );
+    const store = new PostgresConsoleAccountAllowlistStore(database);
+    await store.assertIdentityMigrationReviewed();
+    return new ConsoleAccountAllowlistSignInAuthority(store);
   }
 
   /**

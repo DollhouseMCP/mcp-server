@@ -78,6 +78,38 @@ import type { PatternEncryptor } from "../security/encryption/PatternEncryptor.j
 import type { ContextTracker } from "../security/encryption/ContextTracker.js";
 import type { createStdioSession } from "../context/StdioSession.js";
 import type { SessionResolver , SessionContext } from "../context/SessionContext.js";
+import type { IRateLimitStore } from "../auth/embedded-as/storage/IRateLimitStore.js";
+import { WEB_CONSOLE_SERVICE_NAMES } from "../web-console/WebConsoleRegistrar.js";
+import type {
+  IIntegrationDescriptorStore,
+  IIntegrationOpenApiSpecStore,
+  IPortfolioElementStore,
+  IUserIntegrationStore,
+} from "../web-console/stores/index.js";
+import type { ISecretEncryptionService } from "../web-console/security/SecretEncryption.js";
+import { IntegrationProviderRegistry } from "../web-console/modules/integrations/IntegrationProviderRegistry.js";
+import {
+  AuthorizedIntegrationGateway,
+  AuthorizedIntegrationOperationCatalog,
+  AuthorizedIntegrationRemoteMcpBridge,
+  createGitHubIntegrationProvider,
+  createStoreIntegrationProviderResolver,
+  IntegrationRequestPolicyEnforcer,
+  IntegrationTokenRefreshService,
+  serializeGitHubIntegrationStatus,
+  type IIntegrationProvider,
+  type IntegrationRequestPolicyEnforcerOptions,
+  type RemoteMcpClientFactory,
+} from "../web-console/modules/integrations/index.js";
+// The raw execution authorities are deliberately NOT exported from the module
+// barrel (FO2): only this composition root may construct them, and everything
+// tool-facing receives the policy-authorized facades above.
+import { IntegrationRequestGateway } from "../web-console/modules/integrations/IntegrationRequestGateway.js";
+import { IntegrationOperationCatalog } from "../web-console/modules/integrations/IntegrationOperationCatalog.js";
+import { IntegrationRemoteMcpBridge } from "../web-console/modules/integrations/IntegrationRemoteMcpBridge.js";
+import type { DnsLookup } from "../web-console/modules/integrations/IntegrationPublicHostGuard.js";
+import type { PinnedOutboundFactory } from "../web-console/modules/integrations/PinnedOutboundFactory.js";
+import type { IGitHubIntegrationProvider } from "../web-console/modules/integrations/GitHubIntegrationProvider.js";
 import type { StartupTimer } from "../telemetry/StartupTimer.js";
 import { TokenManager } from "../security/tokenManager.js";
 import type { ITokenStore } from "../security/tokenStores/ITokenStore.js";
@@ -144,7 +176,14 @@ export interface HandlerBundle {
   toolRegistry: ToolRegistry;
   enhancedIndexHandler: EnhancedIndexHandler;
   mcpAqlHandler: MCPAQLHandler;
+  authorizedIntegrationGateway?: AuthorizedIntegrationGateway;
+  authorizedIntegrationOperationCatalog?: AuthorizedIntegrationOperationCatalog;
+  authorizedIntegrationRemoteMcpBridge?: AuthorizedIntegrationRemoteMcpBridge;
 }
+
+import { INTEGRATION_OUTBOUND_OVERRIDES } from "../web-console/modules/integrations/IntegrationOutboundOverrides.js";
+
+export { INTEGRATION_OUTBOUND_OVERRIDES };
 
 /**
  * Type-safe service record for dependency injection container
@@ -164,6 +203,7 @@ interface ServiceRecord<T = unknown> {
 export class DollhouseContainer {
   private services = new Map<string, ServiceRecord>();
   private personasDir: string | null = null;
+  private securityMonitorInstance: SecurityMonitor | null = null;
   /** Issue #706: Set to true once completeDeferredSetup() resolves. */
   public deferredSetupComplete = false;
 
@@ -181,6 +221,8 @@ export class DollhouseContainer {
       details: 'Dependency injection container initializing'
     });
     this.registerServices();
+    const securityMonitor = this.services.get('SecurityMonitor')?.instance;
+    this.securityMonitorInstance = securityMonitor instanceof SecurityMonitor ? securityMonitor : null;
     // Issue #1948: Register LifecycleService in DI if provided
     if (lifecycleService) {
       this.register('LifecycleService', () => lifecycleService);
@@ -1161,7 +1203,6 @@ export class DollhouseContainer {
     // Register mcpAqlHandler as a singleton for test access
     this.register('mcpAqlHandler', () => mcpAqlHandler, { singleton: true });
     this.register('gatekeeper', () => gatekeeper, { singleton: true });
-
     return {
       personaHandler,
       elementCrudHandler,
@@ -1175,6 +1216,7 @@ export class DollhouseContainer {
       toolRegistry: undefined as unknown as ToolRegistry, // No tool registry in bootstrap-only mode
       enhancedIndexHandler,
       mcpAqlHandler,
+      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
     };
   }
 
@@ -1185,7 +1227,7 @@ export class DollhouseContainer {
   public async createHandlers(server: LowLevelMcpServer): Promise<HandlerBundle> {
     const bundle = await this.bootstrapHandlers();
 
-    const toolRegistry = new ToolRegistry(server as never);
+    const toolRegistry = new ToolRegistry();
     const interfaceMode = env.MCP_INTERFACE_MODE;
     logger.info(`MCP Interface Mode: ${interfaceMode}`);
 
@@ -1203,7 +1245,7 @@ export class DollhouseContainer {
       enhancedIndexHandler: bundle.enhancedIndexHandler,
     });
 
-    this.resolve<ServerSetup>('ServerSetup').setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
+    this.resolve<ServerSetup>('ServerSetup').setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
 
     return {
       ...bundle,
@@ -1480,7 +1522,7 @@ export class DollhouseContainer {
     child.register('SessionResolver', () => (() => sessionContext));
     child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
     child.register('ToolRegistry', () => {
-        const registry = new ToolRegistry(child.resolve<LowLevelMcpServer>('Server') as never);
+        const registry = new ToolRegistry();
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
       return registry;
     });
@@ -1489,7 +1531,8 @@ export class DollhouseContainer {
     const server = child.resolve<LowLevelMcpServer>('Server');
     const toolRegistry = child.resolve<ToolRegistry>('ToolRegistry');
     const serverSetup = child.resolve<ServerSetup>('ServerSetup');
-    serverSetup.setupServer(server as never, toolRegistry, bundle.elementCrudHandler);
+    serverSetup.setupServer(server as unknown as Parameters<ServerSetup['setupServer']>[0], toolRegistry, bundle.elementCrudHandler);
+    await this.registerSessionIntegrationTools(toolRegistry, bundle, contextTracker, sessionContext);
     this.resolve<SessionContainerRegistry>('SessionContainerRegistry').register(sid, child);
 
     return {
@@ -1693,6 +1736,7 @@ export class DollhouseContainer {
       enumerable: true,
     });
 
+    const mcpAqlHandler = new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker'));
     return {
       personaHandler,
       elementCrudHandler,
@@ -1705,8 +1749,197 @@ export class DollhouseContainer {
       syncHandler,
       toolRegistry: undefined as unknown as ToolRegistry,
       enhancedIndexHandler,
-      mcpAqlHandler: new MCPAQLHandler(handlerDeps, this.resolve<ContextTracker>('ContextTracker')),
+      mcpAqlHandler,
+      ...this.buildAuthorizedIntegrationServices(handlerDeps.gatekeeper, mcpAqlHandler),
     };
+  }
+
+  /**
+   * Build the policy-authorized integration facades for a handler bundle.
+   *
+   * The enforcer is constructed unconditionally (it only needs the gatekeeper
+   * and the active-element closure), so a facade exists exactly when its raw
+   * authority does — there is no representable "authority present, policy
+   * absent" state (FO2). The raw gateway/bridge/catalog never leave this
+   * composition root.
+   */
+  private buildAuthorizedIntegrationServices(
+    gatekeeper: IntegrationRequestPolicyEnforcerOptions['gatekeeper'],
+    mcpAqlHandler: MCPAQLHandler,
+  ): Pick<
+    HandlerBundle,
+    'authorizedIntegrationGateway' | 'authorizedIntegrationOperationCatalog' | 'authorizedIntegrationRemoteMcpBridge'
+  > {
+    const policyEnforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => mcpAqlHandler.getActiveElementsForGatekeeperPolicy(),
+    });
+    const gateway = this.resolveIntegrationRequestGateway();
+    const catalog = this.resolveIntegrationOperationCatalog();
+    const bridge = this.resolveIntegrationRemoteMcpBridge(
+      provider => policyEnforcer.evaluateDiscovery(provider),
+    );
+    return {
+      authorizedIntegrationGateway: gateway
+        ? new AuthorizedIntegrationGateway({ gateway, policyEnforcer })
+        : undefined,
+      authorizedIntegrationOperationCatalog: catalog
+        ? new AuthorizedIntegrationOperationCatalog({ catalog, policyEnforcer })
+        : undefined,
+      authorizedIntegrationRemoteMcpBridge: bridge
+        ? new AuthorizedIntegrationRemoteMcpBridge({ bridge, policyEnforcer })
+        : undefined,
+    };
+  }
+
+  private resolveIntegrationRequestGateway(): IntegrationRequestGateway | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    const integrationStore = this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore);
+    const descriptorStore = this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore);
+    const secretEncryption = this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption);
+    const rateLimitStore = this.hasRegistration('RateLimitStore')
+      ? this.resolve<IRateLimitStore>('RateLimitStore')
+      : null;
+    const providerRegistry = this.resolveIntegrationProviderRegistry();
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
+    const tokenRefresh = new IntegrationTokenRefreshService({
+      store: integrationStore,
+      providers: providerRegistry,
+      // The boot registry only carries the bespoke GitHub provider here;
+      // descriptor-backed providers (curated and runtime-authored BYO) refresh
+      // through per-request store resolution so no restart is ever needed.
+      resolveProvider: createStoreIntegrationProviderResolver({
+        descriptorStore,
+        secretEncryption,
+        outbound: {
+          ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
+          ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+        },
+      }),
+      secretEncryption,
+    });
+    return new IntegrationRequestGateway({
+      integrationStore,
+      descriptorStore,
+      secretEncryption,
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      tokenRefresh,
+      rateLimitStore,
+      ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
+      ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+    });
+  }
+
+  private resolveIntegrationOverride<T>(name: string): T | undefined {
+    return this.hasRegistration(name) ? this.resolve<T>(name) : undefined;
+  }
+
+  private resolveIntegrationOperationCatalog(): IntegrationOperationCatalog | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.portfolioStore) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    return new IntegrationOperationCatalog({
+      integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
+      descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
+      specStore: this.resolve<IIntegrationOpenApiSpecStore>(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore),
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      portfolioStore: this.resolve<IPortfolioElementStore>(WEB_CONSOLE_SERVICE_NAMES.portfolioStore),
+    });
+  }
+
+  private async registerSessionIntegrationTools(
+    toolRegistry: ToolRegistry,
+    bundle: HandlerBundle,
+    contextTracker: ContextTracker,
+    sessionContext: Readonly<SessionContext>,
+  ): Promise<void> {
+    const {
+      authorizedIntegrationGateway,
+      authorizedIntegrationOperationCatalog,
+      authorizedIntegrationRemoteMcpBridge,
+    } = bundle;
+    if (authorizedIntegrationGateway && authorizedIntegrationOperationCatalog) {
+      const promotionContext = contextTracker.createSessionContext(
+        'llm-request',
+        sessionContext,
+        { toolName: 'promoted_integration_tools' },
+      );
+      await contextTracker.runAsync(promotionContext, async () => {
+        try {
+          await toolRegistry.registerPromotedIntegrationTools(
+            authorizedIntegrationGateway,
+            authorizedIntegrationOperationCatalog,
+          );
+        } catch (error) {
+          logger.warn('[HTTP Session] Promoted integration tool registration skipped', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
+    if (authorizedIntegrationRemoteMcpBridge) {
+      const remoteMcpContext = contextTracker.createSessionContext(
+        'llm-request',
+        sessionContext,
+        { toolName: 'remote_mcp_bridge_tools' },
+      );
+      await contextTracker.runAsync(remoteMcpContext, async () => {
+        try {
+          await toolRegistry.registerRemoteMcpBridgeTools(
+            authorizedIntegrationRemoteMcpBridge,
+          );
+        } catch (error) {
+          logger.warn('[HTTP Session] Remote MCP bridge tool registration skipped', {
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      });
+    }
+  }
+
+  private resolveIntegrationRemoteMcpBridge(
+    discoveryGate: (provider: string) => Promise<boolean>,
+  ): IntegrationRemoteMcpBridge | null {
+    if (!this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore) ||
+        !this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.secretEncryption) ||
+        !this.hasRegistration('ContextTracker')) {
+      return null;
+    }
+    const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
+    const clientFactoryOverride = this.resolveIntegrationOverride<RemoteMcpClientFactory>(INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory);
+    const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutboundFactory);
+    return new IntegrationRemoteMcpBridge({
+      integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
+      descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
+      secretEncryption: this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption),
+      contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      discoveryGate,
+      ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
+      ...(clientFactoryOverride ? { clientFactory: clientFactoryOverride } : {}),
+      ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
+    });
+  }
+
+  private resolveIntegrationProviderRegistry(): IntegrationProviderRegistry {
+    const providers: IIntegrationProvider[] = [];
+    if (this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider)) {
+      providers.push(createGitHubIntegrationProvider(
+        this.resolve<IGitHubIntegrationProvider>(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider),
+        serializeGitHubIntegrationStatus,
+      ));
+    }
+    return new IntegrationProviderRegistry(providers);
   }
 
   /**
@@ -1738,6 +1971,12 @@ export class DollhouseContainer {
       toolRegistry.registerBuildInfoTools(this.resolve('BuildInfoService'));
     } else {
       toolRegistry.registerMCPAQLTools(bundle.mcpAqlHandler);
+    }
+    if (bundle.authorizedIntegrationGateway) {
+      toolRegistry.registerIntegrationTools(
+        bundle.authorizedIntegrationGateway,
+        bundle.authorizedIntegrationOperationCatalog,
+      );
     }
   }
 
@@ -1776,13 +2015,13 @@ export class DollhouseContainer {
 
     if (interfaceMode === 'discrete') {
       // Current is discrete, calculate what mcpaql would be
-        const tempRegistry = new ToolRegistry({} as never);
+        const tempRegistry = new ToolRegistry();
       tempRegistry.registerMCPAQLTools(mcpAqlHandler);
       alternativeTokens = tempRegistry.getToolTokenEstimate();
       alternativeToolCount = tempRegistry.getToolCount();
     } else {
       // Current is mcpaql, calculate what discrete would be
-        const tempRegistry = new ToolRegistry({} as never);
+        const tempRegistry = new ToolRegistry();
       tempRegistry.registerPersonaTools(discreteHandlers.personaHandler);
       tempRegistry.registerElementTools(discreteHandlers.elementCrudHandler);
       tempRegistry.registerCollectionTools(discreteHandlers.collectionHandler);
@@ -1919,6 +2158,7 @@ export class DollhouseContainer {
   }
 
   public async dispose(): Promise<void> {
+    try {
     // Close the HTTP server first so the port is freed immediately (#1856)
     try {
       const { shutdownWebServer } = await import('../web/server.js');
@@ -1940,6 +2180,11 @@ export class DollhouseContainer {
     const disposalPromises = this.buildDisposalPromises();
     const results = await Promise.allSettled(disposalPromises.map(d => d.promise));
     this.reportDisposalFailures(disposalPromises, results);
+    } finally {
+      if (this.securityMonitorInstance) {
+        SecurityMonitor.clearInstance(this.securityMonitorInstance);
+      }
+    }
   }
 
   private buildDisposalPromises(): Array<{ name: string; promise: Promise<void> }> {

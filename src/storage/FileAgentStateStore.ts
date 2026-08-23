@@ -80,10 +80,13 @@ export class FileAgentStateStore implements IAgentStateStore {
   }
 
   async reclaimOrphaned(
-    key: AgentStateKey,
+    _key: AgentStateKey,
     _options: AgentStateReclaimOptions = {},
   ): Promise<AgentState | null> {
-    return this.load(key, { strict: true });
+    // A single file contains session-neutral state and carries no durable
+    // ownership or presence record. Reclaiming it could therefore steal a
+    // still-live execution from another local transport session.
+    return null;
   }
 
   async save(

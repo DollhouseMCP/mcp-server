@@ -2,6 +2,8 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   createPortfolioModule,
+  InMemoryPortfolioActivityEventSink,
+  portfolioDeletionActivityMessage,
   InMemoryPortfolioElementStore,
   InMemoryPortfolioSyncJobStore,
   InMemoryUserIntegrationStore,
@@ -34,6 +36,8 @@ const SYNC_STATUS_PATH = '/api/v1/me/portfolio/sync/:job_id';
 const REVIEW_HELPER_NAME = 'review-helper';
 const REVIEW_HELPER_V3_ETAG = 'W/"portfolio:skills:review-helper:v3"';
 const INTEGRATION_ID = '35e22a52-dc56-4cd0-9d13-b2802524fbd3';
+const CORRELATION_ID = '22222222-2222-4222-8222-222222222222';
+const CONTENT_HASH = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
 
 function authenticatedContext(userId = USER_ID): NonNullable<ConsoleRequest['consoleAuthentication']> {
   return {
@@ -83,7 +87,7 @@ function userIntegration(overrides: Partial<UserIntegrationRecord> = {}): UserIn
   return {
     id: INTEGRATION_ID,
     userId: USER_ID,
-    provider: 'github',
+    provider: 'github' as UserIntegrationRecord['provider'],
     externalAccountLabel: 'alice',
     externalInstallationId: 'installation-123',
     authorizedPermissions: {
@@ -504,6 +508,37 @@ describe('PortfolioModule', () => {
         issues: [expect.objectContaining({ path: 'tags', code: 'too_many' })],
       },
     });
+    // Store record contract mirrored pre-write: name/tag caps 422 here instead
+    // of the store persisting the element and only then throwing on toRecord.
+    await expect(create.handler(consoleRequest({
+      params: { type: 'skills' },
+      body: {
+        name: 'n'.repeat(201),
+        metadata: {},
+        content: '# Long name',
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({ path: 'name', code: 'invalid' })],
+      },
+    });
+    await expect(create.handler(consoleRequest({
+      params: { type: 'skills' },
+      body: {
+        name: 'long-tag',
+        metadata: {},
+        content: '# Long tag',
+        tags: ['t'.repeat(81)],
+      },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: {
+        code: 'validation_failed',
+        issues: [expect.objectContaining({ path: 'tags.0', code: 'invalid' })],
+      },
+    });
   });
 
   it('updates portfolio elements only with the current element ETag', async () => {
@@ -567,7 +602,9 @@ describe('PortfolioModule', () => {
 
     await expect(update.handler(consoleRequest({
       params: { type: 'skills', name: REVIEW_HELPER_NAME },
-      headers: { 'if-match': [REVIEW_HELPER_V3_ETAG] },
+      // Node may expose a repeated header as an array even though ConsoleRequest's
+      // normalized public type is string-valued; exercise that defensive path.
+      headers: { 'if-match': [REVIEW_HELPER_V3_ETAG] } as unknown as ConsoleRequest['headers'],
       body: { content: '# Array header' },
     }))).resolves.toMatchObject({
       status: 200,
@@ -613,6 +650,62 @@ describe('PortfolioModule', () => {
       },
     });
     await expect(store.findByName(USER_ID, 'skills', REVIEW_HELPER_NAME)).resolves.toBeNull();
+  });
+
+  it('records a metadata-only deletion activity event carrying the content hash, not the content', async () => {
+    const sink = new InMemoryPortfolioActivityEventSink();
+    const store = new InMemoryPortfolioElementStore([portfolioElement({ contentHash: CONTENT_HASH })]);
+    const module = createPortfolioModule({
+      portfolioStore: store,
+      integrationStore: new InMemoryUserIntegrationStore(),
+      syncJobStore: new InMemoryPortfolioSyncJobStore(),
+      enablePortfolioWriteRoutes: true,
+      now: () => NOW,
+      activityEventSink: sink,
+    });
+    const remove = findRoute(module.routes, ELEMENT_DETAIL_PATH, 'DELETE');
+    const detail = findRoute(module.routes, ELEMENT_DETAIL_PATH);
+    const current = await detail.handler(consoleRequest({
+      params: { type: 'skills', name: REVIEW_HELPER_NAME },
+    }));
+
+    await remove.handler(consoleRequest({
+      params: { type: 'skills', name: REVIEW_HELPER_NAME },
+      headers: { 'if-match': responseEtag(current) },
+      consoleContext: { correlationId: CORRELATION_ID, receivedAt: NOW },
+    }));
+
+    const events = sink.listEvents();
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: 'console.portfolio.element.deleted.v1',
+      userId: USER_ID,
+      elementType: 'skills',
+      canonicalName: REVIEW_HELPER_NAME,
+      contentHash: CONTENT_HASH,
+      correlationId: CORRELATION_ID,
+    });
+    expect(events[0].consoleSessionId).toMatch(/^[0-9a-f]{64}$/u);
+    // The persisted activity message must carry the hash and never the element's content.
+    const message = portfolioDeletionActivityMessage(events[0]);
+    expect(message).toContain(CONTENT_HASH);
+    expect(message).not.toContain('Owner private content.');
+  });
+
+  it('builds a content-free deletion message with and without a content hash', () => {
+    const base = {
+      type: 'console.portfolio.element.deleted.v1' as const,
+      userId: USER_ID,
+      consoleSessionId: 'a'.repeat(64),
+      elementType: 'skills' as const,
+      canonicalName: REVIEW_HELPER_NAME,
+      correlationId: CORRELATION_ID,
+      occurredAt: NOW,
+    };
+    expect(portfolioDeletionActivityMessage({ ...base, contentHash: CONTENT_HASH }))
+      .toBe(`Deleted skills/${REVIEW_HELPER_NAME} (sha256:${CONTENT_HASH})`);
+    expect(portfolioDeletionActivityMessage({ ...base, contentHash: null }))
+      .toBe(`Deleted skills/${REVIEW_HELPER_NAME}`);
   });
 
   it('enforces delete preconditions before deleting owned elements', async () => {
@@ -730,6 +823,51 @@ describe('PortfolioModule', () => {
       version: 3,
       content: '# Review Helper\nOwner private content.',
     });
+  });
+
+  it('applies element-type content requirements to guided drafts', async () => {
+    const { module } = moduleFixture([]);
+    const validate = findRoute(module.routes, ELEMENT_VALIDATE_PATH, 'POST');
+    const contentOptional = [
+      { type: 'personas', metadata: { instructions: 'Act as a careful reviewer.' } },
+      { type: 'skills', metadata: { instructions: 'Review the input in ordered steps.' } },
+      { type: 'agents', metadata: { goal: { template: 'Review {topic}', parameters: [] } } },
+      {
+        type: 'ensembles',
+        metadata: {
+          elements: [{
+            element_name: 'review-helper',
+            element_type: 'skill',
+            role: 'primary',
+            priority: 10,
+            activation: 'always',
+          }],
+        },
+      },
+    ] as const;
+
+    for (const fixture of contentOptional) {
+      await expect(validate.handler(consoleRequest({
+        params: { type: fixture.type, name: `guided-${fixture.type}` },
+        body: { content: '', metadata: fixture.metadata },
+      }))).resolves.toEqual({
+        status: 200,
+        body: { valid: true, issues: [] },
+      });
+    }
+
+    for (const type of ['templates', 'memories']) {
+      await expect(validate.handler(consoleRequest({
+        params: { type, name: `empty-${type}` },
+        body: { content: '', metadata: {} },
+      }))).resolves.toMatchObject({
+        status: 200,
+        body: {
+          valid: false,
+          issues: [expect.objectContaining({ path: 'content', code: 'required' })],
+        },
+      });
+    }
   });
 
   it('starts portfolio sync jobs only for connected integrations with sufficient permissions', async () => {

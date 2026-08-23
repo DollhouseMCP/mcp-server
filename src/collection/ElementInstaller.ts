@@ -23,24 +23,33 @@
  */
 
 import * as path from 'node:path';
-import { GitHubClient } from './GitHubClient.js';
-import { IElementMetadata } from '../types/elements/IElement.js';
+import { randomUUID } from 'node:crypto';
+import type { GitHubClient } from './GitHubClient.js';
+import type { IElementMetadata } from '../types/elements/IElement.js';
 import { validatePath, validateFilename, validateContentSize } from '../security/InputValidator.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
 import { ContentValidator } from '../security/contentValidator.js';
 import { SecureYamlParser } from '../security/secureYamlParser.js';
 import { SecurityError } from '../errors/SecurityError.js';
-import { PortfolioManager, ElementType } from '../portfolio/PortfolioManager.js';
+import {
+  CollectionContentInvalidError,
+  CollectionElementNotFoundError,
+  CollectionPathInvalidError,
+} from './CollectionErrors.js';
+import type { PortfolioManager } from '../portfolio/PortfolioManager.js';
+import { ElementType } from '../portfolio/PortfolioManager.js';
+import type { SourcePriorityConfig } from '../config/sourcePriority.js';
 import {
   getSourcePriorityConfig,
-  SourcePriorityConfig,
   ElementSource,
   getSourceDisplayName
 } from '../config/sourcePriority.js';
 import { createSafeObject, FORBIDDEN_KEYS } from '../utils/securityUtils.js';
-import { UnifiedIndexManager } from '../portfolio/UnifiedIndexManager.js';
+import type { UnifiedIndexManager } from '../portfolio/UnifiedIndexManager.js';
 import { logger } from '../utils/logger.js';
-import { IFileOperationsService } from '../services/FileOperationsService.js';
+import type { IFileOperationsService } from '../services/FileOperationsService.js';
+import type { ISharedPoolInstaller } from '../collection/shared-pool/ISharedPoolInstaller.js';
+import type { IStorageLayerFactory } from '../storage/IStorageLayerFactory.js';
 
 /**
  * Result of an element installation operation
@@ -82,6 +91,38 @@ export interface InstallOptions {
   fallbackOnError?: boolean;
 }
 
+/**
+ * A collection element fetched and fully validated but NOT written — the output
+ * of `ElementInstaller.fetchAndValidate`. `content` is what a caller should
+ * persist: the frontmatter-stripped body for markdown types, and the whole
+ * sanitized YAML document for memories.
+ */
+export interface CollectionFetchAndValidateResult {
+  readonly elementType: ElementType;
+  readonly name: string;
+  readonly metadata: IElementMetadata;
+  readonly content: string;
+}
+
+/** Path second-segment → element type, covering all six collection types. */
+const COLLECTION_ELEMENT_TYPE_BY_SEGMENT: Readonly<Record<string, ElementType>> = {
+  personas: ElementType.PERSONA,
+  skills: ElementType.SKILL,
+  templates: ElementType.TEMPLATE,
+  agents: ElementType.AGENT,
+  memories: ElementType.MEMORY,
+  ensembles: ElementType.ENSEMBLE,
+};
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/** Canonical on-disk extension per element type: memories are YAML, the rest markdown. */
+function elementFileExtension(elementType: ElementType): string {
+  return elementType === ElementType.MEMORY ? '.yaml' : '.md';
+}
+
 export class ElementInstaller {
   private githubClient: GitHubClient;
   private portfolioManager: PortfolioManager;
@@ -97,7 +138,7 @@ export class ElementInstaller {
   // Step 4.6: Optional shared-pool installer for collection content.
   // When set, installContent() routes through the shared pool instead
   // of writing to the user's per-user portfolio.
-  private readonly sharedPoolInstaller?: import('../collection/shared-pool/ISharedPoolInstaller.js').ISharedPoolInstaller;
+  private readonly sharedPoolInstaller?: ISharedPoolInstaller;
 
   // Phase 4.5 follow-up: optional storage-layer factory. When present AND the
   // factory produces a writable (database-backed) storage layer for the
@@ -107,7 +148,7 @@ export class ElementInstaller {
   // DB-mode but never persisted to Postgres — meaning installs vanished on
   // every container restart with tmpfs. Same correctness pattern as Phase H's
   // CollectionIndexCache and CollectionIndexManager wiring.
-  private readonly storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
+  private readonly storageLayerFactory?: IStorageLayerFactory;
 
   constructor(
     githubClient: GitHubClient,
@@ -115,8 +156,8 @@ export class ElementInstaller {
       portfolioManager: PortfolioManager;
       unifiedIndexManager: UnifiedIndexManager;
       fileOperations?: IFileOperationsService;
-      sharedPoolInstaller?: import('../collection/shared-pool/ISharedPoolInstaller.js').ISharedPoolInstaller;
-      storageLayerFactory?: import('../storage/IStorageLayerFactory.js').IStorageLayerFactory;
+      sharedPoolInstaller?: ISharedPoolInstaller;
+      storageLayerFactory?: IStorageLayerFactory;
     }
   ) {
     this.githubClient = githubClient;
@@ -126,11 +167,14 @@ export class ElementInstaller {
     if (!options?.unifiedIndexManager) {
       throw new Error('ElementInstaller requires a UnifiedIndexManager instance');
     }
+    if (!options.fileOperations) {
+      throw new Error('ElementInstaller requires a FileOperationsService instance');
+    }
     this.portfolioManager = options.portfolioManager;
     this.unifiedIndexManager = options.unifiedIndexManager;
     this.sourcePriorityConfig = getSourcePriorityConfig();
     // Initialize file operations service
-    this.fileOperations = options.fileOperations!;
+    this.fileOperations = options.fileOperations;
     this.sharedPoolInstaller = options.sharedPoolInstaller;
     this.storageLayerFactory = options.storageLayerFactory;
   }
@@ -754,7 +798,7 @@ export class ElementInstaller {
     const content = await this.fetchCollectionContent(sanitizedPath);
 
     // STEP 2: PERFORM ALL VALIDATION BEFORE ANY DISK OPERATIONS
-    const { sanitizedContent, metadata } = await this.validateCollectionContent(content);
+    const { sanitizedContent, metadata } = this.validateCollectionElement(elementType, content);
 
     // STEP 3: PREPARE FILE PATH AND CHECK EXISTENCE
     // FIX (SonarCloud L704): Remove unused elementDir variable
@@ -809,6 +853,109 @@ export class ElementInstaller {
   }
 
   /**
+   * Fetch a collection element and run the full install-grade validation
+   * pipeline WITHOUT writing it anywhere. This is the no-write seam the web
+   * console uses so it can route the validated element through its own
+   * (backend-honest, per-user) portfolio write path instead of this class's
+   * filesystem/storage-layer write.
+   *
+   * Supports all six element types: the five markdown types validate via the
+   * frontmatter pipeline; memories are pure YAML and validate via a dedicated
+   * secure branch. Throws on invalid path/type, fetch failure, or any security
+   * or required-field validation failure — the caller never sees an element
+   * that would not pass a normal install.
+   *
+   * @param collectionPath - Path in the collection (e.g. `library/skills/x.md`)
+   */
+  async fetchAndValidate(collectionPath: string): Promise<CollectionFetchAndValidateResult> {
+    const sanitizedPath = validatePath(collectionPath);
+    const elementType = this.resolveCollectionElementType(sanitizedPath);
+    const raw = await this.fetchCollectionContent(sanitizedPath);
+
+    if (elementType === ElementType.MEMORY) {
+      return this.validateCollectionMemory(elementType, raw);
+    }
+    const { metadata, body } = this.validateCollectionContent(raw);
+    return {
+      elementType,
+      name: metadata.name ?? '',
+      metadata,
+      content: body,
+    };
+  }
+
+  /**
+   * Resolve the element type from a collection path for the no-write seam,
+   * covering all six element types and enforcing the per-type file extension
+   * (memories are `.yaml`/`.yml`; every other type is `.md`). Rejecting the
+   * mismatch keeps a `.md` payload from being treated as a memory and vice
+   * versa.
+   */
+  private resolveCollectionElementType(sanitizedPath: string): ElementType {
+    const pathParts = sanitizedPath.split('/');
+    if (pathParts.length < 3 || pathParts[0] !== 'library') {
+      throw new CollectionPathInvalidError('Invalid collection path format. Expected: library/[element-type]/[element].[ext]');
+    }
+    const elementType = COLLECTION_ELEMENT_TYPE_BY_SEGMENT[pathParts[1]];
+    if (!elementType) {
+      throw new CollectionPathInvalidError(`Unknown element type: ${pathParts[1]}. Valid types: ${Object.keys(COLLECTION_ELEMENT_TYPE_BY_SEGMENT).join(', ')}`);
+    }
+    const isMemory = elementType === ElementType.MEMORY;
+    const hasMemoryExtension = sanitizedPath.endsWith('.yaml') || sanitizedPath.endsWith('.yml');
+    const hasMarkdownExtension = sanitizedPath.endsWith('.md');
+    if (isMemory ? !hasMemoryExtension : !hasMarkdownExtension) {
+      throw new CollectionPathInvalidError(`Invalid file type for ${pathParts[1]}. Expected ${isMemory ? '.yaml/.yml' : '.md'}.`);
+    }
+    return elementType;
+  }
+
+  /**
+   * Validate a pure-YAML memory document from the collection (memories carry no
+   * markdown frontmatter). Runs the same security gates as the markdown path —
+   * size limit, content sanitization, YAML-bomb detection, metadata injection
+   * validation, required fields — then returns the sanitized document as the
+   * install content (the console portfolio store parses the memory document on
+   * the write side).
+   */
+  private validateCollectionMemory(elementType: ElementType, content: string): CollectionFetchAndValidateResult {
+    validateContentSize(content, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
+    const sanitizedContent = ContentValidator.sanitizePersonaContent(content);
+
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = SecureYamlParser.parseRawYaml(sanitizedContent, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
+    } catch (error) {
+      if (error instanceof SecurityError) {
+        throw new CollectionContentInvalidError(`Security threat in content: ${error.message}`);
+      }
+      throw error;
+    }
+
+    // Memory documents nest identity under `metadata:`; fall back to the
+    // top-level object for flatter shapes.
+    const rawMetadata = isPlainRecord(parsed.metadata) ? parsed.metadata : parsed;
+    const metadata = this.sanitizeMetadata(rawMetadata as unknown as IElementMetadata);
+    this.validateMetadataSecurity(metadata);
+    // The parsed YAML is untrusted: unlike the markdown path (whose parser
+    // enforces string-typed identity fields), parseRawYaml happily yields
+    // `name: 2024` as a number — which would escape here typed as string and
+    // TypeError deep in the portfolio store. Require real non-empty strings.
+    const name: unknown = metadata.name;
+    const description: unknown = metadata.description;
+    if (typeof name !== 'string' || name.trim() === '' ||
+        typeof description !== 'string' || description.trim() === '') {
+      throw new CollectionContentInvalidError('Invalid content: missing required name or description');
+    }
+
+    return {
+      elementType,
+      name,
+      metadata,
+      content: sanitizedContent,
+    };
+  }
+
+  /**
    * Phase 4.5 follow-up: if a storage-layer factory is wired AND it produces
    * a writable layer for this element type, persist the element through it
    * (Postgres in DB mode). Returns true on success so the caller skips the
@@ -830,7 +977,7 @@ export class ElementInstaller {
     // path stays consistent if someone wires this through it.
     const layer = this.storageLayerFactory.createForElement(elementType, {
       elementDir: this.portfolioManager.getElementDir(elementType),
-      fileExtension: '.md',
+      fileExtension: elementFileExtension(elementType),
       scanCooldownMs: 0,
     });
     if (!isWritableStorageLayer(layer)) {
@@ -881,20 +1028,11 @@ export class ElementInstaller {
    * @private
    */
   private validateAndExtractElementType(sanitizedPath: string): ElementType {
-    // SECURITY: Detect element type from path structure and validate format
-    // Expected format: library/[element-type]/[category]/[element].md
-    const pathParts = sanitizedPath.split('/');
-    if (pathParts.length < 3 || pathParts[0] !== 'library') {
-      throw new Error('Invalid collection path format. Expected: library/[element-type]/[category]/[element].md');
-    }
-
-    // SECURITY: Ensure the path ends with .md to prevent arbitrary file types
-    if (!sanitizedPath.endsWith('.md')) {
-      throw new Error('Invalid file type. Only .md files are allowed.');
-    }
-
-    const elementTypeStr = pathParts[1];
-    return this.getElementTypeFromString(elementTypeStr);
+    // All six element types with per-type extension enforcement (memories are
+    // .yaml/.yml, everything else .md) — the same resolution the web-console
+    // seam uses, so the MCP install path and the console path can never
+    // disagree about what is installable.
+    return this.resolveCollectionElementType(sanitizedPath);
   }
 
   /**
@@ -911,12 +1049,12 @@ export class ElementInstaller {
     const data = await this.githubClient.fetchFromGitHub(url);
 
     if (data.type !== 'file') {
-      throw new Error('Path does not point to a file');
+      throw new CollectionElementNotFoundError('Path does not point to a file');
     }
 
     // SECURITY: Check file size before downloading to prevent DoS attacks
     if (data.size > SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES) {
-      throw new Error(`File too large (${data.size} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`);
+      throw new CollectionContentInvalidError(`File too large (${data.size} bytes, max ${SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES} bytes)`);
     }
 
     // Decode Base64 content into memory only
@@ -924,18 +1062,36 @@ export class ElementInstaller {
   }
 
   /**
-   * Validate and sanitize collection content
-   * Extracted from installFromCollection() to reduce cognitive complexity
+   * Type-aware validation dispatch for the install paths: memories are pure
+   * YAML with their own secure branch; every other type runs the markdown
+   * frontmatter pipeline. Keeps the MCP install paths and the web-console
+   * seam validating identically for all six element types.
+   */
+  private validateCollectionElement(elementType: ElementType, content: string): {
+    sanitizedContent: string;
+    metadata: IElementMetadata;
+  } {
+    if (elementType === ElementType.MEMORY) {
+      const validated = this.validateCollectionMemory(elementType, content);
+      return { sanitizedContent: validated.content, metadata: validated.metadata };
+    }
+    const { sanitizedContent, metadata } = this.validateCollectionContent(content);
+    return { sanitizedContent, metadata };
+  }
+
+  /**
+   * Validate and sanitize collection content (markdown frontmatter pipeline)
    *
    * @param content - Raw content from collection
    * @returns Sanitized content and parsed metadata
    * @throws Error if validation fails
    * @private
    */
-  private async validateCollectionContent(content: string): Promise<{
+  private validateCollectionContent(content: string): {
     sanitizedContent: string;
     metadata: IElementMetadata;
-  }> {
+    body: string;
+  } {
     // SECURITY: Validate content size after decoding
     validateContentSize(content, SECURITY_LIMITS.MAX_PERSONA_SIZE_BYTES);
 
@@ -944,17 +1100,17 @@ export class ElementInstaller {
 
     // SECURITY: Use secure YAML parser to prevent YAML bombs and injection
     const parsed = this.parseSecureYaml(sanitizedContent);
-    const metadata = this.sanitizeMetadata(parsed.data as IElementMetadata);
+    const metadata = this.sanitizeMetadata(parsed.data);
 
     // SECURITY: Additional metadata validation for injection attacks
     this.validateMetadataSecurity(metadata);
 
     // SECURITY: Validate required metadata fields
     if (!metadata.name || !metadata.description) {
-      throw new Error('Invalid content: missing required name or description');
+      throw new CollectionContentInvalidError('Invalid content: missing required name or description');
     }
 
-    return { sanitizedContent, metadata };
+    return { sanitizedContent, metadata, body: parsed.content };
   }
 
   /**
@@ -989,7 +1145,7 @@ export class ElementInstaller {
       return { data: parsed.data as IElementMetadata, content: parsed.content };
     } catch (error) {
       if (error instanceof SecurityError) {
-        throw new Error(`Security threat in content: ${error.message}`);
+        throw new CollectionContentInvalidError(`Security threat in content: ${error.message}`);
       }
       throw error;
     }
@@ -1006,7 +1162,7 @@ export class ElementInstaller {
   private validateMetadataSecurity(metadata: IElementMetadata): void {
     const metadataValidation = ContentValidator.validateMetadata(metadata);
     if (!metadataValidation.isValid) {
-      throw new Error(`Security validation failed: ${metadataValidation.detectedPatterns?.join(', ')}`);
+      throw new CollectionContentInvalidError(`Security validation failed: ${metadataValidation.detectedPatterns?.join(', ')}`);
     }
   }
 
@@ -1026,7 +1182,10 @@ export class ElementInstaller {
   } {
     // SECURITY: Generate and validate local filename to prevent path traversal
     const originalFilename = sanitizedPath.split('/').pop() || 'downloaded-element.md';
-    const filename = validateFilename(originalFilename);
+    const validatedFilename = validateFilename(originalFilename);
+    const filename = elementType === ElementType.MEMORY && validatedFilename.endsWith('.yml')
+      ? `${validatedFilename.slice(0, -4)}.yaml`
+      : validatedFilename;
 
     // Get appropriate directory for element type
     const elementDir = this.portfolioManager.getElementDir(elementType);
@@ -1085,13 +1244,17 @@ export class ElementInstaller {
    * but writes to the shared pool instead of the user's portfolio.
    */
   private async installViaSharedPool(collectionPath: string): Promise<InstallResult> {
+    const sharedPoolInstaller = this.sharedPoolInstaller;
+    if (!sharedPoolInstaller) {
+      throw new Error('installViaSharedPool called without a shared-pool installer');
+    }
     const sanitizedPath = validatePath(collectionPath);
     const elementType = this.validateAndExtractElementType(sanitizedPath);
     const content = await this.fetchCollectionContent(sanitizedPath);
-    const { sanitizedContent, metadata } = await this.validateCollectionContent(content);
+    const { sanitizedContent, metadata } = this.validateCollectionElement(elementType, content);
 
     const sourceUrl = `github://DollhouseMCP/collection/${sanitizedPath}`;
-    const result = await this.sharedPoolInstaller!.install({
+    const result = await sharedPoolInstaller.install({
       content: sanitizedContent,
       elementType,
       name: metadata.name,
@@ -1106,7 +1269,7 @@ export class ElementInstaller {
           success: true,
           message: 'AI customization element installed to shared pool!',
           metadata,
-          filename: `${metadata.name}.md`,
+          filename: `${metadata.name}${elementFileExtension(elementType)}`,
           elementType,
         };
 
@@ -1115,7 +1278,7 @@ export class ElementInstaller {
           success: true,
           message: result.reason,
           metadata,
-          filename: `${metadata.name}.md`,
+          filename: `${metadata.name}${elementFileExtension(elementType)}`,
           elementType,
           alreadyExists: true,
         };
@@ -1143,7 +1306,7 @@ export class ElementInstaller {
    */
   private async atomicWriteFile(destination: string, content: string): Promise<void> {
     // Generate unique temporary file name to avoid collisions
-    const tempFile = `${destination}.tmp.${Date.now()}.${Math.random().toString(36).substring(2)}`;
+    const tempFile = `${destination}.tmp.${Date.now()}.${randomUUID()}`;
 
     try {
       // SECURITY: Write to temporary file first
@@ -1176,25 +1339,6 @@ export class ElementInstaller {
   }
 
   /**
-   * Get ElementType from string
-   */
-  private getElementTypeFromString(typeStr: string): ElementType {
-    const typeMap: Record<string, ElementType> = {
-      'personas': ElementType.PERSONA,
-      'skills': ElementType.SKILL,
-      'templates': ElementType.TEMPLATE,
-      'agents': ElementType.AGENT
-    };
-
-    const elementType = typeMap[typeStr];
-    if (!elementType) {
-      throw new Error(`Unknown element type: ${typeStr}. Valid types: ${Object.keys(typeMap).join(', ')}`);
-    }
-
-    return elementType;
-  }
-
-  /**
    * Format installation success message
    */
   formatInstallSuccess(metadata: IElementMetadata, filename: string, elementType: ElementType): string {
@@ -1209,9 +1353,10 @@ export class ElementInstaller {
 
     const emoji = typeEmojis[elementType] || '📦';
     const typeName = elementType.charAt(0).toUpperCase() + elementType.slice(1);
+    const authorSuffix = metadata.author ? `by ${metadata.author}` : '';
 
     return `✅ **AI Customization Element Installed Successfully!**\n\n` +
-      `${emoji} **${metadata.name}** ${metadata.author ? `by ${metadata.author}` : ''}\n` +
+      `${emoji} **${metadata.name}** ${authorSuffix}\n` +
       `📁 Type: ${typeName}\n` +
       `📄 Saved as: ${filename}\n\n` +
       `🚀 **Ready to use!**`;

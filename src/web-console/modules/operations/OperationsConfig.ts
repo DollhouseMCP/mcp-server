@@ -191,7 +191,7 @@ export class OperatorConfigurationService {
       sensitivity: definition.sensitivity,
       mutability: definition.mutability,
       value_schema: definition.schema,
-      effective_at: metadata.pendingRestart ? null : metadata.effectiveAt ?? effectiveAt(config),
+      effective_at: metadata.pendingRestart ? null : metadata.effectiveAt,
       pending_restart: metadata.pendingRestart,
       etag: settingEtag(config, definition),
     };
@@ -291,7 +291,6 @@ function settingEtag(config: OperatorConfig, definition: OperatorConfigSettingDe
     sensitivity: definition.sensitivity,
     configured: definition.sensitivity === 'secret_write_only' ? isConfiguredSecret(value) : undefined,
     value: definition.sensitivity === 'secret_write_only' ? undefined : value,
-    updatedAt: config.updatedAt,
     metadata: configMetadata(config, definition.key),
   };
   const digest = createHash('sha256').update(canonicalJson(payload)).digest('base64url').slice(0, 32);
@@ -325,10 +324,6 @@ function setConfigMetadata(
     : {};
   root[key] = metadata;
   config.defaultsConfig[CONFIG_METADATA_KEY] = root;
-}
-
-function effectiveAt(config: OperatorConfig): string | null {
-  return config.updatedAt > 0 ? new Date(config.updatedAt).toISOString() : null;
 }
 
 function isConfiguredSecret(value: unknown): boolean {

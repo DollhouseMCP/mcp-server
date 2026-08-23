@@ -806,6 +806,20 @@ function runContractSuite(
       expect(await storage.allowlistMatchesIdentity({ email: 'bob@example.com' })).toBe(false);
     });
 
+    it('matchesIdentity() preserves distinct Unicode email principals', async () => {
+      const cyrillicAlice = '\u0430lice@example.com';
+      await storage.allowlistAdd({ kind: 'email', value: cyrillicAlice });
+
+      expect(await storage.allowlistMatchesIdentity({ email: cyrillicAlice })).toBe(true);
+      expect(await storage.allowlistMatchesIdentity({ email: ALICE_EMAIL })).toBe(false);
+    });
+
+    it('matchesIdentity() accepts canonically equivalent Unicode email encodings', async () => {
+      await storage.allowlistAdd({ kind: 'email', value: 'jose\u0301@example.com' });
+
+      expect(await storage.allowlistMatchesIdentity({ email: 'jos\u00e9@example.com' })).toBe(true);
+    });
+
     it('matchesIdentity() matches by github_username (case-insensitive input)', async () => {
       await storage.allowlistAdd({ kind: 'github_username', value: 'insomnolence' });
       expect(await storage.allowlistMatchesIdentity({ githubUsername: 'insomnolence' })).toBe(true);
@@ -935,6 +949,7 @@ describePg('IAuthStorageLayer contract: PostgresAuthStorageLayer', () => {
       if (pgAvailable) await reset();
     },
   );
+
 });
 
 // ── Filesystem-only durability tests ───────────────────────────────────
@@ -989,6 +1004,54 @@ describe('FilesystemAuthStorageLayer — durable across instances', () => {
     const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
     await expect(storage.genericGet('AuthModeFingerprint', 'current'))
       .rejects.toThrow(/authorization storage record/i);
+  });
+
+  it('matches and deduplicates a decomposed Unicode value from a legacy file', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([{
+      id: 'legacy-nfd',
+      kind: 'email',
+      value: 'jose\u0301@example.com',
+      note: null,
+      createdBy: null,
+      createdAt: new Date().toISOString(),
+    }]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: 'jos\u00e9@example.com',
+    })).resolves.toBe(true);
+    await expect(storage.allowlistAdd({
+      kind: 'email',
+      value: 'jos\u00e9@example.com',
+    })).rejects.toThrow('already exists');
+
+    await storage.allowlistUpdate('legacy-nfd', { note: 'canonicalized' });
+    const persisted = JSON.parse(
+      await fs.readFile(path.join(dir, 'allowlist.json'), 'utf8'),
+    ) as Array<{ value: string }>;
+    expect(persisted[0].value).toBe('jos\u00e9@example.com');
+  });
+
+  it('fails closed when legacy file entries collide after canonicalization', async () => {
+    await fs.writeFile(path.join(dir, 'allowlist.json'), JSON.stringify([
+      {
+        id: 'legacy-nfd',
+        kind: 'email',
+        value: 'jose\u0301@example.com',
+        createdAt: new Date().toISOString(),
+      },
+      {
+        id: 'canonical-nfc',
+        kind: 'email',
+        value: 'jos\u00e9@example.com',
+        createdAt: new Date().toISOString(),
+      },
+    ]));
+    const storage = new FilesystemAuthStorageLayer({ rootDir: dir });
+
+    await expect(storage.allowlistMatchesIdentity({
+      email: 'jos\u00e9@example.com',
+    })).rejects.toThrow('allowlist normalization collision');
   });
 
   it('cycle-16: bootstrap state survives across instances', async () => {

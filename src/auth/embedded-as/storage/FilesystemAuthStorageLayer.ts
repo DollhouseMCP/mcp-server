@@ -47,6 +47,10 @@ import * as path from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { logger } from '../../../utils/logger.js';
 import { FileLockManager } from '../../../security/fileLockManager.js';
+import {
+  normalizeAuthAllowlistValue,
+  storedAuthAllowlistValueMatches,
+} from '../allowlistIdentity.js';
 import type {
   AllowlistAddInput,
   AllowlistMatchValues,
@@ -769,8 +773,9 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async allowlistAdd(input: AllowlistAddInput): Promise<AuthAllowlistEntry> {
     return this.locks.withLock(`auth:allowlist:${this.allowlistPath}`, async () => {
       const entries = await this.readAllowlistRaw();
-      const value = input.value.toLowerCase();
-      const duplicate = entries.find(e => e.kind === input.kind && e.value === value);
+      const value = normalizeAuthAllowlistValue(input.kind, input.value);
+      const duplicate = entries.some(e =>
+        e.kind === input.kind && storedAuthAllowlistValueMatches(input.kind, e.value, value));
       if (duplicate) {
         throw new Error(`allowlist entry already exists for kind=${input.kind} value=${value}`);
       }
@@ -817,13 +822,13 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
   async allowlistMatchesIdentity(values: AllowlistMatchValues): Promise<boolean> {
     const entries = await this.readAllowlist();
     if (entries.length === 0) return false;
-    const email = values.email?.toLowerCase();
-    const githubUsername = values.githubUsername?.toLowerCase();
-    const githubId = values.githubId;
     for (const e of entries) {
-      if (e.kind === 'email' && email && e.value === email) return true;
-      if (e.kind === 'github_username' && githubUsername && e.value === githubUsername) return true;
-      if (e.kind === 'github_id' && githubId && e.value === githubId) return true;
+      if (e.kind === 'email' && values.email &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.email)) return true;
+      if (e.kind === 'github_username' && values.githubUsername &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.githubUsername)) return true;
+      if (e.kind === 'github_id' && values.githubId &&
+        storedAuthAllowlistValueMatches(e.kind, e.value, values.githubId)) return true;
     }
     return false;
   }
@@ -843,7 +848,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
         });
         return [];
       }
-      return parsed
+      const entries = parsed
         .filter((e): e is AuthAllowlistEntry & { createdAt: string | Date } =>
           typeof e === 'object' && e !== null
           && typeof (e as { id?: unknown }).id === 'string'
@@ -858,6 +863,7 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
           createdBy: typeof e.createdBy === 'string' ? e.createdBy : null,
           createdAt: typeof e.createdAt === 'string' ? new Date(e.createdAt) : e.createdAt,
         }));
+      return canonicalizePersistedAllowlist(entries, this.allowlistPath);
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'ENOENT') return [];
@@ -871,6 +877,26 @@ export class FilesystemAuthStorageLayer implements IAuthStorageLayer {
       throw err;
     }
   }
+}
+
+function canonicalizePersistedAllowlist(
+  entries: AuthAllowlistEntry[],
+  allowlistPath: string,
+): AuthAllowlistEntry[] {
+  const canonicalKeys = new Map<string, string>();
+  return entries.map(entry => {
+    const value = normalizeAuthAllowlistValue(entry.kind, entry.value);
+    const key = `${entry.kind}\u0000${value}`;
+    const existingId = canonicalKeys.get(key);
+    if (existingId !== undefined && existingId !== entry.id) {
+      throw new Error(
+        `allowlist normalization collision in ${allowlistPath}: entries ` +
+        `${existingId} and ${entry.id} resolve to the same ${entry.kind} identity`,
+      );
+    }
+    canonicalKeys.set(key, entry.id);
+    return { ...entry, value };
+  });
 }
 
 function serializeAllowlist(entries: AuthAllowlistEntry[]): string {

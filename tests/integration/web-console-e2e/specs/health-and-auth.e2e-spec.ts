@@ -37,6 +37,19 @@ describe('authentication gate', () => {
     expect(res.body).toBeTruthy();
   });
 
+  it('GET /auth/me carries the profile header fields with the seeded values', async () => {
+    const res = await world.clients.userA.get('/api/v1/auth/me');
+    expect(res.status).toBe(200);
+    const body = res.body as Record<string, unknown>;
+    // The SPA profile header reads these; they mirror /me/profile's source.
+    // Pin the seeded user's actual values, not just the field types — a
+    // regression to null/[] for an existing principal must fail here.
+    expect(body.display_name).toBe(world.userA.username);
+    expect(body.email).toBe(world.userA.email);
+    expect(body.auth_methods).toEqual(['local']);
+    expect(body.granted_capabilities).toEqual(['console:self']);
+  });
+
   it('an elevated admin can list users', async () => {
     const res = await world.clients.admin.get('/api/v1/admin/accounts/users');
     expect(res.status).toBe(200);

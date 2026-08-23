@@ -77,6 +77,9 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
         'X-GitHub-Api-Version': GITHUB_API_VERSION,
       },
       body: JSON.stringify({ access_token: request.accessToken }),
+      // Fail closed on redirects: client_secret (Basic auth) + access_token are
+      // sent here, so a 3xx must never replay them to a redirect target.
+      redirect: 'error',
     });
     if (!response.ok && response.status !== 404) {
       throw new Error('github_integration_revocation_failed');
@@ -101,6 +104,9 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
         code_verifier: request.codeVerifier,
         grant_type: 'authorization_code',
       }),
+      // Fail closed on redirects: client_secret is sent to the token URL, so a
+      // 3xx must never replay it to a redirect target.
+      redirect: 'error',
     });
     if (!response.ok) {
       throw new Error('github_integration_token_exchange_failed');
@@ -148,6 +154,9 @@ export class GitHubAppIntegrationProvider implements IGitHubIntegrationProvider 
         Authorization: `Bearer ${accessToken}`,
         'X-GitHub-Api-Version': GITHUB_API_VERSION,
       },
+      // Fail closed on redirects so the Bearer access token can never be
+      // replayed to a redirect target.
+      redirect: 'error',
     });
   }
 }

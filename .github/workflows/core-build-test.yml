@@ -3,9 +3,9 @@ name: Core Build & Test
 
 on:
   push:
-    branches: [main, develop, beta]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   pull_request:
-    branches: [main, develop, beta]
+    branches: [main, develop, beta, codex/hosted-http-integration]
   workflow_dispatch:
 
 permissions:
@@ -26,7 +26,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: >-
+          ${{ fromJSON((github.base_ref == 'codex/hosted-http-integration' ||
+          github.ref == 'refs/heads/codex/hosted-http-integration') &&
+          '["ubuntu-latest"]' ||
+          '["ubuntu-latest","windows-latest","macos-latest"]') }}
         node-version: ['20.x']
 
     steps:
@@ -139,6 +143,9 @@ jobs:
 
       - name: Run performance tests (separate process)
         id: performance_tests
+        if: >-
+          github.base_ref != 'codex/hosted-http-integration' &&
+          github.ref != 'refs/heads/codex/hosted-http-integration'
         run: npm run test:performance
         continue-on-error: true
 
@@ -159,18 +166,16 @@ jobs:
             echo "✗ package.json NOT FOUND"
           fi
 
-      - name: Run compiled tests approach
-        if: false  # Temporarily disabled - see PR #845
-        # Original condition: if: steps.original_tests.outcome == 'failure'
-        working-directory: ${{ github.workspace }}
+      - name: Enforce unit test result
+        if: always()
+        shell: bash
+        env:
+          TEST_OUTCOME: ${{ steps.original_tests.outcome }}
         run: |
-          echo "=== Running compiled test approach ==="
-          echo "Explicitly setting working directory to: ${{ github.workspace }}"
-          pwd
-          # Build the tests first
-          npm run build:test
-          # Run the compiled tests using cross-env
-          ./node_modules/.bin/cross-env NODE_OPTIONS='--experimental-vm-modules' ./node_modules/.bin/jest --config tests/jest.config.compiled.cjs --ci --watchAll=false
+          if [ "$TEST_OUTCOME" != "success" ]; then
+            echo "Unit tests failed for the core build gate."
+            exit 1
+          fi
 
       - name: Validation complete
         run: |

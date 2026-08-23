@@ -16,6 +16,8 @@ import type {
   PrincipalAuthzVersionBumpInput,
   PrincipalDeletionInput,
   PrincipalDeletionOutcome,
+  PrincipalDirectoryCursor,
+  PrincipalDirectoryPage,
   PrincipalDirectoryQuery,
   PrincipalDisableInput,
   PrincipalEnableInput,
@@ -23,6 +25,9 @@ import type {
   PrincipalStateChange,
   RoleGrantInput,
   RoleRevokeInput,
+  UnlinkedIdentityCursor,
+  UnlinkedIdentityPage,
+  UnlinkedIdentityQuery,
 } from './IConsoleAccountAdminStore.js';
 import {
   clonePrincipalSummary,
@@ -31,6 +36,7 @@ import {
   validateIdentitySub,
   validateIdentityUnlinkInput,
   validatePrincipalDirectoryQuery,
+  validateUnlinkedIdentityQuery,
   validatePrincipalDisableInput,
   validatePrincipalEnableInput,
   validatePrincipalAuthzVersionBumpInput,
@@ -75,13 +81,41 @@ export class InMemoryConsoleAccountAdminStore implements IConsoleAccountAdminSto
     }
   }
 
-  async listPrincipals(query: PrincipalDirectoryQuery = {}): Promise<ConsolePrincipalSummary[]> {
+  async listPrincipals(query: PrincipalDirectoryQuery = {}): Promise<PrincipalDirectoryPage> {
     await Promise.resolve();
     validatePrincipalDirectoryQuery(query);
+    const limit = query.limit ?? 100;
+    const search = query.search?.toLowerCase();
     const filtered = [...this.principals.values()]
-      .filter(principal => !query.sub || principal.primarySub === query.sub)
-      .sort((left, right) => left.createdAt.getTime() - right.createdAt.getTime());
-    return filtered.slice(0, query.limit ?? 100).map(principal => this.withCurrentRoles(principal));
+      .map(principal => this.withCurrentRoles(principal))
+      .filter(p => !query.sub || p.primarySub === query.sub)
+      .filter(p => query.enabled === undefined || (p.disabledAt === null) === query.enabled)
+      .filter(p => !query.role || p.roles.includes(query.role))
+      .filter(p => !search || matchesPrincipalSearch(p, search))
+      .filter(p => !query.after || isAfterPrincipalKey(p, query.after))
+      .sort(comparePrincipalKey);
+    const items = filtered.slice(0, limit);
+    const last = items.at(-1);
+    const nextCursor: PrincipalDirectoryCursor | null = filtered.length > limit && last
+      ? { createdAt: last.createdAt, userId: last.userId }
+      : null;
+    return { items, nextCursor };
+  }
+
+  async listUnlinkedIdentities(query: UnlinkedIdentityQuery = {}): Promise<UnlinkedIdentityPage> {
+    await Promise.resolve();
+    validateUnlinkedIdentityQuery(query);
+    const limit = query.limit ?? 100;
+    const filtered = [...this.identities.values()]
+      .filter(identity => identity.linkedUserId === null)
+      .filter(identity => !query.after || isAfterIdentityKey(identity, query.after))
+      .sort(compareIdentityKey);
+    const items = filtered.slice(0, limit).map(cloneLinkedIdentity);
+    const last = items.at(-1);
+    const nextCursor: UnlinkedIdentityCursor | null = filtered.length > limit && last
+      ? { createdAt: last.createdAt, sub: last.sub }
+      : null;
+    return { items, nextCursor };
   }
 
   async findPrincipal(userId: string): Promise<ConsolePrincipalSummary | null> {
@@ -323,6 +357,32 @@ function cloneLinkedIdentity(identity: LinkedIdentity): LinkedIdentity {
     createdAt: new Date(identity.createdAt),
     lastAuthAt: identity.lastAuthAt ? new Date(identity.lastAuthAt) : null,
   };
+}
+
+/** In-memory mirror of the Postgres `(created_at, id)` keyset ordering + `> cursor` predicate. */
+function comparePrincipalKey(a: ConsolePrincipalSummary, b: ConsolePrincipalSummary): number {
+  const byTime = a.createdAt.getTime() - b.createdAt.getTime();
+  return byTime === 0 ? a.userId.localeCompare(b.userId) : byTime;
+}
+
+function isAfterPrincipalKey(p: ConsolePrincipalSummary, after: PrincipalDirectoryCursor): boolean {
+  const byTime = p.createdAt.getTime() - after.createdAt.getTime();
+  return byTime === 0 ? p.userId.localeCompare(after.userId) > 0 : byTime > 0;
+}
+
+function matchesPrincipalSearch(p: ConsolePrincipalSummary, lowerPrefix: string): boolean {
+  return [p.username, p.email ?? '', p.displayName ?? '']
+    .some(field => field.toLowerCase().startsWith(lowerPrefix));
+}
+
+function compareIdentityKey(a: LinkedIdentity, b: LinkedIdentity): number {
+  const byTime = a.createdAt.getTime() - b.createdAt.getTime();
+  return byTime === 0 ? a.sub.localeCompare(b.sub) : byTime;
+}
+
+function isAfterIdentityKey(identity: LinkedIdentity, after: UnlinkedIdentityCursor): boolean {
+  const byTime = identity.createdAt.getTime() - after.createdAt.getTime();
+  return byTime === 0 ? identity.sub.localeCompare(after.sub) > 0 : byTime > 0;
 }
 
 function stateChangeFromPrincipal(

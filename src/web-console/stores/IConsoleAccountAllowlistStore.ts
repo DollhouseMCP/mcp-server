@@ -1,6 +1,9 @@
 import type { AuthAllowlistKind } from '../../database/schema/index.js';
 import type { AllowlistMatchValues } from '../../auth/embedded-as/storage/IAuthStorageLayer.js';
-import { UnicodeValidator } from '../../security/validators/unicodeValidator.js';
+import type {
+  AtomicAccountProvisioningInput,
+  AllowlistGateResult,
+} from '../../auth/embedded-as/allowlistGate.js';
 import {
   assertUuid,
   cloneDate,
@@ -45,10 +48,14 @@ export interface IConsoleAccountAllowlistStore {
   listActive(): Promise<ConsoleAccountAllowlistEntry[]>;
   hasActiveEntries(): Promise<boolean>;
   matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
+  deniesIdentity(values: AllowlistMatchValues): Promise<boolean>;
   findActive(id: string): Promise<ConsoleAccountAllowlistEntry | null>;
   add(input: AllowlistAddInput): Promise<ConsoleAccountAllowlistEntry>;
   update(input: AllowlistUpdateInput): Promise<ConsoleAccountAllowlistEntry | null>;
   remove(input: AllowlistRemoveInput): Promise<ConsoleAccountAllowlistEntry | null>;
+  provisionAccountIfAllowed?(
+    input: AtomicAccountProvisioningInput,
+  ): Promise<AllowlistGateResult>;
 }
 
 export const CONSOLE_ACCOUNT_ALLOWLIST_KINDS = ['email', 'github_username', 'github_id'] as const;
@@ -80,11 +87,31 @@ export function assertAllowlistKind(value: string, name: string): asserts value 
 
 export function normalizeAllowlistValue(kind: ConsoleAccountAllowlistKind, value: string): string {
   const normalized = normalizeAllowlistDisplayValue(value);
-  return kind === 'github_id' ? normalized : normalized.toLowerCase();
+  if (kind === 'github_id') return normalized;
+  if (kind === 'github_username') return normalized.toLowerCase();
+  return normalized.replace(/[A-Z]/g, character => character.toLowerCase());
 }
 
 export function normalizeAllowlistDisplayValue(value: string): string {
-  return UnicodeValidator.normalize(value).normalizedContent.trim();
+  // Security principals must retain their identity. NFC collapses canonically
+  // equivalent encodings without rewriting look-alike characters into ASCII.
+  return value.normalize('NFC').trim();
+}
+
+/**
+ * Match using the preserved display identity as the source of truth.
+ *
+ * Legacy rows may carry a normalizedValue produced by broader Unicode
+ * lowercasing. Recomputing from displayValue preserves the intended account
+ * while retaining the current cross-script and non-ASCII identity boundaries.
+ */
+export function storedConsoleAllowlistValueMatches(
+  kind: ConsoleAccountAllowlistKind,
+  displayValue: string,
+  presentedValue: string,
+): boolean {
+  return normalizeAllowlistValue(kind, displayValue)
+    === normalizeAllowlistValue(kind, presentedValue);
 }
 
 export function validateAllowlistValue(kind: ConsoleAccountAllowlistKind, value: string, name: string): void {

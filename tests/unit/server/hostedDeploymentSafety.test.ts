@@ -12,10 +12,22 @@
  *     in AuthProviderFactory handles that case.
  */
 
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest, beforeEach, afterEach } from '@jest/globals';
 import { assertHostedDeploymentSafety } from '../../../src/server/StreamableHttpServer.js';
+import { logger } from '../../../src/utils/logger.js';
 
 describe('assertHostedDeploymentSafety', () => {
+  // The token-secret guard hard-fails an exposed multi-user deployment when
+  // DOLLHOUSE_TOKEN_SECRET is unset. That gate is orthogonal to the host/auth/
+  // proxy guards the other cases exercise, so provide a secret by default; the
+  // dedicated 'DOLLHOUSE_TOKEN_SECRET enforcement' block manages its own absence.
+  const suiteTokenSecret = process.env.DOLLHOUSE_TOKEN_SECRET;
+  beforeEach(() => { process.env.DOLLHOUSE_TOKEN_SECRET = 'suite-default-token-secret'; });
+  afterEach(() => {
+    if (suiteTokenSecret === undefined) delete process.env.DOLLHOUSE_TOKEN_SECRET;
+    else process.env.DOLLHOUSE_TOKEN_SECRET = suiteTokenSecret;
+  });
+
   it('passes for loopback bind regardless of other settings', async () => {
     await expect(assertHostedDeploymentSafety({
       host: '127.0.0.1',
@@ -251,5 +263,60 @@ describe('assertHostedDeploymentSafety', () => {
       authEnabled: true,
       trustedProxies: [],
     })).rejects.toThrow(/DOLLHOUSE_TRUSTED_PROXIES is unset/);
+  });
+
+  describe('DOLLHOUSE_TOKEN_SECRET enforcement', () => {
+    const originalSecret = process.env.DOLLHOUSE_TOKEN_SECRET;
+    const originalAllowInsecure = process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE;
+    afterEach(() => {
+      if (originalSecret === undefined) delete process.env.DOLLHOUSE_TOKEN_SECRET;
+      else process.env.DOLLHOUSE_TOKEN_SECRET = originalSecret;
+      if (originalAllowInsecure === undefined) delete process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE;
+      else process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE = originalAllowInsecure;
+      jest.restoreAllMocks();
+    });
+
+    // A properly-secured exposed multi-user config (auth on, native TLS with
+    // loopback-only trusted proxies) so the earlier checks pass and we reach the
+    // token-secret guard rather than an earlier throw.
+    const securedConfig = { host: '0.0.0.0', methods: ['github'], authEnabled: true, trustedProxies: ['loopback'], nativeTls: true } as const;
+
+    it('refuses to start when DOLLHOUSE_TOKEN_SECRET is unset on an exposed multi-user deployment', async () => {
+      delete process.env.DOLLHOUSE_TOKEN_SECRET;
+      delete process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE;
+
+      await expect(assertHostedDeploymentSafety({ ...securedConfig }))
+        .rejects.toThrow(/Refusing to start: DOLLHOUSE_TOKEN_SECRET is not set/);
+    });
+
+    it('warns but starts when the insecure token store is explicitly allowed', async () => {
+      delete process.env.DOLLHOUSE_TOKEN_SECRET;
+      process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE = 'true';
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      await expect(assertHostedDeploymentSafety({ ...securedConfig })).resolves.toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('DOLLHOUSE_TOKEN_SECRET is not set'));
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE=true'));
+    });
+
+    it('accepts the opt-out value case-insensitively (TRUE)', async () => {
+      delete process.env.DOLLHOUSE_TOKEN_SECRET;
+      process.env.DOLLHOUSE_ALLOW_INSECURE_TOKEN_STORE = 'TRUE';
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      await expect(assertHostedDeploymentSafety({ ...securedConfig })).resolves.toBeUndefined();
+
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('DOLLHOUSE_TOKEN_SECRET is not set'));
+    });
+
+    it('does not warn or throw when DOLLHOUSE_TOKEN_SECRET is set', async () => {
+      process.env.DOLLHOUSE_TOKEN_SECRET = 'a-strong-random-secret';
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+
+      await expect(assertHostedDeploymentSafety({ ...securedConfig })).resolves.toBeUndefined();
+
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('DOLLHOUSE_TOKEN_SECRET is not set'));
+    });
   });
 });

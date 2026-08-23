@@ -343,8 +343,24 @@ export class ElementPersister<T extends IElement> {
     if (frontmatterMatch) {
       const yamlContent = frontmatterMatch[1];
       const bodyContent = content.substring(frontmatterMatch[0].length);
+      const contentContext = this.elementTypeToContext[this.host.elementType];
+      const contentPolicy = contentContext === 'skill' || contentContext === 'template' || contentContext === 'agent'
+        ? 'structure-only'
+        : 'strict';
 
-      if (yamlContent.length <= SECURITY_LIMITS.MAX_YAML_LENGTH && !ContentValidator.validateYamlContent(yamlContent)) {
+      if (yamlContent.length > SECURITY_LIMITS.MAX_YAML_LENGTH) {
+        throw new SecurityError('YAML content exceeds maximum allowed size', 'medium');
+      }
+
+      let frontmatterData: Record<string, unknown>;
+      try {
+        frontmatterData = SecureYamlParser.parseRawYaml(yamlContent, {
+          maxSize: SECURITY_LIMITS.MAX_YAML_LENGTH,
+          schema: 'core',
+          contentPolicy,
+          contentContext,
+        });
+      } catch {
         SecurityMonitor.logSecurityEvent({
           type: 'YAML_INJECTION_ATTEMPT',
           severity: 'CRITICAL',
@@ -359,10 +375,8 @@ export class ElementPersister<T extends IElement> {
         );
       }
 
-      const frontmatterData = SecureYamlParser.parseRawYaml(yamlContent, SECURITY_LIMITS.MAX_YAML_LENGTH);
       validateGatekeeperMetadata(frontmatterData, 'frontmatter');
 
-      const contentContext = this.elementTypeToContext[this.host.elementType];
       const bodyValidation = ContentValidator.validateAndSanitize(bodyContent, { contentContext });
       if (!bodyValidation.isValid && bodyValidation.severity === 'critical') {
         throw new SecurityError(

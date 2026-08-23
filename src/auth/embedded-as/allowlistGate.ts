@@ -41,6 +41,8 @@ import type {
   AuthAllowlistEntry,
   AllowlistMatchValues,
   IAuthStorageLayer,
+  IdentityAuditEvent,
+  StoredAccount,
 } from './storage/IAuthStorageLayer.js';
 import { isBootstrapAdminFor } from './bootstrapAdmin.js';
 
@@ -81,8 +83,24 @@ export interface AllowlistGateOptions {
 
 export interface SignInAllowlistAuthority {
   matchesIdentity(values: AllowlistMatchValues): Promise<boolean>;
+  /** A revoked matching identity is a durable deny tombstone unless re-added. */
+  deniesIdentity?(values: AllowlistMatchValues): Promise<boolean>;
   hasAnyEntries(): Promise<boolean>;
   listEntries(): Promise<AuthAllowlistEntry[]>;
+  /**
+   * Optional durable-backend fast path that evaluates the gate and writes the
+   * account in one transaction. PostgreSQL uses this to serialize account
+   * provisioning with allowlist revocation during principal deletion.
+   */
+  provisionAccountIfAllowed?(input: AtomicAccountProvisioningInput): Promise<AllowlistGateResult>;
+}
+
+export interface AtomicAccountProvisioningInput {
+  readonly identity: AllowlistGateIdentity;
+  readonly account: StoredAccount;
+  readonly required: boolean;
+  /** Audit event committed only when the account provisioning decision succeeds. */
+  readonly successAuditEvent?: IdentityAuditEvent;
 }
 
 /**
@@ -123,13 +141,22 @@ export async function checkAllowlistGate(
     return { allowed: true };
   }
 
-  // Rule 2: any-kind match wins.
-  const matched = await authority.matchesIdentity({
+  const matchValues = {
     email: identity.email,
     githubUsername: identity.githubUsername,
     githubId: identity.githubId,
-  });
-  if (matched) {
+  };
+
+  // A deletion tombstone takes precedence over active aliases that predate it.
+  // Durable authorities return false here only when an administrator has
+  // explicitly created a newer active entry after deletion.
+  if (await authority.deniesIdentity?.(matchValues)) {
+    await recordDenied(storage, identity);
+    return { allowed: false, reason: 'This identity is not on the sign-in allowlist.' };
+  }
+
+  // Rule 2: any-kind current match wins.
+  if (await authority.matchesIdentity(matchValues)) {
     return { allowed: true };
   }
 
@@ -150,6 +177,31 @@ export async function checkAllowlistGate(
       ? 'Sign-in allowlist is required and this identity is not on it.'
       : 'This identity is not on the sign-in allowlist.',
   };
+}
+
+/** Evaluate the sign-in gate and persist the account without a revocation gap. */
+export async function provisionAccountThroughAllowlistGate(
+  identity: AllowlistGateIdentity,
+  options: AllowlistGateOptions,
+  account: StoredAccount,
+  successAuditEvent?: IdentityAuditEvent,
+): Promise<AllowlistGateResult> {
+  const authority = options.authority;
+  if (authority?.provisionAccountIfAllowed) {
+    return authority.provisionAccountIfAllowed({
+      identity,
+      account,
+      required: options.required,
+      successAuditEvent,
+    });
+  }
+
+  const gate = await checkAllowlistGate(identity, options);
+  if (gate.allowed) {
+    if (successAuditEvent) await options.storage.recordIdentityEvent(successAuditEvent);
+    await options.storage.upsertAccount(account);
+  }
+  return gate;
 }
 
 function legacyStorageAuthority(storage: IAuthStorageLayer): SignInAllowlistAuthority {

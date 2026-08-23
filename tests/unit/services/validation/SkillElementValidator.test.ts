@@ -81,6 +81,15 @@ describe('SkillElementValidator', () => {
   });
 
   describe('validateCreate', () => {
+    it('passes the skill context to content validation', async () => {
+      await validator.validateCreate(validSkillData);
+
+      expect(mockValidationService.validateContent).toHaveBeenCalledWith(
+        validSkillData.content,
+        expect.objectContaining({ contentContext: 'skill' }),
+      );
+    });
+
     describe('Complexity Validation', () => {
       const validComplexities = ['beginner', 'intermediate', 'advanced', 'expert'];
 

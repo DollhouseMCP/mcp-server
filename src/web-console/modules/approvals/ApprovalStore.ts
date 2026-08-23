@@ -2,7 +2,71 @@ import type { CliApprovalRecord, CliApprovalScope } from '../../../handlers/mcp-
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
 import type { IConfirmationStore } from '../../../state/IConfirmationStore.js';
 
-export type ConsoleApprovalRecord = CliApprovalRecord;
+/**
+ * Console-owned approval record. Structurally mirrors the gatekeeper-internal
+ * {@link CliApprovalRecord} but is owned by the console so an internal gatekeeper
+ * change surfaces as a mapper compile error here rather than silently altering the
+ * console contract. `scope` intentionally reuses the shared {@link CliApprovalScope}
+ * value vocabulary.
+ */
+export interface ConsoleApprovalRecord {
+  readonly requestId: string;
+  readonly toolName: string;
+  readonly toolInputDigest: Record<string, unknown>;
+  readonly toolInputHash: string;
+  readonly toolInputDetail?: Record<string, unknown>;
+  readonly riskLevel: string;
+  readonly riskScore: number;
+  readonly irreversible: boolean;
+  readonly requestedAt: string;
+  readonly approvedAt?: string;
+  readonly deniedAt?: string;
+  readonly expiredAt?: string;
+  readonly cancelledAt?: string;
+  readonly consumed: boolean;
+  readonly scope: CliApprovalScope;
+  readonly denyReason: string;
+  readonly policySource?: string;
+  readonly ttlMs?: number;
+}
+
+// Single explicit field copy shared by both mapping directions. The console and
+// gatekeeper record shapes are structurally identical today; enumerating every field
+// here (rather than spreading) keeps a compile-time tripwire — if the gatekeeper-internal
+// CliApprovalRecord gains or renames a required field, toCliApprovalRecord stops compiling
+// until the console shape and this mapping are consciously updated.
+function copyApprovalRecordFields(record: ConsoleApprovalRecord | CliApprovalRecord): ConsoleApprovalRecord {
+  return {
+    requestId: record.requestId,
+    toolName: record.toolName,
+    toolInputDigest: record.toolInputDigest,
+    toolInputHash: record.toolInputHash,
+    toolInputDetail: record.toolInputDetail,
+    riskLevel: record.riskLevel,
+    riskScore: record.riskScore,
+    irreversible: record.irreversible,
+    requestedAt: record.requestedAt,
+    approvedAt: record.approvedAt,
+    deniedAt: record.deniedAt,
+    expiredAt: record.expiredAt,
+    cancelledAt: record.cancelledAt,
+    consumed: record.consumed,
+    scope: record.scope,
+    denyReason: record.denyReason,
+    policySource: record.policySource,
+    ttlMs: record.ttlMs,
+  };
+}
+
+/** Map a gatekeeper-internal CLI approval record into the console-owned shape. */
+export function toConsoleApprovalRecord(record: CliApprovalRecord): ConsoleApprovalRecord {
+  return copyApprovalRecordFields(record);
+}
+
+/** Map a console-owned approval record back into the gatekeeper-internal shape for persistence. */
+export function toCliApprovalRecord(record: ConsoleApprovalRecord): CliApprovalRecord {
+  return copyApprovalRecordFields(record);
+}
 
 export interface SessionApprovalStore {
   list(userId: string, sessionId: string): Promise<readonly ConsoleApprovalRecord[]>;
@@ -20,12 +84,13 @@ export class ConfirmationSessionApprovalStore implements SessionApprovalStore {
 
   async list(userId: string, sessionId: string): Promise<readonly ConsoleApprovalRecord[]> {
     const store = await this.openStore(userId, sessionId);
-    return store.getAllCliApprovals();
+    return store.getAllCliApprovals().map(toConsoleApprovalRecord);
   }
 
   async find(userId: string, sessionId: string, approvalId: string): Promise<ConsoleApprovalRecord | null> {
     const store = await this.openStore(userId, sessionId);
-    return store.getCliApproval(approvalId) ?? null;
+    const record = store.getCliApproval(approvalId);
+    return record ? toConsoleApprovalRecord(record) : null;
   }
 
   async save(
@@ -35,9 +100,10 @@ export class ConfirmationSessionApprovalStore implements SessionApprovalStore {
     record: ConsoleApprovalRecord,
   ): Promise<void> {
     const store = await this.openStore(userId, sessionId);
-    store.saveCliApproval(approvalId, record);
+    const cliRecord = toCliApprovalRecord(record);
+    store.saveCliApproval(approvalId, cliRecord);
     if (record.scope === 'tool_session' && record.approvedAt) {
-      store.saveCliSessionApproval(record.toolName, record);
+      store.saveCliSessionApproval(record.toolName, cliRecord);
     }
     await store.persist();
   }
@@ -89,11 +155,13 @@ export class GatekeeperSessionApprovalStore implements SessionApprovalStore {
   constructor(private readonly gatekeeper: Gatekeeper) {}
 
   list(_userId: string, sessionId: string): Promise<readonly ConsoleApprovalRecord[]> {
-    return Promise.resolve(this.gatekeeper.getRegisteredSession(sessionId)?.getAllCliApprovals() ?? []);
+    const records = this.gatekeeper.getRegisteredSession(sessionId)?.getAllCliApprovals() ?? [];
+    return Promise.resolve(records.map(toConsoleApprovalRecord));
   }
 
   find(_userId: string, sessionId: string, approvalId: string): Promise<ConsoleApprovalRecord | null> {
-    return Promise.resolve(this.gatekeeper.getRegisteredSession(sessionId)?.getCliApproval(approvalId) ?? null);
+    const record = this.gatekeeper.getRegisteredSession(sessionId)?.getCliApproval(approvalId);
+    return Promise.resolve(record ? toConsoleApprovalRecord(record) : null);
   }
 
   async save(

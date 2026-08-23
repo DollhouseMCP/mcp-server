@@ -106,4 +106,23 @@ describe('PathValidator instance isolation (Issue #1948)', () => {
     await expect(instance.enforceWritablePath(path.join(otherDir, 'file.json')))
       .rejects.toThrow('Path access denied');
   });
+
+  it('canonicalizes a non-existent allowlist subtree through its nearest existing ancestor', async () => {
+    const realRoot = path.join(tempRoot, 'real-root');
+    const aliasRoot = path.join(tempRoot, 'alias-root');
+    await fs.mkdir(realRoot);
+    await fs.symlink(realRoot, aliasRoot, 'dir');
+
+    const writableDir = path.join(aliasRoot, 'users', 'alice', 'portfolio');
+    const instance = new PathValidator({ writeDirs: [writableDir] });
+    const firstTarget = path.join(writableDir, 'personas');
+    const canonicalDir = path.join(await fs.realpath(realRoot), 'users', 'alice', 'portfolio');
+
+    await expect(instance.enforceWritablePath(firstTarget))
+      .resolves.toBe(path.join(canonicalDir, 'personas'));
+
+    await fs.mkdir(firstTarget, { recursive: true });
+    await expect(instance.enforceWritablePath(path.join(firstTarget, 'test.md')))
+      .resolves.toBe(path.join(canonicalDir, 'personas', 'test.md'));
+  });
 });

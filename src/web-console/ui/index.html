@@ -13,7 +13,12 @@
   <link rel="stylesheet" href="console.css">
   <link rel="stylesheet" href="logs.css">
   <link rel="stylesheet" href="admin-metrics.css">
+  <link rel="stylesheet" href="operations.css">
   <link rel="stylesheet" href="integrations.css">
+  <link rel="stylesheet" href="audit.css">
+  <link rel="stylesheet" href="security-admin.css">
+  <link rel="stylesheet" href="accounts-admin.css">
+  <link rel="stylesheet" href="portfolio-actions.css">
 </head>
 <body>
 
@@ -25,7 +30,7 @@
       <img src="dollhouse-logo.png" alt="DollhouseMCP" class="auth-gate-logo" width="56" height="56">
       <h1 class="auth-gate-title">DollhouseMCP Console</h1>
       <p class="auth-gate-text" id="auth-gate-text">Sign in to manage your portfolio, sessions, and security.</p>
-      <button class="btn btn-primary" id="auth-gate-signin" type="button">Sign in with GitHub</button>
+      <button class="btn btn-primary" id="auth-gate-signin" type="button">Sign in</button>
     </div>
   </div>
 
@@ -47,6 +52,7 @@
         <div class="account-menu-wrap">
           <button class="site-account" id="site-account" type="button" aria-haspopup="menu" aria-expanded="false" aria-live="polite"></button>
           <div class="account-menu" id="account-menu" role="menu" hidden>
+            <button class="account-menu-item" id="account-settings" role="menuitem" type="button">Profile &amp; settings</button>
             <button class="account-menu-item" id="account-security" role="menuitem" type="button">Security</button>
           </div>
         </div>
@@ -58,24 +64,24 @@
       </div>
       <div class="header-nav-row">
         <nav class="console-tabs" id="console-tabs" aria-label="Console tabs">
-          <button class="console-tab active" data-tab="portfolio">Portfolio</button>
-          <button class="console-tab" data-tab="sessions">Sessions</button>
-          <button class="console-tab" data-tab="logs">Logs</button>
-          <button class="console-tab" data-tab="integrations">Integrations</button>
-          <button class="console-tab" data-tab="permissions">Permissions</button>
-          <button class="console-tab" data-tab="setup">Setup</button>
+          <button class="console-tab" data-tab="portfolio" hidden>Portfolio</button>
+          <button class="console-tab" data-tab="sessions" hidden>Sessions</button>
+          <button class="console-tab" data-tab="logs" hidden>Logs</button>
+          <button class="console-tab" data-tab="integrations" hidden>Integrations</button>
           <!-- Admin-only: each revealed by app.js only while elevated AND holding the matching capability. -->
           <button class="console-tab console-tab--admin" data-tab="users" data-admin-cap="console:admin:accounts" hidden>Users</button>
-          <button class="console-tab console-tab--admin" data-tab="admin-security" data-admin-cap="console:admin:security" hidden>Security</button>
           <button class="console-tab console-tab--admin" data-tab="operations" data-admin-cap="console:admin:operate" hidden>Operations</button>
-          <button class="console-tab console-tab--admin" data-tab="admin-metrics" data-admin-cap="console:admin:operate" hidden>Metrics</button>
           <button class="console-tab console-tab--admin" data-tab="audit" data-admin-cap="console:admin:audit" hidden>Audit</button>
+          <button class="console-tab console-tab--admin" data-tab="security" data-admin-cap="console:admin:security" hidden>Security</button>
         </nav>
       </div>
     </header>
 
     <main class="site-main">
-      <section id="tab-portfolio" class="tab-panel active" aria-label="Portfolio">
+      <section id="console-empty-state" hidden aria-label="Console availability">
+        <div class="panel-placeholder">No console features are available in this deployment.</div>
+      </section>
+      <section id="tab-portfolio" class="tab-panel" hidden aria-label="Portfolio">
         <div class="panel-placeholder" id="portfolio-root">Loading portfolio…</div>
       </section>
       <section id="tab-sessions" class="tab-panel" hidden aria-label="Sessions">
@@ -87,26 +93,17 @@
       <section id="tab-integrations" class="tab-panel" hidden aria-label="Integrations">
         <div class="panel-placeholder">Loading integrations…</div>
       </section>
-      <section id="tab-permissions" class="tab-panel" hidden aria-label="Permissions">
-        <div class="panel-placeholder">Permissions (gatekeeper policies &amp; decision feed) — coming next.</div>
-      </section>
-      <section id="tab-setup" class="tab-panel" hidden aria-label="Setup">
-        <div class="panel-placeholder">Setup (connect your MCP client) — coming next.</div>
-      </section>
       <section id="tab-users" class="tab-panel" hidden aria-label="User administration">
         <div class="panel-placeholder">Loading users…</div>
       </section>
-      <section id="tab-admin-security" class="tab-panel" hidden aria-label="Security administration">
-        <div class="panel-placeholder">Security (auth policy &amp; signing keys) — coming next.</div>
-      </section>
       <section id="tab-operations" class="tab-panel" hidden aria-label="Operations">
-        <div class="panel-placeholder">Operations (config, health, system logs, sessions) — coming next.</div>
-      </section>
-      <section id="tab-admin-metrics" class="tab-panel" hidden aria-label="System metrics">
-        <div class="panel-placeholder">Loading system metrics…</div>
+        <div class="panel-placeholder">Loading operations…</div>
       </section>
       <section id="tab-audit" class="tab-panel" hidden aria-label="Audit">
-        <div class="panel-placeholder">Audit (admin actions, approvals, authentication) — coming next.</div>
+        <div class="panel-placeholder">Loading audit…</div>
+      </section>
+      <section id="tab-security" class="tab-panel" hidden aria-label="Security administration">
+        <div class="panel-placeholder">Loading security…</div>
       </section>
     </main>
   </div>

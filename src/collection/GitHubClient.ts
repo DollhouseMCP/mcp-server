@@ -3,9 +3,10 @@
  */
 
 import { McpError, ErrorCode } from '@modelcontextprotocol/sdk/types.js';
-import { APICache } from '../cache/APICache.js';
+import { CollectionElementNotFoundError } from './CollectionErrors.js';
+import type { APICache } from '../cache/APICache.js';
 import { SECURITY_LIMITS } from '../security/constants.js';
-import { TokenManager } from '../security/tokenManager.js';
+import type { TokenManager } from '../security/tokenManager.js';
 
 /** Default hosts that are always allowed for GitHub API access. */
 const DEFAULT_ALLOWED_HOSTS: ReadonlySet<string> = new Set([
@@ -55,19 +56,51 @@ export class GitHubClient {
   }
   
   /**
+   * Validate a URL against the SSRF defenses before it is fetched.
+   *
+   * 1. Reject path-traversal segments in the RAW url before the WHATWG URL
+   *    constructor collapses them. The hostname allowlist is not sufficient on
+   *    its own: a caller that interpolates untrusted input (e.g.
+   *    `.../contents/library/../../../orgs/X`) would parse to a *different*
+   *    api.github.com endpoint that still passes the hostname check — and be
+   *    fetched with the server token attached. The check runs on a
+   *    percent-decoded, backslash-normalized copy of the path so encoded forms
+   *    (`%2e%2e`, `..%5c`) — which `fetch`/WHATWG still collapse to traversal —
+   *    cannot slip past a literal `..` scan. No legitimate GitHub URL has a
+   *    `.`/`..` path segment (search queries live in the query string, which we
+   *    exclude here), so this breaks nothing legitimate.
+   * 2. Reject any host not on the allowlist (default api.github.com +
+   *    raw.githubusercontent.com; extendable via DOLLHOUSE_COLLECTION_ALLOWLIST).
+   */
+  private assertUrlAllowed(url: string): void {
+    const rawPath = url.split('#')[0].split('?')[0];
+    let decodedPath: string;
+    try {
+      decodedPath = decodeURIComponent(rawPath);
+    } catch {
+      throw new Error('GitHubClient: Refusing to fetch URL with malformed percent-encoding');
+    }
+    // Backslashes are treated as path separators by the URL parser, so fold
+    // them in before splitting.
+    const segments = decodedPath.replaceAll('\\', '/').split('/');
+    if (segments.some(segment => segment === '..' || segment === '.')) {
+      throw new Error('GitHubClient: Refusing to fetch URL with path-traversal segments');
+    }
+
+    const parsedUrl = new URL(url);
+    if (!this.allowedHosts.has(parsedUrl.hostname)) {
+      throw new Error(`GitHubClient: Refusing to fetch non-allowed URL: ${parsedUrl.hostname}`);
+    }
+  }
+
+  /**
    * Fetch data from GitHub API with caching and rate limiting
    */
   async fetchFromGitHub(url: string, requireAuth: boolean = false): Promise<any> {
     let timeoutId: NodeJS.Timeout | null = null;
     const controller = new AbortController();
 
-    // Validate URL hostname against the allowlist to prevent SSRF.
-    // Default: api.github.com + raw.githubusercontent.com.
-    // Deployments can extend via DOLLHOUSE_COLLECTION_ALLOWLIST env var.
-    const parsedUrl = new URL(url);
-    if (!this.allowedHosts.has(parsedUrl.hostname)) {
-      throw new Error(`GitHubClient: Refusing to fetch non-allowed URL: ${parsedUrl.hostname}`);
-    }
+    this.assertUrlAllowed(url);
 
     try {
       // Check rate limit
@@ -106,67 +139,79 @@ export class GitHubClient {
       });
       
       if (!response.ok) {
-        if (response.status === 403) {
-          const errorMsg = token 
-            ? 'GitHub API rate limit exceeded or token lacks required permissions.'
-            : 'GitHub API rate limit exceeded. Consider using setup_github_auth or setting GITHUB_TOKEN environment variable.';
-          throw new Error(errorMsg);
-        }
-        if (response.status === 401) {
-          throw new Error('GitHub API authentication failed. Please check your GITHUB_TOKEN.');
-        }
-        // Provide helpful error messages based on status code
-        if (response.status === 404) {
-          throw new Error(`File not found in collection. Try using search to get the correct path: search_collection_enhanced "your-search-term"`);
-        }
-        throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+        this.throwForErrorResponse(response, token);
       }
-      
+
       const data = await response.json();
-      
+
       // Cache the successful response
       this.apiCache.set(url, data);
-      
+
       return data;
     } catch (error) {
-      // Use TokenManager for safe error handling
-      const errorMessage = error instanceof Error ? error.message : String(error);
-      const safeMessage = this.tokenManager.createSafeErrorMessage(errorMessage);
-      
-      // codeql[js/clear-text-logging] — URL is a GitHub API endpoint (api.github.com/raw.githubusercontent.com),
-      // validated at method entry. Auth tokens are in headers, not the URL.
-      const errorDetails: any = {
-        originalMessage: safeMessage,
-        url
-      };
-      
-      // Preserve stack trace and error type information
-      if (error instanceof Error) {
-        errorDetails.errorType = error.constructor.name;
-        errorDetails.stack = error.stack;
-        
-        // Special handling for common error types
-        if (error.name === 'AbortError') {
-          errorDetails.timeout = true;
-        }
-      }
-      
-      const mcpError = new McpError(
-        ErrorCode.InternalError,
-        `Failed to fetch from GitHub: ${safeMessage}`,
-        errorDetails
-      );
-      
-      // Also preserve original error for debugging
-      (mcpError as any).cause = error;
-      
-      throw mcpError;
+      throw this.buildFetchError(error, url);
     } finally {
       if (timeoutId) {
         clearTimeout(timeoutId);
         timeoutId = null;
       }
     }
+  }
+
+  /**
+   * Translate a non-OK GitHub response into a helpful error. Always throws.
+   */
+  private throwForErrorResponse(response: Response, token: string | null): never {
+    if (response.status === 403) {
+      throw new Error(token
+        ? 'GitHub API rate limit exceeded or token lacks required permissions.'
+        : 'GitHub API rate limit exceeded. Consider using setup_github_auth or setting GITHUB_TOKEN environment variable.');
+    }
+    if (response.status === 401) {
+      throw new Error('GitHub API authentication failed. Please check your GITHUB_TOKEN.');
+    }
+    if (response.status === 404) {
+      throw new CollectionElementNotFoundError('File not found in collection. Try using search to get the correct path: search_collection_enhanced "your-search-term"');
+    }
+    throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+  }
+
+  /**
+   * Wrap a caught fetch error in an McpError with safe, preserved details.
+   */
+  private buildFetchError(error: unknown, url: string): McpError {
+    // Use TokenManager for safe error handling
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const safeMessage = this.tokenManager.createSafeErrorMessage(errorMessage);
+
+    // codeql[js/clear-text-logging] — URL is a GitHub API endpoint (api.github.com/raw.githubusercontent.com),
+    // validated at method entry. Auth tokens are in headers, not the URL.
+    const errorDetails: any = {
+      originalMessage: safeMessage,
+      url
+    };
+
+    // Preserve stack trace and error type information
+    if (error instanceof Error) {
+      errorDetails.errorType = error.constructor.name;
+      errorDetails.stack = error.stack;
+
+      // Special handling for common error types
+      if (error.name === 'AbortError') {
+        errorDetails.timeout = true;
+      }
+    }
+
+    const mcpError = new McpError(
+      ErrorCode.InternalError,
+      `Failed to fetch from GitHub: ${safeMessage}`,
+      errorDetails
+    );
+
+    // Also preserve original error for debugging
+    (mcpError as any).cause = error;
+
+    return mcpError;
   }
 
   /**

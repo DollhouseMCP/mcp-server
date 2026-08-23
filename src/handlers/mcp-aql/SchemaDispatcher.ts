@@ -33,6 +33,7 @@
  */
 
 import yaml from 'js-yaml';
+import { SECURITY_LIMITS } from '../../security/constants.js';
 import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import {
   getOperationSchema,
@@ -879,8 +880,11 @@ async function handleImportElement(
     if (typeof nestedData === 'string') {
       try {
         if (format === 'yaml') {
-          // Use SecureYamlParser.parseRawYaml for safe YAML parsing (CORE_SCHEMA, size limits)
-          elementData = SecureYamlParser.parseRawYaml(nestedData);
+          elementData = SecureYamlParser.parseRawYaml(nestedData, {
+            maxSize: SECURITY_LIMITS.MAX_CONTENT_LENGTH,
+            schema: 'json',
+            contentPolicy: 'structure-only',
+          });
         } else {
           elementData = JSON.parse(nestedData);
         }

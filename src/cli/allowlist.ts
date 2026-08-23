@@ -1,3 +1,5 @@
+#!/usr/bin/env node
+
 /**
  * dollhouse-allowlist — manage the sign-in allowlist from the operator's
  * machine.
@@ -35,6 +37,10 @@
 import { Command } from 'commander';
 import { openCliAuthStorage, type CliAuthStorageHandle } from './cliAuthStorage.js';
 import type { AuthAllowlistEntry, AuthAllowlistKind } from '../auth/embedded-as/storage/IAuthStorageLayer.js';
+import {
+  normalizeAuthAllowlistPrincipal,
+  normalizeAuthAllowlistValue,
+} from '../auth/embedded-as/allowlistIdentity.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
 const VALID_KINDS: readonly AuthAllowlistKind[] = ['email', 'github_username', 'github_id'];
@@ -82,7 +88,7 @@ function formatEntry(e: AuthAllowlistEntry): string {
 
 async function runAdd(handle: CliAuthStorageHandle, opts: AddOptions): Promise<void> {
   const kind = normalizeCliInput(opts.kind).trim();
-  const value = normalizeCliInput(opts.value).trim();
+  const value = normalizeAuthAllowlistPrincipal(opts.value);
   const note = opts.note === undefined ? undefined : normalizeCliInput(opts.note);
   assertValidKind(kind);
   if (!value) {
@@ -156,7 +162,7 @@ async function runRemove(handle: CliAuthStorageHandle, opts: RemoveOptions): Pro
     }
     const kind = normalizeCliInput(opts.kind).trim();
     assertValidKind(kind);
-    const value = normalizeCliInput(opts.value).trim().toLowerCase();
+    const value = normalizeAuthAllowlistValue(kind, opts.value);
     const all = await handle.storage.allowlistList();
     const found = all.find(e => e.kind === kind && e.value === value);
     if (!found) {

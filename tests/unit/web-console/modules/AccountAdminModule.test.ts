@@ -35,6 +35,8 @@ const ACCOUNT_CREDENTIALS_REVOKE_ALL_PATH = '/api/v1/admin/accounts/users/:user_
 const ACCOUNT_ALLOWLIST_PATH = '/api/v1/admin/accounts/allowlist';
 const ACCOUNT_ALLOWLIST_ITEM_PATH = '/api/v1/admin/accounts/allowlist/:id';
 const ACCOUNT_BOOTSTRAP_PATH = '/api/v1/admin/accounts/bootstrap';
+const ADMIN_USERS_PATH = '/api/v1/admin/accounts/users';
+const ALICE_EMAIL = 'alice@example.test';
 const SELF_CAPABILITY = 'console:self';
 const ACCOUNT_ADMIN_CAPABILITY = 'console:admin:accounts';
 const OPERATE_CAPABILITY = 'console:admin:operate';
@@ -61,7 +63,7 @@ function store(): InMemoryConsoleAccountAdminStore {
     primarySub: PRIMARY_SUB,
     username: 'alice',
     displayName: 'Alice Example',
-    email: 'alice@example.test',
+    email: ALICE_EMAIL,
     emailVerified: true,
     authMethods: ['github'],
     roles: [ACCOUNT_ADMIN_ROLE],
@@ -294,7 +296,7 @@ describe('AccountAdminModule', () => {
       {
         moduleId: 'accountAdmin',
         method: 'GET',
-        path: '/api/v1/admin/accounts/users',
+        path: ADMIN_USERS_PATH,
         audience: 'admin',
         requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
         ownership: 'none',
@@ -462,6 +464,18 @@ describe('AccountAdminModule', () => {
       {
         moduleId: 'accountAdmin',
         method: 'GET',
+        path: '/api/v1/admin/accounts/identities/unlinked',
+        audience: 'admin',
+        requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
+        ownership: 'none',
+        elevation: 'admin_30m',
+        privacyClass: ACCOUNT_METADATA_PRIVACY,
+        idempotency: IDEMPOTENCY_NOT_APPLICABLE,
+        auditOperation: 'accounts.identities.unlinked.list',
+      },
+      {
+        moduleId: 'accountAdmin',
+        method: 'GET',
         path: ACCOUNT_ALLOWLIST_PATH,
         audience: 'admin',
         requiredCapability: ACCOUNT_ADMIN_CAPABILITY,
@@ -549,24 +563,24 @@ describe('AccountAdminModule', () => {
 
   it('serializes principal directory DTOs through the metadata allowlist', async () => {
     const { module } = mutationFixture();
-    const route = findRoute(module.routes, '/api/v1/admin/accounts/users');
+    const route = findRoute(module.routes, ADMIN_USERS_PATH);
 
     const result = await route.handler(consoleRequest({
       query: { limit: '20', sub: PRIMARY_SUB },
     }));
     const rawBody = result.body as Record<string, unknown>;
-    const firstUser = (rawBody.users as Record<string, unknown>[])[0];
+    const firstUser = (rawBody.items as Record<string, unknown>[])[0];
     firstUser.authz_version = 3;
     firstUser.account_correlation_id = ACCOUNT_CORRELATION_ID;
     firstUser.private_settings = { leaked: true };
 
     expect(route.privacyProjector?.(result.body)).toEqual({
-      users: [{
+      items: [{
         user_id: USER_ID,
         primary_sub: PRIMARY_SUB,
         username: 'alice',
         display_name: 'Alice Example',
-        email: 'alice@example.test',
+        email: ALICE_EMAIL,
         email_verified: true,
         auth_methods: ['github'],
         roles: [ACCOUNT_ADMIN_ROLE],
@@ -575,6 +589,7 @@ describe('AccountAdminModule', () => {
         last_login_at: LAST_LOGIN.toISOString(),
         admin_factor_enrolled: true,
       }],
+      page: { limit: 20, cursor: null, next_cursor: null },
     });
   });
 
@@ -995,7 +1010,7 @@ describe('AccountAdminModule', () => {
     });
     expect(add.privacyProjector?.({
       ...(created.body as Record<string, unknown>),
-      normalized_value: 'alice@example.test',
+      normalized_value: ALICE_EMAIL,
       revoked_at: NOW.toISOString(),
       raw_secret: 'nope',
     })).toEqual(created.body);
@@ -1021,7 +1036,7 @@ describe('AccountAdminModule', () => {
     });
     await expect(get.handler(consoleRequest({ params: { id: entryId } })))
       .resolves.toMatchObject({ status: 404, body: { code: 'not_found' } });
-    await expect(add.handler(consoleRequest({ body: { kind: 'email', value: 'alice@example.test' } })))
+    await expect(add.handler(consoleRequest({ body: { kind: 'email', value: ALICE_EMAIL } })))
       .resolves.toMatchObject({ status: 201 });
 
     expect(adminAuditWriter.getEvents().map(event => [event.operation, event.result, event.errorCode])).toEqual([
@@ -1077,30 +1092,34 @@ describe('AccountAdminModule', () => {
     ]);
   });
 
-  it('normalizes security-sensitive allowlist body values before storage', async () => {
+  it('preserves distinct allowlist principals before storage', async () => {
     const { module } = mutationFixture();
     const add = findRoute(module.routes, ACCOUNT_ALLOWLIST_PATH, 'POST');
+    const cyrillicAlice = '\u0430lice@example.test';
 
     await expect(add.handler(consoleRequest({
       body: { kind: 'github_username', value: 'ｍick' },
     }))).resolves.toMatchObject({
-      status: 201,
-      body: {
-        kind: 'github_username',
-        value: 'mick',
-      },
+      status: 400,
+      body: { code: 'invalid_request' },
     });
     await expect(add.handler(consoleRequest({
-      body: { kind: 'github_username', value: 'mick' },
+      body: { kind: 'email', value: cyrillicAlice },
     }))).resolves.toMatchObject({
-      status: 409,
-      body: { code: 'conflict' },
+      status: 201,
+      body: { kind: 'email', value: cyrillicAlice },
+    });
+    await expect(add.handler(consoleRequest({
+      body: { kind: 'email', value: 'alice@example.test' },
+    }))).resolves.toMatchObject({
+      status: 201,
+      body: { kind: 'email', value: 'alice@example.test' },
     });
   });
 
   it('rejects malformed list query parameters before hitting the store', async () => {
     const { module } = mutationFixture();
-    const route = findRoute(module.routes, '/api/v1/admin/accounts/users');
+    const route = findRoute(module.routes, ADMIN_USERS_PATH);
 
     await expect(route.handler(consoleRequest({ query: { limit: 'NaN' } })))
       .resolves.toMatchObject({ status: 400, body: { code: 'invalid_request' } });
@@ -2153,5 +2172,210 @@ describe('AccountAdminModule', () => {
     });
 
     await expect(runner.run(() => Promise.resolve('committed'))).rejects.toThrow('without admin audit');
+  });
+});
+
+describe('AccountAdminModule principal directory filters and pagination', () => {
+  const DIR_ID_A = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+  const DIR_ID_B = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const DIR_ID_C = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc';
+  const DIR_ID_D = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd';
+  const DIR_CORR_A = '1a1a1a1a-1a1a-4a1a-8a1a-1a1a1a1a1a1a';
+  const DIR_CORR_B = '2b2b2b2b-2b2b-4b2b-8b2b-2b2b2b2b2b2b';
+  const DIR_CORR_C = '3c3c3c3c-3c3c-4c3c-8c3c-3c3c3c3c3c3c';
+  const DIR_CORR_D = '4d4d4d4d-4d4d-4d4d-8d4d-4d4d4d4d4d4d';
+
+  type DirectoryPrincipalFixture = ConstructorParameters<typeof InMemoryConsoleAccountAdminStore>[0][number];
+
+  function directoryPrincipal(overrides: Partial<DirectoryPrincipalFixture> = {}): DirectoryPrincipalFixture {
+    return {
+      userId: USER_ID,
+      primarySub: `sub-${overrides.userId ?? USER_ID}`,
+      username: 'user',
+      displayName: null,
+      email: null,
+      emailVerified: false,
+      authMethods: ['local-password'],
+      roles: [],
+      disabledAt: null,
+      createdAt: NOW,
+      lastLoginAt: null,
+      adminFactorEnrolled: false,
+      accountCorrelationId: ACCOUNT_CORRELATION_ID,
+      authzVersion: 1,
+      ...overrides,
+    };
+  }
+
+  it('narrows the directory by search prefix, role, and enabled status', async () => {
+    const principals = new InMemoryConsoleAccountAdminStore([
+      directoryPrincipal({
+        userId: DIR_ID_A,
+        username: 'alice',
+        email: ALICE_EMAIL,
+        displayName: 'Alice Example',
+        accountCorrelationId: DIR_CORR_A,
+        roles: ['account_admin'],
+        createdAt: NOW,
+      }),
+      directoryPrincipal({
+        userId: DIR_ID_B,
+        username: 'bob',
+        email: 'bob@example.test',
+        displayName: 'Bob Example',
+        accountCorrelationId: DIR_CORR_B,
+        roles: ['operator'],
+        createdAt: new Date(NOW.getTime() + 1000),
+      }),
+      directoryPrincipal({
+        userId: DIR_ID_C,
+        username: 'carol',
+        email: 'carol@example.test',
+        displayName: 'Carol Example',
+        accountCorrelationId: DIR_CORR_C,
+        roles: [],
+        disabledAt: NOW,
+        createdAt: new Date(NOW.getTime() + 2000),
+      }),
+    ]);
+    const { module } = mutationFixture(principals);
+    const route = findRoute(module.routes, ADMIN_USERS_PATH);
+
+    const bySearch = await route.handler(consoleRequest({ query: { search: 'ali' } }));
+    expect((bySearch.body as { items: Array<{ user_id: string }> }).items.map(item => item.user_id))
+      .toEqual([DIR_ID_A]);
+
+    const byRole = await route.handler(consoleRequest({ query: { role: 'operator' } }));
+    expect((byRole.body as { items: Array<{ user_id: string }> }).items.map(item => item.user_id))
+      .toEqual([DIR_ID_B]);
+
+    const byDisabled = await route.handler(consoleRequest({ query: { enabled: 'false' } }));
+    expect((byDisabled.body as { items: Array<{ user_id: string }> }).items.map(item => item.user_id))
+      .toEqual([DIR_ID_C]);
+
+    const byEnabled = await route.handler(consoleRequest({ query: { enabled: 'true' } }));
+    expect((byEnabled.body as { items: Array<{ user_id: string }> }).items.map(item => item.user_id).sort((a, b) => a.localeCompare(b)))
+      .toEqual([DIR_ID_A, DIR_ID_B].sort((a, b) => a.localeCompare(b)));
+  });
+
+  it('paginates the directory with a stable (created_at, user_id) cursor, tiebreaking equal timestamps, and restarts on a garbage cursor', async () => {
+    const principals = new InMemoryConsoleAccountAdminStore([
+      // A and B share createdAt: the keyset tiebreaker (ascending user_id) must
+      // place A before B, or a page boundary would skip or duplicate a row.
+      directoryPrincipal({ userId: DIR_ID_A, username: 'user-a', accountCorrelationId: DIR_CORR_A, createdAt: NOW }),
+      directoryPrincipal({ userId: DIR_ID_B, username: 'user-b', accountCorrelationId: DIR_CORR_B, createdAt: NOW }),
+      directoryPrincipal({
+        userId: DIR_ID_C,
+        username: 'user-c',
+        accountCorrelationId: DIR_CORR_C,
+        createdAt: new Date(NOW.getTime() + 1000),
+      }),
+      directoryPrincipal({
+        userId: DIR_ID_D,
+        username: 'user-d',
+        accountCorrelationId: DIR_CORR_D,
+        createdAt: new Date(NOW.getTime() + 2000),
+      }),
+    ]);
+    const { module } = mutationFixture(principals);
+    const route = findRoute(module.routes, ADMIN_USERS_PATH);
+
+    const collected: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await route.handler(consoleRequest({ query: { limit: '1', ...(cursor ? { cursor } : {}) } }));
+      const body = result.body as {
+        items: Array<{ user_id: string }>;
+        page: { next_cursor: string | null };
+      };
+      expect(body.items).toHaveLength(1);
+      collected.push(...body.items.map(item => item.user_id));
+      if (!body.page.next_cursor) break;
+      cursor = body.page.next_cursor;
+    }
+
+    expect(collected).toEqual([DIR_ID_A, DIR_ID_B, DIR_ID_C, DIR_ID_D]);
+    expect(new Set(collected).size).toBe(4);
+
+    const garbage = await route.handler(consoleRequest({ query: { cursor: 'not-a-real-cursor' } }));
+    expect((garbage.body as { items: Array<{ user_id: string }> }).items.map(item => item.user_id)[0])
+      .toBe(DIR_ID_A);
+  });
+});
+
+describe('AccountAdminModule unlinked identities', () => {
+  const SUB_LINKED = 'github_linked-1';
+  const SUB_UNLINKED_A = 'github_unlinked-a';
+  const SUB_UNLINKED_B = 'github_unlinked-b';
+  const SUB_UNLINKED_C = 'github_unlinked-c';
+  const SUB_UNLINKED_D = 'github_unlinked-d';
+
+  type IdentityFixture = ConstructorParameters<typeof InMemoryConsoleAccountAdminStore>[1][number];
+
+  function identityFixture(overrides: Partial<IdentityFixture> = {}): IdentityFixture {
+    return {
+      sub: 'github_default',
+      provider: 'github',
+      externalSub: 'default',
+      email: null,
+      emailVerified: false,
+      displayName: null,
+      linkedUserId: null,
+      createdAt: NOW,
+      lastAuthAt: null,
+      ...overrides,
+    };
+  }
+
+  it('excludes linked identities from the unlinked directory', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([], [
+      identityFixture({ sub: SUB_LINKED, linkedUserId: USER_ID, createdAt: NOW }),
+      identityFixture({ sub: SUB_UNLINKED_A, createdAt: new Date(NOW.getTime() + 1000) }),
+      identityFixture({ sub: SUB_UNLINKED_B, createdAt: new Date(NOW.getTime() + 2000) }),
+    ]);
+    const { module } = mutationFixture(accountAdminStore);
+    const route = findRoute(module.routes, '/api/v1/admin/accounts/identities/unlinked');
+
+    const result = await route.handler(consoleRequest());
+    const subs = (result.body as { items: Array<{ sub: string; linked_user_id: string | null }> }).items;
+
+    expect(subs.map(item => item.sub)).toEqual([SUB_UNLINKED_A, SUB_UNLINKED_B]);
+    expect(subs.every(item => item.linked_user_id === null)).toBe(true);
+  });
+
+  it('paginates unlinked identities with a stable (created_at, sub) cursor, tiebreaking equal timestamps, and restarts on a garbage cursor', async () => {
+    const accountAdminStore = new InMemoryConsoleAccountAdminStore([], [
+      identityFixture({ sub: SUB_LINKED, linkedUserId: USER_ID, createdAt: NOW }),
+      // A and B share createdAt: the (created_at, sub) tiebreaker (ascending sub)
+      // must place A before B.
+      identityFixture({ sub: SUB_UNLINKED_A, createdAt: NOW }),
+      identityFixture({ sub: SUB_UNLINKED_B, createdAt: NOW }),
+      identityFixture({ sub: SUB_UNLINKED_C, createdAt: new Date(NOW.getTime() + 1000) }),
+      identityFixture({ sub: SUB_UNLINKED_D, createdAt: new Date(NOW.getTime() + 2000) }),
+    ]);
+    const { module } = mutationFixture(accountAdminStore);
+    const route = findRoute(module.routes, '/api/v1/admin/accounts/identities/unlinked');
+
+    const collected: string[] = [];
+    let cursor: string | undefined;
+    for (let page = 0; page < 10; page += 1) {
+      const result = await route.handler(consoleRequest({ query: { limit: '1', ...(cursor ? { cursor } : {}) } }));
+      const body = result.body as {
+        items: Array<{ sub: string }>;
+        page: { next_cursor: string | null };
+      };
+      expect(body.items).toHaveLength(1);
+      collected.push(...body.items.map(item => item.sub));
+      if (!body.page.next_cursor) break;
+      cursor = body.page.next_cursor;
+    }
+
+    expect(collected).toEqual([SUB_UNLINKED_A, SUB_UNLINKED_B, SUB_UNLINKED_C, SUB_UNLINKED_D]);
+    expect(collected).not.toContain(SUB_LINKED);
+    expect(new Set(collected).size).toBe(4);
+
+    const garbage = await route.handler(consoleRequest({ query: { cursor: 'not-a-real-cursor' } }));
+    expect((garbage.body as { items: Array<{ sub: string }> }).items.map(item => item.sub)[0])
+      .toBe(SUB_UNLINKED_A);
   });
 });

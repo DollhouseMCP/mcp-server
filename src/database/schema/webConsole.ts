@@ -18,6 +18,7 @@ import {
   uniqueIndex,
   primaryKey,
   check,
+  pgSequence,
 } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './users.js';
@@ -32,6 +33,10 @@ export type ConsoleAdminRole =
   | 'operator'
   | 'auditor'
   | 'security_admin';
+
+export const accountAllowlistAuthorityOrderSequence = pgSequence(
+  'account_allowlist_authority_order_seq',
+);
 
 export const userAdminRoles = pgTable('user_admin_roles', {
   id: uuid('id').primaryKey().defaultRandom(),
@@ -68,6 +73,9 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   revokedByUserId: uuid('revoked_by_user_id').references(() => users.id, { onDelete: 'restrict' }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
+  authorityOrder: bigint('authority_order', { mode: 'number' })
+    .notNull()
+    .default(sql`nextval('account_allowlist_authority_order_seq')`),
 }, (table) => [
   check('account_allowlist_entries_kind_check', sql`${table.kind} IN ('email', 'github_username', 'github_id')`),
   check('account_allowlist_entries_shape_check', sql`
@@ -84,6 +92,7 @@ export const accountAllowlistEntries = pgTable('account_allowlist_entries', {
   uniqueIndex('idx_account_allowlist_entries_active_unique')
     .on(table.kind, table.normalizedValue)
     .where(sql`${table.revokedAt} IS NULL`),
+  uniqueIndex('idx_account_allowlist_entries_authority_order').on(table.authorityOrder),
   index('idx_account_allowlist_entries_created').on(table.createdAt),
 ]);
 
@@ -133,26 +142,41 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   userId: uuid('user_id').references(() => users.id, { onDelete: 'cascade' }),
   consoleSessionIdHash: bytea('console_session_id_hash'),
   requestedCapability: text('requested_capability'),
+  integrationDescriptorId: uuid('integration_descriptor_id')
+    .references(() => integrationProviderDescriptors.id, { onDelete: 'cascade' }),
+  integrationDescriptorFingerprint: text('integration_descriptor_fingerprint'),
   returnTo: text('return_to'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
   consumedAt: timestamp('consumed_at', { withTimezone: true }),
 }, (table) => [
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
+  index('idx_console_login_transactions_descriptor').on(table.integrationDescriptorId),
+  check('console_login_transactions_descriptor_fingerprint_check', sql`
+    (${table.integrationDescriptorId} IS NULL AND ${table.integrationDescriptorFingerprint} IS NULL)
+    OR (${table.integrationDescriptorId} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} IS NOT NULL
+      AND ${table.integrationDescriptorFingerprint} ~ '^[a-f0-9]{64}$')
+  `),
 ]);
 
-export type UserIntegrationProvider = 'github';
+export type UserIntegrationProvider = string & { readonly __brand: 'UserIntegrationProvider' };
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'
+  | 'token_refresh_failed'
   | 'revocation_failed'
   | 'scope_denied'
   | 'provider_unavailable';
+export type IntegrationDescriptorOwnership = 'curated' | 'byo';
+export type IntegrationAuthStrategy = 'oauth2_authorization_code' | 'static_api_key' | 'coded';
 
 export const userIntegrations = pgTable('user_integrations', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
   provider: text('provider').$type<UserIntegrationProvider>().notNull(),
+  integrationDescriptorId: uuid('integration_descriptor_id')
+    .references(() => integrationProviderDescriptors.id, { onDelete: 'set null' }),
   externalAccountLabel: text('external_account_label'),
   externalInstallationId: text('external_installation_id'),
   authorizedPermissions: jsonb('authorized_permissions').notNull().default({
@@ -168,7 +192,7 @@ export const userIntegrations = pgTable('user_integrations', {
   lastSyncAt: timestamp('last_sync_at', { withTimezone: true }),
   revokedAt: timestamp('revoked_at', { withTimezone: true }),
 }, (table) => [
-  check('user_integrations_provider_check', sql`${table.provider} IN ('github')`),
+  check('user_integrations_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
   check('user_integrations_status_check', sql`${table.status} IN ('connected', 'revoked', 'error')`),
   check('user_integrations_shape_check', sql`
     (${table.externalAccountLabel} IS NULL OR (
@@ -185,8 +209,6 @@ export const userIntegrations = pgTable('user_integrations', {
     ))
     AND jsonb_typeof(${table.authorizedPermissions}) = 'object'
     AND char_length(${table.authorizedPermissions}::text) <= 4096
-    AND (${table.authorizedPermissions} ?& array['repository_selection', 'permissions'])
-    AND (${table.authorizedPermissions} - 'repository_selection' - 'permissions') = '{}'::jsonb
     AND NOT (${table.authorizedPermissions} ?| array[
       'access_token',
       'accessToken',
@@ -199,17 +221,31 @@ export const userIntegrations = pgTable('user_integrations', {
       'credential_key_version',
       'credentialKeyVersion'
     ])
-    AND (${table.authorizedPermissions}->>'repository_selection') IN ('selected', 'all', 'unknown')
-    AND jsonb_typeof(${table.authorizedPermissions}->'permissions') = 'object'
-    AND ((${table.authorizedPermissions}->'permissions') - 'contents') = '{}'::jsonb
-    AND (${table.authorizedPermissions}->'permissions'->>'contents') IN ('none', 'read', 'write')
-    AND NOT (${table.authorizedPermissions}->'permissions' ?| array[
-      'administration',
-      'actions',
-      'workflows',
-      'secrets',
-      'metadata'
-    ])
+    AND (
+      (
+        ${table.provider} = 'github'
+        AND (${table.authorizedPermissions} ?& array['repository_selection', 'permissions'])
+        AND (${table.authorizedPermissions} - 'repository_selection' - 'permissions') = '{}'::jsonb
+        AND (${table.authorizedPermissions}->>'repository_selection') IN ('selected', 'all', 'unknown')
+        AND jsonb_typeof(${table.authorizedPermissions}->'permissions') = 'object'
+        AND ((${table.authorizedPermissions}->'permissions') - 'contents') = '{}'::jsonb
+        AND (${table.authorizedPermissions}->'permissions'->>'contents') IN ('none', 'read', 'write')
+        AND NOT (${table.authorizedPermissions}->'permissions' ?| array[
+          'administration',
+          'actions',
+          'workflows',
+          'secrets',
+          'metadata'
+        ])
+      )
+      OR (
+        ${table.provider} <> 'github'
+        AND (${table.authorizedPermissions} ?& array['scopes'])
+        AND (${table.authorizedPermissions} - 'scopes') = '{}'::jsonb
+        AND jsonb_typeof(${table.authorizedPermissions}->'scopes') = 'array'
+        AND jsonb_array_length(${table.authorizedPermissions}->'scopes') <= 100
+      )
+    )
     AND (
       (${table.status} = 'revoked' AND ${table.revokedAt} IS NOT NULL)
       OR (${table.status} <> 'revoked')
@@ -218,22 +254,119 @@ export const userIntegrations = pgTable('user_integrations', {
       (${table.status} = 'error'
         AND ${table.errorReason} IN (
           'token_exchange_failed',
+          'token_refresh_failed',
           'revocation_failed',
           'scope_denied',
           'provider_unavailable'
         ))
       OR (${table.status} <> 'error' AND ${table.errorReason} IS NULL)
     )
+    AND (
+      ${table.provider} = 'github'
+      OR ${table.integrationDescriptorId} IS NOT NULL
+      OR ${table.revokedAt} IS NOT NULL
+    )
   `),
   uniqueIndex('idx_user_integrations_active_provider_unique')
     .on(table.userId, table.provider)
     .where(sql`${table.revokedAt} IS NULL`),
   index('idx_user_integrations_user').on(table.userId, table.revokedAt),
+  index('idx_user_integrations_descriptor').on(table.integrationDescriptorId),
+]);
+
+export const integrationProviderDescriptors = pgTable('integration_provider_descriptors', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  provider: text('provider').notNull(),
+  ownership: text('ownership').$type<IntegrationDescriptorOwnership>().notNull(),
+  ownerUserId: uuid('owner_user_id').references(() => users.id, { onDelete: 'cascade' }),
+  displayName: text('display_name').notNull(),
+  category: text('category').notNull(),
+  authStrategy: text('auth_strategy').$type<IntegrationAuthStrategy>().notNull(),
+  apiHosts: jsonb('api_hosts').$type<readonly string[]>().notNull().default([]),
+  oauth: jsonb('oauth').$type<Record<string, unknown> | null>(),
+  staticApiKey: jsonb('static_api_key').$type<Record<string, unknown> | null>(),
+  clientSecretCiphertext: bytea('client_secret_ciphertext'),
+  clientSecretRevision: uuid('client_secret_revision'),
+  credentialKeyVersion: text('credential_key_version'),
+  operationPromotion: jsonb('operation_promotion').notNull().default({}),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+}, (table) => [
+  check('integration_provider_descriptors_provider_check', sql`${table.provider} ~ '^[a-z][a-z0-9_-]{1,63}$'`),
+  check('integration_provider_descriptors_ownership_check', sql`${table.ownership} IN ('curated', 'byo')`),
+  check('integration_provider_descriptors_auth_strategy_check', sql`${table.authStrategy} IN ('oauth2_authorization_code', 'static_api_key', 'coded')`),
+  check('integration_provider_descriptors_shape_check', sql`
+    btrim(${table.displayName}) <> ''
+    AND char_length(${table.displayName}) <= 120
+    AND btrim(${table.category}) <> ''
+    AND char_length(${table.category}) <= 80
+    AND jsonb_typeof(${table.apiHosts}) = 'array'
+    AND jsonb_array_length(${table.apiHosts}) BETWEEN 1 AND 25
+    AND jsonb_typeof(${table.operationPromotion}) = 'object'
+    AND char_length(${table.operationPromotion}::text) <= 8192
+    AND (${table.credentialKeyVersion} IS NULL OR (
+      btrim(${table.credentialKeyVersion}) <> ''
+      AND char_length(${table.credentialKeyVersion}) <= 128
+    ))
+    AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.clientSecretRevision} IS NULL)
+    AND (${table.clientSecretCiphertext} IS NOT NULL OR ${table.credentialKeyVersion} IS NULL)
+    AND (
+      (${table.ownership} = 'curated' AND ${table.ownerUserId} IS NULL)
+      OR (${table.ownership} = 'byo' AND ${table.ownerUserId} IS NOT NULL)
+    )
+    AND (
+      (${table.authStrategy} = 'oauth2_authorization_code'
+        AND ${table.oauth} IS NOT NULL
+        AND jsonb_typeof(${table.oauth}) = 'object'
+        AND ${table.staticApiKey} IS NULL)
+      OR (${table.authStrategy} = 'static_api_key'
+        AND ${table.staticApiKey} IS NOT NULL
+        AND jsonb_typeof(${table.staticApiKey}) = 'object'
+        AND ${table.oauth} IS NULL)
+      OR (${table.authStrategy} = 'coded'
+        AND ${table.oauth} IS NULL
+        AND ${table.staticApiKey} IS NULL
+        AND ${table.clientSecretCiphertext} IS NULL)
+    )
+    AND ${table.updatedAt} >= ${table.createdAt}
+  `),
+  uniqueIndex('idx_integration_provider_descriptors_curated_unique')
+    .on(table.provider)
+    .where(sql`${table.ownership} = 'curated'`),
+  uniqueIndex('idx_integration_provider_descriptors_byo_unique')
+    .on(table.ownerUserId, table.provider)
+    .where(sql`${table.ownership} = 'byo'`),
+  index('idx_integration_provider_descriptors_owner').on(table.ownerUserId),
+]);
+
+export const integrationOpenApiSpecs = pgTable('integration_openapi_specs', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  descriptorId: uuid('descriptor_id').notNull().references(() => integrationProviderDescriptors.id, { onDelete: 'cascade' }),
+  spec: jsonb('spec').notNull(),
+  sourceUrl: text('source_url'),
+  specHash: text('spec_hash').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().default(sql`NOW()`),
+}, (table) => [
+  check('integration_openapi_specs_shape_check', sql`
+    jsonb_typeof(${table.spec}) = 'object'
+    AND char_length(${table.spec}::text) <= 1048576
+    AND ${table.spec}->>'openapi' LIKE '3.%'
+    AND jsonb_typeof(${table.spec}->'paths') = 'object'
+    AND (${table.sourceUrl} IS NULL OR (
+      ${table.sourceUrl} LIKE 'https://%'
+      AND char_length(${table.sourceUrl}) <= 2048
+      AND ${table.sourceUrl} NOT LIKE '%#%'
+    ))
+    AND ${table.specHash} ~ '^[a-f0-9]{64}$'
+    AND ${table.updatedAt} >= ${table.createdAt}
+  `),
+  uniqueIndex('idx_integration_openapi_specs_descriptor_unique').on(table.descriptorId),
 ]);
 
 export type PortfolioSyncDirection = 'pull' | 'push' | 'bidirectional';
 export type PortfolioSyncConflictPolicy = 'fail' | 'prefer_local' | 'prefer_remote';
-export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
+export type PortfolioSyncJobStatus = 'queued' | 'running' | 'succeeded' | 'failed';
 export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
   id: uuid('id').primaryKey().defaultRandom(),
   userId: uuid('user_id').notNull().references(() => users.id, { onDelete: 'cascade' }),
@@ -253,7 +386,7 @@ export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
 }, (table) => [
   check('portfolio_sync_jobs_direction_check', sql`${table.direction} IN ('pull', 'push', 'bidirectional')`),
   check('portfolio_sync_jobs_conflict_policy_check', sql`${table.conflictPolicy} IN ('fail', 'prefer_local', 'prefer_remote')`),
-  check('portfolio_sync_jobs_status_check', sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')`),
+  check('portfolio_sync_jobs_status_check', sql`${table.status} IN ('queued', 'running', 'succeeded', 'failed')`),
   check('portfolio_sync_jobs_shape_check', sql`
     ${table.claimVersion} >= 0
     AND ${table.attemptCount} >= 0
@@ -279,8 +412,8 @@ export const portfolioSyncJobs = pgTable('portfolio_sync_jobs', {
         AND ${table.leaseUntil} IS NULL)
     )
     AND (
-      (${table.status} IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NOT NULL)
-      OR (${table.status} NOT IN ('succeeded', 'failed', 'cancelled') AND ${table.completedAt} IS NULL)
+      (${table.status} IN ('succeeded', 'failed') AND ${table.completedAt} IS NOT NULL)
+      OR (${table.status} NOT IN ('succeeded', 'failed') AND ${table.completedAt} IS NULL)
     )
     AND (
       (${table.status} = 'failed' AND ${table.operationalErrorCode} IS NOT NULL)
@@ -446,6 +579,10 @@ export const runtimeSessionPresence = pgTable('runtime_session_presence', {
   index('idx_runtime_session_presence_user').on(table.userId, table.status, table.leaseUntil),
   index('idx_runtime_session_presence_replica').on(table.replicaId, table.leaseUntil),
   index('idx_runtime_session_presence_correlation').on(table.accountCorrelationId),
+  // Keyset pagination for the cross-user operational sessions list (Family B): matches
+  // `WHERE status=? ORDER BY last_active_at DESC, session_id DESC` + `(last_active_at, session_id) < cursor`.
+  index('idx_runtime_session_presence_active_ordering')
+    .on(table.status, table.lastActiveAt.desc(), table.sessionId.desc()),
 ]);
 
 export type SessionActivationElementType =

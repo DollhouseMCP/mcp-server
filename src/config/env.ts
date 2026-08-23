@@ -173,6 +173,14 @@ const envSchema = z.object({
   DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET: z.string().trim().optional()
     .transform(v => (v && v.length > 0) ? v : undefined),
   /**
+   * Directory of curated integration descriptor seed files (data, not code),
+   * loaded into the descriptor store at web-console bootstrap. Per-provider
+   * deployment OAuth credentials are read separately from
+   * `DOLLHOUSE_INTEGRATION_<ID>_CLIENT_ID` / `_CLIENT_SECRET`.
+   */
+  DOLLHOUSE_INTEGRATION_DESCRIPTOR_SEED_DIR: z.string().trim().optional()
+    .transform(v => (v && v.length > 0) ? v : undefined),
+  /**
    * Legacy GitHub OAuth client secret. Predates the env-var split
    * above. Kept as a fallback so existing operators don't break;
    * prefer `DOLLHOUSE_AUTH_GITHUB_CLIENT_SECRET` for new deployments.
@@ -406,6 +414,13 @@ const envSchema = z.object({
    * the manager-backed authoring path is deliberately exposed.
    */
   DOLLHOUSE_WEB_CONSOLE_PORTFOLIO_WRITE_ROUTES_ENABLED: envBool(false),
+  /**
+   * Enables the collection catalog browse routes (/api/v1/collection/*) on the
+   * replacement console. Defaults off: serving the catalog drives server-funded
+   * outbound GitHub traffic under a budget shared by every user, so operators
+   * opt in deliberately (and can kill the surface independently of the console).
+   */
+  DOLLHOUSE_WEB_CONSOLE_COLLECTION_ENABLED: envBool(false),
   /**
    * Enables the sign-in allowlist admin routes (/api/v1/admin/accounts/allowlist*)
    * on the replacement console. Defaults on: the console is the operator surface

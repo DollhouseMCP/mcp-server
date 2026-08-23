@@ -90,13 +90,7 @@ export class PathValidator {
         : this.allowedDirectories;
 
       const resolved = await Promise.all(
-        allowedDirs.map(async (dir) => {
-          try {
-            return await fs.realpath(dir);
-          } catch {
-            return dir;
-          }
-        })
+        allowedDirs.map(dir => PathValidator.resolveSymlinks(path.resolve(dir), dir))
       );
 
       return resolved;
@@ -203,14 +197,9 @@ export class PathValidator {
   }
 
   private async validatePathIsWritable(realPath: string): Promise<void> {
-    this.resolvedWritableDirs ??= (async () => {
-      return Promise.all(
-        this.writableDirectories.map(async (dir) => {
-          try { return await fs.realpath(dir); }
-          catch { return dir; }
-        })
-      );
-    })();
+    this.resolvedWritableDirs ??= Promise.all(
+      this.writableDirectories.map(dir => PathValidator.resolveSymlinks(path.resolve(dir), dir))
+    );
     const writableDirs = await this.resolvedWritableDirs;
     const isWritable = writableDirs.some(dir =>
       realPath.startsWith(dir + path.sep) || realPath === dir
@@ -288,21 +277,36 @@ export class PathValidator {
   }
 
   private static async resolveParentSymlink(resolvedPath: string, userPath: string): Promise<string> {
-    const parentDir = path.dirname(resolvedPath);
-    try {
-      const realParent = await fs.realpath(parentDir);
+    let existingAncestor = resolvedPath;
+    const missingSegments: string[] = [];
 
-      if (realParent !== parentDir) {
-        logger.warn('Parent directory symlink detected and resolved', {
-          requestedPath: userPath,
-          parentDir,
-          realParent
-        });
+    while (true) {
+      try {
+        const realAncestor = await fs.realpath(existingAncestor);
+        const realPath = path.join(realAncestor, ...missingSegments);
+
+        if (realPath !== resolvedPath) {
+          logger.warn('Path ancestor symlink detected and resolved', {
+            requestedPath: userPath,
+            resolvedPath,
+            realPath,
+          });
+        }
+
+        return realPath;
+      } catch (error) {
+        const code = (error as NodeJS.ErrnoException).code;
+        if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+          throw error;
+        }
+
+        const parent = path.dirname(existingAncestor);
+        if (parent === existingAncestor) {
+          return resolvedPath;
+        }
+        missingSegments.unshift(path.basename(existingAncestor));
+        existingAncestor = parent;
       }
-
-      return path.join(realParent, path.basename(resolvedPath));
-    } catch {
-      return resolvedPath;
     }
   }
 

@@ -17,11 +17,13 @@
  * - SecureYamlParser for safe YAML parsing
  */
 
-import { Ensemble, EnsembleMetadata, EnsembleElement } from './Ensemble.js';
-import { ElementValidationResult } from '../../types/elements/IElement.js';
+import type { EnsembleMetadata, EnsembleElement } from './Ensemble.js';
+import { Ensemble } from './Ensemble.js';
+import type { ElementValidationResult } from '../../types/elements/IElement.js';
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
-import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
+import type { ElementManagerDeps } from '../base/BaseElementManager.js';
+import { BaseElementManager } from '../base/BaseElementManager.js';
 import { SecurityMonitor } from '../../security/securityMonitor.js';
 import { logger } from '../../utils/logger.js';
 import {
@@ -35,9 +37,9 @@ import {
   ACTIVATION_MODES
 } from './constants.js';
 import type { ActivationStrategy, ConflictResolutionStrategy, ElementRole, ActivationMode } from './types.js';
-import { ValidationService } from '../../services/validation/ValidationService.js';
-import { SerializationService } from '../../services/SerializationService.js';
-import { MetadataService } from '../../services/MetadataService.js';
+import type { ValidationService } from '../../services/validation/ValidationService.js';
+import type { SerializationService } from '../../services/SerializationService.js';
+import type { MetadataService } from '../../services/MetadataService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
 import { VALIDATION_PATTERNS, SECURITY_LIMITS } from '../../security/constants.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
@@ -47,11 +49,10 @@ import { SecureYamlParser } from '../../security/secureYamlParser.js';
 import { getActiveElementLimitConfig, getMaxActiveLimit } from '../../config/active-element-limits.js';
 
 // Issue #466: Shared element type resolver — re-exported for backward compatibility
-import { resolveElementTypes } from '../../utils/elementTypeResolver.js';
 export { resolveElementTypes, type ElementManagersForResolution } from '../../utils/elementTypeResolver.js';
 
 /** @deprecated Use resolveElementTypes from '../../utils/elementTypeResolver.js' */
-export const resolveEnsembleElementTypes = resolveElementTypes;
+export { resolveElementTypes as resolveEnsembleElementTypes } from '../../utils/elementTypeResolver.js';
 
 const LEGACY_ELEMENT_FIELD_REPLACEMENTS = {
   name: 'element_name',
@@ -71,8 +72,8 @@ type LegacyElementField = keyof typeof LEGACY_ELEMENT_FIELD_REPLACEMENTS;
  */
 export class EnsembleManager extends BaseElementManager<Ensemble> {
   private readonly ensemblesDir: string;
-  private validationService: ValidationService;
-  private serializationService: SerializationService;
+  private readonly validationService: ValidationService;
+  private readonly serializationService: SerializationService;
   private readonly metadataService: MetadataService;
   private readonly _localActiveEnsembleNames: Set<string> = new Set();
   private readonly legacyElementFieldWarnings: Set<string> = new Set();
@@ -199,7 +200,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         });
         const parsed = SecureYamlParser.safeMatter(raw);
 
-        if (!this.hasLegacyElementFields(parsed.data?.elements)) {
+        if (!this.hasLegacyElementFields(parsed.data.elements)) {
           continue;
         }
 
@@ -231,292 +232,255 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @param data - Raw YAML data from frontmatter
    * @returns Validated EnsembleMetadata
    */
-  protected override async parseMetadata(data: any): Promise<EnsembleMetadata> {
-    // REFACTORED: Use validateMetadataField for field-aware error messages (#365)
-    const nameResult = this.validationService.validateMetadataField('name', data.name, {
-      required: true,
-      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH
-    });
-    if (!nameResult.isValid) {
-      throw new Error(`Validation failed: ${nameResult.errors?.join(', ')}`);
-    }
-    const name = nameResult.sanitizedValue;
-
-    if (!name) {
-      throw new Error('Ensemble metadata must include a name');
-    }
-
-    // REFACTORED: Use validateMetadataField for field-aware error messages (#365)
-    let description: string | undefined;
-    if (data.description) {
-      const descResult = this.validationService.validateMetadataField('description', data.description, {
-        required: false,
-        maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
-        pattern: VALIDATION_PATTERNS.SAFE_DESCRIPTION
-      });
-      if (!descResult.isValid) {
-        throw new Error(`Validation failed: ${descResult.errors?.join(', ')}`);
-      }
-      description = descResult.sanitizedValue;
-    }
-
-    // REFACTORED: Use ValidationService for activation strategy (support both snake_case and camelCase)
-    const activationStrategyRaw = data.activation_strategy || data.activationStrategy || ENSEMBLE_DEFAULTS.ACTIVATION_STRATEGY;
-    const activationStrategyResult = this.validationService.validateAndSanitizeInput(String(activationStrategyRaw), {
-      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
-      allowSpaces: false
-    });
-    if (!activationStrategyResult.isValid) {
-      throw new Error(`Invalid activation strategy: ${activationStrategyResult.errors?.join(', ')}`);
-    }
-    const activationStrategy = activationStrategyResult.sanitizedValue!;
-
-    // KEEP: Enum validation logic (add AFTER ValidationService sanitization)
-    if (!ACTIVATION_STRATEGIES.includes(activationStrategy as any)) {
-      throw new Error(`${ENSEMBLE_ERRORS.INVALID_STRATEGY}: ${activationStrategy}`);
-    }
-
-    // REFACTORED: Use ValidationService for conflict resolution strategy
-    const conflictResolutionRaw = data.conflict_resolution || data.conflictResolution || ENSEMBLE_DEFAULTS.CONFLICT_RESOLUTION;
-    const conflictResolutionResult = this.validationService.validateAndSanitizeInput(String(conflictResolutionRaw), {
-      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
-      allowSpaces: false
-    });
-    if (!conflictResolutionResult.isValid) {
-      throw new Error(`Invalid conflict resolution strategy: ${conflictResolutionResult.errors?.join(', ')}`);
-    }
-    const conflictResolution = conflictResolutionResult.sanitizedValue!;
-
-    // KEEP: Enum validation logic (add AFTER ValidationService sanitization)
-    if (!CONFLICT_STRATEGIES.includes(conflictResolution as any)) {
-      throw new Error(`${ENSEMBLE_ERRORS.INVALID_CONFLICT_RESOLUTION}: ${conflictResolution}`);
-    }
-
-    // REFACTORED: Use ValidationService for context sharing mode
-    const contextSharingRaw = data.context_sharing || data.contextSharing || ENSEMBLE_DEFAULTS.CONTEXT_SHARING;
-
-    // FIX: Handle boolean values (true -> 'full', false -> 'none')
-    let contextSharingValue: string;
-    if (typeof contextSharingRaw === 'boolean') {
-      contextSharingValue = contextSharingRaw ? 'full' : 'none';
-    } else {
-      contextSharingValue = String(contextSharingRaw);
-    }
-
-    const contextSharingResult = this.validationService.validateAndSanitizeInput(contextSharingValue, {
-      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
-      allowSpaces: false
-    });
-    if (!contextSharingResult.isValid) {
-      throw new Error(`Invalid context sharing mode: ${contextSharingResult.errors?.join(', ')}`);
-    }
-    const contextSharing = contextSharingResult.sanitizedValue!;
-
-    // KEEP: Enum validation logic (add AFTER ValidationService sanitization)
-    if (!['none', 'selective', 'full'].includes(contextSharing)) {
-      throw new Error(`Invalid context sharing mode: ${contextSharing}`);
-    }
-
-    // Parse resource limits (support snake_case)
-    const resourceLimitsRaw = data.resource_limits || data.resourceLimits;
-    let resourceLimits;
-
-    if (resourceLimitsRaw) {
-      resourceLimits = {
-        maxActiveElements: resourceLimitsRaw.max_active_elements || resourceLimitsRaw.maxActiveElements || ENSEMBLE_LIMITS.MAX_ELEMENTS,
-        maxMemoryMb: resourceLimitsRaw.max_memory_mb || resourceLimitsRaw.maxMemoryMb,
-        maxExecutionTimeMs: resourceLimitsRaw.max_execution_time_ms || resourceLimitsRaw.maxExecutionTimeMs || ENSEMBLE_LIMITS.MAX_ACTIVATION_TIME
-      };
-    }
-
-    // Parse elements array
-    const elementsRaw = data.elements || [];
-    if (!Array.isArray(elementsRaw)) {
-      throw new Error('Ensemble elements must be an array');
-    }
-
-    const elements: EnsembleElement[] = elementsRaw.map((elem: any, index: number) => {
-      // REFACTORED: Use ValidationService for element name
-      // Support both element_name (new standard) and name (legacy) for backwards compatibility
-      const rawElementName = elem.element_name || elem.name;
-      if (!rawElementName) {
-        throw new Error(`Element at index ${index} must have element_name (or name for backwards compatibility)`);
-      }
-      // Log deprecation warning if using legacy 'name' field
-      if (elem.name && !elem.element_name) {
-        this.warnOnceForLegacyElementField(name, index, 'name');
-      }
-      const elementNameResult = this.validationService.validateAndSanitizeInput(
-        String(rawElementName),
-        { maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH, allowSpaces: true }
-      );
-      if (!elementNameResult.isValid) {
-        throw new Error(`Invalid element name at index ${index}: ${elementNameResult.errors?.join(', ')}`);
-      }
-      const elementName = elementNameResult.sanitizedValue!;
-
-      // REFACTORED: Use ValidationService for element type
-      // Support both element_type (new standard) and type (legacy) for backwards compatibility
-      const rawElementType = elem.element_type || elem.type || 'skill';
-      // Log deprecation warning if using legacy 'type' field
-      if (elem.type && !elem.element_type) {
-        this.warnOnceForLegacyElementField(name, index, 'type');
-      }
-      const elementTypeResult = this.validationService.validateAndSanitizeInput(
-        String(rawElementType),
-        { maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH, allowSpaces: false }
-      );
-      if (!elementTypeResult.isValid) {
-        throw new Error(`Invalid element type at index ${index}: ${elementTypeResult.errors?.join(', ')}`);
-      }
-      const elementType = elementTypeResult.sanitizedValue!;
-
-      // REFACTORED: Use ValidationService for element role
-      const elementRoleResult = this.validationService.validateAndSanitizeInput(
-        String(elem.role || ENSEMBLE_DEFAULTS.ELEMENT_ROLE),
-        { maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH, allowSpaces: false }
-      );
-      if (!elementRoleResult.isValid) {
-        throw new Error(`Invalid element role at index ${index}: ${elementRoleResult.errors?.join(', ')}`);
-      }
-      const elementRole = elementRoleResult.sanitizedValue!;
-
-      // KEEP: Enum validation logic (add AFTER ValidationService sanitization)
-      if (!ELEMENT_ROLES.includes(elementRole as any)) {
-        throw new Error(`${ENSEMBLE_ERRORS.INVALID_ELEMENT_ROLE}: ${elementRole}`);
-      }
-
-      // REFACTORED: Use ValidationService for element activation
-      const elementActivationResult = this.validationService.validateAndSanitizeInput(
-        String(elem.activation || 'always'),
-        { maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH, allowSpaces: false }
-      );
-      if (!elementActivationResult.isValid) {
-        throw new Error(`Invalid element activation at index ${index}: ${elementActivationResult.errors?.join(', ')}`);
-      }
-      const elementActivation = elementActivationResult.sanitizedValue!;
-
-      // KEEP: Enum validation logic (add AFTER ValidationService sanitization)
-      if (!ACTIVATION_MODES.includes(elementActivation as any)) {
-        throw new Error(`${ENSEMBLE_ERRORS.INVALID_ACTIVATION_MODE}: ${elementActivation}`);
-      }
-
-      // Parse priority (0-100, default 50)
-      let priority = elem.priority ?? ENSEMBLE_DEFAULTS.PRIORITY;
-      if (typeof priority === 'string') {
-        priority = parseInt(priority, 10);
-      }
-      priority = Math.max(0, Math.min(100, priority));
-
-      // REFACTORED: Use ValidationService for condition (if conditional activation)
-      // Conditions need special handling - they can contain operators like ==, !=, &&, ||
-      // So we use a custom pattern that allows these characters
-      let condition: string | undefined;
-      if (elementActivation === 'conditional' && elem.condition) {
-        const conditionResult = this.validationService.validateAndSanitizeInput(
-          String(elem.condition),
-          {
-            maxLength: ENSEMBLE_LIMITS.MAX_CONDITION_LENGTH,
-            allowSpaces: true,
-            customPattern: /^[a-zA-Z0-9\s\-_.=!&|<>()]+$/  // Allow comparison/logical operators
-          }
-        );
-        if (!conditionResult.isValid) {
-          throw new Error(`Invalid condition at index ${index}: ${conditionResult.errors?.join(', ')}`);
-        }
-        condition = conditionResult.sanitizedValue;
-      }
-
-      // REFACTORED: Use ValidationService for dependencies
-      let dependencies: string[] | undefined;
-      if (elem.dependencies && Array.isArray(elem.dependencies)) {
-        const validatedDependencies: string[] = [];
-        for (const dep of elem.dependencies.slice(0, ENSEMBLE_LIMITS.MAX_DEPENDENCIES)) {
-          const depResult = this.validationService.validateAndSanitizeInput(String(dep), {
-            maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH,
-            allowSpaces: true
-          });
-          if (!depResult.isValid) {
-            throw new Error(`Invalid dependency "${dep}" at index ${index}: ${depResult.errors?.join(', ')}`);
-          }
-          validatedDependencies.push(depResult.sanitizedValue!);
-        }
-        dependencies = validatedDependencies;
-      }
-
-      // REFACTORED: Use ValidationService for purpose
-      let purpose: string | undefined;
-      if (elem.purpose) {
-        const purposeResult = this.validationService.validateAndSanitizeInput(String(elem.purpose), {
-          maxLength: SECURITY_LIMITS.MAX_YAML_LENGTH,
-          allowSpaces: true,
-          fieldType: 'description'  // Allow full description punctuation (commas, em-dashes, etc.)
-        });
-        if (!purposeResult.isValid) {
-          throw new Error(`Invalid purpose at index ${index}: ${purposeResult.errors?.join(', ')}`);
-        }
-        purpose = purposeResult.sanitizedValue;
-      }
-
-      return {
-        element_name: elementName,
-        element_type: elementType,
-        role: elementRole as ElementRole,
-        priority,
-        activation: elementActivation as ActivationMode,
-        condition,
-        dependencies,
-        purpose
-      };
-    });
-
-    // Validate element count
+  protected override parseMetadata(data: any): Promise<EnsembleMetadata> {
+    const name = this.parseName(data);
+    const activationStrategy = this.parseActivationStrategy(data);
+    const conflictResolution = this.parseConflictResolution(data);
+    const contextSharing = this.parseContextSharing(data);
+    const elements = this.parseElements(data, name);
     if (elements.length > ENSEMBLE_LIMITS.MAX_ELEMENTS) {
       throw new Error(ENSEMBLE_ERRORS.TOO_MANY_ELEMENTS);
     }
 
-    // Parse nesting configuration
-    const allowNested = data.allow_nested !== undefined ?
-      Boolean(data.allow_nested) :
-      (data.allowNested !== undefined ? Boolean(data.allowNested) : ENSEMBLE_DEFAULTS.ALLOW_NESTED);
-
-    const maxNestingDepth = data.max_nesting_depth || data.maxNestingDepth || ENSEMBLE_DEFAULTS.MAX_NESTING_DEPTH;
-
-    // REFACTORED: Use ValidationService for tags array
-    let tags: string[] = [];
-    if (Array.isArray(data.tags)) {
-      for (const tag of data.tags) {
-        const tagResult = this.validationService.validateAndSanitizeInput(String(tag), {
-          maxLength: SECURITY_LIMITS.MAX_TAG_LENGTH,
-          allowSpaces: true
-        });
-        if (!tagResult.isValid) {
-          throw new Error(`Invalid tag "${tag}": ${tagResult.errors?.join(', ')}`);
-        }
-        tags.push(tagResult.sanitizedValue!);
-      }
-    }
-
-    // Build metadata object (camelCase)
-    const metadata: EnsembleMetadata = {
+    return Promise.resolve({
       name,
-      description: description || '',
+      description: this.parseDescription(data),
       version: data.version || '1.0.0',
       author: data.author,
       created: data.created,
       modified: data.modified || new Date().toISOString(),
-      tags,
-      activationStrategy: activationStrategy as ActivationStrategy,
-      conflictResolution: conflictResolution as ConflictResolutionStrategy,
-      contextSharing: contextSharing as 'none' | 'selective' | 'full',
-      resourceLimits,
-      allowNested,
-      maxNestingDepth,
+      tags: this.parseTags(data),
+      instructions: typeof data.instructions === 'string' ? data.instructions : undefined,
+      activationStrategy,
+      conflictResolution,
+      contextSharing,
+      resourceLimits: this.parseResourceLimits(data),
+      allowNested: this.parseAllowNested(data),
+      maxNestingDepth: data.max_nesting_depth || data.maxNestingDepth || ENSEMBLE_DEFAULTS.MAX_NESTING_DEPTH,
       elements,
-      gatekeeper: sanitizeGatekeeperPolicy(data.gatekeeper, name, 'ensemble', data as Record<string, unknown>),  // Issue #524
-    };
+      gatekeeper: sanitizeGatekeeperPolicy(data.gatekeeper, name, 'ensemble', data as Record<string, unknown>),
+    });
+  }
 
-    return metadata;
+  private parseName(data: any): string {
+    const nameResult = this.validationService.validateMetadataField('name', data.name, {
+      required: true,
+      maxLength: SECURITY_LIMITS.MAX_NAME_LENGTH
+    });
+    const name = this.requireSanitizedValue(nameResult, 'Validation failed');
+    if (!name) {
+      throw new Error('Ensemble metadata must include a name');
+    }
+    return name;
+  }
+
+  private parseDescription(data: any): string {
+    if (!data.description) {
+      return '';
+    }
+    const result = this.validationService.validateMetadataField('description', data.description, {
+      required: false,
+      maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+      pattern: VALIDATION_PATTERNS.SAFE_DESCRIPTION
+    });
+    return this.requireSanitizedValue(result, 'Validation failed');
+  }
+
+  private parseActivationStrategy(data: any): ActivationStrategy {
+    const raw = data.activation_strategy || data.activationStrategy || ENSEMBLE_DEFAULTS.ACTIVATION_STRATEGY;
+    const activationStrategy = this.sanitizeEnumValue(raw, 'activation strategy');
+    if (!ACTIVATION_STRATEGIES.includes(activationStrategy as any)) {
+      throw new Error(`${ENSEMBLE_ERRORS.INVALID_STRATEGY}: ${activationStrategy}`);
+    }
+    return activationStrategy as ActivationStrategy;
+  }
+
+  private parseConflictResolution(data: any): ConflictResolutionStrategy {
+    const raw = data.conflict_resolution || data.conflictResolution || ENSEMBLE_DEFAULTS.CONFLICT_RESOLUTION;
+    const conflictResolution = this.sanitizeEnumValue(raw, 'conflict resolution strategy');
+    if (!CONFLICT_STRATEGIES.includes(conflictResolution as any)) {
+      throw new Error(`${ENSEMBLE_ERRORS.INVALID_CONFLICT_RESOLUTION}: ${conflictResolution}`);
+    }
+    return conflictResolution as ConflictResolutionStrategy;
+  }
+
+  private parseContextSharing(data: any): 'none' | 'selective' | 'full' {
+    const raw = data.context_sharing || data.contextSharing || ENSEMBLE_DEFAULTS.CONTEXT_SHARING;
+    let contextSharingValue = String(raw);
+    if (typeof raw === 'boolean') {
+      contextSharingValue = raw ? 'full' : 'none';
+    }
+    const contextSharing = this.sanitizeEnumValue(contextSharingValue, 'context sharing mode');
+    if (!['none', 'selective', 'full'].includes(contextSharing)) {
+      throw new Error(`Invalid context sharing mode: ${contextSharing}`);
+    }
+    return contextSharing as 'none' | 'selective' | 'full';
+  }
+
+  private sanitizeEnumValue(raw: unknown, label: string): string {
+    const result = this.validationService.validateAndSanitizeInput(String(raw), {
+      maxLength: SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
+      allowSpaces: false
+    });
+    return this.requireSanitizedValue(result, `Invalid ${label}`);
+  }
+
+  private parseResourceLimits(data: any): EnsembleMetadata['resourceLimits'] {
+    const resourceLimitsRaw = data.resource_limits || data.resourceLimits;
+    if (!resourceLimitsRaw) {
+      return undefined;
+    }
+    return {
+      maxActiveElements: resourceLimitsRaw.max_active_elements || resourceLimitsRaw.maxActiveElements || ENSEMBLE_LIMITS.MAX_ELEMENTS,
+      maxMemoryMb: resourceLimitsRaw.max_memory_mb || resourceLimitsRaw.maxMemoryMb,
+      maxExecutionTimeMs: resourceLimitsRaw.max_execution_time_ms || resourceLimitsRaw.maxExecutionTimeMs || ENSEMBLE_LIMITS.MAX_ACTIVATION_TIME
+    };
+  }
+
+  private parseElements(data: any, ensembleName: string): EnsembleElement[] {
+    const elementsRaw = data.elements || [];
+    if (!Array.isArray(elementsRaw)) {
+      throw new TypeError('Ensemble elements must be an array');
+    }
+    return elementsRaw.map((element: any, index: number) =>
+      this.parseElement(element, index, ensembleName));
+  }
+
+  private parseElement(element: any, index: number, ensembleName: string): EnsembleElement {
+    const role = this.parseElementRole(element, index);
+    const activation = this.parseElementActivation(element, index);
+    return {
+      element_name: this.parseElementName(element, index, ensembleName),
+      element_type: this.parseElementType(element, index, ensembleName),
+      role,
+      priority: this.parseElementPriority(element),
+      activation,
+      condition: this.parseElementCondition(element, index, activation),
+      dependencies: this.parseElementDependencies(element, index),
+      purpose: this.parseElementPurpose(element, index)
+    };
+  }
+
+  private parseElementName(element: any, index: number, ensembleName: string): string {
+    const rawName = element.element_name || element.name;
+    if (!rawName) {
+      throw new Error(`Element at index ${index} must have element_name (or name for backwards compatibility)`);
+    }
+    if (element.name && !element.element_name) {
+      this.warnOnceForLegacyElementField(ensembleName, index, 'name');
+    }
+    return this.sanitizeText(rawName, SECURITY_LIMITS.MAX_NAME_LENGTH, true, `Invalid element name at index ${index}`);
+  }
+
+  private parseElementType(element: any, index: number, ensembleName: string): string {
+    const rawType = element.element_type || element.type || 'skill';
+    if (element.type && !element.element_type) {
+      this.warnOnceForLegacyElementField(ensembleName, index, 'type');
+    }
+    return this.sanitizeText(rawType, SECURITY_LIMITS.MAX_TAG_LENGTH, false, `Invalid element type at index ${index}`);
+  }
+
+  private parseElementRole(element: any, index: number): ElementRole {
+    const role = this.sanitizeText(
+      element.role || ENSEMBLE_DEFAULTS.ELEMENT_ROLE,
+      SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
+      false,
+      `Invalid element role at index ${index}`,
+    );
+    if (!ELEMENT_ROLES.includes(role as any)) {
+      throw new Error(`${ENSEMBLE_ERRORS.INVALID_ELEMENT_ROLE}: ${role}`);
+    }
+    return role as ElementRole;
+  }
+
+  private parseElementActivation(element: any, index: number): ActivationMode {
+    const activation = this.sanitizeText(
+      element.activation || 'always',
+      SECURITY_LIMITS.MAX_ENUM_FIELD_LENGTH,
+      false,
+      `Invalid element activation at index ${index}`,
+    );
+    if (!ACTIVATION_MODES.includes(activation as any)) {
+      throw new Error(`${ENSEMBLE_ERRORS.INVALID_ACTIVATION_MODE}: ${activation}`);
+    }
+    return activation as ActivationMode;
+  }
+
+  private parseElementPriority(element: any): number {
+    const rawPriority = element.priority ?? ENSEMBLE_DEFAULTS.PRIORITY;
+    const priority = typeof rawPriority === 'string' ? Number.parseInt(rawPriority, 10) : rawPriority;
+    return Math.max(0, Math.min(100, priority));
+  }
+
+  private parseElementCondition(element: any, index: number, activation: ActivationMode): string | undefined {
+    if (activation !== 'conditional' || !element.condition) {
+      return undefined;
+    }
+    const result = this.validationService.validateAndSanitizeInput(String(element.condition), {
+      maxLength: ENSEMBLE_LIMITS.MAX_CONDITION_LENGTH,
+      allowSpaces: true,
+      customPattern: /^[a-zA-Z0-9\s\-_.=!&|<>()]+$/
+    });
+    return this.requireSanitizedValue(result, `Invalid condition at index ${index}`);
+  }
+
+  private parseElementDependencies(element: any, index: number): string[] | undefined {
+    if (!Array.isArray(element.dependencies)) {
+      return undefined;
+    }
+    return element.dependencies
+      .slice(0, ENSEMBLE_LIMITS.MAX_DEPENDENCIES)
+      .map((dependency: unknown) => this.sanitizeText(
+        dependency,
+        SECURITY_LIMITS.MAX_NAME_LENGTH,
+        true,
+        `Invalid dependency "${String(dependency)}" at index ${index}`,
+      ));
+  }
+
+  private parseElementPurpose(element: any, index: number): string | undefined {
+    if (!element.purpose) {
+      return undefined;
+    }
+    const result = this.validationService.validateAndSanitizeInput(String(element.purpose), {
+      maxLength: SECURITY_LIMITS.MAX_DESCRIPTION_LENGTH,
+      allowSpaces: true,
+      fieldType: 'description'
+    });
+    return this.requireSanitizedValue(result, `Invalid purpose at index ${index}`);
+  }
+
+  private sanitizeText(raw: unknown, maxLength: number, allowSpaces: boolean, errorMessage: string): string {
+    const result = this.validationService.validateAndSanitizeInput(String(raw), { maxLength, allowSpaces });
+    return this.requireSanitizedValue(result, errorMessage);
+  }
+
+  private requireSanitizedValue(
+    result: { isValid: boolean; sanitizedValue?: string; errors?: string[] },
+    errorMessage: string,
+  ): string {
+    if (!result.isValid || typeof result.sanitizedValue !== 'string') {
+      throw new Error(`${errorMessage}: ${result.errors?.join(', ')}`);
+    }
+    return result.sanitizedValue;
+  }
+
+  private parseAllowNested(data: any): boolean {
+    if (data.allow_nested !== undefined) {
+      return Boolean(data.allow_nested);
+    }
+    if (data.allowNested !== undefined) {
+      return Boolean(data.allowNested);
+    }
+    return ENSEMBLE_DEFAULTS.ALLOW_NESTED;
+  }
+
+  private parseTags(data: any): string[] {
+    if (!Array.isArray(data.tags)) {
+      return [];
+    }
+    return data.tags.map((tag: unknown) =>
+      this.sanitizeText(tag, SECURITY_LIMITS.MAX_TAG_LENGTH, true, `Invalid tag "${String(tag)}"`));
   }
 
   /**
@@ -526,14 +490,16 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @param content - Markdown content (ensemble instructions/documentation)
    * @returns New Ensemble instance
    */
-  protected override createElement(metadata: EnsembleMetadata, _content: string): Ensemble {
+  protected override createElement(metadata: EnsembleMetadata, content: string): Ensemble {
     delete (metadata as any).format_version;  // Fix #912: Strip marker from runtime metadata
+    const instructions = metadata.instructions;
+    delete metadata.instructions;
     const ensemble = new Ensemble(metadata, metadata.elements, this.metadataService);
     // Extract instructions from metadata if present (v2 dual-field)
-    if (metadata.instructions) {
-      ensemble.instructions = metadata.instructions;
-      delete metadata.instructions;
+    if (instructions) {
+      ensemble.instructions = instructions;
     }
+    ensemble.content = content;
     return ensemble;
   }
 
@@ -547,7 +513,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
    * @param element - Ensemble to serialize
    * @returns File content (markdown with frontmatter)
    */
-  protected override async serializeElement(element: Ensemble): Promise<string> {
+  protected override serializeElement(element: Ensemble): Promise<string> {
     const metadata = element.metadata;
 
     // Build frontmatter data (using camelCase)
@@ -612,7 +578,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     // Use SerializationService for frontmatter creation
     // Use CORE_SCHEMA to support numbers (priority) and booleans (allowNested)
     const body = element.content || this.buildDefaultBody(element);
-    return this.serializationService.createFrontmatter(frontmatter, body, {
+    return Promise.resolve(this.serializationService.createFrontmatter(frontmatter, body, {
       method: 'manual',
       schema: 'json',  // Fix #914: standardize on JSON schema across all managers
       cleanMetadata: true,  // Fix #913: standardize across all managers
@@ -620,16 +586,15 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       sortKeys: true,
       lineWidth: 100,
       skipInvalid: false  // Don't skip invalid - we want to catch errors
-    });
+    }));
   }
 
   private buildDefaultBody(element: Ensemble): string {
-    const name = (element.metadata.name ?? '').trim();
-    const description = (element.metadata.description ?? '').trim();
+    const name = element.metadata.name.trim();
+    const description = element.metadata.description.trim();
     const lines: string[] = [];
     if (name) {
-      lines.push(`# ${name}`);
-      lines.push('');
+      lines.push(`# ${name}`, '');
     }
     if (description) {
       lines.push(description);
@@ -662,11 +627,13 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
   ): Promise<Ensemble> {
     try {
       let parsed: any;
+      let content = '';
 
       if (format === 'json') {
         parsed = this.serializationService.parseJson(data, {
           source: 'EnsembleManager.importElement'
         });
+        content = typeof parsed.content === 'string' ? parsed.content : '';
       } else {
         // Parse YAML/Markdown using SerializationService
         const result = this.serializationService.parseFrontmatter(data, {
@@ -676,14 +643,14 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
         });
 
         parsed = result.data;
-        // Content is parsed but not used in ensemble creation
+        content = result.content;
       }
 
       // Parse metadata
       const metadata = await this.parseMetadata(parsed);
 
       // Create ensemble
-      const ensemble = new Ensemble(metadata, metadata.elements, this.metadataService);
+      const ensemble = this.createElement(metadata, content);
 
       // Log successful import
       SecurityMonitor.logSecurityEvent({
@@ -748,7 +715,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
     }
 
     // Log warnings if any
-    if (validationResult.warnings && validationResult.warnings.length > 0) {
+    if (validationResult.warnings.length > 0) {
       logger.warn(`Ensemble creation warnings: ${validationResult.warnings.join(', ')}`);
     }
 
@@ -817,7 +784,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
       maxNestingDepth: metadata.maxNestingDepth || ENSEMBLE_DEFAULTS.MAX_NESTING_DEPTH,
       elements: migratedElements,
       // Issue #524 — Gatekeeper policy (symmetric with buildMetadata deserialization)
-      gatekeeper: sanitizeGatekeeperPolicy((metadata as any).gatekeeper, metadata.name!, 'ensemble', metadata as unknown as Record<string, unknown>),
+      gatekeeper: sanitizeGatekeeperPolicy((metadata as any).gatekeeper, metadata.name, 'ensemble', metadata as unknown as Record<string, unknown>),
     };
 
     // Use inherited getElementFilename() for consistent filename normalization
@@ -825,7 +792,7 @@ export class EnsembleManager extends BaseElementManager<Ensemble> {
 
     // Issue #613: Check metadata name uniqueness (not just filename)
     const existingEnsembles = await this.list();
-    const duplicate = existingEnsembles.find(e =>
+    const duplicate = existingEnsembles.some(e =>
       e.metadata.name.toLowerCase() === fullMetadata.name.toLowerCase()
     );
     if (duplicate) {

@@ -1,4 +1,5 @@
-import { describe, it, expect } from '@jest/globals';
+import { describe, it, expect, jest } from '@jest/globals';
+import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 
 const { findElementFlexibly, sanitizeMetadata, validateGatekeeperPolicy } = await import('../../../../src/handlers/element-crud/helpers.js');
 
@@ -157,6 +158,29 @@ describe('element-crud helpers', () => {
 
   describe('sanitizeMetadata', () => {
     describe('basic sanitization', () => {
+      it('does not emit a security event when all metadata is safe', () => {
+        const eventSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+
+        sanitizeMetadata({ name: 'Test', nested: { safe: true } });
+
+        expect(eventSpy).not.toHaveBeenCalled();
+        eventSpy.mockRestore();
+      });
+
+      it('emits one security event listing dangerous properties that were removed', () => {
+        const eventSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
+        const input = JSON.parse('{"name":"Test","constructor":{},"nested":{"prototype":{}}}') as Record<string, unknown>;
+
+        sanitizeMetadata(input);
+
+        expect(eventSpy).toHaveBeenCalledTimes(1);
+        expect(eventSpy).toHaveBeenCalledWith(expect.objectContaining({
+          type: 'ELEMENT_VALIDATED',
+          additionalData: { removedKeys: ['constructor', 'prototype'] },
+        }));
+        eventSpy.mockRestore();
+      });
+
       it('should preserve safe properties', () => {
         const input = {
           name: 'Test',

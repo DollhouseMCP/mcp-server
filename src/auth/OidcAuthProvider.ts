@@ -100,6 +100,15 @@ export class OidcAuthProvider implements IAuthProvider {
     this.algorithms = options.algorithms ?? DEFAULT_OIDC_ALGORITHMS;
     this.requireAccessTokenTyp = options.requireAccessTokenTyp ?? false;
 
+    const issuerHostname = new URL(options.issuer).hostname;
+    if (!this.requireAccessTokenTyp && !isLoopbackHostname(issuerHostname)) {
+      logger.warn(
+        '[OidcAuthProvider] Access-token typ enforcement is disabled for a non-local issuer; ' +
+        'enable requireAccessTokenTyp when the identity provider emits RFC 9068 at+jwt tokens',
+        { issuer: this.issuer }
+      );
+    }
+
     const jwksUri = options.jwksUri
       ?? new URL('.well-known/jwks.json', options.issuer).toString();
 
@@ -150,6 +159,10 @@ export class OidcAuthProvider implements IAuthProvider {
       additionalData: { provider: this.name, issuer: this.issuer, reason },
     });
   }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+  return hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]' || hostname === '::1';
 }
 
 /**

@@ -169,6 +169,23 @@ describe('configToDatabase migration', () => {
       expect(u.autoActivateConfig.personas).toEqual(['helpful-assistant']);
     });
 
+    it('preserves inert code-like scalar values in legacy configuration', async () => {
+      await fs.writeFile(
+        path.join(configRoot, 'config.yml'),
+        'display:\n  custom_format: "eval(result) via file:// reference"\n',
+      );
+
+      await runConfigToDatabaseMigration({
+        operatorStore, userStore, signingKeyStore,
+        userId: TEST_USER_ID,
+        legacyConfigRoot: configRoot,
+        legacyRunRoot: runRoot,
+      });
+
+      const user = await userStore.load(TEST_USER_ID);
+      expect(user.displayConfig.custom_format).toBe('eval(result) via file:// reference');
+    });
+
     it('preserves the original JWKS kid (currently-issued tokens stay valid)', async () => {
       await runConfigToDatabaseMigration({
         operatorStore, userStore, signingKeyStore,
@@ -259,6 +276,36 @@ describe('configToDatabase migration', () => {
           legacyRunRoot: runRoot,
         }),
       ).rejects.toThrow();
+    });
+
+    it('rejects alias-amplification payloads in legacy config', async () => {
+      const aliases = Array.from({ length: 6 }, () => '  - *defaults').join('\n');
+      await fs.writeFile(
+        path.join(configRoot, 'config.yml'),
+        `defaults: &defaults\n  enabled: true\nuser:\n${aliases}\n`,
+      );
+
+      await expect(
+        runConfigToDatabaseMigration({
+          operatorStore, userStore, signingKeyStore,
+          userId: TEST_USER_ID,
+          legacyConfigRoot: configRoot,
+          legacyRunRoot: runRoot,
+        }),
+      ).rejects.toThrow('YAML aliases exceed safe reuse limits');
+    });
+
+    it('rejects legacy config larger than the bounded migration input', async () => {
+      await fs.writeFile(path.join(configRoot, 'config.yml'), `user:\n  value: ${'x'.repeat(64 * 1024)}\n`);
+
+      await expect(
+        runConfigToDatabaseMigration({
+          operatorStore, userStore, signingKeyStore,
+          userId: TEST_USER_ID,
+          legacyConfigRoot: configRoot,
+          legacyRunRoot: runRoot,
+        }),
+      ).rejects.toThrow('exceeds maximum allowed size');
     });
 
     it('throws on malformed JWKS keyfile rather than silently skipping', async () => {
