@@ -35,8 +35,10 @@ export class InMemoryIntegrationDescriptorStore implements IIntegrationDescripto
   ): Promise<IntegrationDescriptorRecord | null> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
-    const visible = [...this.records.values()].find(record =>
+    const matching = [...this.records.values()].filter(record =>
       record.provider === provider && (record.ownership === 'curated' || record.ownerUserId === userId));
+    const visible = matching.find(record => record.ownership === 'byo' && record.ownerUserId === userId)
+      ?? matching.find(record => record.ownership === 'curated');
     return visible ? cloneIntegrationDescriptorRecord(visible) : null;
   }
 

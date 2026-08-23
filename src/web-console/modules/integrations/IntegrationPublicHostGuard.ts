@@ -1,4 +1,4 @@
-import { isPublicIpAddress } from '../../../security/ipAddressClassifier.js';
+import { isPublicIpAddress, parseIpAddress } from '../../../security/ipAddressClassifier.js';
 
 export type DnsLookup = (hostname: string, options: { readonly all: true }) => Promise<readonly DnsLookupAddress[]>;
 
@@ -29,8 +29,13 @@ export async function assertPublicResolvedHost(hostname: string, lookup: DnsLook
   } catch {
     throw new PublicHostGuardError('resolution_failed');
   }
-  if (addresses.length === 0 || addresses.some(entry => !isPublicIpAddress(entry.address))) {
+  if (addresses.length === 0 || addresses.some(entry => !isValidPublicAddress(entry))) {
     throw new PublicHostGuardError('not_allowed');
   }
   return addresses[0];
+}
+
+function isValidPublicAddress(entry: DnsLookupAddress): boolean {
+  const parsed = parseIpAddress(entry.address);
+  return parsed !== null && parsed.family === entry.family && isPublicIpAddress(entry.address);
 }

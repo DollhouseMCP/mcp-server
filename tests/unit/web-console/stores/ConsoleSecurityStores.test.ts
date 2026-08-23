@@ -594,6 +594,26 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.findVisibleByProvider(SECOND_USER_ID, 'gmail')).resolves.toBeNull();
   });
 
+  it('prefers the user BYO descriptor over the curated descriptor regardless of insertion order', async () => {
+    const curated = await new InMemoryIntegrationDescriptorStore().upsert(oauthDescriptorInput({
+      ownership: 'curated',
+      ownerUserId: null,
+      displayName: 'Curated Gmail',
+    }));
+    const byo = await new InMemoryIntegrationDescriptorStore().upsert(oauthDescriptorInput({
+      displayName: 'My Gmail',
+    }));
+
+    for (const records of [[curated, byo], [byo, curated]]) {
+      const store = new InMemoryIntegrationDescriptorStore(records);
+      await expect(store.findVisibleByProvider(USER_ID, 'gmail')).resolves.toMatchObject({
+        ownership: 'byo',
+        ownerUserId: USER_ID,
+        displayName: 'My Gmail',
+      });
+    }
+  });
+
   it('validates descriptor ownership, hosts, URLs, and auth strategy shape', async () => {
     const store = new InMemoryIntegrationDescriptorStore();
 

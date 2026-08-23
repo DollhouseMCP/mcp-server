@@ -73,7 +73,27 @@ describe('createPinnedOutboundFactory', () => {
       await expect(outbound.fetch(`http://other.invalid:${port}/wrong-host`)).rejects.toThrow(
         'pinned outbound URL hostname does not match vetted hostname',
       );
+      await expect(outbound.fetch(`http://[::1]:${port}/wrong-host`)).rejects.toThrow(
+        'pinned outbound URL hostname does not match vetted hostname',
+      );
       expect(seenPaths).not.toContain('/wrong-host');
+    } finally {
+      await outbound.close();
+    }
+  });
+
+  it.each([
+    'PINNED-HOST.INVALID',
+    'pinned-host.invalid.',
+  ])('accepts equivalent canonical hostname %s', async hostname => {
+    const outbound = createPinnedOutboundFactory()({
+      hostname: PINNED_HOSTNAME,
+      address: LOOPBACK,
+      family: 4,
+    });
+    try {
+      const response = await outbound.fetch(`http://${hostname}:${port}/equivalent-host`);
+      expect(await response.text()).toBe('ok');
     } finally {
       await outbound.close();
     }
