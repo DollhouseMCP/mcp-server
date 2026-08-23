@@ -37,8 +37,8 @@ ALTER TABLE "user_integrations"
         (
           "provider" = 'github'
           AND ("authorized_permissions" ?& array[
-            'repository_selection',
-            'permissions'
+            'repository_selection', -- NOSONAR: immutable constraint repeats JSON keys intentionally
+            'permissions' -- NOSONAR: immutable constraint repeats JSON keys intentionally
           ])
           AND ("authorized_permissions" - 'repository_selection' - 'permissions') = '{}'::jsonb
           AND (
@@ -59,7 +59,7 @@ ALTER TABLE "user_integrations"
         )
         OR (
           "provider" <> 'github'
-          AND ("authorized_permissions" ?& array['scopes'])
+          AND ("authorized_permissions" ?& array['scopes']) -- NOSONAR: immutable constraint repeats JSON keys intentionally
           AND ("authorized_permissions" - 'scopes') = '{}'::jsonb
           AND jsonb_typeof("authorized_permissions"->'scopes') = 'array'
           AND jsonb_array_length("authorized_permissions"->'scopes') <= 100

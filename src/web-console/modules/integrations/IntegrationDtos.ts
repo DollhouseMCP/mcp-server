@@ -49,24 +49,20 @@ export function serializeIntegrationList(
 ): IntegrationListDto {
   return {
     integrations: providers.map(provider => serializeProviderStatus(
-      provider.id,
+      provider,
       records.find(record => record.provider === provider.id) ?? null,
     )),
   };
 }
 
 function serializeProviderStatus(
-  provider: UserIntegrationProvider,
+  provider: IntegrationProviderCatalogDescriptor,
   record: UserIntegrationRecord | null,
 ): IntegrationStatusDto {
-  if (provider === 'github') {
+  if (provider.id === 'github') {
     return serializeGitHubIntegrationStatus(record);
   }
-  return serializeConfiguredIntegrationStatus({
-    id: provider,
-    displayName: provider,
-    category: 'Integration',
-  }, record);
+  return serializeConfiguredIntegrationStatus(provider, record);
 }
 
 export function serializeGitHubIntegrationStatus(record: UserIntegrationRecord | null): GitHubIntegrationStatusDto {
