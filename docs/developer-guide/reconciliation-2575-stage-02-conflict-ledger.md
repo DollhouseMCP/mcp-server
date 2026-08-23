@@ -13,6 +13,17 @@ on Stage 1 under issue #2575.
 The milestone is merged with `--no-ff`. The original hosted commit object remains
 an ancestor and is not squashed, rebased, or reconstructed.
 
+## Beta Refresh
+
+- Beta parent: `53bc560d376b20ebde7ff8f69c743ba5cc8f4297`
+- Refresh merge: `900c46ba7c3fb5a48099918c79885d6dd5282951`
+
+Current `beta` was merged into the component branch with `--no-ff` after the
+outbound-security foundation landed in PR #2587. The merge completed without
+conflicts. A direct comparison confirmed that the outbound security and IP
+classification files in this branch match `beta`; the older stacked foundation
+did not replace the reviewed implementation.
+
 ## Conflict Resolution
 
 ### `src/web-console/modules/integrations/IntegrationProvider.ts`
@@ -35,4 +46,6 @@ operations, or promoted MCP tools.
 
 Validation also added explicit Unicode normalization for human-readable provider
 labels while preserving opaque OAuth values byte-for-byte, plus structured outcome
-auditing for every token-refresh result and thrown failure.
+auditing for every token-refresh result and thrown failure. Follow-up review also
+aligned revocation with the configured OAuth client-auth mode, retained
+provider-returned scopes, and added refresh-failure and mixed-strategy route tests.
