@@ -299,6 +299,31 @@ describe('IntegrationModule', () => {
     });
   });
 
+  it('preserves configured provider metadata in integration list responses', async () => {
+    const module = createIntegrationModule({
+      integrationStore: new InMemoryUserIntegrationStore(),
+      configuredProviders: [new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture())],
+    });
+    const list = findRoute(module.routes, LIST_PATH);
+
+    await expect(list.handler(consoleRequest())).resolves.toMatchObject({
+      status: 200,
+      body: {
+        integrations: expect.arrayContaining([{
+          provider: 'airtable',
+          display_name: 'Airtable',
+          category: 'Database',
+          status: 'disconnected',
+          account_label: null,
+          scopes: [],
+          error_reason: null,
+          connected_at: null,
+          last_sync_at: null,
+        }]),
+      },
+    });
+  });
+
   it('fails closed for an unregistered provider id', async () => {
     const service = new IntegrationService({
       store: new InMemoryUserIntegrationStore(),
