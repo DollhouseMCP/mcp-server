@@ -61,7 +61,7 @@ describe('CollectionCache', () => {
       const customCache = new CollectionCache(fileOperations, '/custom/path');
       expect(customCache).toBeInstanceOf(CollectionCache);
       expect(customCache.getCacheFilePath()).toBe(
-        path.join('/custom/path', '.dollhousemcp', 'cache', 'collection-cache.json')
+        path.resolve('/custom/path', '.dollhousemcp', 'cache', 'collection-cache.json')
       );
     });
 
@@ -72,7 +72,7 @@ describe('CollectionCache', () => {
       });
 
       expect(canonicalCache.getCacheFilePath()).toBe(
-        path.join('/canonical/cache', 'collection-cache.json')
+        path.resolve('/canonical/cache', 'collection-cache.json')
       );
     });
   });
