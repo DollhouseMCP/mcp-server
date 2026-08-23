@@ -1,0 +1,65 @@
+import { createServer, type Server } from 'node:http';
+import type { AddressInfo } from 'node:net';
+
+import { afterAll, beforeAll, describe, expect, it } from '@jest/globals';
+
+import { createPinnedOutboundFactory } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
+
+const PINNED_HOSTNAME = 'pinned-host.invalid';
+const LOOPBACK = '127.0.0.1';
+
+describe('createPinnedOutboundFactory', () => {
+  let server: Server;
+  let port: number;
+  const seenPaths: string[] = [];
+
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      seenPaths.push(req.url ?? '');
+      if (req.url === '/redirect') {
+        res.statusCode = 302;
+        res.setHeader('Location', '/redirect-target');
+        res.end();
+        return;
+      }
+      res.end('ok');
+    });
+    await new Promise<void>(resolve => server.listen(0, LOOPBACK, resolve));
+    port = (server.address() as AddressInfo).port;
+  });
+
+  afterAll(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+  });
+
+  it('connects through the vetted address even when the URL hostname cannot resolve', async () => {
+    const outbound = createPinnedOutboundFactory()({
+      hostname: PINNED_HOSTNAME,
+      address: LOOPBACK,
+      family: 4,
+    });
+    try {
+      const response = await outbound.fetch(`http://${PINNED_HOSTNAME}:${port}/probe`);
+      expect(await response.text()).toBe('ok');
+    } finally {
+      await outbound.close();
+    }
+  });
+
+  it('honors redirect:error without visiting the redirect target', async () => {
+    const outbound = createPinnedOutboundFactory()({
+      hostname: PINNED_HOSTNAME,
+      address: LOOPBACK,
+      family: 4,
+    });
+    try {
+      await expect(outbound.fetch(
+        `http://${PINNED_HOSTNAME}:${port}/redirect`,
+        { redirect: 'error' },
+      )).rejects.toThrow();
+      expect(seenPaths).not.toContain('/redirect-target');
+    } finally {
+      await outbound.close();
+    }
+  });
+});

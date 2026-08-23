@@ -116,6 +116,16 @@ export const suppressions: Suppression[] = [
     file: 'src/web/routes/tokenRoutes.ts',
     reason: 'FALSE POSITIVE: All user input fields (confirmationCode) are extracted via getNormalizedStringField() from consoleRouteHelpers.ts which calls UnicodeValidator.normalize(). Normalization is centralized in the shared helper, not duplicated per-router. PR #1795'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web-console/security/IntegrationApiHosts.ts',
+    reason: 'FALSE POSITIVE: DNS identity is canonicalized with the WHATWG URL parser to lowercase ASCII/punycode, then checked against strict DNS syntax and unsafe Unicode controls. Generic UnicodeValidator rewriting could change the destination identity and is inappropriate at this SSRF boundary.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web-console/modules/integrations/BoundedResponseReader.ts',
+    reason: 'FALSE POSITIVE: This transport utility preserves bounded response bytes. OAuth codes and tokens are opaque protocol values and must not be Unicode-normalized; callers parse and validate the bounded payload after transport.'
+  },
 
   // ========================================
   // Test File Suppressions
