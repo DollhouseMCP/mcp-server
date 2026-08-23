@@ -745,15 +745,58 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(row.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
   });
 
-  it('upserts descriptors by owner/provider identity', async () => {
-    transaction.select = jest.fn(() => selectingChain([]));
-    transaction.insert = jest.fn(() => insertChain([integrationDescriptorRow()]));
+  it('prefers the user BYO descriptor when a curated descriptor is also visible', async () => {
+    transaction.select = jest.fn(() => selectingChain([
+      integrationDescriptorRow({
+        id: '379b01dc-f92b-49f8-892d-77d37e525fb9',
+        ownership: 'curated',
+        ownerUserId: null,
+        displayName: 'Curated Gmail',
+      }),
+      integrationDescriptorRow({ displayName: 'My Gmail' }),
+    ]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.findVisibleByProvider(USER_ID, 'gmail')).resolves.toMatchObject({
+      ownership: 'byo',
+      ownerUserId: USER_ID,
+      displayName: 'My Gmail',
+    });
+  });
+
+  it('atomically upserts BYO descriptors by owner/provider identity', async () => {
+    const chain = insertChain([integrationDescriptorRow()]);
+    transaction.insert = jest.fn(() => chain);
     const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
 
     await expect(store.upsert(integrationDescriptorInput())).resolves.toMatchObject({
       provider: 'gmail',
       ownerUserId: USER_ID,
     });
+    expect(chain.onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.any(Array),
+      targetWhere: expect.anything(),
+      set: expect.objectContaining({ displayName: 'Gmail', updatedAt: NOW }),
+    }));
+    expect(transaction.select).toBeUndefined();
+  });
+
+  it('atomically upserts curated descriptors by provider identity', async () => {
+    const row = integrationDescriptorRow({ ownership: 'curated', ownerUserId: null });
+    const chain = insertChain([row]);
+    transaction.insert = jest.fn(() => chain);
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert(integrationDescriptorInput({
+      ownership: 'curated',
+      ownerUserId: null,
+    }))).resolves.toMatchObject({ ownership: 'curated', ownerUserId: null });
+    expect(chain.onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.anything(),
+      targetWhere: expect.anything(),
+      set: expect.objectContaining({ displayName: 'Gmail', updatedAt: NOW }),
+    }));
+    expect(transaction.select).toBeUndefined();
   });
 
   it('rejects descriptor inputs before writing', async () => {
@@ -783,15 +826,20 @@ describe('PostgresIntegrationOpenApiSpecStore', () => {
     expect(row.spec).toEqual({ openapi: '3.1.0', paths: {} });
   });
 
-  it('upserts OpenAPI specs by descriptor id', async () => {
-    transaction.select = jest.fn(() => selectingChain([]));
-    transaction.insert = jest.fn(() => insertChain([openApiSpecRow()]));
+  it('atomically upserts OpenAPI specs by descriptor id', async () => {
+    const chain = insertChain([openApiSpecRow()]);
+    transaction.insert = jest.fn(() => chain);
     const store = new PostgresIntegrationOpenApiSpecStore({} as DatabaseInstance);
 
     await expect(store.upsert(openApiSpecInput())).resolves.toMatchObject({
       descriptorId: DESCRIPTOR_ID,
       specHash: SPEC_HASH,
     });
+    expect(chain.onConflictDoUpdate).toHaveBeenCalledWith(expect.objectContaining({
+      target: expect.anything(),
+      set: expect.objectContaining({ specHash: SPEC_HASH, updatedAt: NOW }),
+    }));
+    expect(transaction.select).toBeUndefined();
   });
 
   it('rejects invalid specs before writing', async () => {

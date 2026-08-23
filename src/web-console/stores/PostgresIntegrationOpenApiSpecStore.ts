@@ -28,25 +28,24 @@ export class PostgresIntegrationOpenApiSpecStore implements IIntegrationOpenApiS
 
   async upsert(input: IntegrationOpenApiSpecUpsertInput): Promise<IntegrationOpenApiSpecRecord> {
     validateIntegrationOpenApiSpecInput(input);
-    const rows = await withSystemContext(this.db, async tx => {
-      const existing = await tx.select().from(integrationOpenApiSpecs).where(
-        eq(integrationOpenApiSpecs.descriptorId, input.descriptorId),
-      ).limit(1);
-      const values = {
+    const rows = await withSystemContext(this.db, tx => {
+      const insertValues = {
         descriptorId: input.descriptorId,
         spec: structuredClone(input.spec) as Record<string, unknown>,
         sourceUrl: input.sourceUrl ?? null,
         specHash: input.specHash,
-        createdAt: existing[0]?.createdAt ?? input.createdAt,
+        createdAt: input.createdAt,
         updatedAt: input.updatedAt,
       };
-      if (existing[0]) {
-        return tx.update(integrationOpenApiSpecs)
-          .set(values)
-          .where(eq(integrationOpenApiSpecs.id, existing[0].id))
-          .returning();
-      }
-      return tx.insert(integrationOpenApiSpecs).values(values).returning();
+      return tx.insert(integrationOpenApiSpecs).values(insertValues).onConflictDoUpdate({
+        target: integrationOpenApiSpecs.descriptorId,
+        set: {
+          spec: insertValues.spec,
+          sourceUrl: insertValues.sourceUrl,
+          specHash: insertValues.specHash,
+          updatedAt: insertValues.updatedAt,
+        },
+      }).returning();
     });
     if (!rows[0]) throw new Error('PostgreSQL did not return integration OpenAPI spec row');
     return fromSpecRow(rows[0]);

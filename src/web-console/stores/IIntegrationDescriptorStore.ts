@@ -74,6 +74,7 @@ export interface IntegrationDescriptorCreateInput {
 
 export interface IIntegrationDescriptorStore {
   listVisible(userId: string): Promise<readonly IntegrationDescriptorRecord[]>;
+  /** Returns the user's BYO descriptor when present, otherwise the curated default. */
   findVisibleByProvider(userId: string, provider: UserIntegrationProvider): Promise<IntegrationDescriptorRecord | null>;
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
 }
