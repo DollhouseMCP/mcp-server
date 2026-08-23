@@ -46,7 +46,11 @@ import {
 } from '../utils/securityUtils.js';
 import { env } from './env.js';
 import { isKnownConfigPath, validateConfigPath } from './configSchema.js';
-import { deleteOwnConfigLeaf, parseSafeConfigPath } from './safeConfigDeletion.js';
+import {
+  deleteOwnConfigLeaf,
+  parseSafeConfigPath,
+  readOwnConfigValue,
+} from './safeConfigDeletion.js';
 import { IFileOperationsService } from '../services/FileOperationsService.js';
 import type { IOperatorConfigStore, OperatorConfig } from '../storage/operatorConfig/IOperatorConfigStore.js';
 import type { IUserConfigStore, UserConfig as UserConfigPayload } from '../storage/userConfig/IUserConfigStore.js';
@@ -930,19 +934,15 @@ export class ConfigManager {
     if (!this.config) {
       return defaultValue;
     }
-    
-    const keys = path.split('.');
-    let value: any = this.config;
-    
-    for (const key of keys) {
-      if (value && typeof value === 'object' && key in value) {
-        value = value[key];
-      } else {
-        return defaultValue;
-      }
+
+    try {
+      const result = readOwnConfigValue(this.config, parseSafeConfigPath(path));
+      return result.kind === 'found' ? result.value as T : defaultValue;
+    } catch {
+      // Reads preserve the historical default-value contract for malformed or
+      // unsafe paths; write/delete operations continue to reject them explicitly.
+      return defaultValue;
     }
-    
-    return value as T;
   }
 
   /**

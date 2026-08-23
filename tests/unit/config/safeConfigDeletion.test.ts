@@ -2,6 +2,7 @@ import { describe, expect, it, jest } from '@jest/globals';
 import {
   deleteOwnConfigLeaf,
   parseSafeConfigPath,
+  readOwnConfigValue,
 } from '../../../src/config/safeConfigDeletion.js';
 
 describe('safeConfigDeletion', () => {
@@ -166,6 +167,79 @@ describe('safeConfigDeletion', () => {
 
     it('returns missing idempotently for absent own properties', () => {
       expect(deleteOwnConfigLeaf({ custom: {} }, ['custom', 'leaf'])).toEqual({ kind: 'missing' });
+    });
+  });
+
+  describe('readOwnConfigValue', () => {
+    it('reads own data properties from plain and null-prototype objects', () => {
+      const nested = Object.assign(Object.create(null) as Record<string, unknown>, {
+        leaf: 42,
+      });
+
+      expect(readOwnConfigValue({ nested }, ['nested', 'leaf'])).toEqual({
+        kind: 'found',
+        value: 42,
+      });
+    });
+
+    it('distinguishes a stored undefined value from a missing property', () => {
+      expect(readOwnConfigValue({ nested: { leaf: undefined } }, ['nested', 'leaf'])).toEqual({
+        kind: 'found',
+        value: undefined,
+      });
+      expect(readOwnConfigValue({ nested: {} }, ['nested', 'leaf'])).toEqual({ kind: 'missing' });
+    });
+
+    it('does not follow inherited properties', () => {
+      const nested = Object.create({ leaf: 'inherited' }) as Record<string, unknown>;
+
+      expect(readOwnConfigValue({ nested }, ['nested', 'leaf'])).toEqual({
+        kind: 'unsafe',
+        reason: 'Configuration path crosses a non-plain object.',
+      });
+    });
+
+    it('does not invoke intermediate or leaf accessors', () => {
+      const intermediateGetter = jest.fn(() => ({ leaf: 'value' }));
+      const leafGetter = jest.fn(() => 'value');
+      const intermediateRoot: Record<string, unknown> = {};
+      const leafParent: Record<string, unknown> = {};
+      Object.defineProperty(intermediateRoot, 'nested', { get: intermediateGetter });
+      Object.defineProperty(leafParent, 'leaf', { get: leafGetter });
+
+      expect(readOwnConfigValue(intermediateRoot, ['nested', 'leaf'])).toEqual({
+        kind: 'unsafe',
+        reason: 'Configuration path crosses an accessor property.',
+      });
+      expect(readOwnConfigValue({ nested: leafParent }, ['nested', 'leaf'])).toEqual({
+        kind: 'unsafe',
+        reason: 'Configuration leaf is an accessor property.',
+      });
+      expect(intermediateGetter).not.toHaveBeenCalled();
+      expect(leafGetter).not.toHaveBeenCalled();
+    });
+
+    it('returns leaf objects and arrays and safely reads array entries', () => {
+      const section = { enabled: true };
+      const values = ['one', 'two'];
+
+      expect(readOwnConfigValue({ section }, ['section'])).toEqual({
+        kind: 'found',
+        value: section,
+      });
+      expect(readOwnConfigValue({ values }, ['values'])).toEqual({
+        kind: 'found',
+        value: values,
+      });
+      expect(readOwnConfigValue({ values }, ['values', '0'])).toEqual({
+        kind: 'found',
+        value: 'one',
+      });
+      expect(readOwnConfigValue({ values }, ['values', 'map'])).toEqual({ kind: 'missing' });
+    });
+
+    it('rejects dangerous segments even when called without the path parser', () => {
+      expect(() => readOwnConfigValue({}, ['%2563onstructor'])).toThrow(/Forbidden property/);
     });
   });
 });
