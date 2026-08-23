@@ -150,6 +150,12 @@ describe('ConfigManager', () => {
       expect(configManager.getSetting('nested.leaf', 'fallback')).toBe('fallback');
     });
 
+    it('does not expose properties from Array.prototype stored as config data', () => {
+      setCachedConfig({ values: Array.prototype });
+
+      expect(configManager.getSetting('values.map', 'fallback')).toBe('fallback');
+    });
+
     it('does not invoke intermediate or leaf accessors', () => {
       const intermediateGetter = jest.fn(() => ({ leaf: 'value' }));
       const leafGetter = jest.fn(() => 'value');

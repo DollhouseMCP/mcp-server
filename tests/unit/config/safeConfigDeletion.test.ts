@@ -238,6 +238,13 @@ describe('safeConfigDeletion', () => {
       expect(readOwnConfigValue({ values }, ['values', 'map'])).toEqual({ kind: 'missing' });
     });
 
+    it('rejects Array.prototype as an intermediate read container', () => {
+      expect(readOwnConfigValue({ values: Array.prototype }, ['values', 'map'])).toEqual({
+        kind: 'unsafe',
+        reason: 'Configuration path crosses a non-plain object.',
+      });
+    });
+
     it('rejects dangerous segments even when called without the path parser', () => {
       expect(() => readOwnConfigValue({}, ['%2563onstructor'])).toThrow(/Forbidden property/);
     });

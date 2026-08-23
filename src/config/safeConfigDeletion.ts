@@ -189,7 +189,11 @@ function asAllowedConfigRecord(value: unknown): MutableConfigRecord | null {
 }
 
 function asAllowedConfigReadContainer(value: unknown): MutableConfigRecord | null {
-  if (Array.isArray(value)) return value as unknown as MutableConfigRecord;
+  // Arrays are valid config containers for indexed reads, but Array.prototype
+  // is itself an array and must never be exposed as configuration data.
+  if (Array.isArray(value)) {
+    return isPrototypeObject(value) ? null : value as unknown as MutableConfigRecord;
+  }
   return asAllowedConfigRecord(value);
 }
 
