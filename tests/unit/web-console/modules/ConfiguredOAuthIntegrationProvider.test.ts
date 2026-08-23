@@ -205,6 +205,42 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(fetchCalls[0].body).not.toContain('client_secret=');
   });
 
+  it('honors HTTP Basic client auth during revocation', async () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider, fetchCalls } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          tokenExchange: { ...base.oauth.tokenExchange, clientAuth: 'basic' },
+        },
+      },
+    });
+
+    await provider.revokeCredentials({ accessToken: 'access-token' });
+
+    expect(fetchCalls[0].authorization).toBe(
+      `Basic ${Buffer.from('gmail-client-id:gmail-client-secret', 'utf8').toString('base64')}`,
+    );
+    expect(fetchCalls[0].body).toBe('token=access-token');
+  });
+
+  it('records scopes returned by the provider instead of overstating the grant', async () => {
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      fetch: () => Promise.resolve(new Response(JSON.stringify({
+        access_token: 'fresh-access-token',
+        scope: 'gmail.metadata gmail.readonly gmail.metadata',
+      }), { status: 200 })),
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST)).resolves.toMatchObject({
+      authorizedPermissions: { scopes: ['gmail.metadata', 'gmail.readonly'] },
+    });
+  });
+
   it('fails closed when refresh is unsupported', async () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');

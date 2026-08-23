@@ -127,7 +127,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     return {
       accountLabel: accountLabelFromTokenResponse(body, oauth.accountLabel),
       externalInstallationId: null,
-      authorizedPermissions: { scopes: oauth.scopes },
+      authorizedPermissions: { scopes: grantedScopesFromTokenResponse(body, oauth.scopes) },
       accessToken,
       refreshToken: readString(body, 'refresh_token'),
     };
@@ -162,16 +162,12 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     const revocationUrl = readString(oauth.tokenExchange, 'revocationUrl');
     if (!revocationUrl) return;
     const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
-      method: 'POST',
-      headers: {
-        Accept: 'application/json',
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
-      body: new URLSearchParams({
-        client_id: oauth.clientId,
-        client_secret: this.config.clientSecret,
-        token: request.accessToken,
-      }),
+      ...credentialedTokenRequestInit(
+        { token: request.accessToken },
+        oauth.clientId,
+        this.config.clientSecret,
+        oauth.tokenExchange,
+      ),
       signal: AbortSignal.timeout(this.timeoutMs),
       redirect: 'error',
     });
@@ -300,6 +296,13 @@ function accountLabelFromTokenResponse(
 ): string | null {
   const field = readString(accountLabel, 'field') ?? readString(accountLabel, 'tokenResponseField');
   return field ? readString(body, field) : null;
+}
+
+function grantedScopesFromTokenResponse(body: unknown, requestedScopes: readonly string[]): readonly string[] {
+  const scope = readRecord(body).scope;
+  if (scope === undefined) return requestedScopes;
+  if (typeof scope !== 'string') throw new Error('configured_oauth_token_exchange_failed');
+  return [...new Set(scope.split(/\s+/u).filter(Boolean))];
 }
 
 async function readBoundedJson(response: Response): Promise<unknown> {

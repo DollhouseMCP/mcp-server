@@ -324,6 +324,27 @@ describe('IntegrationModule', () => {
     });
   });
 
+  it('registers callback routes only for OAuth providers', () => {
+    const oauthProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      ...configuredOAuthNetwork(() => Promise.resolve(new Response('{}', { status: 200 }))),
+    });
+    const module = createIntegrationModule({
+      integrationStore: new InMemoryUserIntegrationStore(),
+      configuredProviders: [
+        oauthProvider,
+        new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture()),
+      ],
+    });
+    const callbackPaths = module.routes
+      .filter(route => route.path.endsWith('/callback'))
+      .map(route => route.path);
+
+    expect(callbackPaths).toContain(GMAIL_CALLBACK_PATH);
+    expect(callbackPaths).not.toContain(`${AIRTABLE_PATH}/callback`);
+  });
+
   it('fails closed for an unregistered provider id', async () => {
     const service = new IntegrationService({
       store: new InMemoryUserIntegrationStore(),
@@ -994,6 +1015,55 @@ describe('IntegrationModule', () => {
       additionalData: { provider: 'gmail', outcome: 'refreshed' },
     }));
     securityLogSpy.mockRestore();
+  });
+
+  it('maps provider refresh failures to a stored token_refresh_failed result', async () => {
+    const provider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      ...configuredOAuthNetwork(() => Promise.resolve(new Response('{}', { status: 503 }))),
+    });
+    const store = new InMemoryUserIntegrationStore();
+    const secretEncryption = new AeadSecretEncryptionService({
+      keyId: 'integration-test-key',
+      key: Buffer.alloc(32, 9),
+    });
+    const staleAccessTokenCiphertext = secretEncryption.encrypt(
+      Buffer.from('gmail-stale-access-token', 'utf8'),
+      { secretClass: 'integration_access_token', ownerId: `gmail:${USER_ID}` },
+    );
+    await store.connect({
+      userId: USER_ID,
+      provider: 'gmail',
+      externalAccountLabel: 'alice@example.com',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['gmail.readonly'] },
+      accessTokenCiphertext: staleAccessTokenCiphertext,
+      refreshTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from('gmail-stale-refresh-token', 'utf8'),
+        { secretClass: 'integration_refresh_token', ownerId: `gmail:${USER_ID}` },
+      ),
+      connectedAt: NOW,
+    });
+    const service = new IntegrationTokenRefreshService({
+      store,
+      providers: new IntegrationProviderRegistry([provider]),
+      secretEncryption,
+      now: () => NOW,
+    });
+
+    await expect(service.refreshOnDemand({
+      userId: USER_ID,
+      provider: 'gmail',
+      staleAccessTokenCiphertext,
+    })).resolves.toMatchObject({
+      kind: 'failed',
+      record: {
+        status: 'error',
+        errorReason: 'token_refresh_failed',
+        accessTokenCiphertext: staleAccessTokenCiphertext,
+      },
+    });
   });
 });
 
