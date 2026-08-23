@@ -141,7 +141,7 @@ export const consoleLoginTransactions = pgTable('console_login_transactions', {
   index('idx_console_login_transactions_expiry').on(table.expiresAt),
 ]);
 
-export type UserIntegrationProvider = string;
+export type UserIntegrationProvider = string & { readonly __integrationProviderBrand?: never };
 export type UserIntegrationStatus = 'connected' | 'revoked' | 'error';
 export type UserIntegrationErrorReason =
   | 'token_exchange_failed'

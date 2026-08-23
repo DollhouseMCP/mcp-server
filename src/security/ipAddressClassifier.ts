@@ -8,6 +8,22 @@ const IPV6_BYTE_LENGTH = 16;
 const IPV6_GROUP_COUNT = 8;
 const HEXTET_PATTERN = /^[0-9a-f]{1,4}$/i;
 const IPV4_OCTET_PATTERN = /^\d{1,3}$/;
+type Ipv4RangePredicate = (bytes: Uint8Array) => boolean;
+
+const NON_PUBLIC_IPV4_RANGES: readonly Ipv4RangePredicate[] = [
+  bytes => bytes[0] === 0,
+  bytes => bytes[0] === 10,
+  bytes => bytes[0] === 127,
+  bytes => bytes[0] === 100 && bytes[1] >= 64 && bytes[1] <= 127,
+  bytes => bytes[0] === 169 && bytes[1] === 254,
+  bytes => bytes[0] === 172 && bytes[1] >= 16 && bytes[1] <= 31,
+  bytes => bytes[0] === 192 && bytes[1] === 0,
+  bytes => bytes[0] === 192 && bytes[1] === 168,
+  bytes => bytes[0] === 198 && (bytes[1] === 18 || bytes[1] === 19),
+  bytes => bytes[0] === 198 && bytes[1] === 51 && bytes[2] === 100,
+  bytes => bytes[0] === 203 && bytes[1] === 0 && bytes[2] === 113,
+  bytes => bytes[0] >= 224,
+];
 
 export interface CanonicalIpAddress {
   readonly family: 4 | 6;
@@ -106,17 +122,7 @@ function expandZeroRun(head: number[], tail: number[]): number[] | null {
 }
 
 function isPublicIpv4Bytes(bytes: Uint8Array): boolean {
-  const [a, b] = bytes;
-  if (a === 0 || a === 10 || a === 127) return false;
-  if (a === 100 && b >= 64 && b <= 127) return false;
-  if (a === 169 && b === 254) return false;
-  if (a === 172 && b >= 16 && b <= 31) return false;
-  if (a === 192 && b === 0) return false;
-  if (a === 192 && b === 168) return false;
-  if (a === 198 && (b === 18 || b === 19 || (b === 51 && bytes[2] === 100))) return false;
-  if (a === 203 && b === 0 && bytes[2] === 113) return false;
-  if (a >= 224) return false;
-  return true;
+  return !NON_PUBLIC_IPV4_RANGES.some(isInRange => isInRange(bytes));
 }
 
 function isPublicIpv6Bytes(bytes: Uint8Array): boolean {
