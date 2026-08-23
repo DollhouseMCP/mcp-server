@@ -2,7 +2,9 @@ import { describe, expect, it } from '@jest/globals';
 
 import {
   canonicalizeIntegrationApiHost,
+  canonicalizeIntegrationApiHosts,
   IntegrationApiHostValidationError,
+  isIntegrationApiHostAllowed,
 } from '../../../../src/web-console/security/IntegrationApiHosts.js';
 
 describe('IntegrationApiHosts', () => {
@@ -41,5 +43,23 @@ describe('IntegrationApiHosts', () => {
 
   it('rejects host input beyond the explicit parser ceiling', () => {
     expect(() => canonicalizeIntegrationApiHost(`${'a'.repeat(1024)}.example`)).toThrow();
+  });
+
+  it('deduplicates canonical hosts and compares equivalent spellings', () => {
+    expect(canonicalizeIntegrationApiHosts([
+      'API.Example.COM',
+      'api.example.com.',
+      'uploads.example.com',
+    ])).toEqual(['api.example.com', 'uploads.example.com']);
+    expect(isIntegrationApiHostAllowed('API.Example.COM.', ['api.example.com'])).toBe(true);
+  });
+
+  it('keeps private-suffix compatibility read-only', () => {
+    expect(canonicalizeIntegrationApiHost(
+      'api.company.corp',
+      'legacy host',
+      { allowLegacyPrivateSuffixes: true },
+    )).toBe('api.company.corp');
+    expect(isIntegrationApiHostAllowed('api.company.corp', ['api.company.corp'])).toBe(false);
   });
 });
