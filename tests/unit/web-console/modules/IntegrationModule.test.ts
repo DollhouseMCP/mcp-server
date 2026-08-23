@@ -8,6 +8,8 @@ import {
   InMemoryLoginTransactionStore,
   CONSOLE_INTEGRATION_STATE_COOKIE,
   CONSOLE_LOGIN_STATE_COOKIE,
+  IntegrationProviderRegistry,
+  IntegrationService,
   type ConsoleRequest,
   type ConsoleRouteDefinition,
   type IGitHubIntegrationProvider,
@@ -247,6 +249,46 @@ describe('IntegrationModule', () => {
     });
   });
 
+  it('lists registered provider catalog entries even when write provider is unavailable', async () => {
+    const store = new InMemoryUserIntegrationStore();
+    const module = createIntegrationModule({ integrationStore: store });
+    const list = findRoute(module.routes, LIST_PATH);
+
+    await expect(list.handler(consoleRequest())).resolves.toEqual({
+      status: 200,
+      body: {
+        integrations: [{
+          provider: 'github',
+          status: 'disconnected',
+          account_label: null,
+          repository_selection: 'unknown',
+          permissions: { contents: 'none' },
+          sync_directions: [],
+          error_reason: null,
+          connected_at: null,
+          last_sync_at: null,
+        }],
+      },
+    });
+  });
+
+  it('fails closed for an unregistered provider id', async () => {
+    const service = new IntegrationService({
+      store: new InMemoryUserIntegrationStore(),
+      providers: IntegrationProviderRegistry.empty(),
+    });
+
+    await expect(service.getProvider(
+      consoleRequest(),
+      'linear' as Parameters<IntegrationService['getProvider']>[1],
+    )).resolves.toMatchObject({
+      status: 404,
+      body: {
+        code: 'integration_provider_not_found',
+      },
+    });
+  });
+
   it('requires authentication and ignores caller-supplied owner parameters', async () => {
     const { module } = moduleFixture();
     const getGitHub = findRoute(module.routes, GITHUB_PATH);
@@ -283,6 +325,19 @@ describe('IntegrationModule', () => {
       contentsPermission: 'write',
       redirectUri: `${PUBLIC_BASE_URL}${GITHUB_CALLBACK_PATH}`,
       codeChallengeMethod: 'S256',
+    });
+  });
+
+  it('does not elevate a confusable GitHub contents permission', async () => {
+    const { module, provider } = writeModuleFixture();
+    const connect = findRoute(module.routes, GITHUB_CONNECT_PATH, 'POST');
+
+    await connect.handler(consoleRequest({
+      body: { contents_permission: '\uff57rite' },
+    }));
+
+    expect(provider.authorizations[0]).toMatchObject({
+      contentsPermission: 'read',
     });
   });
 
@@ -627,7 +682,7 @@ describe('IntegrationModule', () => {
         type: 'OPERATION_FAILED',
         severity: 'MEDIUM',
         source: 'IntegrationService',
-        details: 'GitHub integration credential decrypt failed',
+        details: 'Integration credential decrypt failed',
         additionalData: {
           userId: USER_ID,
           provider: 'github',
