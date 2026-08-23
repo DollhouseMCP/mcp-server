@@ -18,7 +18,7 @@ import { assertUuid } from './ConsoleStoreValidation.js';
 export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   private readonly records = new Map<string, UserIntegrationRecord>();
   private readonly activeProviderIndex = new Map<string, string>();
-  private readonly refreshLocks = new Map<string, Promise<void>>();
+  private readonly providerMutationLocks = new Map<string, Promise<void>>();
 
   constructor(records: readonly UserIntegrationRecord[] = []) {
     for (const record of records) {
@@ -43,89 +43,89 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
   }
 
   async connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord> {
-    await Promise.resolve();
-    this.clearActive(input.userId, input.provider, input.connectedAt);
-    const record: UserIntegrationRecord = {
-      id: randomUUID(),
-      userId: input.userId,
-      provider: input.provider,
-      externalAccountLabel: input.externalAccountLabel,
-      externalInstallationId: input.externalInstallationId,
-      authorizedPermissions: input.authorizedPermissions,
-      accessTokenCiphertext: input.accessTokenCiphertext,
-      refreshTokenCiphertext: input.refreshTokenCiphertext,
-      credentialKeyVersion: input.credentialKeyVersion ?? null,
-      status: 'connected',
-      errorReason: null,
-      connectedAt: input.connectedAt,
-      lastSyncAt: null,
-      revokedAt: null,
-    };
-    this.set(record);
-    return cloneUserIntegrationRecord(record);
+    assertUuid(input.userId, 'userId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const record: UserIntegrationRecord = {
+        id: randomUUID(),
+        userId: input.userId,
+        provider: input.provider,
+        externalAccountLabel: input.externalAccountLabel,
+        externalInstallationId: input.externalInstallationId,
+        authorizedPermissions: input.authorizedPermissions,
+        accessTokenCiphertext: input.accessTokenCiphertext,
+        refreshTokenCiphertext: input.refreshTokenCiphertext,
+        credentialKeyVersion: input.credentialKeyVersion ?? null,
+        status: 'connected',
+        errorReason: null,
+        connectedAt: input.connectedAt,
+        lastSyncAt: null,
+        revokedAt: null,
+      };
+      validateUserIntegrationRecord(record);
+      this.clearActive(input.userId, input.provider, input.connectedAt);
+      this.set(record);
+      return cloneUserIntegrationRecord(record);
+    });
   }
 
   async refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult> {
     assertUuid(input.userId, 'userId');
-    const key = activeProviderKey(input.userId, input.provider);
-    const previous = this.refreshLocks.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const current = new Promise<void>(resolve => {
-      release = resolve;
-    });
-    const tail = previous.catch(() => { /* ignore prior holder rejection */ }).then(() => current);
-    this.refreshLocks.set(key, tail);
-    await previous.catch(() => { /* ignore prior holder rejection */ });
-    try {
-      return await this.refreshLocked(input);
-    } finally {
-      release();
-      // Only the last queued tail may remove the key; a newer waiter replaces it first.
-      if (this.refreshLocks.get(key) === tail) this.refreshLocks.delete(key);
-    }
+    return this.withProviderMutationLock(
+      input.userId,
+      input.provider,
+      () => this.refreshLocked(input),
+    );
   }
 
   async recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord> {
-    await Promise.resolve();
-    this.clearActive(input.userId, input.provider, input.occurredAt);
-    const record: UserIntegrationRecord = {
-      id: randomUUID(),
-      userId: input.userId,
-      provider: input.provider,
-      externalAccountLabel: null,
-      externalInstallationId: null,
-      authorizedPermissions: defaultAuthorizedPermissions(input.provider),
-      accessTokenCiphertext: null,
-      refreshTokenCiphertext: null,
-      credentialKeyVersion: null,
-      status: 'error',
-      errorReason: input.errorReason,
-      connectedAt: null,
-      lastSyncAt: null,
-      revokedAt: null,
-    };
-    this.set(record);
-    return cloneUserIntegrationRecord(record);
+    assertUuid(input.userId, 'userId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const record: UserIntegrationRecord = {
+        id: randomUUID(),
+        userId: input.userId,
+        provider: input.provider,
+        externalAccountLabel: null,
+        externalInstallationId: null,
+        authorizedPermissions: defaultAuthorizedPermissions(input.provider),
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        credentialKeyVersion: null,
+        status: 'error',
+        errorReason: input.errorReason,
+        connectedAt: null,
+        lastSyncAt: null,
+        revokedAt: null,
+      };
+      validateUserIntegrationRecord(record);
+      this.clearActive(input.userId, input.provider, input.occurredAt);
+      this.set(record);
+      return cloneUserIntegrationRecord(record);
+    });
   }
 
   async disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null> {
-    await Promise.resolve();
-    const active = await this.findByProvider(input.userId, input.provider);
-    if (!active) return null;
-    const disconnected: UserIntegrationRecord = {
-      ...active,
-      accessTokenCiphertext: null,
-      refreshTokenCiphertext: null,
-      status: 'revoked',
-      errorReason: null,
-      revokedAt: input.revokedAt,
-    };
-    this.records.set(disconnected.id, cloneUserIntegrationRecord(disconnected));
-    this.activeProviderIndex.delete(activeProviderKey(input.userId, input.provider));
-    return cloneUserIntegrationRecord(disconnected);
+    assertUuid(input.userId, 'userId');
+    return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const key = activeProviderKey(input.userId, input.provider);
+      const activeId = this.activeProviderIndex.get(key);
+      const active = activeId ? this.records.get(activeId) : null;
+      if (!active) return null;
+      const disconnected: UserIntegrationRecord = {
+        ...active,
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
+        status: 'revoked',
+        errorReason: null,
+        revokedAt: input.revokedAt,
+      };
+      validateUserIntegrationRecord(disconnected);
+      this.records.set(disconnected.id, cloneUserIntegrationRecord(disconnected));
+      this.activeProviderIndex.delete(key);
+      return cloneUserIntegrationRecord(disconnected);
+    });
   }
 
-  set(record: UserIntegrationRecord): void {
+  private set(record: UserIntegrationRecord): void {
     validateUserIntegrationRecord(record);
     const cloned = cloneUserIntegrationRecord(record);
     this.records.set(record.id, cloned);
@@ -182,6 +182,29 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       kind: decision.kind,
       record: cloneUserIntegrationRecord(updated),
     };
+  }
+
+  private async withProviderMutationLock<T>(
+    userId: string,
+    provider: UserIntegrationProvider,
+    operation: () => T | Promise<T>,
+  ): Promise<T> {
+    const key = activeProviderKey(userId, provider);
+    const previous = this.providerMutationLocks.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>(resolve => {
+      release = resolve;
+    });
+    const tail = previous.catch(() => { /* ignore prior holder rejection */ }).then(() => current);
+    this.providerMutationLocks.set(key, tail);
+    await previous.catch(() => { /* ignore prior holder rejection */ });
+    try {
+      return await operation();
+    } finally {
+      release();
+      // Only the newest queued tail removes the key; later waiters replace it first.
+      if (this.providerMutationLocks.get(key) === tail) this.providerMutationLocks.delete(key);
+    }
   }
 }
 

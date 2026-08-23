@@ -520,6 +520,101 @@ describe('InMemoryUserIntegrationStore', () => {
     });
   });
 
+  it('does not let an in-flight refresh resurrect a disconnected credential', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+    let releaseRefresh!: () => void;
+    let markRefreshStarted!: () => void;
+    const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+    const refreshStarted = new Promise<void>(resolve => { markRefreshStarted = resolve; });
+
+    const refreshing = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => {
+        markRefreshStarted();
+        await refreshGate;
+        return {
+          kind: 'refreshed' as const,
+          accessTokenCiphertext: Buffer.from('fresh-access'),
+          refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        };
+      },
+    });
+    await refreshStarted;
+    const disconnecting = store.disconnect({
+      userId: USER_ID,
+      provider: 'linear',
+      revokedAt: FIVE_MINUTES,
+    });
+
+    releaseRefresh();
+    await expect(refreshing).resolves.toMatchObject({ kind: 'refreshed' });
+    await expect(disconnecting).resolves.toMatchObject({ status: 'revoked' });
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+  });
+
+  it('does not let an in-flight refresh replace a newer connection', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+    let releaseRefresh!: () => void;
+    let markRefreshStarted!: () => void;
+    const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+    const refreshStarted = new Promise<void>(resolve => { markRefreshStarted = resolve; });
+
+    const refreshing = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => {
+        markRefreshStarted();
+        await refreshGate;
+        return {
+          kind: 'refreshed' as const,
+          accessTokenCiphertext: Buffer.from('fresh-old-access'),
+          refreshTokenCiphertext: Buffer.from('fresh-old-refresh'),
+        };
+      },
+    });
+    await refreshStarted;
+    const reconnecting = store.connect({
+      userId: USER_ID,
+      provider: 'linear',
+      externalAccountLabel: 'replacement',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['write:issues'] },
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
+      credentialKeyVersion: 'integration-key-v3',
+      connectedAt: FIVE_MINUTES,
+    });
+
+    releaseRefresh();
+    await expect(refreshing).resolves.toMatchObject({ kind: 'refreshed' });
+    await expect(reconnecting).resolves.toMatchObject({
+      externalAccountLabel: 'replacement',
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+    });
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      externalAccountLabel: 'replacement',
+      credentialKeyVersion: 'integration-key-v3',
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
+      authorizedPermissions: { scopes: ['write:issues'] },
+    });
+  });
+
   it('validates integration records before storing them', () => {
     expect(() => new InMemoryUserIntegrationStore([userIntegration({
       authorizedPermissions: {

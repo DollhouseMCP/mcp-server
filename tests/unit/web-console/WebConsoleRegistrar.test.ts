@@ -480,6 +480,53 @@ describe('WebConsoleRegistrar', () => {
       .toBe(composition.githubIntegrationProvider);
   });
 
+  it('wires configured integration providers from the production composition boundary', async () => {
+    const {
+      StaticApiKeyIntegrationProvider,
+      WebConsoleRegistrar,
+      WEB_CONSOLE_SERVICE_NAMES,
+    } = await import('../../../src/web-console/index.js');
+    const container = new TestContainer();
+    const provider = new StaticApiKeyIntegrationProvider({
+      id: '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d',
+      provider: 'airtable',
+      ownership: 'curated',
+      ownerUserId: null,
+      displayName: 'Airtable',
+      category: 'Database',
+      authStrategy: 'static_api_key',
+      apiHosts: ['api.airtable.com'],
+      oauth: null,
+      staticApiKey: {
+        injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' },
+      },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: new Date('2026-05-26T12:00:00.000Z'),
+      updatedAt: new Date('2026-05-26T12:00:00.000Z'),
+    });
+    container.seed(WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders, [provider]);
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 252),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        moduleId: 'integrations',
+        method: 'GET',
+        path: '/api/v1/me/integrations/airtable',
+      }),
+      expect.objectContaining({
+        moduleId: 'integrations',
+        method: 'POST',
+        path: '/api/v1/me/integrations/airtable/connect',
+      }),
+    ]));
+  });
+
   it('fails hosted/shared activation with all production invariant failures instead of mounting', async () => {
     const { WebConsoleProductionActivationError, WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 

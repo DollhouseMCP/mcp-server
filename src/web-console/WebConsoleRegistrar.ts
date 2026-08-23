@@ -128,6 +128,7 @@ import {
 } from './modules/integrations/GitHubAppIntegrationProvider.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
+import type { IIntegrationProvider } from './modules/integrations/IntegrationProvider.js';
 import {
   InMemoryConsoleTelemetryQuery,
   PostgresConsoleTelemetryQuery,
@@ -223,6 +224,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
   githubIntegrationProvider: 'WebConsoleGitHubIntegrationProvider',
+  configuredIntegrationProviders: 'WebConsoleConfiguredIntegrationProviders',
   productionDatabaseReadiness: 'WebConsoleProductionDatabaseReadiness',
   operatorConfigStore: 'WebConsoleOperatorConfigStore',
   signingKeyStore: 'WebConsoleSigningKeyStore',
@@ -265,6 +267,7 @@ export interface WebConsoleRegistrarOptions {
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly githubIntegrationProviderConfig?: GitHubAppIntegrationProviderConfig | null;
+  readonly configuredIntegrationProviders?: readonly IIntegrationProvider[];
   readonly portfolioStore?: IPortfolioElementStore | null;
   readonly enableManagerBackedPortfolioStore?: boolean;
   readonly enablePortfolioWriteRoutes?: boolean;
@@ -397,6 +400,7 @@ export class WebConsoleRegistrar {
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const githubIntegrationProvider = resolveGitHubIntegrationProvider(container, this.options);
+    const configuredIntegrationProviders = resolveConfiguredIntegrationProviders(container, this.options);
     const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
     const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container, database, this.options);
     const sessionActivationEventSink = resolveSessionActivationEventSink(container, database);
@@ -551,6 +555,7 @@ export class WebConsoleRegistrar {
       opaqueValues,
       secretEncryption,
       githubProvider: githubIntegrationProvider,
+      configuredProviders: configuredIntegrationProviders,
       publicBaseUrl: integrationPublicBaseUrl,
       now: this.options.now,
     }));
@@ -1924,6 +1929,21 @@ function resolveGitHubIntegrationProviderConfig(
     clientId: env.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_ID,
     clientSecret: env.DOLLHOUSE_INTEGRATION_GITHUB_CLIENT_SECRET,
   };
+}
+
+function resolveConfiguredIntegrationProviders(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): readonly IIntegrationProvider[] {
+  if (options.configuredIntegrationProviders !== undefined) {
+    return options.configuredIntegrationProviders;
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders)) {
+    return container.resolve<readonly IIntegrationProvider[]>(
+      WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders,
+    );
+  }
+  return [];
 }
 
 const MANAGER_BACKED_PORTFOLIO_REQUIRED_SERVICES = [
