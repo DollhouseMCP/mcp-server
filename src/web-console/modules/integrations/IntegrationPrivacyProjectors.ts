@@ -98,6 +98,7 @@ function syncDirections(value: unknown): readonly PortfolioSyncDirection[] {
 
 function errorReason(value: unknown): GitHubIntegrationStatusDto['error_reason'] {
   if (value === 'token_exchange_failed' ||
+      value === 'token_refresh_failed' ||
       value === 'revocation_failed' ||
       value === 'scope_denied' ||
       value === 'provider_unavailable') {

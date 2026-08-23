@@ -22,6 +22,10 @@ import {
   type UserIntegrationRecord,
 } from '../../../../src/web-console/index.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
+import type {
+  PinnedFetch,
+  PinnedOutboundFactory,
+} from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const OTHER_USER_ID = '118f3d47-73ae-7f10-a0de-0742618d4fb2';
@@ -42,6 +46,20 @@ const PUBLIC_BASE_URL = 'https://console.example';
 const SETTINGS_INTEGRATIONS_PATH = '/settings/integrations';
 const PROVIDER_CODE = 'provider-code';
 const START_TRANSACTION_ERROR = 'fixture did not start integration transaction';
+const PUBLIC_TEST_ADDRESS = '8.8.8.8';
+
+function configuredOAuthNetwork(fetchImpl: typeof fetch): {
+  readonly dnsLookup: () => Promise<readonly [{ readonly address: string; readonly family: 4 }]>;
+  readonly pinnedOutbound: PinnedOutboundFactory;
+} {
+  return {
+    dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
+    pinnedOutbound: () => ({
+      fetch: fetchImpl as PinnedFetch,
+      close: () => Promise.resolve(),
+    }),
+  };
+}
 
 function authenticatedContext(userId = USER_ID): NonNullable<ConsoleRequest['consoleAuthentication']> {
   return {
@@ -740,7 +758,7 @@ describe('IntegrationModule', () => {
     const provider = new ConfiguredOAuthIntegrationProvider({
       descriptor: oauthDescriptorFixture(),
       clientSecret: 'gmail-client-secret',
-      fetch: fetchImpl,
+      ...configuredOAuthNetwork(fetchImpl),
     });
     const store = new InMemoryUserIntegrationStore();
     const loginTransactions = new InMemoryLoginTransactionStore();
@@ -888,7 +906,7 @@ describe('IntegrationModule', () => {
     const provider = new ConfiguredOAuthIntegrationProvider({
       descriptor: oauthDescriptorFixture(),
       clientSecret: 'gmail-client-secret',
-      fetch: fetchImpl,
+      ...configuredOAuthNetwork(fetchImpl),
     });
     const store = new InMemoryUserIntegrationStore();
     const secretEncryption = new AeadSecretEncryptionService({

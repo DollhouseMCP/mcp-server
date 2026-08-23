@@ -106,8 +106,9 @@ export class IntegrationService {
       expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
       consumedAt: null,
     });
-    logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration link flow started', {
+    logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration link flow started', {
       userId: auth.userId,
+      provider: providerId,
       contentsPermission,
     });
     return {
@@ -261,8 +262,9 @@ export class IntegrationService {
         provider: providerId,
         revokedAt: this.now(),
       });
-      logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration disconnected', {
+      logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration disconnected', {
         userId: auth.userId,
+        provider: providerId,
       });
     }
     return {

@@ -1,4 +1,4 @@
-import { isIP } from 'node:net';
+import { lookup as dnsLookup } from 'node:dns/promises';
 
 import type { IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import type { UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
@@ -14,15 +14,45 @@ import type {
 } from './IntegrationProvider.js';
 import { normalizeUnicodeDisplayText } from './IntegrationProvider.js';
 import { serializeConfiguredIntegrationStatus } from './IntegrationDtos.js';
+import {
+  assertPublicResolvedHost,
+  PublicHostGuardError,
+  type DnsLookup,
+  type DnsLookupAddress,
+} from './IntegrationPublicHostGuard.js';
+import { createPinnedOutboundFactory, type PinnedOutboundFactory } from './PinnedOutboundFactory.js';
+import { logger } from '../../../utils/logger.js';
+import {
+  canonicalizeIntegrationApiHost,
+  IntegrationApiHostValidationError,
+} from '../../security/IntegrationApiHosts.js';
+import { readBoundedResponseText, ResponseBodyTooLargeError } from './BoundedResponseReader.js';
 
 const DEFAULT_OUTBOUND_TIMEOUT_MS = 10_000;
+const MAX_TOKEN_ENDPOINT_RESPONSE_BYTES = 256 * 1024;
+const RESERVED_AUTHORIZATION_PARAMS = new Set([
+  'client_id',
+  'code_challenge',
+  'code_challenge_method',
+  'redirect_uri',
+  'response_type',
+  'scope',
+  'state',
+]);
 
 export interface ConfiguredOAuthIntegrationProviderConfig {
   readonly descriptor: IntegrationDescriptorRecord;
   readonly clientSecret: string;
-  readonly fetch?: typeof fetch;
+  readonly pinnedOutbound?: PinnedOutboundFactory;
+  readonly dnsLookup?: DnsLookup;
   /** Bounds each outbound token-endpoint call so a hung provider cannot hold a refresh row lock open. */
   readonly requestTimeoutMs?: number;
+}
+
+interface TokenEndpointResponse {
+  readonly ok: boolean;
+  readonly status: number;
+  readonly body: unknown;
 }
 
 export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider {
@@ -30,7 +60,8 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
   readonly authorizationConfigured = true;
   readonly credentialStrategy = 'oauth2_authorization_code';
 
-  private readonly fetchImpl: typeof fetch;
+  private readonly pinnedOutboundFactory: PinnedOutboundFactory;
+  private readonly dnsLookupImpl: DnsLookup;
   private readonly timeoutMs: number;
 
   constructor(private readonly config: ConfiguredOAuthIntegrationProviderConfig) {
@@ -38,6 +69,8 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       throw new Error('configured OAuth provider requires an OAuth descriptor');
     }
     if (!config.clientSecret) throw new Error('configured OAuth provider requires clientSecret');
+    validatePublicHttpsUrl(config.descriptor.oauth.authorizationUrl, 'oauth.authorizationUrl');
+    validatePublicHttpsUrl(config.descriptor.oauth.tokenUrl, 'oauth.tokenUrl');
     const revocationUrl = readString(config.descriptor.oauth.tokenExchange, 'revocationUrl');
     if (revocationUrl) validatePublicHttpsUrl(revocationUrl, 'oauth.tokenExchange.revocationUrl');
     this.descriptor = {
@@ -45,7 +78,8 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       displayName: normalizeUnicodeDisplayText(config.descriptor.displayName),
       category: normalizeUnicodeDisplayText(config.descriptor.category),
     };
-    this.fetchImpl = config.fetch ?? fetch;
+    this.pinnedOutboundFactory = config.pinnedOutbound ?? createPinnedOutboundFactory();
+    this.dnsLookupImpl = config.dnsLookup ?? dnsLookup;
     this.timeoutMs = config.requestTimeoutMs ?? DEFAULT_OUTBOUND_TIMEOUT_MS;
   }
 
@@ -64,6 +98,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       url.searchParams.set('code_challenge_method', request.codeChallengeMethod);
     }
     for (const [key, value] of Object.entries(stringRecord(readRecord(oauth.tokenExchange.authorizationParams)))) {
+      if (RESERVED_AUTHORIZATION_PARAMS.has(key.toLowerCase())) continue;
       url.searchParams.set(key, value);
     }
     return url.toString();
@@ -73,7 +108,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     request: IntegrationTokenExchangeRequest,
   ): Promise<IntegrationTokenExchangeResult> {
     const oauth = this.oauthDescriptor();
-    const response = await this.fetchImpl(oauth.tokenUrl, {
+    const response = await this.guardedTokenEndpointFetch('token', oauth.tokenUrl, {
       ...tokenRequestInit({
         clientId: oauth.clientId,
         clientSecret: this.config.clientSecret,
@@ -83,9 +118,10 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         tokenExchange: oauth.tokenExchange,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
+      redirect: 'error',
     });
     if (!response.ok) throw new Error('configured_oauth_token_exchange_failed');
-    const body = await readJson(response);
+    const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_exchange_failed');
     return {
@@ -100,7 +136,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
   async refreshCredentials(request: IntegrationTokenRefreshRequest): Promise<IntegrationTokenRefreshResult> {
     const oauth = this.oauthDescriptor();
     if (oauth.refresh === 'none') throw new Error('configured_oauth_refresh_not_supported');
-    const response = await this.fetchImpl(oauth.tokenUrl, {
+    const response = await this.guardedTokenEndpointFetch('token', oauth.tokenUrl, {
       ...refreshTokenRequestInit({
         clientId: oauth.clientId,
         clientSecret: this.config.clientSecret,
@@ -108,9 +144,10 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         tokenExchange: oauth.tokenExchange,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
+      redirect: 'error',
     });
     if (!response.ok) throw new Error('configured_oauth_token_refresh_failed');
-    const body = await readJson(response);
+    const body = response.body;
     const accessToken = readString(body, 'access_token');
     if (!accessToken) throw new Error('configured_oauth_token_refresh_failed');
     return {
@@ -124,7 +161,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     const oauth = this.oauthDescriptor();
     const revocationUrl = readString(oauth.tokenExchange, 'revocationUrl');
     if (!revocationUrl) return;
-    const response = await this.fetchImpl(revocationUrl, {
+    const response = await this.guardedTokenEndpointFetch('revocation', revocationUrl, {
       method: 'POST',
       headers: {
         Accept: 'application/json',
@@ -136,6 +173,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         token: request.accessToken,
       }),
       signal: AbortSignal.timeout(this.timeoutMs),
+      redirect: 'error',
     });
     if (!response.ok && response.status !== 404) {
       throw new Error('configured_oauth_revocation_failed');
@@ -151,6 +189,51 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     if (!oauth) throw new Error('configured OAuth provider requires an OAuth descriptor');
     return oauth;
   }
+
+  private async guardedTokenEndpointFetch(
+    endpoint: 'token' | 'revocation',
+    urlValue: string,
+    init: RequestInit,
+  ): Promise<TokenEndpointResponse> {
+    const url = new URL(urlValue);
+    let canonicalHostname: string;
+    let vetted: DnsLookupAddress;
+    try {
+      canonicalHostname = canonicalizeIntegrationApiHost(url.hostname, `oauth.${endpoint} endpoint host`);
+      vetted = await assertPublicResolvedHost(canonicalHostname, this.dnsLookupImpl);
+    } catch (error) {
+      if (error instanceof IntegrationApiHostValidationError) {
+        logger.warn('Configured OAuth endpoint host rejected by canonical host policy', {
+          provider: this.descriptor.id,
+          endpoint,
+        });
+        throw new Error('configured_oauth_endpoint_not_allowed');
+      }
+      if (error instanceof PublicHostGuardError) {
+        logger.warn('Configured OAuth endpoint host rejected by public-host guard', {
+          provider: this.descriptor.id,
+          endpoint,
+          reason: error.reason,
+        });
+        throw new Error(error.reason === 'resolution_failed'
+          ? 'configured_oauth_endpoint_resolution_failed'
+          : 'configured_oauth_endpoint_not_allowed');
+      }
+      throw error;
+    }
+
+    const outbound = this.pinnedOutboundFactory({
+      hostname: canonicalHostname,
+      address: vetted.address,
+      family: vetted.family,
+    });
+    try {
+      const response = await outbound.fetch(urlValue, init);
+      return { ok: response.ok, status: response.status, body: await readBoundedJson(response) };
+    } finally {
+      await outbound.close();
+    }
+  }
 }
 
 function tokenRequestInit(input: {
@@ -161,32 +244,13 @@ function tokenRequestInit(input: {
   readonly codeVerifier: string | null;
   readonly tokenExchange: Readonly<Record<string, unknown>>;
 }): RequestInit {
-  const clientAuth = readString(input.tokenExchange, 'clientAuth') ?? 'body';
   const fields: Record<string, string> = {
     grant_type: 'authorization_code',
     code: input.code,
     redirect_uri: input.redirectUri,
   };
   if (input.codeVerifier) fields.code_verifier = input.codeVerifier;
-  if (clientAuth !== 'basic' && clientAuth !== 'none') {
-    fields.client_id = input.clientId;
-    fields.client_secret = input.clientSecret;
-  } else if (clientAuth === 'none') {
-    fields.client_id = input.clientId;
-  }
-  const headers: Record<string, string> = {
-    Accept: 'application/json',
-    'Content-Type': 'application/x-www-form-urlencoded',
-  };
-  if (clientAuth === 'basic') {
-    const basicAuth = Buffer.from(`${input.clientId}:${input.clientSecret}`, 'utf8').toString('base64');
-    headers.Authorization = `Basic ${basicAuth}`;
-  }
-  return {
-    method: 'POST',
-    headers,
-    body: new URLSearchParams(fields),
-  };
+  return credentialedTokenRequestInit(fields, input.clientId, input.clientSecret, input.tokenExchange);
 }
 
 function refreshTokenRequestInit(input: {
@@ -195,23 +259,32 @@ function refreshTokenRequestInit(input: {
   readonly refreshToken: string;
   readonly tokenExchange: Readonly<Record<string, unknown>>;
 }): RequestInit {
-  const clientAuth = readString(input.tokenExchange, 'clientAuth') ?? 'body';
   const fields: Record<string, string> = {
     grant_type: 'refresh_token',
     refresh_token: input.refreshToken,
   };
+  return credentialedTokenRequestInit(fields, input.clientId, input.clientSecret, input.tokenExchange);
+}
+
+function credentialedTokenRequestInit(
+  fields: Record<string, string>,
+  clientId: string,
+  clientSecret: string,
+  tokenExchange: Readonly<Record<string, unknown>>,
+): RequestInit {
+  const clientAuth = readString(tokenExchange, 'clientAuth') ?? 'body';
   if (clientAuth !== 'basic' && clientAuth !== 'none') {
-    fields.client_id = input.clientId;
-    fields.client_secret = input.clientSecret;
+    fields.client_id = clientId;
+    fields.client_secret = clientSecret;
   } else if (clientAuth === 'none') {
-    fields.client_id = input.clientId;
+    fields.client_id = clientId;
   }
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'Content-Type': 'application/x-www-form-urlencoded',
   };
   if (clientAuth === 'basic') {
-    const basicAuth = Buffer.from(`${input.clientId}:${input.clientSecret}`, 'utf8').toString('base64');
+    const basicAuth = Buffer.from(`${clientId}:${clientSecret}`, 'utf8').toString('base64');
     headers.Authorization = `Basic ${basicAuth}`;
   }
   return {
@@ -229,9 +302,20 @@ function accountLabelFromTokenResponse(
   return field ? readString(body, field) : null;
 }
 
-async function readJson(response: Response): Promise<unknown> {
+async function readBoundedJson(response: Response): Promise<unknown> {
+  let text: string;
   try {
-    return await response.json() as unknown;
+    text = await readBoundedResponseText(response, MAX_TOKEN_ENDPOINT_RESPONSE_BYTES);
+  } catch (error) {
+    if (error instanceof ResponseBodyTooLargeError) {
+      throw new Error('configured_oauth_endpoint_response_too_large');
+    }
+    throw error;
+  }
+
+  try {
+    const jsonText = text.codePointAt(0) === 0xfeff ? text.slice(1) : text;
+    return JSON.parse(jsonText) as unknown;
   } catch {
     return null;
   }
@@ -264,19 +348,10 @@ function validatePublicHttpsUrl(value: string, name: string): void {
   if (url.protocol !== 'https:' || url.username || url.password || url.hash) {
     throw new Error(`${name} must be HTTPS without credentials or fragments`);
   }
-  validatePublicDnsHost(url.hostname, name);
-}
-
-function validatePublicDnsHost(host: string, name: string): void {
-  const normalized = host.toLowerCase();
-  if (host !== normalized ||
-      !normalized.includes('.') ||
-      normalized === 'localhost' ||
-      normalized.endsWith('.localhost') ||
-      normalized.endsWith('.local') ||
-      normalized.endsWith('.internal') ||
-      isIP(normalized) !== 0 ||
-      !/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$/.test(normalized)) {
+  try {
+    canonicalizeIntegrationApiHost(url.hostname, name);
+  } catch (error) {
+    if (!(error instanceof IntegrationApiHostValidationError)) throw error;
     throw new Error(`${name} must be a public DNS hostname`);
   }
 }

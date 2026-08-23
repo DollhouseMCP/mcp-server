@@ -36,6 +36,7 @@ export class StaticApiKeyIntegrationProvider implements IIntegrationProvider {
   }
 
   async revokeCredentials(_request: IntegrationRevocationRequest): Promise<void> {
+    // Static keys have no remote revocation endpoint; local disconnect removes the encrypted credential.
     await Promise.resolve();
   }
 
