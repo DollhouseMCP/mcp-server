@@ -80,6 +80,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
       return await this.refreshLocked(input);
     } finally {
       release();
+      // Only the last queued tail may remove the key; a newer waiter replaces it first.
       if (this.refreshLocks.get(key) === tail) this.refreshLocks.delete(key);
     }
   }

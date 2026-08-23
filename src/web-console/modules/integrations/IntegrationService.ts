@@ -196,8 +196,9 @@ export class IntegrationService {
         errorReason: 'token_exchange_failed',
         occurredAt: this.now(),
       });
-      logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration token exchange failed', {
+      logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'Integration token exchange failed', {
         userId: auth.userId,
+        provider: providerId,
       });
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
@@ -392,7 +393,7 @@ export class IntegrationService {
     userId: string | null,
     reason: IntegrationCallbackRejectedReason,
   ): Promise<void> {
-    logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration callback rejected', {
+    logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'Integration callback rejected', {
       userId,
       reason,
     });

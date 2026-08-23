@@ -314,6 +314,7 @@ async function readBoundedJson(response: Response): Promise<unknown> {
   }
 
   try {
+    // Invalid JSON is represented as null; callers fail closed when required token fields are absent.
     const jsonText = text.codePointAt(0) === 0xfeff ? text.slice(1) : text;
     return JSON.parse(jsonText) as unknown;
   } catch {

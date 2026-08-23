@@ -61,6 +61,7 @@ function providerWith(input: {
     readonly url: string;
     readonly body: string | null;
     readonly redirect: RequestRedirect | undefined;
+    readonly authorization: string | null;
   }> = [];
   const fetchImpl: PinnedFetch = input.fetch ?? ((url, init) => {
     const body = init?.body;
@@ -68,6 +69,7 @@ function providerWith(input: {
       url: String(url),
       body: typeof body === 'string' || body instanceof URLSearchParams ? body.toString() : null,
       redirect: init?.redirect,
+      authorization: new Headers(init?.headers).get('authorization'),
     });
     return Promise.resolve(new Response(JSON.stringify({
       access_token: 'fresh-access-token',
@@ -179,6 +181,40 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
       family: 4,
     })));
     expect(fetchCalls.map(call => call.redirect)).toEqual(['error', 'error', 'error']);
+  });
+
+  it('uses HTTP Basic client auth without duplicating credentials in the form body', async () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider, fetchCalls } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          tokenExchange: { ...base.oauth.tokenExchange, clientAuth: 'basic' },
+        },
+      },
+    });
+
+    await provider.exchangeAuthorizationCode(EXCHANGE_REQUEST);
+    expect(fetchCalls[0].authorization).toBe(
+      `Basic ${Buffer.from('gmail-client-id:gmail-client-secret', 'utf8').toString('base64')}`,
+    );
+    expect(fetchCalls[0].body).not.toContain('client_id=');
+    expect(fetchCalls[0].body).not.toContain('client_secret=');
+  });
+
+  it('fails closed when refresh is unsupported', async () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: { ...base, oauth: { ...base.oauth, refresh: 'none' } },
+    });
+
+    await expect(provider.refreshCredentials({ refreshToken: 'refresh-token' }))
+      .rejects.toThrow('configured_oauth_refresh_not_supported');
   });
 
   it('rejects a streaming token response that exceeds the byte cap', async () => {
