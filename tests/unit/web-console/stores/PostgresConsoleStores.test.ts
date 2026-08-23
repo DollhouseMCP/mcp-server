@@ -819,6 +819,21 @@ describe('PostgresIntegrationDescriptorStore', () => {
     expect(row.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
   });
 
+  it('keeps pre-client-ID OAuth descriptors readable as unconfigured metadata', async () => {
+    const row = integrationDescriptorRow();
+    const legacyOauth = { ...(row.oauth as Record<string, unknown>) };
+    delete legacyOauth.clientId;
+    transaction.select = jest.fn(() => selectingChain([{ ...row, oauth: legacyOauth }]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.listVisible(USER_ID)).resolves.toEqual([
+      expect.objectContaining({
+        provider: 'gmail',
+        oauth: expect.objectContaining({ clientId: null }),
+      }),
+    ]);
+  });
+
   it('prefers the user BYO descriptor when a curated descriptor is also visible', async () => {
     transaction.select = jest.fn(() => selectingChain([
       integrationDescriptorRow({
@@ -879,6 +894,17 @@ describe('PostgresIntegrationDescriptorStore', () => {
     await expect(store.upsert(integrationDescriptorInput({
       apiHosts: ['127.0.0.1'],
     }))).rejects.toThrow(ConsoleStoreValidationError);
+    expect(transaction.insert).toBeUndefined();
+  });
+
+  it('requires a client ID for new OAuth descriptor writes', async () => {
+    const input = integrationDescriptorInput();
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert({
+      ...input,
+      oauth: input.oauth ? { ...input.oauth, clientId: null } : null,
+    })).rejects.toThrow('oauth.clientId is required');
     expect(transaction.insert).toBeUndefined();
   });
 });

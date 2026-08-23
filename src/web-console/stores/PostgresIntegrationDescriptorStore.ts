@@ -130,9 +130,12 @@ function fromDescriptorRow(row: typeof integrationProviderDescriptors.$inferSele
 }
 
 function asNullableOAuth(value: unknown): IntegrationOAuthDescriptor | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as IntegrationOAuthDescriptor
-    : null;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const oauth = value as Record<string, unknown>;
+  return {
+    ...oauth,
+    clientId: typeof oauth.clientId === 'string' ? oauth.clientId : null,
+  } as unknown as IntegrationOAuthDescriptor;
 }
 
 function asNullableStaticApiKey(value: unknown): IntegrationStaticApiKeyDescriptor | null {

@@ -38,7 +38,8 @@ export interface IntegrationDescriptorRecord {
 }
 
 export interface IntegrationOAuthDescriptor {
-  readonly clientId: string;
+  /** Null only for legacy descriptors that predate configured OAuth execution. */
+  readonly clientId: string | null;
   readonly authorizationUrl: string;
   readonly tokenUrl: string;
   readonly scopes: readonly string[];
@@ -82,7 +83,7 @@ export interface IIntegrationDescriptorStore {
 
 export function validateIntegrationDescriptorRecord(record: IntegrationDescriptorRecord): void {
   assertUuid(record.id, 'id');
-  validateIntegrationDescriptorShape(record);
+  validateIntegrationDescriptorShape(record, false);
 }
 
 export function validateIntegrationDescriptorInput(input: IntegrationDescriptorCreateInput): void {
@@ -102,7 +103,7 @@ export function validateIntegrationDescriptorInput(input: IntegrationDescriptorC
     operationPromotion: input.operationPromotion ?? {},
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
-  });
+  }, true);
 }
 
 export function cloneIntegrationDescriptorRecord(
@@ -124,6 +125,7 @@ export function cloneIntegrationDescriptorRecord(
 
 function validateIntegrationDescriptorShape(
   record: Omit<IntegrationDescriptorRecord, 'id'> & { readonly id?: string },
+  requireConfiguredOAuthClient: boolean,
 ): void {
   assertUserIntegrationProvider(record.provider);
   const ownership: string = record.ownership;
@@ -141,7 +143,7 @@ function validateIntegrationDescriptorShape(
   }
   assertDisplayString(record.displayName, 'displayName', 120);
   assertDisplayString(record.category, 'category', 80);
-  validateAuthStrategy(record);
+  validateAuthStrategy(record, requireConfiguredOAuthClient);
   validateApiHosts(record.apiHosts);
   validateOptionalCredential(record.clientSecretCiphertext, record.credentialKeyVersion);
   validateJsonRecord(record.operationPromotion, 'operationPromotion', 8192);
@@ -153,12 +155,12 @@ function validateIntegrationDescriptorShape(
 function validateAuthStrategy(record: Pick<
   IntegrationDescriptorRecord,
   'authStrategy' | 'oauth' | 'staticApiKey' | 'clientSecretCiphertext'
->): void {
+>, requireConfiguredOAuthClient: boolean): void {
   switch (record.authStrategy) {
     case 'oauth2_authorization_code':
       if (!record.oauth) throw new ConsoleStoreValidationError('oauth descriptor is required');
       if (record.staticApiKey) throw new ConsoleStoreValidationError('oauth descriptor cannot include staticApiKey');
-      validateOAuthDescriptor(record.oauth);
+      validateOAuthDescriptor(record.oauth, requireConfiguredOAuthClient);
       return;
     case 'static_api_key':
       if (!record.staticApiKey) throw new ConsoleStoreValidationError('staticApiKey descriptor is required');
@@ -175,8 +177,17 @@ function validateAuthStrategy(record: Pick<
   }
 }
 
-function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor): void {
-  assertDisplayString(oauth.clientId, 'oauth.clientId', 200);
+function validateOAuthDescriptor(
+  oauth: IntegrationOAuthDescriptor,
+  requireConfiguredClient: boolean,
+): void {
+  if (oauth.clientId === null) {
+    if (requireConfiguredClient) {
+      throw new ConsoleStoreValidationError('oauth.clientId is required');
+    }
+  } else {
+    assertDisplayString(oauth.clientId, 'oauth.clientId', 200);
+  }
   validatePublicHttpsUrl(oauth.authorizationUrl, 'oauth.authorizationUrl');
   validatePublicHttpsUrl(oauth.tokenUrl, 'oauth.tokenUrl');
   const pkce: string = oauth.pkce;

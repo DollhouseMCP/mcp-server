@@ -401,7 +401,11 @@ export class WebConsoleRegistrar {
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const githubIntegrationProvider = resolveGitHubIntegrationProvider(container, this.options);
     const configuredIntegrationProviders = resolveConfiguredIntegrationProviders(container, this.options);
-    const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
+    const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(
+      this.options,
+      githubIntegrationProvider,
+      configuredIntegrationProviders,
+    );
     const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container, database, this.options);
     const sessionActivationEventSink = resolveSessionActivationEventSink(container, database);
     const sessionApprovalStore = resolveSessionApprovalStore(container, database, this.options);
@@ -2034,10 +2038,16 @@ function resolvePortfolioSyncJobStore(
 function resolveIntegrationPublicBaseUrl(
   options: WebConsoleRegistrarOptions,
   githubIntegrationProvider: IGitHubIntegrationProvider | null,
+  configuredIntegrationProviders: readonly IIntegrationProvider[],
 ): string | null {
   if (options.publicBaseUrl) return options.publicBaseUrl;
   if (githubIntegrationProvider) {
     throw new Error('Web console GitHub integration provider requires publicBaseUrl');
+  }
+  if (configuredIntegrationProviders.some(
+    provider => provider.credentialStrategy === 'oauth2_authorization_code',
+  )) {
+    throw new Error('Web console configured OAuth integration providers require publicBaseUrl');
   }
   return null;
 }

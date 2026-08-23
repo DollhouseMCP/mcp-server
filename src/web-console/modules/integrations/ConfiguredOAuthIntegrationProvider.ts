@@ -69,6 +69,9 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     if (config.descriptor.authStrategy !== 'oauth2_authorization_code' || !config.descriptor.oauth) {
       throw new Error('configured OAuth provider requires an OAuth descriptor');
     }
+    if (!config.descriptor.oauth.clientId) {
+      throw new Error('configured OAuth provider requires oauth.clientId');
+    }
     if (!config.clientSecret) throw new Error('configured OAuth provider requires clientSecret');
     validatePublicHttpsUrl(config.descriptor.oauth.authorizationUrl, 'oauth.authorizationUrl');
     validatePublicHttpsUrl(config.descriptor.oauth.tokenUrl, 'oauth.tokenUrl');
@@ -118,7 +121,6 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         codeVerifier: oauth.pkce === 'unsupported' ? null : request.codeVerifier,
         tokenExchange: oauth.tokenExchange,
       }),
-      signal: AbortSignal.timeout(this.timeoutMs),
       redirect: 'error',
     });
     if (!response.ok) throw new Error('configured_oauth_token_exchange_failed');
@@ -145,7 +147,6 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
         refreshToken: request.refreshToken,
         tokenExchange: oauth.tokenExchange,
       }),
-      signal: AbortSignal.timeout(this.timeoutMs),
       redirect: 'error',
     });
     if (!response.ok) throw new Error('configured_oauth_token_refresh_failed');
@@ -185,7 +186,6 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
           this.config.clientSecret,
           oauth.tokenExchange,
         ),
-        signal: AbortSignal.timeout(this.timeoutMs),
         redirect: 'error',
       });
       if (!response.ok) throw new Error('configured_oauth_revocation_failed');
@@ -196,10 +196,11 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     return { body: serializeConfiguredIntegrationStatus(this.descriptor, record) };
   }
 
-  private oauthDescriptor() {
+  private oauthDescriptor(): NonNullable<IntegrationDescriptorRecord['oauth']> & { readonly clientId: string } {
     const oauth = this.config.descriptor.oauth;
-    if (!oauth) throw new Error('configured OAuth provider requires an OAuth descriptor');
-    return oauth;
+    const clientId = oauth?.clientId;
+    if (!oauth || !clientId) throw new Error('configured OAuth provider requires a configured OAuth descriptor');
+    return { ...oauth, clientId };
   }
 
   private async guardedTokenEndpointFetch(
@@ -208,12 +209,19 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     init: RequestInit,
   ): Promise<TokenEndpointResponse> {
     const url = new URL(urlValue);
+    const signal = AbortSignal.timeout(this.timeoutMs);
     let canonicalHostname: string;
     let vetted: DnsLookupAddress;
     try {
       canonicalHostname = canonicalizeIntegrationApiHost(url.hostname, `oauth.${endpoint} endpoint host`);
-      vetted = await assertPublicResolvedHost(canonicalHostname, this.dnsLookupImpl);
+      vetted = await waitForAbortable(
+        assertPublicResolvedHost(canonicalHostname, this.dnsLookupImpl),
+        signal,
+      );
     } catch (error) {
+      if (error instanceof ConfiguredOAuthRequestTimeoutError) {
+        throw new Error('configured_oauth_endpoint_timeout');
+      }
       if (error instanceof IntegrationApiHostValidationError) {
         logger.warn('Configured OAuth endpoint host rejected by canonical host policy', {
           provider: this.descriptor.id,
@@ -240,12 +248,26 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
       family: vetted.family,
     });
     try {
-      const response = await outbound.fetch(urlValue, init);
+      const response = await outbound.fetch(urlValue, { ...init, signal });
       return { ok: response.ok, status: response.status, body: await readBoundedJson(response) };
+    } catch (error) {
+      if (signal.aborted) throw new Error('configured_oauth_endpoint_timeout');
+      throw error;
     } finally {
       await outbound.close();
     }
   }
+}
+
+class ConfiguredOAuthRequestTimeoutError extends Error {}
+
+function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(new ConfiguredOAuthRequestTimeoutError());
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(new ConfiguredOAuthRequestTimeoutError());
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
 }
 
 function tokenRequestInit(input: {

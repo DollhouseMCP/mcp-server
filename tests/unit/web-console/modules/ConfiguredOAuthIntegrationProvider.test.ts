@@ -56,6 +56,7 @@ function providerWith(input: {
   readonly fetch?: PinnedFetch;
   readonly descriptor?: IntegrationDescriptorRecord;
   readonly clientSecret?: string;
+  readonly requestTimeoutMs?: number;
 }) {
   const pins: OutboundPin[] = [];
   const fetchCalls: Array<{
@@ -87,6 +88,7 @@ function providerWith(input: {
     clientSecret: input.clientSecret ?? 'gmail-client-secret',
     pinnedOutbound: factory as unknown as PinnedOutboundFactory,
     dnsLookup: input.dnsLookup,
+    requestTimeoutMs: input.requestTimeoutMs,
   });
   return { provider, factory, pins, fetchCalls };
 }
@@ -101,6 +103,16 @@ const EXCHANGE_REQUEST = {
 };
 
 describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
+  it('does not activate a legacy OAuth descriptor until its client ID is configured', () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+
+    expect(() => providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: { ...base, oauth: { ...base.oauth, clientId: null } },
+    })).toThrow('configured OAuth provider requires oauth.clientId');
+  });
+
   it('does not let descriptor extras replace protocol-critical authorization parameters', () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');
@@ -163,6 +175,17 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     });
     await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST))
       .rejects.toThrow('configured_oauth_endpoint_resolution_failed');
+    expect(factory).not.toHaveBeenCalled();
+  });
+
+  it('applies the outbound deadline while DNS resolution is pending', async () => {
+    const { provider, factory } = providerWith({
+      dnsLookup: () => new Promise(() => undefined),
+      requestTimeoutMs: 10,
+    });
+
+    await expect(provider.exchangeAuthorizationCode(EXCHANGE_REQUEST))
+      .rejects.toThrow('configured_oauth_endpoint_timeout');
     expect(factory).not.toHaveBeenCalled();
   });
 

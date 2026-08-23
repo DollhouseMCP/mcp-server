@@ -527,6 +527,50 @@ describe('WebConsoleRegistrar', () => {
     ]));
   });
 
+  it('rejects configured OAuth integration providers without a public callback base URL', async () => {
+    const {
+      ConfiguredOAuthIntegrationProvider,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+    const oauthProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: {
+        id: '07e6a2f1-c2d5-4b47-9294-bade73b3fe61',
+        provider: 'gmail',
+        ownership: 'curated',
+        ownerUserId: null,
+        displayName: 'Gmail',
+        category: 'Email',
+        authStrategy: 'oauth2_authorization_code',
+        apiHosts: ['gmail.googleapis.com'],
+        oauth: {
+          clientId: 'gmail-client-id',
+          authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+          tokenUrl: 'https://oauth2.googleapis.com/token',
+          scopes: ['gmail.readonly'],
+          pkce: 'required',
+          refresh: 'rotating',
+          tokenExchange: {},
+          accountLabel: {},
+        },
+        staticApiKey: null,
+        clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+        credentialKeyVersion: 'integration-key-v1',
+        operationPromotion: {},
+        createdAt: new Date('2026-05-26T12:00:00.000Z'),
+        updatedAt: new Date('2026-05-26T12:00:00.000Z'),
+      },
+      clientSecret: 'gmail-client-secret',
+    });
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 253),
+      registerCleanup: false,
+      configuredIntegrationProviders: [oauthProvider],
+    }).bootstrapAndRegister(new TestContainer())).rejects.toThrow(
+      'Web console configured OAuth integration providers require publicBaseUrl',
+    );
+  });
+
   it('fails hosted/shared activation with all production invariant failures instead of mounting', async () => {
     const { WebConsoleProductionActivationError, WebConsoleRegistrar } = await import('../../../src/web-console/index.js');
 
