@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import type { AgentState } from '../../../src/elements/agents/types.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
@@ -30,6 +30,7 @@ describe('FileAgentStateStore strict recovery I/O', () => {
   let tempDir: string;
   let stateDir: string;
   let cache: Map<string, AgentState>;
+  let serializationService: SerializationService;
   let store: FileAgentStateStore;
 
   beforeEach(async () => {
@@ -37,11 +38,12 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     stateDir = path.join(tempDir, '.state');
     cache = new Map();
     const lockManager = new FileLockManager();
+    serializationService = new SerializationService();
     store = new FileAgentStateStore({
       stateDir,
       fileLockManager: lockManager,
       fileOperations: new FileOperationsService(lockManager),
-      serializationService: new SerializationService(),
+      serializationService,
       stateCache: cache,
     });
   });
@@ -199,6 +201,23 @@ stateVersion: ${stateVersion}
 
     await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
       .rejects.toThrow('exceeds allowed size');
+  });
+
+  it('rejects compact YAML that expands beyond the parsed-state ceiling', async () => {
+    const expandedState = state(1);
+    expandedState.context = Object.fromEntries(
+      Array.from({ length: 9_000 }, (_, index) => [`k${index}`, 'x']),
+    );
+    expect(JSON.stringify(expandedState).length).toBeGreaterThan(100 * 1024);
+    jest.spyOn(serializationService, 'parseFrontmatter').mockReturnValue({
+      data: expandedState as unknown as Record<string, unknown>,
+      content: '',
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), 'compact-yaml');
+
+    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+      .rejects.toThrow('Parsed agent state exceeds allowed size');
   });
 
   it('routes an oversized terminal update through the reduction path', async () => {

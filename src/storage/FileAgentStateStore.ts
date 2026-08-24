@@ -75,6 +75,11 @@ export class FileAgentStateStore implements IAgentStateStore {
 
       const state = result.data as AgentState;
       this.normalizeLoadedState(state);
+      this.deps.serializationService.validateSize(
+        JSON.stringify(state),
+        AGENT_STATE_RECOVERY_MAX_YAML_SIZE,
+        'Parsed agent state',
+      );
       if (!options.strict) {
         this.deps.stateCache.set(normalizedName, state);
       }
