@@ -439,6 +439,10 @@ describe('WebConsoleRegistrar', () => {
 
     await expect(new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 25),
+      secretEncryptionKey: {
+        keyId: 'github-test-key',
+        key: Buffer.alloc(32, 26),
+      },
       registerCleanup: false,
       githubIntegrationProvider: {
         createAuthorizationUrl: () => 'https://github.example/install',
@@ -466,6 +470,10 @@ describe('WebConsoleRegistrar', () => {
 
     const composition = await new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 251),
+      secretEncryptionKey: {
+        keyId: 'github-config-test-key',
+        key: Buffer.alloc(32, 252),
+      },
       registerCleanup: false,
       publicBaseUrl: TEST_PUBLIC_BASE_URL,
       githubIntegrationProviderConfig: {
@@ -507,6 +515,10 @@ describe('WebConsoleRegistrar', () => {
       updatedAt: new Date('2026-05-26T12:00:00.000Z'),
     });
     container.seed(WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders, [provider]);
+    container.seed('WebConsoleSecretEncryptionKey', {
+      keyId: 'static-provider-test-key',
+      key: Buffer.alloc(32, 253),
+    });
 
     const composition = await new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 252),
@@ -525,6 +537,40 @@ describe('WebConsoleRegistrar', () => {
         path: '/api/v1/me/integrations/airtable/connect',
       }),
     ]));
+  });
+
+  it('rejects configured integration providers without credential encryption', async () => {
+    const {
+      StaticApiKeyIntegrationProvider,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+    const provider = new StaticApiKeyIntegrationProvider({
+      id: 'dbef8cd3-f3c4-4799-9132-63df963f776a',
+      provider: 'airtable',
+      ownership: 'curated',
+      ownerUserId: null,
+      displayName: 'Airtable',
+      category: 'Database',
+      authStrategy: 'static_api_key',
+      apiHosts: ['api.airtable.com'],
+      oauth: null,
+      staticApiKey: {
+        injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' },
+      },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: new Date('2026-05-26T12:00:00.000Z'),
+      updatedAt: new Date('2026-05-26T12:00:00.000Z'),
+    });
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 254),
+      registerCleanup: false,
+      configuredIntegrationProviders: [provider],
+    }).bootstrapAndRegister(new TestContainer())).rejects.toThrow(
+      'Web console integration providers require secretEncryptionKey or WebConsoleSecretEncryptionKey',
+    );
   });
 
   it('rejects configured OAuth integration providers without a public callback base URL', async () => {
@@ -564,6 +610,10 @@ describe('WebConsoleRegistrar', () => {
 
     await expect(new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 253),
+      secretEncryptionKey: {
+        keyId: 'oauth-test-key',
+        key: Buffer.alloc(32, 254),
+      },
       registerCleanup: false,
       configuredIntegrationProviders: [oauthProvider],
     }).bootstrapAndRegister(new TestContainer())).rejects.toThrow(

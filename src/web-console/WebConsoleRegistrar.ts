@@ -401,6 +401,11 @@ export class WebConsoleRegistrar {
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const githubIntegrationProvider = resolveGitHubIntegrationProvider(container, this.options);
     const configuredIntegrationProviders = resolveConfiguredIntegrationProviders(container, this.options);
+    assertIntegrationCredentialEncryptionConfigured(
+      secretEncryption,
+      githubIntegrationProvider,
+      configuredIntegrationProviders,
+    );
     const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(
       this.options,
       githubIntegrationProvider,
@@ -2050,6 +2055,17 @@ function resolveIntegrationPublicBaseUrl(
     throw new Error('Web console configured OAuth integration providers require publicBaseUrl');
   }
   return null;
+}
+
+function assertIntegrationCredentialEncryptionConfigured(
+  secretEncryption: ISecretEncryptionService | null,
+  githubIntegrationProvider: IGitHubIntegrationProvider | null,
+  configuredIntegrationProviders: readonly IIntegrationProvider[],
+): void {
+  if (secretEncryption || (!githubIntegrationProvider && configuredIntegrationProviders.length === 0)) return;
+  throw new Error(
+    'Web console integration providers require secretEncryptionKey or WebConsoleSecretEncryptionKey',
+  );
 }
 
 function markProductionAdapter<T extends object>(
