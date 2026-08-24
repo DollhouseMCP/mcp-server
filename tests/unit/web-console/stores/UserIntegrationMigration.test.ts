@@ -32,8 +32,9 @@ describe('user integration token refresh migration', () => {
 
 describe('legacy OAuth account-label migration', () => {
   it('removes credential-bearing selectors while preserving the account-label object', () => {
-    expect(accountLabelMigrationSql).toContain("ARRAY['accountLabel', 'field']::text[]");
-    expect(accountLabelMigrationSql).toContain("ARRAY['accountLabel', 'tokenResponseField']::text[]");
+    expect(accountLabelMigrationSql).toContain("FROM (VALUES ('accountLabel')) AS label(account_label_key)");
+    expect(accountLabelMigrationSql).toContain("ARRAY[account_label_key, 'field']::text[]");
+    expect(accountLabelMigrationSql).toContain("ARRAY[account_label_key, 'tokenResponseField']::text[]");
     expect(accountLabelMigrationSql).toContain('descriptor.oauth #- candidate.field_path');
     expect(accountLabelMigrationSql).toContain('descriptor.oauth #- candidate.token_response_field_path');
     for (const canonicalField of [

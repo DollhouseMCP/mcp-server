@@ -21,11 +21,12 @@ WITH reserved_fields(canonical) AS (
     ('token'),
     ('user_code')
 ),
-account_label_paths(field_path, token_response_field_path) AS (
-  VALUES (
-    ARRAY['accountLabel', 'field']::text[],
-    ARRAY['accountLabel', 'tokenResponseField']::text[]
-  )
+account_label_paths(account_label_key, field_path, token_response_field_path) AS (
+  SELECT
+    account_label_key,
+    ARRAY[account_label_key, 'field']::text[],
+    ARRAY[account_label_key, 'tokenResponseField']::text[]
+  FROM (VALUES ('accountLabel')) AS label(account_label_key)
 ),
 unsafe_account_labels AS (
   SELECT
@@ -64,7 +65,7 @@ unsafe_account_labels AS (
   CROSS JOIN account_label_paths AS paths
   WHERE descriptor.auth_strategy = 'oauth2_authorization_code'
     AND jsonb_typeof(descriptor.oauth) = 'object'
-    AND jsonb_typeof(descriptor.oauth->'accountLabel') = 'object'
+    AND jsonb_typeof(descriptor.oauth->paths.account_label_key) = 'object'
 )
 UPDATE "integration_provider_descriptors" AS descriptor
 SET
