@@ -653,6 +653,29 @@ describe('PostgresLoginTransactionStore', () => {
 });
 
 describe('PostgresUserIntegrationStore', () => {
+  it.each(['', 'bad\nkey', 'k'.repeat(129)])(
+    'rejects invalid credential key version %j before opening a transaction',
+    async credentialKeyVersion => {
+      const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+      await expect(store.connect({
+        userId: USER_ID,
+        provider: 'github',
+        externalAccountLabel: 'alice',
+        externalInstallationId: 'installation-123',
+        authorizedPermissions: {
+          repository_selection: 'selected',
+          permissions: { contents: 'read' },
+        },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+        credentialKeyVersion,
+        connectedAt: NOW,
+      })).rejects.toThrow(ConsoleStoreValidationError);
+      expect(withSystemContextMock).not.toHaveBeenCalled();
+    },
+  );
+
   it('lists active user integrations and clones credential ciphertext', async () => {
     const row = userIntegrationRow();
     const chain = selectingOrderedChain([row]);

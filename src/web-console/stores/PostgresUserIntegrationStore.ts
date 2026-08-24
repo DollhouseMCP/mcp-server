@@ -238,7 +238,7 @@ function validateConnectInput(input: UserIntegrationConnectInput): void {
     authorizedPermissions: input.authorizedPermissions,
     accessTokenCiphertext: input.accessTokenCiphertext,
     refreshTokenCiphertext: input.refreshTokenCiphertext,
-    credentialKeyVersion: null,
+    credentialKeyVersion: input.credentialKeyVersion ?? null,
     status: 'connected',
     errorReason: null,
     connectedAt: input.connectedAt,
