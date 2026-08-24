@@ -588,7 +588,7 @@ export class Agent extends BaseElement implements IElement {
         ValidationErrorCodes.INVALID_GOAL_STATUS,
       );
     }
-    this.removeGoalHistory(goalId);
+    this.archiveTerminalGoalHistory(goal);
     this.isDirtyState = true;
     this.markDirty();
   }
@@ -623,6 +623,32 @@ export class Agent extends BaseElement implements IElement {
     this.state.goals = this.state.goals.filter(goal => goal.id !== goalId);
     this.state.decisions = this.state.decisions.filter(decision => decision.goalId !== goalId);
     this._decisionHistory.reset(this.state.decisions);
+  }
+
+  private archiveTerminalGoalHistory(goal: AgentGoal): void {
+    const isReferenced = this.state.goals.some(candidate =>
+      candidate.id !== goal.id && candidate.dependencies?.includes(goal.id)
+    );
+    if (isReferenced) {
+      const tombstone: AgentGoal = {
+        id: goal.id,
+        description: 'Archived terminal goal',
+        priority: goal.priority,
+        status: goal.status,
+        importance: goal.importance,
+        urgency: goal.urgency,
+        createdAt: goal.createdAt,
+        updatedAt: goal.updatedAt,
+        completedAt: goal.completedAt,
+      };
+      this.state.goals = this.state.goals.map(candidate =>
+        candidate.id === goal.id ? tombstone : candidate
+      );
+      this.state.decisions = this.state.decisions.filter(decision => decision.goalId !== goal.id);
+      this._decisionHistory.reset(this.state.decisions);
+      return;
+    }
+    this.removeGoalHistory(goal.id);
   }
 
   private isTerminalGoal(goal: AgentGoal): boolean {

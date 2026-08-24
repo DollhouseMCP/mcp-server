@@ -3202,7 +3202,7 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();
-    const completedGoal = updatedState.goals.find(g => g.id === goal.id) ?? completedGoalSnapshot;
+    const completedGoal = completedGoalSnapshot;
 
     return {
       success: true,

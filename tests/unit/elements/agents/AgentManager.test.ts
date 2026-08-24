@@ -216,6 +216,42 @@ describe('AgentManager', () => {
       }));
     });
 
+    it('retains a referenced failure tombstone during oversized recovery', async () => {
+      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = recoveryAgent.addGoal({ description: 'Detailed stuck execution' });
+      target.status = 'in_progress';
+      const dependent = recoveryAgent.addGoal({
+        description: 'Dependent execution',
+        dependencies: [target.id],
+      });
+      recoveryAgent.markStatePersisted();
+
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      const result = await agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      });
+
+      expect(result.goal).toEqual(expect.objectContaining({
+        id: target.id,
+        description: 'Detailed stuck execution',
+        status: 'failed',
+      }));
+      expect(recoveryAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: target.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(recoveryAgent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
     it('continues the requested in-progress goal instead of another session goal', async () => {
       const agent = new Agent({ name: 'test-agent' }, metadataService);
       const otherGoal = agent.addGoal({ description: 'Other session execution' });

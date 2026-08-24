@@ -194,6 +194,34 @@ describe('Agent Element', () => {
         .toContain('1 incomplete dependencies');
     });
 
+    it('retains a compact outcome tombstone when recovery archives a referenced goal', () => {
+      const failedDependency = agent.addGoal({ description: 'Detailed failed prerequisite' });
+      failedDependency.status = 'failed';
+      const dependent = agent.addGoal({
+        description: 'Dependent work',
+        dependencies: [failedDependency.id],
+      });
+      agent.recordDecision({
+        goalId: failedDependency.id,
+        decision: 'Stop failed work',
+        reasoning: 'The prerequisite failed',
+        confidence: 1,
+      });
+
+      agent[EVICT_TERMINAL_GOAL](failedDependency.id);
+
+      expect(agent.getState().goals).toContainEqual(expect.objectContaining({
+        id: failedDependency.id,
+        status: 'failed',
+        description: 'Archived terminal goal',
+      }));
+      expect(agent.getState().decisions).not.toContainEqual(
+        expect.objectContaining({ goalId: failedDependency.id }),
+      );
+      expect(agent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
     it('should validate goal description length', () => {
       const longDescription = 'a'.repeat(AGENT_LIMITS.MAX_GOAL_LENGTH + 1);
       const goal = agent.addGoal({ description: longDescription });
