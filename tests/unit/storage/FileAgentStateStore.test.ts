@@ -2,13 +2,17 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
+import { afterEach, beforeEach, describe, expect, it, jest } from '@jest/globals';
 
 import type { AgentState } from '../../../src/elements/agents/types.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { SerializationService } from '../../../src/services/SerializationService.js';
-import { FileAgentStateStore } from '../../../src/storage/FileAgentStateStore.js';
+import {
+  AgentStateReductionRequiredError,
+  AgentStateSizeLimitError,
+  FileAgentStateStore,
+} from '../../../src/storage/FileAgentStateStore.js';
 
 const key = { name: 'Recovery Agent', agentElementId: 'agent-id' };
 
@@ -27,6 +31,7 @@ describe('FileAgentStateStore strict recovery I/O', () => {
   let tempDir: string;
   let stateDir: string;
   let cache: Map<string, AgentState>;
+  let serializationService: SerializationService;
   let store: FileAgentStateStore;
 
   beforeEach(async () => {
@@ -34,11 +39,12 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     stateDir = path.join(tempDir, '.state');
     cache = new Map();
     const lockManager = new FileLockManager();
+    serializationService = new SerializationService();
     store = new FileAgentStateStore({
       stateDir,
       fileLockManager: lockManager,
       fileOperations: new FileOperationsService(lockManager),
-      serializationService: new SerializationService(),
+      serializationService,
       stateCache: cache,
     });
   });
@@ -73,6 +79,14 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     const reclaimed = await store.reclaimOrphaned(key);
 
     expect(reclaimed?.context).toEqual({});
+  });
+
+  it('permits a bounded oversized read while reclaiming orphaned state', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
+
+    const reclaimed = await store.reclaimOrphaned(key);
+
+    expect(String(reclaimed?.context.payload)).toHaveLength(70 * 1024);
   });
 
   it('defaults malformed integer fields when loading durable state', async () => {
@@ -152,4 +166,141 @@ stateVersion: ${stateVersion}
       .rejects.toThrow('State version conflict');
     expect(staleState.stateVersion).toBe(0);
   });
+
+  it('does not mutate the caller version when size validation rejects a save', async () => {
+    const oversized = state();
+    oversized.context = { payload: 'x'.repeat(70 * 1024) };
+
+    await expect(store.save(key, oversized, 0)).rejects.toThrow('normal persistence limit');
+
+    expect(oversized.stateVersion).toBe(0);
+  });
+
+  it('enforces persistence ceilings using UTF-8 bytes', async () => {
+    const oversized = state();
+    oversized.context = { payload: 'é'.repeat(35 * 1024) };
+
+    await expect(store.save(key, oversized, 0)).rejects.toBeInstanceOf(AgentStateSizeLimitError);
+    expect(oversized.stateVersion).toBe(0);
+  });
+
+  it('allows a bounded recovery read while ordinary reads retain the normal limit', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
+
+    await expect(store.load(key, { strict: true })).rejects.toThrow('exceeds allowed size');
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+
+    expect(String(recovered?.context.payload)).toHaveLength(70 * 1024);
+  });
+
+  it('enforces ordinary load ceilings using UTF-8 bytes', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'é'.repeat(35 * 1024) } });
+
+    await expect(store.load(key)).rejects.toBeInstanceOf(AgentStateSizeLimitError);
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+
+    expect(String(recovered?.context.payload)).toHaveLength(35 * 1024);
+  });
+
+  it('permits an oversized recovery save only when it strictly shrinks durable state', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+    expect(recovered).not.toBeNull();
+
+    recovered!.context = { payload: 'x'.repeat(68 * 1024) };
+    await expect(store.save(key, recovered!, 1, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).resolves.toBe(2);
+    expect(recovered?.stateVersion).toBe(2);
+
+    const unchanged = await store.load(key, { strict: true, allowOversizedRecovery: true });
+    await expect(store.save(key, unchanged!, 2, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).rejects.toThrow('must strictly reduce');
+    expect(unchanged?.stateVersion).toBe(2);
+  });
+
+  it('rejects recovery content beyond the bounded recovery ceiling', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(101 * 1024) } });
+
+    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+      .rejects.toThrow('exceeds allowed size');
+  });
+
+  it('surfaces compact YAML that expands beyond the parsed-state ceiling', async () => {
+    const expandedState = state(1);
+    expandedState.context = Object.fromEntries(
+      Array.from({ length: 9_000 }, (_, index) => [`k${index}`, 'x']),
+    );
+    expect(JSON.stringify(expandedState).length).toBeGreaterThan(100 * 1024);
+    jest.spyOn(serializationService, 'parseFrontmatter').mockReturnValue({
+      data: expandedState as unknown as Record<string, unknown>,
+      content: '',
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), 'compact-yaml');
+
+    await expect(store.load(key)).rejects.toThrow('Parsed agent state exceeds allowed size');
+    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+      .rejects.toThrow('Parsed agent state exceeds allowed size');
+  });
+
+  it('routes an oversized terminal update through the reduction path', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(98 * 1024) } });
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+    expect(recovered).not.toBeNull();
+    recovered!.context = { payload: 'x'.repeat(101 * 1024) };
+
+    await expect(store.save(key, recovered!, 1, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).rejects.toBeInstanceOf(AgentStateReductionRequiredError);
+    expect(recovered?.stateVersion).toBe(1);
+  });
+
+  it('routes a normal candidate beyond the recovery ceiling through terminal cleanup', async () => {
+    const oversized = { ...state(), context: { payload: 'x'.repeat(101 * 1024) } };
+
+    await expect(store.save(key, oversized, 0))
+      .rejects.toBeInstanceOf(AgentStateSizeLimitError);
+    expect(oversized.stateVersion).toBe(0);
+  });
+
+  it('compares recovery reduction against actual durable bytes', async () => {
+    const existing = { ...state(1), context: { payload: 'x'.repeat(70 * 1024) } };
+    jest.spyOn(serializationService, 'parseFrontmatter').mockReturnValue({
+      data: existing as unknown as Record<string, unknown>,
+      content: '',
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), 'compact-legacy-state');
+    const candidate = { ...state(1), context: { payload: 'x'.repeat(68 * 1024) } };
+
+    await expect(store.save(key, candidate, 1, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).rejects.toBeInstanceOf(AgentStateReductionRequiredError);
+    expect(candidate.stateVersion).toBe(1);
+  });
+
+  it('does not permit oversized reduction without an existing durable state', async () => {
+    const oversized = { ...state(), context: { payload: 'x'.repeat(70 * 1024) } };
+
+    await expect(store.save(key, oversized, 0, { allowOversizedReduction: true }))
+      .rejects.toThrow('normal persistence limit');
+  });
+
+  async function writeStateFile(agentState: AgentState): Promise<void> {
+    await fs.mkdir(stateDir, { recursive: true });
+    const serialization = new SerializationService();
+    const yaml = serialization.dumpYaml({
+      ...agentState,
+      lastActive: agentState.lastActive.toISOString(),
+      sessionCount: String(agentState.sessionCount),
+      stateVersion: String(agentState.stateVersion),
+    }, { schema: 'json', noRefs: true, sortKeys: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), yaml);
+  }
 });

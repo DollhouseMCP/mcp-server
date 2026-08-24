@@ -31,6 +31,11 @@ import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispa
 import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 import type { SessionContext } from '../../../../src/context/SessionContext.js';
+import {
+  AgentStateReductionRequiredError,
+  AgentStateSizeLimitError,
+} from '../../../../src/storage/FileAgentStateStore.js';
+import { EVICT_TERMINAL_GOAL } from '../../../../src/elements/agents/constants.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -38,7 +43,10 @@ interface AgentManagerExecutionInternals {
   executeAgentWithinStateOperation(
     name: string,
     parameters: Record<string, unknown>,
-    context: { operationName?: 'execute_agent' | 'continue_execution' },
+    context: {
+      operationName?: 'execute_agent' | 'continue_execution';
+      resumedGoalId?: string;
+    },
   ): ReturnType<AgentManager['executeAgent']>;
   contextTracker?: { getSessionContext: () => SessionContext | undefined };
 }
@@ -136,6 +144,153 @@ describe('AgentManager', () => {
   });
 
   describe('Recovery state synchronization', () => {
+    it('allows normal completion to shrink legacy oversized state', async () => {
+      const agent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = agent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      agent.markStatePersisted();
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      jest.spyOn(agentManager, 'save').mockRejectedValueOnce(new AgentStateSizeLimitError());
+      jest.spyOn((agentManager as any).stateStore, 'save').mockResolvedValueOnce(2);
+
+      const result = await agentManager.completeAgentGoal({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'success',
+        summary: 'Completed normally',
+      });
+
+      expect(result.goal).toEqual(expect.objectContaining({ id: target.id, status: 'completed' }));
+      expect(agent.getState().goals).toEqual([]);
+      expect(agent.getState().stateVersion).toBe(2);
+    });
+
+    it('restores normal completion state when oversized cleanup cannot be saved', async () => {
+      const agent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = agent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      agent.markStatePersisted();
+      agent.getState().context.payload = 'x'.repeat(101 * 1024);
+      const before = agent.serializeToJSON();
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      jest.spyOn(agentManager, 'save').mockRejectedValueOnce(new AgentStateSizeLimitError());
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new Error('version conflict'));
+
+      await expect(agentManager.completeAgentGoal({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Failed cleanup',
+      })).rejects.toThrow('version conflict');
+
+      expect(agent.serializeToJSON()).toBe(before);
+      expect(agent.needsStatePersistence()).toBe(false);
+    });
+
+    it('archives only the terminal goal when oversized recovery must shrink', async () => {
+      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = recoveryAgent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      const survivor = recoveryAgent.addGoal({ description: 'Other execution' });
+      survivor.status = 'in_progress';
+      recoveryAgent.markStatePersisted();
+
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      const save = jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      const result = await agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      });
+
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(result.goal).toEqual(expect.objectContaining({ id: target.id, status: 'failed' }));
+      expect(recoveryAgent.getState().goals.map(goal => goal.id)).toEqual([survivor.id]);
+      expect(recoveryAgent.getState().decisions).not.toContainEqual(
+        expect.objectContaining({ goalId: target.id }),
+      );
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AGENT_STATE_COMPACTED',
+        source: 'AgentManager.completeAgentGoalForRecovery',
+        details: expect.stringContaining(target.id),
+      }));
+    });
+
+    it('continues compacting safe terminal history until recovery fits', async () => {
+      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const oldTerminal = recoveryAgent.addGoal({ description: 'Old completed history' });
+      oldTerminal.status = 'completed';
+      const target = recoveryAgent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      const survivor = recoveryAgent.addGoal({ description: 'Other execution' });
+      survivor.status = 'in_progress';
+      recoveryAgent.markStatePersisted();
+
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      const save = jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      await expect(agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      })).resolves.toEqual(expect.objectContaining({ success: true }));
+
+      expect(save).toHaveBeenCalledTimes(3);
+      expect(recoveryAgent.getState().goals.map(goal => goal.id)).toEqual([survivor.id]);
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AGENT_STATE_COMPACTED',
+        additionalData: expect.objectContaining({
+          goalId: target.id,
+          archivedGoalIds: [target.id, oldTerminal.id],
+        }),
+      }));
+    });
+
+    it('retains a referenced failure tombstone during oversized recovery', async () => {
+      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = recoveryAgent.addGoal({ description: 'Detailed stuck execution' });
+      target.status = 'in_progress';
+      const dependent = recoveryAgent.addGoal({
+        description: 'Dependent execution',
+        dependencies: [target.id],
+      });
+      recoveryAgent.markStatePersisted();
+
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      const result = await agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      });
+
+      expect(result.goal).toEqual(expect.objectContaining({
+        id: target.id,
+        description: 'Detailed stuck execution',
+        status: 'failed',
+      }));
+      expect(recoveryAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: target.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(recoveryAgent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
     it('continues the requested in-progress goal instead of another session goal', async () => {
       const agent = new Agent({ name: 'test-agent' }, metadataService);
       const otherGoal = agent.addGoal({ description: 'Other session execution' });
@@ -177,7 +332,7 @@ describe('AgentManager', () => {
       expect(executeSpy).toHaveBeenCalledWith(
         'test-agent',
         {},
-        { operationName: 'continue_execution' },
+        { operationName: 'continue_execution', resumedGoalId: ownedGoal.id },
       );
     });
 
@@ -413,6 +568,154 @@ Content`;
       expect(sourceAgent.needsStatePersistence()).toBe(true);
     });
 
+    it('removes an archived recovery goal while preserving concurrent state', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      const concurrentGoal = sourceAgent.addGoal({ description: 'Concurrent execution' });
+      concurrentGoal.status = 'in_progress';
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+      recoveryAgent[EVICT_TERMINAL_GOAL](originalGoal.id);
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+        [originalGoal.id],
+      );
+
+      const synchronizedState = sourceAgent.getState();
+      expect(synchronizedState.goals.map(goal => goal.id)).toEqual([concurrentGoal.id]);
+      expect(synchronizedState.stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
+    it('removes every recovery eviction from pending live state', async () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const oldTerminal = sourceAgent.addGoal({ description: 'Old completed history' });
+      sourceAgent.recordDecision({
+        goalId: oldTerminal.id,
+        decision: 'completed_history',
+        reasoning: 'Old outcome retained before recovery compaction',
+        confidence: 1,
+      });
+      sourceAgent.completeGoal(oldTerminal.id, 'success');
+      const originalGoal = sourceAgent.addGoal({
+        description: 'Original execution',
+        dependencies: [oldTerminal.id],
+      });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      const concurrentGoal = sourceAgent.addGoal({ description: 'Concurrent execution' });
+      concurrentGoal.status = 'in_progress';
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      await expect(agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: originalGoal.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      })).resolves.toEqual(expect.objectContaining({ success: true }));
+
+      const synchronizedState = sourceAgent.getState();
+      expect(synchronizedState.goals.map(goal => goal.id)).toEqual([concurrentGoal.id]);
+      expect(synchronizedState.decisions).not.toContainEqual(
+        expect.objectContaining({ goalId: oldTerminal.id }),
+      );
+      expect(synchronizedState.stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
+    it('retains tombstones for evicted prerequisites of pending live work', async () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const oldTerminal = sourceAgent.addGoal({ description: 'Old failed prerequisite' });
+      sourceAgent.completeGoal(oldTerminal.id, 'failure');
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      const pendingDependent = sourceAgent.addGoal({
+        description: 'Pending dependent execution',
+        dependencies: [oldTerminal.id, originalGoal.id],
+      });
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      await expect(agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: originalGoal.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      })).resolves.toEqual(expect.objectContaining({ success: true }));
+
+      expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: oldTerminal.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: originalGoal.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(sourceAgent.evaluateConstraints(pendingDependent).blockers)
+        .toContain('2 incomplete dependencies');
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
+    it('synchronizes a referenced recovery tombstone into the live source state', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      const dependent = sourceAgent.addGoal({
+        description: 'Dependent execution',
+        dependencies: [originalGoal.id],
+      });
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+      recoveryAgent[EVICT_TERMINAL_GOAL](originalGoal.id);
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+        [originalGoal.id],
+      );
+
+      expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: originalGoal.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(sourceAgent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
     it('marks a recovery-only synchronization as fully persisted', () => {
       const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
       const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
@@ -429,6 +732,66 @@ Content`;
       expect(sourceAgent.getState().goals[0]?.status).toBe('failed');
       expect(sourceAgent.getState().stateVersion).toBe(2);
       expect(sourceAgent.needsStatePersistence()).toBe(false);
+    });
+
+    it('keeps the durable recovery committed when live synchronization fails', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+      const sourceSnapshot = sourceAgent.serializeToJSON();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceSnapshot);
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).hydratedAgents.add(sourceAgent);
+      jest.spyOn(sourceAgent, 'deserialize')
+        .mockImplementationOnce(() => { throw new Error('live synchronization failed'); });
+
+      expect(() => (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+      )).not.toThrow();
+
+      expect(sourceAgent.serializeToJSON()).toBe(sourceSnapshot);
+      expect((agentManager as any).hydratedAgents.has(sourceAgent)).toBe(false);
+      expect((agentManager as any).recoverySourceAgents.has(recoveryAgent)).toBe(false);
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'OPERATION_FAILED',
+        source: 'AgentManager.synchronizeRecoveryState',
+      }));
+    });
+
+    it('does not deserialize an oversized live snapshot during failed synchronization', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      sourceAgent.getState().context.payload = 'x'.repeat(101 * 1024);
+      sourceAgent.addGoal({ description: 'Concurrent unsaved work' }).status = 'in_progress';
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).hydratedAgents.add(sourceAgent);
+
+      expect(() => (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+      )).not.toThrow();
+
+      expect(String(sourceAgent.getState().context.payload)).toHaveLength(101 * 1024);
+      expect(sourceAgent.getState().goals).toContainEqual(
+        expect.objectContaining({ description: 'Concurrent unsaved work' }),
+      );
+      expect((agentManager as any).hydratedAgents.has(sourceAgent)).toBe(false);
+      expect((agentManager as any).recoverySourceAgents.has(recoveryAgent)).toBe(false);
     });
   });
 
@@ -1290,7 +1653,7 @@ Content`;
         };
 
         await expect(agentManager.exposedSaveAgentState('test-agent', state as any))
-          .rejects.toThrow('exceeds allowed size');
+          .rejects.toThrow('normal persistence limit');
       });
 
       it('should handle state with many small goals near size limit', async () => {

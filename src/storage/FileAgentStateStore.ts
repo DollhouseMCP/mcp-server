@@ -17,6 +17,28 @@ import type {
 
 export const AGENT_STATE_FILE_EXTENSION = '.state.yaml';
 export const AGENT_STATE_MAX_YAML_SIZE = 64 * 1024;
+export const AGENT_STATE_RECOVERY_MAX_YAML_SIZE = 100 * 1024;
+
+export class AgentStateSizeLimitError extends Error {
+  constructor() {
+    super('Agent state exceeds allowed size for the normal persistence limit');
+    this.name = 'AgentStateSizeLimitError';
+  }
+}
+
+export class AgentStateReductionRequiredError extends Error {
+  constructor() {
+    super('Oversized agent state recovery must strictly reduce durable state');
+    this.name = 'AgentStateReductionRequiredError';
+  }
+}
+
+export class AgentStateParsedSizeLimitError extends Error {
+  constructor(actualBytes: number) {
+    super(`Parsed agent state exceeds allowed size of ${AGENT_STATE_RECOVERY_MAX_YAML_SIZE} bytes (actual: ${actualBytes} bytes)`);
+    this.name = 'AgentStateParsedSizeLimitError';
+  }
+}
 
 export interface FileAgentStateStoreDeps {
   stateDir: string | (() => string);
@@ -50,14 +72,24 @@ export class FileAgentStateStore implements IAgentStateStore {
 
     try {
       const content = await this.deps.fileOperations.readFile(statePath, { encoding: 'utf-8' });
+      const durableContentLimit = options.allowOversizedRecovery
+        ? AGENT_STATE_RECOVERY_MAX_YAML_SIZE
+        : this.maxYamlSize;
+      if (Buffer.byteLength(content, 'utf8') > durableContentLimit) {
+        throw new AgentStateSizeLimitError();
+      }
       const result = this.deps.serializationService.parseFrontmatter(content, {
-        maxYamlSize: this.maxYamlSize,
+        maxYamlSize: durableContentLimit,
         validateContent: true,
         source: 'FileAgentStateStore.load',
       });
 
       const state = result.data as AgentState;
       this.normalizeLoadedState(state);
+      const parsedStateBytes = Buffer.byteLength(JSON.stringify(state), 'utf8');
+      if (parsedStateBytes > AGENT_STATE_RECOVERY_MAX_YAML_SIZE) {
+        throw new AgentStateParsedSizeLimitError(parsedStateBytes);
+      }
       if (!options.strict) {
         this.deps.stateCache.set(normalizedName, state);
       }
@@ -72,7 +104,9 @@ export class FileAgentStateStore implements IAgentStateStore {
         return null;
       }
       logger.error(`Failed to load agent state: ${key.name}`, error);
-      if (options.strict) {
+      if (options.strict
+          || error instanceof AgentStateParsedSizeLimitError
+          || error instanceof AgentStateSizeLimitError) {
         throw error;
       }
       return null;
@@ -83,7 +117,8 @@ export class FileAgentStateStore implements IAgentStateStore {
     key: AgentStateKey,
     _options: AgentStateReclaimOptions = {},
   ): Promise<AgentState | null> {
-    return this.load(key, { strict: true });
+    // File-backed state has no session ownership, so excluded goal IDs do not apply.
+    return this.load(key, { strict: true, allowOversizedRecovery: true });
   }
 
   async save(
@@ -105,7 +140,10 @@ export class FileAgentStateStore implements IAgentStateStore {
       // load() does not acquire an `agent-state:*` lock. Its disk read uses
       // FileOperationsService's distinct `file:<absolute path>` namespace, so
       // this is not a reentrant acquisition of the transaction lock.
-      const existingState = await this.load(key, { strict: options.requireExisting });
+      const existingState = await this.load(key, {
+        strict: options.requireExisting,
+        allowOversizedRecovery: options.allowOversizedReduction,
+      });
       if (options.requireExisting && !existingState) {
         throw new Error(`Agent state disappeared while updating '${key.name}'`);
       }
@@ -141,16 +179,31 @@ export class FileAgentStateStore implements IAgentStateStore {
         );
       }
 
-      state.stateVersion = expectedVersion + 1;
-      const serializedState = this.prepareStateForSerialization(state);
+      const durableContentLength = options.allowOversizedReduction && existingState
+        ? Buffer.byteLength(
+            await this.deps.fileOperations.readFile(filePath, { encoding: 'utf-8' }),
+            'utf8',
+          )
+        : undefined;
+
+      const nextVersion = expectedVersion + 1;
+      const candidateState = structuredClone(state);
+      candidateState.stateVersion = nextVersion;
+      const serializedState = this.prepareStateForSerialization(candidateState);
       const yamlContent = this.deps.serializationService.dumpYaml(serializedState, {
         schema: 'json',
         noRefs: true,
         sortKeys: true,
       });
 
-      this.deps.serializationService.validateSize(yamlContent, this.maxYamlSize, 'Agent state');
+      this.validateCandidateSize(
+        yamlContent,
+        existingState,
+        options.allowOversizedReduction === true,
+        durableContentLength,
+      );
       await this.deps.fileOperations.writeFile(filePath, yamlContent, { encoding: 'utf-8' });
+      state.stateVersion = nextVersion;
       this.deps.stateCache.set(normalizedName, state);
 
       logger.debug('Agent state saved successfully', {
@@ -242,6 +295,31 @@ export class FileAgentStateStore implements IAgentStateStore {
         confidence: decision.confidence === undefined ? undefined : String(decision.confidence),
       })),
     };
+  }
+
+  private validateCandidateSize(
+    yamlContent: string,
+    existingState: AgentState | null,
+    allowOversizedReduction: boolean,
+    durableContentLength?: number,
+  ): void {
+    const yamlBytes = Buffer.byteLength(yamlContent, 'utf8');
+    if (yamlBytes <= this.maxYamlSize) {
+      return;
+    }
+    if (yamlBytes > AGENT_STATE_RECOVERY_MAX_YAML_SIZE) {
+      if (allowOversizedReduction && existingState) {
+        throw new AgentStateReductionRequiredError();
+      }
+      throw new AgentStateSizeLimitError();
+    }
+    if (!allowOversizedReduction || !existingState) {
+      throw new AgentStateSizeLimitError();
+    }
+    if (durableContentLength === undefined
+      || yamlBytes >= durableContentLength) {
+      throw new AgentStateReductionRequiredError();
+    }
   }
 
   private normalizeLoadedState(state: AgentState): void {

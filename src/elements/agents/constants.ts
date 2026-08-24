@@ -19,6 +19,15 @@ export const COMMIT_PERSISTED_VERSION = Symbol('commitPersistedVersion');
  */
 export const MARK_STATE_FOR_PERSISTENCE = Symbol('markStateForPersistence');
 
+/** Symbol for removing a terminal goal during bounded oversized-state recovery. @internal */
+export const EVICT_TERMINAL_GOAL = Symbol('evictTerminalGoal');
+export const EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL = Symbol('evictOldestUnreferencedTerminalGoal');
+
+/** Symbols for managing instance-bound rollback snapshots. @internal */
+export const CAPTURE_AGENT_SNAPSHOT = Symbol('captureAgentSnapshot');
+export const RESTORE_AGENT_SNAPSHOT = Symbol('restoreAgentSnapshot');
+export const DISCARD_AGENT_SNAPSHOT = Symbol('discardAgentSnapshot');
+
 // Security limits
 export const AGENT_LIMITS = {
   MAX_GOALS: 50,

@@ -1011,14 +1011,10 @@ Minimal agent with no activates.`;
    *
    * Set up agent with maxConcurrentGoals limit and verify:
    * - Agent loads with state containing multiple goals
-   * - Execution succeeds (constraints not yet implemented in walking skeleton)
-   *
-   * NOTE: Constraint evaluation is not yet implemented in the walking skeleton.
-   * The evaluateConstraints method exists but is not called by executeAgent yet.
-   * This test verifies that agents with state can be executed.
+   * - Execution is rejected before another goal or activation is persisted
    */
   describe('Test 6: Constraint Blocking (Hard Limit)', () => {
-    it('should execute agent with existing goals (constraints not yet blocking)', async () => {
+    it('rejects execution at the concurrency limit without persisting another goal', async () => {
       // First, create an agent instance with existing goals
       const agent = new Agent({
         name: 'task-manager',
@@ -1080,21 +1076,170 @@ sessionCount: 1
         throw new Error(`Unexpected file read: ${filePath}`);
       });
 
-      // Execute with another task
-      const result: ExecuteAgentResult = await agentManager.executeAgent(
-        'task-manager',
-        { task: 'New task' }
-      );
+      fileOperationsService.writeFile.mockClear();
 
-      // Verify execution succeeded
-      expect(result).toBeDefined();
-      expect(result.agentName).toBe('task-manager');
-      expect(result.goal).toBe('Add task: New task');
+      await expect(agentManager.executeAgent('task-manager', { task: 'New task' }))
+        .rejects.toMatchObject({ code: 'VALIDATION_MAX_GOALS_EXCEEDED' });
 
-      // Constraints are not yet implemented in the walking skeleton
-      // When implemented, this test should verify:
-      // - result.constraints.canProceed is false
-      // - result.constraints.blockers mentions maxConcurrentGoals
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
+      const persisted = await agentManager.getAgentState({ agentName: 'task-manager' });
+      expect(persisted.state.goals).toHaveLength(5);
+    });
+
+    it('resumes the existing goal at the concurrency limit without creating another', async () => {
+      const agent = new Agent({
+        name: 'resume-agent',
+        description: 'Resume an existing execution',
+        maxConcurrentGoals: 1,
+      }, metadataService);
+      const activeGoal = agent.addGoal({ description: 'Existing execution' });
+      activeGoal.status = 'in_progress';
+      const decision = agent.recordDecision({
+        goalId: activeGoal.id,
+        decision: 'pause',
+        reasoning: 'Waiting for input',
+        confidence: 1,
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('resume-agent.md')) {
+          return `---
+name: "Resume Agent"
+type: "agent"
+version: "2.0.0"
+maxConcurrentGoals: 1
+goal:
+  template: "Resume task: {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+---
+# Resume Agent`;
+        }
+        if (filePath.includes('resume-agent.state.yaml')) {
+          return `---
+goals:
+  - id: "${activeGoal.id}"
+    description: "${activeGoal.description}"
+    priority: "${activeGoal.priority}"
+    status: "in_progress"
+    importance: 5
+    urgency: 5
+    createdAt: "${activeGoal.createdAt.toISOString()}"
+    updatedAt: "${activeGoal.updatedAt.toISOString()}"
+decisions:
+  - id: "${decision.id}"
+    goalId: "${activeGoal.id}"
+    decision: "pause"
+    reasoning: "Waiting for input"
+    confidence: 1
+    timestamp: "${decision.timestamp.toISOString()}"
+context: {}
+lastActive: "${agent.getState().lastActive.toISOString()}"
+sessionCount: 1
+stateVersion: 1
+---`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+      fileOperationsService.writeFile.mockClear();
+
+      const result = await agentManager.continueAgentExecution({
+        agentName: 'resume-agent',
+        goalId: activeGoal.id,
+        parameters: { task: 'the existing work' },
+      });
+
+      expect(result.goalId).toBe(activeGoal.id);
+      expect(result.previousState.goals).toHaveLength(1);
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
+    });
+
+    it('rejects a resumed goal whose prerequisite failed', async () => {
+      const agent = new Agent({
+        name: 'blocked-resume-agent',
+        description: 'Resume only after prerequisites complete',
+        maxConcurrentGoals: 1,
+      }, metadataService);
+      const prerequisite = agent.addGoal({ description: 'Required preparation' });
+      prerequisite.status = 'failed';
+      const activeGoal = agent.addGoal({
+        description: 'Dependent execution',
+        dependencies: [prerequisite.id],
+      });
+      activeGoal.status = 'in_progress';
+      const decision = agent.recordDecision({
+        goalId: activeGoal.id,
+        decision: 'pause',
+        reasoning: 'Waiting for prerequisite recovery',
+        confidence: 1,
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('blocked-resume-agent.md')) {
+          return `---
+name: "Blocked Resume Agent"
+type: "agent"
+version: "2.0.0"
+maxConcurrentGoals: 1
+goal:
+  template: "Resume task: {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+---
+# Blocked Resume Agent`;
+        }
+        if (filePath.includes('blocked-resume-agent.state.yaml')) {
+          return `---
+goals:
+  - id: "${prerequisite.id}"
+    description: "${prerequisite.description}"
+    priority: "${prerequisite.priority}"
+    status: "failed"
+    importance: 5
+    urgency: 5
+    createdAt: "${prerequisite.createdAt.toISOString()}"
+    updatedAt: "${prerequisite.updatedAt.toISOString()}"
+  - id: "${activeGoal.id}"
+    description: "${activeGoal.description}"
+    priority: "${activeGoal.priority}"
+    status: "in_progress"
+    importance: 5
+    urgency: 5
+    dependencies:
+      - "${prerequisite.id}"
+    createdAt: "${activeGoal.createdAt.toISOString()}"
+    updatedAt: "${activeGoal.updatedAt.toISOString()}"
+decisions:
+  - id: "${decision.id}"
+    goalId: "${activeGoal.id}"
+    decision: "pause"
+    reasoning: "Waiting for prerequisite recovery"
+    confidence: 1
+    timestamp: "${decision.timestamp.toISOString()}"
+context: {}
+lastActive: "${agent.getState().lastActive.toISOString()}"
+sessionCount: 1
+stateVersion: 1
+---`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+      fileOperationsService.writeFile.mockClear();
+
+      await expect(agentManager.continueAgentExecution({
+        agentName: 'blocked-resume-agent',
+        goalId: activeGoal.id,
+        parameters: { task: 'the blocked work' },
+      })).rejects.toMatchObject({
+        code: 'VALIDATION_INVALID_GOAL_STATUS',
+        message: expect.stringContaining('1 incomplete dependencies'),
+      });
+
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
     });
 
     it('should execute agent with state under limit', async () => {
@@ -1168,11 +1313,7 @@ sessionCount: 1
       expect(result).toBeDefined();
       expect(result.agentName).toBe('task-manager-under-limit');
       expect(result.goal).toBe('Add task: New task');
-
-      // Constraints are not yet implemented in the walking skeleton
-      // When implemented, this test should verify:
-      // - result.constraints.canProceed is true
-      // - result.constraints.blockers is empty
+      expect(result.constraints).toEqual({ canProceed: true, blockers: [], warnings: [] });
     });
   });
 
@@ -1182,6 +1323,24 @@ sessionCount: 1
    * Verify proper error handling for missing agents
    */
   describe('Error Handling', () => {
+    it('restores in-memory state when goal persistence fails', async () => {
+      const agent = new Agent({ name: 'rollback-agent' }, metadataService);
+      agent.addGoal({ description: 'Existing unsaved goal' });
+      agent.getState().context.payload = 'x'.repeat(101 * 1024);
+      const before = agent.serializeToJSON();
+      jest.spyOn(agentManager, 'save').mockRejectedValueOnce(new Error('state too large'));
+
+      await expect((agentManager as any).persistExecutionGoal(
+        agent,
+        'rollback-agent',
+        'Rejected execution goal',
+        {},
+      )).rejects.toThrow('state too large');
+
+      expect(agent.serializeToJSON()).toBe(before);
+      expect(agent.needsStatePersistence()).toBe(true);
+    });
+
     it('should throw error for non-existent agent', async () => {
       fileOperationsService.readFile.mockRejectedValue({ code: 'ENOENT' });
 

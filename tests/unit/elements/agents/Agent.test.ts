@@ -5,7 +5,13 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
 import { Agent } from '../../../../src/elements/agents/Agent.js';
 import { AgentMetadata } from '../../../../src/elements/agents/types.js';
-import { AGENT_LIMITS, AGENT_DEFAULTS } from '../../../../src/elements/agents/constants.js';
+import {
+  AGENT_LIMITS,
+  AGENT_DEFAULTS,
+  EVICT_TERMINAL_GOAL,
+  CAPTURE_AGENT_SNAPSHOT,
+  RESTORE_AGENT_SNAPSHOT,
+} from '../../../../src/elements/agents/constants.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
 import { createTestMetadataService } from '../../../helpers/di-mocks.js';
@@ -134,6 +140,153 @@ describe('Agent Element', () => {
       expect(() => {
         agent.addGoal({ description: 'One too many' });
       }).toThrow(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
+    });
+
+    it('excludes the resumed goal from concurrent execution admission', () => {
+      const resumed = agent.addGoal({ description: 'Paused execution' });
+      resumed.status = 'in_progress';
+      agent.metadata.maxConcurrentGoals = 1;
+
+      expect(agent.evaluateExecutionAdmission()).toMatchObject({ canProceed: false });
+      expect(agent.evaluateExecutionAdmission(resumed.id)).toMatchObject({ canProceed: true });
+    });
+
+    it('preserves dependency constraints while excluding resumed-goal concurrency', () => {
+      const prerequisite = agent.addGoal({ description: 'Failed prerequisite' });
+      prerequisite.status = 'failed';
+      const resumed = agent.addGoal({
+        description: 'Paused dependent execution',
+        dependencies: [prerequisite.id],
+      });
+      resumed.status = 'in_progress';
+      agent.metadata.maxConcurrentGoals = 1;
+
+      expect(agent.evaluateConstraints(resumed, resumed.id)).toEqual({
+        canProceed: false,
+        blockers: ['1 incomplete dependencies'],
+        warnings: [],
+      });
+    });
+
+    it('prunes the oldest terminal goal and its decisions at the history limit', () => {
+      const archived = agent.addGoal({ description: 'Old completed goal' });
+      archived.status = 'completed';
+      const archivedDecision = agent.recordDecision({
+        goalId: archived.id,
+        decision: 'Complete the old goal',
+        reasoning: 'Work finished',
+        confidence: 1,
+      });
+      for (let i = 1; i < AGENT_LIMITS.MAX_GOALS; i++) {
+        agent.addGoal({ description: `Active goal ${i}` }).status = 'in_progress';
+      }
+
+      const replacement = agent.addGoal({ description: 'Replacement goal' });
+      const state = agent.getState();
+
+      expect(state.goals).toHaveLength(AGENT_LIMITS.MAX_GOALS);
+      expect(state.goals.map(goal => goal.id)).not.toContain(archived.id);
+      expect(state.goals.map(goal => goal.id)).toContain(replacement.id);
+      expect(state.decisions.map(decision => decision.id)).not.toContain(archivedDecision.id);
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AGENT_STATE_COMPACTED',
+        source: 'Agent.compactTerminalGoalHistoryForNewGoal',
+        details: expect.stringContaining(archived.id),
+      }));
+    });
+
+    it('refuses to evict a non-terminal goal during state recovery', () => {
+      const active = agent.addGoal({ description: 'Active goal' });
+      active.status = 'in_progress';
+
+      expect(() => agent[EVICT_TERMINAL_GOAL](active.id))
+        .toThrow(`Cannot archive non-terminal goal '${active.id}'`);
+      expect(agent.getState().goals.map(goal => goal.id)).toContain(active.id);
+    });
+
+    it('preserves terminal goals that are still referenced by dependencies', () => {
+      const failedDependency = agent.addGoal({ description: 'Failed prerequisite' });
+      failedDependency.status = 'failed';
+      const dependent = agent.addGoal({
+        description: 'Dependent work',
+        dependencies: [failedDependency.id],
+      });
+      dependent.status = 'pending';
+      for (let i = 2; i < AGENT_LIMITS.MAX_GOALS; i++) {
+        agent.addGoal({ description: `Active goal ${i}` }).status = 'in_progress';
+      }
+
+      expect(() => agent.addGoal({ description: 'One too many' }))
+        .toThrow(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
+      expect(agent.getState().goals.map(goal => goal.id)).toContain(failedDependency.id);
+      expect(agent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
+    it('does not evict a failed prerequisite referenced by the incoming goal', () => {
+      const failedDependency = agent.addGoal({ description: 'Incoming prerequisite' });
+      failedDependency.status = 'failed';
+      for (let i = 1; i < AGENT_LIMITS.MAX_GOALS; i++) {
+        agent.addGoal({ description: `Active goal ${i}` }).status = 'in_progress';
+      }
+
+      expect(() => agent.addGoal({
+        description: 'Incoming dependent work',
+        dependencies: [failedDependency.id],
+      })).toThrow(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
+      expect(agent.getState().goals.map(goal => goal.id)).toContain(failedDependency.id);
+    });
+
+    it('retains a compact outcome tombstone when recovery archives a referenced goal', () => {
+      const failedDependency = agent.addGoal({ description: 'Detailed failed prerequisite' });
+      failedDependency.status = 'failed';
+      const dependent = agent.addGoal({
+        description: 'Dependent work',
+        dependencies: [failedDependency.id],
+      });
+      agent.recordDecision({
+        goalId: failedDependency.id,
+        decision: 'Stop failed work',
+        reasoning: 'The prerequisite failed',
+        confidence: 1,
+      });
+
+      agent[EVICT_TERMINAL_GOAL](failedDependency.id);
+
+      expect(agent.getState().goals).toContainEqual(expect.objectContaining({
+        id: failedDependency.id,
+        status: 'failed',
+        description: 'Archived terminal goal',
+      }));
+      expect(agent.getState().decisions).not.toContainEqual(
+        expect.objectContaining({ goalId: failedDependency.id }),
+      );
+      expect(agent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
+    it('restores an already-live oversized snapshot without weakening normal deserialization', () => {
+      agent.getState().context.payload = 'x'.repeat(101 * 1024);
+      agent.getState().context.notANumber = Number.NaN;
+      agent.getState().context.infinity = Number.POSITIVE_INFINITY;
+      agent.getState().context.presentButUndefined = undefined;
+      const oversizedSnapshot = agent.serializeToJSON();
+      const rollbackToken = agent[CAPTURE_AGENT_SNAPSHOT]();
+      agent.getState().context.payload = 'changed';
+      agent.getState().context.notANumber = 0;
+      agent.getState().context.infinity = 0;
+      delete agent.getState().context.presentButUndefined;
+
+      expect(() => agent.deserialize(oversizedSnapshot)).toThrow('State size exceeds maximum');
+      const otherAgent = new Agent({ name: 'other-agent' }, metadataService);
+      expect(() => otherAgent[RESTORE_AGENT_SNAPSHOT](rollbackToken)).toThrow('Invalid or expired');
+      agent[RESTORE_AGENT_SNAPSHOT](rollbackToken);
+
+      expect(String(agent.getState().context.payload)).toHaveLength(101 * 1024);
+      expect(agent.getState().context.notANumber).toBeNaN();
+      expect(agent.getState().context.infinity).toBe(Number.POSITIVE_INFINITY);
+      expect(agent.getState().context).toHaveProperty('presentButUndefined', undefined);
+      expect(() => agent[RESTORE_AGENT_SNAPSHOT](rollbackToken)).toThrow('Invalid or expired');
     });
 
     it('should validate goal description length', () => {
