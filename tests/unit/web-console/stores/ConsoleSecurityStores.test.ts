@@ -776,6 +776,12 @@ describe('InMemoryIntegrationDescriptorStore', () => {
         tokenExchange: { clientAuth: 'boddy' },
       },
     }))).rejects.toThrow('oauth.tokenExchange.clientAuth must be body, basic, or none');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        accountLabel: { tokenResponseField: 'accessToken' },
+      },
+    }))).rejects.toThrow('oauth.accountLabel must not reference credential fields');
     await expect(store.upsert({
       ...oauthDescriptorInput(),
       authStrategy: 'static_api_key',

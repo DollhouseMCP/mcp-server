@@ -144,6 +144,22 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     })).toThrow('configured OAuth provider requires clientSecret');
   });
 
+  it.each(['access_token', 'refreshToken', 'id-token', 'client.secret'])(
+    'rejects credential-bearing account label field %s',
+    field => {
+      const base = descriptor();
+      if (!base.oauth) throw new Error('fixture oauth missing');
+
+      expect(() => providerWith({
+        dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+        descriptor: {
+          ...base,
+          oauth: { ...base.oauth, accountLabel: { field } },
+        },
+      })).toThrow('oauth.accountLabel must not reference credential fields');
+    },
+  );
+
   it('rejects unknown client authentication modes before any request can be built', () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');

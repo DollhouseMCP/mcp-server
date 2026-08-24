@@ -20,6 +20,24 @@ export type IntegrationPkceMode = 'required' | 'supported' | 'unsupported';
 export type IntegrationRefreshMode = 'none' | 'static' | 'rotating';
 export type IntegrationOAuthClientAuth = 'body' | 'basic' | 'none';
 
+const SENSITIVE_OAUTH_RESPONSE_FIELDS = new Set([
+  'access_token',
+  'api_key',
+  'assertion',
+  'authorization_code',
+  'client_secret',
+  'code',
+  'credential',
+  'credentials',
+  'device_code',
+  'id_token',
+  'password',
+  'refresh_token',
+  'secret',
+  'token',
+  'user_code',
+]);
+
 export interface IntegrationDescriptorRecord {
   readonly id: string;
   readonly provider: UserIntegrationProvider;
@@ -91,6 +109,23 @@ export function resolveIntegrationOAuthClientAuth(
   throw new ConsoleStoreValidationError(
     'oauth.tokenExchange.clientAuth must be body, basic, or none',
   );
+}
+
+export function assertSafeIntegrationOAuthAccountLabel(
+  accountLabel: Readonly<Record<string, unknown>>,
+): void {
+  for (const key of ['field', 'tokenResponseField'] as const) {
+    const field = accountLabel[key];
+    if (typeof field !== 'string') continue;
+    const canonicalField = field
+      .trim()
+      .replace(/([a-z0-9])([A-Z])/gu, '$1_$2')
+      .replace(/[^a-zA-Z0-9]+/gu, '_')
+      .toLowerCase();
+    if (SENSITIVE_OAUTH_RESPONSE_FIELDS.has(canonicalField)) {
+      throw new ConsoleStoreValidationError('oauth.accountLabel must not reference credential fields');
+    }
+  }
 }
 
 export function validateIntegrationDescriptorRecord(record: IntegrationDescriptorRecord): void {
@@ -215,6 +250,7 @@ function validateOAuthDescriptor(
   validateJsonRecord(oauth.tokenExchange, 'oauth.tokenExchange', 4096);
   if (requireConfiguredClient) resolveIntegrationOAuthClientAuth(oauth.tokenExchange);
   validateJsonRecord(oauth.accountLabel, 'oauth.accountLabel', 4096);
+  assertSafeIntegrationOAuthAccountLabel(oauth.accountLabel);
 }
 
 function validateStaticApiKeyDescriptor(staticApiKey: IntegrationStaticApiKeyDescriptor): void {

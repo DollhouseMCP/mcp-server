@@ -1,6 +1,7 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 
 import {
+  assertSafeIntegrationOAuthAccountLabel,
   resolveIntegrationOAuthClientAuth,
   type IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
@@ -83,6 +84,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     validatePublicHttpsUrl(config.descriptor.oauth.tokenUrl, 'oauth.tokenUrl');
     const revocationUrl = readString(config.descriptor.oauth.tokenExchange, 'revocationUrl');
     if (revocationUrl) validatePublicHttpsUrl(revocationUrl, 'oauth.tokenExchange.revocationUrl');
+    assertSafeIntegrationOAuthAccountLabel(config.descriptor.oauth.accountLabel);
     this.descriptor = {
       id: config.descriptor.provider,
       displayName: normalizeUnicodeDisplayText(config.descriptor.displayName),
@@ -347,6 +349,7 @@ function accountLabelFromTokenResponse(
   body: unknown,
   accountLabel: Readonly<Record<string, unknown>>,
 ): string | null {
+  assertSafeIntegrationOAuthAccountLabel(accountLabel);
   const field = readString(accountLabel, 'field') ?? readString(accountLabel, 'tokenResponseField');
   return field ? readString(body, field) : null;
 }
