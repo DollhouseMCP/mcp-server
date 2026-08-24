@@ -46,7 +46,7 @@ const RESERVED_AUTHORIZATION_PARAMS = new Set([
 
 export interface ConfiguredOAuthIntegrationProviderConfig {
   readonly descriptor: IntegrationDescriptorRecord;
-  readonly clientSecret: string;
+  readonly clientSecret: string | null;
   readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
   /** Bounds each outbound token-endpoint call so a hung provider cannot hold a refresh row lock open. */
@@ -75,8 +75,10 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     if (!config.descriptor.oauth.clientId) {
       throw new Error('configured OAuth provider requires oauth.clientId');
     }
-    resolveIntegrationOAuthClientAuth(config.descriptor.oauth.tokenExchange);
-    if (!config.clientSecret) throw new Error('configured OAuth provider requires clientSecret');
+    const clientAuth = resolveIntegrationOAuthClientAuth(config.descriptor.oauth.tokenExchange);
+    if (clientAuth !== 'none' && !config.clientSecret) {
+      throw new Error('configured OAuth provider requires clientSecret');
+    }
     validatePublicHttpsUrl(config.descriptor.oauth.authorizationUrl, 'oauth.authorizationUrl');
     validatePublicHttpsUrl(config.descriptor.oauth.tokenUrl, 'oauth.tokenUrl');
     const revocationUrl = readString(config.descriptor.oauth.tokenExchange, 'revocationUrl');
@@ -276,7 +278,7 @@ function waitForAbortable<T>(operation: Promise<T>, signal: AbortSignal): Promis
 
 function tokenRequestInit(input: {
   readonly clientId: string;
-  readonly clientSecret: string;
+  readonly clientSecret: string | null;
   readonly code: string;
   readonly redirectUri: string;
   readonly codeVerifier: string | null;
@@ -293,7 +295,7 @@ function tokenRequestInit(input: {
 
 function refreshTokenRequestInit(input: {
   readonly clientId: string;
-  readonly clientSecret: string;
+  readonly clientSecret: string | null;
   readonly refreshToken: string;
   readonly tokenExchange: Readonly<Record<string, unknown>>;
 }): RequestInit {
@@ -307,7 +309,7 @@ function refreshTokenRequestInit(input: {
 function credentialedTokenRequestInit(
   fields: Record<string, string>,
   clientId: string,
-  clientSecret: string,
+  clientSecret: string | null,
   tokenExchange: Readonly<Record<string, unknown>>,
 ): RequestInit {
   const clientAuth = resolveIntegrationOAuthClientAuth(tokenExchange);
@@ -317,6 +319,7 @@ function credentialedTokenRequestInit(
   };
   switch (clientAuth) {
     case 'body':
+      if (!clientSecret) throw new Error('configured OAuth provider requires clientSecret');
       fields.client_id = clientId;
       fields.client_secret = clientSecret;
       break;
@@ -324,6 +327,7 @@ function credentialedTokenRequestInit(
       fields.client_id = clientId;
       break;
     case 'basic': {
+      if (!clientSecret) throw new Error('configured OAuth provider requires clientSecret');
       const basicAuth = Buffer.from(
         `${formEncodeComponent(clientId)}:${formEncodeComponent(clientSecret)}`,
         'utf8',

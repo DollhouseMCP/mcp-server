@@ -55,7 +55,7 @@ function providerWith(input: {
   readonly dnsLookup: DnsLookup;
   readonly fetch?: PinnedFetch;
   readonly descriptor?: IntegrationDescriptorRecord;
-  readonly clientSecret?: string;
+  readonly clientSecret?: string | null;
   readonly requestTimeoutMs?: number;
 }) {
   const pins: OutboundPin[] = [];
@@ -85,7 +85,7 @@ function providerWith(input: {
   });
   const provider = new ConfiguredOAuthIntegrationProvider({
     descriptor: input.descriptor ?? descriptor(),
-    clientSecret: input.clientSecret ?? 'gmail-client-secret',
+    clientSecret: input.clientSecret === undefined ? 'gmail-client-secret' : input.clientSecret,
     pinnedOutbound: factory as unknown as PinnedOutboundFactory,
     dnsLookup: input.dnsLookup,
     requestTimeoutMs: input.requestTimeoutMs,
@@ -103,6 +103,47 @@ const EXCHANGE_REQUEST = {
 };
 
 describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
+  it('allows public OAuth clients to use token endpoints without a client secret', async () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider, fetchCalls } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        clientSecretCiphertext: null,
+        credentialKeyVersion: null,
+        oauth: {
+          ...base.oauth,
+          tokenExchange: { ...base.oauth.tokenExchange, clientAuth: 'none' },
+        },
+      },
+      clientSecret: null,
+    });
+
+    await provider.exchangeAuthorizationCode(EXCHANGE_REQUEST);
+    await provider.refreshCredentials({ refreshToken: 'refresh-token' });
+    await provider.revokeCredentials({
+      accessToken: 'access-token',
+      refreshToken: null,
+      externalInstallationId: null,
+    });
+
+    expect(fetchCalls).toHaveLength(3);
+    for (const request of fetchCalls) {
+      expect(request.authorization).toBeNull();
+      const body = new URLSearchParams(request.body ?? '');
+      expect(body.get('client_id')).toBe('gmail-client-id');
+      expect(body.has('client_secret')).toBe(false);
+    }
+  });
+
+  it('still requires a client secret for confidential OAuth clients', () => {
+    expect(() => providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      clientSecret: null,
+    })).toThrow('configured OAuth provider requires clientSecret');
+  });
+
   it('rejects unknown client authentication modes before any request can be built', () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');
