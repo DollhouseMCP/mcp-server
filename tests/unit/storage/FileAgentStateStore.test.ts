@@ -233,6 +233,23 @@ stateVersion: ${stateVersion}
     expect(recovered?.stateVersion).toBe(1);
   });
 
+  it('compares recovery reduction against actual durable bytes', async () => {
+    const existing = { ...state(1), context: { payload: 'x'.repeat(70 * 1024) } };
+    jest.spyOn(serializationService, 'parseFrontmatter').mockReturnValue({
+      data: existing as unknown as Record<string, unknown>,
+      content: '',
+    });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), 'compact-legacy-state');
+    const candidate = { ...state(1), context: { payload: 'x'.repeat(68 * 1024) } };
+
+    await expect(store.save(key, candidate, 1, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).rejects.toBeInstanceOf(AgentStateReductionRequiredError);
+    expect(candidate.stateVersion).toBe(1);
+  });
+
   it('does not permit oversized reduction without an existing durable state', async () => {
     const oversized = { ...state(), context: { payload: 'x'.repeat(70 * 1024) } };
 

@@ -167,6 +167,13 @@ export class FileAgentStateStore implements IAgentStateStore {
         );
       }
 
+      const durableContentLength = options.allowOversizedReduction && existingState
+        ? Buffer.byteLength(
+            await this.deps.fileOperations.readFile(filePath, { encoding: 'utf-8' }),
+            'utf8',
+          )
+        : undefined;
+
       const nextVersion = expectedVersion + 1;
       const candidateState = structuredClone(state);
       candidateState.stateVersion = nextVersion;
@@ -177,7 +184,12 @@ export class FileAgentStateStore implements IAgentStateStore {
         sortKeys: true,
       });
 
-      this.validateCandidateSize(yamlContent, existingState, options.allowOversizedReduction === true);
+      this.validateCandidateSize(
+        yamlContent,
+        existingState,
+        options.allowOversizedReduction === true,
+        durableContentLength,
+      );
       await this.deps.fileOperations.writeFile(filePath, yamlContent, { encoding: 'utf-8' });
       state.stateVersion = nextVersion;
       this.deps.stateCache.set(normalizedName, state);
@@ -277,6 +289,7 @@ export class FileAgentStateStore implements IAgentStateStore {
     yamlContent: string,
     existingState: AgentState | null,
     allowOversizedReduction: boolean,
+    durableContentLength?: number,
   ): void {
     if (yamlContent.length <= this.maxYamlSize) {
       return;
@@ -294,11 +307,8 @@ export class FileAgentStateStore implements IAgentStateStore {
     if (!allowOversizedReduction || !existingState) {
       throw new AgentStateSizeLimitError();
     }
-    const existingYaml = this.deps.serializationService.dumpYaml(
-      this.prepareStateForSerialization(existingState),
-      { schema: 'json', noRefs: true, sortKeys: true },
-    );
-    if (yamlContent.length >= existingYaml.length) {
+    if (durableContentLength === undefined
+      || Buffer.byteLength(yamlContent, 'utf8') >= durableContentLength) {
       throw new AgentStateReductionRequiredError();
     }
   }
