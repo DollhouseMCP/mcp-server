@@ -627,6 +627,35 @@ Content`;
         source: 'AgentManager.synchronizeRecoveryState',
       }));
     });
+
+    it('does not deserialize an oversized live snapshot during failed synchronization', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      sourceAgent.getState().context.payload = 'x'.repeat(101 * 1024);
+      sourceAgent.addGoal({ description: 'Concurrent unsaved work' }).status = 'in_progress';
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).hydratedAgents.add(sourceAgent);
+
+      expect(() => (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+      )).not.toThrow();
+
+      expect(String(sourceAgent.getState().context.payload)).toHaveLength(101 * 1024);
+      expect(sourceAgent.getState().goals).toContainEqual(
+        expect.objectContaining({ description: 'Concurrent unsaved work' }),
+      );
+      expect((agentManager as any).hydratedAgents.has(sourceAgent)).toBe(false);
+      expect((agentManager as any).recoverySourceAgents.has(recoveryAgent)).toBe(false);
+    });
   });
 
   describe('Create', () => {
