@@ -58,6 +58,13 @@ import {
   validateGoalAgainstTemplate
 } from './goalTemplates.js';
 
+interface AgentLiveSnapshot {
+  state: AgentState;
+  metadata: AgentMetadata;
+  isDirtyState: boolean;
+  isElementDirty: boolean;
+}
+
 export class Agent extends BaseElement implements IElement {
   public declare metadata: AgentMetadata;
   // instructions and content inherited from BaseElement (v2.0 dual-field architecture)
@@ -65,8 +72,7 @@ export class Agent extends BaseElement implements IElement {
   private isDirtyState: boolean = false;
   private ruleEngineConfig: RuleEngineConfig;
   private _decisionHistory: EvictingQueue<AgentDecision>;
-  private readonly liveSnapshots = new WeakMap<object, string>();
-  private isRestoringLiveSnapshot = false;
+  private readonly liveSnapshots = new WeakMap<object, AgentLiveSnapshot>();
 
   constructor(metadata: Partial<AgentMetadata>, metadataService: MetadataService) {
     // Sanitize all inputs
@@ -601,7 +607,12 @@ export class Agent extends BaseElement implements IElement {
   /** @internal Capture an opaque rollback token bound to this Agent instance. */
   public [CAPTURE_AGENT_SNAPSHOT](): object {
     const token = {};
-    this.liveSnapshots.set(token, this.serializeToJSON());
+    this.liveSnapshots.set(token, {
+      state: structuredClone(this.state),
+      metadata: structuredClone(this.metadata),
+      isDirtyState: this.isDirtyState,
+      isElementDirty: this._isDirty,
+    });
     return token;
   }
 
@@ -612,12 +623,11 @@ export class Agent extends BaseElement implements IElement {
       throw new Error('Invalid or expired agent snapshot token');
     }
     this.liveSnapshots.delete(token);
-    this.isRestoringLiveSnapshot = true;
-    try {
-      this.deserialize(snapshot);
-    } finally {
-      this.isRestoringLiveSnapshot = false;
-    }
+    this.state = snapshot.state;
+    this.metadata = snapshot.metadata;
+    this.isDirtyState = snapshot.isDirtyState;
+    this._isDirty = snapshot.isElementDirty;
+    this._decisionHistory.reset(this.state.decisions);
   }
 
   /** @internal Discard a rollback token after the guarded operation succeeds. */
@@ -1051,7 +1061,7 @@ export class Agent extends BaseElement implements IElement {
     if (parsed.state) {
       // Validate state size
       const stateStr = JSON.stringify(parsed.state);
-      if (!this.isRestoringLiveSnapshot && stateStr.length > AGENT_LIMITS.MAX_STATE_SIZE) {
+      if (stateStr.length > AGENT_LIMITS.MAX_STATE_SIZE) {
         throw ErrorHandler.createError(`State size exceeds maximum of ${AGENT_LIMITS.MAX_STATE_SIZE} bytes`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.STATE_TOO_LARGE);
       }
 

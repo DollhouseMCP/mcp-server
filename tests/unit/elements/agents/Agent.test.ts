@@ -227,9 +227,15 @@ describe('Agent Element', () => {
 
     it('restores an already-live oversized snapshot without weakening normal deserialization', () => {
       agent.getState().context.payload = 'x'.repeat(101 * 1024);
+      agent.getState().context.notANumber = Number.NaN;
+      agent.getState().context.infinity = Number.POSITIVE_INFINITY;
+      agent.getState().context.presentButUndefined = undefined;
       const oversizedSnapshot = agent.serializeToJSON();
       const rollbackToken = agent[CAPTURE_AGENT_SNAPSHOT]();
       agent.getState().context.payload = 'changed';
+      agent.getState().context.notANumber = 0;
+      agent.getState().context.infinity = 0;
+      delete agent.getState().context.presentButUndefined;
 
       expect(() => agent.deserialize(oversizedSnapshot)).toThrow('State size exceeds maximum');
       const otherAgent = new Agent({ name: 'other-agent' }, metadataService);
@@ -237,6 +243,9 @@ describe('Agent Element', () => {
       agent[RESTORE_AGENT_SNAPSHOT](rollbackToken);
 
       expect(String(agent.getState().context.payload)).toHaveLength(101 * 1024);
+      expect(agent.getState().context.notANumber).toBeNaN();
+      expect(agent.getState().context.infinity).toBe(Number.POSITIVE_INFINITY);
+      expect(agent.getState().context).toHaveProperty('presentButUndefined', undefined);
       expect(() => agent[RESTORE_AGENT_SNAPSHOT](rollbackToken)).toThrow('Invalid or expired');
     });
 
