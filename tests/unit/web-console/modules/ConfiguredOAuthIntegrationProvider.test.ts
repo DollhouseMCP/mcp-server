@@ -246,6 +246,26 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(url.searchParams.get('audience')).toBe('mail');
   });
 
+  it('removes every duplicate reserved parameter inherited from the authorization URL', () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          authorizationUrl: `https://${TOKEN_HOST}/oauth/authorize?scope=admin&scope=read&audience=mail&audience=calendar`,
+          scopes: [],
+        },
+      },
+    });
+
+    const url = new URL(provider.createAuthorizationUrl(EXCHANGE_REQUEST));
+    expect(url.searchParams.getAll('scope')).toEqual([]);
+    expect(url.searchParams.getAll('audience')).toEqual(['mail', 'calendar']);
+  });
+
   it.each([
     ['authorizationUrl', 'https://auth.company.corp/oauth/authorize'],
     ['tokenUrl', 'https://auth.company.corp/oauth/token'],
