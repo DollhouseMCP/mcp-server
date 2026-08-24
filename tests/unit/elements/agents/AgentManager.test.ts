@@ -605,7 +605,10 @@ Content`;
         confidence: 1,
       });
       sourceAgent.completeGoal(oldTerminal.id, 'success');
-      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      const originalGoal = sourceAgent.addGoal({
+        description: 'Original execution',
+        dependencies: [oldTerminal.id],
+      });
       originalGoal.status = 'in_progress';
       sourceAgent.markStatePersisted();
 

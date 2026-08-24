@@ -2241,15 +2241,18 @@ export class AgentManager extends BaseElementManager<Agent> {
     archivedGoalSnapshots: readonly AgentGoal[],
   ): AgentState {
     const archivedGoalIdSet = new Set(archivedGoalIds);
+    const survivingSourceGoals = sourceState.goals
+      .filter(goal => !archivedGoalIdSet.has(goal.id));
     const sourceReferencedGoalIds = new Set(
-      sourceState.goals.flatMap(goal => goal.dependencies ?? []),
+      survivingSourceGoals
+        .filter(goal => goal.status === 'pending' || goal.status === 'in_progress')
+        .flatMap(goal => goal.dependencies ?? []),
     );
     const archivedGoalSnapshotById = new Map(
       archivedGoalSnapshots.map(goal => [goal.id, goal]),
     );
     const recoveredGoal = recoveryState.goals.find(goal => goal.id === completedGoalId);
-    const goals = sourceState.goals
-      .filter(goal => !archivedGoalIdSet.has(goal.id))
+    const goals = survivingSourceGoals
       .map(goal => goal.id === completedGoalId && recoveredGoal ? recoveredGoal : goal);
     if (recoveredGoal && !goals.some(goal => goal.id === completedGoalId)) {
       goals.push(recoveredGoal);
