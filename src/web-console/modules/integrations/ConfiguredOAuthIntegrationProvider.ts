@@ -1,6 +1,9 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 
-import type { IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
+import {
+  resolveIntegrationOAuthClientAuth,
+  type IntegrationDescriptorRecord,
+} from '../../stores/IIntegrationDescriptorStore.js';
 import type { UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
 import type {
   IIntegrationProvider,
@@ -72,6 +75,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     if (!config.descriptor.oauth.clientId) {
       throw new Error('configured OAuth provider requires oauth.clientId');
     }
+    resolveIntegrationOAuthClientAuth(config.descriptor.oauth.tokenExchange);
     if (!config.clientSecret) throw new Error('configured OAuth provider requires clientSecret');
     validatePublicHttpsUrl(config.descriptor.oauth.authorizationUrl, 'oauth.authorizationUrl');
     validatePublicHttpsUrl(config.descriptor.oauth.tokenUrl, 'oauth.tokenUrl');
@@ -306,23 +310,27 @@ function credentialedTokenRequestInit(
   clientSecret: string,
   tokenExchange: Readonly<Record<string, unknown>>,
 ): RequestInit {
-  const clientAuth = readString(tokenExchange, 'clientAuth') ?? 'body';
-  if (clientAuth !== 'basic' && clientAuth !== 'none') {
-    fields.client_id = clientId;
-    fields.client_secret = clientSecret;
-  } else if (clientAuth === 'none') {
-    fields.client_id = clientId;
-  }
+  const clientAuth = resolveIntegrationOAuthClientAuth(tokenExchange);
   const headers: Record<string, string> = {
     Accept: 'application/json',
     'Content-Type': 'application/x-www-form-urlencoded',
   };
-  if (clientAuth === 'basic') {
-    const basicAuth = Buffer.from(
-      `${formEncodeComponent(clientId)}:${formEncodeComponent(clientSecret)}`,
-      'utf8',
-    ).toString('base64');
-    headers.Authorization = `Basic ${basicAuth}`;
+  switch (clientAuth) {
+    case 'body':
+      fields.client_id = clientId;
+      fields.client_secret = clientSecret;
+      break;
+    case 'none':
+      fields.client_id = clientId;
+      break;
+    case 'basic': {
+      const basicAuth = Buffer.from(
+        `${formEncodeComponent(clientId)}:${formEncodeComponent(clientSecret)}`,
+        'utf8',
+      ).toString('base64');
+      headers.Authorization = `Basic ${basicAuth}`;
+      break;
+    }
   }
   return {
     method: 'POST',

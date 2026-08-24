@@ -47,10 +47,14 @@ export class IntegrationService {
 
   async list(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const records = await this.options.store.listByUser(auth.userId);
+    const descriptors = this.options.providers.listDescriptors();
+    const records = await this.options.store.listByUser(
+      auth.userId,
+      descriptors.map(descriptor => descriptor.id),
+    );
     return {
       status: 200,
-      body: serializeIntegrationList(records, this.options.providers.listDescriptors()),
+      body: serializeIntegrationList(records, descriptors),
     };
   }
 

@@ -18,6 +18,7 @@ export type IntegrationDescriptorOwnership = 'curated' | 'byo';
 export type IntegrationAuthStrategy = 'oauth2_authorization_code' | 'static_api_key' | 'coded';
 export type IntegrationPkceMode = 'required' | 'supported' | 'unsupported';
 export type IntegrationRefreshMode = 'none' | 'static' | 'rotating';
+export type IntegrationOAuthClientAuth = 'body' | 'basic' | 'none';
 
 export interface IntegrationDescriptorRecord {
   readonly id: string;
@@ -79,6 +80,17 @@ export interface IIntegrationDescriptorStore {
   /** Returns the user's BYO descriptor when present, otherwise the curated default. */
   findVisibleByProvider(userId: string, provider: UserIntegrationProvider): Promise<IntegrationDescriptorRecord | null>;
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
+}
+
+export function resolveIntegrationOAuthClientAuth(
+  tokenExchange: Readonly<Record<string, unknown>>,
+): IntegrationOAuthClientAuth {
+  const clientAuth = tokenExchange.clientAuth;
+  if (clientAuth === undefined) return 'body';
+  if (clientAuth === 'body' || clientAuth === 'basic' || clientAuth === 'none') return clientAuth;
+  throw new ConsoleStoreValidationError(
+    'oauth.tokenExchange.clientAuth must be body, basic, or none',
+  );
 }
 
 export function validateIntegrationDescriptorRecord(record: IntegrationDescriptorRecord): void {
@@ -201,6 +213,7 @@ function validateOAuthDescriptor(
   if (oauth.scopes.length > 100) throw new ConsoleStoreValidationError('oauth.scopes must contain at most 100 entries');
   for (const scope of oauth.scopes) assertDisplayString(scope, 'oauth.scopes entry', 200);
   validateJsonRecord(oauth.tokenExchange, 'oauth.tokenExchange', 4096);
+  if (requireConfiguredClient) resolveIntegrationOAuthClientAuth(oauth.tokenExchange);
   validateJsonRecord(oauth.accountLabel, 'oauth.accountLabel', 4096);
 }
 

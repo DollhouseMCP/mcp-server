@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { withSystemContext } from '../../database/admin.js';
 import type { DatabaseInstance } from '../../database/connection.js';
@@ -18,20 +18,21 @@ import {
 } from './IUserIntegrationStore.js';
 import { assertUuid } from './ConsoleStoreValidation.js';
 
-// The visible descriptor query returns at most 100 configured providers, and
-// the built-in GitHub provider occupies one additional catalog slot.
-const MAX_USER_INTEGRATIONS_PER_USER = 101;
-
 export class PostgresUserIntegrationStore implements IUserIntegrationStore {
   constructor(private readonly db: DatabaseInstance) {}
 
-  async listByUser(userId: string): Promise<readonly UserIntegrationRecord[]> {
+  async listByUser(
+    userId: string,
+    providers: readonly UserIntegrationProvider[],
+  ): Promise<readonly UserIntegrationRecord[]> {
     assertUuid(userId, 'userId');
+    if (providers.length === 0) return [];
     const rows = await withSystemContext(this.db, tx =>
       tx.select().from(userIntegrations).where(and(
         eq(userIntegrations.userId, userId),
+        inArray(userIntegrations.provider, [...providers]),
         isNull(userIntegrations.revokedAt),
-      )).orderBy(asc(userIntegrations.provider)).limit(MAX_USER_INTEGRATIONS_PER_USER),
+      )).orderBy(asc(userIntegrations.provider)),
     );
     return rows.map(fromRow);
   }

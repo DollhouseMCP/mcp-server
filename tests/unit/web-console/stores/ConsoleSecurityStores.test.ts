@@ -408,9 +408,14 @@ describe('InMemoryUserIntegrationStore', () => {
         status: 'revoked',
         revokedAt: FIVE_MINUTES,
       }),
+      userIntegration({
+        id: '65e22a52-dc56-4cd0-9d13-b2802524fbd6',
+        provider: 'retired-provider',
+        authorizedPermissions: { scopes: ['read'] },
+      }),
     ]);
 
-    const rows = await store.listByUser(USER_ID);
+    const rows = await store.listByUser(USER_ID, ['github']);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       id: active.id,
@@ -726,6 +731,12 @@ describe('InMemoryIntegrationDescriptorStore', () => {
         tokenUrl: 'http://oauth2.googleapis.com/token',
       },
     }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenExchange: { clientAuth: 'boddy' },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.clientAuth must be body, basic, or none');
     await expect(store.upsert({
       ...oauthDescriptorInput(),
       authStrategy: 'static_api_key',

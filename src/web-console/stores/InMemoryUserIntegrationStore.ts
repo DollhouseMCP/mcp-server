@@ -26,11 +26,18 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     }
   }
 
-  async listByUser(userId: string): Promise<readonly UserIntegrationRecord[]> {
+  async listByUser(
+    userId: string,
+    providers: readonly UserIntegrationProvider[],
+  ): Promise<readonly UserIntegrationRecord[]> {
     await Promise.resolve();
     assertUuid(userId, 'userId');
+    const visibleProviders = new Set(providers);
     return [...this.records.values()]
-      .filter(record => record.userId === userId && record.revokedAt === null)
+      .filter(record =>
+        record.userId === userId &&
+        record.revokedAt === null &&
+        visibleProviders.has(record.provider))
       .map(cloneUserIntegrationRecord);
   }
 

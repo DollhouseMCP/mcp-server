@@ -103,6 +103,22 @@ const EXCHANGE_REQUEST = {
 };
 
 describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
+  it('rejects unknown client authentication modes before any request can be built', () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+
+    expect(() => providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          tokenExchange: { ...base.oauth.tokenExchange, clientAuth: 'boddy' },
+        },
+      },
+    })).toThrow('oauth.tokenExchange.clientAuth must be body, basic, or none');
+  });
+
   it('does not activate a legacy OAuth descriptor until its client ID is configured', () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');

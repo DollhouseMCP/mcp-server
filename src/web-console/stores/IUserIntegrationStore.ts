@@ -37,7 +37,10 @@ export interface UserIntegrationRecord {
 }
 
 export interface IUserIntegrationStore {
-  listByUser(userId: string): Promise<readonly UserIntegrationRecord[]>;
+  listByUser(
+    userId: string,
+    providers: readonly UserIntegrationProvider[],
+  ): Promise<readonly UserIntegrationRecord[]>;
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;

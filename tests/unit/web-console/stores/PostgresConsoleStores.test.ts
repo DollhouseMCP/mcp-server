@@ -655,11 +655,11 @@ describe('PostgresLoginTransactionStore', () => {
 describe('PostgresUserIntegrationStore', () => {
   it('lists active user integrations and clones credential ciphertext', async () => {
     const row = userIntegrationRow();
-    const chain = selectingChain([row]);
+    const chain = selectingOrderedChain([row]);
     transaction.select = jest.fn(() => chain);
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
 
-    const rows = await store.listByUser(USER_ID);
+    const rows = await store.listByUser(USER_ID, ['github']);
     rows[0]?.accessTokenCiphertext?.fill(0);
 
     expect(rows).toHaveLength(1);
@@ -670,7 +670,14 @@ describe('PostgresUserIntegrationStore', () => {
       externalAccountLabel: 'alice',
     });
     expect(row.accessTokenCiphertext).toEqual(Buffer.from('encrypted-access-token'));
-    expect(chain.limit).toHaveBeenCalledWith(101);
+    expect(chain.limit).toBeUndefined();
+  });
+
+  it('does not query when the current provider catalog is empty', async () => {
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.listByUser(USER_ID, [])).resolves.toEqual([]);
+    expect(transaction.select).toBeUndefined();
   });
 
   it('finds one active provider integration for a user', async () => {
