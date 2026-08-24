@@ -10,6 +10,7 @@ import { FileOperationsService } from '../../../src/services/FileOperationsServi
 import { SerializationService } from '../../../src/services/SerializationService.js';
 import {
   AgentStateReductionRequiredError,
+  AgentStateSizeLimitError,
   FileAgentStateStore,
 } from '../../../src/storage/FileAgentStateStore.js';
 
@@ -231,6 +232,14 @@ stateVersion: ${stateVersion}
       allowOversizedReduction: true,
     })).rejects.toBeInstanceOf(AgentStateReductionRequiredError);
     expect(recovered?.stateVersion).toBe(1);
+  });
+
+  it('routes a normal candidate beyond the recovery ceiling through terminal cleanup', async () => {
+    const oversized = { ...state(), context: { payload: 'x'.repeat(101 * 1024) } };
+
+    await expect(store.save(key, oversized, 0))
+      .rejects.toBeInstanceOf(AgentStateSizeLimitError);
+    expect(oversized.stateVersion).toBe(0);
   });
 
   it('compares recovery reduction against actual durable bytes', async () => {

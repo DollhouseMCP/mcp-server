@@ -21,7 +21,7 @@ export const AGENT_STATE_RECOVERY_MAX_YAML_SIZE = 100 * 1024;
 
 export class AgentStateSizeLimitError extends Error {
   constructor() {
-    super('Agent state exceeds the normal persistence limit');
+    super('Agent state exceeds allowed size for the normal persistence limit');
     this.name = 'AgentStateSizeLimitError';
   }
 }
@@ -298,11 +298,7 @@ export class FileAgentStateStore implements IAgentStateStore {
       if (allowOversizedReduction && existingState) {
         throw new AgentStateReductionRequiredError();
       }
-      this.deps.serializationService.validateSize(
-        yamlContent,
-        AGENT_STATE_RECOVERY_MAX_YAML_SIZE,
-        'Agent recovery state',
-      );
+      throw new AgentStateSizeLimitError();
     }
     if (!allowOversizedReduction || !existingState) {
       throw new AgentStateSizeLimitError();

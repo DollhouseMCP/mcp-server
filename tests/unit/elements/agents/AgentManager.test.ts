@@ -552,6 +552,33 @@ Content`;
       expect(sourceAgent.needsStatePersistence()).toBe(true);
     });
 
+    it('synchronizes a referenced recovery tombstone into the live source state', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      const dependent = sourceAgent.addGoal({
+        description: 'Dependent execution',
+        dependencies: [originalGoal.id],
+      });
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+      recoveryAgent[EVICT_TERMINAL_GOAL](originalGoal.id);
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id, true);
+
+      expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: originalGoal.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(sourceAgent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
     it('marks a recovery-only synchronization as fully persisted', () => {
       const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
       const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
