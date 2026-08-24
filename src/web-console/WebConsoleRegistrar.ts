@@ -128,6 +128,7 @@ import {
 } from './modules/integrations/GitHubAppIntegrationProvider.js';
 import type { IGitHubIntegrationProvider } from './modules/integrations/GitHubIntegrationProvider.js';
 import { createIntegrationModule } from './modules/integrations/IntegrationModule.js';
+import type { IIntegrationProvider } from './modules/integrations/IntegrationProvider.js';
 import {
   InMemoryConsoleTelemetryQuery,
   PostgresConsoleTelemetryQuery,
@@ -223,6 +224,7 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   authStorage: 'WebConsoleAuthStorage',
   accountInviteIssuer: 'WebConsoleAccountInviteIssuer',
   githubIntegrationProvider: 'WebConsoleGitHubIntegrationProvider',
+  configuredIntegrationProviders: 'WebConsoleConfiguredIntegrationProviders',
   productionDatabaseReadiness: 'WebConsoleProductionDatabaseReadiness',
   operatorConfigStore: 'WebConsoleOperatorConfigStore',
   signingKeyStore: 'WebConsoleSigningKeyStore',
@@ -265,6 +267,7 @@ export interface WebConsoleRegistrarOptions {
   readonly runtimeTerminationAcknowledgementTimeoutMs?: number;
   readonly githubIntegrationProvider?: IGitHubIntegrationProvider | null;
   readonly githubIntegrationProviderConfig?: GitHubAppIntegrationProviderConfig | null;
+  readonly configuredIntegrationProviders?: readonly IIntegrationProvider[];
   readonly portfolioStore?: IPortfolioElementStore | null;
   readonly enableManagerBackedPortfolioStore?: boolean;
   readonly enablePortfolioWriteRoutes?: boolean;
@@ -397,7 +400,17 @@ export class WebConsoleRegistrar {
     const opaqueValues = new HmacConsoleOpaqueValueService(resolveOpaqueValueHmacKey(container, this.options));
     const secretEncryption = resolveSecretEncryption(container, this.options);
     const githubIntegrationProvider = resolveGitHubIntegrationProvider(container, this.options);
-    const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(this.options, githubIntegrationProvider);
+    const configuredIntegrationProviders = resolveConfiguredIntegrationProviders(container, this.options);
+    assertIntegrationCredentialEncryptionConfigured(
+      secretEncryption,
+      githubIntegrationProvider,
+      configuredIntegrationProviders,
+    );
+    const integrationPublicBaseUrl = resolveIntegrationPublicBaseUrl(
+      this.options,
+      githubIntegrationProvider,
+      configuredIntegrationProviders,
+    );
     const sessionActivationStateAdapter = resolveSessionActivationStateAdapter(container, database, this.options);
     const sessionActivationEventSink = resolveSessionActivationEventSink(container, database);
     const sessionApprovalStore = resolveSessionApprovalStore(container, database, this.options);
@@ -551,6 +564,7 @@ export class WebConsoleRegistrar {
       opaqueValues,
       secretEncryption,
       githubProvider: githubIntegrationProvider,
+      configuredProviders: configuredIntegrationProviders,
       publicBaseUrl: integrationPublicBaseUrl,
       now: this.options.now,
     }));
@@ -1926,6 +1940,21 @@ function resolveGitHubIntegrationProviderConfig(
   };
 }
 
+function resolveConfiguredIntegrationProviders(
+  container: DiContainerFacade,
+  options: WebConsoleRegistrarOptions,
+): readonly IIntegrationProvider[] {
+  if (options.configuredIntegrationProviders !== undefined) {
+    return options.configuredIntegrationProviders;
+  }
+  if (container.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders)) {
+    return container.resolve<readonly IIntegrationProvider[]>(
+      WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders,
+    );
+  }
+  return [];
+}
+
 const MANAGER_BACKED_PORTFOLIO_REQUIRED_SERVICES = [
   'UserIdResolver',
   'PersonaManager',
@@ -2014,12 +2043,29 @@ function resolvePortfolioSyncJobStore(
 function resolveIntegrationPublicBaseUrl(
   options: WebConsoleRegistrarOptions,
   githubIntegrationProvider: IGitHubIntegrationProvider | null,
+  configuredIntegrationProviders: readonly IIntegrationProvider[],
 ): string | null {
   if (options.publicBaseUrl) return options.publicBaseUrl;
   if (githubIntegrationProvider) {
     throw new Error('Web console GitHub integration provider requires publicBaseUrl');
   }
+  if (configuredIntegrationProviders.some(
+    provider => provider.credentialStrategy === 'oauth2_authorization_code',
+  )) {
+    throw new Error('Web console configured OAuth integration providers require publicBaseUrl');
+  }
   return null;
+}
+
+function assertIntegrationCredentialEncryptionConfigured(
+  secretEncryption: ISecretEncryptionService | null,
+  githubIntegrationProvider: IGitHubIntegrationProvider | null,
+  configuredIntegrationProviders: readonly IIntegrationProvider[],
+): void {
+  if (secretEncryption || (!githubIntegrationProvider && configuredIntegrationProviders.length === 0)) return;
+  throw new Error(
+    'Web console integration providers require secretEncryptionKey or WebConsoleSecretEncryptionKey',
+  );
 }
 
 function markProductionAdapter<T extends object>(

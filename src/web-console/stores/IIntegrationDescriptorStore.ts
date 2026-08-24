@@ -18,6 +18,25 @@ export type IntegrationDescriptorOwnership = 'curated' | 'byo';
 export type IntegrationAuthStrategy = 'oauth2_authorization_code' | 'static_api_key' | 'coded';
 export type IntegrationPkceMode = 'required' | 'supported' | 'unsupported';
 export type IntegrationRefreshMode = 'none' | 'static' | 'rotating';
+export type IntegrationOAuthClientAuth = 'body' | 'basic' | 'none';
+
+const SENSITIVE_OAUTH_RESPONSE_FIELDS = new Set([
+  'access_token',
+  'api_key',
+  'assertion',
+  'authorization_code',
+  'client_secret',
+  'code',
+  'credential',
+  'credentials',
+  'device_code',
+  'id_token',
+  'password',
+  'refresh_token',
+  'secret',
+  'token',
+  'user_code',
+]);
 
 export interface IntegrationDescriptorRecord {
   readonly id: string;
@@ -38,6 +57,8 @@ export interface IntegrationDescriptorRecord {
 }
 
 export interface IntegrationOAuthDescriptor {
+  /** Null only for legacy descriptors that predate configured OAuth execution. */
+  readonly clientId: string | null;
   readonly authorizationUrl: string;
   readonly tokenUrl: string;
   readonly scopes: readonly string[];
@@ -79,9 +100,76 @@ export interface IIntegrationDescriptorStore {
   upsert(input: IntegrationDescriptorCreateInput): Promise<IntegrationDescriptorRecord>;
 }
 
+export function resolveIntegrationOAuthClientAuth(
+  tokenExchange: Readonly<Record<string, unknown>>,
+): IntegrationOAuthClientAuth {
+  const clientAuth = tokenExchange.clientAuth;
+  if (clientAuth === undefined) return 'body';
+  if (clientAuth === 'body' || clientAuth === 'basic' || clientAuth === 'none') return clientAuth;
+  throw new ConsoleStoreValidationError(
+    'oauth.tokenExchange.clientAuth must be body, basic, or none',
+  );
+}
+
+export function validateIntegrationOAuthTokenExchange(
+  tokenExchange: Readonly<Record<string, unknown>>,
+): void {
+  resolveIntegrationOAuthClientAuth(tokenExchange);
+
+  const revocationUrl = tokenExchange.revocationUrl;
+  if (revocationUrl !== undefined) {
+    if (typeof revocationUrl !== 'string') {
+      throw new ConsoleStoreValidationError('oauth.tokenExchange.revocationUrl must be a string');
+    }
+    validatePublicHttpsUrl(revocationUrl, 'oauth.tokenExchange.revocationUrl');
+  }
+
+  const authorizationParams = tokenExchange.authorizationParams;
+  if (authorizationParams === undefined) return;
+  validateJsonRecord(authorizationParams, 'oauth.tokenExchange.authorizationParams', 4096);
+  for (const [key, value] of Object.entries(authorizationParams)) {
+    assertDisplayString(key, 'oauth.tokenExchange.authorizationParams key', 200);
+    if (typeof value !== 'string') {
+      throw new ConsoleStoreValidationError(
+        'oauth.tokenExchange.authorizationParams values must be strings',
+      );
+    }
+    assertDisplayString(value, 'oauth.tokenExchange.authorizationParams value', 4096);
+  }
+}
+
+export function validateIntegrationOAuthScopes(
+  scopes: unknown,
+): asserts scopes is readonly string[] {
+  if (!Array.isArray(scopes)) {
+    throw new ConsoleStoreValidationError('oauth.scopes must be an array');
+  }
+  if (scopes.length > 100) {
+    throw new ConsoleStoreValidationError('oauth.scopes must contain at most 100 entries');
+  }
+  for (const scope of scopes) assertDisplayString(scope, 'oauth.scopes entry', 200);
+}
+
+export function assertSafeIntegrationOAuthAccountLabel(
+  accountLabel: Readonly<Record<string, unknown>>,
+): void {
+  for (const key of ['field', 'tokenResponseField'] as const) {
+    const field = accountLabel[key];
+    if (typeof field !== 'string') continue;
+    const canonicalField = field
+      .trim()
+      .replace(/([a-z0-9])([A-Z])/gu, '$1_$2')
+      .replace(/[^a-zA-Z0-9]+/gu, '_')
+      .toLowerCase();
+    if (SENSITIVE_OAUTH_RESPONSE_FIELDS.has(canonicalField)) {
+      throw new ConsoleStoreValidationError('oauth.accountLabel must not reference credential fields');
+    }
+  }
+}
+
 export function validateIntegrationDescriptorRecord(record: IntegrationDescriptorRecord): void {
   assertUuid(record.id, 'id');
-  validateIntegrationDescriptorShape(record);
+  validateIntegrationDescriptorShape(record, false);
 }
 
 export function validateIntegrationDescriptorInput(input: IntegrationDescriptorCreateInput): void {
@@ -101,7 +189,7 @@ export function validateIntegrationDescriptorInput(input: IntegrationDescriptorC
     operationPromotion: input.operationPromotion ?? {},
     createdAt: input.createdAt,
     updatedAt: input.updatedAt,
-  });
+  }, true);
 }
 
 export function cloneIntegrationDescriptorRecord(
@@ -123,6 +211,7 @@ export function cloneIntegrationDescriptorRecord(
 
 function validateIntegrationDescriptorShape(
   record: Omit<IntegrationDescriptorRecord, 'id'> & { readonly id?: string },
+  requireConfiguredOAuthClient: boolean,
 ): void {
   assertUserIntegrationProvider(record.provider);
   const ownership: string = record.ownership;
@@ -140,7 +229,7 @@ function validateIntegrationDescriptorShape(
   }
   assertDisplayString(record.displayName, 'displayName', 120);
   assertDisplayString(record.category, 'category', 80);
-  validateAuthStrategy(record);
+  validateAuthStrategy(record, requireConfiguredOAuthClient);
   validateApiHosts(record.apiHosts);
   validateOptionalCredential(record.clientSecretCiphertext, record.credentialKeyVersion);
   validateJsonRecord(record.operationPromotion, 'operationPromotion', 8192);
@@ -152,12 +241,12 @@ function validateIntegrationDescriptorShape(
 function validateAuthStrategy(record: Pick<
   IntegrationDescriptorRecord,
   'authStrategy' | 'oauth' | 'staticApiKey' | 'clientSecretCiphertext'
->): void {
+>, requireConfiguredOAuthClient: boolean): void {
   switch (record.authStrategy) {
     case 'oauth2_authorization_code':
       if (!record.oauth) throw new ConsoleStoreValidationError('oauth descriptor is required');
       if (record.staticApiKey) throw new ConsoleStoreValidationError('oauth descriptor cannot include staticApiKey');
-      validateOAuthDescriptor(record.oauth);
+      validateOAuthDescriptor(record.oauth, requireConfiguredOAuthClient);
       return;
     case 'static_api_key':
       if (!record.staticApiKey) throw new ConsoleStoreValidationError('staticApiKey descriptor is required');
@@ -174,7 +263,17 @@ function validateAuthStrategy(record: Pick<
   }
 }
 
-function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor): void {
+function validateOAuthDescriptor(
+  oauth: IntegrationOAuthDescriptor,
+  requireConfiguredClient: boolean,
+): void {
+  if (oauth.clientId === null) {
+    if (requireConfiguredClient) {
+      throw new ConsoleStoreValidationError('oauth.clientId is required');
+    }
+  } else {
+    assertDisplayString(oauth.clientId, 'oauth.clientId', 200);
+  }
   validatePublicHttpsUrl(oauth.authorizationUrl, 'oauth.authorizationUrl');
   validatePublicHttpsUrl(oauth.tokenUrl, 'oauth.tokenUrl');
   const pkce: string = oauth.pkce;
@@ -185,10 +284,11 @@ function validateOAuthDescriptor(oauth: IntegrationOAuthDescriptor): void {
   if (refresh !== 'none' && refresh !== 'static' && refresh !== 'rotating') {
     throw new ConsoleStoreValidationError('oauth.refresh must be none, static, or rotating');
   }
-  if (oauth.scopes.length > 100) throw new ConsoleStoreValidationError('oauth.scopes must contain at most 100 entries');
-  for (const scope of oauth.scopes) assertDisplayString(scope, 'oauth.scopes entry', 200);
+  validateIntegrationOAuthScopes(oauth.scopes);
   validateJsonRecord(oauth.tokenExchange, 'oauth.tokenExchange', 4096);
+  validateIntegrationOAuthTokenExchange(oauth.tokenExchange);
   validateJsonRecord(oauth.accountLabel, 'oauth.accountLabel', 4096);
+  assertSafeIntegrationOAuthAccountLabel(oauth.accountLabel);
 }
 
 function validateStaticApiKeyDescriptor(staticApiKey: IntegrationStaticApiKeyDescriptor): void {
@@ -255,7 +355,11 @@ function validatePublicDnsHost(host: string, name: string): void {
   }
 }
 
-function validateJsonRecord(value: unknown, name: string, maxBytes: number): void {
+function validateJsonRecord(
+  value: unknown,
+  name: string,
+  maxBytes: number,
+): asserts value is Readonly<Record<string, unknown>> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new ConsoleStoreValidationError(`${name} must be a JSON object`);
   }

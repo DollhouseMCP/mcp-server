@@ -439,6 +439,10 @@ describe('WebConsoleRegistrar', () => {
 
     await expect(new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 25),
+      secretEncryptionKey: {
+        keyId: 'github-test-key',
+        key: Buffer.alloc(32, 26),
+      },
       registerCleanup: false,
       githubIntegrationProvider: {
         createAuthorizationUrl: () => 'https://github.example/install',
@@ -466,6 +470,10 @@ describe('WebConsoleRegistrar', () => {
 
     const composition = await new WebConsoleRegistrar({
       opaqueValueHmacKey: Buffer.alloc(32, 251),
+      secretEncryptionKey: {
+        keyId: 'github-config-test-key',
+        key: Buffer.alloc(32, 252),
+      },
       registerCleanup: false,
       publicBaseUrl: TEST_PUBLIC_BASE_URL,
       githubIntegrationProviderConfig: {
@@ -478,6 +486,139 @@ describe('WebConsoleRegistrar', () => {
     expect(composition.githubIntegrationProvider).toBeInstanceOf(GitHubAppIntegrationProvider);
     expect(container.resolve(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider))
       .toBe(composition.githubIntegrationProvider);
+  });
+
+  it('wires static-key providers without requiring a public callback base URL', async () => {
+    const {
+      StaticApiKeyIntegrationProvider,
+      WebConsoleRegistrar,
+      WEB_CONSOLE_SERVICE_NAMES,
+    } = await import('../../../src/web-console/index.js');
+    const container = new TestContainer();
+    const provider = new StaticApiKeyIntegrationProvider({
+      id: '19b9f7d7-0bf5-4cc0-9892-cf00d0f4f74d',
+      provider: 'airtable',
+      ownership: 'curated',
+      ownerUserId: null,
+      displayName: 'Airtable',
+      category: 'Database',
+      authStrategy: 'static_api_key',
+      apiHosts: ['api.airtable.com'],
+      oauth: null,
+      staticApiKey: {
+        injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' },
+      },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: new Date('2026-05-26T12:00:00.000Z'),
+      updatedAt: new Date('2026-05-26T12:00:00.000Z'),
+    });
+    container.seed(WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders, [provider]);
+    container.seed('WebConsoleSecretEncryptionKey', {
+      keyId: 'static-provider-test-key',
+      key: Buffer.alloc(32, 253),
+    });
+
+    const composition = await new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 252),
+      registerCleanup: false,
+    }).bootstrapAndRegister(container);
+
+    expect(composition.registry.createRouteManifest().routes).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        moduleId: 'integrations',
+        method: 'GET',
+        path: '/api/v1/me/integrations/airtable',
+      }),
+      expect.objectContaining({
+        moduleId: 'integrations',
+        method: 'POST',
+        path: '/api/v1/me/integrations/airtable/connect',
+      }),
+    ]));
+  });
+
+  it('rejects configured integration providers without credential encryption', async () => {
+    const {
+      StaticApiKeyIntegrationProvider,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+    const provider = new StaticApiKeyIntegrationProvider({
+      id: 'dbef8cd3-f3c4-4799-9132-63df963f776a',
+      provider: 'airtable',
+      ownership: 'curated',
+      ownerUserId: null,
+      displayName: 'Airtable',
+      category: 'Database',
+      authStrategy: 'static_api_key',
+      apiHosts: ['api.airtable.com'],
+      oauth: null,
+      staticApiKey: {
+        injection: { location: 'header', name: 'Authorization', valuePrefix: 'Bearer ' },
+      },
+      clientSecretCiphertext: null,
+      credentialKeyVersion: null,
+      operationPromotion: {},
+      createdAt: new Date('2026-05-26T12:00:00.000Z'),
+      updatedAt: new Date('2026-05-26T12:00:00.000Z'),
+    });
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 254),
+      registerCleanup: false,
+      configuredIntegrationProviders: [provider],
+    }).bootstrapAndRegister(new TestContainer())).rejects.toThrow(
+      'Web console integration providers require secretEncryptionKey or WebConsoleSecretEncryptionKey',
+    );
+  });
+
+  it('rejects configured OAuth integration providers without a public callback base URL', async () => {
+    const {
+      ConfiguredOAuthIntegrationProvider,
+      WebConsoleRegistrar,
+    } = await import('../../../src/web-console/index.js');
+    const oauthProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: {
+        id: '07e6a2f1-c2d5-4b47-9294-bade73b3fe61',
+        provider: 'gmail',
+        ownership: 'curated',
+        ownerUserId: null,
+        displayName: 'Gmail',
+        category: 'Email',
+        authStrategy: 'oauth2_authorization_code',
+        apiHosts: ['gmail.googleapis.com'],
+        oauth: {
+          clientId: 'gmail-client-id',
+          authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
+          tokenUrl: 'https://oauth2.googleapis.com/token',
+          scopes: ['gmail.readonly'],
+          pkce: 'required',
+          refresh: 'rotating',
+          tokenExchange: {},
+          accountLabel: {},
+        },
+        staticApiKey: null,
+        clientSecretCiphertext: Buffer.from('encrypted-client-secret'),
+        credentialKeyVersion: 'integration-key-v1',
+        operationPromotion: {},
+        createdAt: new Date('2026-05-26T12:00:00.000Z'),
+        updatedAt: new Date('2026-05-26T12:00:00.000Z'),
+      },
+      clientSecret: 'gmail-client-secret',
+    });
+
+    await expect(new WebConsoleRegistrar({
+      opaqueValueHmacKey: Buffer.alloc(32, 253),
+      secretEncryptionKey: {
+        keyId: 'oauth-test-key',
+        key: Buffer.alloc(32, 254),
+      },
+      registerCleanup: false,
+      configuredIntegrationProviders: [oauthProvider],
+    }).bootstrapAndRegister(new TestContainer())).rejects.toThrow(
+      'Web console configured OAuth integration providers require publicBaseUrl',
+    );
   });
 
   it('fails hosted/shared activation with all production invariant failures instead of mounting', async () => {

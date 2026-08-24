@@ -181,6 +181,7 @@ function integrationDescriptorRow(overrides: Partial<Record<string, unknown>> = 
     authStrategy: 'oauth2_authorization_code',
     apiHosts: ['gmail.googleapis.com'],
     oauth: {
+      clientId: 'gmail-client-id',
       authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
@@ -209,6 +210,7 @@ function integrationDescriptorInput(overrides: Partial<Parameters<InstanceType<t
     authStrategy: 'oauth2_authorization_code' as const,
     apiHosts: ['gmail.googleapis.com'],
     oauth: {
+      clientId: 'gmail-client-id',
       authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
@@ -651,13 +653,36 @@ describe('PostgresLoginTransactionStore', () => {
 });
 
 describe('PostgresUserIntegrationStore', () => {
+  it.each(['', 'bad\nkey', 'k'.repeat(129)])(
+    'rejects invalid credential key version %j before opening a transaction',
+    async credentialKeyVersion => {
+      const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+      await expect(store.connect({
+        userId: USER_ID,
+        provider: 'github',
+        externalAccountLabel: 'alice',
+        externalInstallationId: 'installation-123',
+        authorizedPermissions: {
+          repository_selection: 'selected',
+          permissions: { contents: 'read' },
+        },
+        accessTokenCiphertext: Buffer.from('encrypted-access-token'),
+        refreshTokenCiphertext: Buffer.from('encrypted-refresh-token'),
+        credentialKeyVersion,
+        connectedAt: NOW,
+      })).rejects.toThrow(ConsoleStoreValidationError);
+      expect(withSystemContextMock).not.toHaveBeenCalled();
+    },
+  );
+
   it('lists active user integrations and clones credential ciphertext', async () => {
     const row = userIntegrationRow();
-    const chain = selectingChain([row]);
+    const chain = selectingOrderedChain([row]);
     transaction.select = jest.fn(() => chain);
     const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
 
-    const rows = await store.listByUser(USER_ID);
+    const rows = await store.listByUser(USER_ID, ['github']);
     rows[0]?.accessTokenCiphertext?.fill(0);
 
     expect(rows).toHaveLength(1);
@@ -668,7 +693,14 @@ describe('PostgresUserIntegrationStore', () => {
       externalAccountLabel: 'alice',
     });
     expect(row.accessTokenCiphertext).toEqual(Buffer.from('encrypted-access-token'));
-    expect(chain.limit).toHaveBeenCalledWith(25);
+    expect(chain.limit).toBeUndefined();
+  });
+
+  it('does not query when the current provider catalog is empty', async () => {
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.listByUser(USER_ID, [])).resolves.toEqual([]);
+    expect(transaction.select).toBeUndefined();
   });
 
   it('finds one active provider integration for a user', async () => {
@@ -716,6 +748,7 @@ describe('PostgresUserIntegrationStore', () => {
     await expect(store.recordError({
       userId: USER_ID,
       provider: 'linear',
+      expectedActiveRecordId: null,
       errorReason: 'provider_unavailable',
       occurredAt: NOW,
     })).resolves.toMatchObject({
@@ -723,6 +756,109 @@ describe('PostgresUserIntegrationStore', () => {
       authorizedPermissions: { scopes: [] },
       status: 'error',
     });
+  });
+
+  it('preserves a concurrently active PostgreSQL integration when recording a first-link error', async () => {
+    const active = userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+    });
+    const insert = insertChain([]);
+    const select = selectingChain([active]);
+    transaction.insert = jest.fn(() => insert);
+    transaction.select = jest.fn(() => select);
+    transaction.update = jest.fn();
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.recordError({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: null,
+      errorReason: 'token_exchange_failed',
+      occurredAt: NOW,
+    })).resolves.toMatchObject({
+      id: active.id,
+      status: 'connected',
+      accessTokenCiphertext: active.accessTokenCiphertext,
+    });
+    expect(insert.onConflictDoNothing).toHaveBeenCalledTimes(1);
+    expect(transaction.update).not.toHaveBeenCalled();
+  });
+
+  it('locks an active integration before updating refreshed credentials', async () => {
+    const updated = userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+      credentialKeyVersion: 'integration-key-v2',
+      lastSyncAt: FIVE_MINUTES,
+    });
+    transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues', 'write:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]));
+    transaction.update = jest.fn(() => returningChain([updated]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => ({
+        kind: 'refreshed',
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        authorizedPermissions: { scopes: ['read:issues'] },
+        credentialKeyVersion: 'integration-key-v2',
+      }),
+    })).resolves.toMatchObject({
+      kind: 'refreshed',
+      record: {
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        authorizedPermissions: { scopes: ['read:issues'] },
+        credentialKeyVersion: 'integration-key-v2',
+        lastSyncAt: FIVE_MINUTES,
+      },
+    });
+    const lockSql = transaction.execute.mock.calls[0]?.[0] as { queryChunks?: readonly unknown[] };
+    expect(JSON.stringify(lockSql.queryChunks)).toContain('FOR UPDATE');
+    expect(sqlText(0)).toMatch(/LIMIT 1\s+FOR UPDATE/u);
+    expect(transaction.update).toHaveBeenCalledTimes(1);
+    const updateChain = transaction.update.mock.results[0]?.value as ReturnType<typeof returningChain>;
+    expect(updateChain.set).toHaveBeenCalledWith(expect.objectContaining({
+      authorizedPermissions: { scopes: ['read:issues'] },
+      lastSyncAt: FIVE_MINUTES,
+    }));
+  });
+
+  it('reuses a row refreshed by an earlier locked caller', async () => {
+    transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+    })]));
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => {
+        throw new Error('refresh should not run');
+      },
+    })).resolves.toMatchObject({
+      kind: 'reused',
+      record: {
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+      },
+    });
+    expect(transaction.update).toBeUndefined();
   });
 });
 
@@ -743,6 +879,21 @@ describe('PostgresIntegrationDescriptorStore', () => {
       apiHosts: ['gmail.googleapis.com'],
     });
     expect(row.clientSecretCiphertext).toEqual(Buffer.from('encrypted-client-secret'));
+  });
+
+  it('keeps pre-client-ID OAuth descriptors readable as unconfigured metadata', async () => {
+    const row = integrationDescriptorRow();
+    const legacyOauth = { ...(row.oauth as Record<string, unknown>) };
+    delete legacyOauth.clientId;
+    transaction.select = jest.fn(() => selectingChain([{ ...row, oauth: legacyOauth }]));
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.listVisible(USER_ID)).resolves.toEqual([
+      expect.objectContaining({
+        provider: 'gmail',
+        oauth: expect.objectContaining({ clientId: null }),
+      }),
+    ]);
   });
 
   it('prefers the user BYO descriptor when a curated descriptor is also visible', async () => {
@@ -805,6 +956,17 @@ describe('PostgresIntegrationDescriptorStore', () => {
     await expect(store.upsert(integrationDescriptorInput({
       apiHosts: ['127.0.0.1'],
     }))).rejects.toThrow(ConsoleStoreValidationError);
+    expect(transaction.insert).toBeUndefined();
+  });
+
+  it('requires a client ID for new OAuth descriptor writes', async () => {
+    const input = integrationDescriptorInput();
+    const store = new PostgresIntegrationDescriptorStore({} as DatabaseInstance);
+
+    await expect(store.upsert({
+      ...input,
+      oauth: input.oauth ? { ...input.oauth, clientId: null } : null,
+    })).rejects.toThrow('oauth.clientId is required');
     expect(transaction.insert).toBeUndefined();
   });
 });
@@ -915,6 +1077,7 @@ describe('PostgresPortfolioSyncJobStore', () => {
     expect(transaction.execute).toHaveBeenCalledWith(expect.objectContaining({
       queryChunks: expect.any(Array),
     }));
+    expect(sqlText(0)).toMatch(/LIMIT 1\s+FOR UPDATE SKIP LOCKED/u);
   });
 
   it('returns null when atomic claim finds no eligible job', async () => {

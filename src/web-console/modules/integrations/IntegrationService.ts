@@ -16,6 +16,7 @@ import type { IConsoleOpaqueValueService } from '../../security/ConsoleOpaqueVal
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type { ILoginTransactionStore } from '../../stores/ILoginTransactionStore.js';
 import type { IUserIntegrationStore, UserIntegrationProvider } from '../../stores/IUserIntegrationStore.js';
+import { assertDisplayString } from '../../stores/ConsoleStoreValidation.js';
 import {
   serializeIntegrationList,
 } from './IntegrationDtos.js';
@@ -46,10 +47,14 @@ export class IntegrationService {
 
   async list(req: ConsoleRequest): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const records = await this.options.store.listByUser(auth.userId);
+    const descriptors = this.options.providers.listDescriptors();
+    const records = await this.options.store.listByUser(
+      auth.userId,
+      descriptors.map(descriptor => descriptor.id),
+    );
     return {
       status: 200,
-      body: serializeIntegrationList(records, this.options.providers.listDescriptors()),
+      body: serializeIntegrationList(records, descriptors),
     };
   }
 
@@ -74,6 +79,13 @@ export class IntegrationService {
 
   async connectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
+    const provider = this.options.providers.get(providerId);
+    if (!provider) return providerNotFound(providerId);
+    if (provider.credentialStrategy === 'static_api_key') {
+      const deps = this.credentialDependencies(providerId);
+      if (!deps) return serviceUnavailable(`${providerId} integration linking is not configured.`);
+      return this.captureStaticApiKey(req, auth, deps);
+    }
     const deps = this.writeDependencies(providerId);
     if (!deps) return serviceUnavailable(`${providerId} integration linking is not configured.`);
     const now = this.now();
@@ -85,11 +97,11 @@ export class IntegrationService {
       pkceContext(transactionId),
     );
     const contentsPermission = requestedContentsPermission(req.body);
-    const redirectUri = this.githubCallbackUri();
+    const redirectUri = this.providerCallbackUri(providerId);
     await deps.loginTransactions.create({
       idHash: deps.opaqueValues.hashOpaqueValue(transactionId),
       flowKind: 'integration_link',
-      stateHash: deps.opaqueValues.hashOpaqueValue(state),
+      stateHash: hashProviderState(deps.opaqueValues, providerId, state),
       pkceVerifierEnc,
       userId: auth.userId,
       consoleSessionIdHash: Buffer.from(auth.sessionIdHash),
@@ -99,8 +111,9 @@ export class IntegrationService {
       expiresAt: new Date(now.getTime() + INTEGRATION_TRANSACTION_TTL_MS),
       consumedAt: null,
     });
-    logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration link flow started', {
+    logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration link flow started', {
       userId: auth.userId,
+      provider: providerId,
       contentsPermission,
     });
     return {
@@ -142,7 +155,7 @@ export class IntegrationService {
     const now = this.now();
     const transaction = await deps.loginTransactions.consume(
       idHash,
-      deps.opaqueValues.hashOpaqueValue(state),
+      hashProviderState(deps.opaqueValues, providerId, state),
       now,
     );
     if (transaction?.flowKind !== 'integration_link') {
@@ -178,18 +191,20 @@ export class IntegrationService {
       exchanged = await deps.provider.exchangeAuthorizationCode({
         code,
         codeVerifier: pkceVerifier,
-        redirectUri: this.githubCallbackUri(),
+        redirectUri: this.providerCallbackUri(providerId),
         providerCallbackParams: stringQueryParams(req.query),
       });
     } catch {
       await this.options.store.recordError({
         userId: auth.userId,
         provider: providerId,
+        expectedActiveRecordId: null,
         errorReason: 'token_exchange_failed',
         occurredAt: this.now(),
       });
-      logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration token exchange failed', {
+      logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'Integration token exchange failed', {
         userId: auth.userId,
+        provider: providerId,
       });
       return failedIntegrationCallback(transaction.returnTo ?? undefined);
     }
@@ -232,7 +247,7 @@ export class IntegrationService {
 
   async disconnectProvider(req: ConsoleRequest, providerId: UserIntegrationProvider): Promise<ConsoleHandlerResult> {
     const auth = requireConsoleAuthentication(req);
-    const deps = this.writeDependencies(providerId);
+    const deps = this.credentialDependencies(providerId);
     if (!deps) return serviceUnavailable(`${providerId} integration disconnect is not configured.`);
     const active = await this.options.store.findByProvider(auth.userId, providerId);
     if (active) {
@@ -241,6 +256,7 @@ export class IntegrationService {
         const errorRecord = await this.options.store.recordError({
           userId: auth.userId,
           provider: providerId,
+          expectedActiveRecordId: active.id,
           errorReason: 'revocation_failed',
           occurredAt: this.now(),
         });
@@ -249,23 +265,28 @@ export class IntegrationService {
           body: deps.provider.projectStatus(errorRecord).body,
         };
       }
-      await this.options.store.disconnect({
+      const disconnected = await this.options.store.disconnect({
         userId: auth.userId,
         provider: providerId,
+        expectedActiveRecordId: active.id,
         revokedAt: this.now(),
       });
-      logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'GitHub integration disconnected', {
-        userId: auth.userId,
-      });
+      if (disconnected) {
+        logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration disconnected', {
+          userId: auth.userId,
+          provider: providerId,
+        });
+      }
     }
+    const current = await this.options.store.findByProvider(auth.userId, providerId);
     return {
       status: 200,
-      body: deps.provider.projectStatus(null).body,
+      body: deps.provider.projectStatus(current).body,
     };
   }
 
   private async revokeRemoteCredentials(
-    deps: NonNullable<ReturnType<IntegrationService['writeDependencies']>>,
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
     auth: ConsoleAuthenticatedContext,
     active: NonNullable<Awaited<ReturnType<IUserIntegrationStore['findByProvider']>>>,
   ): Promise<boolean> {
@@ -287,6 +308,10 @@ export class IntegrationService {
         active.provider,
       )
       : null;
+    if ((active.accessTokenCiphertext && accessToken === null) ||
+        (active.refreshTokenCiphertext && refreshToken === null)) {
+      return false;
+    }
     try {
       await deps.provider.revokeCredentials({
         accessToken,
@@ -313,12 +338,59 @@ export class IntegrationService {
         !this.options.opaqueValues ||
         !this.options.secretEncryption ||
         !this.options.publicBaseUrl ||
+        provider?.credentialStrategy === 'static_api_key' ||
         !provider?.authorizationConfigured) {
       return null;
     }
     return {
       loginTransactions: this.options.loginTransactions,
       opaqueValues: this.options.opaqueValues,
+      secretEncryption: this.options.secretEncryption,
+      provider,
+    };
+  }
+
+  private async captureStaticApiKey(
+    req: ConsoleRequest,
+    auth: ConsoleAuthenticatedContext,
+    deps: NonNullable<ReturnType<IntegrationService['credentialDependencies']>>,
+  ): Promise<ConsoleHandlerResult> {
+    const { provider, secretEncryption } = deps;
+    const apiKey = readStaticApiKey(req.body);
+    if (!apiKey) return badRequest('invalid_static_api_key', 'A non-empty api_key is required.');
+    const accountLabel = readBodyAccountLabel(req.body);
+    if (accountLabel === undefined) {
+      return badRequest('invalid_account_label', 'account_label must be a printable string up to 200 characters.');
+    }
+    const connectedAt = this.now();
+    const record = await this.options.store.connect({
+      userId: auth.userId,
+      provider: provider.descriptor.id,
+      externalAccountLabel: accountLabel,
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: [] },
+      accessTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from(apiKey, 'utf8'),
+        integrationSecretContext('access_token', auth.userId, provider.descriptor.id),
+      ),
+      refreshTokenCiphertext: null,
+      connectedAt,
+    });
+    return {
+      status: 200,
+      body: provider.projectStatus(record).body,
+    };
+  }
+
+  private credentialDependencies(providerId: UserIntegrationProvider): {
+    readonly secretEncryption: ISecretEncryptionService;
+    readonly provider: IIntegrationProvider;
+  } | null {
+    const provider = this.options.providers.get(providerId);
+    if (!this.options.secretEncryption || !provider?.authorizationConfigured) {
+      return null;
+    }
+    return {
       secretEncryption: this.options.secretEncryption,
       provider,
     };
@@ -340,7 +412,7 @@ export class IntegrationService {
     userId: string | null,
     reason: IntegrationCallbackRejectedReason,
   ): Promise<void> {
-    logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'GitHub integration callback rejected', {
+    logIntegrationSecurityEvent('OPERATION_FAILED', 'MEDIUM', 'Integration callback rejected', {
       userId,
       reason,
     });
@@ -358,9 +430,9 @@ export class IntegrationService {
     }
   }
 
-  private githubCallbackUri(): string {
-    if (!this.options.publicBaseUrl) throw new Error('GitHub integration public base URL is not configured');
-    return new URL(`${INTEGRATION_PATH}/github/callback`, normalizeBaseUrl(this.options.publicBaseUrl)).toString();
+  private providerCallbackUri(providerId: UserIntegrationProvider): string {
+    if (!this.options.publicBaseUrl) throw new Error('Integration public base URL is not configured');
+    return new URL(`${INTEGRATION_PATH}/${providerId}/callback`, normalizeBaseUrl(this.options.publicBaseUrl)).toString();
   }
 
   private now(): Date {
@@ -407,6 +479,35 @@ function requestedContentsPermission(body: unknown): Readonly<Record<string, unk
 function readBodyReturnTo(body: unknown): string {
   const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
   return normalizeConsoleReturnPath(record.return_to, INTEGRATION_PATH);
+}
+
+function readBodyAccountLabel(body: unknown): string | null | undefined {
+  const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
+  if (record.account_label === undefined || record.account_label === null) return null;
+  if (typeof record.account_label !== 'string') return undefined;
+  const label = record.account_label.trim();
+  if (label === '') return null;
+  try {
+    assertDisplayString(label, 'account_label', 200);
+    return label;
+  } catch {
+    return undefined;
+  }
+}
+
+function readStaticApiKey(body: unknown): string | null {
+  const record = body && typeof body === 'object' && !Array.isArray(body) ? body as Record<string, unknown> : {};
+  if (typeof record.api_key !== 'string') return null;
+  if (record.api_key.trim().length === 0 || Buffer.byteLength(record.api_key, 'utf8') > 8192) return null;
+  return record.api_key;
+}
+
+function hashProviderState(
+  opaqueValues: IConsoleOpaqueValueService,
+  providerId: UserIntegrationProvider,
+  state: string,
+): Buffer {
+  return opaqueValues.hashOpaqueValue(`${providerId.length}:${providerId}:${state}`);
 }
 
 function singleQueryValue(value: unknown): string | null {
@@ -477,6 +578,19 @@ function logIntegrationSecurityEvent(
     details,
     additionalData,
   });
+}
+
+function badRequest(code: string, detail: string): ConsoleHandlerResult {
+  return {
+    status: 400,
+    body: {
+      type: 'about:blank',
+      title: 'Bad request',
+      status: 400,
+      code,
+      detail,
+    },
+  };
 }
 
 function buffersEqual(left: Buffer, right: Buffer): boolean {

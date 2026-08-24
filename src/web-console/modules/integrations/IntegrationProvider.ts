@@ -1,12 +1,17 @@
-import type { UserIntegrationProvider, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
 import { UnicodeValidator } from '../../../security/validators/unicodeValidator.js';
-import type { GitHubIntegrationStatusDto } from './IntegrationDtos.js';
+import type { UserIntegrationProvider, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
+import type { GitHubIntegrationStatusDto, IntegrationStatusDto } from './IntegrationDtos.js';
 import type {
   GitHubIntegrationContentsPermission,
   IGitHubIntegrationProvider,
 } from './GitHubIntegrationProvider.js';
 
 export type IntegrationProviderId = UserIntegrationProvider;
+export type IntegrationCredentialStrategy = 'oauth2_authorization_code' | 'static_api_key' | 'coded';
+
+export function normalizeUnicodeDisplayText(value: string): string {
+  return UnicodeValidator.normalize(value).normalizedContent;
+}
 
 export interface IntegrationProviderCatalogDescriptor {
   readonly id: IntegrationProviderId;
@@ -37,6 +42,22 @@ export interface IntegrationTokenExchangeResult {
   readonly refreshToken?: string | null;
 }
 
+export interface IntegrationTokenRefreshRequest {
+  readonly refreshToken: string;
+  readonly authorizedPermissions: Readonly<Record<string, unknown>>;
+}
+
+export interface IntegrationTokenRefreshResult {
+  readonly accessToken: string;
+  /** Undefined preserves the permissions recorded for the existing grant. */
+  readonly authorizedPermissions?: Readonly<Record<string, unknown>>;
+  /**
+   * Undefined preserves the existing encrypted refresh token. Null clears it.
+   * A string replaces it, which supports rotating refresh-token providers.
+   */
+  readonly refreshToken?: string | null;
+}
+
 export interface IntegrationRevocationRequest {
   /**
    * Null means the encrypted local credential could not be decrypted or was
@@ -54,14 +75,16 @@ export interface IntegrationRevocationRequest {
 }
 
 export interface IntegrationProviderStatusProjection {
-  readonly body: GitHubIntegrationStatusDto;
+  readonly body: IntegrationStatusDto;
 }
 
 export interface IIntegrationProvider {
   readonly descriptor: IntegrationProviderCatalogDescriptor;
   readonly authorizationConfigured: boolean;
+  readonly credentialStrategy: IntegrationCredentialStrategy;
   createAuthorizationUrl(request: IntegrationAuthorizationRequest): string;
   exchangeAuthorizationCode(request: IntegrationTokenExchangeRequest): Promise<IntegrationTokenExchangeResult>;
+  refreshCredentials?(request: IntegrationTokenRefreshRequest): Promise<IntegrationTokenRefreshResult>;
   revokeCredentials(request: IntegrationRevocationRequest): Promise<void>;
   projectStatus(record: UserIntegrationRecord | null): IntegrationProviderStatusProjection;
 }
@@ -77,6 +100,7 @@ export function createGitHubIntegrationProvider(
       category: 'Source control',
     },
     authorizationConfigured: true,
+    credentialStrategy: 'coded',
     createAuthorizationUrl(request) {
       return provider.createAuthorizationUrl({
         state: request.state,
@@ -127,6 +151,7 @@ export function createUnavailableGitHubIntegrationProvider(
       category: 'Source control',
     },
     authorizationConfigured: false,
+    credentialStrategy: 'coded',
     createAuthorizationUrl() {
       throw new Error('github_integration_provider_not_configured');
     },

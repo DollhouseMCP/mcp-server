@@ -119,6 +119,7 @@ function oauthDescriptorInput(overrides: Partial<Parameters<InMemoryIntegrationD
     authStrategy: 'oauth2_authorization_code' as const,
     apiHosts: ['gmail.googleapis.com'],
     oauth: {
+      clientId: 'gmail-client-id',
       authorizationUrl: 'https://accounts.google.com/o/oauth2/v2/auth',
       tokenUrl: 'https://oauth2.googleapis.com/token',
       scopes: ['https://www.googleapis.com/auth/gmail.readonly'],
@@ -407,9 +408,14 @@ describe('InMemoryUserIntegrationStore', () => {
         status: 'revoked',
         revokedAt: FIVE_MINUTES,
       }),
+      userIntegration({
+        id: '65e22a52-dc56-4cd0-9d13-b2802524fbd6',
+        provider: 'retired-provider',
+        authorizedPermissions: { scopes: ['read'] },
+      }),
     ]);
 
-    const rows = await store.listByUser(USER_ID);
+    const rows = await store.listByUser(USER_ID, ['github']);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
       id: active.id,
@@ -436,6 +442,221 @@ describe('InMemoryUserIntegrationStore', () => {
       authorizedPermissions: {
         scopes: ['read:issues', 'write:comments'],
       },
+    });
+  });
+
+  it('serializes concurrent refresh and lets the losing caller reuse the fresh token', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+    let refreshCalls = 0;
+    let releaseRefresh!: () => void;
+    const refreshGate = new Promise<void>(resolve => {
+      releaseRefresh = resolve;
+    });
+    const refresh = async () => {
+      refreshCalls += 1;
+      await refreshGate;
+      return {
+        kind: 'refreshed' as const,
+        accessTokenCiphertext: Buffer.from('fresh-access'),
+        refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        authorizedPermissions: { scopes: ['read:issues'] },
+        credentialKeyVersion: 'integration-key-v2',
+      };
+    };
+
+    const first = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh,
+    });
+    const second = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh,
+    });
+    await Promise.resolve();
+    releaseRefresh();
+
+    await expect(Promise.all([first, second])).resolves.toEqual([
+      expect.objectContaining({ kind: 'refreshed' }),
+      expect.objectContaining({ kind: 'reused' }),
+    ]);
+    expect(refreshCalls).toBe(1);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      status: 'connected',
+      credentialKeyVersion: 'integration-key-v2',
+      accessTokenCiphertext: Buffer.from('fresh-access'),
+      refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+      authorizedPermissions: { scopes: ['read:issues'] },
+      lastSyncAt: FIVE_MINUTES,
+    });
+  });
+
+  it('records refresh failure without deleting the previous encrypted credential', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+
+    await expect(store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => ({ kind: 'failed', errorReason: 'token_refresh_failed' }),
+    })).resolves.toMatchObject({
+      kind: 'failed',
+      record: {
+        status: 'error',
+        errorReason: 'token_refresh_failed',
+        accessTokenCiphertext: Buffer.from('stale-access'),
+        refreshTokenCiphertext: Buffer.from('stale-refresh'),
+      },
+    });
+  });
+
+  it('preserves an active integration when recording an error expected no active grant', async () => {
+    const active = userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('active-access'),
+      refreshTokenCiphertext: Buffer.from('active-refresh'),
+    });
+    const store = new InMemoryUserIntegrationStore([active]);
+
+    await expect(store.recordError({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: null,
+      errorReason: 'token_exchange_failed',
+      occurredAt: FIVE_MINUTES,
+    })).resolves.toEqual(active);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toEqual(active);
+  });
+
+  it('does not disconnect a grant that replaced the expected active record', async () => {
+    const replacement = userIntegration({
+      id: '00000000-0000-4000-8000-000000000222',
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['write:issues'] },
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
+    });
+    const store = new InMemoryUserIntegrationStore([replacement]);
+
+    await expect(store.disconnect({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: '00000000-0000-4000-8000-000000000111',
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toEqual(replacement);
+  });
+
+  it('does not let an in-flight refresh resurrect a disconnected credential', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+    let releaseRefresh!: () => void;
+    let markRefreshStarted!: () => void;
+    const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+    const refreshStarted = new Promise<void>(resolve => { markRefreshStarted = resolve; });
+
+    const refreshing = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => {
+        markRefreshStarted();
+        await refreshGate;
+        return {
+          kind: 'refreshed' as const,
+          accessTokenCiphertext: Buffer.from('fresh-access'),
+          refreshTokenCiphertext: Buffer.from('fresh-refresh'),
+        };
+      },
+    });
+    await refreshStarted;
+    const disconnecting = store.disconnect({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
+      revokedAt: FIVE_MINUTES,
+    });
+
+    releaseRefresh();
+    await expect(refreshing).resolves.toMatchObject({ kind: 'refreshed' });
+    await expect(disconnecting).resolves.toMatchObject({ status: 'revoked' });
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toBeNull();
+  });
+
+  it('does not let an in-flight refresh replace a newer connection', async () => {
+    const store = new InMemoryUserIntegrationStore([userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('stale-access'),
+      refreshTokenCiphertext: Buffer.from('stale-refresh'),
+    })]);
+    let releaseRefresh!: () => void;
+    let markRefreshStarted!: () => void;
+    const refreshGate = new Promise<void>(resolve => { releaseRefresh = resolve; });
+    const refreshStarted = new Promise<void>(resolve => { markRefreshStarted = resolve; });
+
+    const refreshing = store.refresh({
+      userId: USER_ID,
+      provider: 'linear',
+      staleAccessTokenCiphertext: Buffer.from('stale-access'),
+      refreshedAt: FIVE_MINUTES,
+      refresh: async () => {
+        markRefreshStarted();
+        await refreshGate;
+        return {
+          kind: 'refreshed' as const,
+          accessTokenCiphertext: Buffer.from('fresh-old-access'),
+          refreshTokenCiphertext: Buffer.from('fresh-old-refresh'),
+        };
+      },
+    });
+    await refreshStarted;
+    const reconnecting = store.connect({
+      userId: USER_ID,
+      provider: 'linear',
+      externalAccountLabel: 'replacement',
+      externalInstallationId: null,
+      authorizedPermissions: { scopes: ['write:issues'] },
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
+      credentialKeyVersion: 'integration-key-v3',
+      connectedAt: FIVE_MINUTES,
+    });
+
+    releaseRefresh();
+    await expect(refreshing).resolves.toMatchObject({ kind: 'refreshed' });
+    await expect(reconnecting).resolves.toMatchObject({
+      externalAccountLabel: 'replacement',
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+    });
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toMatchObject({
+      externalAccountLabel: 'replacement',
+      credentialKeyVersion: 'integration-key-v3',
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
+      authorizedPermissions: { scopes: ['write:issues'] },
     });
   });
 
@@ -550,6 +771,42 @@ describe('InMemoryIntegrationDescriptorStore', () => {
         tokenUrl: 'http://oauth2.googleapis.com/token',
       },
     }))).rejects.toThrow(ConsoleStoreValidationError);
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenExchange: { clientAuth: 'boddy' },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.clientAuth must be body, basic, or none');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        scopes: 'read' as unknown as readonly string[],
+      },
+    }))).rejects.toThrow('oauth.scopes must be an array');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenExchange: { revocationUrl: { href: 'https://accounts.google.com/revoke' } },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.revocationUrl must be a string');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenExchange: { authorizationParams: ['audience'] },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.authorizationParams must be a JSON object');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenExchange: { authorizationParams: { audience: 42 } },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.authorizationParams values must be strings');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        accountLabel: { tokenResponseField: 'accessToken' },
+      },
+    }))).rejects.toThrow('oauth.accountLabel must not reference credential fields');
     await expect(store.upsert({
       ...oauthDescriptorInput(),
       authStrategy: 'static_api_key',
