@@ -100,6 +100,7 @@ export class FileAgentStateStore implements IAgentStateStore {
     key: AgentStateKey,
     _options: AgentStateReclaimOptions = {},
   ): Promise<AgentState | null> {
+    // File-backed state has no session ownership, so excluded goal IDs do not apply.
     return this.load(key, { strict: true });
   }
 

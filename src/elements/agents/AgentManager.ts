@@ -2174,6 +2174,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     }
 
     const sourceHadPendingState = sourceAgent.needsStatePersistence();
+    const sourceSnapshot = sourceAgent.serializeToJSON();
     const synchronizedState = sourceHadPendingState
       ? this.mergeRecoveryCompletion(
           sourceAgent.getState(),
@@ -2185,14 +2186,30 @@ export class AgentManager extends BaseElementManager<Agent> {
       : agent.getState();
     const serialized = JSON.parse(sourceAgent.serializeToJSON());
     serialized.state = synchronizedState;
-    sourceAgent.deserialize(JSON.stringify(serialized));
-    sourceAgent[COMMIT_PERSISTED_VERSION](persistedVersion);
-    if (sourceHadPendingState) {
-      sourceAgent[MARK_STATE_FOR_PERSISTENCE]();
-    } else {
-      sourceAgent.markStatePersisted();
+    try {
+      sourceAgent.deserialize(JSON.stringify(serialized));
+      sourceAgent[COMMIT_PERSISTED_VERSION](persistedVersion);
+      if (sourceHadPendingState) {
+        sourceAgent[MARK_STATE_FOR_PERSISTENCE]();
+      } else {
+        sourceAgent.markStatePersisted();
+      }
+      this.hydratedAgents.add(sourceAgent);
+    } catch (error) {
+      sourceAgent.deserialize(sourceSnapshot);
+      if (sourceHadPendingState) {
+        sourceAgent[MARK_STATE_FOR_PERSISTENCE]();
+      }
+      this.hydratedAgents.delete(sourceAgent);
+      logger.error('Durable recovery succeeded but live agent synchronization failed', error);
+      SecurityMonitor.logSecurityEvent({
+        type: 'OPERATION_FAILED',
+        severity: 'HIGH',
+        source: 'AgentManager.synchronizeRecoveryState',
+        details: 'Durable recovery succeeded but live agent synchronization failed',
+        additionalData: { agentName: sourceAgent.metadata.name, completedGoalId },
+      });
     }
-    this.hydratedAgents.add(sourceAgent);
     this.recoverySourceAgents.delete(agent);
   }
 

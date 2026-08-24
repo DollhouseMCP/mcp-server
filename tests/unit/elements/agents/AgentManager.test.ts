@@ -532,6 +532,37 @@ Content`;
       expect(sourceAgent.getState().stateVersion).toBe(2);
       expect(sourceAgent.needsStatePersistence()).toBe(false);
     });
+
+    it('keeps the durable recovery committed when live synchronization fails', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+      const sourceSnapshot = sourceAgent.serializeToJSON();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceSnapshot);
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).hydratedAgents.add(sourceAgent);
+      jest.spyOn(sourceAgent, 'deserialize')
+        .mockImplementationOnce(() => { throw new Error('live synchronization failed'); });
+
+      expect(() => (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+      )).not.toThrow();
+
+      expect(sourceAgent.serializeToJSON()).toBe(sourceSnapshot);
+      expect((agentManager as any).hydratedAgents.has(sourceAgent)).toBe(false);
+      expect((agentManager as any).recoverySourceAgents.has(recoveryAgent)).toBe(false);
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'OPERATION_FAILED',
+        source: 'AgentManager.synchronizeRecoveryState',
+      }));
+    });
   });
 
   describe('Create', () => {

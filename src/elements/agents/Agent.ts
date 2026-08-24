@@ -610,7 +610,7 @@ export class Agent extends BaseElement implements IElement {
     SecurityMonitor.logSecurityEvent({
       type: 'AGENT_STATE_COMPACTED',
       severity: 'LOW',
-      source: 'Agent.addGoal',
+      source: 'Agent.compactTerminalGoalHistoryForNewGoal',
       details: 'Pruned oldest terminal goal to retain bounded agent history',
       additionalData: { agentId: this.id, goalId: terminalGoal.id },
     });
