@@ -480,7 +480,7 @@ describe('WebConsoleRegistrar', () => {
       .toBe(composition.githubIntegrationProvider);
   });
 
-  it('wires configured integration providers from the production composition boundary', async () => {
+  it('wires static-key providers without requiring a public callback base URL', async () => {
     const {
       StaticApiKeyIntegrationProvider,
       WebConsoleRegistrar,

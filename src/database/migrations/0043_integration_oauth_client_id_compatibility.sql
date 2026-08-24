@@ -5,7 +5,7 @@
 UPDATE "integration_provider_descriptors"
 SET "oauth" = jsonb_set("oauth", '{clientId}', 'null'::jsonb, true)
 WHERE "auth_strategy" = 'oauth2_authorization_code'
-  AND jsonb_typeof("oauth") = 'object'
+  AND jsonb_typeof("oauth") = 'object' -- NOSONAR: immutable migration predicates intentionally repeat the column
   AND (
     NOT ("oauth" ? 'clientId')
     OR jsonb_typeof("oauth"->'clientId') <> 'string'
