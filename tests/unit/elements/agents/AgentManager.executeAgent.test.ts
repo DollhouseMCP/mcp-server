@@ -1086,6 +1086,76 @@ sessionCount: 1
       expect(persisted.state.goals).toHaveLength(5);
     });
 
+    it('resumes the existing goal at the concurrency limit without creating another', async () => {
+      const agent = new Agent({
+        name: 'resume-agent',
+        description: 'Resume an existing execution',
+        maxConcurrentGoals: 1,
+      }, metadataService);
+      const activeGoal = agent.addGoal({ description: 'Existing execution' });
+      activeGoal.status = 'in_progress';
+      const decision = agent.recordDecision({
+        goalId: activeGoal.id,
+        decision: 'pause',
+        reasoning: 'Waiting for input',
+        confidence: 1,
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('resume-agent.md')) {
+          return `---
+name: "Resume Agent"
+type: "agent"
+version: "2.0.0"
+maxConcurrentGoals: 1
+goal:
+  template: "Resume task: {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+---
+# Resume Agent`;
+        }
+        if (filePath.includes('resume-agent.state.yaml')) {
+          return `---
+goals:
+  - id: "${activeGoal.id}"
+    description: "${activeGoal.description}"
+    priority: "${activeGoal.priority}"
+    status: "in_progress"
+    importance: 5
+    urgency: 5
+    createdAt: "${activeGoal.createdAt.toISOString()}"
+    updatedAt: "${activeGoal.updatedAt.toISOString()}"
+decisions:
+  - id: "${decision.id}"
+    goalId: "${activeGoal.id}"
+    decision: "pause"
+    reasoning: "Waiting for input"
+    confidence: 1
+    timestamp: "${decision.timestamp.toISOString()}"
+context: {}
+lastActive: "${agent.getState().lastActive.toISOString()}"
+sessionCount: 1
+stateVersion: 1
+---`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+      fileOperationsService.writeFile.mockClear();
+
+      const result = await agentManager.continueAgentExecution({
+        agentName: 'resume-agent',
+        goalId: activeGoal.id,
+        parameters: { task: 'the existing work' },
+      });
+
+      expect(result.goalId).toBe(activeGoal.id);
+      expect(result.previousState.goals).toHaveLength(1);
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
+    });
+
     it('should execute agent with state under limit', async () => {
       // Create agent with only 3 goals (under limit of 5)
       const agent = new Agent({

@@ -142,6 +142,15 @@ describe('Agent Element', () => {
       }).toThrow(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
     });
 
+    it('excludes the resumed goal from concurrent execution admission', () => {
+      const resumed = agent.addGoal({ description: 'Paused execution' });
+      resumed.status = 'in_progress';
+      agent.metadata.maxConcurrentGoals = 1;
+
+      expect(agent.evaluateExecutionAdmission()).toMatchObject({ canProceed: false });
+      expect(agent.evaluateExecutionAdmission(resumed.id)).toMatchObject({ canProceed: true });
+    });
+
     it('prunes the oldest terminal goal and its decisions at the history limit', () => {
       const archived = agent.addGoal({ description: 'Old completed goal' });
       archived.status = 'completed';
@@ -195,6 +204,20 @@ describe('Agent Element', () => {
       expect(agent.getState().goals.map(goal => goal.id)).toContain(failedDependency.id);
       expect(agent.evaluateConstraints(dependent).blockers)
         .toContain('1 incomplete dependencies');
+    });
+
+    it('does not evict a failed prerequisite referenced by the incoming goal', () => {
+      const failedDependency = agent.addGoal({ description: 'Incoming prerequisite' });
+      failedDependency.status = 'failed';
+      for (let i = 1; i < AGENT_LIMITS.MAX_GOALS; i++) {
+        agent.addGoal({ description: `Active goal ${i}` }).status = 'in_progress';
+      }
+
+      expect(() => agent.addGoal({
+        description: 'Incoming dependent work',
+        dependencies: [failedDependency.id],
+      })).toThrow(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
+      expect(agent.getState().goals.map(goal => goal.id)).toContain(failedDependency.id);
     });
 
     it('retains a compact outcome tombstone when recovery archives a referenced goal', () => {

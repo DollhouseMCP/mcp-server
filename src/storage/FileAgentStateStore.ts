@@ -33,6 +33,13 @@ export class AgentStateReductionRequiredError extends Error {
   }
 }
 
+export class AgentStateParsedSizeLimitError extends Error {
+  constructor(actualBytes: number) {
+    super(`Parsed agent state exceeds allowed size of ${AGENT_STATE_RECOVERY_MAX_YAML_SIZE} bytes (actual: ${actualBytes} bytes)`);
+    this.name = 'AgentStateParsedSizeLimitError';
+  }
+}
+
 export interface FileAgentStateStoreDeps {
   stateDir: string | (() => string);
   fileLockManager: FileLockManager;
@@ -75,11 +82,10 @@ export class FileAgentStateStore implements IAgentStateStore {
 
       const state = result.data as AgentState;
       this.normalizeLoadedState(state);
-      this.deps.serializationService.validateSize(
-        JSON.stringify(state),
-        AGENT_STATE_RECOVERY_MAX_YAML_SIZE,
-        'Parsed agent state',
-      );
+      const parsedStateBytes = Buffer.byteLength(JSON.stringify(state), 'utf8');
+      if (parsedStateBytes > AGENT_STATE_RECOVERY_MAX_YAML_SIZE) {
+        throw new AgentStateParsedSizeLimitError(parsedStateBytes);
+      }
       if (!options.strict) {
         this.deps.stateCache.set(normalizedName, state);
       }
@@ -94,7 +100,7 @@ export class FileAgentStateStore implements IAgentStateStore {
         return null;
       }
       logger.error(`Failed to load agent state: ${key.name}`, error);
-      if (options.strict) {
+      if (options.strict || error instanceof AgentStateParsedSizeLimitError) {
         throw error;
       }
       return null;
@@ -106,7 +112,7 @@ export class FileAgentStateStore implements IAgentStateStore {
     _options: AgentStateReclaimOptions = {},
   ): Promise<AgentState | null> {
     // File-backed state has no session ownership, so excluded goal IDs do not apply.
-    return this.load(key, { strict: true });
+    return this.load(key, { strict: true, allowOversizedRecovery: true });
   }
 
   async save(
@@ -291,10 +297,11 @@ export class FileAgentStateStore implements IAgentStateStore {
     allowOversizedReduction: boolean,
     durableContentLength?: number,
   ): void {
-    if (yamlContent.length <= this.maxYamlSize) {
+    const yamlBytes = Buffer.byteLength(yamlContent, 'utf8');
+    if (yamlBytes <= this.maxYamlSize) {
       return;
     }
-    if (yamlContent.length > AGENT_STATE_RECOVERY_MAX_YAML_SIZE) {
+    if (yamlBytes > AGENT_STATE_RECOVERY_MAX_YAML_SIZE) {
       if (allowOversizedReduction && existingState) {
         throw new AgentStateReductionRequiredError();
       }
@@ -304,7 +311,7 @@ export class FileAgentStateStore implements IAgentStateStore {
       throw new AgentStateSizeLimitError();
     }
     if (durableContentLength === undefined
-      || Buffer.byteLength(yamlContent, 'utf8') >= durableContentLength) {
+      || yamlBytes >= durableContentLength) {
       throw new AgentStateReductionRequiredError();
     }
   }

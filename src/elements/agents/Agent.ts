@@ -223,7 +223,7 @@ export class Agent extends BaseElement implements IElement {
       }
     }
 
-    this.compactTerminalGoalHistoryForNewGoal();
+    this.compactTerminalGoalHistoryForNewGoal(newGoal.dependencies ?? []);
     this.state.goals.push(newGoal);
     // Note: stateVersion is incremented on successful save, not here (Issue #123 fix)
     this.isDirtyState = true;
@@ -427,8 +427,10 @@ export class Agent extends BaseElement implements IElement {
   }
 
   /** Evaluate constraints that must pass before a new goal is persisted. */
-  public evaluateExecutionAdmission(): ConstraintResult {
-    const activeGoals = this.state.goals.filter(goal => goal.status === 'in_progress').length;
+  public evaluateExecutionAdmission(resumedGoalId?: string): ConstraintResult {
+    const activeGoals = this.state.goals.filter(goal =>
+      goal.status === 'in_progress' && goal.id !== resumedGoalId
+    ).length;
     const maxConcurrent = (this.metadata as AgentMetadata).maxConcurrentGoals
       || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS;
     const blockers = activeGoals >= maxConcurrent
@@ -635,11 +637,14 @@ export class Agent extends BaseElement implements IElement {
     this.liveSnapshots.delete(token);
   }
 
-  private compactTerminalGoalHistoryForNewGoal(): void {
+  private compactTerminalGoalHistoryForNewGoal(incomingDependencies: string[]): void {
     if (this.state.goals.length < AGENT_LIMITS.MAX_GOALS) {
       return;
     }
-    const referencedGoalIds = new Set(this.state.goals.flatMap(goal => goal.dependencies ?? []));
+    const referencedGoalIds = new Set([
+      ...this.state.goals.flatMap(goal => goal.dependencies ?? []),
+      ...incomingDependencies,
+    ]);
     const terminalGoal = this.state.goals.find(goal =>
       this.isTerminalGoal(goal) && !referencedGoalIds.has(goal.id)
     );

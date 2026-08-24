@@ -81,6 +81,14 @@ describe('FileAgentStateStore strict recovery I/O', () => {
     expect(reclaimed?.context).toEqual({});
   });
 
+  it('permits a bounded oversized read while reclaiming orphaned state', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
+
+    const reclaimed = await store.reclaimOrphaned(key);
+
+    expect(String(reclaimed?.context.payload)).toHaveLength(70 * 1024);
+  });
+
   it('defaults malformed integer fields when loading durable state', async () => {
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), `
@@ -168,6 +176,14 @@ stateVersion: ${stateVersion}
     expect(oversized.stateVersion).toBe(0);
   });
 
+  it('enforces persistence ceilings using UTF-8 bytes', async () => {
+    const oversized = state();
+    oversized.context = { payload: 'é'.repeat(35 * 1024) };
+
+    await expect(store.save(key, oversized, 0)).rejects.toBeInstanceOf(AgentStateSizeLimitError);
+    expect(oversized.stateVersion).toBe(0);
+  });
+
   it('allows a bounded recovery read while ordinary reads retain the normal limit', async () => {
     await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
 
@@ -204,7 +220,7 @@ stateVersion: ${stateVersion}
       .rejects.toThrow('exceeds allowed size');
   });
 
-  it('rejects compact YAML that expands beyond the parsed-state ceiling', async () => {
+  it('surfaces compact YAML that expands beyond the parsed-state ceiling', async () => {
     const expandedState = state(1);
     expandedState.context = Object.fromEntries(
       Array.from({ length: 9_000 }, (_, index) => [`k${index}`, 'x']),
@@ -217,6 +233,7 @@ stateVersion: ${stateVersion}
     await fs.mkdir(stateDir, { recursive: true });
     await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), 'compact-yaml');
 
+    await expect(store.load(key)).rejects.toThrow('Parsed agent state exceeds allowed size');
     await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
       .rejects.toThrow('Parsed agent state exceeds allowed size');
   });

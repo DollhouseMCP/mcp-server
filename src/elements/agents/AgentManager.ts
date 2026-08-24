@@ -84,6 +84,11 @@ export interface AgentManagerDeps extends ElementManagerDeps {
   /** Issue #1948: VerificationStore/ChallengeStore for danger zone verification codes. */
   verificationStore?: { set: (id: string, challenge: { code: string; expiresAt: number; reason: string }) => void };
 }
+
+interface AgentExecutionInvocationContext {
+  operationName?: 'execute_agent' | 'continue_execution';
+  resumedGoalId?: string;
+}
 import { ElementType } from '../../portfolio/types.js';
 import { toSingularLabel } from '../../utils/elementTypeNormalization.js';
 import { sanitizeInput, validatePath } from '../../security/InputValidator.js';
@@ -1039,9 +1044,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     parameters: Record<string, unknown>,
     // Thread the triggering MCP lifecycle op through validation so error messages
     // can distinguish a fresh execute_agent call from a misused continue_execution.
-    context: {
-      operationName?: 'execute_agent' | 'continue_execution';
-    } = {}
+    context: AgentExecutionInvocationContext = {}
   ): Promise<ExecuteAgentResult> {
     return this.runSerializedAgentStateOperation(
       name,
@@ -1052,9 +1055,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async executeAgentWithinStateOperation(
     name: string,
     parameters: Record<string, unknown>,
-    context: {
-      operationName?: 'execute_agent' | 'continue_execution';
-    },
+    context: AgentExecutionInvocationContext,
   ): Promise<ExecuteAgentResult> {
     // Register before the first await so abort recovery can detect every caller,
     // including continue_execution and legacy entry points.
@@ -1074,7 +1075,15 @@ export class AgentManager extends BaseElementManager<Agent> {
       this.logUnmatchedPlaceholders(name, unmatchedPlaceholders);
       const executionContext = createExecutionContext(name);
       await this.assertNoStaticActivationCycle(name, metadata);
-      const admission = agent.evaluateExecutionAdmission();
+      const resumedGoal = context.resumedGoalId
+        ? agent.getState().goals.find(goal =>
+          goal.id === context.resumedGoalId && goal.status === 'in_progress'
+        )
+        : undefined;
+      if (context.resumedGoalId && !resumedGoal) {
+        throw new Error(`Cannot resume missing or inactive goal '${context.resumedGoalId}'`);
+      }
+      const admission = agent.evaluateExecutionAdmission(context.resumedGoalId);
       if (!admission.canProceed) {
         throw ErrorHandler.createError(
           `Agent '${name}' cannot start another goal: ${admission.blockers.join('; ')}`,
@@ -1091,8 +1100,13 @@ export class AgentManager extends BaseElementManager<Agent> {
         unmatchedPlaceholders,
         activationResult
       );
-      const newGoal = await this.persistExecutionGoal(agent, name, renderedGoal, result);
-      this.populateExecutionAnalysis(agent, newGoal, renderedGoal, admission, result);
+      const executionGoal = resumedGoal
+        ?? await this.persistExecutionGoal(agent, name, renderedGoal, result);
+      if (resumedGoal) {
+        result.goalId = resumedGoal.id;
+        result.stateVersion = agent.getState().stateVersion || 1;
+      }
+      this.populateExecutionAnalysis(agent, executionGoal, renderedGoal, admission, result);
       this.applySafetyTier(renderedGoal, executionContext, result);
       const safetyTierResult = result.safetyTierResult;
 
@@ -3616,7 +3630,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       const executionResult = await this.executeAgentWithinStateOperation(
         params.agentName,
         executionParams,
-        { operationName: 'continue_execution' }
+        { operationName: 'continue_execution', resumedGoalId: activeGoal.id }
       );
 
       // 5. Build previous state summary

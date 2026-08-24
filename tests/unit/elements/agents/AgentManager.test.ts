@@ -43,7 +43,10 @@ interface AgentManagerExecutionInternals {
   executeAgentWithinStateOperation(
     name: string,
     parameters: Record<string, unknown>,
-    context: { operationName?: 'execute_agent' | 'continue_execution' },
+    context: {
+      operationName?: 'execute_agent' | 'continue_execution';
+      resumedGoalId?: string;
+    },
   ): ReturnType<AgentManager['executeAgent']>;
   contextTracker?: { getSessionContext: () => SessionContext | undefined };
 }
@@ -295,7 +298,7 @@ describe('AgentManager', () => {
       expect(executeSpy).toHaveBeenCalledWith(
         'test-agent',
         {},
-        { operationName: 'continue_execution' },
+        { operationName: 'continue_execution', resumedGoalId: ownedGoal.id },
       );
     });
 
