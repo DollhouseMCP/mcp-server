@@ -637,6 +637,50 @@ Content`;
       expect(sourceAgent.needsStatePersistence()).toBe(true);
     });
 
+    it('retains tombstones for evicted prerequisites of pending live work', async () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const oldTerminal = sourceAgent.addGoal({ description: 'Old failed prerequisite' });
+      sourceAgent.completeGoal(oldTerminal.id, 'failure');
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      const pendingDependent = sourceAgent.addGoal({
+        description: 'Pending dependent execution',
+        dependencies: [oldTerminal.id, originalGoal.id],
+      });
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      await expect(agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: originalGoal.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      })).resolves.toEqual(expect.objectContaining({ success: true }));
+
+      expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: oldTerminal.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
+        id: originalGoal.id,
+        description: 'Archived terminal goal',
+        status: 'failed',
+      }));
+      expect(sourceAgent.evaluateConstraints(pendingDependent).blockers)
+        .toContain('2 incomplete dependencies');
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
     it('synchronizes a referenced recovery tombstone into the live source state', () => {
       const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
       const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });

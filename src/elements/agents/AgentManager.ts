@@ -2187,6 +2187,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     persistedVersion: number,
     completedGoalId: string,
     archivedGoalIds: readonly string[] = [],
+    archivedGoalSnapshots: readonly AgentGoal[] = [],
   ): void {
     const sourceAgent = this.recoverySourceAgents.get(agent);
     if (!sourceAgent) {
@@ -2201,6 +2202,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           completedGoalId,
           persistedVersion,
           archivedGoalIds,
+          archivedGoalSnapshots,
         )
       : agent.getState();
     const serialized = JSON.parse(sourceAgent.serializeToJSON());
@@ -2236,14 +2238,33 @@ export class AgentManager extends BaseElementManager<Agent> {
     completedGoalId: string,
     persistedVersion: number,
     archivedGoalIds: readonly string[],
+    archivedGoalSnapshots: readonly AgentGoal[],
   ): AgentState {
     const archivedGoalIdSet = new Set(archivedGoalIds);
+    const sourceReferencedGoalIds = new Set(
+      sourceState.goals.flatMap(goal => goal.dependencies ?? []),
+    );
+    const archivedGoalSnapshotById = new Map(
+      archivedGoalSnapshots.map(goal => [goal.id, goal]),
+    );
     const recoveredGoal = recoveryState.goals.find(goal => goal.id === completedGoalId);
     const goals = sourceState.goals
       .filter(goal => !archivedGoalIdSet.has(goal.id))
       .map(goal => goal.id === completedGoalId && recoveredGoal ? recoveredGoal : goal);
     if (recoveredGoal && !goals.some(goal => goal.id === completedGoalId)) {
       goals.push(recoveredGoal);
+    }
+    // Pending live goals may reference history that looked unreferenced to the older recovery copy.
+    for (const archivedGoalId of archivedGoalIdSet) {
+      if (!sourceReferencedGoalIds.has(archivedGoalId)
+          || goals.some(goal => goal.id === archivedGoalId)) {
+        continue;
+      }
+      const archivedGoal = recoveryState.goals.find(goal => goal.id === archivedGoalId)
+        ?? archivedGoalSnapshotById.get(archivedGoalId);
+      if (archivedGoal) {
+        goals.push(this.createArchivedGoalTombstone(archivedGoal));
+      }
     }
 
     const recoveredDecisions = new Map(
@@ -2269,6 +2290,20 @@ export class AgentManager extends BaseElementManager<Agent> {
         ? sourceState.lastActive
         : recoveryState.lastActive,
       stateVersion: persistedVersion,
+    };
+  }
+
+  private createArchivedGoalTombstone(goal: AgentGoal): AgentGoal {
+    return {
+      id: goal.id,
+      description: 'Archived terminal goal',
+      priority: goal.priority,
+      status: goal.status,
+      importance: goal.importance,
+      urgency: goal.urgency,
+      createdAt: goal.createdAt,
+      updatedAt: goal.updatedAt,
+      completedAt: goal.completedAt,
     };
   }
 
@@ -3302,7 +3337,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     hadPendingState: boolean;
   }): Promise<void> {
     const archivedGoalIds = [params.goalId];
+    const archivedGoalSnapshots: AgentGoal[] = [];
     try {
+      const targetGoal = params.agent.getState().goals.find(goal => goal.id === params.goalId);
+      if (targetGoal) {
+        archivedGoalSnapshots.push(structuredClone(targetGoal));
+      }
       params.agent[EVICT_TERMINAL_GOAL](params.goalId);
       let newVersion: number;
       while (true) {
@@ -3313,17 +3353,28 @@ export class AgentManager extends BaseElementManager<Agent> {
           if (!(error instanceof AgentStateReductionRequiredError)) {
             throw error;
           }
+          const stateBeforeEviction = params.agent.getState();
           const additionalGoalId = params.agent[EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL]();
           if (!additionalGoalId) {
             throw error;
           }
           archivedGoalIds.push(additionalGoalId);
+          const additionalGoal = stateBeforeEviction.goals.find(goal => goal.id === additionalGoalId);
+          if (additionalGoal) {
+            archivedGoalSnapshots.push(structuredClone(additionalGoal));
+          }
         }
       }
       params.agent[COMMIT_PERSISTED_VERSION](newVersion);
       params.agent.markStatePersisted();
       if (params.strictState) {
-        this.synchronizeRecoveryState(params.agent, newVersion, params.goalId, archivedGoalIds);
+        this.synchronizeRecoveryState(
+          params.agent,
+          newVersion,
+          params.goalId,
+          archivedGoalIds,
+          archivedGoalSnapshots,
+        );
       }
     } catch (error) {
       this.restoreFailedTerminalUpdate(params.agent, params.stateSnapshot, params.hadPendingState);
