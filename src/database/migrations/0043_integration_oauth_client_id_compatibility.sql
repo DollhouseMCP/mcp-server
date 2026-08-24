@@ -3,12 +3,12 @@
 -- unconfigured metadata; operators can complete them through a later upsert.
 
 UPDATE "integration_provider_descriptors"
-SET "oauth" = jsonb_set("oauth", '{clientId}', 'null'::jsonb, true)
+SET oauth = jsonb_set(oauth, '{clientId}', 'null'::jsonb, true)
 WHERE "auth_strategy" = 'oauth2_authorization_code'
-  AND jsonb_typeof("oauth") = 'object' -- NOSONAR: immutable migration predicates intentionally repeat the column
+  AND jsonb_typeof(oauth) = 'object'
   AND (
-    NOT ("oauth" ? 'clientId')
-    OR jsonb_typeof("oauth"->'clientId') <> 'string'
-    OR btrim("oauth"->>'clientId') = ''
-    OR char_length("oauth"->>'clientId') > 200
+    NOT (oauth ? 'clientId')
+    OR jsonb_typeof(oauth->'clientId') <> 'string'
+    OR btrim(oauth->>'clientId') = ''
+    OR char_length(oauth->>'clientId') > 200
   );
