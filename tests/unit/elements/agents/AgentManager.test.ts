@@ -31,6 +31,11 @@ import { ElementEventDispatcher } from '../../../../src/events/ElementEventDispa
 import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
 import { createTestStorageFactory } from '../../../helpers/createTestStorageFactory.js';
 import type { SessionContext } from '../../../../src/context/SessionContext.js';
+import {
+  AgentStateReductionRequiredError,
+  AgentStateSizeLimitError,
+} from '../../../../src/storage/FileAgentStateStore.js';
+import { EVICT_TERMINAL_GOAL } from '../../../../src/elements/agents/constants.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -136,6 +141,81 @@ describe('AgentManager', () => {
   });
 
   describe('Recovery state synchronization', () => {
+    it('allows normal completion to shrink legacy oversized state', async () => {
+      const agent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = agent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      agent.markStatePersisted();
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      jest.spyOn(agentManager, 'save').mockRejectedValueOnce(new AgentStateSizeLimitError());
+      jest.spyOn((agentManager as any).stateStore, 'save').mockResolvedValueOnce(2);
+
+      const result = await agentManager.completeAgentGoal({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'success',
+        summary: 'Completed normally',
+      });
+
+      expect(result.goal).toEqual(expect.objectContaining({ id: target.id, status: 'completed' }));
+      expect(agent.getState().goals).toEqual([]);
+      expect(agent.getState().stateVersion).toBe(2);
+    });
+
+    it('restores normal completion state when oversized cleanup cannot be saved', async () => {
+      const agent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = agent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      agent.markStatePersisted();
+      const before = agent.serializeToJSON();
+      jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
+      jest.spyOn(agentManager, 'save').mockRejectedValueOnce(new AgentStateSizeLimitError());
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new Error('version conflict'));
+
+      await expect(agentManager.completeAgentGoal({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Failed cleanup',
+      })).rejects.toThrow('version conflict');
+
+      expect(agent.serializeToJSON()).toBe(before);
+      expect(agent.needsStatePersistence()).toBe(false);
+    });
+
+    it('archives only the terminal goal when oversized recovery must shrink', async () => {
+      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const target = recoveryAgent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      const survivor = recoveryAgent.addGoal({ description: 'Other execution' });
+      survivor.status = 'in_progress';
+      recoveryAgent.markStatePersisted();
+
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      const save = jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      const result = await agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      });
+
+      expect(save).toHaveBeenCalledTimes(2);
+      expect(result.goal).toEqual(expect.objectContaining({ id: target.id, status: 'failed' }));
+      expect(recoveryAgent.getState().goals.map(goal => goal.id)).toEqual([survivor.id]);
+      expect(recoveryAgent.getState().decisions).not.toContainEqual(
+        expect.objectContaining({ goalId: target.id }),
+      );
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AGENT_STATE_COMPACTED',
+        source: 'AgentManager.completeAgentGoalForRecovery',
+      }));
+    });
+
     it('continues the requested in-progress goal instead of another session goal', async () => {
       const agent = new Agent({ name: 'test-agent' }, metadataService);
       const otherGoal = agent.addGoal({ description: 'Other session execution' });
@@ -409,6 +489,28 @@ Content`;
       expect(synchronizedState.decisions.some(decision =>
         decision.goalId === originalGoal.id && decision.decision === 'goal_complete'
       )).toBe(true);
+      expect(synchronizedState.stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
+    it('removes an archived recovery goal while preserving concurrent state', () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      const concurrentGoal = sourceAgent.addGoal({ description: 'Concurrent execution' });
+      concurrentGoal.status = 'in_progress';
+      recoveryAgent.completeGoal(originalGoal.id, 'failure');
+      recoveryAgent[EVICT_TERMINAL_GOAL](originalGoal.id);
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id, true);
+
+      const synchronizedState = sourceAgent.getState();
+      expect(synchronizedState.goals.map(goal => goal.id)).toEqual([concurrentGoal.id]);
       expect(synchronizedState.stateVersion).toBe(2);
       expect(sourceAgent.needsStatePersistence()).toBe(true);
     });
@@ -1290,7 +1392,7 @@ Content`;
         };
 
         await expect(agentManager.exposedSaveAgentState('test-agent', state as any))
-          .rejects.toThrow('exceeds allowed size');
+          .rejects.toThrow('normal persistence limit');
       });
 
       it('should handle state with many small goals near size limit', async () => {

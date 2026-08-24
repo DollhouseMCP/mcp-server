@@ -136,6 +136,32 @@ describe('Agent Element', () => {
       }).toThrow(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
     });
 
+    it('prunes the oldest terminal goal and its decisions at the history limit', () => {
+      const archived = agent.addGoal({ description: 'Old completed goal' });
+      archived.status = 'completed';
+      const archivedDecision = agent.recordDecision({
+        goalId: archived.id,
+        decision: 'Complete the old goal',
+        reasoning: 'Work finished',
+        confidence: 1,
+      });
+      for (let i = 1; i < AGENT_LIMITS.MAX_GOALS; i++) {
+        agent.addGoal({ description: `Active goal ${i}` }).status = 'in_progress';
+      }
+
+      const replacement = agent.addGoal({ description: 'Replacement goal' });
+      const state = agent.getState();
+
+      expect(state.goals).toHaveLength(AGENT_LIMITS.MAX_GOALS);
+      expect(state.goals.map(goal => goal.id)).not.toContain(archived.id);
+      expect(state.goals.map(goal => goal.id)).toContain(replacement.id);
+      expect(state.decisions.map(decision => decision.id)).not.toContain(archivedDecision.id);
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AGENT_STATE_COMPACTED',
+        source: 'Agent.addGoal',
+      }));
+    });
+
     it('should validate goal description length', () => {
       const longDescription = 'a'.repeat(AGENT_LIMITS.MAX_GOAL_LENGTH + 1);
       const goal = agent.addGoal({ description: longDescription });

@@ -12,11 +12,15 @@ export interface AgentStateKey {
 export interface AgentStateLoadOptions {
   /** Bypass process-local caches and surface storage failures. */
   strict?: boolean;
+  /** Permit a bounded oversized read solely for terminal-state recovery. */
+  allowOversizedRecovery?: boolean;
 }
 
 export interface AgentStateSaveOptions {
   /** Require an existing durable state at exactly expectedVersion. */
   requireExisting?: boolean;
+  /** Permit an oversized save only when it strictly shrinks durable state. */
+  allowOversizedReduction?: boolean;
 }
 
 export interface AgentStateReclaimOptions {

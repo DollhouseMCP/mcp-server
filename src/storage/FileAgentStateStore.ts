@@ -17,6 +17,21 @@ import type {
 
 export const AGENT_STATE_FILE_EXTENSION = '.state.yaml';
 export const AGENT_STATE_MAX_YAML_SIZE = 64 * 1024;
+export const AGENT_STATE_RECOVERY_MAX_YAML_SIZE = 100 * 1024;
+
+export class AgentStateSizeLimitError extends Error {
+  constructor() {
+    super('Agent state exceeds the normal persistence limit');
+    this.name = 'AgentStateSizeLimitError';
+  }
+}
+
+export class AgentStateReductionRequiredError extends Error {
+  constructor() {
+    super('Oversized agent state recovery must strictly reduce durable state');
+    this.name = 'AgentStateReductionRequiredError';
+  }
+}
 
 export interface FileAgentStateStoreDeps {
   stateDir: string | (() => string);
@@ -51,7 +66,9 @@ export class FileAgentStateStore implements IAgentStateStore {
     try {
       const content = await this.deps.fileOperations.readFile(statePath, { encoding: 'utf-8' });
       const result = this.deps.serializationService.parseFrontmatter(content, {
-        maxYamlSize: this.maxYamlSize,
+        maxYamlSize: options.allowOversizedRecovery
+          ? AGENT_STATE_RECOVERY_MAX_YAML_SIZE
+          : this.maxYamlSize,
         validateContent: true,
         source: 'FileAgentStateStore.load',
       });
@@ -105,7 +122,10 @@ export class FileAgentStateStore implements IAgentStateStore {
       // load() does not acquire an `agent-state:*` lock. Its disk read uses
       // FileOperationsService's distinct `file:<absolute path>` namespace, so
       // this is not a reentrant acquisition of the transaction lock.
-      const existingState = await this.load(key, { strict: options.requireExisting });
+      const existingState = await this.load(key, {
+        strict: options.requireExisting,
+        allowOversizedRecovery: options.allowOversizedReduction,
+      });
       if (options.requireExisting && !existingState) {
         throw new Error(`Agent state disappeared while updating '${key.name}'`);
       }
@@ -141,16 +161,19 @@ export class FileAgentStateStore implements IAgentStateStore {
         );
       }
 
-      state.stateVersion = expectedVersion + 1;
-      const serializedState = this.prepareStateForSerialization(state);
+      const nextVersion = expectedVersion + 1;
+      const candidateState = structuredClone(state);
+      candidateState.stateVersion = nextVersion;
+      const serializedState = this.prepareStateForSerialization(candidateState);
       const yamlContent = this.deps.serializationService.dumpYaml(serializedState, {
         schema: 'json',
         noRefs: true,
         sortKeys: true,
       });
 
-      this.deps.serializationService.validateSize(yamlContent, this.maxYamlSize, 'Agent state');
+      this.validateCandidateSize(yamlContent, existingState, options.allowOversizedReduction === true);
       await this.deps.fileOperations.writeFile(filePath, yamlContent, { encoding: 'utf-8' });
+      state.stateVersion = nextVersion;
       this.deps.stateCache.set(normalizedName, state);
 
       logger.debug('Agent state saved successfully', {
@@ -242,6 +265,31 @@ export class FileAgentStateStore implements IAgentStateStore {
         confidence: decision.confidence === undefined ? undefined : String(decision.confidence),
       })),
     };
+  }
+
+  private validateCandidateSize(
+    yamlContent: string,
+    existingState: AgentState | null,
+    allowOversizedReduction: boolean,
+  ): void {
+    if (yamlContent.length <= this.maxYamlSize) {
+      return;
+    }
+    this.deps.serializationService.validateSize(
+      yamlContent,
+      AGENT_STATE_RECOVERY_MAX_YAML_SIZE,
+      'Agent recovery state',
+    );
+    if (!allowOversizedReduction || !existingState) {
+      throw new AgentStateSizeLimitError();
+    }
+    const existingYaml = this.deps.serializationService.dumpYaml(
+      this.prepareStateForSerialization(existingState),
+      { schema: 'json', noRefs: true, sortKeys: true },
+    );
+    if (yamlContent.length >= existingYaml.length) {
+      throw new AgentStateReductionRequiredError();
+    }
   }
 
   private normalizeLoadedState(state: AgentState): void {

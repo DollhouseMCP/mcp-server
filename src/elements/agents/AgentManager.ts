@@ -9,6 +9,7 @@ import { Agent } from './Agent.js';
 import {
   COMMIT_PERSISTED_VERSION,
   MARK_STATE_FOR_PERSISTENCE,
+  EVICT_TERMINAL_GOAL,
   AGENT_LIMITS,
   RISK_TOLERANCE_LEVELS,
   STEP_LIMIT_ACTIONS,
@@ -46,7 +47,12 @@ import {
 } from './safetyTierService.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
 import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
-import { AGENT_STATE_MAX_YAML_SIZE, FileAgentStateStore } from '../../storage/FileAgentStateStore.js';
+import {
+  AGENT_STATE_MAX_YAML_SIZE,
+  AgentStateReductionRequiredError,
+  AgentStateSizeLimitError,
+  FileAgentStateStore,
+} from '../../storage/FileAgentStateStore.js';
 import type { IAgentStateStore } from '../../storage/IAgentStateStore.js';
 
 /**
@@ -90,7 +96,8 @@ import { ValidationService } from '../../services/validation/ValidationService.j
 import { SerializationService } from '../../services/SerializationService.js';
 import { MetadataService } from '../../services/MetadataService.js';
 import { ElementMessages } from '../../utils/elementMessages.js';
-import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
+import { ElementNotFoundError, ErrorCategory, ErrorHandler } from '../../utils/ErrorHandler.js';
+import { ValidationErrorCodes } from '../../utils/errorCodes.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
 
@@ -1064,6 +1071,14 @@ export class AgentManager extends BaseElementManager<Agent> {
       this.logUnmatchedPlaceholders(name, unmatchedPlaceholders);
       const executionContext = createExecutionContext(name);
       await this.assertNoStaticActivationCycle(name, metadata);
+      const admission = agent.evaluateExecutionAdmission();
+      if (!admission.canProceed) {
+        throw ErrorHandler.createError(
+          `Agent '${name}' cannot start another goal: ${admission.blockers.join('; ')}`,
+          ErrorCategory.VALIDATION_ERROR,
+          ValidationErrorCodes.MAX_GOALS_EXCEEDED,
+        );
+      }
 
       const activationResult = await this.activateAgentElements(name, metadata, executionContext);
       const result = this.createExecuteAgentResult(
@@ -1074,7 +1089,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         activationResult
       );
       const newGoal = await this.persistExecutionGoal(agent, name, renderedGoal, result);
-      this.populateExecutionAnalysis(agent, newGoal, renderedGoal, result);
+      this.populateExecutionAnalysis(agent, newGoal, renderedGoal, admission, result);
       this.applySafetyTier(renderedGoal, executionContext, result);
       const safetyTierResult = result.safetyTierResult;
 
@@ -1347,14 +1362,25 @@ export class AgentManager extends BaseElementManager<Agent> {
     renderedGoal: string,
     result: ExecuteAgentResult
   ): Promise<AgentGoal> {
-    const newGoal = agent.addGoal({
-      description: renderedGoal,
-      priority: 'medium',
-      importance: 5,
-      urgency: 5,
-    });
-    newGoal.status = 'in_progress';
-    await this.save(agent, this.getFilename(sanitizeInput(name, 100)));
+    const stateSnapshot = agent.serializeToJSON();
+    const hadPendingState = agent.needsStatePersistence();
+    let newGoal: AgentGoal;
+    try {
+      newGoal = agent.addGoal({
+        description: renderedGoal,
+        priority: 'medium',
+        importance: 5,
+        urgency: 5,
+      });
+      newGoal.status = 'in_progress';
+      await this.save(agent, this.getFilename(sanitizeInput(name, 100)));
+    } catch (error) {
+      agent.deserialize(stateSnapshot);
+      if (hadPendingState) {
+        agent[MARK_STATE_FOR_PERSISTENCE]();
+      }
+      throw error;
+    }
 
     result.goalId = newGoal.id;
     result.stateVersion = agent.getState().stateVersion || 1;
@@ -1365,13 +1391,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent: Agent,
     newGoal: AgentGoal,
     renderedGoal: string,
+    admission: ExecuteAgentResult['constraints'],
     result: ExecuteAgentResult
   ): void {
     const securityValidation = agent.validateGoalSecurity(renderedGoal);
     if (securityValidation.warnings && securityValidation.warnings.length > 0) {
       result.securityWarnings = securityValidation.warnings;
     }
-    result.constraints = agent.evaluateConstraints(newGoal);
+    result.constraints = admission;
     result.riskAssessment = agent.assessRisk('execute', newGoal, {});
     result.priorityScore = agent.calculatePriorityScore(newGoal);
   }
@@ -2070,7 +2097,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       { name, agentElementId: this.getAgentElementId(agent, name) },
       state,
       state.stateVersion ?? 0,
-      { requireExisting: true },
+      { requireExisting: true, allowOversizedReduction: true },
     );
   }
 
@@ -2117,7 +2144,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     const state = await this.stateStore.load({
       name,
       agentElementId: this.getAgentElementId(agent, name),
-    }, { strict: true });
+    }, { strict: true, allowOversizedRecovery: true });
     const recoveryAgent = new Agent(agent.metadata, this.metadataService);
     const serialized = JSON.parse(agent.serializeToJSON());
     serialized.state = state ?? {
@@ -2139,6 +2166,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent: Agent,
     persistedVersion: number,
     completedGoalId: string,
+    completedGoalArchived = false,
   ): void {
     const sourceAgent = this.recoverySourceAgents.get(agent);
     if (!sourceAgent) {
@@ -2152,6 +2180,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           agent.getState(),
           completedGoalId,
           persistedVersion,
+          completedGoalArchived,
         )
       : agent.getState();
     const serialized = JSON.parse(sourceAgent.serializeToJSON());
@@ -2172,11 +2201,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     recoveryState: Readonly<AgentState>,
     completedGoalId: string,
     persistedVersion: number,
+    completedGoalArchived: boolean,
   ): AgentState {
     const recoveredGoal = recoveryState.goals.find(goal => goal.id === completedGoalId);
-    const goals = sourceState.goals.map(goal =>
-      goal.id === completedGoalId && recoveredGoal ? recoveredGoal : goal
-    );
+    const goals = sourceState.goals
+      .filter(goal => !completedGoalArchived || goal.id !== completedGoalId)
+      .map(goal => goal.id === completedGoalId && recoveredGoal ? recoveredGoal : goal);
     if (recoveredGoal && !goals.some(goal => goal.id === completedGoalId)) {
       goals.push(recoveredGoal);
     }
@@ -2187,9 +2217,9 @@ export class AgentManager extends BaseElementManager<Agent> {
         .map(decision => [decision.id, decision]),
     );
     const sourceDecisionIds = new Set(sourceState.decisions.map(decision => decision.id));
-    const decisions = sourceState.decisions.map(decision =>
-      recoveredDecisions.get(decision.id) ?? decision
-    );
+    const decisions = sourceState.decisions
+      .filter(decision => !completedGoalArchived || decision.goalId !== completedGoalId)
+      .map(decision => recoveredDecisions.get(decision.id) ?? decision);
     for (const decision of recoveredDecisions.values()) {
       if (!sourceDecisionIds.has(decision.id)) {
         decisions.push(decision);
@@ -3122,6 +3152,8 @@ export class AgentManager extends BaseElementManager<Agent> {
           : `Goal '${goal.id}' is not in progress for agent '${params.agentName}'`
       );
     }
+    const stateSnapshot = agent.serializeToJSON();
+    const hadPendingState = agent.needsStatePersistence();
 
     // 3. Record final decision with summary
     agent.recordDecision({
@@ -3137,21 +3169,23 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 5. Get performance metrics
     const metrics = agent.getPerformanceMetrics();
+    const completedGoalSnapshot = structuredClone(goal);
 
     // 6. Save agent state
     const completeSanitizedName = sanitizeInput(params.agentName, 100);
-    if (strictState) {
-      const newVersion = await this.saveAgentStateForRecovery(agent, completeSanitizedName);
-      agent[COMMIT_PERSISTED_VERSION](newVersion);
-      agent.markStatePersisted();
-      this.synchronizeRecoveryState(agent, newVersion, goal.id);
-    } else {
-      await this.save(agent, this.getFilename(completeSanitizedName));
-    }
+    await this.persistTerminalGoalState({
+      agent,
+      agentName: params.agentName,
+      sanitizedName: completeSanitizedName,
+      goalId: goal.id,
+      strictState,
+      stateSnapshot,
+      hadPendingState,
+    });
 
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();
-    const completedGoal = updatedState.goals.find(g => g.id === goal.id)!;
+    const completedGoal = updatedState.goals.find(g => g.id === goal.id) ?? completedGoalSnapshot;
 
     return {
       success: true,
@@ -3179,6 +3213,88 @@ export class AgentManager extends BaseElementManager<Agent> {
         stateVersion: updatedState.stateVersion || 1
       }
     };
+  }
+
+  private async persistTerminalGoalState(params: {
+    agent: Agent;
+    agentName: string;
+    sanitizedName: string;
+    goalId: string;
+    strictState: boolean;
+    stateSnapshot: string;
+    hadPendingState: boolean;
+  }): Promise<void> {
+    try {
+      if (params.strictState) {
+        await this.persistStrictTerminalGoalState(params.agent, params.sanitizedName, params.goalId);
+      } else {
+        await this.save(params.agent, this.getFilename(params.sanitizedName));
+      }
+    } catch (error) {
+      const canShrink = params.strictState
+        ? error instanceof AgentStateReductionRequiredError
+        : error instanceof AgentStateSizeLimitError;
+      if (!canShrink) {
+        this.restoreFailedTerminalUpdate(params.agent, params.stateSnapshot, params.hadPendingState);
+        throw error;
+      }
+      await this.archiveTerminalGoalAndShrink(params);
+    }
+  }
+
+  private async persistStrictTerminalGoalState(
+    agent: Agent,
+    sanitizedName: string,
+    goalId: string,
+  ): Promise<void> {
+    const newVersion = await this.saveAgentStateForRecovery(agent, sanitizedName);
+    agent[COMMIT_PERSISTED_VERSION](newVersion);
+    agent.markStatePersisted();
+    this.synchronizeRecoveryState(agent, newVersion, goalId);
+  }
+
+  private async archiveTerminalGoalAndShrink(params: {
+    agent: Agent;
+    agentName: string;
+    sanitizedName: string;
+    goalId: string;
+    strictState: boolean;
+    stateSnapshot: string;
+    hadPendingState: boolean;
+  }): Promise<void> {
+    try {
+      params.agent[EVICT_TERMINAL_GOAL](params.goalId);
+      const newVersion = await this.saveAgentStateForRecovery(params.agent, params.sanitizedName);
+      params.agent[COMMIT_PERSISTED_VERSION](newVersion);
+      params.agent.markStatePersisted();
+      if (params.strictState) {
+        this.synchronizeRecoveryState(params.agent, newVersion, params.goalId, true);
+      }
+    } catch (error) {
+      this.restoreFailedTerminalUpdate(params.agent, params.stateSnapshot, params.hadPendingState);
+      throw error;
+    }
+
+    SecurityMonitor.logSecurityEvent({
+      type: 'AGENT_STATE_COMPACTED',
+      severity: 'MEDIUM',
+      source: params.strictState
+        ? 'AgentManager.completeAgentGoalForRecovery'
+        : 'AgentManager.completeAgentGoal',
+      details: 'Archived terminal goal while shrinking oversized agent state',
+      additionalData: { agentName: params.agentName, goalId: params.goalId },
+    });
+  }
+
+  private restoreFailedTerminalUpdate(
+    agent: Agent,
+    stateSnapshot: string,
+    hadPendingState: boolean,
+  ): void {
+    agent.deserialize(stateSnapshot);
+    if (hadPendingState) {
+      agent[MARK_STATE_FOR_PERSISTENCE]();
+    }
   }
 
   /**

@@ -42,6 +42,7 @@ import {
   RISK_TOLERANCE_LEVELS,
   COMMIT_PERSISTED_VERSION,
   MARK_STATE_FOR_PERSISTENCE,
+  EVICT_TERMINAL_GOAL,
 } from './constants.js';
 import {
   RuleEngineConfig,
@@ -138,11 +139,6 @@ export class Agent extends BaseElement implements IElement {
    * @since v2.0.0 - Security validation is advisory by default (Issue #112)
    */
   public addGoal(goal: Partial<AgentGoal>, options?: { strict?: boolean }): AgentGoal {
-    // Validate goal count
-    if (this.state.goals.length >= AGENT_LIMITS.MAX_GOALS) {
-      throw ErrorHandler.createError(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.MAX_GOALS_EXCEEDED);
-    }
-
     // Normalize and validate BEFORE sanitization (Issue #112)
     const normalizedDescription = UnicodeValidator.normalize(goal.description || '').normalizedContent;
 
@@ -216,6 +212,7 @@ export class Agent extends BaseElement implements IElement {
       }
     }
 
+    this.compactTerminalGoalHistoryForNewGoal();
     this.state.goals.push(newGoal);
     // Note: stateVersion is incremented on successful save, not here (Issue #123 fix)
     this.isDirtyState = true;
@@ -391,8 +388,9 @@ export class Agent extends BaseElement implements IElement {
    * @since v2.0.0 - Extracted from ruleBasedDecision for LLM-first agentic loop
    */
   public evaluateConstraints(goal: AgentGoal): ConstraintResult {
-    const blockers: string[] = [];
-    const warnings: string[] = [];
+    const admission = this.evaluateExecutionAdmission();
+    const blockers = [...admission.blockers];
+    const warnings = [...admission.warnings];
 
     // HARD CONSTRAINT: Incomplete dependencies
     if (goal.dependencies && goal.dependencies.length > 0) {
@@ -405,13 +403,6 @@ export class Agent extends BaseElement implements IElement {
       }
     }
 
-    // HARD CONSTRAINT: Max concurrent goals
-    const activeGoals = this.state.goals.filter(g => g.status === 'in_progress').length;
-    const maxConcurrent = (this.metadata as AgentMetadata).maxConcurrentGoals || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS;
-    if (activeGoals >= maxConcurrent) {
-      blockers.push(`Maximum concurrent goals reached (${maxConcurrent})`);
-    }
-
     // SOFT CONSTRAINT: Risk + tolerance mismatch
     if (goal.riskLevel === 'high' && this.extensions?.riskTolerance === 'conservative') {
       warnings.push('High-risk goal with conservative risk tolerance - approval recommended');
@@ -422,6 +413,18 @@ export class Agent extends BaseElement implements IElement {
       blockers,
       warnings
     };
+  }
+
+  /** Evaluate constraints that must pass before a new goal is persisted. */
+  public evaluateExecutionAdmission(): ConstraintResult {
+    const activeGoals = this.state.goals.filter(goal => goal.status === 'in_progress').length;
+    const maxConcurrent = (this.metadata as AgentMetadata).maxConcurrentGoals
+      || AGENT_DEFAULTS.MAX_CONCURRENT_GOALS;
+    const blockers = activeGoals >= maxConcurrent
+      ? [`Maximum concurrent goals reached (${maxConcurrent})`]
+      : [];
+
+    return { canProceed: blockers.length === 0, blockers, warnings: [] };
   }
 
   /**
@@ -570,6 +573,57 @@ export class Agent extends BaseElement implements IElement {
   /** @internal Used by AgentManager after merging recovery and live state. */
   public [MARK_STATE_FOR_PERSISTENCE](): void {
     this.isDirtyState = true;
+  }
+
+  /** @internal Used only to make an oversized terminal recovery save shrink. */
+  public [EVICT_TERMINAL_GOAL](goalId: string): void {
+    const goal = this.state.goals.find(candidate => candidate.id === goalId);
+    if (!goal) {
+      return;
+    }
+    if (!this.isTerminalGoal(goal)) {
+      throw ErrorHandler.createError(
+        `Cannot archive non-terminal goal '${goalId}'`,
+        ErrorCategory.VALIDATION_ERROR,
+        ValidationErrorCodes.INVALID_GOAL_STATUS,
+      );
+    }
+    this.removeGoalHistory(goalId);
+    this.isDirtyState = true;
+    this.markDirty();
+  }
+
+  private compactTerminalGoalHistoryForNewGoal(): void {
+    if (this.state.goals.length < AGENT_LIMITS.MAX_GOALS) {
+      return;
+    }
+    const terminalGoal = this.state.goals.find(goal => this.isTerminalGoal(goal));
+    if (!terminalGoal) {
+      throw ErrorHandler.createError(
+        `Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`,
+        ErrorCategory.VALIDATION_ERROR,
+        ValidationErrorCodes.MAX_GOALS_EXCEEDED,
+      );
+    }
+
+    this.removeGoalHistory(terminalGoal.id);
+    SecurityMonitor.logSecurityEvent({
+      type: 'AGENT_STATE_COMPACTED',
+      severity: 'LOW',
+      source: 'Agent.addGoal',
+      details: 'Pruned oldest terminal goal to retain bounded agent history',
+      additionalData: { agentId: this.id, goalId: terminalGoal.id },
+    });
+  }
+
+  private removeGoalHistory(goalId: string): void {
+    this.state.goals = this.state.goals.filter(goal => goal.id !== goalId);
+    this.state.decisions = this.state.decisions.filter(decision => decision.goalId !== goalId);
+    this._decisionHistory.reset(this.state.decisions);
+  }
+
+  private isTerminalGoal(goal: AgentGoal): boolean {
+    return goal.status === 'completed' || goal.status === 'failed' || goal.status === 'cancelled';
   }
 
   /**

@@ -19,6 +19,9 @@ export const COMMIT_PERSISTED_VERSION = Symbol('commitPersistedVersion');
  */
 export const MARK_STATE_FOR_PERSISTENCE = Symbol('markStateForPersistence');
 
+/** Symbol for removing a terminal goal during bounded oversized-state recovery. @internal */
+export const EVICT_TERMINAL_GOAL = Symbol('evictTerminalGoal');
+
 // Security limits
 export const AGENT_LIMITS = {
   MAX_GOALS: 50,

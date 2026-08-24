@@ -152,4 +152,68 @@ stateVersion: ${stateVersion}
       .rejects.toThrow('State version conflict');
     expect(staleState.stateVersion).toBe(0);
   });
+
+  it('does not mutate the caller version when size validation rejects a save', async () => {
+    const oversized = state();
+    oversized.context = { payload: 'x'.repeat(70 * 1024) };
+
+    await expect(store.save(key, oversized, 0)).rejects.toThrow('normal persistence limit');
+
+    expect(oversized.stateVersion).toBe(0);
+  });
+
+  it('allows a bounded recovery read while ordinary reads retain the normal limit', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
+
+    await expect(store.load(key, { strict: true })).rejects.toThrow('exceeds allowed size');
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+
+    expect(String(recovered?.context.payload)).toHaveLength(70 * 1024);
+  });
+
+  it('permits an oversized recovery save only when it strictly shrinks durable state', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+    expect(recovered).not.toBeNull();
+
+    recovered!.context = { payload: 'x'.repeat(68 * 1024) };
+    await expect(store.save(key, recovered!, 1, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).resolves.toBe(2);
+    expect(recovered?.stateVersion).toBe(2);
+
+    const unchanged = await store.load(key, { strict: true, allowOversizedRecovery: true });
+    await expect(store.save(key, unchanged!, 2, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).rejects.toThrow('must strictly reduce');
+    expect(unchanged?.stateVersion).toBe(2);
+  });
+
+  it('rejects recovery content beyond the bounded recovery ceiling', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(101 * 1024) } });
+
+    await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
+      .rejects.toThrow('exceeds allowed size');
+  });
+
+  it('does not permit oversized reduction without an existing durable state', async () => {
+    const oversized = { ...state(), context: { payload: 'x'.repeat(70 * 1024) } };
+
+    await expect(store.save(key, oversized, 0, { allowOversizedReduction: true }))
+      .rejects.toThrow('normal persistence limit');
+  });
+
+  async function writeStateFile(agentState: AgentState): Promise<void> {
+    await fs.mkdir(stateDir, { recursive: true });
+    const serialization = new SerializationService();
+    const yaml = serialization.dumpYaml({
+      ...agentState,
+      lastActive: agentState.lastActive.toISOString(),
+      sessionCount: String(agentState.sessionCount),
+      stateVersion: String(agentState.stateVersion),
+    }, { schema: 'json', noRefs: true, sortKeys: true });
+    await fs.writeFile(path.join(stateDir, 'recovery-agent.state.yaml'), yaml);
+  }
 });
