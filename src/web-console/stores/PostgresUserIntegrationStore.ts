@@ -153,21 +153,28 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     };
   }
 
-  async recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord> {
+  async recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord | null> {
     assertUuid(input.userId, 'userId');
-    const rows = await withSystemContext(this.db, async tx => {
-      await tx.update(userIntegrations).set({
-        accessTokenCiphertext: null,
-        refreshTokenCiphertext: null,
-        status: 'revoked',
-        errorReason: null,
-        revokedAt: input.occurredAt,
-      }).where(and(
-        eq(userIntegrations.userId, input.userId),
-        eq(userIntegrations.provider, input.provider),
-        isNull(userIntegrations.revokedAt),
-      ));
-      return tx.insert(userIntegrations).values({
+    if (input.expectedActiveRecordId !== null) {
+      assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
+    }
+    const row = await withSystemContext(this.db, async tx => {
+      if (input.expectedActiveRecordId !== null) {
+        const replaced = await tx.update(userIntegrations).set({
+          accessTokenCiphertext: null,
+          refreshTokenCiphertext: null,
+          status: 'revoked',
+          errorReason: null,
+          revokedAt: input.occurredAt,
+        }).where(and(
+          eq(userIntegrations.id, input.expectedActiveRecordId),
+          eq(userIntegrations.userId, input.userId),
+          eq(userIntegrations.provider, input.provider),
+          isNull(userIntegrations.revokedAt),
+        )).returning();
+        if (!replaced[0]) return findActiveRow(tx, input.userId, input.provider);
+      }
+      const inserted = await tx.insert(userIntegrations).values({
         userId: input.userId,
         provider: input.provider,
         externalAccountLabel: null,
@@ -181,14 +188,15 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         connectedAt: null,
         lastSyncAt: null,
         revokedAt: null,
-      }).returning();
+      }).onConflictDoNothing().returning();
+      return inserted[0] ?? findActiveRow(tx, input.userId, input.provider);
     });
-    if (!rows[0]) throw new Error('PostgreSQL did not return inserted user integration error row');
-    return fromRow(rows[0]);
+    return row ? fromRow(row) : null;
   }
 
   async disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null> {
     assertUuid(input.userId, 'userId');
+    assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
     const rows = await withSystemContext(this.db, tx =>
       tx.update(userIntegrations).set({
         accessTokenCiphertext: null,
@@ -197,6 +205,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         errorReason: null,
         revokedAt: input.revokedAt,
       }).where(and(
+        eq(userIntegrations.id, input.expectedActiveRecordId),
         eq(userIntegrations.userId, input.userId),
         eq(userIntegrations.provider, input.provider),
         isNull(userIntegrations.revokedAt),
@@ -204,6 +213,19 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
     );
     return rows[0] ? fromRow(rows[0]) : null;
   }
+}
+
+async function findActiveRow(
+  tx: Parameters<Parameters<typeof withSystemContext>[1]>[0],
+  userId: string,
+  provider: UserIntegrationProvider,
+): Promise<typeof userIntegrations.$inferSelect | null> {
+  const rows = await tx.select().from(userIntegrations).where(and(
+    eq(userIntegrations.userId, userId),
+    eq(userIntegrations.provider, provider),
+    isNull(userIntegrations.revokedAt),
+  )).limit(1);
+  return rows[0] ?? null;
 }
 
 function validateConnectInput(input: UserIntegrationConnectInput): void {

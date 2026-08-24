@@ -198,6 +198,7 @@ export class IntegrationService {
       await this.options.store.recordError({
         userId: auth.userId,
         provider: providerId,
+        expectedActiveRecordId: null,
         errorReason: 'token_exchange_failed',
         occurredAt: this.now(),
       });
@@ -255,6 +256,7 @@ export class IntegrationService {
         const errorRecord = await this.options.store.recordError({
           userId: auth.userId,
           provider: providerId,
+          expectedActiveRecordId: active.id,
           errorReason: 'revocation_failed',
           occurredAt: this.now(),
         });
@@ -263,19 +265,23 @@ export class IntegrationService {
           body: deps.provider.projectStatus(errorRecord).body,
         };
       }
-      await this.options.store.disconnect({
+      const disconnected = await this.options.store.disconnect({
         userId: auth.userId,
         provider: providerId,
+        expectedActiveRecordId: active.id,
         revokedAt: this.now(),
       });
-      logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration disconnected', {
-        userId: auth.userId,
-        provider: providerId,
-      });
+      if (disconnected) {
+        logIntegrationSecurityEvent('OPERATION_COMPLETED', 'LOW', 'Integration disconnected', {
+          userId: auth.userId,
+          provider: providerId,
+        });
+      }
     }
+    const current = await this.options.store.findByProvider(auth.userId, providerId);
     return {
       status: 200,
-      body: deps.provider.projectStatus(null).body,
+      body: deps.provider.projectStatus(current).body,
     };
   }
 

@@ -84,9 +84,17 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
     );
   }
 
-  async recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord> {
+  async recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord | null> {
     assertUuid(input.userId, 'userId');
+    if (input.expectedActiveRecordId !== null) {
+      assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
+    }
     return this.withProviderMutationLock(input.userId, input.provider, () => {
+      const activeId = this.activeProviderIndex.get(activeProviderKey(input.userId, input.provider)) ?? null;
+      if (activeId !== input.expectedActiveRecordId) {
+        const active = activeId ? this.records.get(activeId) : null;
+        return active ? cloneUserIntegrationRecord(active) : null;
+      }
       const record: UserIntegrationRecord = {
         id: randomUUID(),
         userId: input.userId,
@@ -112,9 +120,11 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
 
   async disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null> {
     assertUuid(input.userId, 'userId');
+    assertUuid(input.expectedActiveRecordId, 'expectedActiveRecordId');
     return this.withProviderMutationLock(input.userId, input.provider, () => {
       const key = activeProviderKey(input.userId, input.provider);
       const activeId = this.activeProviderIndex.get(key);
+      if (activeId !== input.expectedActiveRecordId) return null;
       const active = activeId ? this.records.get(activeId) : null;
       if (!active) return null;
       const disconnected: UserIntegrationRecord = {

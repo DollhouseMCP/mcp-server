@@ -725,6 +725,7 @@ describe('PostgresUserIntegrationStore', () => {
     await expect(store.recordError({
       userId: USER_ID,
       provider: 'linear',
+      expectedActiveRecordId: null,
       errorReason: 'provider_unavailable',
       occurredAt: NOW,
     })).resolves.toMatchObject({
@@ -732,6 +733,33 @@ describe('PostgresUserIntegrationStore', () => {
       authorizedPermissions: { scopes: [] },
       status: 'error',
     });
+  });
+
+  it('preserves a concurrently active PostgreSQL integration when recording a first-link error', async () => {
+    const active = userIntegrationRow({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+    });
+    const insert = insertChain([]);
+    const select = selectingChain([active]);
+    transaction.insert = jest.fn(() => insert);
+    transaction.select = jest.fn(() => select);
+    transaction.update = jest.fn();
+    const store = new PostgresUserIntegrationStore({} as DatabaseInstance);
+
+    await expect(store.recordError({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: null,
+      errorReason: 'token_exchange_failed',
+      occurredAt: NOW,
+    })).resolves.toMatchObject({
+      id: active.id,
+      status: 'connected',
+      accessTokenCiphertext: active.accessTokenCiphertext,
+    });
+    expect(insert.onConflictDoNothing).toHaveBeenCalledTimes(1);
+    expect(transaction.update).not.toHaveBeenCalled();
   });
 
   it('locks an active integration before updating refreshed credentials', async () => {

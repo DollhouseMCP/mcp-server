@@ -632,6 +632,37 @@ describe('IntegrationModule', () => {
     });
   });
 
+  it('preserves an active grant when a relink token exchange fails', async () => {
+    const provider = new FixtureGitHubIntegrationProvider();
+    const { module, store } = writeModuleFixture({ provider });
+    const connect = findRoute(module.routes, GITHUB_CONNECT_PATH, 'POST');
+    const callback = findRoute(module.routes, GITHUB_CALLBACK_PATH);
+
+    const firstStart = await connect.handler(consoleRequest());
+    const firstTransactionId = cookieValue(firstStart, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const firstState = provider.authorizations[0]?.state;
+    if (!firstTransactionId || !firstState) throw new Error(START_TRANSACTION_ERROR);
+    await callback.handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(firstTransactionId)}` },
+      query: { code: PROVIDER_CODE, state: firstState },
+    }));
+    const original = await store.findByProvider(USER_ID, 'github');
+    if (!original) throw new Error('fixture did not create the original integration');
+
+    provider.exchangeFails = true;
+    const relinkStart = await connect.handler(consoleRequest());
+    const relinkTransactionId = cookieValue(relinkStart, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const relinkState = provider.authorizations[1]?.state;
+    if (!relinkTransactionId || !relinkState) throw new Error(START_TRANSACTION_ERROR);
+
+    await expect(callback.handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(relinkTransactionId)}` },
+      query: { code: PROVIDER_CODE, state: relinkState },
+    }))).resolves.toMatchObject({ status: 302 });
+
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toEqual(original);
+  });
+
   it('treats tampered PKCE verifier ciphertext as a rejected callback instead of throwing', async () => {
     const { module, store, loginTransactions, opaqueValues, secretEncryption, securityEventSink } = writeModuleFixture();
     const callback = findRoute(module.routes, GITHUB_CALLBACK_PATH);
@@ -731,6 +762,60 @@ describe('IntegrationModule', () => {
       accessTokenCiphertext: null,
       refreshTokenCiphertext: null,
     });
+  });
+
+  it.each([
+    { label: 'succeeds', revokeFails: false },
+    { label: 'fails', revokeFails: true },
+  ])('does not disconnect a replacement grant when remote revocation $label', async ({ revokeFails }) => {
+    const provider = new FixtureGitHubIntegrationProvider();
+    const { module, store } = writeModuleFixture({ provider });
+    const connect = findRoute(module.routes, GITHUB_CONNECT_PATH, 'POST');
+    const callback = findRoute(module.routes, GITHUB_CALLBACK_PATH);
+    const disconnect = findRoute(module.routes, GITHUB_PATH, 'DELETE');
+    const started = await connect.handler(consoleRequest());
+    const transactionId = cookieValue(started, CONSOLE_INTEGRATION_STATE_COOKIE);
+    const state = provider.authorizations[0]?.state;
+    if (!transactionId || !state) throw new Error(START_TRANSACTION_ERROR);
+    await callback.handler(consoleRequest({
+      headers: { cookie: `${CONSOLE_INTEGRATION_STATE_COOKIE}=${encodeURIComponent(transactionId)}` },
+      query: { code: PROVIDER_CODE, state },
+    }));
+
+    let releaseRevocation!: () => void;
+    let markRevocationStarted!: () => void;
+    provider.revocationGate = new Promise<void>(resolve => { releaseRevocation = resolve; });
+    const revocationStarted = new Promise<void>(resolve => { markRevocationStarted = resolve; });
+    provider.onRevocationStarted = markRevocationStarted;
+    provider.revokeFails = revokeFails;
+    const disconnecting = disconnect.handler(consoleRequest());
+    await revocationStarted;
+
+    const replacement = await store.connect({
+      userId: USER_ID,
+      provider: 'github',
+      externalAccountLabel: 'replacement-account',
+      externalInstallationId: 'replacement-installation',
+      authorizedPermissions: {
+        repository_selection: 'all',
+        permissions: { contents: 'write' },
+      },
+      accessTokenCiphertext: Buffer.from('replacement-access-ciphertext'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh-ciphertext'),
+      credentialKeyVersion: 'integration-key-v2',
+      connectedAt: LAST_SYNC,
+    });
+    releaseRevocation();
+
+    await expect(disconnecting).resolves.toMatchObject({
+      status: 200,
+      body: {
+        provider: 'github',
+        status: 'connected',
+        account_label: 'replacement-account',
+      },
+    });
+    await expect(store.findByProvider(USER_ID, 'github')).resolves.toEqual(replacement);
   });
 
   it('logs integration credential decrypt failures with caller context', async () => {
@@ -1212,6 +1297,8 @@ class FixtureGitHubIntegrationProvider implements IGitHubIntegrationProvider {
   readonly accessToken = 'github-access-token-secret';
   exchangeFails = false;
   revokeFails = false;
+  revocationGate: Promise<void> | null = null;
+  onRevocationStarted: (() => void) | null = null;
 
   createAuthorizationUrl(request: Parameters<IGitHubIntegrationProvider['createAuthorizationUrl']>[0]): string {
     this.authorizations.push(request);
@@ -1230,10 +1317,11 @@ class FixtureGitHubIntegrationProvider implements IGitHubIntegrationProvider {
     });
   }
 
-  revokeCredentials(request: Parameters<IGitHubIntegrationProvider['revokeCredentials']>[0]): Promise<void> {
+  async revokeCredentials(request: Parameters<IGitHubIntegrationProvider['revokeCredentials']>[0]): Promise<void> {
     this.revocations.push(request);
-    if (this.revokeFails) return Promise.reject(new Error('provider revoke failed'));
-    return Promise.resolve();
+    this.onRevocationStarted?.();
+    if (this.revocationGate) await this.revocationGate;
+    if (this.revokeFails) throw new Error('provider revoke failed');
   }
 }
 

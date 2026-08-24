@@ -44,7 +44,7 @@ export interface IUserIntegrationStore {
   findByProvider(userId: string, provider: UserIntegrationProvider): Promise<UserIntegrationRecord | null>;
   connect(input: UserIntegrationConnectInput): Promise<UserIntegrationRecord>;
   refresh(input: UserIntegrationRefreshInput): Promise<UserIntegrationRefreshResult>;
-  recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord>;
+  recordError(input: UserIntegrationErrorInput): Promise<UserIntegrationRecord | null>;
   disconnect(input: UserIntegrationDisconnectInput): Promise<UserIntegrationRecord | null>;
 }
 
@@ -90,12 +90,14 @@ export type UserIntegrationRefreshResult =
 export interface UserIntegrationDisconnectInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly expectedActiveRecordId: string;
   readonly revokedAt: Date;
 }
 
 export interface UserIntegrationErrorInput {
   readonly userId: string;
   readonly provider: UserIntegrationProvider;
+  readonly expectedActiveRecordId: string | null;
   readonly errorReason: UserIntegrationErrorReason;
   readonly occurredAt: Date;
 }

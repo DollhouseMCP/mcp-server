@@ -525,6 +525,44 @@ describe('InMemoryUserIntegrationStore', () => {
     });
   });
 
+  it('preserves an active integration when recording an error expected no active grant', async () => {
+    const active = userIntegration({
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['read:issues'] },
+      accessTokenCiphertext: Buffer.from('active-access'),
+      refreshTokenCiphertext: Buffer.from('active-refresh'),
+    });
+    const store = new InMemoryUserIntegrationStore([active]);
+
+    await expect(store.recordError({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: null,
+      errorReason: 'token_exchange_failed',
+      occurredAt: FIVE_MINUTES,
+    })).resolves.toEqual(active);
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toEqual(active);
+  });
+
+  it('does not disconnect a grant that replaced the expected active record', async () => {
+    const replacement = userIntegration({
+      id: '00000000-0000-4000-8000-000000000222',
+      provider: 'linear',
+      authorizedPermissions: { scopes: ['write:issues'] },
+      accessTokenCiphertext: Buffer.from('replacement-access'),
+      refreshTokenCiphertext: Buffer.from('replacement-refresh'),
+    });
+    const store = new InMemoryUserIntegrationStore([replacement]);
+
+    await expect(store.disconnect({
+      userId: USER_ID,
+      provider: 'linear',
+      expectedActiveRecordId: '00000000-0000-4000-8000-000000000111',
+      revokedAt: FIVE_MINUTES,
+    })).resolves.toBeNull();
+    await expect(store.findByProvider(USER_ID, 'linear')).resolves.toEqual(replacement);
+  });
+
   it('does not let an in-flight refresh resurrect a disconnected credential', async () => {
     const store = new InMemoryUserIntegrationStore([userIntegration({
       provider: 'linear',
@@ -556,6 +594,7 @@ describe('InMemoryUserIntegrationStore', () => {
     const disconnecting = store.disconnect({
       userId: USER_ID,
       provider: 'linear',
+      expectedActiveRecordId: '35e22a52-dc56-4cd0-9d13-b2802524fbd3',
       revokedAt: FIVE_MINUTES,
     });
 
