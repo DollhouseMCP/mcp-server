@@ -597,7 +597,10 @@ export class Agent extends BaseElement implements IElement {
     if (this.state.goals.length < AGENT_LIMITS.MAX_GOALS) {
       return;
     }
-    const terminalGoal = this.state.goals.find(goal => this.isTerminalGoal(goal));
+    const referencedGoalIds = new Set(this.state.goals.flatMap(goal => goal.dependencies ?? []));
+    const terminalGoal = this.state.goals.find(goal =>
+      this.isTerminalGoal(goal) && !referencedGoalIds.has(goal.id)
+    );
     if (!terminalGoal) {
       throw ErrorHandler.createError(
         `Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`,

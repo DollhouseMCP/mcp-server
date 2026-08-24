@@ -175,6 +175,25 @@ describe('Agent Element', () => {
       expect(agent.getState().goals.map(goal => goal.id)).toContain(active.id);
     });
 
+    it('preserves terminal goals that are still referenced by dependencies', () => {
+      const failedDependency = agent.addGoal({ description: 'Failed prerequisite' });
+      failedDependency.status = 'failed';
+      const dependent = agent.addGoal({
+        description: 'Dependent work',
+        dependencies: [failedDependency.id],
+      });
+      dependent.status = 'pending';
+      for (let i = 2; i < AGENT_LIMITS.MAX_GOALS; i++) {
+        agent.addGoal({ description: `Active goal ${i}` }).status = 'in_progress';
+      }
+
+      expect(() => agent.addGoal({ description: 'One too many' }))
+        .toThrow(`Maximum number of goals (${AGENT_LIMITS.MAX_GOALS}) reached`);
+      expect(agent.getState().goals.map(goal => goal.id)).toContain(failedDependency.id);
+      expect(agent.evaluateConstraints(dependent).blockers)
+        .toContain('1 incomplete dependencies');
+    });
+
     it('should validate goal description length', () => {
       const longDescription = 'a'.repeat(AGENT_LIMITS.MAX_GOAL_LENGTH + 1);
       const goal = agent.addGoal({ description: longDescription });

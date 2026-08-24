@@ -276,11 +276,16 @@ export class FileAgentStateStore implements IAgentStateStore {
     if (yamlContent.length <= this.maxYamlSize) {
       return;
     }
-    this.deps.serializationService.validateSize(
-      yamlContent,
-      AGENT_STATE_RECOVERY_MAX_YAML_SIZE,
-      'Agent recovery state',
-    );
+    if (yamlContent.length > AGENT_STATE_RECOVERY_MAX_YAML_SIZE) {
+      if (allowOversizedReduction && existingState) {
+        throw new AgentStateReductionRequiredError();
+      }
+      this.deps.serializationService.validateSize(
+        yamlContent,
+        AGENT_STATE_RECOVERY_MAX_YAML_SIZE,
+        'Agent recovery state',
+      );
+    }
     if (!allowOversizedReduction || !existingState) {
       throw new AgentStateSizeLimitError();
     }

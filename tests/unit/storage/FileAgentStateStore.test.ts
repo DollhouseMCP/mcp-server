@@ -8,7 +8,10 @@ import type { AgentState } from '../../../src/elements/agents/types.js';
 import { FileLockManager } from '../../../src/security/fileLockManager.js';
 import { FileOperationsService } from '../../../src/services/FileOperationsService.js';
 import { SerializationService } from '../../../src/services/SerializationService.js';
-import { FileAgentStateStore } from '../../../src/storage/FileAgentStateStore.js';
+import {
+  AgentStateReductionRequiredError,
+  FileAgentStateStore,
+} from '../../../src/storage/FileAgentStateStore.js';
 
 const key = { name: 'Recovery Agent', agentElementId: 'agent-id' };
 
@@ -196,6 +199,19 @@ stateVersion: ${stateVersion}
 
     await expect(store.load(key, { strict: true, allowOversizedRecovery: true }))
       .rejects.toThrow('exceeds allowed size');
+  });
+
+  it('routes an oversized terminal update through the reduction path', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(98 * 1024) } });
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+    expect(recovered).not.toBeNull();
+    recovered!.context = { payload: 'x'.repeat(101 * 1024) };
+
+    await expect(store.save(key, recovered!, 1, {
+      requireExisting: true,
+      allowOversizedReduction: true,
+    })).rejects.toBeInstanceOf(AgentStateReductionRequiredError);
+    expect(recovered?.stateVersion).toBe(1);
   });
 
   it('does not permit oversized reduction without an existing durable state', async () => {
