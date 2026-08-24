@@ -582,10 +582,57 @@ Content`;
       recoveryAgent[EVICT_TERMINAL_GOAL](originalGoal.id);
 
       (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
-      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id, true);
+      (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+        [originalGoal.id],
+      );
 
       const synchronizedState = sourceAgent.getState();
       expect(synchronizedState.goals.map(goal => goal.id)).toEqual([concurrentGoal.id]);
+      expect(synchronizedState.stateVersion).toBe(2);
+      expect(sourceAgent.needsStatePersistence()).toBe(true);
+    });
+
+    it('removes every recovery eviction from pending live state', async () => {
+      const sourceAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const oldTerminal = sourceAgent.addGoal({ description: 'Old completed history' });
+      sourceAgent.recordDecision({
+        goalId: oldTerminal.id,
+        decision: 'completed_history',
+        reasoning: 'Old outcome retained before recovery compaction',
+        confidence: 1,
+      });
+      sourceAgent.completeGoal(oldTerminal.id, 'success');
+      const originalGoal = sourceAgent.addGoal({ description: 'Original execution' });
+      originalGoal.status = 'in_progress';
+      sourceAgent.markStatePersisted();
+
+      const recoveryAgent = new Agent(sourceAgent.metadata, metadataService);
+      recoveryAgent.deserialize(sourceAgent.serializeToJSON());
+      const concurrentGoal = sourceAgent.addGoal({ description: 'Concurrent execution' });
+      concurrentGoal.status = 'in_progress';
+
+      (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      await expect(agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: originalGoal.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      })).resolves.toEqual(expect.objectContaining({ success: true }));
+
+      const synchronizedState = sourceAgent.getState();
+      expect(synchronizedState.goals.map(goal => goal.id)).toEqual([concurrentGoal.id]);
+      expect(synchronizedState.decisions).not.toContainEqual(
+        expect.objectContaining({ goalId: oldTerminal.id }),
+      );
       expect(synchronizedState.stateVersion).toBe(2);
       expect(sourceAgent.needsStatePersistence()).toBe(true);
     });
@@ -606,7 +653,12 @@ Content`;
       recoveryAgent[EVICT_TERMINAL_GOAL](originalGoal.id);
 
       (agentManager as any).recoverySourceAgents.set(recoveryAgent, sourceAgent);
-      (agentManager as any).synchronizeRecoveryState(recoveryAgent, 2, originalGoal.id, true);
+      (agentManager as any).synchronizeRecoveryState(
+        recoveryAgent,
+        2,
+        originalGoal.id,
+        [originalGoal.id],
+      );
 
       expect(sourceAgent.getState().goals).toContainEqual(expect.objectContaining({
         id: originalGoal.id,

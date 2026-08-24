@@ -2186,7 +2186,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     agent: Agent,
     persistedVersion: number,
     completedGoalId: string,
-    completedGoalArchived = false,
+    archivedGoalIds: readonly string[] = [],
   ): void {
     const sourceAgent = this.recoverySourceAgents.get(agent);
     if (!sourceAgent) {
@@ -2200,7 +2200,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           agent.getState(),
           completedGoalId,
           persistedVersion,
-          completedGoalArchived,
+          archivedGoalIds,
         )
       : agent.getState();
     const serialized = JSON.parse(sourceAgent.serializeToJSON());
@@ -2235,11 +2235,12 @@ export class AgentManager extends BaseElementManager<Agent> {
     recoveryState: Readonly<AgentState>,
     completedGoalId: string,
     persistedVersion: number,
-    completedGoalArchived: boolean,
+    archivedGoalIds: readonly string[],
   ): AgentState {
+    const archivedGoalIdSet = new Set(archivedGoalIds);
     const recoveredGoal = recoveryState.goals.find(goal => goal.id === completedGoalId);
     const goals = sourceState.goals
-      .filter(goal => !completedGoalArchived || goal.id !== completedGoalId)
+      .filter(goal => !archivedGoalIdSet.has(goal.id))
       .map(goal => goal.id === completedGoalId && recoveredGoal ? recoveredGoal : goal);
     if (recoveredGoal && !goals.some(goal => goal.id === completedGoalId)) {
       goals.push(recoveredGoal);
@@ -2252,7 +2253,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     );
     const sourceDecisionIds = new Set(sourceState.decisions.map(decision => decision.id));
     const decisions = sourceState.decisions
-      .filter(decision => !completedGoalArchived || decision.goalId !== completedGoalId)
+      .filter(decision => !decision.goalId || !archivedGoalIdSet.has(decision.goalId))
       .map(decision => recoveredDecisions.get(decision.id) ?? decision);
     for (const decision of recoveredDecisions.values()) {
       if (!sourceDecisionIds.has(decision.id)) {
@@ -3322,7 +3323,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       params.agent[COMMIT_PERSISTED_VERSION](newVersion);
       params.agent.markStatePersisted();
       if (params.strictState) {
-        this.synchronizeRecoveryState(params.agent, newVersion, params.goalId, true);
+        this.synchronizeRecoveryState(params.agent, newVersion, params.goalId, archivedGoalIds);
       }
     } catch (error) {
       this.restoreFailedTerminalUpdate(params.agent, params.stateSnapshot, params.hadPendingState);
