@@ -223,6 +223,29 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     expect(url.searchParams.get('scope')).toBe('gmail.readonly');
   });
 
+  it('removes reserved parameters inherited from the authorization URL', () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+    const { provider } = providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          authorizationUrl: `https://${TOKEN_HOST}/oauth/authorize?scope=admin&Code_Challenge=stale&code_challenge_method=plain&audience=mail`,
+          scopes: [],
+          pkce: 'unsupported',
+        },
+      },
+    });
+
+    const url = new URL(provider.createAuthorizationUrl(EXCHANGE_REQUEST));
+    expect(url.searchParams.has('scope')).toBe(false);
+    expect(url.searchParams.has('Code_Challenge')).toBe(false);
+    expect(url.searchParams.has('code_challenge_method')).toBe(false);
+    expect(url.searchParams.get('audience')).toBe('mail');
+  });
+
   it.each([
     ['authorizationUrl', 'https://auth.company.corp/oauth/authorize'],
     ['tokenUrl', 'https://auth.company.corp/oauth/token'],

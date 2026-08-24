@@ -5,7 +5,13 @@ export class IntegrationProviderRegistry {
   private readonly providers: ReadonlyMap<UserIntegrationProvider, IIntegrationProvider>;
 
   constructor(providers: readonly IIntegrationProvider[]) {
-    this.providers = new Map(providers.map(provider => [provider.descriptor.id, provider]));
+    const providerMap = new Map<UserIntegrationProvider, IIntegrationProvider>();
+    for (const provider of providers) {
+      const providerId = provider.descriptor.id;
+      if (providerMap.has(providerId)) throw new DuplicateIntegrationProviderError(providerId);
+      providerMap.set(providerId, provider);
+    }
+    this.providers = providerMap;
   }
 
   static empty(): IntegrationProviderRegistry {
@@ -24,6 +30,13 @@ export class IntegrationProviderRegistry {
 
   listDescriptors(): readonly IntegrationProviderCatalogDescriptor[] {
     return [...this.providers.values()].map(provider => provider.descriptor);
+  }
+}
+
+export class DuplicateIntegrationProviderError extends Error {
+  constructor(readonly providerId: string) {
+    super(`Integration provider '${providerId}' is registered more than once`);
+    this.name = 'DuplicateIntegrationProviderError';
   }
 }
 

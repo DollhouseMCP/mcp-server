@@ -100,6 +100,9 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     // retain their exact bytes; only human-readable descriptor text is normalized.
     const oauth = this.oauthDescriptor();
     const url = new URL(oauth.authorizationUrl);
+    for (const key of [...url.searchParams.keys()]) {
+      if (RESERVED_AUTHORIZATION_PARAMS.has(key.toLowerCase())) url.searchParams.delete(key);
+    }
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('client_id', oauth.clientId);
     url.searchParams.set('redirect_uri', request.redirectUri);

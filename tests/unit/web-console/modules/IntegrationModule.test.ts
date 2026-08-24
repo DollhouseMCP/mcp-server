@@ -346,6 +346,27 @@ describe('IntegrationModule', () => {
     expect(callbackPaths).not.toContain(`${AIRTABLE_PATH}/callback`);
   });
 
+  it('rejects configured provider IDs that collide with built-in or configured providers', () => {
+    const gmail = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      ...configuredOAuthNetwork(() => Promise.resolve(new Response('{}', { status: 200 }))),
+    });
+    const github = new StaticApiKeyIntegrationProvider({
+      ...staticApiKeyDescriptorFixture(),
+      provider: 'github',
+    });
+
+    expect(() => createIntegrationModule({
+      integrationStore: new InMemoryUserIntegrationStore(),
+      configuredProviders: [github],
+    })).toThrow("Integration provider 'github' is registered more than once");
+    expect(() => createIntegrationModule({
+      integrationStore: new InMemoryUserIntegrationStore(),
+      configuredProviders: [gmail, gmail],
+    })).toThrow("Integration provider 'gmail' is registered more than once");
+  });
+
   it('fails closed for an unregistered provider id', async () => {
     const service = new IntegrationService({
       store: new InMemoryUserIntegrationStore(),
