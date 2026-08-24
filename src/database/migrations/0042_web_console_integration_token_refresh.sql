@@ -2,6 +2,13 @@
 -- previous encrypted credential. Refresh retry/gateway behavior lands in
 -- later Integrations v2 groups.
 
+-- Migration 0029 installed this standalone constraint before the integration
+-- shape constraint existed. Its rule is consolidated into the replacement
+-- shape constraint below; leaving it in place would reject token_refresh_failed
+-- on upgraded databases even though fresh schemas accept that reason.
+ALTER TABLE "user_integrations"
+  DROP CONSTRAINT IF EXISTS "user_integrations_error_reason_check";
+
 ALTER TABLE "user_integrations"
   DROP CONSTRAINT IF EXISTS "user_integrations_shape_check";
 ALTER TABLE "user_integrations"
