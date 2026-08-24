@@ -859,12 +859,26 @@ describe('IntegrationModule', () => {
     await expect(store.findByProvider(USER_ID, 'github')).resolves.toEqual(replacement);
   });
 
-  it('logs integration credential decrypt failures with caller context', async () => {
-    const { module } = writeModuleFixture({
-      records: [integrationFixture({
+  it.each([
+    {
+      label: 'access token',
+      record: integrationFixture({
         accessTokenCiphertext: Buffer.from('not-valid-ciphertext'),
         refreshTokenCiphertext: null,
-      })],
+      }),
+      secretClass: 'integration_access_token',
+    },
+    {
+      label: 'refresh token',
+      record: integrationFixture({
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: Buffer.from('not-valid-ciphertext'),
+      }),
+      secretClass: 'integration_refresh_token',
+    },
+  ])('reports revocation failure when the $label cannot be decrypted', async ({ record, secretClass }) => {
+    const { module, provider, store } = writeModuleFixture({
+      records: [record],
     });
     const disconnect = findRoute(module.routes, GITHUB_PATH, 'DELETE');
     const logSpy = jest.spyOn(SecurityMonitor, 'logSecurityEvent').mockImplementation(() => {});
@@ -875,8 +889,16 @@ describe('IntegrationModule', () => {
         status: 200,
         body: {
           provider: 'github',
-          status: 'disconnected',
+          status: 'error',
+          error_reason: 'revocation_failed',
         },
+      });
+      expect(provider.revocations).toHaveLength(0);
+      await expect(store.findByProvider(USER_ID, 'github')).resolves.toMatchObject({
+        status: 'error',
+        errorReason: 'revocation_failed',
+        accessTokenCiphertext: null,
+        refreshTokenCiphertext: null,
       });
       expect(logSpy).toHaveBeenCalledWith(expect.objectContaining({
         type: 'OPERATION_FAILED',
@@ -886,7 +908,7 @@ describe('IntegrationModule', () => {
         additionalData: {
           userId: USER_ID,
           provider: 'github',
-          secretClass: 'integration_access_token',
+          secretClass,
         },
       }));
     } finally {

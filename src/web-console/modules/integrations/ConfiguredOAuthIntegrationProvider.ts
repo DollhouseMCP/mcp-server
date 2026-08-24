@@ -3,6 +3,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import {
   assertSafeIntegrationOAuthAccountLabel,
   resolveIntegrationOAuthClientAuth,
+  validateIntegrationOAuthScopes,
   validateIntegrationOAuthTokenExchange,
   type IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
@@ -77,6 +78,7 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     if (!config.descriptor.oauth.clientId) {
       throw new Error('configured OAuth provider requires oauth.clientId');
     }
+    validateIntegrationOAuthScopes(config.descriptor.oauth.scopes);
     validateIntegrationOAuthTokenExchange(config.descriptor.oauth.tokenExchange);
     const clientAuth = resolveIntegrationOAuthClientAuth(config.descriptor.oauth.tokenExchange);
     if (clientAuth !== 'none' && !config.clientSecret) {

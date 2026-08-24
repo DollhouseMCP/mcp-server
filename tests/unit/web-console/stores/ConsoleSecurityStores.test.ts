@@ -780,6 +780,12 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.upsert(oauthDescriptorInput({
       oauth: {
         ...oauthDescriptorInput().oauth!,
+        scopes: 'read' as unknown as readonly string[],
+      },
+    }))).rejects.toThrow('oauth.scopes must be an array');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
         tokenExchange: { revocationUrl: { href: 'https://accounts.google.com/revoke' } },
       },
     }))).rejects.toThrow('oauth.tokenExchange.revocationUrl must be a string');

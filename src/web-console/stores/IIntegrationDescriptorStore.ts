@@ -138,6 +138,18 @@ export function validateIntegrationOAuthTokenExchange(
   }
 }
 
+export function validateIntegrationOAuthScopes(
+  scopes: unknown,
+): asserts scopes is readonly string[] {
+  if (!Array.isArray(scopes)) {
+    throw new ConsoleStoreValidationError('oauth.scopes must be an array');
+  }
+  if (scopes.length > 100) {
+    throw new ConsoleStoreValidationError('oauth.scopes must contain at most 100 entries');
+  }
+  for (const scope of scopes) assertDisplayString(scope, 'oauth.scopes entry', 200);
+}
+
 export function assertSafeIntegrationOAuthAccountLabel(
   accountLabel: Readonly<Record<string, unknown>>,
 ): void {
@@ -272,8 +284,7 @@ function validateOAuthDescriptor(
   if (refresh !== 'none' && refresh !== 'static' && refresh !== 'rotating') {
     throw new ConsoleStoreValidationError('oauth.refresh must be none, static, or rotating');
   }
-  if (oauth.scopes.length > 100) throw new ConsoleStoreValidationError('oauth.scopes must contain at most 100 entries');
-  for (const scope of oauth.scopes) assertDisplayString(scope, 'oauth.scopes entry', 200);
+  validateIntegrationOAuthScopes(oauth.scopes);
   validateJsonRecord(oauth.tokenExchange, 'oauth.tokenExchange', 4096);
   validateIntegrationOAuthTokenExchange(oauth.tokenExchange);
   validateJsonRecord(oauth.accountLabel, 'oauth.accountLabel', 4096);

@@ -176,6 +176,22 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     })).toThrow('oauth.tokenExchange.clientAuth must be body, basic, or none');
   });
 
+  it('rejects non-array OAuth scopes before building an authorization request', () => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+
+    expect(() => providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: {
+          ...base.oauth,
+          scopes: 'read' as unknown as readonly string[],
+        },
+      },
+    })).toThrow('oauth.scopes must be an array');
+  });
+
   it.each([
     [
       { revocationUrl: { href: `https://${TOKEN_HOST}/oauth/revoke` } },

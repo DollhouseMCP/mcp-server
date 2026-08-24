@@ -308,6 +308,10 @@ export class IntegrationService {
         active.provider,
       )
       : null;
+    if ((active.accessTokenCiphertext && accessToken === null) ||
+        (active.refreshTokenCiphertext && refreshToken === null)) {
+      return false;
+    }
     try {
       await deps.provider.revokeCredentials({
         accessToken,
