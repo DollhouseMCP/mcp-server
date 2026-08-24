@@ -126,6 +126,11 @@ export const suppressions: Suppression[] = [
     file: 'src/web-console/modules/integrations/BoundedResponseReader.ts',
     reason: 'FALSE POSITIVE: This transport utility preserves bounded response bytes. OAuth codes and tokens are opaque protocol values and must not be Unicode-normalized; callers parse and validate the bounded payload after transport.'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web-console/modules/integrations/IntegrationCredentialRedactor.ts',
+    reason: 'FALSE POSITIVE: Credential matching must compare the exact opaque bytes sent upstream, including encoded and escaped representations. Unicode normalization could change credential identity, miss an echo, or corrupt ordinary response content; this module applies bounded structural redaction instead.'
+  },
 
   // ========================================
   // Test File Suppressions
