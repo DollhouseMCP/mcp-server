@@ -188,6 +188,7 @@ export class InMemoryUserIntegrationStore implements IUserIntegrationStore {
           credentialKeyVersion: decision.credentialKeyVersion ?? active.credentialKeyVersion,
           status: 'connected',
           errorReason: null,
+          lastSyncAt: input.refreshedAt,
         }
       : {
           ...active,

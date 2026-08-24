@@ -99,7 +99,10 @@ export function createIntegrationModule(options: IntegrationModuleOptions): Cons
         // later requires console-side reauthentication before provider consent.
         elevation: 'none',
         privacyClass: 'self_private',
-        idempotency: 'required',
+        // OAuth initialization returns a one-time state cookie paired with the
+        // authorization URL. A retry must create a fresh pair, not replay only
+        // the stored response payload without its cookie.
+        idempotency: 'not_applicable',
         privacyProjector: projectIntegrationConnect,
         handler: req => service.connectGitHub(req),
       },
@@ -160,7 +163,9 @@ function configuredProviderRoutes(
         ownership: 'authenticated_user',
         elevation: 'none',
         privacyClass: 'self_private',
-        idempotency: 'required',
+        idempotency: provider.credentialStrategy === 'oauth2_authorization_code'
+          ? 'not_applicable'
+          : 'required',
         privacyProjector: provider.credentialStrategy === 'static_api_key'
           ? projectConfiguredIntegrationStatus
           : projectIntegrationConnect,

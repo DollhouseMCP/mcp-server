@@ -497,6 +497,7 @@ describe('InMemoryUserIntegrationStore', () => {
       accessTokenCiphertext: Buffer.from('fresh-access'),
       refreshTokenCiphertext: Buffer.from('fresh-refresh'),
       authorizedPermissions: { scopes: ['read:issues'] },
+      lastSyncAt: FIVE_MINUTES,
     });
   });
 

@@ -126,6 +126,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
           credentialKeyVersion: decision.credentialKeyVersion ?? locked.credentialKeyVersion,
           status: 'connected',
           errorReason: null,
+          lastSyncAt: input.refreshedAt,
         });
       }
       const update = decision.kind === 'refreshed'
@@ -136,6 +137,7 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
             credentialKeyVersion: decision.credentialKeyVersion ?? locked.credentialKeyVersion,
             status: 'connected' as const,
             errorReason: null,
+            lastSyncAt: input.refreshedAt,
           }
         : {
             status: 'error' as const,

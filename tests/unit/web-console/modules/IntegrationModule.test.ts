@@ -184,7 +184,7 @@ describe('IntegrationModule', () => {
         method: 'POST',
         path: GITHUB_CONNECT_PATH,
         ownership: 'authenticated_user',
-        idempotency: 'required',
+        idempotency: 'not_applicable',
       }),
       expect.objectContaining({
         method: 'GET',
@@ -344,6 +344,26 @@ describe('IntegrationModule', () => {
 
     expect(callbackPaths).toContain(GMAIL_CALLBACK_PATH);
     expect(callbackPaths).not.toContain(`${AIRTABLE_PATH}/callback`);
+  });
+
+  it('restarts OAuth initialization on retry while keeping credential writes idempotent', () => {
+    const oauthProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptorFixture(),
+      clientSecret: 'gmail-client-secret',
+      ...configuredOAuthNetwork(() => Promise.resolve(new Response('{}', { status: 200 }))),
+    });
+    const module = createIntegrationModule({
+      integrationStore: new InMemoryUserIntegrationStore(),
+      configuredProviders: [
+        oauthProvider,
+        new StaticApiKeyIntegrationProvider(staticApiKeyDescriptorFixture()),
+      ],
+    });
+
+    expect(findRoute(module.routes, GITHUB_CONNECT_PATH, 'POST').idempotency).toBe('not_applicable');
+    expect(findRoute(module.routes, `${GMAIL_PATH}/connect`, 'POST').idempotency).toBe('not_applicable');
+    expect(findRoute(module.routes, `${AIRTABLE_PATH}/connect`, 'POST').idempotency).toBe('required');
+    expect(findRoute(module.routes, AIRTABLE_PATH, 'DELETE').idempotency).toBe('required');
   });
 
   it('rejects configured provider IDs that collide with built-in or configured providers', () => {

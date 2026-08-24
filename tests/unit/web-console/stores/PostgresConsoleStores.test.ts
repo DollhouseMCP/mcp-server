@@ -792,6 +792,7 @@ describe('PostgresUserIntegrationStore', () => {
       accessTokenCiphertext: Buffer.from('fresh-access'),
       refreshTokenCiphertext: Buffer.from('fresh-refresh'),
       credentialKeyVersion: 'integration-key-v2',
+      lastSyncAt: FIVE_MINUTES,
     });
     transaction.execute = jest.fn(() => Promise.resolve([userIntegrationRow({
       provider: 'linear',
@@ -820,6 +821,7 @@ describe('PostgresUserIntegrationStore', () => {
         accessTokenCiphertext: Buffer.from('fresh-access'),
         authorizedPermissions: { scopes: ['read:issues'] },
         credentialKeyVersion: 'integration-key-v2',
+        lastSyncAt: FIVE_MINUTES,
       },
     });
     const lockSql = transaction.execute.mock.calls[0]?.[0] as { queryChunks?: readonly unknown[] };
@@ -828,6 +830,7 @@ describe('PostgresUserIntegrationStore', () => {
     const updateChain = transaction.update.mock.results[0]?.value as ReturnType<typeof returningChain>;
     expect(updateChain.set).toHaveBeenCalledWith(expect.objectContaining({
       authorizedPermissions: { scopes: ['read:issues'] },
+      lastSyncAt: FIVE_MINUTES,
     }));
   });
 
