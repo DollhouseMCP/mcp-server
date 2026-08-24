@@ -9,6 +9,8 @@ import {
   AGENT_LIMITS,
   AGENT_DEFAULTS,
   EVICT_TERMINAL_GOAL,
+  CAPTURE_AGENT_SNAPSHOT,
+  RESTORE_AGENT_SNAPSHOT,
 } from '../../../../src/elements/agents/constants.js';
 import { ElementType } from '../../../../src/portfolio/types.js';
 import { SecurityMonitor } from '../../../../src/security/securityMonitor.js';
@@ -221,6 +223,21 @@ describe('Agent Element', () => {
       );
       expect(agent.evaluateConstraints(dependent).blockers)
         .toContain('1 incomplete dependencies');
+    });
+
+    it('restores an already-live oversized snapshot without weakening normal deserialization', () => {
+      agent.getState().context.payload = 'x'.repeat(101 * 1024);
+      const oversizedSnapshot = agent.serializeToJSON();
+      const rollbackToken = agent[CAPTURE_AGENT_SNAPSHOT]();
+      agent.getState().context.payload = 'changed';
+
+      expect(() => agent.deserialize(oversizedSnapshot)).toThrow('State size exceeds maximum');
+      const otherAgent = new Agent({ name: 'other-agent' }, metadataService);
+      expect(() => otherAgent[RESTORE_AGENT_SNAPSHOT](rollbackToken)).toThrow('Invalid or expired');
+      agent[RESTORE_AGENT_SNAPSHOT](rollbackToken);
+
+      expect(String(agent.getState().context.payload)).toHaveLength(101 * 1024);
+      expect(() => agent[RESTORE_AGENT_SNAPSHOT](rollbackToken)).toThrow('Invalid or expired');
     });
 
     it('should validate goal description length', () => {

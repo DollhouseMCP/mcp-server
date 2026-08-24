@@ -10,6 +10,9 @@ import {
   COMMIT_PERSISTED_VERSION,
   MARK_STATE_FOR_PERSISTENCE,
   EVICT_TERMINAL_GOAL,
+  CAPTURE_AGENT_SNAPSHOT,
+  RESTORE_AGENT_SNAPSHOT,
+  DISCARD_AGENT_SNAPSHOT,
   AGENT_LIMITS,
   RISK_TOLERANCE_LEVELS,
   STEP_LIMIT_ACTIONS,
@@ -1362,7 +1365,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     renderedGoal: string,
     result: ExecuteAgentResult
   ): Promise<AgentGoal> {
-    const stateSnapshot = agent.serializeToJSON();
+    const stateSnapshot = agent[CAPTURE_AGENT_SNAPSHOT]();
     const hadPendingState = agent.needsStatePersistence();
     let newGoal: AgentGoal;
     try {
@@ -1375,11 +1378,13 @@ export class AgentManager extends BaseElementManager<Agent> {
       newGoal.status = 'in_progress';
       await this.save(agent, this.getFilename(sanitizeInput(name, 100)));
     } catch (error) {
-      agent.deserialize(stateSnapshot);
+      agent[RESTORE_AGENT_SNAPSHOT](stateSnapshot);
       if (hadPendingState) {
         agent[MARK_STATE_FOR_PERSISTENCE]();
       }
       throw error;
+    } finally {
+      agent[DISCARD_AGENT_SNAPSHOT](stateSnapshot);
     }
 
     result.goalId = newGoal.id;
@@ -3166,7 +3171,7 @@ export class AgentManager extends BaseElementManager<Agent> {
           : `Goal '${goal.id}' is not in progress for agent '${params.agentName}'`
       );
     }
-    const stateSnapshot = agent.serializeToJSON();
+    const stateSnapshot = agent[CAPTURE_AGENT_SNAPSHOT]();
     const hadPendingState = agent.needsStatePersistence();
 
     // 3. Record final decision with summary
@@ -3187,15 +3192,19 @@ export class AgentManager extends BaseElementManager<Agent> {
 
     // 6. Save agent state
     const completeSanitizedName = sanitizeInput(params.agentName, 100);
-    await this.persistTerminalGoalState({
-      agent,
-      agentName: params.agentName,
-      sanitizedName: completeSanitizedName,
-      goalId: goal.id,
-      strictState,
-      stateSnapshot,
-      hadPendingState,
-    });
+    try {
+      await this.persistTerminalGoalState({
+        agent,
+        agentName: params.agentName,
+        sanitizedName: completeSanitizedName,
+        goalId: goal.id,
+        strictState,
+        stateSnapshot,
+        hadPendingState,
+      });
+    } finally {
+      agent[DISCARD_AGENT_SNAPSHOT](stateSnapshot);
+    }
 
     // 7. Return goal, metrics, and state
     const updatedState = agent.getState();
@@ -3235,7 +3244,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     sanitizedName: string;
     goalId: string;
     strictState: boolean;
-    stateSnapshot: string;
+    stateSnapshot: object;
     hadPendingState: boolean;
   }): Promise<void> {
     try {
@@ -3273,7 +3282,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     sanitizedName: string;
     goalId: string;
     strictState: boolean;
-    stateSnapshot: string;
+    stateSnapshot: object;
     hadPendingState: boolean;
   }): Promise<void> {
     try {
@@ -3302,10 +3311,10 @@ export class AgentManager extends BaseElementManager<Agent> {
 
   private restoreFailedTerminalUpdate(
     agent: Agent,
-    stateSnapshot: string,
+    stateSnapshot: object,
     hadPendingState: boolean,
   ): void {
-    agent.deserialize(stateSnapshot);
+    agent[RESTORE_AGENT_SNAPSHOT](stateSnapshot);
     if (hadPendingState) {
       agent[MARK_STATE_FOR_PERSISTENCE]();
     }

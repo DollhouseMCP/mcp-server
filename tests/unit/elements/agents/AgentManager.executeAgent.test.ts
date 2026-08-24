@@ -1170,6 +1170,7 @@ sessionCount: 1
     it('restores in-memory state when goal persistence fails', async () => {
       const agent = new Agent({ name: 'rollback-agent' }, metadataService);
       agent.addGoal({ description: 'Existing unsaved goal' });
+      agent.getState().context.payload = 'x'.repeat(101 * 1024);
       const before = agent.serializeToJSON();
       jest.spyOn(agentManager, 'save').mockRejectedValueOnce(new Error('state too large'));
 

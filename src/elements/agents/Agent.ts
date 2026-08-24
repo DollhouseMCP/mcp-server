@@ -43,6 +43,9 @@ import {
   COMMIT_PERSISTED_VERSION,
   MARK_STATE_FOR_PERSISTENCE,
   EVICT_TERMINAL_GOAL,
+  CAPTURE_AGENT_SNAPSHOT,
+  RESTORE_AGENT_SNAPSHOT,
+  DISCARD_AGENT_SNAPSHOT,
 } from './constants.js';
 import {
   RuleEngineConfig,
@@ -62,6 +65,8 @@ export class Agent extends BaseElement implements IElement {
   private isDirtyState: boolean = false;
   private ruleEngineConfig: RuleEngineConfig;
   private _decisionHistory: EvictingQueue<AgentDecision>;
+  private readonly liveSnapshots = new WeakMap<object, string>();
+  private isRestoringLiveSnapshot = false;
 
   constructor(metadata: Partial<AgentMetadata>, metadataService: MetadataService) {
     // Sanitize all inputs
@@ -593,6 +598,33 @@ export class Agent extends BaseElement implements IElement {
     this.markDirty();
   }
 
+  /** @internal Capture an opaque rollback token bound to this Agent instance. */
+  public [CAPTURE_AGENT_SNAPSHOT](): object {
+    const token = {};
+    this.liveSnapshots.set(token, this.serializeToJSON());
+    return token;
+  }
+
+  /** @internal Restore and consume a rollback token captured from this Agent instance. */
+  public [RESTORE_AGENT_SNAPSHOT](token: object): void {
+    const snapshot = this.liveSnapshots.get(token);
+    if (snapshot === undefined) {
+      throw new Error('Invalid or expired agent snapshot token');
+    }
+    this.liveSnapshots.delete(token);
+    this.isRestoringLiveSnapshot = true;
+    try {
+      this.deserialize(snapshot);
+    } finally {
+      this.isRestoringLiveSnapshot = false;
+    }
+  }
+
+  /** @internal Discard a rollback token after the guarded operation succeeds. */
+  public [DISCARD_AGENT_SNAPSHOT](token: object): void {
+    this.liveSnapshots.delete(token);
+  }
+
   private compactTerminalGoalHistoryForNewGoal(): void {
     if (this.state.goals.length < AGENT_LIMITS.MAX_GOALS) {
       return;
@@ -1019,7 +1051,7 @@ export class Agent extends BaseElement implements IElement {
     if (parsed.state) {
       // Validate state size
       const stateStr = JSON.stringify(parsed.state);
-      if (stateStr.length > AGENT_LIMITS.MAX_STATE_SIZE) {
+      if (!this.isRestoringLiveSnapshot && stateStr.length > AGENT_LIMITS.MAX_STATE_SIZE) {
         throw ErrorHandler.createError(`State size exceeds maximum of ${AGENT_LIMITS.MAX_STATE_SIZE} bytes`, ErrorCategory.VALIDATION_ERROR, ValidationErrorCodes.STATE_TOO_LARGE);
       }
 

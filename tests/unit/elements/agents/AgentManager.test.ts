@@ -167,6 +167,7 @@ describe('AgentManager', () => {
       const target = agent.addGoal({ description: 'Stuck execution' });
       target.status = 'in_progress';
       agent.markStatePersisted();
+      agent.getState().context.payload = 'x'.repeat(101 * 1024);
       const before = agent.serializeToJSON();
       jest.spyOn(agentManager, 'read').mockResolvedValue(agent);
       jest.spyOn(agentManager, 'save').mockRejectedValueOnce(new AgentStateSizeLimitError());
