@@ -106,8 +106,8 @@ export class PostgresUserIntegrationStore implements IUserIntegrationStore {
         WHERE user_id = ${input.userId}
           AND provider = ${input.provider}
           AND revoked_at IS NULL
-        FOR UPDATE
         LIMIT 1
+        FOR UPDATE
       `);
       const locked = lockedRows[0] ? fromRow(lockedRows[0]) : null;
       if (locked?.status !== 'connected' || !locked.accessTokenCiphertext) {

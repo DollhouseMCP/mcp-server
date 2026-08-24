@@ -111,6 +111,33 @@ export function resolveIntegrationOAuthClientAuth(
   );
 }
 
+export function validateIntegrationOAuthTokenExchange(
+  tokenExchange: Readonly<Record<string, unknown>>,
+): void {
+  resolveIntegrationOAuthClientAuth(tokenExchange);
+
+  const revocationUrl = tokenExchange.revocationUrl;
+  if (revocationUrl !== undefined) {
+    if (typeof revocationUrl !== 'string') {
+      throw new ConsoleStoreValidationError('oauth.tokenExchange.revocationUrl must be a string');
+    }
+    validatePublicHttpsUrl(revocationUrl, 'oauth.tokenExchange.revocationUrl');
+  }
+
+  const authorizationParams = tokenExchange.authorizationParams;
+  if (authorizationParams === undefined) return;
+  validateJsonRecord(authorizationParams, 'oauth.tokenExchange.authorizationParams', 4096);
+  for (const [key, value] of Object.entries(authorizationParams)) {
+    assertDisplayString(key, 'oauth.tokenExchange.authorizationParams key', 200);
+    if (typeof value !== 'string') {
+      throw new ConsoleStoreValidationError(
+        'oauth.tokenExchange.authorizationParams values must be strings',
+      );
+    }
+    assertDisplayString(value, 'oauth.tokenExchange.authorizationParams value', 4096);
+  }
+}
+
 export function assertSafeIntegrationOAuthAccountLabel(
   accountLabel: Readonly<Record<string, unknown>>,
 ): void {
@@ -248,7 +275,7 @@ function validateOAuthDescriptor(
   if (oauth.scopes.length > 100) throw new ConsoleStoreValidationError('oauth.scopes must contain at most 100 entries');
   for (const scope of oauth.scopes) assertDisplayString(scope, 'oauth.scopes entry', 200);
   validateJsonRecord(oauth.tokenExchange, 'oauth.tokenExchange', 4096);
-  if (requireConfiguredClient) resolveIntegrationOAuthClientAuth(oauth.tokenExchange);
+  validateIntegrationOAuthTokenExchange(oauth.tokenExchange);
   validateJsonRecord(oauth.accountLabel, 'oauth.accountLabel', 4096);
   assertSafeIntegrationOAuthAccountLabel(oauth.accountLabel);
 }
@@ -317,7 +344,11 @@ function validatePublicDnsHost(host: string, name: string): void {
   }
 }
 
-function validateJsonRecord(value: unknown, name: string, maxBytes: number): void {
+function validateJsonRecord(
+  value: unknown,
+  name: string,
+  maxBytes: number,
+): asserts value is Readonly<Record<string, unknown>> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new ConsoleStoreValidationError(`${name} must be a JSON object`);
   }

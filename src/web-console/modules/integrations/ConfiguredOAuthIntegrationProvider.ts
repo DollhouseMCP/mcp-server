@@ -3,6 +3,7 @@ import { lookup as dnsLookup } from 'node:dns/promises';
 import {
   assertSafeIntegrationOAuthAccountLabel,
   resolveIntegrationOAuthClientAuth,
+  validateIntegrationOAuthTokenExchange,
   type IntegrationDescriptorRecord,
 } from '../../stores/IIntegrationDescriptorStore.js';
 import type { UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
@@ -76,14 +77,13 @@ export class ConfiguredOAuthIntegrationProvider implements IIntegrationProvider 
     if (!config.descriptor.oauth.clientId) {
       throw new Error('configured OAuth provider requires oauth.clientId');
     }
+    validateIntegrationOAuthTokenExchange(config.descriptor.oauth.tokenExchange);
     const clientAuth = resolveIntegrationOAuthClientAuth(config.descriptor.oauth.tokenExchange);
     if (clientAuth !== 'none' && !config.clientSecret) {
       throw new Error('configured OAuth provider requires clientSecret');
     }
     validatePublicHttpsUrl(config.descriptor.oauth.authorizationUrl, 'oauth.authorizationUrl');
     validatePublicHttpsUrl(config.descriptor.oauth.tokenUrl, 'oauth.tokenUrl');
-    const revocationUrl = readString(config.descriptor.oauth.tokenExchange, 'revocationUrl');
-    if (revocationUrl) validatePublicHttpsUrl(revocationUrl, 'oauth.tokenExchange.revocationUrl');
     assertSafeIntegrationOAuthAccountLabel(config.descriptor.oauth.accountLabel);
     this.descriptor = {
       id: config.descriptor.provider,

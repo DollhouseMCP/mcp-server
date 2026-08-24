@@ -780,6 +780,24 @@ describe('InMemoryIntegrationDescriptorStore', () => {
     await expect(store.upsert(oauthDescriptorInput({
       oauth: {
         ...oauthDescriptorInput().oauth!,
+        tokenExchange: { revocationUrl: { href: 'https://accounts.google.com/revoke' } },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.revocationUrl must be a string');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenExchange: { authorizationParams: ['audience'] },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.authorizationParams must be a JSON object');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
+        tokenExchange: { authorizationParams: { audience: 42 } },
+      },
+    }))).rejects.toThrow('oauth.tokenExchange.authorizationParams values must be strings');
+    await expect(store.upsert(oauthDescriptorInput({
+      oauth: {
+        ...oauthDescriptorInput().oauth!,
         accountLabel: { tokenResponseField: 'accessToken' },
       },
     }))).rejects.toThrow('oauth.accountLabel must not reference credential fields');

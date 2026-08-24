@@ -98,8 +98,8 @@ export class PostgresPortfolioSyncJobStore implements IPortfolioSyncJobStore {
         WHERE status = 'queued'
           OR (status = 'running' AND lease_until <= ${input.now.toISOString()}::timestamptz)
         ORDER BY created_at
-        FOR UPDATE SKIP LOCKED
         LIMIT 1
+        FOR UPDATE SKIP LOCKED
       )
       RETURNING
         id,

@@ -826,6 +826,7 @@ describe('PostgresUserIntegrationStore', () => {
     });
     const lockSql = transaction.execute.mock.calls[0]?.[0] as { queryChunks?: readonly unknown[] };
     expect(JSON.stringify(lockSql.queryChunks)).toContain('FOR UPDATE');
+    expect(sqlText(0)).toMatch(/LIMIT 1\s+FOR UPDATE/u);
     expect(transaction.update).toHaveBeenCalledTimes(1);
     const updateChain = transaction.update.mock.results[0]?.value as ReturnType<typeof returningChain>;
     expect(updateChain.set).toHaveBeenCalledWith(expect.objectContaining({
@@ -1076,6 +1077,7 @@ describe('PostgresPortfolioSyncJobStore', () => {
     expect(transaction.execute).toHaveBeenCalledWith(expect.objectContaining({
       queryChunks: expect.any(Array),
     }));
+    expect(sqlText(0)).toMatch(/LIMIT 1\s+FOR UPDATE SKIP LOCKED/u);
   });
 
   it('returns null when atomic claim finds no eligible job', async () => {

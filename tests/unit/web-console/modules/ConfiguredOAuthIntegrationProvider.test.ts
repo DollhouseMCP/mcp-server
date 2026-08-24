@@ -176,6 +176,32 @@ describe('ConfiguredOAuthIntegrationProvider endpoint security', () => {
     })).toThrow('oauth.tokenExchange.clientAuth must be body, basic, or none');
   });
 
+  it.each([
+    [
+      { revocationUrl: { href: `https://${TOKEN_HOST}/oauth/revoke` } },
+      'oauth.tokenExchange.revocationUrl must be a string',
+    ],
+    [
+      { authorizationParams: ['audience'] },
+      'oauth.tokenExchange.authorizationParams must be a JSON object',
+    ],
+    [
+      { authorizationParams: { audience: 42 } },
+      'oauth.tokenExchange.authorizationParams values must be strings',
+    ],
+  ])('rejects malformed token exchange configuration before mounting', (tokenExchange, message) => {
+    const base = descriptor();
+    if (!base.oauth) throw new Error('fixture oauth missing');
+
+    expect(() => providerWith({
+      dnsLookup: lookupReturning(PUBLIC_ADDRESS),
+      descriptor: {
+        ...base,
+        oauth: { ...base.oauth, tokenExchange },
+      },
+    })).toThrow(message);
+  });
+
   it('does not activate a legacy OAuth descriptor until its client ID is configured', () => {
     const base = descriptor();
     if (!base.oauth) throw new Error('fixture oauth missing');
