@@ -72,10 +72,14 @@ export class FileAgentStateStore implements IAgentStateStore {
 
     try {
       const content = await this.deps.fileOperations.readFile(statePath, { encoding: 'utf-8' });
+      const durableContentLimit = options.allowOversizedRecovery
+        ? AGENT_STATE_RECOVERY_MAX_YAML_SIZE
+        : this.maxYamlSize;
+      if (Buffer.byteLength(content, 'utf8') > durableContentLimit) {
+        throw new AgentStateSizeLimitError();
+      }
       const result = this.deps.serializationService.parseFrontmatter(content, {
-        maxYamlSize: options.allowOversizedRecovery
-          ? AGENT_STATE_RECOVERY_MAX_YAML_SIZE
-          : this.maxYamlSize,
+        maxYamlSize: durableContentLimit,
         validateContent: true,
         source: 'FileAgentStateStore.load',
       });
@@ -100,7 +104,9 @@ export class FileAgentStateStore implements IAgentStateStore {
         return null;
       }
       logger.error(`Failed to load agent state: ${key.name}`, error);
-      if (options.strict || error instanceof AgentStateParsedSizeLimitError) {
+      if (options.strict
+          || error instanceof AgentStateParsedSizeLimitError
+          || error instanceof AgentStateSizeLimitError) {
         throw error;
       }
       return null;

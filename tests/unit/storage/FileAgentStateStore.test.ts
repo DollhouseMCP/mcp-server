@@ -193,6 +193,15 @@ stateVersion: ${stateVersion}
     expect(String(recovered?.context.payload)).toHaveLength(70 * 1024);
   });
 
+  it('enforces ordinary load ceilings using UTF-8 bytes', async () => {
+    await writeStateFile({ ...state(1), context: { payload: 'é'.repeat(35 * 1024) } });
+
+    await expect(store.load(key)).rejects.toBeInstanceOf(AgentStateSizeLimitError);
+    const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
+
+    expect(String(recovered?.context.payload)).toHaveLength(35 * 1024);
+  });
+
   it('permits an oversized recovery save only when it strictly shrinks durable state', async () => {
     await writeStateFile({ ...state(1), context: { payload: 'x'.repeat(70 * 1024) } });
     const recovered = await store.load(key, { strict: true, allowOversizedRecovery: true });
