@@ -151,6 +151,23 @@ describe('Agent Element', () => {
       expect(agent.evaluateExecutionAdmission(resumed.id)).toMatchObject({ canProceed: true });
     });
 
+    it('preserves dependency constraints while excluding resumed-goal concurrency', () => {
+      const prerequisite = agent.addGoal({ description: 'Failed prerequisite' });
+      prerequisite.status = 'failed';
+      const resumed = agent.addGoal({
+        description: 'Paused dependent execution',
+        dependencies: [prerequisite.id],
+      });
+      resumed.status = 'in_progress';
+      agent.metadata.maxConcurrentGoals = 1;
+
+      expect(agent.evaluateConstraints(resumed, resumed.id)).toEqual({
+        canProceed: false,
+        blockers: ['1 incomplete dependencies'],
+        warnings: [],
+      });
+    });
+
     it('prunes the oldest terminal goal and its decisions at the history limit', () => {
       const archived = agent.addGoal({ description: 'Old completed goal' });
       archived.status = 'completed';

@@ -1156,6 +1156,92 @@ stateVersion: 1
       expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
     });
 
+    it('rejects a resumed goal whose prerequisite failed', async () => {
+      const agent = new Agent({
+        name: 'blocked-resume-agent',
+        description: 'Resume only after prerequisites complete',
+        maxConcurrentGoals: 1,
+      }, metadataService);
+      const prerequisite = agent.addGoal({ description: 'Required preparation' });
+      prerequisite.status = 'failed';
+      const activeGoal = agent.addGoal({
+        description: 'Dependent execution',
+        dependencies: [prerequisite.id],
+      });
+      activeGoal.status = 'in_progress';
+      const decision = agent.recordDecision({
+        goalId: activeGoal.id,
+        decision: 'pause',
+        reasoning: 'Waiting for prerequisite recovery',
+        confidence: 1,
+      });
+
+      fileOperationsService.readFile.mockImplementation(async (filePath: string) => {
+        if (filePath.includes('blocked-resume-agent.md')) {
+          return `---
+name: "Blocked Resume Agent"
+type: "agent"
+version: "2.0.0"
+maxConcurrentGoals: 1
+goal:
+  template: "Resume task: {task}"
+  parameters:
+    - name: task
+      type: string
+      required: true
+---
+# Blocked Resume Agent`;
+        }
+        if (filePath.includes('blocked-resume-agent.state.yaml')) {
+          return `---
+goals:
+  - id: "${prerequisite.id}"
+    description: "${prerequisite.description}"
+    priority: "${prerequisite.priority}"
+    status: "failed"
+    importance: 5
+    urgency: 5
+    createdAt: "${prerequisite.createdAt.toISOString()}"
+    updatedAt: "${prerequisite.updatedAt.toISOString()}"
+  - id: "${activeGoal.id}"
+    description: "${activeGoal.description}"
+    priority: "${activeGoal.priority}"
+    status: "in_progress"
+    importance: 5
+    urgency: 5
+    dependencies:
+      - "${prerequisite.id}"
+    createdAt: "${activeGoal.createdAt.toISOString()}"
+    updatedAt: "${activeGoal.updatedAt.toISOString()}"
+decisions:
+  - id: "${decision.id}"
+    goalId: "${activeGoal.id}"
+    decision: "pause"
+    reasoning: "Waiting for prerequisite recovery"
+    confidence: 1
+    timestamp: "${decision.timestamp.toISOString()}"
+context: {}
+lastActive: "${agent.getState().lastActive.toISOString()}"
+sessionCount: 1
+stateVersion: 1
+---`;
+        }
+        throw new Error(`Unexpected file read: ${filePath}`);
+      });
+      fileOperationsService.writeFile.mockClear();
+
+      await expect(agentManager.continueAgentExecution({
+        agentName: 'blocked-resume-agent',
+        goalId: activeGoal.id,
+        parameters: { task: 'the blocked work' },
+      })).rejects.toMatchObject({
+        code: 'VALIDATION_INVALID_GOAL_STATUS',
+        message: expect.stringContaining('1 incomplete dependencies'),
+      });
+
+      expect(fileOperationsService.writeFile).not.toHaveBeenCalled();
+    });
+
     it('should execute agent with state under limit', async () => {
       // Create agent with only 3 goals (under limit of 5)
       const agent = new Agent({

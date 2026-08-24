@@ -399,8 +399,8 @@ export class Agent extends BaseElement implements IElement {
    *
    * @since v2.0.0 - Extracted from ruleBasedDecision for LLM-first agentic loop
    */
-  public evaluateConstraints(goal: AgentGoal): ConstraintResult {
-    const admission = this.evaluateExecutionAdmission();
+  public evaluateConstraints(goal: AgentGoal, resumedGoalId?: string): ConstraintResult {
+    const admission = this.evaluateExecutionAdmission(resumedGoalId);
     const blockers = [...admission.blockers];
     const warnings = [...admission.warnings];
 

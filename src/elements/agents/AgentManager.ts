@@ -1084,12 +1084,19 @@ export class AgentManager extends BaseElementManager<Agent> {
       if (context.resumedGoalId && !resumedGoal) {
         throw new Error(`Cannot resume missing or inactive goal '${context.resumedGoalId}'`);
       }
-      const admission = agent.evaluateExecutionAdmission(context.resumedGoalId);
+      const admission = resumedGoal
+        ? agent.evaluateConstraints(resumedGoal, resumedGoal.id)
+        : agent.evaluateExecutionAdmission();
       if (!admission.canProceed) {
+        const action = resumedGoal
+          ? `resume goal '${resumedGoal.id}'`
+          : 'start another goal';
         throw ErrorHandler.createError(
-          `Agent '${name}' cannot start another goal: ${admission.blockers.join('; ')}`,
+          `Agent '${name}' cannot ${action}: ${admission.blockers.join('; ')}`,
           ErrorCategory.VALIDATION_ERROR,
-          ValidationErrorCodes.MAX_GOALS_EXCEEDED,
+          resumedGoal
+            ? ValidationErrorCodes.INVALID_GOAL_STATUS
+            : ValidationErrorCodes.MAX_GOALS_EXCEEDED,
         );
       }
 
