@@ -3342,32 +3342,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     const archivedGoalIds = [params.goalId];
     const archivedGoalSnapshots: AgentGoal[] = [];
     try {
-      const targetGoal = params.agent.getState().goals.find(goal => goal.id === params.goalId);
-      if (targetGoal) {
-        archivedGoalSnapshots.push(structuredClone(targetGoal));
-      }
+      this.captureArchivedGoalSnapshot(params.agent, params.goalId, archivedGoalSnapshots);
       params.agent[EVICT_TERMINAL_GOAL](params.goalId);
-      let newVersion: number;
-      while (true) {
-        try {
-          newVersion = await this.saveAgentStateForRecovery(params.agent, params.sanitizedName);
-          break;
-        } catch (error) {
-          if (!(error instanceof AgentStateReductionRequiredError)) {
-            throw error;
-          }
-          const stateBeforeEviction = params.agent.getState();
-          const additionalGoalId = params.agent[EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL]();
-          if (!additionalGoalId) {
-            throw error;
-          }
-          archivedGoalIds.push(additionalGoalId);
-          const additionalGoal = stateBeforeEviction.goals.find(goal => goal.id === additionalGoalId);
-          if (additionalGoal) {
-            archivedGoalSnapshots.push(structuredClone(additionalGoal));
-          }
-        }
-      }
+      const newVersion = await this.persistCompactedRecoveryState(
+        params.agent,
+        params.sanitizedName,
+        archivedGoalIds,
+        archivedGoalSnapshots,
+      );
       params.agent[COMMIT_PERSISTED_VERSION](newVersion);
       params.agent.markStatePersisted();
       if (params.strictState) {
@@ -3397,6 +3379,47 @@ export class AgentManager extends BaseElementManager<Agent> {
         archivedGoalIds,
       },
     });
+  }
+
+  private async persistCompactedRecoveryState(
+    agent: Agent,
+    sanitizedName: string,
+    archivedGoalIds: string[],
+    archivedGoalSnapshots: AgentGoal[],
+  ): Promise<number> {
+    while (true) {
+      try {
+        return await this.saveAgentStateForRecovery(agent, sanitizedName);
+      } catch (error) {
+        if (!(error instanceof AgentStateReductionRequiredError)) {
+          throw error;
+        }
+        const stateBeforeEviction = agent.getState();
+        const additionalGoalId = agent[EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL]();
+        if (!additionalGoalId) {
+          throw error;
+        }
+        archivedGoalIds.push(additionalGoalId);
+        this.captureArchivedGoalSnapshot(
+          agent,
+          additionalGoalId,
+          archivedGoalSnapshots,
+          stateBeforeEviction.goals,
+        );
+      }
+    }
+  }
+
+  private captureArchivedGoalSnapshot(
+    agent: Agent,
+    goalId: string,
+    snapshots: AgentGoal[],
+    goals: readonly AgentGoal[] = agent.getState().goals,
+  ): void {
+    const goal = goals.find(candidate => candidate.id === goalId);
+    if (goal) {
+      snapshots.push(structuredClone(goal));
+    }
   }
 
   private restoreFailedTerminalUpdate(
