@@ -221,6 +221,40 @@ describe('AgentManager', () => {
       }));
     });
 
+    it('continues compacting safe terminal history until recovery fits', async () => {
+      const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
+      const oldTerminal = recoveryAgent.addGoal({ description: 'Old completed history' });
+      oldTerminal.status = 'completed';
+      const target = recoveryAgent.addGoal({ description: 'Stuck execution' });
+      target.status = 'in_progress';
+      const survivor = recoveryAgent.addGoal({ description: 'Other execution' });
+      survivor.status = 'in_progress';
+      recoveryAgent.markStatePersisted();
+
+      jest.spyOn(agentManager as any, 'readWithStatePolicy').mockResolvedValue(recoveryAgent);
+      const save = jest.spyOn((agentManager as any).stateStore, 'save')
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockRejectedValueOnce(new AgentStateReductionRequiredError())
+        .mockResolvedValueOnce(2);
+
+      await expect(agentManager.completeAgentGoalForRecovery({
+        agentName: 'recovery-agent',
+        goalId: target.id,
+        outcome: 'failure',
+        summary: 'Operator abort',
+      })).resolves.toEqual(expect.objectContaining({ success: true }));
+
+      expect(save).toHaveBeenCalledTimes(3);
+      expect(recoveryAgent.getState().goals.map(goal => goal.id)).toEqual([survivor.id]);
+      expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'AGENT_STATE_COMPACTED',
+        additionalData: expect.objectContaining({
+          goalId: target.id,
+          archivedGoalIds: [target.id, oldTerminal.id],
+        }),
+      }));
+    });
+
     it('retains a referenced failure tombstone during oversized recovery', async () => {
       const recoveryAgent = new Agent({ name: 'recovery-agent' }, metadataService);
       const target = recoveryAgent.addGoal({ description: 'Detailed stuck execution' });

@@ -10,6 +10,7 @@ import {
   COMMIT_PERSISTED_VERSION,
   MARK_STATE_FOR_PERSISTENCE,
   EVICT_TERMINAL_GOAL,
+  EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL,
   CAPTURE_AGENT_SNAPSHOT,
   RESTORE_AGENT_SNAPSHOT,
   DISCARD_AGENT_SNAPSHOT,
@@ -3299,9 +3300,25 @@ export class AgentManager extends BaseElementManager<Agent> {
     stateSnapshot: object;
     hadPendingState: boolean;
   }): Promise<void> {
+    const archivedGoalIds = [params.goalId];
     try {
       params.agent[EVICT_TERMINAL_GOAL](params.goalId);
-      const newVersion = await this.saveAgentStateForRecovery(params.agent, params.sanitizedName);
+      let newVersion: number;
+      while (true) {
+        try {
+          newVersion = await this.saveAgentStateForRecovery(params.agent, params.sanitizedName);
+          break;
+        } catch (error) {
+          if (!(error instanceof AgentStateReductionRequiredError)) {
+            throw error;
+          }
+          const additionalGoalId = params.agent[EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL]();
+          if (!additionalGoalId) {
+            throw error;
+          }
+          archivedGoalIds.push(additionalGoalId);
+        }
+      }
       params.agent[COMMIT_PERSISTED_VERSION](newVersion);
       params.agent.markStatePersisted();
       if (params.strictState) {
@@ -3319,7 +3336,11 @@ export class AgentManager extends BaseElementManager<Agent> {
         ? 'AgentManager.completeAgentGoalForRecovery'
         : 'AgentManager.completeAgentGoal',
       details: `Archived terminal goal '${params.goalId}' while shrinking oversized agent state`,
-      additionalData: { agentName: params.agentName, goalId: params.goalId },
+      additionalData: {
+        agentName: params.agentName,
+        goalId: params.goalId,
+        archivedGoalIds,
+      },
     });
   }
 

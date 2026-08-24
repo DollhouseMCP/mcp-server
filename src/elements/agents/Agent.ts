@@ -43,6 +43,7 @@ import {
   COMMIT_PERSISTED_VERSION,
   MARK_STATE_FOR_PERSISTENCE,
   EVICT_TERMINAL_GOAL,
+  EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL,
   CAPTURE_AGENT_SNAPSHOT,
   RESTORE_AGENT_SNAPSHOT,
   DISCARD_AGENT_SNAPSHOT,
@@ -604,6 +605,23 @@ export class Agent extends BaseElement implements IElement {
     this.archiveTerminalGoalHistory(goal);
     this.isDirtyState = true;
     this.markDirty();
+  }
+
+  /** @internal Remove one safe terminal history entry during bounded recovery. */
+  public [EVICT_OLDEST_UNREFERENCED_TERMINAL_GOAL](): string | undefined {
+    const referencedGoalIds = new Set(
+      this.state.goals.flatMap(goal => goal.dependencies ?? [])
+    );
+    const candidate = this.state.goals.find(goal =>
+      this.isTerminalGoal(goal) && !referencedGoalIds.has(goal.id)
+    );
+    if (!candidate) {
+      return undefined;
+    }
+    this.removeGoalHistory(candidate.id);
+    this.isDirtyState = true;
+    this.markDirty();
+    return candidate.id;
   }
 
   /** @internal Capture an opaque rollback token bound to this Agent instance. */
