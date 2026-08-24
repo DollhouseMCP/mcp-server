@@ -3298,7 +3298,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       source: params.strictState
         ? 'AgentManager.completeAgentGoalForRecovery'
         : 'AgentManager.completeAgentGoal',
-      details: 'Archived terminal goal while shrinking oversized agent state',
+      details: `Archived terminal goal '${params.goalId}' while shrinking oversized agent state`,
       additionalData: { agentName: params.agentName, goalId: params.goalId },
     });
   }

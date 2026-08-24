@@ -213,6 +213,7 @@ describe('AgentManager', () => {
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
         type: 'AGENT_STATE_COMPACTED',
         source: 'AgentManager.completeAgentGoalForRecovery',
+        details: expect.stringContaining(target.id),
       }));
     });
 

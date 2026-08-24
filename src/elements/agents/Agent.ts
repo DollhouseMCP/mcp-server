@@ -614,7 +614,7 @@ export class Agent extends BaseElement implements IElement {
       type: 'AGENT_STATE_COMPACTED',
       severity: 'LOW',
       source: 'Agent.compactTerminalGoalHistoryForNewGoal',
-      details: 'Pruned oldest terminal goal to retain bounded agent history',
+      details: `Pruned terminal goal '${terminalGoal.id}' to retain bounded agent history`,
       additionalData: { agentId: this.id, goalId: terminalGoal.id },
     });
   }

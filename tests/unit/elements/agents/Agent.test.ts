@@ -163,6 +163,7 @@ describe('Agent Element', () => {
       expect(SecurityMonitor.logSecurityEvent).toHaveBeenCalledWith(expect.objectContaining({
         type: 'AGENT_STATE_COMPACTED',
         source: 'Agent.compactTerminalGoalHistoryForNewGoal',
+        details: expect.stringContaining(archived.id),
       }));
     });
 
