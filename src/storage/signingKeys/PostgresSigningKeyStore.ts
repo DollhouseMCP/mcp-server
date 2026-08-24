@@ -114,7 +114,10 @@ export class PostgresSigningKeyStore implements ISigningKeyStore {
         .update(authSigningKeys)
         .set({
           active: false,
-          rotatedAt: sql`COALESCE(${authSigningKeys.rotatedAt}, ${now})`,
+          rotatedAt: sql`COALESCE(
+            ${authSigningKeys.rotatedAt},
+            ${sql.param(now, authSigningKeys.rotatedAt)}
+          )`,
           retiredAt: now,
         })
         .where(eq(authSigningKeys.kind, write.kind));
