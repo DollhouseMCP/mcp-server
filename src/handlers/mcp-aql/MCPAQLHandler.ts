@@ -733,7 +733,7 @@ export class MCPAQLHandler {
     try {
       const rawElements = sessionId
         ? await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId)
-        : await this.handlers.elementCRUD.getActiveElementsForPolicy();
+        : await this.handlers.elementCRUD.getActiveElementsForPolicy({ allowCoalescing: false });
       const activeElements: ActiveElement[] = rawElements.map((el) => ({
         type: el.type,
         name: el.name,

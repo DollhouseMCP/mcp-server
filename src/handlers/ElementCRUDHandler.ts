@@ -391,7 +391,14 @@ export class ElementCRUDHandler {
    *
    * Issue #452: Provides active element context for enforce() policy checks.
    */
-  async getActiveElementsForPolicy(): Promise<PolicyElement[]> {
+  async getActiveElementsForPolicy(options: { allowCoalescing?: boolean } = {}): Promise<PolicyElement[]> {
+    // Security enforcement must not join a snapshot that may have started
+    // before an external policy-file edit. Dashboard/reporting callers may
+    // coalesce overlapping reads to bound polling work.
+    if (options.allowCoalescing === false) {
+      return this.collectActiveElementsForPolicy();
+    }
+
     const generation = this.activePolicySnapshotGeneration;
     if (this.activePolicySnapshotInFlight?.generation === generation) {
       return this.activePolicySnapshotInFlight.promise;

@@ -338,6 +338,33 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(1);
     });
 
+    it('does not coalesce a security-critical policy read onto an in-flight dashboard snapshot', async () => {
+      let markDashboardStarted!: () => void;
+      let releaseDashboard!: () => void;
+      const dashboardStarted = new Promise<void>((resolve) => {
+        markDashboardStarted = resolve;
+      });
+      const dashboardBlocked = new Promise<void>((resolve) => {
+        releaseDashboard = resolve;
+      });
+      ensembleManager.getActiveEnsembles
+        .mockImplementationOnce(async () => {
+          markDashboardStarted();
+          await dashboardBlocked;
+          return [];
+        })
+        .mockResolvedValueOnce([]);
+
+      const dashboardSnapshot = handler.getActiveElementsForPolicy();
+      await dashboardStarted;
+      const enforcementSnapshot = handler.getActiveElementsForPolicy({ allowCoalescing: false });
+
+      await enforcementSnapshot;
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(2);
+      releaseDashboard();
+      await dashboardSnapshot;
+    });
+
     it('does not reuse an in-flight snapshot after activation state changes', async () => {
       let markFirstSnapshotStarted!: () => void;
       let releaseFirstSnapshot!: () => void;
