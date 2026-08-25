@@ -67,6 +67,7 @@ import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { normalizeElementStorageIdentity } from '../../utils/filesystem.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
+import { ElementStatus } from '../../types/elements/IElement.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
@@ -994,7 +995,16 @@ export class AgentManager extends BaseElementManager<Agent> {
     const agents: Agent[] = [];
     for (const name of this.activeAgentNames) {
       const agent = await this.findByName(name);
-      if (agent) agents.push(agent);
+      if (agent) {
+        // scanAndEvict() can discard an externally modified active agent. Its
+        // replacement starts inactive, so restore the lifecycle state once.
+        // Avoid reactivating unchanged instances: Agent.activate() advances
+        // session tracking and must not run on every policy/status poll.
+        if (agent.getStatus() !== ElementStatus.ACTIVE) {
+          await agent.activate();
+        }
+        agents.push(agent);
+      }
     }
     return agents;
   }

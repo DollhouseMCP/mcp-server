@@ -28,6 +28,7 @@ import { TriggerValidationService } from '../../../../src/services/validation/Tr
 import { ValidationService } from '../../../../src/services/validation/ValidationService.js';
 import { SerializationService } from '../../../../src/services/SerializationService.js';
 import { SECURITY_LIMITS } from '../../../../src/security/constants.js';
+import { ElementStatus } from '../../../../src/types/elements/IElement.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -118,8 +119,11 @@ describe('AgentManager', () => {
 
   describe('Active agents', () => {
     it('resolves only active names without listing the full agent catalog', async () => {
+      const activate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
       const activeAgent = {
         metadata: { name: 'active-agent' },
+        getStatus: () => ElementStatus.ACTIVE,
+        activate,
       } as Agent;
       (agentManager as any).activeAgentNames.add('active-agent');
       const scanAndEvict = jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
@@ -131,7 +135,25 @@ describe('AgentManager', () => {
       expect(result).toEqual([activeAgent]);
       expect(scanAndEvict).toHaveBeenCalledTimes(1);
       expect(findByName).toHaveBeenCalledWith('active-agent');
+      expect(activate).not.toHaveBeenCalled();
       expect(list).not.toHaveBeenCalled();
+    });
+
+    it('restores active status when a refreshed active agent was evicted and reloaded', async () => {
+      const activate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      const reloadedAgent = {
+        metadata: { name: 'active-agent' },
+        getStatus: () => ElementStatus.INACTIVE,
+        activate,
+      } as Agent;
+      (agentManager as any).activeAgentNames.add('active-agent');
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager, 'findByName').mockResolvedValue(reloadedAgent);
+
+      const result = await agentManager.getActiveAgents();
+
+      expect(result).toEqual([reloadedAgent]);
+      expect(activate).toHaveBeenCalledTimes(1);
     });
   });
 
