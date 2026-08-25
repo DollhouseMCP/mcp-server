@@ -14,7 +14,7 @@
 
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
-import type { IStorageLayer } from './IStorageLayer.js';
+import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
 import type { IStorageBackend } from './IStorageBackend.js';
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
@@ -76,29 +76,49 @@ export class MemoryStorageLayer implements IStorageLayer {
 
   // ---- IStorageLayer implementation ----
 
-  async scan(): Promise<ManifestDiffResult> {
+  async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
+    const existingScan = this.scanInProgress;
+    if (existingScan) {
+      if (!options.freshAfterInFlight) {
+        return existingScan;
+      }
+
+      try {
+        await existingScan;
+      } catch {
+        // The trailing scan gets an independent chance to recover.
+      }
+      if (this.scanInProgress === existingScan) {
+        this.scanInProgress = null;
+      }
+      this.invalidate();
+    }
+
     // Cold start: try loading from _index.json first
+    let scan: Promise<ManifestDiffResult>;
     if (!this.coldStartDone) {
       this.coldStartDone = true;
-      return this.coldStart();
+      scan = this.coldStart();
+    } else {
+      const now = Date.now();
+      if (now - this.lastScanTimestamp < this.scanCooldownMs) {
+        logger.debug(`MemoryStorageLayer.scan: COOLDOWN ACTIVE — skipping disk I/O (${this.scanCooldownMs - (now - this.lastScanTimestamp)}ms remaining)`);
+        return EMPTY_DIFF;
+      }
+
+      if (this.scanInProgress) {
+        return this.scanInProgress;
+      }
+      scan = this.performScan();
     }
 
-    const now = Date.now();
-    if (now - this.lastScanTimestamp < this.scanCooldownMs) {
-      logger.debug(`MemoryStorageLayer.scan: COOLDOWN ACTIVE — skipping disk I/O (${this.scanCooldownMs - (now - this.lastScanTimestamp)}ms remaining)`);
-      return EMPTY_DIFF;
-    }
-
-    // Deduplicate concurrent scans
-    if (this.scanInProgress) {
-      return this.scanInProgress;
-    }
-
-    this.scanInProgress = this.performScan();
+    this.scanInProgress = scan;
     try {
-      return await this.scanInProgress;
+      return await scan;
     } finally {
-      this.scanInProgress = null;
+      if (this.scanInProgress === scan) {
+        this.scanInProgress = null;
+      }
     }
   }
 

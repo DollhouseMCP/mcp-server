@@ -396,7 +396,7 @@ export class ElementCRUDHandler {
     // before an external policy-file edit. Dashboard/reporting callers may
     // coalesce overlapping reads to bound polling work.
     if (options.allowCoalescing === false) {
-      return this.collectActiveElementsForPolicy();
+      return this.collectActiveElementsForPolicy({ freshAfterInFlight: true });
     }
 
     const generation = this.activePolicySnapshotGeneration;
@@ -417,7 +417,9 @@ export class ElementCRUDHandler {
     }
   }
 
-  private async collectActiveElementsForPolicy(): Promise<PolicyElement[]> {
+  private async collectActiveElementsForPolicy(
+    indexOptions: { freshAfterInFlight?: boolean } = {},
+  ): Promise<PolicyElement[]> {
     await this.ensureInitialized();
 
     const result: PolicyElement[] = [];
@@ -437,7 +439,7 @@ export class ElementCRUDHandler {
 
       const manager = this.getManagerForType(normalizedType);
       const indexed = manager
-        ? manager.refreshIndex().then(() => manager)
+        ? manager.refreshIndex(indexOptions).then(() => manager)
         : Promise.resolve(undefined);
       indexedManagers.set(normalizedType, indexed);
       return indexed;
@@ -495,7 +497,7 @@ export class ElementCRUDHandler {
 
     try {
       // Active agents (async)
-      const agents = await this.agentManager.getActiveAgents();
+      const agents = await this.agentManager.getActiveAgents(indexOptions);
       for (const agent of agents) {
         const key = this.policyElementKey('agent', agent.metadata.name);
         seen.add(key);

@@ -361,6 +361,7 @@ describe('ElementCRUDHandler (DI)', () => {
 
       await enforcementSnapshot;
       expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(2);
+      expect(agentManager.getActiveAgents).toHaveBeenCalledWith({ freshAfterInFlight: true });
       releaseDashboard();
       await dashboardSnapshot;
     });

@@ -270,6 +270,36 @@ describe('MemoryStorageLayer', () => {
       expect(d1).toBe(d2);
       expect(d2).toBe(d3);
     });
+
+    it('runs a trailing scan for a freshness-sensitive caller', async () => {
+      await layer.scan();
+      (backend.directoryExists as jest.Mock<any>).mockClear();
+      layer.invalidate();
+
+      let markOlderScanStarted!: () => void;
+      let releaseOlderScan!: () => void;
+      const olderScanStarted = new Promise<void>((resolve) => {
+        markOlderScanStarted = resolve;
+      });
+      const olderScanBlocked = new Promise<void>((resolve) => {
+        releaseOlderScan = resolve;
+      });
+      (backend.directoryExists as jest.Mock<any>)
+        .mockImplementationOnce(async () => {
+          markOlderScanStarted();
+          await olderScanBlocked;
+          return true;
+        })
+        .mockResolvedValue(true);
+
+      const olderScan = layer.scan();
+      await olderScanStarted;
+      const freshScan = layer.scan({ freshAfterInFlight: true });
+      releaseOlderScan();
+      await Promise.all([olderScan, freshScan]);
+
+      expect(backend.directoryExists).toHaveBeenCalledTimes(2);
+    });
   });
 
   // ----------------------------------------------------------------

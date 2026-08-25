@@ -8,7 +8,7 @@
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import type { IStorageBackend } from './IStorageBackend.js';
-import type { IStorageLayer } from './IStorageLayer.js';
+import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
 import { MetadataIndex } from './MetadataIndex.js';
@@ -62,23 +62,46 @@ export class ElementStorageLayer implements IStorageLayer {
    * - Deduplicates concurrent calls (returns same promise)
    * - Updates index and manifest based on diff
    */
-  async scan(): Promise<ManifestDiffResult> {
+  async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
+    const existingScan = this.scanInProgress;
+    if (existingScan) {
+      if (!options.freshAfterInFlight) {
+        return existingScan;
+      }
+
+      // A security-sensitive caller must not inherit a directory snapshot that
+      // began before the caller. Drain it, then force a trailing disk scan.
+      try {
+        await existingScan;
+      } catch {
+        // The trailing scan gets an independent chance to recover.
+      }
+      if (this.scanInProgress === existingScan) {
+        this.scanInProgress = null;
+      }
+      this.invalidate();
+    }
+
     const now = Date.now();
     if (now - this.lastScanTimestamp < this.scanCooldownMs) {
       logger.debug(`ElementStorageLayer.scan: COOLDOWN ACTIVE for ${path.basename(this.elementDir)} — skipping disk I/O (${this.scanCooldownMs - (now - this.lastScanTimestamp)}ms remaining)`);
       return EMPTY_DIFF;
     }
 
-    // Deduplicate concurrent scans
+    // Deduplicate a scan that started after the freshness wait above. Such a
+    // scan is new enough for this caller and can safely be shared.
     if (this.scanInProgress) {
       return this.scanInProgress;
     }
 
-    this.scanInProgress = this.performScan();
+    const scan = this.performScan();
+    this.scanInProgress = scan;
     try {
-      return await this.scanInProgress;
+      return await scan;
     } finally {
-      this.scanInProgress = null;
+      if (this.scanInProgress === scan) {
+        this.scanInProgress = null;
+      }
     }
   }
 

@@ -133,6 +133,47 @@ describe('ElementStorageLayer', () => {
       // Backend should only be called once
       expect(backend.listFiles).toHaveBeenCalledTimes(1);
     });
+
+    it('runs a trailing scan for freshness-sensitive callers', async () => {
+      await layer.scan();
+      layer.invalidate();
+
+      let markOlderScanStarted!: () => void;
+      let releaseOlderScan!: () => void;
+      const olderScanStarted = new Promise<void>((resolve) => {
+        markOlderScanStarted = resolve;
+      });
+      const olderScanBlocked = new Promise<void>((resolve) => {
+        releaseOlderScan = resolve;
+      });
+      (backend.statMany as jest.Mock<any>)
+        .mockImplementationOnce(async () => {
+          markOlderScanStarted();
+          await olderScanBlocked;
+          return new Map([
+            ['alpha.md', makeMeta('alpha.md', 1000)],
+            ['beta.md', makeMeta('beta.md', 2000)],
+          ]);
+        })
+        .mockResolvedValue(new Map([
+          ['alpha.md', makeMeta('alpha.md', 1000)],
+          ['beta.md', makeMeta('beta.md', 5000)],
+        ]));
+      (backend.readFile as jest.Mock<any>).mockImplementation((absPath: string) => {
+        if (absPath.includes('alpha')) return Promise.resolve(makeContent('Alpha', 'Alpha desc'));
+        if (absPath.includes('beta')) return Promise.resolve(makeContent('Beta Updated', 'New desc'));
+        return Promise.resolve(makeContent('Unknown'));
+      });
+
+      const olderScan = layer.scan();
+      await olderScanStarted;
+      const freshScan = layer.scan({ freshAfterInFlight: true });
+      releaseOlderScan();
+      await Promise.all([olderScan, freshScan]);
+
+      expect(backend.listFiles).toHaveBeenCalledTimes(3);
+      expect(layer.getPathByName('Beta Updated')).toBe('beta.md');
+    });
   });
 
   describe('change detection', () => {

@@ -38,7 +38,7 @@ import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
 import { ElementStorageLayer } from '../../storage/ElementStorageLayer.js';
-import type { IStorageLayer } from '../../storage/IStorageLayer.js';
+import type { IStorageLayer, StorageScanOptions } from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { MEMORY_CONSTANTS } from '../memories/constants.js';
@@ -1143,10 +1143,10 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Unlike list(), this does not load all elements — it only evicts stale ones.
    * Fixes #1895 (ensemble activation serving stale cached element list).
    */
-  protected async scanAndEvict(): Promise<void> {
+  protected async scanAndEvict(options: StorageScanOptions = {}): Promise<void> {
     this.storageLayer.invalidate(); // bypass cooldown so the next scan hits disk
     try {
-      const diff = await this.storageLayer.scan();
+      const diff = await this.storageLayer.scan(options);
       for (const relPath of [...diff.modified, ...diff.removed]) {
         const absPath = path.join(this.elementDir, relPath);
         const existingId = this.filePathToId.get(absPath);
@@ -1164,8 +1164,8 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * indexed read-only lookups. Unlike list(), this does not load every element or
    * apply manager-specific lifecycle status.
    */
-  async refreshIndex(): Promise<void> {
-    await this.scanAndEvict();
+  async refreshIndex(options: StorageScanOptions = {}): Promise<void> {
+    await this.scanAndEvict(options);
   }
 
   /**
