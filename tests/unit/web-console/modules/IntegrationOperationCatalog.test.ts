@@ -332,6 +332,49 @@ describe('IntegrationOperationCatalog', () => {
     }))).rejects.toMatchObject({ code: 'invalid_openapi_spec' });
   });
 
+  it('rejects OpenAPI paths longer than the execution policy can evaluate', async () => {
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    await expect(runAsUser(contextTracker, () => catalog.ingestOpenApiSpec({
+      provider: 'gmail',
+      spec: {
+        openapi: '3.1.0',
+        info: { title: 'Oversized path', version: '1.0.0' },
+        paths: {
+          [`/${'a'.repeat(1000)}`]: {
+            get: { responses: { 200: { description: 'ok' } } },
+          },
+        },
+      },
+    }))).rejects.toMatchObject({
+      code: 'invalid_openapi_spec',
+      status: 400,
+    });
+  });
+
+  it('does not expose operations for a revoked connected integration', async () => {
+    const revoked = {
+      ...integration([GMAIL_READONLY]),
+      revokedAt: new Date(TIMESTAMP),
+    };
+    const { catalog, contextTracker } = createCatalog({
+      descriptor: descriptor({ operationPromotion: { operations: ['listMessages'] } }),
+      scopes: [GMAIL_READONLY],
+      integration: revoked,
+    });
+
+    await expect(runAsUser(contextTracker, () => catalog.listOperations({ provider: 'gmail' })))
+      .rejects.toMatchObject({
+        code: 'integration_operation_connection_required',
+        status: 403,
+      });
+    await expect(runAsUser(contextTracker, () => catalog.listPromotedOperations()))
+      .resolves.toEqual([]);
+  });
+
   it('regenerates skill helpers while preserving user edits as a new revision', async () => {
     const portfolioStore = new InMemoryPortfolioElementStore([{
       userId: USER_ID,
@@ -401,6 +444,7 @@ function createCatalog(options: {
   readonly descriptor?: IntegrationDescriptorRecord;
   readonly portfolioStore?: InMemoryPortfolioElementStore;
   readonly spec?: Readonly<Record<string, unknown>>;
+  readonly integration?: UserIntegrationRecord;
 }) {
   const contextTracker = new ContextTracker();
   const descriptorStore = new InMemoryIntegrationDescriptorStore([options.descriptor ?? descriptor()]);
@@ -413,7 +457,7 @@ function createCatalog(options: {
     createdAt: new Date(TIMESTAMP),
     updatedAt: new Date(TIMESTAMP),
   }]);
-  const integrationStore = new InMemoryUserIntegrationStore([integration(options.scopes)]);
+  const integrationStore = new InMemoryUserIntegrationStore([options.integration ?? integration(options.scopes)]);
   return {
     contextTracker,
     catalog: new IntegrationOperationCatalog({

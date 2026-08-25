@@ -151,6 +151,14 @@ describe('IntegrationRequestGateway', () => {
       path: '/ok',
       body: { payload: 'x'.repeat(70 * 1024) },
     }))).rejects.toMatchObject({ code: 'integration_request_too_large' });
+    await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: `/${'a'.repeat(1000)}`,
+    }))).rejects.toMatchObject({
+      code: 'integration_request_path_too_long',
+      status: 414,
+    });
 
     const limited = gatewayFixture({
       rateLimit: { windowMs: 60_000, maxRequests: 1 },

@@ -166,6 +166,32 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       error: { code: 'integration_request_denied_by_policy' },
     });
   });
+
+  it('rejects paths longer than the complete policy matching boundary', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-path-length-test',
+      new StaticAuditHmacKeyResolver('aa'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([]),
+    });
+
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'GET',
+      path: `/${'a'.repeat(995)}/admin`,
+    })).resolves.toMatchObject({
+      allowed: false,
+      error: {
+        code: 'integration_request_path_too_long',
+        status: 414,
+      },
+    });
+  });
 });
 
 function integrationWriteGuard(): ActiveElement {

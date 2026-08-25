@@ -1,5 +1,6 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 
+import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
 import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
@@ -533,6 +534,13 @@ function buildAllowedUrl(
 ): URL {
   if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
     throw new IntegrationRequestError('invalid_integration_path', 'Integration request path must be an absolute path.', 400);
+  }
+  if (path.length > MAX_INTEGRATION_REQUEST_PATH_LENGTH) {
+    throw new IntegrationRequestError(
+      'integration_request_path_too_long',
+      `Integration request path must be at most ${MAX_INTEGRATION_REQUEST_PATH_LENGTH} characters.`,
+      414,
+    );
   }
   const base = `https://${descriptor.apiHosts[0]}`;
   const url = new URL(path, base);

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 
+import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpenApiSpecStore.js';
@@ -319,7 +320,7 @@ export class IntegrationOperationCatalog {
 
   private async resolveGrantedScopes(userId: string, provider: string): Promise<ReadonlySet<string>> {
     const integration = await this.options.integrationStore.findByProvider(userId, provider);
-    if (integration?.status !== 'connected') {
+    if (integration?.status !== 'connected' || integration.revokedAt !== null) {
       throw new IntegrationOperationCatalogError(
         'integration_operation_connection_required',
         'Integration operation discovery requires a connected integration credential.',
@@ -331,7 +332,9 @@ export class IntegrationOperationCatalog {
 
   private async resolveGrantedScopesForPromotion(userId: string, provider: string): Promise<ReadonlySet<string> | null> {
     const integration = await this.options.integrationStore.findByProvider(userId, provider);
-    return integration?.status === 'connected' ? grantedScopes(integration) : null;
+    return integration?.status === 'connected' && integration.revokedAt === null
+      ? grantedScopes(integration)
+      : null;
   }
 
   private async writeGeneratedSkill(
@@ -678,6 +681,13 @@ function buildNormalizedPaths(rawPaths: Readonly<Record<string, unknown>>): Reco
   for (const [path, pathItemValue] of Object.entries(rawPaths).sort(([left], [right]) => left.localeCompare(right))) {
     if (!path.startsWith('/')) {
       throw new IntegrationOperationCatalogError('invalid_openapi_spec', 'OpenAPI paths must start with /.', 400);
+    }
+    if (path.length > MAX_INTEGRATION_REQUEST_PATH_LENGTH) {
+      throw new IntegrationOperationCatalogError(
+        'invalid_openapi_spec',
+        `OpenAPI paths must be at most ${MAX_INTEGRATION_REQUEST_PATH_LENGTH} characters.`,
+        400,
+      );
     }
     const normalizedPathItem = normalizePathItem(asRecord(pathItemValue), path, operationIds);
     if (Object.keys(normalizedPathItem).some(key => HTTP_METHODS.has(key))) {

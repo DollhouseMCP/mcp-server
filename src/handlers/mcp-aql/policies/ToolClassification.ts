@@ -10,6 +10,7 @@
  * @module
  */
 
+import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
 import { matchesPattern } from '../../../utils/patternMatcher.js';
 import { logger } from '../../../utils/logger.js';
 import type { ActiveElement } from './ElementPolicies.js';
@@ -854,7 +855,7 @@ function buildIntegrationRequestMatchTargets(toolInput: Record<string, unknown>)
     ? sanitizeMatchInput(toolInput.method.toUpperCase().slice(0, MAX_MATCH_INPUT_LENGTH))
     : '';
   const path = typeof toolInput.path === 'string'
-    ? sanitizeMatchInput(toolInput.path.slice(0, MAX_MATCH_INPUT_LENGTH))
+    ? sanitizeMatchInput(toolInput.path.slice(0, MAX_INTEGRATION_REQUEST_PATH_LENGTH))
     : '';
   const readWriteClass = typeof toolInput.read_write_class === 'string'
     ? sanitizeMatchInput(toolInput.read_write_class.slice(0, MAX_MATCH_INPUT_LENGTH))

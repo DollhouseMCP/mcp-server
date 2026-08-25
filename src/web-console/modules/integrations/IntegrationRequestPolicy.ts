@@ -1,4 +1,5 @@
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
+import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
 import type { ActiveElement } from '../../../handlers/mcp-aql/policies/index.js';
 import { resolveCliApprovalPolicy } from '../../../handlers/mcp-aql/OperationSummary.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
@@ -65,6 +66,16 @@ export class IntegrationRequestPolicyEnforcer {
   }
 
   private async authorizeInternal(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
+    if (input.path.length > MAX_INTEGRATION_REQUEST_PATH_LENGTH) {
+      return {
+        allowed: false,
+        error: {
+          code: 'integration_request_path_too_long',
+          message: `Integration request path must be at most ${MAX_INTEGRATION_REQUEST_PATH_LENGTH} characters.`,
+          status: 414,
+        },
+      };
+    }
     const toolInput = integrationToolInput(input);
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
     const activeElements = await this.options.getActiveElements();
