@@ -621,46 +621,58 @@ export class ElementCRUDHandler {
 
     if (this.activationStore?.isEnabled()) {
       const persistedStates = await this.activationStore.listPersistedActivationStates(sessionId);
-      const catalogs = new Map<string, Array<{ metadata?: Record<string, unknown>; filename?: string }>>();
+      const indexedManagers = new Map<string, Promise<BaseElementManager<any> | undefined>>();
+      const persistedLookups = new Map<string, Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null>>();
 
-      const getCatalog = async (type: string) => {
+      const getIndexedManager = (type: string): Promise<BaseElementManager<any> | undefined> => {
         const normalizedType = this.normalizeElementType(type);
-        if (!catalogs.has(normalizedType)) {
-          catalogs.set(
-            normalizedType,
-            (await this.getElements(normalizedType)) as Array<{ metadata?: Record<string, unknown>; filename?: string }>,
-          );
+        const existing = indexedManagers.get(normalizedType);
+        if (existing) {
+          return existing;
         }
-        return catalogs.get(normalizedType) ?? [];
+
+        const manager = this.getManagerForType(normalizedType);
+        const indexed = manager
+          ? manager.refreshIndex().then(() => manager)
+          : Promise.resolve(undefined);
+        indexedManagers.set(normalizedType, indexed);
+        return indexed;
       };
 
-      const findPersistedElement = async (
+      const findPersistedElement = (
         type: string,
         activation: PersistedActivation,
       ): Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null> => {
-        const catalog = await getCatalog(type);
+        const normalizedType = this.normalizeElementType(type);
         const normalizedName = this.normalizeLookupValue(activation.name);
         const normalizedFilename = this.normalizeLookupValue(activation.filename);
-
-        const found = catalog.find((element) => {
-          const metadata = element.metadata ?? {};
-          const elementName = this.normalizeLookupValue(metadata['name']);
-          const elementFilename = this.normalizeLookupValue(
-            element.filename ?? metadata['filename'] ?? metadata['sourceFile'],
-          );
-
-          return elementName === normalizedName || (normalizedFilename !== '' && elementFilename === normalizedFilename);
-        });
-
-        if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
-          return null;
+        const lookupKey = `${normalizedType}:${normalizedName}:${normalizedFilename}`;
+        const existing = persistedLookups.get(lookupKey);
+        if (existing) {
+          return existing;
         }
 
-        return {
-          type: this.toPolicyElementType(type),
-          name: (found.metadata['name'] as string) ?? activation.name,
-          metadata: found.metadata,
-        };
+        const lookup = getIndexedManager(normalizedType).then(async (manager) => {
+          if (!manager) return null;
+          let found = normalizedName !== ''
+            ? await manager.findByName(normalizedName) as PolicyMemberElement | undefined
+            : undefined;
+          if (!found && normalizedFilename !== '') {
+            found = await manager.findByName(normalizedFilename) as PolicyMemberElement | undefined;
+          }
+
+          if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
+            return null;
+          }
+
+          return {
+            type: this.toPolicyElementType(normalizedType),
+            name: (found.metadata['name'] as string) ?? activation.name,
+            metadata: found.metadata,
+          };
+        });
+        persistedLookups.set(lookupKey, lookup);
+        return lookup;
       };
 
       for (const state of persistedStates) {

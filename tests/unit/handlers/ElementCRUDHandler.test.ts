@@ -433,18 +433,18 @@ describe('ElementCRUDHandler (DI)', () => {
       } as unknown as jest.Mocked<ActivationStore>;
 
       skillManager.getActiveSkills = jest.fn().mockResolvedValue([]);
-      skillManager.list = jest.fn().mockResolvedValue([
-        {
-          metadata: {
-            name: 'audit-trace-demo',
-            gatekeeper: {
-              externalRestrictions: {
-                confirmPatterns: ['Bash:git push*'],
-              },
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'audit-trace-demo',
+          gatekeeper: {
+            externalRestrictions: {
+              confirmPatterns: ['Bash:git push*'],
             },
           },
-        } as any,
-      ]);
+        },
+      } as any);
 
       const reportHandler = new ElementCRUDHandler(
         skillManager,
@@ -473,6 +473,9 @@ describe('ElementCRUDHandler (DI)', () => {
         }),
       ]);
       expect(activationStore.listPersistedActivationStates).toHaveBeenCalledWith('session-other');
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledWith('audit-trace-demo');
+      expect(skillManager.list).not.toHaveBeenCalled();
     });
 
     it('does not leak the current session in-memory policies into another session report', async () => {
@@ -502,28 +505,33 @@ describe('ElementCRUDHandler (DI)', () => {
           },
         } as any,
       ]);
-      skillManager.list = jest.fn().mockResolvedValue([
-        {
-          metadata: {
-            name: 'audit-trace-demo',
-            gatekeeper: {
-              externalRestrictions: {
-                confirmPatterns: ['Bash:git push*'],
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn(async (name: string) => {
+        const elements = [
+          {
+            metadata: {
+              name: 'audit-trace-demo',
+              gatekeeper: {
+                externalRestrictions: {
+                  confirmPatterns: ['Bash:git push*'],
+                },
               },
             },
           },
-        } as any,
-        {
-          metadata: {
-            name: 'leader-only-skill',
-            gatekeeper: {
-              externalRestrictions: {
-                denyPatterns: ['Bash:rm*'],
+          {
+            metadata: {
+              name: 'leader-only-skill',
+              gatekeeper: {
+                externalRestrictions: {
+                  denyPatterns: ['Bash:rm*'],
+                },
               },
             },
           },
-        } as any,
-      ]);
+        ];
+        return elements.find((element) => element.metadata.name === name) as any;
+      });
 
       const reportHandler = new ElementCRUDHandler(
         skillManager,
@@ -550,6 +558,9 @@ describe('ElementCRUDHandler (DI)', () => {
           sessionIds: ['session-other'],
         }),
       ]);
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(1);
+      expect(skillManager.list).not.toHaveBeenCalled();
     });
   });
 
