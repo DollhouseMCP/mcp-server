@@ -68,6 +68,8 @@ type PolicyElement = {
   type: string;
   name: string;
   metadata: Record<string, unknown>;
+  /** Stable storage identity used only to avoid unsafe display-name deduplication. */
+  identity?: string;
 };
 
 type PolicyMemberElement = {
@@ -501,10 +503,14 @@ export class ElementCRUDHandler {
       for (const agent of agents) {
         const key = this.policyElementKey('agent', agent.metadata.name);
         seen.add(key);
+        const filename = (agent as typeof agent & { filename?: unknown }).filename;
         result.push({
           type: 'agent',
           name: agent.metadata.name,
           metadata: agent.metadata as unknown as Record<string, unknown>,
+          ...(typeof filename === 'string' && filename.trim() !== ''
+            ? { identity: filename }
+            : {}),
         });
       }
     } catch (error) {
@@ -602,14 +608,14 @@ export class ElementCRUDHandler {
     }>();
 
     const addElement = (
-      element: { type: string; name: string; metadata: Record<string, unknown> },
+      element: PolicyElement,
       sessionIds: string[] = [],
     ): void => {
       if (!this.hasGatekeeperPolicy(element.metadata)) {
         return;
       }
 
-      const key = `${element.type}:${element.name}`;
+      const key = `${element.type}:${element.identity ?? element.name}`;
       const existing = merged.get(key);
       if (existing) {
         sessionIds.forEach(id => existing.sessionIds.add(id));

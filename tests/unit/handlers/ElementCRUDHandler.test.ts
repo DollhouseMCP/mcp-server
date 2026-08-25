@@ -252,6 +252,33 @@ describe('ElementCRUDHandler (DI)', () => {
       ]));
     });
 
+    it('preserves filename-distinct colliding agent policies in session reports', async () => {
+      agentManager.getActiveAgents.mockResolvedValue([
+        {
+          filename: 'first-agent.md',
+          metadata: {
+            name: 'colliding-name',
+            gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+          },
+        } as any,
+        {
+          filename: 'second-agent.md',
+          metadata: {
+            name: 'colliding-name',
+            gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+          },
+        } as any,
+      ]);
+
+      const result = await handler.getPolicyElementsForReport('session-demo');
+
+      expect(result).toHaveLength(2);
+      expect(result.map(element => element.metadata.gatekeeper)).toEqual([
+        { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+      ]);
+    });
+
     it('indexes each ensemble-member type once without lifecycle-bearing list calls', async () => {
       ensembleManager.getActiveEnsembles.mockResolvedValue([{
         metadata: {
