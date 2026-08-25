@@ -11,3 +11,7 @@ export * from './IntegrationPrivacyProjectors.js';
 export * from './IntegrationSecretContext.js';
 export * from './IntegrationService.js';
 export * from './IntegrationTokenRefreshService.js';
+export * from './IntegrationRequestGateway.js';
+export * from './IntegrationRequestPolicy.js';
+export * from './IntegrationOperationCatalog.js';
+export * from './IntegrationRemoteMcpBridge.js';

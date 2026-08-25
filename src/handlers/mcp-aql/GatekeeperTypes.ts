@@ -179,6 +179,8 @@ export interface CreateCliApprovalArgs {
   denyReason: string;
   policySource?: string;
   ttlMs?: number;
+  /** Scopes this request may be approved with. Omit to allow every scope. */
+  allowedScopes?: readonly CliApprovalScope[];
 }
 
 /**
@@ -216,6 +218,8 @@ export interface CliApprovalRecord {
   consumed: boolean;
   /** Approval scope */
   scope: CliApprovalScope;
+  /** Scopes this request may be approved with. Absent on unrestricted legacy records. */
+  allowedScopes?: readonly CliApprovalScope[];
   /** Reason the tool was denied (pending approval) */
   denyReason: string;
   /** Which policy source triggered the approval requirement */

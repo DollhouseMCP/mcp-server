@@ -73,6 +73,17 @@ describe('GatekeeperSession CLI approval store', () => {
   });
 
   describe('approveCliRequest', () => {
+    it('rejects an approval scope excluded by the request', async () => {
+      const requestId = await session.createCliApprovalRequest({
+        ...dangerousArgs(TOOL_BASH, NPM_INSTALL),
+        allowedScopes: ['single'],
+      });
+
+      await expect(session.approveCliRequest(requestId, 'tool_session'))
+        .rejects.toThrow('does not permit scope "tool_session"');
+      expect(session.getCliApproval(requestId)?.approvedAt).toBeUndefined();
+    });
+
     it('should set approvedAt on approval', async () => {
       const requestId = await session.createCliApprovalRequest(dangerousArgs(TOOL_BASH, NPM_INSTALL));
       const record = requireRecord(await session.approveCliRequest(requestId, 'single'));

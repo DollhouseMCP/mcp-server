@@ -46,13 +46,20 @@ export class ApprovalService {
     if (currentStatus !== 'pending') {
       return { status: 200, body: this.toDto(sessionId, record) };
     }
+    const requestedScope = toCliApprovalScope(parsed.scope);
+    if (decision === 'approved' && record.allowedScopes && !record.allowedScopes.includes(requestedScope)) {
+      return validationProblem(
+        `scope "${parsed.scope}" is not allowed for this approval; use ` +
+        record.allowedScopes.map(scope => `"${scope === 'single' ? 'once' : 'session'}"`).join(' or ') + '.',
+      );
+    }
 
     const decidedAt = this.now().toISOString();
     const updated: CliApprovalRecord = decision === 'approved'
       ? {
         ...record,
         approvedAt: decidedAt,
-        scope: toCliApprovalScope(parsed.scope),
+        scope: requestedScope,
       }
       : {
         ...record,

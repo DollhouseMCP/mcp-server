@@ -1,5 +1,8 @@
 import { describe, it, expect } from '@jest/globals';
 import { DollhouseContainer } from '../../../src/di/Container.js';
+import { WEB_CONSOLE_SERVICE_NAMES } from '../../../src/web-console/WebConsoleRegistrar.js';
+import type { IIntegrationProvider } from '../../../src/web-console/modules/integrations/IntegrationProvider.js';
+import type { IntegrationProviderRegistry } from '../../../src/web-console/modules/integrations/IntegrationProviderRegistry.js';
 
 describe('DollhouseContainer', () => {
   it('should create a container instance', () => {
@@ -48,4 +51,32 @@ describe('DollhouseContainer', () => {
       container.resolve('NonExistentService');
     }).toThrow('Service not registered: NonExistentService');
   });
+
+  it('includes configured OAuth providers in the runtime refresh registry', () => {
+    const container = new DollhouseContainer();
+    const provider = configuredProvider('configured-oauth');
+    container.register(
+      WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders,
+      () => [provider],
+    );
+
+    const registry = (container as unknown as {
+      resolveIntegrationProviderRegistry(): IntegrationProviderRegistry;
+    }).resolveIntegrationProviderRegistry();
+
+    expect(registry.get('configured-oauth')).toBe(provider);
+  });
 });
+
+function configuredProvider(id: string): IIntegrationProvider {
+  return {
+    descriptor: { id, displayName: 'Configured OAuth', category: 'test' },
+    authorizationConfigured: true,
+    credentialStrategy: 'oauth2_authorization_code',
+    createAuthorizationUrl: () => 'https://auth.example/authorize',
+    exchangeAuthorizationCode: () => Promise.reject(new Error('not used')),
+    refreshCredentials: () => Promise.resolve({ accessToken: 'refreshed' }),
+    revokeCredentials: () => Promise.resolve(),
+    projectStatus: () => ({ body: { provider: id, status: 'disconnected' } }),
+  } as IIntegrationProvider;
+}
