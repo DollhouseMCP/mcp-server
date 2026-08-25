@@ -67,3 +67,24 @@ export interface ManifestDiffResult {
   /** Files whose mtime matches the manifest (no change) */
   unchanged: string[];
 }
+
+/**
+ * Merge sequential scan results without losing an earlier invalidation when a
+ * trailing scan observes the same path as unchanged. Changed categories are
+ * intentionally retained as unions; consumers that evict caches must see any
+ * modification/removal observed during the freshness window.
+ */
+export function mergeManifestDiffResults(
+  first: ManifestDiffResult,
+  second: ManifestDiffResult,
+): ManifestDiffResult {
+  const unique = (values: string[]): string[] => Array.from(new Set(values));
+  const added = unique([...first.added, ...second.added]);
+  const modified = unique([...first.modified, ...second.modified]);
+  const removed = unique([...first.removed, ...second.removed]);
+  const changed = new Set([...added, ...modified, ...removed]);
+  const unchanged = unique([...first.unchanged, ...second.unchanged])
+    .filter((filePath) => !changed.has(filePath));
+
+  return { added, modified, removed, unchanged };
+}

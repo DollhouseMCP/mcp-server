@@ -291,14 +291,18 @@ describe('MemoryStorageLayer', () => {
           return true;
         })
         .mockResolvedValue(true);
+      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+        ['system/baseline.yaml', makeMeta('system/baseline.yaml', 2000)],
+      ]));
 
       const olderScan = layer.scan();
       await olderScanStarted;
       const freshScan = layer.scan({ freshAfterInFlight: true });
       releaseOlderScan();
-      await Promise.all([olderScan, freshScan]);
+      const [, freshDiff] = await Promise.all([olderScan, freshScan]);
 
       expect(backend.directoryExists).toHaveBeenCalledTimes(2);
+      expect(freshDiff.modified).toContain('system/baseline.yaml');
     });
   });
 

@@ -16,7 +16,7 @@ import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
 import type { IStorageBackend } from './IStorageBackend.js';
-import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
+import { mergeManifestDiffResults, type ElementIndexEntry, type ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
 import { MetadataIndex } from './MetadataIndex.js';
 import { FileStorageBackend } from './FileStorageBackend.js';
@@ -77,6 +77,7 @@ export class MemoryStorageLayer implements IStorageLayer {
   // ---- IStorageLayer implementation ----
 
   async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
+    let drainedDiff: ManifestDiffResult | undefined;
     const existingScan = this.scanInProgress;
     if (existingScan) {
       if (!options.freshAfterInFlight) {
@@ -84,7 +85,7 @@ export class MemoryStorageLayer implements IStorageLayer {
       }
 
       try {
-        await existingScan;
+        drainedDiff = await existingScan;
       } catch {
         // The trailing scan gets an independent chance to recover.
       }
@@ -107,14 +108,16 @@ export class MemoryStorageLayer implements IStorageLayer {
       }
 
       if (this.scanInProgress) {
-        return this.scanInProgress;
+        const result = await this.scanInProgress;
+        return drainedDiff ? mergeManifestDiffResults(drainedDiff, result) : result;
       }
       scan = this.performScan();
     }
 
     this.scanInProgress = scan;
     try {
-      return await scan;
+      const result = await scan;
+      return drainedDiff ? mergeManifestDiffResults(drainedDiff, result) : result;
     } finally {
       if (this.scanInProgress === scan) {
         this.scanInProgress = null;

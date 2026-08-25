@@ -9,7 +9,7 @@ import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import type { IStorageBackend } from './IStorageBackend.js';
 import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
-import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
+import { mergeManifestDiffResults, type ElementIndexEntry, type ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
 import { MetadataIndex } from './MetadataIndex.js';
 import { FrontmatterParser } from './FrontmatterParser.js';
@@ -63,6 +63,7 @@ export class ElementStorageLayer implements IStorageLayer {
    * - Updates index and manifest based on diff
    */
   async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
+    let drainedDiff: ManifestDiffResult | undefined;
     const existingScan = this.scanInProgress;
     if (existingScan) {
       if (!options.freshAfterInFlight) {
@@ -72,7 +73,7 @@ export class ElementStorageLayer implements IStorageLayer {
       // A security-sensitive caller must not inherit a directory snapshot that
       // began before the caller. Drain it, then force a trailing disk scan.
       try {
-        await existingScan;
+        drainedDiff = await existingScan;
       } catch {
         // The trailing scan gets an independent chance to recover.
       }
@@ -91,13 +92,15 @@ export class ElementStorageLayer implements IStorageLayer {
     // Deduplicate a scan that started after the freshness wait above. Such a
     // scan is new enough for this caller and can safely be shared.
     if (this.scanInProgress) {
-      return this.scanInProgress;
+      const result = await this.scanInProgress;
+      return drainedDiff ? mergeManifestDiffResults(drainedDiff, result) : result;
     }
 
     const scan = this.performScan();
     this.scanInProgress = scan;
     try {
-      return await scan;
+      const result = await scan;
+      return drainedDiff ? mergeManifestDiffResults(drainedDiff, result) : result;
     } finally {
       if (this.scanInProgress === scan) {
         this.scanInProgress = null;

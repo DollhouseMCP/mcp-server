@@ -152,7 +152,7 @@ describe('ElementStorageLayer', () => {
           await olderScanBlocked;
           return new Map([
             ['alpha.md', makeMeta('alpha.md', 1000)],
-            ['beta.md', makeMeta('beta.md', 2000)],
+            ['beta.md', makeMeta('beta.md', 5000)],
           ]);
         })
         .mockResolvedValue(new Map([
@@ -169,9 +169,10 @@ describe('ElementStorageLayer', () => {
       await olderScanStarted;
       const freshScan = layer.scan({ freshAfterInFlight: true });
       releaseOlderScan();
-      await Promise.all([olderScan, freshScan]);
+      const [, freshDiff] = await Promise.all([olderScan, freshScan]);
 
       expect(backend.listFiles).toHaveBeenCalledTimes(3);
+      expect(freshDiff.modified).toContain('beta.md');
       expect(layer.getPathByName('Beta Updated')).toBe('beta.md');
     });
   });

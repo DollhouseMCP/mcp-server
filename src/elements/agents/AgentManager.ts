@@ -993,9 +993,16 @@ export class AgentManager extends BaseElementManager<Agent> {
   async getActiveAgents(options: { freshAfterInFlight?: boolean } = {}): Promise<Agent[]> {
     await this.scanAndEvict(options);
     const agents: Agent[] = [];
-    for (const name of this.activeAgentNames) {
+    // Snapshot the keys because a reloaded file may have a new metadata name.
+    // Migrate that identity before restoring lifecycle state so a later
+    // deactivateAgent(newName) removes the authoritative active-set entry.
+    for (const name of Array.from(this.activeAgentNames)) {
       const agent = await this.findByName(name);
       if (agent) {
+        if (agent.metadata.name !== name) {
+          this.activeAgentNames.delete(name);
+          this.activeAgentNames.add(agent.metadata.name);
+        }
         // scanAndEvict() can discard an externally modified active agent. Its
         // replacement starts inactive, so restore the lifecycle state once.
         // Avoid reactivating unchanged instances: Agent.activate() advances

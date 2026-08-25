@@ -155,6 +155,25 @@ describe('AgentManager', () => {
       expect(result).toEqual([reloadedAgent]);
       expect(activate).toHaveBeenCalledTimes(1);
     });
+
+    it('migrates the active-set key when a reloaded agent was renamed', async () => {
+      const activate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      const reloadedAgent = {
+        metadata: { name: 'renamed-agent' },
+        getStatus: () => ElementStatus.INACTIVE,
+        activate,
+      } as Agent;
+      const activeNames = (agentManager as any).activeAgentNames as Set<string>;
+      activeNames.add('original-agent');
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager, 'findByName').mockResolvedValue(reloadedAgent);
+
+      await agentManager.getActiveAgents();
+
+      expect(activeNames.has('original-agent')).toBe(false);
+      expect(activeNames.has('renamed-agent')).toBe(true);
+      expect(activate).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('Create', () => {
