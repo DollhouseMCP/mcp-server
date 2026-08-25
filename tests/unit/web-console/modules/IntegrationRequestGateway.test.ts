@@ -48,6 +48,7 @@ describe('IntegrationRequestGateway', () => {
         fetches.push({ url: urlString(url), init });
         return Promise.resolve(jsonResponse(200, {
           ok: true,
+          message: 'credential gmail-access-token was accepted',
           access_token: 'upstream-token',
           nested: { api_key: 'upstream-key' },
         }));
@@ -70,6 +71,7 @@ describe('IntegrationRequestGateway', () => {
       status: 200,
       response: {
         ok: true,
+        message: 'credential [redacted] was accepted',
         access_token: '[redacted]',
         nested: { api_key: '[redacted]' },
       },
@@ -126,6 +128,24 @@ describe('IntegrationRequestGateway', () => {
       refresh_token: '[redacted]',
     });
     expect(JSON.stringify(result)).not.toContain('upstream-refresh-token');
+  });
+
+  it('redacts an echoed active credential from plain-text responses', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(new Response(
+        'credential gmail-access-token was accepted',
+        { status: 200, headers: { 'Content-Type': 'text/plain' } },
+      )),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/plain-text',
+    }));
+
+    expect(result.response).toBe('credential [redacted] was accepted');
+    expect(JSON.stringify(result)).not.toContain('gmail-access-token');
   });
 
   it('injects static API keys into query parameters without returning the key', async () => {
@@ -481,7 +501,7 @@ describe('IntegrationRequestGateway', () => {
         });
         return Promise.resolve(fetches.length === 1
           ? jsonResponse(401, { error: 'expired' })
-          : jsonResponse(200, { ok: true }));
+          : jsonResponse(200, { ok: true, message: 'gmail-fresh-access-token' }));
       },
     });
 
@@ -491,7 +511,11 @@ describe('IntegrationRequestGateway', () => {
       path: '/gmail/v1/users/me/profile',
     }));
 
-    expect(result).toMatchObject({ status: 200, refreshed: true });
+    expect(result).toMatchObject({
+      status: 200,
+      refreshed: true,
+      response: { ok: true, message: '[redacted]' },
+    });
     expect(fetches.map(call => call.authorization)).toEqual([
       'Bearer gmail-access-token',
       null,

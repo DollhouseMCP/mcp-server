@@ -302,7 +302,7 @@ export class IntegrationRequestGateway {
         signal: controller.signal,
         redirect: 'error',
       });
-      return await readBoundedResponse(response, controller);
+      return await readBoundedResponse(response, controller, credential);
     } catch (error) {
       if (error instanceof IntegrationRequestError) {
         throw error;
@@ -649,11 +649,15 @@ async function assertIntegrationPublicHost(hostname: string, lookup: DnsLookup):
   }
 }
 
-async function readBoundedResponse(response: Response, controller: AbortController): Promise<IntegrationHttpResponse> {
+async function readBoundedResponse(
+  response: Response,
+  controller: AbortController,
+  activeCredential: string,
+): Promise<IntegrationHttpResponse> {
   const text = await readBoundedResponseText(response, controller);
   return {
     status: response.status,
-    body: parseResponseBody(text, response.headers.get('content-type')),
+    body: parseResponseBody(text, response.headers.get('content-type'), activeCredential),
   };
 }
 
@@ -693,16 +697,16 @@ async function readBoundedResponseText(response: Response, controller: AbortCont
   return Buffer.concat(chunks, totalBytes).toString('utf8');
 }
 
-function parseResponseBody(text: string, contentType: string | null): unknown {
+function parseResponseBody(text: string, contentType: string | null, activeCredential: string): unknown {
   if (text === '') return null;
   if (isJsonMediaType(contentType)) {
     try {
-      return redactCredentialFields(JSON.parse(text) as unknown);
+      return redactCredentialFields(JSON.parse(text) as unknown, activeCredential);
     } catch {
       return REDACTED;
     }
   }
-  return text;
+  return redactExactCredential(text, activeCredential);
 }
 
 function isJsonMediaType(contentType: string | null): boolean {
@@ -712,14 +716,20 @@ function isJsonMediaType(contentType: string | null): boolean {
     (mediaType?.startsWith('application/') === true && mediaType.endsWith('+json'));
 }
 
-function redactCredentialFields(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(redactCredentialFields);
+function redactCredentialFields(value: unknown, activeCredential: string): unknown {
+  if (typeof value === 'string') return redactExactCredential(value, activeCredential);
+  if (Array.isArray(value)) return value.map(field => redactCredentialFields(field, activeCredential));
   if (!value || typeof value !== 'object') return value;
   const output: Record<string, unknown> = {};
   for (const [key, field] of Object.entries(value)) {
-    output[key] = isCredentialKey(key) ? REDACTED : redactCredentialFields(field);
+    const safeKey = redactExactCredential(key, activeCredential);
+    output[safeKey] = isCredentialKey(key) ? REDACTED : redactCredentialFields(field, activeCredential);
   }
   return output;
+}
+
+function redactExactCredential(value: string, activeCredential: string): string {
+  return activeCredential === '' ? value : value.replaceAll(activeCredential, REDACTED);
 }
 
 function isCredentialKey(key: string): boolean {
