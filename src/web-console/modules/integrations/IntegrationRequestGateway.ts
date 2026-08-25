@@ -684,7 +684,7 @@ async function readBoundedResponseText(response: Response, controller: AbortCont
 
 function parseResponseBody(text: string, contentType: string | null): unknown {
   if (text === '') return null;
-  if (contentType?.toLowerCase().includes('application/json')) {
+  if (isJsonMediaType(contentType)) {
     try {
       return redactCredentialFields(JSON.parse(text) as unknown);
     } catch {
@@ -692,6 +692,13 @@ function parseResponseBody(text: string, contentType: string | null): unknown {
     }
   }
   return text;
+}
+
+function isJsonMediaType(contentType: string | null): boolean {
+  if (!contentType) return false;
+  const mediaType = contentType.split(';', 1)[0]?.trim().toLowerCase();
+  return mediaType === 'application/json' ||
+    (mediaType?.startsWith('application/') === true && mediaType.endsWith('+json'));
 }
 
 function redactCredentialFields(value: unknown): unknown {

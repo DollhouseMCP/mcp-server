@@ -90,6 +90,8 @@ export interface WiredHarnessOptions {
   readonly remoteMcp?: { readonly tools: readonly string[] };
   /** Injected remote MCP client factory (defaults to a stub echo client). */
   readonly remoteMcpClientFactory?: RemoteMcpClientFactory;
+  /** Overrides the connected user id, including for stdio parity coverage. */
+  readonly userId?: string;
 }
 
 export function openApiSpec(host: string = API_HOST): Record<string, unknown> {
@@ -206,7 +208,7 @@ export async function bootWiredIntegration(options: WiredHarnessOptions = {}): P
     now: () => TIMESTAMP,
   }).bootstrapAndRegister(container);
 
-  const userId = randomUUID();
+  const userId = options.userId ?? randomUUID();
   const descriptorStore = container.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore);
   const specStore = container.resolve<IIntegrationOpenApiSpecStore>(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore);
   const userStore = container.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore);

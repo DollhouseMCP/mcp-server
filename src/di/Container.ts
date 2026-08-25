@@ -1246,6 +1246,10 @@ export class DollhouseContainer {
 
     this.registerToolsOnRegistry(toolRegistry, bundle, interfaceMode);
 
+    const contextTracker = this.resolve<ContextTracker>('ContextTracker');
+    const stdioSession = this.resolve<ReturnType<typeof createStdioSession>>('StdioSession');
+    await this.registerSessionIntegrationTools(toolRegistry, bundle, contextTracker, stdioSession);
+
     // Log token statistics (Issue #237 enhancement)
     this.logToolTokenStats(toolRegistry, interfaceMode, bundle.mcpAqlHandler, {
       personaHandler: bundle.personaHandler,
@@ -1859,7 +1863,7 @@ export class DollhouseContainer {
             integrationRequestPolicyEnforcer,
           );
         } catch (error) {
-          logger.warn('[HTTP Session] Promoted integration tool registration skipped', {
+          logger.warn('[Integration Session] Promoted integration tool registration skipped', {
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1878,7 +1882,7 @@ export class DollhouseContainer {
             integrationRequestPolicyEnforcer,
           );
         } catch (error) {
-          logger.warn('[HTTP Session] Remote MCP bridge tool registration skipped', {
+          logger.warn('[Integration Session] Remote MCP bridge tool registration skipped', {
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -1913,6 +1917,11 @@ export class DollhouseContainer {
       providers.push(createGitHubIntegrationProvider(
         this.resolve<IGitHubIntegrationProvider>(WEB_CONSOLE_SERVICE_NAMES.githubIntegrationProvider),
         serializeGitHubIntegrationStatus,
+      ));
+    }
+    if (this.hasRegistration(WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders)) {
+      providers.push(...this.resolve<readonly IIntegrationProvider[]>(
+        WEB_CONSOLE_SERVICE_NAMES.configuredIntegrationProviders,
       ));
     }
     return new IntegrationProviderRegistry(providers);

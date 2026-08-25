@@ -9,6 +9,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from '@jest/globals';
 import { randomUUID } from 'node:crypto';
+import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 
 import { ACCESS_TOKEN, PROVIDER, bootWiredIntegration, type WiredHarness } from './wiredIntegrationHarness.js';
 
@@ -181,5 +182,31 @@ describe('Integrations v2 — wired integration_request (core path)', () => {
     });
     // The decrypted credential was injected server-side into the remote MCP client.
     expect(harness.lastRemoteMcpBearerToken()).toBe(ACCESS_TOKEN);
+  });
+
+  it('registers promoted and remote integration tools for stdio sessions', async () => {
+    const previousUser = process.env.DOLLHOUSE_USER;
+    const stdioUserId = randomUUID();
+    process.env.DOLLHOUSE_USER = stdioUserId;
+    let stdioHarness: WiredHarness | undefined;
+    try {
+      stdioHarness = await bootWiredIntegration({
+        remoteMcp: { tools: ['echo'] },
+        userId: stdioUserId,
+      });
+      const server = new Server(
+        { name: 'stdio-integration-test', version: '1.0.0' },
+        { capabilities: { tools: {} } },
+      );
+
+      const handlers = await stdioHarness.container.createHandlers(server);
+
+      expect(handlers.toolRegistry.has(`integration_${PROVIDER.replace('-', '_')}_getthing`)).toBe(true);
+      expect(handlers.toolRegistry.has(`remote_mcp_${PROVIDER.replace('-', '_')}_echo`)).toBe(true);
+    } finally {
+      await stdioHarness?.dispose();
+      if (previousUser === undefined) delete process.env.DOLLHOUSE_USER;
+      else process.env.DOLLHOUSE_USER = previousUser;
+    }
   });
 });

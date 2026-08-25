@@ -104,6 +104,30 @@ describe('IntegrationRequestGateway', () => {
     ]);
   });
 
+  it('redacts credential fields in structured-suffix JSON responses', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(new Response(JSON.stringify({
+        type: 'upstream_problem',
+        refresh_token: 'upstream-refresh-token',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/problem+json; charset=utf-8' },
+      })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/problem',
+    }));
+
+    expect(result.response).toEqual({
+      type: 'upstream_problem',
+      refresh_token: '[redacted]',
+    });
+    expect(JSON.stringify(result)).not.toContain('upstream-refresh-token');
+  });
+
   it('injects static API keys into query parameters without returning the key', async () => {
     const fetches: string[] = [];
     const gateway = gatewayFixture({

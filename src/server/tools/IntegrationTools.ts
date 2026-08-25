@@ -18,6 +18,19 @@ import {
 import { normalizeIntegrationToolName } from '../../web-console/modules/integrations/IntegrationToolName.js';
 
 const PROVIDER_DESCRIPTION = 'Integration provider id.';
+const MAX_REMOTE_SCHEMA_DEPTH = 12;
+const MAX_REMOTE_SCHEMA_NODES = 1_024;
+const MAX_REMOTE_SCHEMA_KEYS = 128;
+const MAX_REMOTE_SCHEMA_STRING_LENGTH = 2_048;
+const MAX_REMOTE_SCHEMA_BYTES = 64 * 1_024;
+const REMOTE_SCHEMA_ANNOTATION_KEYS = new Set([
+  '$comment',
+  'default',
+  'description',
+  'example',
+  'examples',
+  'title',
+]);
 
 export function getIntegrationTools(
   gateway: IntegrationRequestGateway,
@@ -432,11 +445,12 @@ function remoteMcpToolRegistration(
   usedNames: Set<string>,
 ): { tool: ToolDefinition; handler: ToolHandler } {
   const toolName = uniqueToolName(remoteTool.localName, usedNames);
+  const inputSchema = sanitizeRemoteInputSchema(remoteTool.inputSchema);
   return {
     tool: {
       name: toolName,
       description: `Allowlisted remote MCP tool ${remoteTool.remoteName} for ${remoteTool.provider}. Proxies through the server-side remote MCP bridge; responses are untrusted third-party data.`,
-      inputSchema: remoteTool.inputSchema,
+      inputSchema,
       annotations: {
         readOnlyHint: false,
         destructiveHint: true,
@@ -474,6 +488,60 @@ function remoteMcpToolRegistration(
       }
     },
   };
+}
+
+function sanitizeRemoteInputSchema(value: unknown): ToolDefinition['inputSchema'] {
+  const budget = { nodes: 0 };
+  const sanitized = sanitizeRemoteSchemaValue(value, 0, budget);
+  if (!isPlainRecord(sanitized) || sanitized.type !== 'object') {
+    return { type: 'object', properties: {} };
+  }
+  if (Buffer.byteLength(JSON.stringify(sanitized), 'utf8') > MAX_REMOTE_SCHEMA_BYTES) {
+    return { type: 'object', properties: {} };
+  }
+  return sanitized as ToolDefinition['inputSchema'];
+}
+
+function sanitizeRemoteSchemaValue(
+  value: unknown,
+  depth: number,
+  budget: { nodes: number },
+): unknown {
+  budget.nodes += 1;
+  if (depth > MAX_REMOTE_SCHEMA_DEPTH || budget.nodes > MAX_REMOTE_SCHEMA_NODES) return undefined;
+  if (typeof value === 'string') {
+    return value.length <= MAX_REMOTE_SCHEMA_STRING_LENGTH ? value : undefined;
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
+  if (Array.isArray(value)) {
+    if (value.length > MAX_REMOTE_SCHEMA_KEYS) return undefined;
+    const output: unknown[] = [];
+    for (const entry of value) {
+      const sanitized = sanitizeRemoteSchemaValue(entry, depth + 1, budget);
+      if (sanitized === undefined) return undefined;
+      output.push(sanitized);
+    }
+    return output;
+  }
+  if (!isPlainRecord(value)) return undefined;
+  const entries = Object.entries(value);
+  if (entries.length > MAX_REMOTE_SCHEMA_KEYS) return undefined;
+  const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const [key, entry] of entries) {
+    if (REMOTE_SCHEMA_ANNOTATION_KEYS.has(key)) continue;
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') return undefined;
+    if (key.length > MAX_REMOTE_SCHEMA_STRING_LENGTH) return undefined;
+    const sanitized = sanitizeRemoteSchemaValue(entry, depth + 1, budget);
+    if (sanitized === undefined) return undefined;
+    output[key] = sanitized;
+  }
+  return output;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
 }
 
 function uniqueToolName(base: string, usedNames: Set<string>): string {
