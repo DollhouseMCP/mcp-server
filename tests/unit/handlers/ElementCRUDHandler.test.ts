@@ -376,6 +376,47 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(skillManager.list).not.toHaveBeenCalled();
     });
 
+    it('resolves unique ensemble members concurrently with a bounded I/O ceiling', async () => {
+      const members = Array.from({ length: 20 }, (_, index) => ({
+        element_type: 'skill',
+        element_name: `member-${index}`,
+      }));
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: { name: 'concurrent-ensemble', elements: members },
+      } as any]);
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let releaseLookups!: () => void;
+      let markCeilingReached!: () => void;
+      const lookupsBlocked = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      const ceilingReached = new Promise<void>((resolve) => {
+        markCeilingReached = resolve;
+      });
+      skillManager.findByName = jest.fn(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (maxInFlight === 8) markCeilingReached();
+        await lookupsBlocked;
+        inFlight--;
+        return undefined;
+      });
+
+      const snapshot = handler.getActiveElementsForPolicy();
+      await ceilingReached;
+
+      expect(skillManager.findByName).toHaveBeenCalledTimes(8);
+      expect(maxInFlight).toBe(8);
+      releaseLookups();
+      await snapshot;
+
+      expect(skillManager.findByName).toHaveBeenCalledTimes(20);
+      expect(maxInFlight).toBe(8);
+    });
+
     it('merges persisted activation snapshots into reportable policy elements', async () => {
       const activationStore = {
         isEnabled: jest.fn().mockReturnValue(true),

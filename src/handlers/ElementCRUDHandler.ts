@@ -74,6 +74,8 @@ type PolicyMemberElement = {
   metadata?: Record<string, unknown>;
 };
 
+const ACTIVE_POLICY_MEMBER_LOOKUP_CONCURRENCY = 8;
+
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
   private activePolicySnapshotGeneration = 0;
@@ -501,6 +503,8 @@ export class ElementCRUDHandler {
     try {
       // Active ensembles (async)
       const ensembles = await this.ensembleManager.getActiveEnsembles();
+      const memberCandidates: Array<{ type: string; name: string; key: string }> = [];
+      const queuedMemberKeys = new Set<string>();
       for (const e of ensembles) {
         const ensembleKey = this.policyElementKey('ensemble', e.metadata.name);
         seen.add(ensembleKey);
@@ -521,21 +525,47 @@ export class ElementCRUDHandler {
 
             const memberKey = this.policyElementKey(normalizedType, normalizedName);
             if (seen.has(memberKey)) continue; // Already active individually
-            try {
-              const found = await findMember(normalizedType, normalizedName, memberKey);
-              if (found?.metadata && found.metadata['gatekeeper']) {
-                seen.add(memberKey);
-                result.push({
-                  type: this.toPolicyElementType(normalizedType),
-                  name: normalizedName,
-                  metadata: found.metadata,
-                });
-              }
-            } catch {
-              // Non-fatal: skip member if element type lookup fails
-            }
+            if (queuedMemberKeys.has(memberKey)) continue;
+            queuedMemberKeys.add(memberKey);
+            memberCandidates.push({ type: normalizedType, name: normalizedName, key: memberKey });
           }
         }
+      }
+
+      // Resolve uncached member files concurrently, but cap the work so a
+      // large ensemble cannot create an unbounded I/O burst. Store results by
+      // candidate index to preserve deterministic policy ordering.
+      const resolvedMembers = new Array<PolicyElement | undefined>(memberCandidates.length);
+      let nextCandidateIndex = 0;
+      const resolveNextMember = async (): Promise<void> => {
+        while (nextCandidateIndex < memberCandidates.length) {
+          const candidateIndex = nextCandidateIndex++;
+          const candidate = memberCandidates[candidateIndex];
+          try {
+            const found = await findMember(candidate.type, candidate.name, candidate.key);
+            if (found?.metadata && found.metadata['gatekeeper']) {
+              resolvedMembers[candidateIndex] = {
+                type: this.toPolicyElementType(candidate.type),
+                name: candidate.name,
+                metadata: found.metadata,
+              };
+            }
+          } catch {
+            // Non-fatal: skip member if element type lookup fails
+          }
+        }
+      };
+      const workerCount = Math.min(
+        ACTIVE_POLICY_MEMBER_LOOKUP_CONCURRENCY,
+        memberCandidates.length,
+      );
+      await Promise.all(Array.from({ length: workerCount }, () => resolveNextMember()));
+      for (const resolved of resolvedMembers) {
+        if (!resolved) continue;
+        const memberKey = this.policyElementKey(resolved.type, resolved.name);
+        if (seen.has(memberKey)) continue;
+        seen.add(memberKey);
+        result.push(resolved);
       }
     } catch (error) {
       logger.warn('Failed to gather active ensembles for policy evaluation', { error });
