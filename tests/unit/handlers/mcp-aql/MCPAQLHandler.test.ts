@@ -472,7 +472,10 @@ describe('MCPAQLHandler', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(mockRegistry.elementCRUD.getPolicyElementsForReport).toHaveBeenCalledWith('session-follower-1');
+      expect(mockRegistry.elementCRUD.getPolicyElementsForReport).toHaveBeenCalledWith(
+        'session-follower-1',
+        { allowCoalescing: false },
+      );
     });
   });
 

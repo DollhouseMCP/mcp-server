@@ -585,7 +585,10 @@ export class ElementCRUDHandler {
     return result;
   }
 
-  async getPolicyElementsForReport(sessionId?: string): Promise<Array<{
+  async getPolicyElementsForReport(
+    sessionId?: string,
+    options: { allowCoalescing?: boolean } = {},
+  ): Promise<Array<{
     type: string;
     name: string;
     metadata: Record<string, unknown>;
@@ -623,9 +626,12 @@ export class ElementCRUDHandler {
 
     const currentSessionId = this.activationStore?.getSessionId();
     const includeCurrentSession = !sessionId || !currentSessionId || currentSessionId === sessionId;
+    const indexOptions = options.allowCoalescing === false
+      ? { freshAfterInFlight: true }
+      : {};
 
     if (includeCurrentSession) {
-      for (const activeElement of await this.getActiveElementsForPolicy()) {
+      for (const activeElement of await this.getActiveElementsForPolicy(options)) {
         addElement(activeElement, currentSessionId ? [currentSessionId] : []);
       }
     }
@@ -644,7 +650,7 @@ export class ElementCRUDHandler {
 
         const manager = this.getManagerForType(normalizedType);
         const indexed = manager
-          ? manager.refreshIndex().then(() => manager)
+          ? manager.refreshIndex(indexOptions).then(() => manager)
           : Promise.resolve(undefined);
         indexedManagers.set(normalizedType, indexed);
         return indexed;

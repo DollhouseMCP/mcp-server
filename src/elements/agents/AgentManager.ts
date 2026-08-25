@@ -130,6 +130,9 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
   // Track active agents by name (stable identifier)
   private readonly activeAgentNames: Set<string> = new Set();
+  // Preserve the storage identity captured at activation time. Display names
+  // are editable metadata, while filenames remain stable across those edits.
+  private readonly activeAgentFilenames: Map<string, string> = new Map();
 
   // Static resolver for element manager lookup (DI pattern)
   // This allows Agent instances to resolve managers without tight coupling
@@ -876,10 +879,21 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   override async list(): Promise<Agent[]> {
     const agents = await super.list();
+    const activeNameByFilename = new Map<string, string>();
+    for (const [activeName, filename] of this.activeAgentFilenames) {
+      activeNameByFilename.set(filename, activeName);
+    }
 
-    // Apply active status to agents that are in the active set (by name)
+    // Apply active status by display name or, when available, stable filename.
     for (const agent of agents) {
-      if (this.activeAgentNames.has(agent.metadata.name)) {
+      const filename = this.getStableFilename(agent);
+      const priorName = filename
+        ? activeNameByFilename.get(filename)
+        : undefined;
+      if (this.activeAgentNames.has(agent.metadata.name) || priorName) {
+        if (priorName && priorName !== agent.metadata.name) {
+          this.migrateActiveAgentIdentity(priorName, agent.metadata.name, filename);
+        }
         // Activate the agent to set status to ACTIVE
         await agent.activate();
       }
@@ -910,8 +924,13 @@ export class AgentManager extends BaseElementManager<Agent> {
     // MEMORY LEAK FIX: Check if cleanup is needed before adding
     this.checkAndCleanupActiveSet();
 
-    // Add to active set (by name, which is stable across reloads)
+    // Keep the display name for compatibility and the filename as the stable
+    // identity used to survive an external metadata rename.
     this.activeAgentNames.add(agent.metadata.name);
+    const filename = this.getStableFilename(agent);
+    if (filename) {
+      this.activeAgentFilenames.set(agent.metadata.name, filename);
+    }
 
     // Update agent status in memory
     await agent.activate();
@@ -948,8 +967,21 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    */
   async deactivateAgent(identifier: string): Promise<{ success: boolean; message: string }> {
-    // PERFORMANCE FIX: Use findByName() instead of list()
-    const agent = await this.findByName(identifier);
+    // Deactivation is a security-sensitive lifecycle change. Refresh first,
+    // then fall back to stable active filenames when external metadata edits
+    // have made the current display name diverge from its storage path.
+    await this.scanAndEvict({ freshAfterInFlight: true });
+    let agent = await this.findByName(identifier);
+    if (!agent) {
+      const normalizedIdentifier = identifier.toLowerCase();
+      for (const filename of new Set(this.activeAgentFilenames.values())) {
+        const candidate = await this.findByFilename(filename);
+        if (candidate?.metadata.name.toLowerCase() === normalizedIdentifier) {
+          agent = candidate;
+          break;
+        }
+      }
+    }
 
     if (!agent) {
       return {
@@ -959,8 +991,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       };
     }
 
-    // Remove from active set
-    this.activeAgentNames.delete(agent.metadata.name);
+    // Remove the current display name and any pre-rename key that points at
+    // the same stable file, so explicit deactivation cannot be undone by a
+    // later policy refresh.
+    this.removeActiveAgentIdentity(agent);
 
     // Update agent status in memory
     await agent.deactivate();
@@ -997,11 +1031,18 @@ export class AgentManager extends BaseElementManager<Agent> {
     // Migrate that identity before restoring lifecycle state so a later
     // deactivateAgent(newName) removes the authoritative active-set entry.
     for (const name of Array.from(this.activeAgentNames)) {
-      const agent = await this.findByName(name);
+      const stableFilename = this.activeAgentFilenames.get(name);
+      const agent = stableFilename
+        ? await this.findByFilename(stableFilename)
+        : await this.findByName(name);
       if (agent) {
         if (agent.metadata.name !== name) {
-          this.activeAgentNames.delete(name);
-          this.activeAgentNames.add(agent.metadata.name);
+          this.migrateActiveAgentIdentity(name, agent.metadata.name, stableFilename);
+        } else if (!stableFilename) {
+          const loadedFilename = this.getStableFilename(agent);
+          if (loadedFilename) {
+            this.activeAgentFilenames.set(name, loadedFilename);
+          }
         }
         // scanAndEvict() can discard an externally modified active agent. Its
         // replacement starts inactive, so restore the lifecycle state once.
@@ -1014,6 +1055,39 @@ export class AgentManager extends BaseElementManager<Agent> {
       }
     }
     return agents;
+  }
+
+  private getStableFilename(agent: Agent): string | undefined {
+    const filename = (agent as Agent & { filename?: unknown }).filename;
+    return typeof filename === 'string' && filename.trim() !== ''
+      ? filename
+      : undefined;
+  }
+
+  private migrateActiveAgentIdentity(
+    previousName: string,
+    currentName: string,
+    filename?: string,
+  ): void {
+    this.activeAgentNames.delete(previousName);
+    this.activeAgentNames.add(currentName);
+    this.activeAgentFilenames.delete(previousName);
+    if (filename) {
+      this.activeAgentFilenames.set(currentName, filename);
+    }
+  }
+
+  private removeActiveAgentIdentity(agent: Agent): void {
+    const filename = this.getStableFilename(agent);
+    this.activeAgentNames.delete(agent.metadata.name);
+    this.activeAgentFilenames.delete(agent.metadata.name);
+
+    if (!filename) return;
+    for (const [activeName, activeFilename] of this.activeAgentFilenames) {
+      if (activeFilename !== filename) continue;
+      this.activeAgentFilenames.delete(activeName);
+      this.activeAgentNames.delete(activeName);
+    }
   }
 
   /**
@@ -1856,6 +1930,7 @@ export class AgentManager extends BaseElementManager<Agent> {
       for (const activeName of this.activeAgentNames) {
         if (!existingAgentNames.has(activeName)) {
           this.activeAgentNames.delete(activeName);
+          this.activeAgentFilenames.delete(activeName);
           staleNames.push(activeName);
         }
       }

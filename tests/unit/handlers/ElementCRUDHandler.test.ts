@@ -604,6 +604,55 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(skillManager.list).not.toHaveBeenCalled();
     });
 
+    it('forces a trailing persisted-policy index scan for enforcement reports', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: {
+            skill: [{ name: 'fresh-policy', activatedAt: new Date().toISOString() }],
+          },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'fresh-policy',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport(
+        'session-other',
+        { allowCoalescing: false },
+      );
+
+      expect(skillManager.refreshIndex).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      expect(result).toEqual([
+        expect.objectContaining({ type: 'skill', name: 'fresh-policy' }),
+      ]);
+    });
+
     it('uses a persisted persona stable filename before a reused display name', async () => {
       const activationStore = {
         isEnabled: jest.fn().mockReturnValue(true),

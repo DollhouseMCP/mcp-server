@@ -732,7 +732,10 @@ export class MCPAQLHandler {
   private async getActiveElements(sessionId?: string): Promise<ActiveElement[]> {
     try {
       const rawElements = sessionId
-        ? await this.handlers.elementCRUD.getPolicyElementsForReport(sessionId)
+        ? await this.handlers.elementCRUD.getPolicyElementsForReport(
+          sessionId,
+          { allowCoalescing: false },
+        )
         : await this.handlers.elementCRUD.getActiveElementsForPolicy({ allowCoalescing: false });
       const activeElements: ActiveElement[] = rawElements.map((el) => ({
         type: el.type,

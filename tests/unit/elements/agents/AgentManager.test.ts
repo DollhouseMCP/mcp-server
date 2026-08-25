@@ -160,19 +160,52 @@ describe('AgentManager', () => {
       const activate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
       const reloadedAgent = {
         metadata: { name: 'renamed-agent' },
+        filename: 'original-agent.md',
         getStatus: () => ElementStatus.INACTIVE,
         activate,
       } as Agent;
       const activeNames = (agentManager as any).activeAgentNames as Set<string>;
+      const activeFilenames = (agentManager as any).activeAgentFilenames as Map<string, string>;
       activeNames.add('original-agent');
+      activeFilenames.set('original-agent', 'original-agent.md');
       jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
-      jest.spyOn(agentManager, 'findByName').mockResolvedValue(reloadedAgent);
+      const findByName = jest.spyOn(agentManager, 'findByName').mockResolvedValue(undefined);
+      const findByFilename = jest.spyOn(agentManager, 'findByFilename').mockResolvedValue(reloadedAgent);
 
       await agentManager.getActiveAgents();
 
+      expect(findByFilename).toHaveBeenCalledWith('original-agent.md');
+      expect(findByName).not.toHaveBeenCalled();
       expect(activeNames.has('original-agent')).toBe(false);
       expect(activeNames.has('renamed-agent')).toBe(true);
+      expect(activeFilenames.get('renamed-agent')).toBe('original-agent.md');
       expect(activate).toHaveBeenCalledTimes(1);
+    });
+
+    it('deactivates a renamed agent by its stable filename before a policy refresh', async () => {
+      const deactivate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      const renamedAgent = {
+        metadata: { name: 'renamed-agent', version: '1.0.0' },
+        filename: 'original-agent.md',
+        id: 'renamed-agent-id',
+        deactivate,
+      } as unknown as Agent;
+      const activeNames = (agentManager as any).activeAgentNames as Set<string>;
+      const activeFilenames = (agentManager as any).activeAgentFilenames as Map<string, string>;
+      activeNames.add('original-agent');
+      activeFilenames.set('original-agent', 'original-agent.md');
+      const scanAndEvict = jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager, 'findByName').mockResolvedValue(undefined);
+      const findByFilename = jest.spyOn(agentManager, 'findByFilename').mockResolvedValue(renamedAgent);
+
+      const result = await agentManager.deactivateAgent('renamed-agent');
+
+      expect(result.success).toBe(true);
+      expect(scanAndEvict).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      expect(findByFilename).toHaveBeenCalledWith('original-agent.md');
+      expect(activeNames.size).toBe(0);
+      expect(activeFilenames.size).toBe(0);
+      expect(deactivate).toHaveBeenCalledTimes(1);
     });
   });
 
