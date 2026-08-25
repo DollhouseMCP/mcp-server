@@ -53,7 +53,7 @@ export function canonicalizeIntegrationRequestPath(path: unknown): CanonicalInte
 
 function decodeUnreservedPathBytes(pathname: string): string {
   return pathname.replace(ENCODED_BYTE, (encoded, hexadecimal: string) => {
-    const character = String.fromCharCode(Number.parseInt(hexadecimal, 16));
+    const character = String.fromCodePoint(Number.parseInt(hexadecimal, 16));
     return /[A-Za-z0-9._~-]/.test(character) ? character : encoded;
   });
 }
