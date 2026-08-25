@@ -656,11 +656,11 @@ export class ElementCRUDHandler {
 
         const lookup = getIndexedManager(normalizedType).then(async (manager) => {
           if (!manager) return null;
-          let found = normalizedName !== ''
-            ? await manager.findByName(normalizedName) as PolicyMemberElement | undefined
+          let found = normalizedFilename !== ''
+            ? await manager.findByFilename(normalizedFilename) as PolicyMemberElement | undefined
             : undefined;
-          if (!found && normalizedFilename !== '') {
-            found = await manager.findByFilename(normalizedFilename) as PolicyMemberElement | undefined;
+          if (!found && normalizedName !== '') {
+            found = await manager.findByName(normalizedName) as PolicyMemberElement | undefined;
           }
 
           if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {

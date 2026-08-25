@@ -576,7 +576,7 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(skillManager.list).not.toHaveBeenCalled();
     });
 
-    it('recovers a renamed persisted persona by its stable filename', async () => {
+    it('uses a persisted persona stable filename before a reused display name', async () => {
       const activationStore = {
         isEnabled: jest.fn().mockReturnValue(true),
         getSessionId: jest.fn().mockReturnValue('leader-session'),
@@ -594,7 +594,12 @@ describe('ElementCRUDHandler (DI)', () => {
       } as unknown as jest.Mocked<ActivationStore>;
 
       personaHandler.refreshIndex = jest.fn().mockResolvedValue(undefined);
-      personaHandler.findByName = jest.fn().mockResolvedValue(undefined);
+      personaHandler.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'Old Display Name',
+          gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:rm*'] } },
+        },
+      } as any);
       personaHandler.findByFilename = jest.fn().mockResolvedValue({
         metadata: {
           name: 'New Display Name',
@@ -622,8 +627,8 @@ describe('ElementCRUDHandler (DI)', () => {
       const result = await reportHandler.getPolicyElementsForReport('session-other');
 
       expect(personaHandler.refreshIndex).toHaveBeenCalledTimes(1);
-      expect(personaHandler.findByName).toHaveBeenCalledWith('Old Display Name');
       expect(personaHandler.findByFilename).toHaveBeenCalledWith('stable-persona.md');
+      expect(personaHandler.findByName).not.toHaveBeenCalled();
       expect(result).toEqual([
         expect.objectContaining({
           type: 'persona',
