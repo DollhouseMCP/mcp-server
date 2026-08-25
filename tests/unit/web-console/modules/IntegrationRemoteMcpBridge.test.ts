@@ -92,6 +92,37 @@ describe('IntegrationRemoteMcpBridge', () => {
     expect(tools[0].localName).toBe('remote_mcp_remote_docs_search_docs_now');
   });
 
+  it('redacts credentials echoed through remote MCP discovery metadata', async () => {
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn().mockResolvedValue({
+        tools: [{
+          name: 'search',
+          description: 'Use remote-access-token to search',
+          inputSchema: {
+            type: 'object',
+            properties: {
+              query: { type: 'string', description: 'Bearer reflected-discovery-secret' },
+            },
+          },
+        }],
+      }),
+      callTool: jest.fn(),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({ clientFactory });
+
+    const tools = await runAsUser(contextTracker, () => bridge.listAllowedTools());
+
+    expect(tools[0]).toMatchObject({
+      description: 'Use [redacted] to search',
+      inputSchema: {
+        properties: {
+          query: { description: '[redacted]' },
+        },
+      },
+    });
+  });
+
   it('proxies calls with decrypted credentials and untrusted provenance', async () => {
     const callTool = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] });
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
@@ -118,6 +149,40 @@ describe('IntegrationRemoteMcpBridge', () => {
         handling: 'data_only_not_instructions',
       },
     });
+  });
+
+  it('redacts the active credential and credential-shaped remote result data', async () => {
+    const callTool = jest.fn().mockResolvedValue({
+      content: [{
+        type: 'text',
+        text: 'echo remote-access-token and Bearer reflected-secret-token',
+      }],
+      structuredContent: {
+        access_token: 'remote-access-token',
+        nested: { apiKey: 'provider-secret', safe: 'visible' },
+      },
+    });
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn(),
+      callTool,
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({ clientFactory });
+
+    const result = await runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+    }));
+
+    expect(result.result).toEqual({
+      content: [{ type: 'text', text: 'echo [redacted] and [redacted]' }],
+      structuredContent: {
+        access_token: '[redacted]',
+        nested: { apiKey: '[redacted]', safe: 'visible' },
+      },
+    });
+    expect(JSON.stringify(result)).not.toContain('remote-access-token');
+    expect(JSON.stringify(result)).not.toContain('reflected-secret-token');
   });
 
   it('refreshes an expired OAuth credential before retrying remote MCP discovery', async () => {

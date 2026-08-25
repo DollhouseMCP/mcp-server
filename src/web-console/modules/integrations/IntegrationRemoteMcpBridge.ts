@@ -27,6 +27,15 @@ import {
 
 const DEFAULT_REMOTE_MCP_TIMEOUT_MS = 5_000;
 const MAX_REMOTE_MCP_RESPONSE_BYTES = 1024 * 1024;
+const MAX_REMOTE_MCP_RESULT_DEPTH = 64;
+const MAX_REMOTE_MCP_RESULT_NODES = 50_000;
+const REDACTED_REMOTE_CREDENTIAL = '[redacted]';
+const REMOTE_CREDENTIAL_VALUE_PATTERNS = [
+  /\bBearer\s+[\w.+/=-]{8,}/gi,
+  /\b(?:gh[pousr]_|github_pat_|glpat-|npm_|xox[abprs]-)[\w-]{8,}/g,
+  /\b(?:sk-ant-|sk-)[A-Za-z0-9_-]{20,}/g,
+  /\beyJ[\w-]+\.[\w-]+\.[\w-]+\b/g,
+];
 
 export interface IntegrationRemoteMcpBridgeOptions {
   readonly descriptorStore: IIntegrationDescriptorStore;
@@ -136,7 +145,7 @@ export class IntegrationRemoteMcpBridge {
       return [];
     }
     const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-    const tools = await this.withRefreshablePinnedClient(descriptor, integration, userId, config.serverUrl, vetted, async client => {
+    const tools = await this.withRefreshablePinnedClient(descriptor, integration, userId, config.serverUrl, vetted, async (client, credential) => {
       const listed = await withTimeout(
         client.listTools(),
         this.timeoutMs,
@@ -149,8 +158,17 @@ export class IntegrationRemoteMcpBridge {
           provider: descriptor.provider,
           remoteName: tool.name,
           localName: remoteMcpLocalToolName(descriptor.provider, tool.name),
-          description: tool.description,
-          inputSchema: tool.inputSchema,
+          description: tool.description === undefined
+            ? undefined
+            : redactRemoteCredentialString(tool.description, credential),
+          inputSchema: redactRemoteMcpValue(
+            tool.inputSchema,
+            credential,
+            new WeakSet<object>(),
+            { nodes: 0 },
+            0,
+            false,
+          ) as Tool['inputSchema'],
           serverUrl: config.serverUrl.toString(),
         }];
       });
@@ -185,7 +203,7 @@ export class IntegrationRemoteMcpBridge {
       throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
     }
     const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-    return this.withRefreshablePinnedClient(descriptor, integration, session.userId, config.serverUrl, vetted, async client => {
+    return this.withRefreshablePinnedClient(descriptor, integration, session.userId, config.serverUrl, vetted, async (client, credential) => {
       const result = await withTimeout(
         client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
         this.timeoutMs,
@@ -195,7 +213,7 @@ export class IntegrationRemoteMcpBridge {
       return {
         provider: descriptor.provider,
         remoteName: input.remoteName,
-        result,
+        result: redactRemoteMcpResult(result, credential),
         provenance: {
           source: 'third_party_integration',
           trust: 'untrusted',
@@ -283,11 +301,11 @@ export class IntegrationRemoteMcpBridge {
     userId: string,
     serverUrl: URL,
     vetted: DnsLookupAddress,
-    work: (client: RemoteMcpClient) => Promise<T>,
+    work: (client: RemoteMcpClient, credential: string) => Promise<T>,
   ): Promise<T> {
     const firstCredential = this.decryptAccessToken(integration, userId);
     try {
-      return await this.withPinnedClient(serverUrl, firstCredential, vetted, work);
+      return await this.withPinnedClient(serverUrl, firstCredential, vetted, client => work(client, firstCredential));
     } catch (error) {
       const tokenRefresh = this.options.tokenRefresh;
       if (!(error instanceof RemoteMcpUnauthorizedResponseError) ||
@@ -309,7 +327,7 @@ export class IntegrationRemoteMcpBridge {
       }
       const refreshedCredential = this.decryptAccessToken(refreshed.record, userId);
       try {
-        return await this.withPinnedClient(serverUrl, refreshedCredential, vetted, work);
+        return await this.withPinnedClient(serverUrl, refreshedCredential, vetted, client => work(client, refreshedCredential));
       } catch (retryError) {
         throw unwrapRemoteMcpUnauthorizedError(retryError);
       }
@@ -414,6 +432,62 @@ function readArguments(value: unknown): Readonly<Record<string, unknown>> | unde
 
 function isConnected(record: UserIntegrationRecord | null): record is UserIntegrationRecord {
   return record?.status === 'connected' && record.revokedAt === null;
+}
+
+function redactRemoteMcpResult(value: unknown, activeCredential: string): unknown {
+  const seen = new WeakSet<object>();
+  const budget = { nodes: 0 };
+  return redactRemoteMcpValue(value, activeCredential, seen, budget, 0, true);
+}
+
+function redactRemoteMcpValue(
+  value: unknown,
+  activeCredential: string,
+  seen: WeakSet<object>,
+  budget: { nodes: number },
+  depth: number,
+  redactCredentialKeys: boolean,
+): unknown {
+  budget.nodes += 1;
+  if (depth > MAX_REMOTE_MCP_RESULT_DEPTH || budget.nodes > MAX_REMOTE_MCP_RESULT_NODES) {
+    return REDACTED_REMOTE_CREDENTIAL;
+  }
+  if (typeof value === 'string') return redactRemoteCredentialString(value, activeCredential);
+  if (!value || typeof value !== 'object') return value;
+  if (seen.has(value)) return REDACTED_REMOTE_CREDENTIAL;
+  seen.add(value);
+  if (Array.isArray(value)) {
+    return value.map(item => redactRemoteMcpValue(
+      item,
+      activeCredential,
+      seen,
+      budget,
+      depth + 1,
+      redactCredentialKeys,
+    ));
+  }
+  const output: Record<string, unknown> = {};
+  for (const [key, field] of Object.entries(value)) {
+    const safeKey = redactRemoteCredentialString(key, activeCredential);
+    output[safeKey] = redactCredentialKeys && isRemoteCredentialKey(key)
+      ? REDACTED_REMOTE_CREDENTIAL
+      : redactRemoteMcpValue(field, activeCredential, seen, budget, depth + 1, redactCredentialKeys);
+  }
+  return output;
+}
+
+function redactRemoteCredentialString(value: string, activeCredential: string): string {
+  let redacted = activeCredential === ''
+    ? value
+    : value.replaceAll(activeCredential, REDACTED_REMOTE_CREDENTIAL);
+  for (const pattern of REMOTE_CREDENTIAL_VALUE_PATTERNS) {
+    redacted = redacted.replaceAll(pattern, REDACTED_REMOTE_CREDENTIAL);
+  }
+  return redacted;
+}
+
+function isRemoteCredentialKey(key: string): boolean {
+  return /(^|_)(access|refresh)?_?token($|_)|authorization|api[_-]?key|secret|password|cookie|ciphertext/i.test(key);
 }
 
 function boundedRemoteMcpFetch(pinnedFetch: PinnedFetch): PinnedFetch {

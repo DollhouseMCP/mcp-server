@@ -1,6 +1,10 @@
 import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
+import { UnicodeValidator } from '../../../security/validators/unicodeValidator.js';
 
 const CANONICALIZATION_ORIGIN = 'https://integration.invalid';
+const MALFORMED_PERCENT_ESCAPE = /%(?![0-9a-f]{2})/i;
+const AMBIGUOUS_ENCODED_PATH_BYTE = /%(?:0[0-9a-f]|1[0-9a-f]|2[35f]|3f|5c|7f|8[0-9a-f]|9[0-9a-f])/i;
+const ENCODED_BYTE = /%([0-9a-f]{2})/gi;
 
 export interface CanonicalIntegrationRequestPath {
   readonly pathname: string;
@@ -25,9 +29,18 @@ export function canonicalizeIntegrationRequestPath(path: unknown): CanonicalInte
   }
   if (path.length > MAX_INTEGRATION_REQUEST_PATH_LENGTH) throw pathTooLong();
 
+  const queryIndex = path.indexOf('?');
+  const rawPathname = queryIndex === -1 ? path : path.slice(0, queryIndex);
+  const rawSearch = queryIndex === -1 ? '' : path.slice(queryIndex);
+  if (MALFORMED_PERCENT_ESCAPE.test(rawPathname) || AMBIGUOUS_ENCODED_PATH_BYTE.test(rawPathname)) {
+    throw invalidPath();
+  }
+  const unicodeNormalizedPathname = UnicodeValidator.normalize(rawPathname).normalizedContent;
+  const normalizedPathname = decodeUnreservedPathBytes(unicodeNormalizedPathname);
+
   let url: URL;
   try {
-    url = new URL(path, CANONICALIZATION_ORIGIN);
+    url = new URL(`${normalizedPathname}${rawSearch}`, CANONICALIZATION_ORIGIN);
   } catch {
     throw invalidPath();
   }
@@ -36,6 +49,13 @@ export function canonicalizeIntegrationRequestPath(path: unknown): CanonicalInte
   const canonicalLength = url.pathname.length + url.search.length;
   if (canonicalLength > MAX_INTEGRATION_REQUEST_PATH_LENGTH) throw pathTooLong();
   return { pathname: url.pathname, search: url.search };
+}
+
+function decodeUnreservedPathBytes(pathname: string): string {
+  return pathname.replace(ENCODED_BYTE, (encoded, hexadecimal: string) => {
+    const character = String.fromCharCode(Number.parseInt(hexadecimal, 16));
+    return /[A-Za-z0-9._~-]/.test(character) ? character : encoded;
+  });
 }
 
 function hasUnsafeControlCharacter(value: string): boolean {

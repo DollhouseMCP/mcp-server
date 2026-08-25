@@ -243,6 +243,13 @@ describe('IntegrationRequestGateway', () => {
       method: 'GET',
       path: '/admin#ignored-fragment',
     }))).rejects.toMatchObject({ code: 'invalid_integration_path' });
+    for (const path of ['/safe%2F..%2Fadmin', '/%2561dmin', '/%00admin', '/admin%']) {
+      await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+        provider: 'gmail',
+        method: 'GET',
+        path,
+      }))).rejects.toMatchObject({ code: 'invalid_integration_path' });
+    }
     await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
       provider: 'gmail',
       method: 'POST',
@@ -274,7 +281,7 @@ describe('IntegrationRequestGateway', () => {
     }))).rejects.toMatchObject({ code: 'integration_request_rate_limited' });
   });
 
-  it.each(['/safe/../admin', '/safe/%2e%2e/admin'])(
+  it.each(['/safe/../admin', '/safe/%2e%2e/admin', '/%61dmin', '/\u0430dmin'])(
     'sends the canonical outbound path for %s',
     async path => {
       const requestedUrls: string[] = [];

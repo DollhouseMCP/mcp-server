@@ -193,7 +193,7 @@ describe('IntegrationRequestPolicyEnforcer', () => {
     });
   });
 
-  it.each(['/safe/../admin', '/safe/%2e%2e/admin'])(
+  it.each(['/safe/../admin', '/safe/%2e%2e/admin', '/%61dmin', '/\u0430dmin'])(
     'matches deny policies against canonical outbound path for %s',
     async path => {
       const gatekeeper = new Gatekeeper(
@@ -215,6 +215,25 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       })).resolves.toMatchObject({
         allowed: false,
         error: { code: 'integration_request_denied_by_policy' },
+      });
+    },
+  );
+
+  it.each(['/safe%2F..%2Fadmin', '/%2561dmin', '/%00admin', '/admin%'])(
+    'rejects ambiguous encoded policy path %s',
+    async path => {
+      const enforcer = new IntegrationRequestPolicyEnforcer({
+        gatekeeper: new Gatekeeper(),
+        getActiveElements: () => Promise.resolve([]),
+      });
+
+      await expect(enforcer.authorize({
+        provider: 'gmail',
+        method: 'GET',
+        path,
+      })).resolves.toMatchObject({
+        allowed: false,
+        error: { code: 'invalid_integration_path' },
       });
     },
   );

@@ -7,6 +7,7 @@ import type { IIntegrationOpenApiSpecStore } from '../../stores/IIntegrationOpen
 import {
   PortfolioElementAlreadyExistsError,
   canonicalizePortfolioElementName,
+  type ConsolePortfolioElementDetailRecord,
   type IPortfolioElementStore,
 } from '../../stores/IPortfolioElementStore.js';
 import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
@@ -373,7 +374,7 @@ export class IntegrationOperationCatalog {
     if (isCurrentGeneratedSkill(existing.metadata, specHash, skill.regeneration.scopeFingerprint)) {
       return { ...skill, written: false, portfolioAction: 'skipped', portfolioName };
     }
-    if (!isManagedGeneratedSkill(existing.metadata)) {
+    if (!isManagedGeneratedSkill(existing.metadata) || hasGeneratedSkillUserEdits(existing)) {
       return this.createGeneratedSkillRevision(userId, descriptor, skill, metadata, tags);
     }
     await this.options.portfolioStore.update({
@@ -788,6 +789,7 @@ function generatedSkillMetadata(
       descriptorId: descriptor.id,
       specHash: skill.regeneration.specHash,
       scopeFingerprint: skill.regeneration.scopeFingerprint,
+      generatedContentHash: sha256Text(skill.content),
       generated: true,
     },
   };
@@ -796,6 +798,22 @@ function generatedSkillMetadata(
 function isManagedGeneratedSkill(metadata: Readonly<Record<string, unknown>>): boolean {
   return asRecord(metadata.integration).generated === true &&
     metadata.source === 'integration_openapi_spec';
+}
+
+function hasGeneratedSkillUserEdits(existing: ConsolePortfolioElementDetailRecord): boolean {
+  const integration = asRecord(existing.metadata.integration);
+  const generatedContentHash = integration.generatedContentHash;
+  if (typeof generatedContentHash === 'string' && generatedContentHash !== '') {
+    return sha256Text(existing.content) !== generatedContentHash ||
+      (typeof existing.metadata.instructions === 'string' &&
+        sha256Text(existing.metadata.instructions) !== generatedContentHash);
+  }
+
+  // Legacy generated skills predate the explicit content fingerprint. Their
+  // original body was mirrored in instructions, so divergence must be treated
+  // as a user edit and preserved by creating a revision.
+  return typeof existing.metadata.instructions !== 'string' ||
+    existing.content !== existing.metadata.instructions;
 }
 
 function isCurrentGeneratedSkill(
@@ -807,6 +825,10 @@ function isCurrentGeneratedSkill(
   return isManagedGeneratedSkill(metadata) &&
     integration.specHash === specHash &&
     integration.scopeFingerprint === scopeFingerprint;
+}
+
+function sha256Text(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
 }
 
 function grantedScopes(integration: UserIntegrationRecord): ReadonlySet<string> {
