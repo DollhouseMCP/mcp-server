@@ -272,6 +272,31 @@ describe('IntegrationOperationCatalog', () => {
     expect(pathItem.post.operationId).toBe('duplicate_2');
   });
 
+  it('generates stable operation ids for paths containing punctuation and parameters', async () => {
+    const { catalog, contextTracker, specStore } = createCatalog({
+      descriptor: descriptor({ ownership: 'byo', ownerUserId: USER_ID }),
+      scopes: [GMAIL_READONLY],
+    });
+
+    await runAsUser(contextTracker, () => catalog.ingestOpenApiSpec({
+      provider: 'gmail',
+      spec: {
+        openapi: '3.1.0',
+        info: { title: 'Reports', version: '1.0.0' },
+        paths: {
+          '/reports/{report-id}/daily.v1': {
+            get: { responses: { 200: { description: 'ok' } } },
+          },
+        },
+      },
+    }));
+
+    const stored = await specStore.findByDescriptorId(DESCRIPTOR_ID);
+    const paths = stored?.spec.paths as Record<string, Record<string, { operationId: string }>>;
+    expect(paths['/reports/{report-id}/daily.v1'].get.operationId)
+      .toBe('get_reports_report_id_daily_v1');
+  });
+
   it('rejects curated spec ingestion through the self-service path', async () => {
     const { catalog, contextTracker } = createCatalog({ scopes: [GMAIL_READONLY] });
 

@@ -36,7 +36,7 @@ describe('Unicode Normalization in Tool Calls', () => {
     };
 
     // Initialize the tool registry
-    toolRegistry = new ToolRegistry(mockServer);
+    toolRegistry = new ToolRegistry();
 
     // Setup server with our mock registry
     serverSetup.setupServer(mockServer, toolRegistry);

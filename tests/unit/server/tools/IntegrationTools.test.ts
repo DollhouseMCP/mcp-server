@@ -211,7 +211,7 @@ describe('IntegrationTools', () => {
     } as unknown as IntegrationRequestPolicyEnforcer;
     const catalog = {
       listPromotedOperations: jest.fn<IntegrationOperationCatalog['listPromotedOperations']>().mockResolvedValue([{
-        operationId: 'listMessages',
+        operationId: '---List.Messages///Now---',
         method: 'GET',
         path: '/gmail/v1/users/{userId}/messages',
         readWriteClass: 'read',
@@ -228,7 +228,7 @@ describe('IntegrationTools', () => {
         responses: [],
         gatewayRequest: {
           tool: 'integration_request',
-          provider: 'gmail',
+          provider: '---GMAIL Provider---',
           method: 'GET',
           pathTemplate: '/gmail/v1/users/{userId}/messages',
         },
@@ -246,37 +246,46 @@ describe('IntegrationTools', () => {
     const tools = await getPromotedIntegrationTools(gateway, catalog, policy);
 
     expect(tools).toHaveLength(1);
-    expect(tools[0].tool.name).toBe('integration_gmail_listmessages');
+    expect(tools[0].tool.name).toBe('integration_gmail_provider_list_messages_now');
     const result = await tools[0].handler({
-      path_params: { userId: 'me' },
+      path_params: { userId: 'me/primary' },
       query: { q: 'is:unread' },
     });
 
     expect(policy.authorize).toHaveBeenCalledWith({
-      provider: 'gmail',
+      provider: '---GMAIL Provider---',
       method: 'GET',
-      path: '/gmail/v1/users/me/messages',
+      path: '/gmail/v1/users/me%2Fprimary/messages',
       query: { q: 'is:unread' },
       body: undefined,
     });
     expect(gateway.request).toHaveBeenCalledWith({
-      provider: 'gmail',
+      provider: '---GMAIL Provider---',
       method: 'GET',
-      path: '/gmail/v1/users/me/messages',
+      path: '/gmail/v1/users/me%2Fprimary/messages',
       query: { q: 'is:unread' },
       body: undefined,
     });
     expect(JSON.parse(result.content[0].text)).toMatchObject({
       ok: true,
       promotedTool: {
-        operationId: 'listMessages',
-        provider: 'gmail',
+        operationId: '---List.Messages///Now---',
+        provider: '---GMAIL Provider---',
       },
       result: {
         provenance: {
           source: 'third_party_integration',
           trust: 'untrusted',
         },
+      },
+    });
+
+    const missingPathParam = await tools[0].handler({});
+    expect(JSON.parse(missingPathParam.content[0].text)).toMatchObject({
+      ok: false,
+      error: {
+        code: 'invalid_integration_request',
+        status: 400,
       },
     });
   });

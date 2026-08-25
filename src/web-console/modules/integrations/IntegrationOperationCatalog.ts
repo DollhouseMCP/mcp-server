@@ -506,7 +506,7 @@ function resolveScopeDecision(
     .map(requirement => Object.values(asRecord(requirement)).flatMap(value =>
       Array.isArray(value) ? value.filter((scope): scope is string => typeof scope === 'string') : [],
     ))
-    .map(scopes => [...new Set(scopes)].sort())
+    .map(scopes => [...new Set(scopes)].sort((left, right) => left.localeCompare(right)))
     .sort((a, b) => a.length - b.length);
   const satisfied = alternatives.find(scopes => scopes.every(scope => granted.has(scope)));
   return {
@@ -541,7 +541,7 @@ function readRequestBody(
 ): IntegrationOperationRequestBody | null {
   const body = asRecord(resolveInternalRef(value, spec));
   const content = asRecord(body.content);
-  const contentTypes = Object.keys(content).sort();
+  const contentTypes = Object.keys(content).sort((left, right) => left.localeCompare(right));
   if (contentTypes.length === 0) return null;
   return {
     required: body.required === true,
@@ -559,7 +559,7 @@ function readResponses(
     return {
       status,
       description: readString(response.description),
-      contentTypes: Object.keys(asRecord(response.content)).sort(),
+      contentTypes: Object.keys(asRecord(response.content)).sort((left, right) => left.localeCompare(right)),
     };
   }).sort((a, b) => a.status.localeCompare(b.status));
 }
@@ -592,7 +592,7 @@ function resolveJsonPointer(root: unknown, ref: string): unknown {
       return Number.isInteger(index) ? current[index] : undefined;
     }
     const record = asRecord(current);
-    return Object.prototype.hasOwnProperty.call(record, segment) ? record[segment] : undefined;
+    return Object.hasOwn(record, segment) ? record[segment] : undefined;
   }, root);
 }
 
@@ -642,7 +642,7 @@ function generateSkill(
     regeneration: {
       source: 'openapi_spec',
       specHash,
-      scopeFingerprint: [...granted].sort().join(' '),
+      scopeFingerprint: [...granted].sort((left, right) => left.localeCompare(right)).join(' '),
       policy: 'regenerate_on_spec_hash_or_granted_scope_change_preserve_user_edits_by_creating_new_revision',
     },
   };
@@ -812,8 +812,25 @@ function readPromotedOperationIds(operationPromotion: Readonly<Record<string, un
 }
 
 function fallbackOperationId(method: string, path: string): string {
-  const suffix = path.replaceAll(/[^a-zA-Z0-9]+/g, '_').replaceAll(/^_+|_+$/g, '').toLowerCase();
+  const suffix = normalizeIdentifier(path);
   return `${method}_${suffix || 'root'}`;
+}
+
+function normalizeIdentifier(value: string): string {
+  const characters: string[] = [];
+  let pendingSeparator = false;
+  for (const character of value.toLowerCase()) {
+    const isLetter = character >= 'a' && character <= 'z';
+    const isDigit = character >= '0' && character <= '9';
+    if (isLetter || isDigit) {
+      if (pendingSeparator && characters.length > 0) characters.push('_');
+      characters.push(character);
+      pendingSeparator = false;
+    } else if (characters.length > 0) {
+      pendingSeparator = true;
+    }
+  }
+  return characters.join('');
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {

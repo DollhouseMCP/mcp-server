@@ -62,6 +62,33 @@ describe('IntegrationRemoteMcpBridge', () => {
     }]);
   });
 
+  it('normalizes punctuation runs in generated local tool names', async () => {
+    const remoteName = '---Search Docs///Now---';
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({
+      listTools: jest.fn().mockResolvedValue({
+        tools: [{ name: remoteName, description: 'Search', inputSchema: { type: 'object' } }],
+      }),
+      callTool: jest.fn(),
+      close: jest.fn(() => Promise.resolve()),
+    });
+    const { bridge, contextTracker } = fixture({
+      clientFactory,
+      descriptor: descriptor({
+        operationPromotion: {
+          remoteMcp: {
+            serverUrl: 'https://mcp.example.com/mcp',
+            tools: [remoteName],
+          },
+        },
+      }),
+    });
+
+    const tools = await runAsUser(contextTracker, () => bridge.listAllowedTools());
+
+    expect(tools).toHaveLength(1);
+    expect(tools[0].localName).toBe('remote_mcp_remote_docs_search_docs_now');
+  });
+
   it('proxies calls with decrypted credentials and untrusted provenance', async () => {
     const callTool = jest.fn().mockResolvedValue({ content: [{ type: 'text', text: 'result' }] });
     const clientFactory = jest.fn<RemoteMcpClientFactory>().mockResolvedValue({

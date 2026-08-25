@@ -1240,7 +1240,7 @@ export class DollhouseContainer {
   public async createHandlers(server: LowLevelMcpServer): Promise<HandlerBundle> {
     const bundle = await this.bootstrapHandlers();
 
-    const toolRegistry = new ToolRegistry(server);
+    const toolRegistry = new ToolRegistry();
     const interfaceMode = env.MCP_INTERFACE_MODE;
     logger.info(`MCP Interface Mode: ${interfaceMode}`);
 
@@ -1535,7 +1535,7 @@ export class DollhouseContainer {
     child.register('SessionResolver', () => (() => sessionContext));
     child.register('ServerSetup', () => new ServerSetup(contextTracker, child.resolve<SessionResolver>('SessionResolver')));
     child.register('ToolRegistry', () => {
-        const registry = new ToolRegistry(child.resolve<LowLevelMcpServer>('Server'));
+      const registry = new ToolRegistry();
       this.registerToolsOnRegistry(registry, bundle, env.MCP_INTERFACE_MODE);
       return registry;
     });
@@ -1992,13 +1992,13 @@ export class DollhouseContainer {
 
     if (interfaceMode === 'discrete') {
       // Current is discrete, calculate what mcpaql would be
-        const tempRegistry = new ToolRegistry({});
+      const tempRegistry = new ToolRegistry();
       tempRegistry.registerMCPAQLTools(mcpAqlHandler);
       alternativeTokens = tempRegistry.getToolTokenEstimate();
       alternativeToolCount = tempRegistry.getToolCount();
     } else {
       // Current is mcpaql, calculate what discrete would be
-        const tempRegistry = new ToolRegistry({});
+      const tempRegistry = new ToolRegistry();
       tempRegistry.registerPersonaTools(discreteHandlers.personaHandler);
       tempRegistry.registerElementTools(discreteHandlers.elementCrudHandler);
       tempRegistry.registerCollectionTools(discreteHandlers.collectionHandler);

@@ -15,6 +15,7 @@ import {
   type IntegrationRemoteMcpBridge,
   type RemoteMcpTool,
 } from '../../web-console/modules/integrations/IntegrationRemoteMcpBridge.js';
+import { normalizeIntegrationToolName } from '../../web-console/modules/integrations/IntegrationToolName.js';
 
 const PROVIDER_DESCRIPTION = 'Integration provider id.';
 
@@ -493,8 +494,7 @@ function uniquePromotedToolName(operation: IntegrationOperationDetails, usedName
 }
 
 function sanitizeToolName(value: string): string {
-  const normalized = value.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '_').replaceAll(/^_+|_+$/g, '');
-  return normalized || 'operation';
+  return normalizeIntegrationToolName(value, 'operation');
 }
 
 function promotedToolDescription(operation: IntegrationOperationDetails): string {
@@ -541,7 +541,26 @@ function promotedToolInputSchema(operation: IntegrationOperationDetails): ToolDe
 }
 
 function applyPathParams(pathTemplate: string, pathParams: Readonly<Record<string, unknown>> | undefined): string {
-  return pathTemplate.replaceAll(/\{([^}]+)\}/g, (_match, name: string) => {
+  let output = '';
+  let cursor = 0;
+  while (cursor < pathTemplate.length) {
+    const open = pathTemplate.indexOf('{', cursor);
+    if (open === -1) {
+      output += pathTemplate.slice(cursor);
+      break;
+    }
+    const close = pathTemplate.indexOf('}', open + 1);
+    if (close === -1) {
+      output += pathTemplate.slice(cursor);
+      break;
+    }
+    output += pathTemplate.slice(cursor, open);
+    const name = pathTemplate.slice(open + 1, close);
+    if (name === '') {
+      output += '{}';
+      cursor = close + 1;
+      continue;
+    }
     const value = pathParams?.[name];
     if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
       throw new IntegrationRequestError(
@@ -550,8 +569,10 @@ function applyPathParams(pathTemplate: string, pathParams: Readonly<Record<strin
         400,
       );
     }
-    return encodeURIComponent(String(value));
-  });
+    output += encodeURIComponent(String(value));
+    cursor = close + 1;
+  }
+  return output;
 }
 
 function readObject(args: unknown): Record<string, unknown> {

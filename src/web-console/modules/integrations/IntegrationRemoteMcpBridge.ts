@@ -11,6 +11,7 @@ import type { ISecretEncryptionService } from '../../security/SecretEncryption.j
 import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
+import { normalizeIntegrationToolName } from './IntegrationToolName.js';
 import {
   assertPublicResolvedHost,
   PublicHostGuardError,
@@ -345,7 +346,7 @@ function remoteMcpLocalToolName(provider: string, remoteName: string): string {
 }
 
 function sanitizeToolName(value: string): string {
-  return value.toLowerCase().replaceAll(/[^a-z0-9_]+/g, '_').replaceAll(/^_+|_+$/g, '') || 'tool';
+  return normalizeIntegrationToolName(value, 'tool');
 }
 
 function asRecord(value: unknown): Readonly<Record<string, unknown>> {
