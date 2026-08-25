@@ -170,6 +170,60 @@ describe('IntegrationRemoteMcpBridge', () => {
     expect(clientFactory).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized remote MCP response streams', async () => {
+    const oversizedBody = new Uint8Array(1024 * 1024 + 1);
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockImplementation(async ({ pinnedFetch }) => ({
+      listTools: jest.fn(),
+      callTool: jest.fn(async () => {
+        const response = await pinnedFetch('https://mcp.example.com/mcp');
+        await response.arrayBuffer();
+        return {};
+      }),
+      close: jest.fn(() => Promise.resolve()),
+    }));
+    const close = jest.fn(() => Promise.resolve());
+    const { bridge, contextTracker } = fixture({
+      clientFactory,
+      pinnedOutbound: () => ({
+        fetch: () => Promise.resolve(new Response(oversizedBody)),
+        close,
+      }),
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_response_too_large',
+      status: 502,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+    expect(close).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not use credentials from a revoked connected record', async () => {
+    const secretEncryption = encryption();
+    const revoked = {
+      ...integration(secretEncryption),
+      revokedAt: TIMESTAMP,
+    };
+    const clientFactory = jest.fn<RemoteMcpClientFactory>();
+    const { bridge, contextTracker } = fixture({
+      integration: revoked,
+      clientFactory,
+    });
+
+    await expect(runAsUser(contextTracker, () => bridge.callTool({
+      provider: REMOTE_DOCS,
+      remoteName: 'search',
+      arguments: {},
+    }))).rejects.toMatchObject({
+      code: 'remote_mcp_not_connected',
+      status: 409,
+    } satisfies Partial<IntegrationRemoteMcpBridgeError>);
+    expect(clientFactory).not.toHaveBeenCalled();
+  });
+
   it('isolates failed and timed-out remote MCP discovery without failing the whole list', async () => {
     const clientFactory = jest.fn<RemoteMcpClientFactory>()
       .mockRejectedValueOnce(new Error('downstream unavailable'))

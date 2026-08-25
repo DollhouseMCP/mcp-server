@@ -67,17 +67,6 @@ export class IntegrationRequestPolicyEnforcer {
   private async authorizeInternal(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
     const toolInput = integrationToolInput(input);
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
-    const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass);
-    if (existingApproval) {
-      return {
-        allowed: true,
-        approvalContext: {
-          requestId: existingApproval.requestId,
-          scope: existingApproval.scope,
-        },
-      };
-    }
-
     const activeElements = await this.options.getActiveElements();
     const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
     const elementDecision = evaluateCliToolPolicy(INTEGRATION_TOOL_NAME, toolInput, activeElements);
@@ -88,6 +77,17 @@ export class IntegrationRequestPolicyEnforcer {
           code: 'integration_request_denied_by_policy',
           message: elementDecision.message ?? 'Integration request denied by policy.',
           status: 403,
+        },
+        policyContext: elementDecision.policyContext,
+      };
+    }
+    const existingApproval = await this.checkExistingApproval(toolInput, readWriteClass);
+    if (existingApproval) {
+      return {
+        allowed: true,
+        approvalContext: {
+          requestId: existingApproval.requestId,
+          scope: existingApproval.scope,
         },
         policyContext: elementDecision.policyContext,
       };
@@ -163,6 +163,7 @@ export class IntegrationRequestPolicyEnforcer {
       denyReason: request.denyReason,
       policySource: request.policySource,
       ttlMs: approvalPolicy.ttlSeconds ? approvalPolicy.ttlSeconds * 1000 : undefined,
+      allowedScopes: toolInput.read_write_class === 'write' ? ['single'] : undefined,
     });
     return {
       allowed: false,

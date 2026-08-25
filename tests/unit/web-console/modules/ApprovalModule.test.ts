@@ -275,6 +275,26 @@ describe('ApprovalModule', () => {
     }))).resolves.toMatchObject({ status: 404 });
   });
 
+  it('rejects a session decision for an approval restricted to one use', async () => {
+    const { module, approvalStore, eventSink } = await fixture();
+    approvalStore.seed(USER_ID, SESSION_ID, approvalRecord(APPROVAL_ID, {
+      allowedScopes: ['single'],
+    }));
+    const approveRoute = findRoute(module.routes, 'POST', APPROVE_PATH);
+
+    await expect(approveRoute.handler(request({
+      params: { session_id: SESSION_ID, approval_id: APPROVAL_ID },
+      body: { scope: 'session' },
+    }))).resolves.toMatchObject({
+      status: 422,
+      body: expect.objectContaining({ detail: expect.stringContaining('use "once"') }),
+    });
+    const stored = await approvalStore.find(USER_ID, SESSION_ID, APPROVAL_ID);
+    expect(stored?.approvedAt).toBeUndefined();
+    expect(stored?.scope).toBe('single');
+    expect(eventSink.listEvents()).toEqual([]);
+  });
+
   it('privacy projectors use explicit owner-private approval allowlists', () => {
     expect(projectSessionApproval({
       approval_id: APPROVAL_ID,

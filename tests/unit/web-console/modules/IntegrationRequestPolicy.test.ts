@@ -87,25 +87,9 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       path: SEND_PATH,
       body: { raw: 'abc' },
     });
-    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
-
-    await expect(enforcer.authorize({
-      provider: 'gmail',
-      method: 'POST',
-      path: SEND_PATH,
-      body: { raw: 'abc' },
-    })).resolves.toMatchObject({
-      allowed: false,
-      error: { code: 'integration_request_approval_required' },
-    });
-
-    const exact = await enforcer.authorize({
-      provider: 'gmail',
-      method: 'POST',
-      path: SEND_PATH,
-      body: { raw: 'abc' },
-    });
-    await gatekeeper.approveCliRequest(approvalRequestId(exact), 'single');
+    await expect(gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session'))
+      .rejects.toThrow('does not permit scope "tool_session"');
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
 
     await expect(enforcer.authorize({
       provider: 'gmail',
@@ -153,6 +137,35 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       approvalContext: { scope: 'tool_session' },
     });
   });
+
+  it('evaluates newly active deny policies before accepting an existing approval', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-deny-test',
+      new StaticAuditHmacKeyResolver('99'.repeat(32)),
+    );
+    let activeElements: ActiveElement[] = [integrationReadGuard()];
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve(activeElements),
+    });
+    const request = {
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/messages',
+    };
+    const first = await enforcer.authorize(request);
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'tool_session');
+
+    activeElements = [integrationDenyGuard()];
+
+    await expect(enforcer.authorize(request)).resolves.toMatchObject({
+      allowed: false,
+      error: { code: 'integration_request_denied_by_policy' },
+    });
+  });
 });
 
 function integrationWriteGuard(): ActiveElement {
@@ -181,6 +194,22 @@ function integrationReadGuard(): ActiveElement {
         externalRestrictions: {
           description: 'Confirm integration reads',
           confirmPatterns: ['integration_request:read'],
+        },
+      },
+    },
+  };
+}
+
+function integrationDenyGuard(): ActiveElement {
+  return {
+    type: 'agent',
+    name: 'integration-deny-guard',
+    metadata: {
+      name: 'integration-deny-guard',
+      gatekeeper: {
+        externalRestrictions: {
+          description: 'Deny integration reads',
+          denyPatterns: ['integration_request:read'],
         },
       },
     },

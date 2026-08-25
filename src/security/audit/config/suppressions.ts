@@ -133,6 +133,11 @@ export const suppressions: Suppression[] = [
   },
   {
     rule: 'DMCP-SEC-004',
+    file: 'src/web-console/modules/integrations/IntegrationRemoteMcpBridge.ts',
+    reason: 'FALSE POSITIVE: Descriptor and tool identities are structurally allowlisted, the destination is DNS-vetted and connect-time pinned, and bounded MCP protocol payload bytes must remain unchanged rather than being rewritten by generic Unicode normalization.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
     file: 'src/web-console/modules/integrations/IntegrationRequestPolicy.ts',
     reason: 'FALSE POSITIVE: This policy layer evaluates the already-validated gateway request shape. It must preserve opaque query/body values exactly so approval fingerprints match the request that will execute.'
   },

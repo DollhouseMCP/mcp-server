@@ -382,7 +382,17 @@ export class GatekeeperSession {
    * Returns a unique request ID (format: cli-<UUIDv4>).
    */
   async createCliApprovalRequest(args: CreateCliApprovalArgs): Promise<string> {
-    const { toolName, toolInput, riskLevel, riskScore, irreversible, denyReason, policySource, ttlMs } = args;
+    const {
+      toolName,
+      toolInput,
+      riskLevel,
+      riskScore,
+      irreversible,
+      denyReason,
+      policySource,
+      ttlMs,
+      allowedScopes,
+    } = args;
     this.touch();
     this.expireStaleApprovals(true); // Force sweep on write path to ensure capacity
 
@@ -430,6 +440,7 @@ export class GatekeeperSession {
       requestedAt: new Date().toISOString(),
       consumed: false,
       scope: 'single',
+      allowedScopes,
       denyReason,
       policySource,
       ttlMs: clampedTtl,
@@ -462,6 +473,12 @@ export class GatekeeperSession {
     const record = this.state.cliApprovals.get(requestId);
     if (!record || !isPendingCliApproval(record)) {
       return undefined;
+    }
+    if (record.allowedScopes && !record.allowedScopes.includes(scope)) {
+      throw new Error(
+        `Approval request "${requestId}" does not permit scope "${scope}". ` +
+        `Allowed scopes: ${record.allowedScopes.join(', ')}.`,
+      );
     }
 
     record.approvedAt = approvedAt;

@@ -25,6 +25,7 @@ import {
 } from './PinnedOutboundFactory.js';
 
 const DEFAULT_REMOTE_MCP_TIMEOUT_MS = 5_000;
+const MAX_REMOTE_MCP_RESPONSE_BYTES = 1024 * 1024;
 
 export interface IntegrationRemoteMcpBridgeOptions {
   readonly descriptorStore: IIntegrationDescriptorStore;
@@ -272,7 +273,11 @@ export class IntegrationRemoteMcpBridge {
     bearerToken: string,
     pinnedFetch: PinnedFetch,
   ): Promise<RemoteMcpClient> {
-    const clientPromise = this.clientFactory({ serverUrl, bearerToken, pinnedFetch });
+    const clientPromise = this.clientFactory({
+      serverUrl,
+      bearerToken,
+      pinnedFetch: boundedRemoteMcpFetch(pinnedFetch),
+    });
     try {
       return await withTimeout(
         clientPromise,
@@ -360,7 +365,43 @@ function readArguments(value: unknown): Readonly<Record<string, unknown>> | unde
 }
 
 function isConnected(record: UserIntegrationRecord | null): record is UserIntegrationRecord {
-  return record?.status === 'connected';
+  return record?.status === 'connected' && record.revokedAt === null;
+}
+
+function boundedRemoteMcpFetch(pinnedFetch: PinnedFetch): PinnedFetch {
+  return async (input, init) => {
+    const response = await pinnedFetch(input, init);
+    const contentLength = Number(response.headers.get('content-length'));
+    if (Number.isFinite(contentLength) && contentLength > MAX_REMOTE_MCP_RESPONSE_BYTES) {
+      throw remoteMcpResponseTooLarge();
+    }
+    if (!response.body) return response;
+
+    let receivedBytes = 0;
+    const boundedBody = response.body.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        receivedBytes += chunk.byteLength;
+        if (receivedBytes > MAX_REMOTE_MCP_RESPONSE_BYTES) {
+          controller.error(remoteMcpResponseTooLarge());
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+    }));
+    return new Response(boundedBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
+
+function remoteMcpResponseTooLarge(): IntegrationRemoteMcpBridgeError {
+  return new IntegrationRemoteMcpBridgeError(
+    'remote_mcp_response_too_large',
+    'Remote MCP response exceeded the maximum allowed size.',
+    502,
+  );
 }
 
 function withTimeout<T>(
