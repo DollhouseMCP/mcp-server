@@ -779,6 +779,41 @@ describe('ToolClassification', () => {
       expect(result.behavior).toBe('deny');
     });
 
+    it('should let a later element deny override an earlier confirmation', () => {
+      const elements: ActiveElement[] = [
+        {
+          type: 'ensemble', name: 'confirmation-policy',
+          metadata: {
+            gatekeeper: {
+              externalRestrictions: {
+                description: 'requires confirmation',
+                confirmPatterns: [PATTERN_BASH_GIT_PUSH],
+              },
+            },
+          },
+        },
+        {
+          type: 'skill', name: 'deny-policy',
+          metadata: {
+            gatekeeper: {
+              externalRestrictions: {
+                description: 'forbids force pushes',
+                denyPatterns: ['Bash:git push --force*'],
+              },
+            },
+          },
+        },
+      ];
+
+      const result = evaluateCliToolPolicy('Bash', { command: CMD_GIT_PUSH_FORCE }, elements);
+
+      expect(result.behavior).toBe('deny');
+      expect(result.message).toContain("skill 'deny-policy'");
+      expect(policyCtx(result).evaluatedElements).toHaveLength(2);
+      expect(policyCtx(result).evaluatedElements[0].matched).toBe('confirmPatterns');
+      expect(policyCtx(result).evaluatedElements[1].matched).toBe('denyPatterns');
+    });
+
     it('should confirm before allow (confirm takes precedence over allow)', () => {
       const elements: ActiveElement[] = [{
         type: 'persona', name: 'cautious',
@@ -817,7 +852,7 @@ describe('ToolClassification', () => {
       expect(policyCtx(result).decisionChain.some(s => s.includes('CONFIRM:'))).toBe(true);
     });
 
-    it('should handle confirmPatterns across multiple elements (first match wins)', () => {
+    it('should find confirmation across multiple elements', () => {
       const elements: ActiveElement[] = [
         {
           type: 'persona', name: 'developer',

@@ -290,8 +290,8 @@ export class IntegrationRemoteMcpBridge {
       return await this.withPinnedClient(serverUrl, firstCredential, vetted, work);
     } catch (error) {
       const tokenRefresh = this.options.tokenRefresh;
-      if (!(error instanceof RemoteMcpUnauthorizedResponseError) || !tokenRefresh ||
-          !tokenRefresh.canRefresh(descriptor, integration)) {
+      if (!(error instanceof RemoteMcpUnauthorizedResponseError) ||
+          !tokenRefresh?.canRefresh(descriptor, integration)) {
         throw unwrapRemoteMcpUnauthorizedError(error);
       }
 

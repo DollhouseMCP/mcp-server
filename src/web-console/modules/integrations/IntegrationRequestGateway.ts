@@ -149,7 +149,7 @@ export class IntegrationRequestGateway {
     const body = await this.serializeAuditedRequestBody(provider, session.userId, session.sessionId, method, url, input.body);
     const first = await this.auditedSend(requestContext, descriptor, body, firstCredential, false);
     const tokenRefresh = this.options.tokenRefresh;
-    if (first.status !== 401 || !tokenRefresh || !tokenRefresh.canRefresh(descriptor, record)) {
+    if (first.status !== 401 || !tokenRefresh?.canRefresh(descriptor, record)) {
       return this.finish(provider, session.userId, session.sessionId, method, url, first, false);
     }
 

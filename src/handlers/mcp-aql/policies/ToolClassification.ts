@@ -577,7 +577,7 @@ export function getStaticPolicyData() {
  *
  * Four-step evaluation per element (Issue #625 Phase 2, Issue #1660):
  * 1. denyPatterns (highest priority) — first match = immediate deny
- * 1.5. confirmPatterns — first match = immediate confirm (requires approval)
+ * 1.5. confirmPatterns — retain the first match while scanning for later denies
  * 2. allowPatterns — if element defines them, record whether tool matched
  * 3. After all elements: if any had allowPatterns but tool wasn't allowed by any = deny
  *
@@ -590,7 +590,8 @@ export function getStaticPolicyData() {
  * // Tool matches no allowPatterns but some exist → DENIED ("not in any allowlist")
  * // No allowPatterns defined anywhere → Phase 1 behavior (fall through to default)
  *
- * @returns 'deny' if blocked, 'evaluate' if permitted to fall through to default
+ * @returns 'deny' if blocked, 'confirm' if approval is required, or 'evaluate'
+ * if permitted to fall through to default
  */
 export function evaluateCliToolPolicy(
   toolName: string,
@@ -618,12 +619,17 @@ export function evaluateCliToolPolicy(
 
   let anyElementHasAllowPatterns = false;
   let toolAllowedByAnyElement = false;
+  let confirmation: CliToolPolicyResult | undefined;
   const elementsWithAllowPatterns: string[] = [];
 
   for (const element of activeElements) {
     const evaluation = evaluateElementRestrictions(element, matchTargets, evaluatedElements, decisionChain, startTime);
     if ('terminal' in evaluation) {
-      return evaluation.terminal;
+      if (evaluation.terminal.behavior === 'deny') {
+        return evaluation.terminal;
+      }
+      confirmation ??= evaluation.terminal;
+      continue;
     }
     if (evaluation.hasAllowPatterns) {
       anyElementHasAllowPatterns = true;
@@ -632,6 +638,11 @@ export function evaluateCliToolPolicy(
         toolAllowedByAnyElement = true;
       }
     }
+  }
+
+  // Confirmation must not hide a deny rule on a later active element.
+  if (confirmation) {
+    return confirmation;
   }
 
   // Step 3: If any element had allowPatterns, tool must have matched at least one
