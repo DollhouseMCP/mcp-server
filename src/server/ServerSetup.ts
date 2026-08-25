@@ -2,9 +2,9 @@
  * Server setup and initialization
  */
 
-import { Server } from "@modelcontextprotocol/sdk/server/index.js";
+import type { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
-import { ToolRegistry } from '../handlers/ToolRegistry.js';
+import type { ToolRegistry } from '../handlers/ToolRegistry.js';
 // import { getUserTools } from './tools/UserTools.js'; // DEPRECATED - replaced by dollhouse_config
 // import { getConfigTools } from './tools/ConfigTools.js'; // DEPRECATED - replaced by dollhouse_config
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
@@ -75,6 +75,30 @@ export class ServerSetup {
     // Setup request handlers
     this.setupListToolsHandler(server, toolRegistry);
     this.setupCallToolHandler(server, toolRegistry);
+    this.setupToolRegistryChangeHandler(server, toolRegistry);
+  }
+
+  private setupToolRegistryChangeHandler(server: Server, toolRegistry: ToolRegistry): void {
+    toolRegistry.onChange((event) => {
+      this.invalidateToolCache('ToolRegistry change');
+      if (event.toolNames.length === 0) return;
+      // Best-effort client notification: a notification failure (sync or async)
+      // must never crash tool registration.
+      try {
+        server.sendToolListChanged().catch(error => {
+          logger.debug('ToolDiscoveryCache: Tool list changed notification was not delivered', {
+            error: error instanceof Error ? error.message : String(error),
+            reason: event.reason,
+            toolNames: event.toolNames,
+          });
+        });
+      } catch (error) {
+        logger.debug('ToolDiscoveryCache: Tool list changed notification could not be sent', {
+          error: error instanceof Error ? error.message : String(error),
+          reason: event.reason,
+        });
+      }
+    });
   }
   
   /**
@@ -87,13 +111,20 @@ export class ServerSetup {
         ? this.contextTracker.createSessionContext('llm-request', session, { toolName: 'list_tools' })
         : this.contextTracker.createContext('llm-request', { toolName: 'list_tools' });
 
-      return this.contextTracker.runAsync(context, async () => {
+      return this.contextTracker.runAsync(context, () => {
         const startTime = Date.now();
 
         // Try to get cached tools first
         let tools = this.toolCache.get(ServerSetup.TOOL_CACHE_KEY);
 
-        if (!tools) {
+        if (tools) {
+          const duration = Date.now() - startTime;
+          logger.debug('ToolDiscoveryCache: Cache hit - returned cached tools', {
+            toolCount: tools.length,
+            duration: `${duration}ms`,
+            source: 'cache'
+          });
+        } else {
           // Cache miss - fetch tools from registry
           tools = toolRegistry.getAllTools();
 
@@ -106,16 +137,9 @@ export class ServerSetup {
             duration: `${duration}ms`,
             source: 'registry'
           });
-        } else {
-          const duration = Date.now() - startTime;
-          logger.debug('ToolDiscoveryCache: Cache hit - returned cached tools', {
-            toolCount: tools.length,
-            duration: `${duration}ms`,
-            source: 'cache'
-          });
         }
 
-        return { tools };
+        return Promise.resolve({ tools });
       });
     });
   }
@@ -123,6 +147,25 @@ export class ServerSetup {
   /**
    * Setup the CallToolRequest handler
    */
+  /**
+   * Issue #492: Prescriptive digest for active element context recovery.
+   * After context compaction, the LLM loses active element instructions;
+   * this digest tells it how to recover them. Best-effort — never fails a response.
+   */
+  private async appendPrescriptiveDigest(response: any, toolName: string): Promise<void> {
+    if (!this.elementCrudHandler || toolName === 'get_active_elements') return;
+    try {
+      const activeElements = await this.elementCrudHandler.getActiveElementsForPolicy();
+      if (activeElements.length === 0) return;
+      const digest = generatePrescriptiveDigest(activeElements);
+      if (response?.content?.[0]?.type === 'text') {
+        response.content[0].text += '\n\n' + digest;
+      }
+    } catch {
+      // Best-effort — never fail a tool response for the digest
+    }
+  }
+
   private setupCallToolHandler(server: Server, toolRegistry: ToolRegistry): void {
     server.setRequestHandler(CallToolRequestSchema, async (request) => {
       // Issue #706 Phase 4: Hold first request(s) until deferred setup completes
@@ -150,22 +193,7 @@ export class ServerSetup {
 
           const response = await handler(normalizedArgs);
 
-          // Issue #492: Prescriptive digest for active element context recovery.
-          // After context compaction, the LLM loses active element instructions.
-          // This digest tells it how to recover them.
-          if (this.elementCrudHandler && name !== 'get_active_elements') {
-            try {
-              const activeElements = await this.elementCrudHandler.getActiveElementsForPolicy();
-              if (activeElements.length > 0) {
-                const digest = generatePrescriptiveDigest(activeElements);
-                if (response?.content?.[0]?.type === 'text') {
-                  response.content[0].text += '\n\n' + digest;
-                }
-              }
-            } catch {
-              // Best-effort — never fail a tool response for the digest
-            }
-          }
+          await this.appendPrescriptiveDigest(response, name);
 
           return response;
         } catch (error) {
@@ -230,16 +258,16 @@ export class ServerSetup {
   /**
    * Invalidate the tool discovery cache (useful for external tool changes)
    */
-  invalidateToolCache(): void {
+  invalidateToolCache(reason = 'manual invalidation'): void {
     this.toolCache.delete(ServerSetup.TOOL_CACHE_KEY);
-    logger.info('ToolDiscoveryCache: Cache manually invalidated');
+    logger.info('ToolDiscoveryCache: Cache invalidated', { reason });
 
     // Log security event for audit trail
     SecurityMonitor.logSecurityEvent({
       type: 'TOOL_CACHE_INVALIDATED',
       severity: 'LOW',
       source: 'ServerSetup.invalidateToolCache',
-      details: 'Tool discovery cache manually invalidated'
+      details: `Tool discovery cache invalidated: ${reason}`
     });
   }
 

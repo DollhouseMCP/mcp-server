@@ -126,6 +126,21 @@ export const suppressions: Suppression[] = [
     file: 'src/web-console/modules/integrations/BoundedResponseReader.ts',
     reason: 'FALSE POSITIVE: This transport utility preserves bounded response bytes. OAuth codes and tokens are opaque protocol values and must not be Unicode-normalized; callers parse and validate the bounded payload after transport.'
   },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web-console/modules/integrations/IntegrationRequestGateway.ts',
+    reason: 'FALSE POSITIVE: Provider and method are restricted to ASCII allowlists, paths are parsed as HTTPS URLs and checked against descriptor hosts, and query/body values are opaque upstream API data whose bytes must not be rewritten by generic Unicode normalization.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web-console/modules/integrations/IntegrationRequestPolicy.ts',
+    reason: 'FALSE POSITIVE: This policy layer evaluates the already-validated gateway request shape. It must preserve opaque query/body values exactly so approval fingerprints match the request that will execute.'
+  },
+  {
+    rule: 'DMCP-SEC-004',
+    file: 'src/web-console/modules/integrations/IntegrationOperationCatalog.ts',
+    reason: 'FALSE POSITIVE: Provider identity is validated by descriptor stores and OpenAPI content is structurally normalized, size-bounded, host-checked, and persisted as an API contract. Generic text normalization would change schema and operation semantics.'
+  },
 
   // ========================================
   // Test File Suppressions
@@ -154,6 +169,11 @@ export const suppressions: Suppression[] = [
     rule: 'DMCP-SEC-006',
     file: 'tests/**/*',
     reason: 'Audit logging not required for test utilities and E2E tests'
+  },
+  {
+    rule: 'DMCP-SEC-003',
+    file: 'tests/integration/integrations/wiredIntegrationHarness.ts',
+    reason: 'FALSE POSITIVE: This is an in-process integration-test harness, not an MCP tool handler. Production integration_request rate limiting is implemented by IntegrationRequestGateway.'
   },
   {
     rule: 'OWASP-A03-003',

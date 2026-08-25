@@ -12,6 +12,8 @@ import { ContextTracker } from '../../../src/security/encryption/ContextTracker.
 
 import { ToolRegistry } from '../../../src/handlers/ToolRegistry.js';
 
+const MALFORMED_SURROGATE_MSG = 'Malformed surrogate pairs detected';
+
 describe('Unicode Normalization in Tool Calls', () => {
   let serverSetup: ServerSetup;
   let mockServer: any;
@@ -29,14 +31,15 @@ describe('Unicode Normalization in Tool Calls', () => {
         if (schema === CallToolRequestSchema) {
           capturedHandler = handler;
         }
-      })
+      }),
+      sendToolListChanged: jest.fn(() => Promise.resolve())
     };
 
     // Initialize the tool registry
-    toolRegistry = new ToolRegistry(mockServer as any);
+    toolRegistry = new ToolRegistry(mockServer);
 
     // Setup server with our mock registry
-    serverSetup.setupServer(mockServer as any, toolRegistry);
+    serverSetup.setupServer(mockServer, toolRegistry);
     
     // Manually register our test tool in the registry
     toolRegistry.register({
@@ -296,7 +299,7 @@ describe('Unicode Normalization in Tool Calls', () => {
 // UpdateChecker tests removed - UpdateTools and UpdateChecker have been removed from the codebase
 
 describe('ReDoS Protection', () => {
-  it('should handle malformed surrogates without ReDoS', async () => {
+  it('should handle malformed surrogates without ReDoS', () => {
     // Test with a string that would cause ReDoS with the old regex
     const maliciousInput = 'A' + '\uD800'.repeat(1000) + 'B'; // Many unpaired high surrogates
     
@@ -306,24 +309,24 @@ describe('ReDoS Protection', () => {
     
     // Should complete quickly (under 100ms) even with malicious input
     expect(endTime - startTime).toBeLessThan(100);
-    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+    expect(result.detectedIssues).toContain(MALFORMED_SURROGATE_MSG);
   });
 
   it('should correctly identify various surrogate pair issues', () => {
     // High surrogate at end of string
     let result = UnicodeValidator.normalize('test\uD800');
-    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+    expect(result.detectedIssues).toContain(MALFORMED_SURROGATE_MSG);
     
     // Low surrogate without high surrogate
     result = UnicodeValidator.normalize('test\uDC00');
-    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+    expect(result.detectedIssues).toContain(MALFORMED_SURROGATE_MSG);
     
     // High surrogate followed by non-surrogate
     result = UnicodeValidator.normalize('test\uD800a');
-    expect(result.detectedIssues).toContain('Malformed surrogate pairs detected');
+    expect(result.detectedIssues).toContain(MALFORMED_SURROGATE_MSG);
     
     // Valid surrogate pair (should not detect issues)
     result = UnicodeValidator.normalize('test\uD800\uDC00'); // Valid pair
-    expect(result.detectedIssues || []).not.toContain('Malformed surrogate pairs detected');
+    expect(result.detectedIssues || []).not.toContain(MALFORMED_SURROGATE_MSG);
   });
 });

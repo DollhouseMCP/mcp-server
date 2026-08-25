@@ -29,6 +29,8 @@ import { InMemoryConsoleAuthPolicyStore } from './stores/InMemoryConsoleAuthPoli
 import type { IConsoleAccountAdminStore } from './stores/IConsoleAccountAdminStore.js';
 import type { IConsoleAccountAllowlistStore } from './stores/IConsoleAccountAllowlistStore.js';
 import type { IUserIntegrationStore } from './stores/IUserIntegrationStore.js';
+import type { IIntegrationDescriptorStore } from './stores/IIntegrationDescriptorStore.js';
+import type { IIntegrationOpenApiSpecStore } from './stores/IIntegrationOpenApiSpecStore.js';
 import type { IPortfolioElementStore } from './stores/IPortfolioElementStore.js';
 import type { IPortfolioSyncJobStore } from './stores/IPortfolioSyncJobStore.js';
 import type { IConsoleSecurityInvalidationStore } from './services/invalidation/IConsoleSecurityInvalidationStore.js';
@@ -63,6 +65,8 @@ import { InMemoryUserConfigStore } from '../storage/userConfig/InMemoryUserConfi
 import { InMemoryConsoleAccountAdminStore } from './stores/InMemoryConsoleAccountAdminStore.js';
 import { InMemoryConsoleAccountAllowlistStore } from './stores/InMemoryConsoleAccountAllowlistStore.js';
 import { InMemoryUserIntegrationStore } from './stores/InMemoryUserIntegrationStore.js';
+import { InMemoryIntegrationDescriptorStore } from './stores/InMemoryIntegrationDescriptorStore.js';
+import { InMemoryIntegrationOpenApiSpecStore } from './stores/InMemoryIntegrationOpenApiSpecStore.js';
 import { InMemoryPortfolioElementStore } from './stores/InMemoryPortfolioElementStore.js';
 import {
   ManagerBackedPortfolioElementStore,
@@ -197,6 +201,8 @@ export const WEB_CONSOLE_SERVICE_NAMES = {
   accountAdminStore: 'WebConsoleAccountAdminStore',
   accountAllowlistStore: 'WebConsoleAccountAllowlistStore',
   integrationStore: 'WebConsoleIntegrationStore',
+  integrationDescriptorStore: 'WebConsoleIntegrationDescriptorStore',
+  integrationOpenApiSpecStore: 'WebConsoleIntegrationOpenApiSpecStore',
   portfolioStore: 'WebConsolePortfolioStore',
   portfolioSyncJobStore: 'WebConsolePortfolioSyncJobStore',
   securityInvalidationStore: 'WebConsoleSecurityInvalidationStore',
@@ -324,6 +330,8 @@ export interface WebConsoleComposition {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly integrationStore: IUserIntegrationStore;
+  readonly integrationDescriptorStore: IIntegrationDescriptorStore;
+  readonly integrationOpenApiSpecStore: IIntegrationOpenApiSpecStore;
   readonly portfolioStore: IPortfolioElementStore;
   readonly portfolioSyncJobStore: IPortfolioSyncJobStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
@@ -891,6 +899,8 @@ function registerWebConsoleCompositionServices(
   container.register(WEB_CONSOLE_SERVICE_NAMES.accountAdminStore, () => composition.accountAdminStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.accountAllowlistStore, () => composition.accountAllowlistStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.integrationStore, () => composition.integrationStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore, () => composition.integrationDescriptorStore);
+  container.register(WEB_CONSOLE_SERVICE_NAMES.integrationOpenApiSpecStore, () => composition.integrationOpenApiSpecStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioStore, () => composition.portfolioStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.portfolioSyncJobStore, () => composition.portfolioSyncJobStore);
   container.register(WEB_CONSOLE_SERVICE_NAMES.securityInvalidationStore, () => composition.securityInvalidationStore);
@@ -1094,6 +1104,8 @@ interface ConsoleStoreSet {
   readonly accountAdminStore: IConsoleAccountAdminStore;
   readonly accountAllowlistStore: IConsoleAccountAllowlistStore;
   readonly integrationStore: IUserIntegrationStore;
+  readonly integrationDescriptorStore: IIntegrationDescriptorStore;
+  readonly integrationOpenApiSpecStore: IIntegrationOpenApiSpecStore;
   readonly portfolioStore: IPortfolioElementStore;
   readonly portfolioSyncJobStore: IPortfolioSyncJobStore;
   readonly securityInvalidationStore: IConsoleSecurityInvalidationStore;
@@ -1170,6 +1182,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       { PostgresConsoleAccountAdminStore },
       { PostgresConsoleAccountAllowlistStore },
       { PostgresUserIntegrationStore },
+      { PostgresIntegrationDescriptorStore },
+      { PostgresIntegrationOpenApiSpecStore },
       { PostgresPortfolioSyncJobStore },
       { PostgresConsoleSecurityInvalidationStore },
       { PostgresRuntimeSessionControlStore },
@@ -1182,6 +1196,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
       import('./stores/PostgresConsoleAccountAdminStore.js'),
       import('./stores/PostgresConsoleAccountAllowlistStore.js'),
       import('./stores/PostgresUserIntegrationStore.js'),
+      import('./stores/PostgresIntegrationDescriptorStore.js'),
+      import('./stores/PostgresIntegrationOpenApiSpecStore.js'),
       import('./stores/PostgresPortfolioSyncJobStore.js'),
       import('./services/invalidation/PostgresConsoleSecurityInvalidationStore.js'),
       import('./services/runtime/PostgresRuntimeSessionControlStore.js'),
@@ -1198,6 +1214,14 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
         'PostgresConsoleAccountAllowlistStore',
       ),
       integrationStore: markProductionAdapter(new PostgresUserIntegrationStore(database), 'PostgresUserIntegrationStore'),
+      integrationDescriptorStore: markProductionAdapter(
+        new PostgresIntegrationDescriptorStore(database),
+        'PostgresIntegrationDescriptorStore',
+      ),
+      integrationOpenApiSpecStore: markProductionAdapter(
+        new PostgresIntegrationOpenApiSpecStore(database),
+        'PostgresIntegrationOpenApiSpecStore',
+      ),
       portfolioStore: new InMemoryPortfolioElementStore(),
       portfolioSyncJobStore: markProductionAdapter(
         new PostgresPortfolioSyncJobStore(database),
@@ -1223,6 +1247,8 @@ async function createConsoleStores(database: DatabaseInstance | undefined): Prom
     accountAdminStore: new InMemoryConsoleAccountAdminStore(),
     accountAllowlistStore: new InMemoryConsoleAccountAllowlistStore(),
     integrationStore: new InMemoryUserIntegrationStore(),
+    integrationDescriptorStore: new InMemoryIntegrationDescriptorStore(),
+    integrationOpenApiSpecStore: new InMemoryIntegrationOpenApiSpecStore(),
     portfolioStore: new InMemoryPortfolioElementStore(),
     portfolioSyncJobStore: new InMemoryPortfolioSyncJobStore(),
     securityInvalidationStore: new InMemoryConsoleSecurityInvalidationStore(),
