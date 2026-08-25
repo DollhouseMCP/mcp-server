@@ -817,5 +817,22 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(fileOperations.createDirectory).toHaveBeenCalled();
       expect(fileOperations.writeFile).toHaveBeenCalled();
     });
+
+    it('deactivates filename-distinct agents even when their display names collide', async () => {
+      agentManager.getActiveAgents.mockResolvedValue([
+        { filename: 'first-agent.md', metadata: { name: 'colliding-name' } } as any,
+        { filename: 'second-agent.md', metadata: { name: 'colliding-name' } } as any,
+      ]);
+
+      const result = await handler.releaseDeadlock();
+
+      expect(agentManager.deactivateAgent).toHaveBeenNthCalledWith(1, 'first-agent.md');
+      expect(agentManager.deactivateAgent).toHaveBeenNthCalledWith(2, 'second-agent.md');
+      expect(result.activeBeforeReset).toEqual([
+        { type: ElementType.AGENT, name: 'colliding-name' },
+        { type: ElementType.AGENT, name: 'colliding-name' },
+      ]);
+      expect(result.deactivated).toHaveLength(2);
+    });
   });
 });

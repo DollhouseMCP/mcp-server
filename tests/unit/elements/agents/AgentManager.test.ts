@@ -231,6 +231,26 @@ describe('AgentManager', () => {
       expect(firstActivate).toHaveBeenCalledTimes(1);
       expect(secondActivate).toHaveBeenCalledTimes(1);
     });
+
+    it('deactivates an active agent by stable filename', async () => {
+      const deactivate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      const agent = {
+        metadata: { name: 'colliding-name', version: '1.0.0' },
+        filename: 'stable-agent.md',
+        id: 'stable-agent-id',
+        deactivate,
+      } as unknown as Agent;
+      const activeByFilename = (agentManager as any).activeAgentsByFilename as Map<string, string>;
+      activeByFilename.set('stable-agent.md', 'original-name');
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager, 'findByFilename').mockResolvedValue(agent);
+
+      const result = await agentManager.deactivateAgent('stable-agent.md');
+
+      expect(result.success).toBe(true);
+      expect(activeByFilename.size).toBe(0);
+      expect(deactivate).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('Create', () => {

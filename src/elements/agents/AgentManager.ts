@@ -970,6 +970,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     for (const [filename, activationName] of this.activeAgentsByFilename) {
       const candidate = await this.findByFilename(filename);
       if (
+        filename.toLowerCase() === normalizedIdentifier ||
         activationName.toLowerCase() === normalizedIdentifier ||
         candidate?.metadata.name.toLowerCase() === normalizedIdentifier
       ) {

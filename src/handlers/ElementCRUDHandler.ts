@@ -76,6 +76,12 @@ type PolicyMemberElement = {
   metadata?: Record<string, unknown>;
 };
 
+type DeadlockReliefElement = {
+  type: string;
+  name: string;
+  deactivationIdentifier?: string;
+};
+
 const ACTIVE_POLICY_MEMBER_LOOKUP_CONCURRENCY = 8;
 
 export class ElementCRUDHandler {
@@ -726,6 +732,7 @@ export class ElementCRUDHandler {
     snapshotFile?: string;
   }> {
     const activeElements = await this.collectActiveElementsForDeadlockRelief();
+    const activeBeforeReset = activeElements.map(({ type, name }) => ({ type, name }));
     const activePolicyElements = await this.getActiveElementsForPolicy();
     const sandboxingElement = findConfirmDenyingElement(activePolicyElements);
     const advisoryElements = findConfirmAdvisoryElements(activePolicyElements);
@@ -744,8 +751,8 @@ export class ElementCRUDHandler {
       }
 
       try {
-        await strategy.deactivate(element.name);
-        deactivated.push(element);
+        await strategy.deactivate(element.deactivationIdentifier ?? element.name);
+        deactivated.push({ type: element.type, name: element.name });
       } catch (error) {
         failed.push({
           type: element.type,
@@ -758,7 +765,7 @@ export class ElementCRUDHandler {
     const persistedStateCleared = Boolean(this.activationStore?.isEnabled());
     const snapshotFile = await this.writeDeadlockReliefSnapshot({
       sessionId: this.activationStore?.getSessionId(),
-      activeBeforeReset: activeElements,
+      activeBeforeReset,
       deactivated,
       failed,
       likelyDeadlockCause: {
@@ -781,7 +788,7 @@ export class ElementCRUDHandler {
       details: `Deadlock relief deactivated ${deactivated.length} element(s)${failureSummary}`,
       additionalData: {
         sessionId: this.activationStore?.getSessionId(),
-        activeBeforeReset: activeElements,
+        activeBeforeReset,
         deactivated,
         failed,
         persistedStateCleared,
@@ -797,7 +804,7 @@ export class ElementCRUDHandler {
       ...(this.activationStore?.getSessionId()
         ? { sessionId: this.activationStore.getSessionId() }
         : {}),
-      activeBeforeReset: activeElements,
+      activeBeforeReset,
       deactivated,
       failed,
       persistedStateCleared,
@@ -809,8 +816,8 @@ export class ElementCRUDHandler {
     };
   }
 
-  private async collectActiveElementsForDeadlockRelief(): Promise<Array<{ type: string; name: string }>> {
-    const activeElements: Array<{ type: string; name: string }> = [];
+  private async collectActiveElementsForDeadlockRelief(): Promise<DeadlockReliefElement[]> {
+    const activeElements: DeadlockReliefElement[] = [];
 
     const activePersonas = this.personaManager.getActivePersonas();
     activeElements.push(...activePersonas.map((persona) => ({
@@ -825,10 +832,16 @@ export class ElementCRUDHandler {
     })));
 
     const activeAgents = await this.agentManager.getActiveAgents();
-    activeElements.push(...activeAgents.map((agent) => ({
-      type: ElementType.AGENT,
-      name: agent.metadata.name,
-    })));
+    activeElements.push(...activeAgents.map((agent) => {
+      const filename = (agent as typeof agent & { filename?: unknown }).filename;
+      return {
+        type: ElementType.AGENT,
+        name: agent.metadata.name,
+        ...(typeof filename === 'string' && filename.trim() !== ''
+          ? { deactivationIdentifier: filename }
+          : {}),
+      };
+    }));
 
     const activeMemories = await this.memoryManager.getActiveMemories();
     activeElements.push(...activeMemories.map((memory) => ({
@@ -844,7 +857,7 @@ export class ElementCRUDHandler {
 
     const seen = new Set<string>();
     return activeElements.filter((element) => {
-      const key = `${element.type}:${element.name}`;
+      const key = `${element.type}:${element.deactivationIdentifier ?? element.name}`;
       if (seen.has(key)) {
         return false;
       }
