@@ -1,5 +1,4 @@
 import type { Gatekeeper } from '../../../handlers/mcp-aql/Gatekeeper.js';
-import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
 import type { ActiveElement } from '../../../handlers/mcp-aql/policies/index.js';
 import { resolveCliApprovalPolicy } from '../../../handlers/mcp-aql/OperationSummary.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
@@ -8,6 +7,11 @@ import {
   classifyTool,
   evaluateCliToolPolicy,
 } from '../../../handlers/mcp-aql/policies/ToolClassification.js';
+import {
+  canonicalizeIntegrationRequestPath,
+  IntegrationRequestPathError,
+  type CanonicalIntegrationRequestPath,
+} from './IntegrationRequestPath.js';
 
 const INTEGRATION_TOOL_NAME = 'integration_request';
 
@@ -66,17 +70,21 @@ export class IntegrationRequestPolicyEnforcer {
   }
 
   private async authorizeInternal(input: IntegrationRequestPolicyInput): Promise<IntegrationRequestPolicyDecision> {
-    if (input.path.length > MAX_INTEGRATION_REQUEST_PATH_LENGTH) {
+    let canonicalPath: CanonicalIntegrationRequestPath;
+    try {
+      canonicalPath = canonicalizeIntegrationRequestPath(input.path);
+    } catch (error) {
+      if (!(error instanceof IntegrationRequestPathError)) throw error;
       return {
         allowed: false,
         error: {
-          code: 'integration_request_path_too_long',
-          message: `Integration request path must be at most ${MAX_INTEGRATION_REQUEST_PATH_LENGTH} characters.`,
-          status: 414,
+          code: error.code,
+          message: error.message,
+          status: error.status,
         },
       };
     }
-    const toolInput = integrationToolInput(input);
+    const toolInput = integrationToolInput(input, canonicalPath);
     const readWriteClass = toolInput.read_write_class === 'read' ? 'read' : 'write';
     const activeElements = await this.options.getActiveElements();
     const classification = classifyTool(INTEGRATION_TOOL_NAME, toolInput);
@@ -203,12 +211,16 @@ export class IntegrationPolicyUnavailableError extends Error {
   }
 }
 
-function integrationToolInput(input: IntegrationRequestPolicyInput): Record<string, unknown> {
+function integrationToolInput(
+  input: IntegrationRequestPolicyInput,
+  canonicalPath: CanonicalIntegrationRequestPath,
+): Record<string, unknown> {
   const method = input.method.toUpperCase();
   return {
     provider: input.provider,
     method,
-    path: input.path,
+    path: canonicalPath.pathname,
+    ...(canonicalPath.search ? { path_query: canonicalPath.search } : {}),
     read_write_class: method === 'GET' ? 'read' : 'write',
     ...(input.query ? { query: input.query } : {}),
     ...(input.body === undefined ? {} : { body: input.body }),

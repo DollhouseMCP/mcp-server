@@ -192,6 +192,69 @@ describe('IntegrationRequestPolicyEnforcer', () => {
       },
     });
   });
+
+  it.each(['/safe/../admin', '/safe/%2e%2e/admin'])(
+    'matches deny policies against canonical outbound path for %s',
+    async path => {
+      const gatekeeper = new Gatekeeper(
+        undefined,
+        undefined,
+        undefined,
+        'integration-policy-canonical-path-test',
+        new StaticAuditHmacKeyResolver('bb'.repeat(32)),
+      );
+      const enforcer = new IntegrationRequestPolicyEnforcer({
+        gatekeeper,
+        getActiveElements: () => Promise.resolve([integrationAdminDenyGuard()]),
+      });
+
+      await expect(enforcer.authorize({
+        provider: 'gmail',
+        method: 'DELETE',
+        path,
+      })).resolves.toMatchObject({
+        allowed: false,
+        error: { code: 'integration_request_denied_by_policy' },
+      });
+    },
+  );
+
+  it('keeps embedded query strings in the exact-input approval hash', async () => {
+    const gatekeeper = new Gatekeeper(
+      undefined,
+      undefined,
+      undefined,
+      'integration-policy-query-approval-test',
+      new StaticAuditHmacKeyResolver('cc'.repeat(32)),
+    );
+    const enforcer = new IntegrationRequestPolicyEnforcer({
+      gatekeeper,
+      getActiveElements: () => Promise.resolve([integrationWriteGuard()]),
+    });
+    const first = await enforcer.authorize({
+      provider: 'gmail',
+      method: 'POST',
+      path: `${SEND_PATH}?mode=draft`,
+      body: { raw: 'abc' },
+    });
+    await gatekeeper.approveCliRequest(approvalRequestId(first), 'single');
+
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'POST',
+      path: `${SEND_PATH}?mode=send`,
+      body: { raw: 'abc' },
+    })).resolves.toMatchObject({
+      allowed: false,
+      error: { code: 'integration_request_approval_required' },
+    });
+    await expect(enforcer.authorize({
+      provider: 'gmail',
+      method: 'POST',
+      path: `${SEND_PATH}?mode=draft`,
+      body: { raw: 'abc' },
+    })).resolves.toMatchObject({ allowed: true });
+  });
 });
 
 function integrationWriteGuard(): ActiveElement {
@@ -236,6 +299,22 @@ function integrationDenyGuard(): ActiveElement {
         externalRestrictions: {
           description: 'Deny integration reads',
           denyPatterns: ['integration_request:read'],
+        },
+      },
+    },
+  };
+}
+
+function integrationAdminDenyGuard(): ActiveElement {
+  return {
+    type: 'agent',
+    name: 'integration-admin-deny-guard',
+    metadata: {
+      name: 'integration-admin-deny-guard',
+      gatekeeper: {
+        externalRestrictions: {
+          description: 'Deny integration admin writes',
+          denyPatterns: ['integration_request:gmail:DELETE:/admin'],
         },
       },
     },

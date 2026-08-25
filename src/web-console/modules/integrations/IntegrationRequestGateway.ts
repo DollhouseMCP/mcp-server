@@ -1,6 +1,5 @@
 import { lookup as dnsLookup } from 'node:dns/promises';
 
-import { MAX_INTEGRATION_REQUEST_PATH_LENGTH } from '../../../config/integration-constants.js';
 import type { IRateLimitStore, RateLimitUpdate } from '../../../auth/embedded-as/storage/IRateLimitStore.js';
 import type { ContextTracker } from '../../../security/encryption/ContextTracker.js';
 import { SecurityMonitor } from '../../../security/securityMonitor.js';
@@ -9,6 +8,10 @@ import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '.
 import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
+import {
+  canonicalizeIntegrationRequestPath,
+  IntegrationRequestPathError,
+} from './IntegrationRequestPath.js';
 import {
   assertPublicResolvedHost,
   PublicHostGuardError,
@@ -541,18 +544,17 @@ function buildAllowedUrl(
   path: string,
   query: Readonly<Record<string, unknown>> | undefined,
 ): URL {
-  if (typeof path !== 'string' || !path.startsWith('/') || path.startsWith('//') || path.includes('\\')) {
-    throw new IntegrationRequestError('invalid_integration_path', 'Integration request path must be an absolute path.', 400);
-  }
-  if (path.length > MAX_INTEGRATION_REQUEST_PATH_LENGTH) {
-    throw new IntegrationRequestError(
-      'integration_request_path_too_long',
-      `Integration request path must be at most ${MAX_INTEGRATION_REQUEST_PATH_LENGTH} characters.`,
-      414,
-    );
+  let canonicalPath;
+  try {
+    canonicalPath = canonicalizeIntegrationRequestPath(path);
+  } catch (error) {
+    if (error instanceof IntegrationRequestPathError) {
+      throw new IntegrationRequestError(error.code, error.message, error.status);
+    }
+    throw error;
   }
   const base = `https://${descriptor.apiHosts[0]}`;
-  const url = new URL(path, base);
+  const url = new URL(`${canonicalPath.pathname}${canonicalPath.search}`, base);
   if (url.protocol !== 'https:' || !descriptor.apiHosts.includes(url.hostname)) {
     throw new IntegrationRequestError('integration_host_not_allowed', 'Integration request host is not allowed.', 403);
   }

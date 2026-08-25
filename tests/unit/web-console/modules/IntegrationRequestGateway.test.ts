@@ -240,6 +240,11 @@ describe('IntegrationRequestGateway', () => {
     }))).rejects.toMatchObject({ code: 'invalid_integration_path' });
     await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
       provider: 'gmail',
+      method: 'GET',
+      path: '/admin#ignored-fragment',
+    }))).rejects.toMatchObject({ code: 'invalid_integration_path' });
+    await expect(runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
       method: 'POST',
       path: '/ok',
       body: { payload: 'x'.repeat(70 * 1024) },
@@ -268,6 +273,27 @@ describe('IntegrationRequestGateway', () => {
       path: '/ok',
     }))).rejects.toMatchObject({ code: 'integration_request_rate_limited' });
   });
+
+  it.each(['/safe/../admin', '/safe/%2e%2e/admin'])(
+    'sends the canonical outbound path for %s',
+    async path => {
+      const requestedUrls: string[] = [];
+      const gateway = gatewayFixture({
+        fetch: url => {
+          requestedUrls.push(urlString(url));
+          return Promise.resolve(jsonResponse(200, { ok: true }));
+        },
+      });
+
+      await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+        provider: 'gmail',
+        method: 'GET',
+        path,
+      }));
+
+      expect(requestedUrls).toEqual([`https://${GMAIL_HOST}/admin`]);
+    },
+  );
 
   it('uses a shared rate-limit store across gateway instances when provided', async () => {
     const rateLimitStore = new InMemoryRateLimitStore();
