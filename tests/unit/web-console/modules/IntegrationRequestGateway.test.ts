@@ -16,7 +16,10 @@ import {
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
 import { InMemoryRateLimitStore } from '../../../../src/auth/embedded-as/storage/InMemoryRateLimitStore.js';
 import type { IRateLimitStore } from '../../../../src/auth/embedded-as/storage/IRateLimitStore.js';
-import type { PinnedOutboundFactory } from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
+import type {
+  OutboundPin,
+  PinnedOutboundFactory,
+} from '../../../../src/web-console/modules/integrations/PinnedOutboundFactory.js';
 
 const USER_ID = '018f3d47-73ae-7f10-a0de-0742618d4fb1';
 const SESSION_ID = 'mcp-session-1';
@@ -82,6 +85,12 @@ describe('IntegrationRequestGateway', () => {
       },
     });
     expect(JSON.stringify(result)).not.toContain('gmail-access-token');
+    expect(gateway.outboundState.pins).toEqual([{
+      hostname: GMAIL_HOST,
+      address: PUBLIC_TEST_ADDRESS,
+      family: 4,
+    }]);
+    expect(gateway.outboundState.closeCount).toBe(1);
     expect(gateway.audit.events).toEqual([
       expect.objectContaining({
         provider: 'gmail',
@@ -380,6 +389,10 @@ function gatewayFixture(options: {
   const descriptorStore = new InMemoryIntegrationDescriptorStore(options.descriptors ?? [oauthDescriptor()]);
   const providers = options.providers ?? IntegrationProviderRegistry.empty();
   const audit = new FixtureAuditSink();
+  const outboundState: { pins: OutboundPin[]; closeCount: number } = {
+    pins: [],
+    closeCount: 0,
+  };
   const gateway = new IntegrationRequestGateway({
     integrationStore,
     descriptorStore,
@@ -391,13 +404,13 @@ function gatewayFixture(options: {
       secretEncryption,
       now: () => NOW,
     }),
-    ...(options.fetch ? { pinnedOutbound: testPinnedOutbound(options.fetch) } : {}),
+    ...(options.fetch ? { pinnedOutbound: testPinnedOutbound(options.fetch, outboundState) } : {}),
     dnsLookup: options.dnsLookup ?? (() => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }])),
     auditSink: audit,
     rateLimitStore: options.rateLimitStore,
     rateLimit: options.rateLimit,
   });
-  return { gateway, contextTracker, audit };
+  return { gateway, contextTracker, audit, outboundState };
 }
 
 function runAsUser<T>(contextTracker: ContextTracker, fn: () => Promise<T>): Promise<T> {
@@ -494,11 +507,20 @@ function encrypt(value: string, provider: string, secret = 'access_token'): Buff
   });
 }
 
-function testPinnedOutbound(fetchImpl: typeof fetch): PinnedOutboundFactory {
-  return () => ({
-    fetch: (input, init) => fetchImpl(input, init),
-    close: () => Promise.resolve(),
-  });
+function testPinnedOutbound(
+  fetchImpl: typeof fetch,
+  state?: { pins: OutboundPin[]; closeCount: number },
+): PinnedOutboundFactory {
+  return pin => {
+    state?.pins.push(pin);
+    return {
+      fetch: (input, init) => fetchImpl(input, init),
+      close: () => {
+        if (state) state.closeCount += 1;
+        return Promise.resolve();
+      },
+    };
+  };
 }
 
 function jsonResponse(status: number, body: unknown): Response {
