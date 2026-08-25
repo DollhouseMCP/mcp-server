@@ -509,21 +509,37 @@ function sanitizeRemoteSchemaValue(
 ): unknown {
   budget.nodes += 1;
   if (depth > MAX_REMOTE_SCHEMA_DEPTH || budget.nodes > MAX_REMOTE_SCHEMA_NODES) return undefined;
-  if (typeof value === 'string') {
-    return value.length <= MAX_REMOTE_SCHEMA_STRING_LENGTH ? value : undefined;
-  }
+  if (typeof value === 'string') return boundedRemoteSchemaString(value);
   if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
-  if (Array.isArray(value)) {
-    if (value.length > MAX_REMOTE_SCHEMA_KEYS) return undefined;
-    const output: unknown[] = [];
-    for (const entry of value) {
-      const sanitized = sanitizeRemoteSchemaValue(entry, depth + 1, budget);
-      if (sanitized === undefined) return undefined;
-      output.push(sanitized);
-    }
-    return output;
-  }
+  if (Array.isArray(value)) return sanitizeRemoteSchemaArray(value, depth, budget);
   if (!isPlainRecord(value)) return undefined;
+  return sanitizeRemoteSchemaRecord(value, depth, budget);
+}
+
+function boundedRemoteSchemaString(value: string): string | undefined {
+  return value.length <= MAX_REMOTE_SCHEMA_STRING_LENGTH ? value : undefined;
+}
+
+function sanitizeRemoteSchemaArray(
+  value: readonly unknown[],
+  depth: number,
+  budget: { nodes: number },
+): unknown[] | undefined {
+  if (value.length > MAX_REMOTE_SCHEMA_KEYS) return undefined;
+  const output: unknown[] = [];
+  for (const entry of value) {
+    const sanitized = sanitizeRemoteSchemaValue(entry, depth + 1, budget);
+    if (sanitized === undefined) return undefined;
+    output.push(sanitized);
+  }
+  return output;
+}
+
+function sanitizeRemoteSchemaRecord(
+  value: Readonly<Record<string, unknown>>,
+  depth: number,
+  budget: { nodes: number },
+): Record<string, unknown> | undefined {
   const entries = Object.entries(value);
   if (entries.length > MAX_REMOTE_SCHEMA_KEYS) return undefined;
   const output: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
