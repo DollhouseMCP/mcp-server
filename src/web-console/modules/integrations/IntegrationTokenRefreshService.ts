@@ -2,9 +2,11 @@ import { SecurityMonitor } from '../../../security/securityMonitor.js';
 import type { ISecretEncryptionService } from '../../security/SecretEncryption.js';
 import type {
   IUserIntegrationStore,
+  UserIntegrationRecord,
   UserIntegrationProvider,
   UserIntegrationRefreshResult,
 } from '../../stores/IUserIntegrationStore.js';
+import type { IntegrationDescriptorRecord } from '../../stores/IIntegrationDescriptorStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import type { IntegrationProviderRegistry } from './IntegrationProviderRegistry.js';
 
@@ -23,6 +25,22 @@ export interface IntegrationTokenRefreshInput {
 
 export class IntegrationTokenRefreshService {
   constructor(private readonly options: IntegrationTokenRefreshServiceOptions) {}
+
+  canRefresh(
+    descriptor: IntegrationDescriptorRecord,
+    record: UserIntegrationRecord,
+  ): record is UserIntegrationRecord & {
+    readonly accessTokenCiphertext: Buffer;
+    readonly refreshTokenCiphertext: Buffer;
+  } {
+    return descriptor.provider === record.provider &&
+      descriptor.authStrategy === 'oauth2_authorization_code' &&
+      descriptor.oauth !== null &&
+      descriptor.oauth.refresh !== 'none' &&
+      record.accessTokenCiphertext !== null &&
+      record.refreshTokenCiphertext !== null &&
+      typeof this.options.providers.get(record.provider)?.refreshCredentials === 'function';
+  }
 
   refreshOnDemand(input: IntegrationTokenRefreshInput): Promise<UserIntegrationRefreshResult> {
     const provider = this.options.providers.get(input.provider);

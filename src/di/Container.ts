@@ -1796,12 +1796,7 @@ export class DollhouseContainer {
     const rateLimitStore = this.hasRegistration('RateLimitStore')
       ? this.resolve<IRateLimitStore>('RateLimitStore')
       : null;
-    const providerRegistry = this.resolveIntegrationProviderRegistry();
-    const tokenRefresh = new IntegrationTokenRefreshService({
-      store: integrationStore,
-      providers: providerRegistry,
-      secretEncryption,
-    });
+    const tokenRefresh = this.createIntegrationTokenRefreshService(integrationStore, secretEncryption);
     const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutbound);
     const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     return new IntegrationRequestGateway({
@@ -1897,17 +1892,31 @@ export class DollhouseContainer {
         !this.hasRegistration('ContextTracker')) {
       return null;
     }
+    const integrationStore = this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore);
+    const secretEncryption = this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption);
     const dnsLookupOverride = this.resolveIntegrationOverride<DnsLookup>(INTEGRATION_OUTBOUND_OVERRIDES.dnsLookup);
     const pinnedOutboundOverride = this.resolveIntegrationOverride<PinnedOutboundFactory>(INTEGRATION_OUTBOUND_OVERRIDES.pinnedOutbound);
     const clientFactoryOverride = this.resolveIntegrationOverride<RemoteMcpClientFactory>(INTEGRATION_OUTBOUND_OVERRIDES.remoteMcpClientFactory);
     return new IntegrationRemoteMcpBridge({
-      integrationStore: this.resolve<IUserIntegrationStore>(WEB_CONSOLE_SERVICE_NAMES.integrationStore),
+      integrationStore,
       descriptorStore: this.resolve<IIntegrationDescriptorStore>(WEB_CONSOLE_SERVICE_NAMES.integrationDescriptorStore),
-      secretEncryption: this.resolve<ISecretEncryptionService>(WEB_CONSOLE_SERVICE_NAMES.secretEncryption),
+      secretEncryption,
       contextTracker: this.resolve<ContextTracker>('ContextTracker'),
+      tokenRefresh: this.createIntegrationTokenRefreshService(integrationStore, secretEncryption),
       ...(pinnedOutboundOverride ? { pinnedOutbound: pinnedOutboundOverride } : {}),
       ...(dnsLookupOverride ? { dnsLookup: dnsLookupOverride } : {}),
       ...(clientFactoryOverride ? { clientFactory: clientFactoryOverride } : {}),
+    });
+  }
+
+  private createIntegrationTokenRefreshService(
+    integrationStore: IUserIntegrationStore,
+    secretEncryption: ISecretEncryptionService,
+  ): IntegrationTokenRefreshService {
+    return new IntegrationTokenRefreshService({
+      store: integrationStore,
+      providers: this.resolveIntegrationProviderRegistry(),
+      secretEncryption,
     });
   }
 

@@ -3,11 +3,14 @@ import { describe, expect, it, jest } from '@jest/globals';
 import { ContextTracker } from '../../../../src/security/encryption/ContextTracker.js';
 import { AeadSecretEncryptionService } from '../../../../src/web-console/security/SecretEncryption.js';
 import {
+  ConfiguredOAuthIntegrationProvider,
   InMemoryIntegrationDescriptorStore,
   InMemoryUserIntegrationStore,
+  IntegrationProviderRegistry,
+  IntegrationTokenRefreshService,
   type IntegrationDescriptorRecord,
   type UserIntegrationRecord,
-} from '../../../../src/web-console/stores/index.js';
+} from '../../../../src/web-console/index.js';
 import {
   IntegrationRemoteMcpBridge,
   type IntegrationRemoteMcpBridgeError,
@@ -115,6 +118,62 @@ describe('IntegrationRemoteMcpBridge', () => {
         handling: 'data_only_not_instructions',
       },
     });
+  });
+
+  it('refreshes an expired OAuth credential before retrying remote MCP discovery', async () => {
+    const secretEncryption = encryption();
+    const staleIntegration = {
+      ...integration(secretEncryption),
+      refreshTokenCiphertext: secretEncryption.encrypt(
+        Buffer.from('remote-refresh-token', 'utf8'),
+        integrationSecretContext('refresh_token', USER_ID, REMOTE_DOCS),
+      ),
+    };
+    const refreshProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: descriptor(),
+      clientSecret: 'remote-client-secret',
+      dnsLookup: publicDnsLookup,
+      pinnedOutbound: () => ({
+        fetch: () => Promise.resolve(new Response(JSON.stringify({
+          access_token: 'remote-refreshed-access-token',
+          refresh_token: 'remote-rotated-refresh-token',
+        }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' },
+        })),
+        close: () => Promise.resolve(),
+      }),
+    });
+    const bearerTokens: string[] = [];
+    const clientFactory = jest.fn<RemoteMcpClientFactory>().mockImplementation(({ bearerToken, pinnedFetch }) => {
+      bearerTokens.push(bearerToken);
+      return Promise.resolve({
+        listTools: bearerToken === 'remote-access-token'
+          ? async () => {
+              await pinnedFetch('https://mcp.example.com/mcp');
+              throw new Error('Remote MCP request failed with HTTP 401');
+            }
+          : () => Promise.resolve({
+              tools: [{ name: 'search', description: 'Search', inputSchema: { type: 'object' } }],
+            }),
+        callTool: jest.fn(),
+        close: jest.fn(() => Promise.resolve()),
+      });
+    });
+    const { bridge, contextTracker } = fixture({
+      integration: staleIntegration,
+      providers: new IntegrationProviderRegistry([refreshProvider]),
+      clientFactory,
+      pinnedOutbound: () => ({
+        fetch: () => Promise.resolve(new Response(null, { status: 401 })),
+        close: () => Promise.resolve(),
+      }),
+    });
+
+    const tools = await runAsUser(contextTracker, () => bridge.listAllowedTools());
+
+    expect(tools).toHaveLength(1);
+    expect(bearerTokens).toEqual(['remote-access-token', 'remote-refreshed-access-token']);
   });
 
   it('rejects remote MCP server URLs outside descriptor apiHosts', async () => {
@@ -267,6 +326,7 @@ function fixture(options: {
   readonly integration?: UserIntegrationRecord;
   readonly integrations?: readonly UserIntegrationRecord[];
   readonly clientFactory?: RemoteMcpClientFactory;
+  readonly providers?: IntegrationProviderRegistry;
   readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
   readonly timeoutMs?: number;
@@ -275,6 +335,7 @@ function fixture(options: {
   const secretEncryption = encryption();
   const descriptorRecords = options.descriptors ?? [options.descriptor ?? descriptor()];
   const integrationRecords = options.integrations ?? [options.integration ?? integration(secretEncryption)];
+  const integrationStore = new InMemoryUserIntegrationStore(integrationRecords);
   const pins: OutboundPin[] = [];
   const closePinned = jest.fn(() => Promise.resolve());
   const pinnedOutbound: PinnedOutboundFactory = options.pinnedOutbound ?? (pin => {
@@ -290,9 +351,16 @@ function fixture(options: {
     closePinned,
     bridge: new IntegrationRemoteMcpBridge({
       descriptorStore: new InMemoryIntegrationDescriptorStore(descriptorRecords),
-      integrationStore: new InMemoryUserIntegrationStore(integrationRecords),
+      integrationStore,
       secretEncryption,
       contextTracker,
+      tokenRefresh: options.providers
+        ? new IntegrationTokenRefreshService({
+            store: integrationStore,
+            providers: options.providers,
+            secretEncryption,
+          })
+        : undefined,
       pinnedOutbound,
       dnsLookup: options.dnsLookup ?? publicDnsLookup,
       timeoutMs: options.timeoutMs,

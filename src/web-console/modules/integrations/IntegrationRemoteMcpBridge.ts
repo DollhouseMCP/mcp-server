@@ -12,6 +12,7 @@ import type { IIntegrationDescriptorStore, IntegrationDescriptorRecord } from '.
 import type { IUserIntegrationStore, UserIntegrationRecord } from '../../stores/IUserIntegrationStore.js';
 import { integrationSecretContext } from './IntegrationSecretContext.js';
 import { normalizeIntegrationToolName } from './IntegrationToolName.js';
+import type { IntegrationTokenRefreshService } from './IntegrationTokenRefreshService.js';
 import {
   assertPublicResolvedHost,
   PublicHostGuardError,
@@ -32,6 +33,7 @@ export interface IntegrationRemoteMcpBridgeOptions {
   readonly integrationStore: IUserIntegrationStore;
   readonly secretEncryption: ISecretEncryptionService;
   readonly contextTracker: ContextTracker;
+  readonly tokenRefresh?: IntegrationTokenRefreshService | null;
   readonly clientFactory?: RemoteMcpClientFactory;
   readonly pinnedOutbound?: PinnedOutboundFactory;
   readonly dnsLookup?: DnsLookup;
@@ -134,8 +136,7 @@ export class IntegrationRemoteMcpBridge {
       return [];
     }
     const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-    const bearerToken = this.decryptAccessToken(integration, userId);
-    const tools = await this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
+    const tools = await this.withRefreshablePinnedClient(descriptor, integration, userId, config.serverUrl, vetted, async client => {
       const listed = await withTimeout(
         client.listTools(),
         this.timeoutMs,
@@ -184,8 +185,7 @@ export class IntegrationRemoteMcpBridge {
       throw new IntegrationRemoteMcpBridgeError('remote_mcp_not_connected', 'Remote MCP integration is not connected.', 409);
     }
     const vetted = await this.assertRemoteMcpPublicHost(config.serverUrl.hostname);
-    const bearerToken = this.decryptAccessToken(integration, session.userId);
-    return this.withPinnedClient(config.serverUrl, bearerToken, vetted, async client => {
+    return this.withRefreshablePinnedClient(descriptor, integration, session.userId, config.serverUrl, vetted, async client => {
       const result = await withTimeout(
         client.callTool({ name: input.remoteName, arguments: readArguments(input.arguments) }),
         this.timeoutMs,
@@ -256,15 +256,63 @@ export class IntegrationRemoteMcpBridge {
       address: vetted.address,
       family: vetted.family,
     });
+    let receivedUnauthorized = false;
+    const observedFetch: PinnedFetch = async (input, init) => {
+      const response = await outbound.fetch(input, init);
+      if (response.status === 401) receivedUnauthorized = true;
+      return response;
+    };
     try {
-      const client = await this.connectClient(serverUrl, bearerToken, outbound.fetch);
+      const client = await this.connectClient(serverUrl, bearerToken, observedFetch);
       try {
         return await work(client);
       } finally {
         await client.close();
       }
+    } catch (error) {
+      if (receivedUnauthorized) throw new RemoteMcpUnauthorizedResponseError(error);
+      throw error;
     } finally {
       await outbound.close();
+    }
+  }
+
+  private async withRefreshablePinnedClient<T>(
+    descriptor: IntegrationDescriptorRecord,
+    integration: UserIntegrationRecord,
+    userId: string,
+    serverUrl: URL,
+    vetted: DnsLookupAddress,
+    work: (client: RemoteMcpClient) => Promise<T>,
+  ): Promise<T> {
+    const firstCredential = this.decryptAccessToken(integration, userId);
+    try {
+      return await this.withPinnedClient(serverUrl, firstCredential, vetted, work);
+    } catch (error) {
+      const tokenRefresh = this.options.tokenRefresh;
+      if (!(error instanceof RemoteMcpUnauthorizedResponseError) || !tokenRefresh ||
+          !tokenRefresh.canRefresh(descriptor, integration)) {
+        throw unwrapRemoteMcpUnauthorizedError(error);
+      }
+
+      const refreshed = await tokenRefresh.refreshOnDemand({
+        userId,
+        provider: descriptor.provider,
+        staleAccessTokenCiphertext: integration.accessTokenCiphertext,
+      });
+      if (refreshed.kind !== 'refreshed' && refreshed.kind !== 'reused') {
+        throw new IntegrationRemoteMcpBridgeError(
+          'remote_mcp_token_refresh_failed',
+          'Remote MCP credential refresh failed.',
+          502,
+        );
+      }
+      const refreshedCredential = this.decryptAccessToken(refreshed.record, userId);
+      try {
+        return await this.withPinnedClient(serverUrl, refreshedCredential, vetted, work);
+      } catch (retryError) {
+        throw unwrapRemoteMcpUnauthorizedError(retryError);
+      }
     }
   }
 
@@ -402,6 +450,17 @@ function remoteMcpResponseTooLarge(): IntegrationRemoteMcpBridgeError {
     'Remote MCP response exceeded the maximum allowed size.',
     502,
   );
+}
+
+class RemoteMcpUnauthorizedResponseError extends Error {
+  constructor(readonly originalError: unknown) {
+    super('Remote MCP server rejected the integration credential.');
+    this.name = 'RemoteMcpUnauthorizedResponseError';
+  }
+}
+
+function unwrapRemoteMcpUnauthorizedError(error: unknown): unknown {
+  return error instanceof RemoteMcpUnauthorizedResponseError ? error.originalError : error;
 }
 
 function withTimeout<T>(

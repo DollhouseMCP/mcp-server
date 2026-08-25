@@ -154,6 +154,75 @@ describe('IntegrationRequestGateway', () => {
     expect(JSON.stringify(result)).not.toContain('airtable-key');
   });
 
+  it('returns a static-key 401 without corrupting the connected credential record', async () => {
+    const gateway = gatewayFixture({
+      descriptors: [staticDescriptor()],
+      records: [integrationRecord({
+        provider: 'airtable',
+        authorizedPermissions: { scopes: [] },
+        accessTokenCiphertext: encrypt('airtable-key', 'airtable'),
+        refreshTokenCiphertext: null,
+      })],
+      fetch: () => Promise.resolve(jsonResponse(401, { error: 'unauthorized' })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'airtable',
+      method: 'GET',
+      path: '/v0/app/table',
+    }));
+    const stored = await gateway.integrationStore.findByProvider(USER_ID, 'airtable');
+
+    expect(result).toMatchObject({ status: 401, refreshed: false });
+    expect(stored).toMatchObject({ status: 'connected', errorReason: null });
+  });
+
+  it('does not refresh OAuth credentials when the descriptor disables refresh', async () => {
+    const refreshDisabledDescriptor = oauthDescriptor();
+    const oauthProvider = new ConfiguredOAuthIntegrationProvider({
+      descriptor: oauthDescriptor(),
+      clientSecret: 'gmail-client-secret',
+      dnsLookup: () => Promise.resolve([{ address: PUBLIC_TEST_ADDRESS, family: 4 }]),
+      pinnedOutbound: testPinnedOutbound(() => Promise.reject(new Error('refresh must not run'))),
+    });
+    const gateway = gatewayFixture({
+      descriptors: [{
+        ...refreshDisabledDescriptor,
+        oauth: refreshDisabledDescriptor.oauth
+          ? { ...refreshDisabledDescriptor.oauth, refresh: 'none' }
+          : null,
+      }],
+      providers: new IntegrationProviderRegistry([oauthProvider]),
+      fetch: () => Promise.resolve(jsonResponse(401, { error: 'unauthorized' })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+    }));
+    const stored = await gateway.integrationStore.findByProvider(USER_ID, 'gmail');
+
+    expect(result).toMatchObject({ status: 401, refreshed: false });
+    expect(stored).toMatchObject({ status: 'connected', errorReason: null });
+  });
+
+  it('does not corrupt OAuth credentials when no refresh-capable provider is registered', async () => {
+    const gateway = gatewayFixture({
+      fetch: () => Promise.resolve(jsonResponse(401, { error: 'unauthorized' })),
+    });
+
+    const result = await runAsUser(gateway.contextTracker, () => gateway.gateway.request({
+      provider: 'gmail',
+      method: 'GET',
+      path: '/gmail/v1/users/me/profile',
+    }));
+    const stored = await gateway.integrationStore.findByProvider(USER_ID, 'gmail');
+
+    expect(result).toMatchObject({ status: 401, refreshed: false });
+    expect(stored).toMatchObject({ status: 'connected', errorReason: null });
+  });
+
   it('fails closed on disallowed method, host escape, oversized body, and rate limit', async () => {
     const gateway = gatewayFixture({
       fetch: () => Promise.resolve(jsonResponse(200, { ok: true })),
@@ -442,7 +511,7 @@ function gatewayFixture(options: {
     rateLimitStore: options.rateLimitStore,
     rateLimit: options.rateLimit,
   });
-  return { gateway, contextTracker, audit, outboundState };
+  return { gateway, contextTracker, audit, outboundState, integrationStore };
 }
 
 function runAsUser<T>(contextTracker: ContextTracker, fn: () => Promise<T>): Promise<T> {

@@ -145,11 +145,20 @@ export class IntegrationRequestGateway {
     const firstCredential = await this.decryptAuditedAccessToken(record, session.userId, session.sessionId, method, url, false);
     const body = await this.serializeAuditedRequestBody(provider, session.userId, session.sessionId, method, url, input.body);
     const first = await this.auditedSend(requestContext, descriptor, body, firstCredential, false);
-    if (first.status !== 401 || !this.options.tokenRefresh || !record.accessTokenCiphertext) {
+    const tokenRefresh = this.options.tokenRefresh;
+    if (first.status !== 401 || !tokenRefresh || !tokenRefresh.canRefresh(descriptor, record)) {
       return this.finish(provider, session.userId, session.sessionId, method, url, first, false);
     }
 
-    const refresh = await this.refreshAudited(this.options.tokenRefresh, session.userId, session.sessionId, provider, method, url, record.accessTokenCiphertext);
+    const refresh = await this.refreshAudited(
+      tokenRefresh,
+      session.userId,
+      session.sessionId,
+      provider,
+      method,
+      url,
+      record.accessTokenCiphertext,
+    );
     if (refresh.kind !== 'refreshed' && refresh.kind !== 'reused') {
       await this.auditCredentialError(provider, session.userId, session.sessionId, method, url, 'refresh_failed');
       throw new IntegrationRequestError('integration_token_refresh_failed', 'Integration token refresh failed.', 502);
