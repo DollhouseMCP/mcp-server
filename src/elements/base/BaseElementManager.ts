@@ -769,8 +769,16 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
       return undefined;
     }
 
+    const normalizedFilename = filename.trim();
+    const cached = this.getCachedElementByAbsolutePath(
+      this.resolveAbsolutePath(normalizedFilename)
+    );
+    if (cached) {
+      return cached;
+    }
+
     try {
-      return await this.load(filename.trim());
+      return await this.load(normalizedFilename);
     } catch {
       return undefined;
     }

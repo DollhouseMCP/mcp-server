@@ -178,6 +178,28 @@ describe('AgentManager', () => {
       expect(activate).toHaveBeenCalledTimes(1);
     });
 
+    it('reuses the cached active agent for stable filename policy reads', async () => {
+      const cachedAgent = new Agent({
+        name: 'cached-agent',
+        description: 'Cached active agent',
+      }, metadataService);
+      await cachedAgent.activate();
+      (agentManager as any).cacheElement(cachedAgent, 'cached-agent.md');
+      (agentManager as any).activeAgentsByFilename.set('cached-agent.md', 'cached-agent');
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      fileOperationsService.readFile.mockClear();
+
+      const first = await agentManager.getActiveAgents();
+      const second = await agentManager.getActiveAgents();
+
+      expect(first).toEqual([cachedAgent]);
+      expect(second).toEqual([cachedAgent]);
+      expect(first[0]).toBe(cachedAgent);
+      expect(second[0]).toBe(cachedAgent);
+      expect(cachedAgent.getState().sessionCount).toBe(1);
+      expect(fileOperationsService.readFile).not.toHaveBeenCalled();
+    });
+
     it('deactivates a renamed agent using its pre-rename activation name', async () => {
       const deactivate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
       const renamedAgent = {
