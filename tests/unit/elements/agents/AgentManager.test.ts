@@ -116,6 +116,23 @@ describe('AgentManager', () => {
     });
   });
 
+  describe('Active agents', () => {
+    it('resolves only active names without listing the full agent catalog', async () => {
+      const activeAgent = {
+        metadata: { name: 'active-agent' },
+      } as Agent;
+      (agentManager as any).activeAgentNames.add('active-agent');
+      const findByName = jest.spyOn(agentManager, 'findByName').mockResolvedValue(activeAgent);
+      const list = jest.spyOn(agentManager, 'list');
+
+      const result = await agentManager.getActiveAgents();
+
+      expect(result).toEqual([activeAgent]);
+      expect(findByName).toHaveBeenCalledWith('active-agent');
+      expect(list).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Create', () => {
     it('should create a new agent', async () => {
       const result = await agentManager.create(

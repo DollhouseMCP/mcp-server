@@ -64,8 +64,19 @@ import {
   getGatekeeperDiagnostics,
 } from './mcp-aql/policies/ElementPolicies.js';
 
+type PolicyElement = {
+  type: string;
+  name: string;
+  metadata: Record<string, unknown>;
+};
+
+type PolicyMemberElement = {
+  metadata?: Record<string, unknown>;
+};
+
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
+  private activePolicySnapshotInFlight?: Promise<PolicyElement[]>;
 
   constructor(
     private readonly skillManager: SkillManager,
@@ -173,6 +184,10 @@ export class ElementCRUDHandler {
       default:
         return normalizedType;
     }
+  }
+
+  private policyElementKey(type: string, name: string): string {
+    return `${this.toPolicyElementType(this.normalizeElementType(type))}:${this.normalizeLookupValue(name)}`;
   }
 
   /**
@@ -363,15 +378,72 @@ export class ElementCRUDHandler {
    *
    * Issue #452: Provides active element context for enforce() policy checks.
    */
-  async getActiveElementsForPolicy(): Promise<Array<{ type: string; name: string; metadata: Record<string, unknown> }>> {
-    const result: Array<{ type: string; name: string; metadata: Record<string, unknown> }> = [];
+  async getActiveElementsForPolicy(): Promise<PolicyElement[]> {
+    if (this.activePolicySnapshotInFlight) {
+      return this.activePolicySnapshotInFlight;
+    }
+
+    const snapshot = this.collectActiveElementsForPolicy();
+    this.activePolicySnapshotInFlight = snapshot;
+
+    try {
+      return await snapshot;
+    } finally {
+      if (this.activePolicySnapshotInFlight === snapshot) {
+        this.activePolicySnapshotInFlight = undefined;
+      }
+    }
+  }
+
+  private async collectActiveElementsForPolicy(): Promise<PolicyElement[]> {
+    await this.ensureInitialized();
+
+    const result: PolicyElement[] = [];
     const seen = new Set<string>();
+    const indexedManagers = new Map<string, Promise<BaseElementManager<any> | undefined>>();
+    const memberLookups = new Map<string, Promise<PolicyMemberElement | undefined>>();
+
+    // Prime each manager's lightweight metadata index once, then resolve only
+    // the referenced members. This prevents findByName() from falling back to a
+    // full list on a miss while avoiding list() lifecycle/status side effects.
+    const getIndexedManager = (type: string): Promise<BaseElementManager<any> | undefined> => {
+      const normalizedType = this.normalizeElementType(type);
+      const existing = indexedManagers.get(normalizedType);
+      if (existing) {
+        return existing;
+      }
+
+      const manager = this.getManagerForType(normalizedType);
+      const indexed = manager
+        ? manager.listSummaries().then(() => manager)
+        : Promise.resolve(undefined);
+      indexedManagers.set(normalizedType, indexed);
+      return indexed;
+    };
+
+    const findMember = (
+      type: string,
+      name: string,
+      key: string,
+    ): Promise<PolicyMemberElement | undefined> => {
+      const existing = memberLookups.get(key);
+      if (existing) {
+        return existing;
+      }
+
+      const lookup = getIndexedManager(type).then(async (manager) => {
+        if (!manager) return undefined;
+        return manager.findByName(name) as Promise<PolicyMemberElement | undefined>;
+      });
+      memberLookups.set(key, lookup);
+      return lookup;
+    };
 
     try {
       // Active personas (sync)
       const personas = this.personaManager.getActivePersonas();
       for (const p of personas) {
-        const key = `persona:${p.metadata.name}`;
+        const key = this.policyElementKey('persona', p.metadata.name);
         seen.add(key);
         result.push({
           type: 'persona',
@@ -387,7 +459,7 @@ export class ElementCRUDHandler {
       // Active skills (async)
       const skills = await this.skillManager.getActiveSkills();
       for (const s of skills) {
-        const key = `skill:${s.metadata.name}`;
+        const key = this.policyElementKey('skill', s.metadata.name);
         seen.add(key);
         result.push({
           type: 'skill',
@@ -403,7 +475,7 @@ export class ElementCRUDHandler {
       // Active agents (async)
       const agents = await this.agentManager.getActiveAgents();
       for (const agent of agents) {
-        const key = `agent:${agent.metadata.name}`;
+        const key = this.policyElementKey('agent', agent.metadata.name);
         seen.add(key);
         result.push({
           type: 'agent',
@@ -419,7 +491,7 @@ export class ElementCRUDHandler {
       // Active ensembles (async)
       const ensembles = await this.ensembleManager.getActiveEnsembles();
       for (const e of ensembles) {
-        const ensembleKey = `ensemble:${e.metadata.name}`;
+        const ensembleKey = this.policyElementKey('ensemble', e.metadata.name);
         seen.add(ensembleKey);
         result.push({
           type: 'ensemble',
@@ -432,19 +504,20 @@ export class ElementCRUDHandler {
           Array<{ element_name: string; element_type: string }> | undefined;
         if (Array.isArray(members)) {
           for (const member of members) {
-            const memberKey = `${member.element_type}:${member.element_name}`;
+            const normalizedType = this.normalizeElementType(member.element_type);
+            const normalizedName = this.normalizeLookupValue(member.element_name);
+            if (normalizedType === '' || normalizedName === '') continue;
+
+            const memberKey = this.policyElementKey(normalizedType, normalizedName);
             if (seen.has(memberKey)) continue; // Already active individually
             try {
-              const memberElements = await this.getElements(member.element_type);
-              const found = (memberElements as Array<{ metadata: Record<string, unknown> }>).find(
-                el => (el?.metadata as Record<string, unknown>)?.name === member.element_name
-              );
-              if (found?.metadata && (found.metadata as Record<string, unknown>)?.gatekeeper) {
+              const found = await findMember(normalizedType, normalizedName, memberKey);
+              if (found?.metadata && found.metadata['gatekeeper']) {
                 seen.add(memberKey);
                 result.push({
-                  type: member.element_type,
-                  name: member.element_name,
-                  metadata: found.metadata as Record<string, unknown>,
+                  type: this.toPolicyElementType(normalizedType),
+                  name: normalizedName,
+                  metadata: found.metadata,
                 });
               }
             } catch {

@@ -252,6 +252,98 @@ describe('ElementCRUDHandler (DI)', () => {
       ]));
     });
 
+    it('indexes each ensemble-member type once without lifecycle-bearing list calls', async () => {
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: {
+          name: 'large-policy-team',
+          elements: [
+            { element_type: 'skill', element_name: 'policy-skill' },
+            { element_type: 'skills', element_name: 'policy-skill' },
+            { element_type: 'skill', element_name: 'ordinary-skill' },
+            { element_type: 'memory', element_name: 'policy-memory' },
+            { element_type: 'memories', element_name: 'policy-memory' },
+          ],
+        },
+      } as any]);
+      const skillsByName = new Map<string, any>([
+        ['policy-skill', {
+          metadata: {
+            name: 'policy-skill',
+            gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+          },
+        }],
+        ['ordinary-skill', { metadata: { name: 'ordinary-skill' } }],
+      ]);
+      skillManager.list = jest.fn();
+      skillManager.listSummaries = jest.fn().mockResolvedValue([]);
+      skillManager.findByName = jest.fn(async (name: string) => skillsByName.get(name));
+      memoryManager.list = jest.fn();
+      memoryManager.listSummaries = jest.fn().mockResolvedValue([]);
+      memoryManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'policy-memory',
+          gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+        },
+      } as any);
+
+      const result = await handler.getActiveElementsForPolicy();
+
+      expect(skillManager.listSummaries).toHaveBeenCalledTimes(1);
+      expect(memoryManager.listSummaries).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(2);
+      expect(memoryManager.findByName).toHaveBeenCalledTimes(1);
+      expect(skillManager.list).not.toHaveBeenCalled();
+      expect(memoryManager.list).not.toHaveBeenCalled();
+      expect(result.filter((element) => element.name === 'policy-skill')).toHaveLength(1);
+      expect(result.filter((element) => element.name === 'policy-memory')).toHaveLength(1);
+      expect(result).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'ordinary-skill' }),
+      ]));
+    });
+
+    it('coalesces concurrent active-policy snapshots', async () => {
+      let releaseEnsembles!: () => void;
+      const ensemblesBlocked = new Promise<void>((resolve) => {
+        releaseEnsembles = resolve;
+      });
+      ensembleManager.getActiveEnsembles.mockImplementation(async () => {
+        await ensemblesBlocked;
+        return [];
+      });
+
+      const snapshots = [
+        handler.getActiveElementsForPolicy(),
+        handler.getActiveElementsForPolicy(),
+        handler.getActiveElementsForPolicy(),
+      ];
+      releaseEnsembles();
+      await Promise.all(snapshots);
+
+      expect(personaHandler.getActivePersonas).toHaveBeenCalledTimes(1);
+      expect(skillManager.getActiveSkills).toHaveBeenCalledTimes(1);
+      expect(agentManager.getActiveAgents).toHaveBeenCalledTimes(1);
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps large ensemble policy scans linear in unique member count', async () => {
+      const members = Array.from({ length: 500 }, (_, index) => ({
+        element_type: index % 2 === 0 ? 'skill' : 'skills',
+        element_name: `member-${index % 250}`,
+      }));
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: { name: 'large-ensemble', elements: members },
+      } as any]);
+      skillManager.list = jest.fn();
+      skillManager.listSummaries = jest.fn().mockResolvedValue([]);
+      skillManager.findByName = jest.fn().mockResolvedValue(undefined);
+
+      await handler.getActiveElementsForPolicy();
+
+      expect(skillManager.listSummaries).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(250);
+      expect(skillManager.list).not.toHaveBeenCalled();
+    });
+
     it('merges persisted activation snapshots into reportable policy elements', async () => {
       const activationStore = {
         isEnabled: jest.fn().mockReturnValue(true),
