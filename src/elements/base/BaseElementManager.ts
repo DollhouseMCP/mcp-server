@@ -756,6 +756,27 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
+   * Load an element by its stable storage filename without requiring its
+   * current display name to match that filename. This is intended for trusted
+   * persisted references (for example persona activation records) that must
+   * survive a metadata name change.
+   *
+   * Path validation remains delegated to load(); malformed, missing, or
+   * unreadable filenames are treated as lookup misses.
+   */
+  async findByFilename(filename: string): Promise<T | undefined> {
+    if (typeof filename !== 'string' || filename.trim() === '') {
+      return undefined;
+    }
+
+    try {
+      return await this.load(filename.trim());
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Helper: Search cache for element by name or ID
    * @private
    */

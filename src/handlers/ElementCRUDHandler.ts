@@ -181,6 +181,8 @@ export class ElementCRUDHandler {
         return 'persona';
       case 'skills':
         return 'skill';
+      case 'templates':
+        return 'template';
       case 'agents':
         return 'agent';
       case 'memories':
@@ -658,7 +660,7 @@ export class ElementCRUDHandler {
             ? await manager.findByName(normalizedName) as PolicyMemberElement | undefined
             : undefined;
           if (!found && normalizedFilename !== '') {
-            found = await manager.findByName(normalizedFilename) as PolicyMemberElement | undefined;
+            found = await manager.findByFilename(normalizedFilename) as PolicyMemberElement | undefined;
           }
 
           if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {

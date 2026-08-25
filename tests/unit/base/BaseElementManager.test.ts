@@ -797,6 +797,19 @@ describe('BaseElementManager - Requirements & Contract', () => {
   // ============================================
 
   describe('findByName() Cache Key Consistency', () => {
+    it('findByFilename() loads a stable path when the display name has changed', async () => {
+      await fs.writeFile(
+        path.join(elementsDir, 'stable-element.md'),
+        `---\nname: Renamed Element\n---\n\nContent`
+      );
+
+      const found = await manager.findByFilename('stable-element.md');
+
+      expect(found).toBeDefined();
+      expect(found?.metadata.name).toBe('Renamed Element');
+      expect((found as TestElement & { filename?: string })?.filename).toBe('stable-element.md');
+    });
+
     it('findByName() hits cache after list() populates it', async () => {
       // Setup: create files on disk
       await fs.writeFile(

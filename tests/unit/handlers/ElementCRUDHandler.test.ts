@@ -262,6 +262,7 @@ describe('ElementCRUDHandler (DI)', () => {
             { element_type: 'skill', element_name: 'ordinary-skill' },
             { element_type: 'memory', element_name: 'policy-memory' },
             { element_type: 'memories', element_name: 'policy-memory' },
+            { element_type: 'template', element_name: 'policy-template' },
           ],
         },
       } as any]);
@@ -285,17 +286,29 @@ describe('ElementCRUDHandler (DI)', () => {
           gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
         },
       } as any);
+      templateManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      templateManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'policy-template',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Write:*'] } },
+        },
+      } as any);
 
       const result = await handler.getActiveElementsForPolicy();
 
       expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
       expect(memoryManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(templateManager.refreshIndex).toHaveBeenCalledTimes(1);
       expect(skillManager.findByName).toHaveBeenCalledTimes(2);
       expect(memoryManager.findByName).toHaveBeenCalledTimes(1);
+      expect(templateManager.findByName).toHaveBeenCalledTimes(1);
       expect(skillManager.list).not.toHaveBeenCalled();
       expect(memoryManager.list).not.toHaveBeenCalled();
       expect(result.filter((element) => element.name === 'policy-skill')).toHaveLength(1);
       expect(result.filter((element) => element.name === 'policy-memory')).toHaveLength(1);
+      expect(result).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'template', name: 'policy-template' }),
+      ]));
       expect(result).not.toEqual(expect.arrayContaining([
         expect.objectContaining({ name: 'ordinary-skill' }),
       ]));
@@ -561,6 +574,63 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
       expect(skillManager.findByName).toHaveBeenCalledTimes(1);
       expect(skillManager.list).not.toHaveBeenCalled();
+    });
+
+    it('recovers a renamed persisted persona by its stable filename', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: {
+            persona: [{
+              name: 'Old Display Name',
+              filename: 'stable-persona.md',
+              activatedAt: new Date().toISOString(),
+            }],
+          },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      personaHandler.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      personaHandler.findByName = jest.fn().mockResolvedValue(undefined);
+      personaHandler.findByFilename = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'New Display Name',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+      expect(personaHandler.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(personaHandler.findByName).toHaveBeenCalledWith('Old Display Name');
+      expect(personaHandler.findByFilename).toHaveBeenCalledWith('stable-persona.md');
+      expect(result).toEqual([
+        expect.objectContaining({
+          type: 'persona',
+          name: 'New Display Name',
+          sessionIds: ['session-other'],
+        }),
+      ]);
     });
   });
 
