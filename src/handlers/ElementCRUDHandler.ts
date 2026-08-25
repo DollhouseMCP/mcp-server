@@ -76,7 +76,11 @@ type PolicyMemberElement = {
 
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
-  private activePolicySnapshotInFlight?: Promise<PolicyElement[]>;
+  private activePolicySnapshotGeneration = 0;
+  private activePolicySnapshotInFlight?: {
+    generation: number;
+    promise: Promise<PolicyElement[]>;
+  };
 
   constructor(
     private readonly skillManager: SkillManager,
@@ -188,6 +192,10 @@ export class ElementCRUDHandler {
 
   private policyElementKey(type: string, name: string): string {
     return `${this.toPolicyElementType(this.normalizeElementType(type))}:${this.normalizeLookupValue(name)}`;
+  }
+
+  private invalidateActivePolicySnapshot(): void {
+    this.activePolicySnapshotGeneration += 1;
   }
 
   /**
@@ -316,6 +324,7 @@ export class ElementCRUDHandler {
       }
 
       const result = await strategy.activate(name, context);
+      this.invalidateActivePolicySnapshot();
 
       // Issue #598: Persist activation state for session restore
       if (this.activationStore) {
@@ -379,17 +388,19 @@ export class ElementCRUDHandler {
    * Issue #452: Provides active element context for enforce() policy checks.
    */
   async getActiveElementsForPolicy(): Promise<PolicyElement[]> {
-    if (this.activePolicySnapshotInFlight) {
-      return this.activePolicySnapshotInFlight;
+    const generation = this.activePolicySnapshotGeneration;
+    if (this.activePolicySnapshotInFlight?.generation === generation) {
+      return this.activePolicySnapshotInFlight.promise;
     }
 
     const snapshot = this.collectActiveElementsForPolicy();
-    this.activePolicySnapshotInFlight = snapshot;
+    const inFlight = { generation, promise: snapshot };
+    this.activePolicySnapshotInFlight = inFlight;
 
     try {
       return await snapshot;
     } finally {
-      if (this.activePolicySnapshotInFlight === snapshot) {
+      if (this.activePolicySnapshotInFlight === inFlight) {
         this.activePolicySnapshotInFlight = undefined;
       }
     }
@@ -415,7 +426,7 @@ export class ElementCRUDHandler {
 
       const manager = this.getManagerForType(normalizedType);
       const indexed = manager
-        ? manager.listSummaries().then(() => manager)
+        ? manager.refreshIndex().then(() => manager)
         : Promise.resolve(undefined);
       indexedManagers.set(normalizedType, indexed);
       return indexed;
@@ -693,6 +704,7 @@ export class ElementCRUDHandler {
     });
 
     this.activationStore?.clearAll();
+    this.invalidateActivePolicySnapshot();
     this.policyExportService?.exportPolicies().catch(() => {});
 
     const failureSummary = failed.length > 0 ? ` with ${failed.length} failure(s)` : '';
@@ -862,6 +874,7 @@ export class ElementCRUDHandler {
       }
 
       const result = await strategy.deactivate(name);
+      this.invalidateActivePolicySnapshot();
 
       // Issue #598: Persist deactivation state for session restore
       if (this.activationStore) {

@@ -990,6 +990,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Get all active agents
    */
   async getActiveAgents(): Promise<Agent[]> {
+    await this.scanAndEvict();
     const agents: Agent[] = [];
     for (const name of this.activeAgentNames) {
       const agent = await this.findByName(name);

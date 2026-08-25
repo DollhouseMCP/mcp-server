@@ -1139,6 +1139,15 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
+   * Refresh the lightweight metadata index and evict stale cached objects before
+   * indexed read-only lookups. Unlike list(), this does not load every element or
+   * apply manager-specific lifecycle status.
+   */
+  async refreshIndex(): Promise<void> {
+    await this.scanAndEvict();
+  }
+
+  /**
    * Removes an element from both caches by file path
    * This is the preferred method for deletion to avoid stale cache entries
    * @param filePath - File path (relative or absolute)

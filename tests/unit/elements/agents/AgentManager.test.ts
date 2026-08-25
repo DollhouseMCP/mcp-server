@@ -122,12 +122,14 @@ describe('AgentManager', () => {
         metadata: { name: 'active-agent' },
       } as Agent;
       (agentManager as any).activeAgentNames.add('active-agent');
+      const scanAndEvict = jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
       const findByName = jest.spyOn(agentManager, 'findByName').mockResolvedValue(activeAgent);
       const list = jest.spyOn(agentManager, 'list');
 
       const result = await agentManager.getActiveAgents();
 
       expect(result).toEqual([activeAgent]);
+      expect(scanAndEvict).toHaveBeenCalledTimes(1);
       expect(findByName).toHaveBeenCalledWith('active-agent');
       expect(list).not.toHaveBeenCalled();
     });

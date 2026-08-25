@@ -275,10 +275,10 @@ describe('ElementCRUDHandler (DI)', () => {
         ['ordinary-skill', { metadata: { name: 'ordinary-skill' } }],
       ]);
       skillManager.list = jest.fn();
-      skillManager.listSummaries = jest.fn().mockResolvedValue([]);
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
       skillManager.findByName = jest.fn(async (name: string) => skillsByName.get(name));
       memoryManager.list = jest.fn();
-      memoryManager.listSummaries = jest.fn().mockResolvedValue([]);
+      memoryManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
       memoryManager.findByName = jest.fn().mockResolvedValue({
         metadata: {
           name: 'policy-memory',
@@ -288,8 +288,8 @@ describe('ElementCRUDHandler (DI)', () => {
 
       const result = await handler.getActiveElementsForPolicy();
 
-      expect(skillManager.listSummaries).toHaveBeenCalledTimes(1);
-      expect(memoryManager.listSummaries).toHaveBeenCalledTimes(1);
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(memoryManager.refreshIndex).toHaveBeenCalledTimes(1);
       expect(skillManager.findByName).toHaveBeenCalledTimes(2);
       expect(memoryManager.findByName).toHaveBeenCalledTimes(1);
       expect(skillManager.list).not.toHaveBeenCalled();
@@ -325,6 +325,38 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(1);
     });
 
+    it('does not reuse an in-flight snapshot after activation state changes', async () => {
+      let markFirstSnapshotStarted!: () => void;
+      let releaseFirstSnapshot!: () => void;
+      const firstSnapshotStarted = new Promise<void>((resolve) => {
+        markFirstSnapshotStarted = resolve;
+      });
+      const firstSnapshotBlocked = new Promise<void>((resolve) => {
+        releaseFirstSnapshot = resolve;
+      });
+      ensembleManager.getActiveEnsembles
+        .mockImplementationOnce(async () => {
+          markFirstSnapshotStarted();
+          await firstSnapshotBlocked;
+          return [];
+        })
+        .mockResolvedValueOnce([]);
+      skillManager.activateSkill = jest.fn().mockResolvedValue({
+        success: true,
+        message: 'activated',
+      });
+
+      const beforeActivation = handler.getActiveElementsForPolicy();
+      await firstSnapshotStarted;
+      await handler.activateElement('new-policy-skill', 'skill');
+      const afterActivation = handler.getActiveElementsForPolicy();
+
+      await afterActivation;
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(2);
+      releaseFirstSnapshot();
+      await beforeActivation;
+    });
+
     it('keeps large ensemble policy scans linear in unique member count', async () => {
       const members = Array.from({ length: 500 }, (_, index) => ({
         element_type: index % 2 === 0 ? 'skill' : 'skills',
@@ -334,12 +366,12 @@ describe('ElementCRUDHandler (DI)', () => {
         metadata: { name: 'large-ensemble', elements: members },
       } as any]);
       skillManager.list = jest.fn();
-      skillManager.listSummaries = jest.fn().mockResolvedValue([]);
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
       skillManager.findByName = jest.fn().mockResolvedValue(undefined);
 
       await handler.getActiveElementsForPolicy();
 
-      expect(skillManager.listSummaries).toHaveBeenCalledTimes(1);
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
       expect(skillManager.findByName).toHaveBeenCalledTimes(250);
       expect(skillManager.list).not.toHaveBeenCalled();
     });
