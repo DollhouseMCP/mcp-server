@@ -57,22 +57,27 @@ export class PolicyExportService {
 
     this.exportQueued = true;
     if (!this.exportInFlight) {
-      const drain = this.drainExports();
-      const inFlight = drain.finally(() => {
-        if (this.exportInFlight === inFlight) {
-          this.exportInFlight = undefined;
-        }
-
-        // A request can arrive as the drain promise settles. Preserve it as a
-        // trailing export instead of silently losing the newest policy state.
-        if (this.exportQueued) {
-          void this.exportPolicies();
-        }
-      });
-      this.exportInFlight = inFlight;
+      this.exportInFlight = this.runExportLoop();
     }
 
     return this.exportInFlight;
+  }
+
+  private async runExportLoop(): Promise<void> {
+    try {
+      await this.drainExports();
+    } finally {
+      this.exportInFlight = undefined;
+
+      // A request can arrive after drainExports() settles but before this
+      // continuation runs. Chain that trailing drain into the current promise
+      // so the request that queued it cannot resolve before its write finishes.
+      if (this.exportQueued) {
+        const trailing = this.runExportLoop();
+        this.exportInFlight = trailing;
+        await trailing;
+      }
+    }
   }
 
   private async drainExports(): Promise<void> {

@@ -91,6 +91,51 @@ describe('PolicyExportService', () => {
       expect(getActiveElementsForPolicy).toHaveBeenCalledTimes(2);
     });
 
+    it('keeps a settlement-race caller pending until its trailing export finishes', async () => {
+      const service = createServiceWithDir(policyDir);
+      let releaseFirstDrain!: () => void;
+      let releaseTrailingDrain!: () => void;
+      let markTrailingDrainStarted!: () => void;
+      const firstDrainBlocked = new Promise<void>((resolve) => {
+        releaseFirstDrain = resolve;
+      });
+      const trailingDrainBlocked = new Promise<void>((resolve) => {
+        releaseTrailingDrain = resolve;
+      });
+      const trailingDrainStarted = new Promise<void>((resolve) => {
+        markTrailingDrainStarted = resolve;
+      });
+      const drainExports = jest.spyOn(service as any, 'drainExports')
+        .mockImplementationOnce(async () => {
+          (service as any).exportQueued = false;
+          await firstDrainBlocked;
+        })
+        .mockImplementationOnce(async () => {
+          (service as any).exportQueued = false;
+          markTrailingDrainStarted();
+          await trailingDrainBlocked;
+        });
+
+      const first = service.exportPolicies();
+      releaseFirstDrain();
+      // Queue after the first drain is resolved but before runExportLoop's
+      // continuation clears the in-flight promise.
+      const settlementRaceRequest = service.exportPolicies();
+      let requestSettled = false;
+      void settlementRaceRequest.then(() => {
+        requestSettled = true;
+      });
+
+      await trailingDrainStarted;
+      await Promise.resolve();
+      expect(requestSettled).toBe(false);
+
+      releaseTrailingDrain();
+      await Promise.all([first, settlementRaceRequest]);
+      expect(requestSettled).toBe(true);
+      expect(drainExports).toHaveBeenCalledTimes(2);
+    });
+
     it('should produce valid schema v1.0 structure', async () => {
       const service = createServiceWithDir(policyDir);
       await service.exportPolicies();
