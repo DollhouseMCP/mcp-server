@@ -8,12 +8,20 @@
 
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
 
+export interface StorageScanOptions {
+  /**
+   * If a scan was already running when this call began, wait for it and then
+   * force a trailing disk scan instead of reusing its potentially older view.
+   */
+  freshAfterInFlight?: boolean;
+}
+
 export interface IStorageLayer {
   /**
    * Scan the filesystem for changes relative to the last snapshot.
    * Implementations should enforce cooldown and deduplicate concurrent calls.
    */
-  scan(): Promise<ManifestDiffResult>;
+  scan(options?: StorageScanOptions): Promise<ManifestDiffResult>;
 
   /**
    * Trigger scan and return all indexed entries.

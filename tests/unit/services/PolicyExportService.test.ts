@@ -11,7 +11,7 @@
  * Uses a real temp directory to avoid ESM mocking complexity.
  */
 
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import { PolicyExportService, type PolicyExportDeps } from '../../../src/services/PolicyExportService.js';
 import { getStaticPolicyData } from '../../../src/handlers/mcp-aql/policies/ToolClassification.js';
 import * as fs from 'node:fs/promises';
@@ -34,44 +34,7 @@ function createMockDeps(overrides: Partial<PolicyExportDeps> = {}): PolicyExport
  * instead of the real bridge imports path.
  */
 function createServiceWithDir(dir: string, deps: Partial<PolicyExportDeps> = {}): PolicyExportService {
-  const service = new PolicyExportService(createMockDeps(deps));
-  // Override the private POLICY_DIR via a subclass to test with temp dir
-  // We access the internal method through the public API and override writeFile path
-  // by monkey-patching exportPolicies to use our test dir
-  service.exportPolicies = async () => {
-    // Temporarily replace the module-level constants by overriding the method
-    const staticRules = getStaticPolicyData();
-    const activeElements = await createMockDeps(deps).getActiveElementsForPolicy();
-    const version = createMockDeps(deps).getServerVersion();
-
-    const elementPolicies = (service as any).buildElementPolicies(activeElements);
-
-    const policy = {
-      schema_version: '1.0',
-      server: {
-        name: 'DollhouseMCP-V2-Refactor CRUDE',
-        version,
-      },
-      exported_at: new Date().toISOString(),
-      static_rules: {
-        safe_tools: staticRules.safe_tools,
-        safe_bash_patterns: staticRules.safe_bash_patterns,
-        dangerous_bash_patterns: staticRules.dangerous_bash_patterns,
-        blocked_bash_patterns: staticRules.blocked_bash_patterns,
-        irreversible_patterns: staticRules.irreversible_patterns,
-        sensitive_path_prefixes: staticRules.sensitive_path_prefixes,
-        gatekeeper_essential_operations: staticRules.gatekeeper_essential_operations,
-        safe_mcp_operations: staticRules.safe_mcp_operations,
-      },
-      element_policies: elementPolicies,
-      risk_scores: staticRules.risk_scores,
-    };
-
-    const filePath = path.join(dir, 'dollhousemcp-crude-policies.json');
-    await fs.writeFile(filePath, JSON.stringify(policy, null, 2), 'utf-8');
-  };
-
-  return service;
+  return new PolicyExportService(createMockDeps(deps), dir);
 }
 
 async function readPolicyFile(): Promise<Record<string, any>> {
@@ -91,11 +54,86 @@ describe('PolicyExportService', () => {
 
   describe('exportPolicies', () => {
     it('should skip silently when bridge directory does not exist', async () => {
-      // Use the real service pointing at real (non-existent) path
-      // This verifies the access() check works
-      const service = new PolicyExportService(createMockDeps());
+      const service = new PolicyExportService(createMockDeps(), path.join(testDir, 'missing'));
       // If bridge dir doesn't exist, this should not throw
       await expect(service.exportPolicies()).resolves.toBeUndefined();
+    });
+
+    it('coalesces overlapping requests and runs one trailing export for newer state', async () => {
+      let releaseFirstSnapshot!: () => void;
+      let markFirstSnapshotStarted!: () => void;
+      const firstSnapshotBlocked = new Promise<void>((resolve) => {
+        releaseFirstSnapshot = resolve;
+      });
+      const firstSnapshotStarted = new Promise<void>((resolve) => {
+        markFirstSnapshotStarted = resolve;
+      });
+      let snapshotCount = 0;
+      const getActiveElementsForPolicy = jest.fn(async () => {
+        snapshotCount += 1;
+        if (snapshotCount === 1) {
+          markFirstSnapshotStarted();
+          await firstSnapshotBlocked;
+        }
+        return [];
+      });
+      const service = createServiceWithDir(policyDir, { getActiveElementsForPolicy });
+
+      const first = service.exportPolicies();
+      const second = service.exportPolicies();
+      const third = service.exportPolicies();
+      await firstSnapshotStarted;
+      expect(getActiveElementsForPolicy).toHaveBeenCalledTimes(1);
+
+      releaseFirstSnapshot();
+      await Promise.all([first, second, third]);
+
+      expect(getActiveElementsForPolicy).toHaveBeenCalledTimes(2);
+    });
+
+    it('keeps a settlement-race caller pending until its trailing export finishes', async () => {
+      const service = createServiceWithDir(policyDir);
+      let releaseFirstDrain!: () => void;
+      let releaseTrailingDrain!: () => void;
+      let markTrailingDrainStarted!: () => void;
+      const firstDrainBlocked = new Promise<void>((resolve) => {
+        releaseFirstDrain = resolve;
+      });
+      const trailingDrainBlocked = new Promise<void>((resolve) => {
+        releaseTrailingDrain = resolve;
+      });
+      const trailingDrainStarted = new Promise<void>((resolve) => {
+        markTrailingDrainStarted = resolve;
+      });
+      const drainExports = jest.spyOn(service as any, 'drainExports')
+        .mockImplementationOnce(async () => {
+          (service as any).exportQueued = false;
+          await firstDrainBlocked;
+        })
+        .mockImplementationOnce(async () => {
+          (service as any).exportQueued = false;
+          markTrailingDrainStarted();
+          await trailingDrainBlocked;
+        });
+
+      const first = service.exportPolicies();
+      releaseFirstDrain();
+      // Queue after the first drain is resolved but before runExportLoop's
+      // continuation clears the in-flight promise.
+      const settlementRaceRequest = service.exportPolicies();
+      let requestSettled = false;
+      void settlementRaceRequest.then(() => {
+        requestSettled = true;
+      });
+
+      await trailingDrainStarted;
+      await Promise.resolve();
+      expect(requestSettled).toBe(false);
+
+      releaseTrailingDrain();
+      await Promise.all([first, settlementRaceRequest]);
+      expect(requestSettled).toBe(true);
+      expect(drainExports).toHaveBeenCalledTimes(2);
     });
 
     it('should produce valid schema v1.0 structure', async () => {

@@ -38,7 +38,7 @@ import { FileOperationsService } from '../../services/FileOperationsService.js';
 import { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
 import { ElementStorageLayer } from '../../storage/ElementStorageLayer.js';
-import type { IStorageLayer } from '../../storage/IStorageLayer.js';
+import type { IStorageLayer, StorageScanOptions } from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import { getGatekeeperAuthoringErrors } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { MEMORY_CONSTANTS } from '../memories/constants.js';
@@ -756,6 +756,35 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
   }
 
   /**
+   * Load an element by its stable storage filename without requiring its
+   * current display name to match that filename. This is intended for trusted
+   * persisted references (for example persona activation records) that must
+   * survive a metadata name change.
+   *
+   * Path validation remains delegated to load(); malformed, missing, or
+   * unreadable filenames are treated as lookup misses.
+   */
+  async findByFilename(filename: string): Promise<T | undefined> {
+    if (typeof filename !== 'string' || filename.trim() === '') {
+      return undefined;
+    }
+
+    const normalizedFilename = filename.trim();
+    const cached = this.getCachedElementByAbsolutePath(
+      this.resolveAbsolutePath(normalizedFilename)
+    );
+    if (cached) {
+      return cached;
+    }
+
+    try {
+      return await this.load(normalizedFilename);
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * Helper: Search cache for element by name or ID
    * @private
    */
@@ -1122,10 +1151,10 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Unlike list(), this does not load all elements — it only evicts stale ones.
    * Fixes #1895 (ensemble activation serving stale cached element list).
    */
-  protected async scanAndEvict(): Promise<void> {
+  protected async scanAndEvict(options: StorageScanOptions = {}): Promise<void> {
     this.storageLayer.invalidate(); // bypass cooldown so the next scan hits disk
     try {
-      const diff = await this.storageLayer.scan();
+      const diff = await this.storageLayer.scan(options);
       for (const relPath of [...diff.modified, ...diff.removed]) {
         const absPath = path.join(this.elementDir, relPath);
         const existingId = this.filePathToId.get(absPath);
@@ -1136,6 +1165,15 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
         }
       }
     } catch { /* non-fatal — cache may be slightly stale, but activation proceeds */ }
+  }
+
+  /**
+   * Refresh the lightweight metadata index and evict stale cached objects before
+   * indexed read-only lookups. Unlike list(), this does not load every element or
+   * apply manager-specific lifecycle status.
+   */
+  async refreshIndex(options: StorageScanOptions = {}): Promise<void> {
+    await this.scanAndEvict(options);
   }
 
   /**

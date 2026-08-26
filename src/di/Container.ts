@@ -1152,12 +1152,12 @@ export class DollhouseContainer {
           restoredCount++;
         } else {
           logger.debug(`[ActivationStore] Pruning missing persona '${activation.name}'`);
-          store.removeStaleActivation('persona', activation.name);
+          store.removeStaleActivation('persona', activation.name, activation.filename);
           skippedCount++;
         }
       } catch {
         logger.debug(`[ActivationStore] Skipping failed persona '${activation.name}'`);
-        store.removeStaleActivation('persona', activation.name);
+        store.removeStaleActivation('persona', activation.name, activation.filename);
         skippedCount++;
       }
     }
@@ -1181,20 +1181,23 @@ export class DollhouseContainer {
       }
     }
 
-    // Restore agents
+    // Restore agents (uses stable filename when available so metadata renames
+    // cannot orphan a persisted activation between server processes)
     for (const activation of store.getActivations('agent')) {
       try {
-        const result = await agentManager.activateAgent(activation.name);
+        const result = activation.filename
+          ? await agentManager.activateAgentByFilename(activation.filename)
+          : await agentManager.activateAgent(activation.name);
         if (result.success) {
           restoredCount++;
         } else {
           logger.debug(`[ActivationStore] Pruning missing agent '${activation.name}'`);
-          store.removeStaleActivation('agent', activation.name);
+          store.removeStaleActivation('agent', activation.name, activation.filename);
           skippedCount++;
         }
       } catch {
         logger.debug(`[ActivationStore] Skipping failed agent '${activation.name}'`);
-        store.removeStaleActivation('agent', activation.name);
+        store.removeStaleActivation('agent', activation.name, activation.filename);
         skippedCount++;
       }
     }

@@ -330,6 +330,25 @@ async function writePidFile() {
 }
 
 async function main() {
+  let attempts = 0;
+
+  // Install termination handling before the first await and before publishing
+  // the PID file. Callers use that file as the helper readiness signal.
+  process.on('exit', cleanupPidFileSync);
+  process.on('beforeExit', async () => {
+    await log('OAuth helper completing cleanup');
+    await cleanupPidFile();
+  });
+
+  const handleInterruption = () => {
+    writeTerminalResultSync('failed', attempts, 'interrupted');
+    cleanupStateFileSync();
+    cleanupPidFileSync();
+    process.exit(1);
+  };
+  process.once('SIGINT', handleInterruption);
+  process.once('SIGTERM', handleInterruption);
+
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
   await log(`[CONFIG] Poll interval: ${pollIntervalSeconds}s, Expires in: ${expiresIn}s`);
@@ -349,35 +368,9 @@ async function main() {
   
   const startTime = Date.now();
   const timeout = startTime + (expiresIn * 1000);
-  let attempts = 0;
   let consecutiveErrors = 0;
   let currentPollIntervalMs = pollIntervalSeconds * 1000;
   const MAX_CONSECUTIVE_ERRORS = 5;
-  
-  // Set up cleanup on exit - use synchronous cleanup for exit event
-  process.on('exit', () => {
-    cleanupPidFileSync();
-  });
-  
-  // Use beforeExit for async cleanup when possible
-  process.on('beforeExit', async () => {
-    await log('OAuth helper completing cleanup');
-    await cleanupPidFile();
-  });
-  
-  process.on('SIGINT', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
-    cleanupPidFileSync();
-    process.exit(1);
-  });
-  
-  process.on('SIGTERM', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
-    cleanupPidFileSync();
-    process.exit(1);
-  });
 
   async function finish(status, errorCode, exitCode) {
     clearInterval(heartbeatInterval);

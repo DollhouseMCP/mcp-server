@@ -37,7 +37,7 @@ import {
 export interface PersistedActivation {
   /** Element name (human-readable, used for all types) */
   name: string;
-  /** For personas only: the filename key used by PersonaManager */
+  /** Stable filename for element types whose display names may change */
   filename?: string;
   /** ISO-8601 timestamp of when activation was persisted */
   activatedAt: string;
@@ -238,10 +238,30 @@ export class ActivationStore {
       this.state.activations[type] = [];
     }
 
-    // Deduplicate — don't add if already present
+    // Deduplicate. Upgrade legacy name-only records when a stable filename is
+    // now available so future restarts survive external metadata renames.
     const existing = this.state.activations[type]!;
-    const alreadyActive = existing.some(a => a.name === normalizedName);
-    if (alreadyActive) return;
+    let activeRecord = normalizedFilename
+      ? existing.find(a => a.filename === normalizedFilename)
+      : undefined;
+    activeRecord ??= existing.find(a =>
+      a.name === normalizedName && (!normalizedFilename || !a.filename)
+    );
+    if (activeRecord) {
+      let changed = false;
+      if (activeRecord.name !== normalizedName) {
+        activeRecord.name = normalizedName;
+        changed = true;
+      }
+      if (normalizedFilename && activeRecord.filename !== normalizedFilename) {
+        activeRecord.filename = normalizedFilename;
+        changed = true;
+      }
+      if (changed) {
+        this.persistAsync();
+      }
+      return;
+    }
 
     existing.push({
       name: normalizedName,
@@ -255,19 +275,27 @@ export class ActivationStore {
   /**
    * Record an element deactivation. Fire-and-forget persist.
    */
-  recordDeactivation(elementType: string, name: string): void {
+  recordDeactivation(elementType: string, name: string, filename?: string): void {
     if (!this.enabled) return;
 
     const type = normalizeType(elementType);
     if (!ACTIVATABLE_TYPES.has(type)) return;
     const normalizedName = normalizeActivationIdentifier(name);
     if (!normalizedName) return;
+    const normalizedFilename = typeof filename === 'string'
+      ? normalizeActivationIdentifier(filename)
+      : undefined;
 
     const activations = this.state.activations[type];
     if (!activations) return;
 
     const initialLength = activations.length;
-    this.state.activations[type] = activations.filter(a => a.name !== normalizedName);
+    this.state.activations[type] = activations.filter(a => {
+      const shouldRemove = normalizedFilename
+        ? a.filename === normalizedFilename || (!a.filename && a.name === normalizedName)
+        : a.name === normalizedName || a.filename === normalizedName;
+      return !shouldRemove;
+    });
 
     // Only persist if something actually changed
     if (this.state.activations[type]!.length !== initialLength) {
@@ -276,10 +304,11 @@ export class ActivationStore {
   }
 
   /**
-   * Remove a specific activation by name (used during restore to prune stale entries).
+   * Remove a specific activation by stable identity when available.
+   * Used during restore to prune stale entries.
    */
-  removeStaleActivation(elementType: string, name: string): void {
-    this.recordDeactivation(elementType, name);
+  removeStaleActivation(elementType: string, name: string, filename?: string): void {
+    this.recordDeactivation(elementType, name, filename);
   }
 
   /**
