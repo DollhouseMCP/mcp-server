@@ -290,11 +290,12 @@ export class ActivationStore {
     if (!activations) return;
 
     const initialLength = activations.length;
-    this.state.activations[type] = activations.filter(a =>
-      a.name !== normalizedName
-      && a.filename !== normalizedName
-      && (!normalizedFilename || a.filename !== normalizedFilename)
-    );
+    this.state.activations[type] = activations.filter(a => {
+      const shouldRemove = normalizedFilename
+        ? a.filename === normalizedFilename || (!a.filename && a.name === normalizedName)
+        : a.name === normalizedName || a.filename === normalizedName;
+      return !shouldRemove;
+    });
 
     // Only persist if something actually changed
     if (this.state.activations[type]!.length !== initialLength) {

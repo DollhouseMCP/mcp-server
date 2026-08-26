@@ -464,6 +464,20 @@ describe('ActivationStore', () => {
 
       expect(store.getActivations('agent')).toHaveLength(0);
     });
+
+    it('should preserve filename-distinct agents with colliding display names', () => {
+      store.recordActivation('agent', 'Colliding Agent', 'first-agent.md');
+      store.recordActivation('agent', 'Colliding Agent', 'second-agent.md');
+
+      store.recordDeactivation('agent', 'Colliding Agent', 'second-agent.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'Colliding Agent',
+          filename: 'first-agent.md',
+        }),
+      ]);
+    });
   });
 
   describe('removeStaleActivation()', () => {
