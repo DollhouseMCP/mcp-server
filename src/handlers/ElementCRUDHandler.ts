@@ -80,7 +80,26 @@ type PolicyIndexOptions = { freshAfterInFlight?: boolean };
 type IndexedPolicyManagers = Map<string, Promise<BaseElementManager<any> | undefined>>;
 type PolicyMemberCandidate = { type: string; name: string; key: string };
 
-const ACTIVE_POLICY_MEMBER_LOOKUP_CONCURRENCY = 8;
+const ACTIVE_POLICY_LOOKUP_CONCURRENCY = 8;
+
+async function mapPolicyLookups<TInput, TOutput>(
+  candidates: readonly TInput[],
+  lookup: (candidate: TInput, index: number) => Promise<TOutput>,
+): Promise<TOutput[]> {
+  const resolved = new Array<TOutput>(candidates.length);
+  let nextCandidateIndex = 0;
+
+  const resolveNext = async (): Promise<void> => {
+    while (nextCandidateIndex < candidates.length) {
+      const candidateIndex = nextCandidateIndex++;
+      resolved[candidateIndex] = await lookup(candidates[candidateIndex], candidateIndex);
+    }
+  };
+
+  const workerCount = Math.min(ACTIVE_POLICY_LOOKUP_CONCURRENCY, candidates.length);
+  await Promise.all(Array.from({ length: workerCount }, () => resolveNext()));
+  return resolved;
+}
 
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
@@ -582,37 +601,27 @@ export class ElementCRUDHandler {
     indexOptions: PolicyIndexOptions,
     indexedManagers: IndexedPolicyManagers,
   ): Promise<Array<PolicyElement | undefined>> {
-    const resolved = new Array<PolicyElement | undefined>(candidates.length);
     const memberLookups = new Map<string, Promise<PolicyMemberElement | undefined>>();
-    let nextCandidateIndex = 0;
-
-    const resolveNext = async (): Promise<void> => {
-      while (nextCandidateIndex < candidates.length) {
-        const candidateIndex = nextCandidateIndex++;
-        const candidate = candidates[candidateIndex];
-        try {
-          const found = await this.findPolicyMember(
-            candidate,
-            indexedManagers,
-            memberLookups,
-            indexOptions,
-          );
-          if (found?.metadata?.['gatekeeper']) {
-            resolved[candidateIndex] = {
-              type: this.toPolicyElementType(candidate.type),
-              name: candidate.name,
-              metadata: found.metadata,
-            };
-          }
-        } catch {
-          // A malformed or missing member must not break evaluation of others.
+    return mapPolicyLookups(candidates, async (candidate) => {
+      try {
+        const found = await this.findPolicyMember(
+          candidate,
+          indexedManagers,
+          memberLookups,
+          indexOptions,
+        );
+        if (found?.metadata?.['gatekeeper']) {
+          return {
+            type: this.toPolicyElementType(candidate.type),
+            name: candidate.name,
+            metadata: found.metadata,
+          };
         }
+      } catch {
+        // A malformed or missing member must not break evaluation of others.
       }
-    };
-
-    const workerCount = Math.min(ACTIVE_POLICY_MEMBER_LOOKUP_CONCURRENCY, candidates.length);
-    await Promise.all(Array.from({ length: workerCount }, () => resolveNext()));
-    return resolved;
+      return undefined;
+    });
   }
 
   private appendResolvedPolicyMembers(
@@ -953,24 +962,27 @@ export class ElementCRUDHandler {
     addElement: (element: { type: string; name: string; metadata: Record<string, unknown> }, sessionIds?: string[]) => void,
     findPersistedElement: (type: string, activation: PersistedActivation) => Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null>,
   ): Promise<void> {
-    const pending: Promise<void>[] = [];
+    const candidates: Array<{ type: string; activation: PersistedActivation }> = [];
 
     for (const [type, activations] of Object.entries(state.activations)) {
       for (const activation of activations ?? []) {
-        pending.push((async () => {
-          const found = await findPersistedElement(type, activation);
-          if (found) {
-            addElement(found, [state.sessionId]);
-          }
-        })());
+        candidates.push({ type, activation });
       }
     }
 
-    if (pending.length === 0) {
-      return;
-    }
+    const resolved = await mapPolicyLookups(candidates, async (candidate) => {
+      try {
+        return await findPersistedElement(candidate.type, candidate.activation);
+      } catch {
+        // Match the previous allSettled behavior: one unreadable activation
+        // must not prevent other persisted policies from being reported.
+        return null;
+      }
+    });
 
-    await Promise.allSettled(pending);
+    for (const found of resolved) {
+      if (found) addElement(found, [state.sessionId]);
+    }
   }
 
   async deactivateElement(name: string, type: string) {

@@ -27,6 +27,7 @@ describe('mergeManifestDiffResults', () => {
     ['modified', 'removed', 'removed'],
     ['removed', 'added', 'modified'],
     ['removed', 'modified', 'modified'],
+    ['removed', 'removed', 'removed'],
     ['unchanged', 'modified', 'modified'],
     ['unchanged', 'removed', 'removed'],
     ['unchanged', 'unchanged', 'unchanged'],

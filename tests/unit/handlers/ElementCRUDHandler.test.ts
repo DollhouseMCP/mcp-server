@@ -523,6 +523,76 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(skillManager.list).not.toHaveBeenCalled();
     });
 
+    it('bounds persisted policy lookups at eight and preserves activation order', async () => {
+      const activations = Array.from({ length: 20 }, (_, index) => ({
+        name: `persisted-skill-${index}`,
+        activatedAt: new Date().toISOString(),
+      }));
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: { skill: activations },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let releaseLookups!: () => void;
+      let markCeilingReached!: () => void;
+      const lookupsBlocked = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      const ceilingReached = new Promise<void>((resolve) => {
+        markCeilingReached = resolve;
+      });
+      skillManager.findByName = jest.fn(async (name: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (maxInFlight === 8) markCeilingReached();
+        await lookupsBlocked;
+        inFlight -= 1;
+        return {
+          metadata: {
+            name,
+            gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+          },
+        } as any;
+      });
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const report = reportHandler.getPolicyElementsForReport('session-other');
+      await ceilingReached;
+      expect(skillManager.findByName).toHaveBeenCalledTimes(8);
+      releaseLookups();
+      const result = await report;
+
+      expect(skillManager.findByName).toHaveBeenCalledTimes(20);
+      expect(maxInFlight).toBe(8);
+      expect(result.map((element) => element.name)).toEqual(
+        activations.map((activation) => activation.name),
+      );
+    });
+
     it('does not leak the current session in-memory policies into another session report', async () => {
       const activationStore = {
         isEnabled: jest.fn().mockReturnValue(true),
