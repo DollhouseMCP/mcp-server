@@ -79,11 +79,7 @@ type PolicyMemberElement = {
 type PolicyIndexOptions = { freshAfterInFlight?: boolean };
 type IndexedPolicyManagers = Map<string, Promise<BaseElementManager<any> | undefined>>;
 type PolicyMemberCandidate = { type: string; name: string; key: string };
-type PersistedPolicyElement = {
-  type: string;
-  name: string;
-  metadata: Record<string, unknown>;
-};
+type PersistedPolicyElement = PolicyElement;
 
 type DeadlockReliefElement = {
   type: string;
@@ -732,6 +728,7 @@ export class ElementCRUDHandler {
             type: this.toPolicyElementType(normalizedType),
             name: (found.metadata['name'] as string) ?? activation.name,
             metadata: found.metadata,
+            ...(normalizedFilename !== '' ? { identity: normalizedFilename } : {}),
           };
         });
         persistedLookups.set(lookupKey, lookup);
@@ -940,8 +937,8 @@ export class ElementCRUDHandler {
 
   private async mergePersistedPolicyState(
     state: PersistedActivationStateSnapshot,
-    addElement: (element: { type: string; name: string; metadata: Record<string, unknown> }, sessionIds?: string[]) => void,
-    findPersistedElement: (type: string, activation: PersistedActivation) => Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null>,
+    addElement: (element: PolicyElement, sessionIds?: string[]) => void,
+    findPersistedElement: (type: string, activation: PersistedActivation) => Promise<PersistedPolicyElement | null>,
   ): Promise<void> {
     const pending: Promise<void>[] = [];
 
@@ -995,21 +992,22 @@ export class ElementCRUDHandler {
         };
       }
 
-      const filename = this.activationStore
-        ? await this.getStableActivationFilename(normalizedType, name)
-        : undefined;
       const result = await strategy.deactivate(name);
       this.invalidateActivePolicySnapshot();
 
       // Issue #598: Persist deactivation state for session restore
       if (this.activationStore) {
+        // Agent deactivation returns the exact stable identity selected by its
+        // freshness scan. Other element types resolve from their live cache.
+        const filename = result.stableIdentity
+          ?? await this.getStableActivationFilename(normalizedType, name);
         this.activationStore.recordDeactivation(normalizedType, name, filename);
       }
 
       // Issue #762: Export policies to bridge after deactivation
       this.policyExportService?.exportPolicies().catch(() => {});
 
-      return result;
+      return { content: result.content };
     } catch (error) {
       // Re-throw ElementNotFoundError to propagate to MCP-AQL layer
       // This ensures operations return success=false instead of success=true with error text

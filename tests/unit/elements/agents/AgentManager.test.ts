@@ -249,6 +249,7 @@ describe('AgentManager', () => {
       const result = await agentManager.deactivateAgent('original-agent');
 
       expect(result.success).toBe(true);
+      expect(result.filename).toBe('original-agent.md');
       expect(scanAndEvict).toHaveBeenCalledWith({ freshAfterInFlight: true });
       expect(findByFilename).toHaveBeenCalledWith('original-agent.md');
       expect(activeByFilename.size).toBe(0);
@@ -302,6 +303,7 @@ describe('AgentManager', () => {
       const result = await agentManager.deactivateAgent('stable-agent.md');
 
       expect(result.success).toBe(true);
+      expect(result.filename).toBe('stable-agent.md');
       expect(activeByFilename.size).toBe(0);
       expect(deactivate).toHaveBeenCalledTimes(1);
     });

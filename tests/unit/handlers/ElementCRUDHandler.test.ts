@@ -162,8 +162,11 @@ describe('ElementCRUDHandler (DI)', () => {
     const activationStore = {
       recordDeactivation: jest.fn(),
     } as unknown as jest.Mocked<ActivationStore>;
-    agentManager.getStableActivationFilename.mockResolvedValue('stable-agent.md');
-    agentManager.deactivateAgent.mockResolvedValue({ success: true, message: 'deactivated' });
+    agentManager.deactivateAgent.mockResolvedValue({
+      success: true,
+      message: 'deactivated',
+      filename: 'stable-agent.md',
+    });
     const handlerWithPersistence = new ElementCRUDHandler(
       skillManager,
       templateManager,
@@ -188,6 +191,60 @@ describe('ElementCRUDHandler (DI)', () => {
       'Renamed Agent',
       'stable-agent.md',
     );
+    expect(agentManager.getStableActivationFilename).not.toHaveBeenCalled();
+  });
+
+  it('preserves stable identities for colliding persisted agent policies', async () => {
+    const activationStore = {
+      isEnabled: jest.fn().mockReturnValue(true),
+      getSessionId: jest.fn().mockReturnValue('leader-session'),
+      listPersistedActivationStates: jest.fn().mockResolvedValue([{
+        sessionId: 'session-other',
+        lastUpdated: new Date().toISOString(),
+        activations: {
+          agent: [
+            { name: 'First Agent', filename: 'first-agent.md', activatedAt: new Date().toISOString() },
+            { name: 'Second Agent', filename: 'second-agent.md', activatedAt: new Date().toISOString() },
+          ],
+        },
+      }]),
+    } as unknown as jest.Mocked<ActivationStore>;
+    agentManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+    agentManager.findByFilename = jest.fn(async (filename: string) => ({
+      metadata: {
+        name: 'Colliding Agent',
+        gatekeeper: {
+          externalRestrictions: filename === 'first-agent.md'
+            ? { denyPatterns: ['Bash:rm*'] }
+            : { confirmPatterns: ['Bash:git push*'] },
+        },
+      },
+    } as any));
+    const reportHandler = new ElementCRUDHandler(
+      skillManager,
+      templateManager,
+      templateRenderer,
+      agentManager,
+      memoryManager,
+      ensembleManager,
+      personaHandler,
+      portfolioManager,
+      initService,
+      indicatorService,
+      fileOperations,
+      undefined as any,
+      undefined as any,
+      activationStore,
+    );
+
+    const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+    expect(result).toHaveLength(2);
+    expect(result.map(element => element.metadata.gatekeeper)).toEqual([
+      { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+      { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+    ]);
+    expect(agentManager.findByFilename).toHaveBeenCalledTimes(2);
   });
 
   it('ensures initialization and delegates to skill manager for create', async () => {

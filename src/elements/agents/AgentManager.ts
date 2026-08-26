@@ -983,7 +983,7 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Issue #24 (LOW PRIORITY): Performance optimization using findByName()
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    */
-  async deactivateAgent(identifier: string): Promise<{ success: boolean; message: string }> {
+  async deactivateAgent(identifier: string): Promise<{ success: boolean; message: string; filename?: string }> {
     // Deactivation is a security-sensitive lifecycle change. Refresh first,
     // then fall back to stable active filenames when external metadata edits
     // have made the current display name diverge from its storage path.
@@ -1011,6 +1011,8 @@ export class AgentManager extends BaseElementManager<Agent> {
       };
     }
 
+    const filename = this.getStableFilename(agent);
+
     // Remove the current display name and any pre-rename key that points at
     // the same stable file, so explicit deactivation cannot be undone by a
     // later policy refresh.
@@ -1037,7 +1039,8 @@ export class AgentManager extends BaseElementManager<Agent> {
     return {
       success: true,
       // CONSISTENCY FIX: Use standardized success message format
-      message: ElementMessages.deactivated(ElementType.AGENT, agent.metadata.name)
+      message: ElementMessages.deactivated(ElementType.AGENT, agent.metadata.name),
+      ...(filename ? { filename } : {}),
     };
   }
 
