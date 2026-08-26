@@ -14,6 +14,8 @@ export interface MCPResponse {
     type: string;
     text: string;
   }>;
+  /** Internal stable identity consumed by ElementCRUDHandler before response return. */
+  stableIdentity?: string;
 }
 
 /**

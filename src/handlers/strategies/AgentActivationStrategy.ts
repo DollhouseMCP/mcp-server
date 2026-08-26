@@ -228,7 +228,10 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
       this.throwNotFoundError(name, 'Agent');
     }
 
-    return this.createSuccessResponse(result.message);
+    return {
+      ...this.createSuccessResponse(result.message),
+      ...(result.filename ? { stableIdentity: result.filename } : {}),
+    };
   }
 
   /**

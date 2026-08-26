@@ -301,6 +301,39 @@ describe('ActivationStore', () => {
       expect(activations[0].filename).toBe('creative-dev-abc.md');
     });
 
+    it('should store stable filenames for agents', () => {
+      store.recordActivation('agent', 'Renamed Agent', 'stable-agent.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'Renamed Agent',
+          filename: 'stable-agent.md',
+        }),
+      ]);
+    });
+
+    it('should upgrade a legacy name-only activation with its stable filename', () => {
+      store.recordActivation('agent', 'Renamed Agent');
+      store.recordActivation('agent', 'Renamed Agent', 'stable-agent.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'Renamed Agent',
+          filename: 'stable-agent.md',
+        }),
+      ]);
+    });
+
+    it('should keep filename-distinct agents with colliding display names', () => {
+      store.recordActivation('agent', 'Colliding Agent', 'first-agent.md');
+      store.recordActivation('agent', 'Colliding Agent', 'second-agent.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({ filename: 'first-agent.md' }),
+        expect.objectContaining({ filename: 'second-agent.md' }),
+      ]);
+    });
+
     it('should not include filename field for non-persona types', () => {
       store.recordActivation('skill', 'my-skill');
 
@@ -414,6 +447,36 @@ describe('ActivationStore', () => {
 
       store.recordDeactivation('skill', 'Café Skill');
       expect(store.getActivations('skill')).toHaveLength(0);
+    });
+
+    it('should deactivate a renamed agent by stable filename', () => {
+      store.recordActivation('agent', 'Pre-Rename Agent', 'stable-agent.md');
+
+      store.recordDeactivation('agent', 'Renamed Agent', 'stable-agent.md');
+
+      expect(store.getActivations('agent')).toHaveLength(0);
+    });
+
+    it('should accept the stable filename as the deactivation identifier', () => {
+      store.recordActivation('agent', 'Pre-Rename Agent', 'stable-agent.md');
+
+      store.recordDeactivation('agent', 'stable-agent.md');
+
+      expect(store.getActivations('agent')).toHaveLength(0);
+    });
+
+    it('should preserve filename-distinct agents with colliding display names', () => {
+      store.recordActivation('agent', 'Colliding Agent', 'first-agent.md');
+      store.recordActivation('agent', 'Colliding Agent', 'second-agent.md');
+
+      store.recordDeactivation('agent', 'Colliding Agent', 'second-agent.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'Colliding Agent',
+          filename: 'first-agent.md',
+        }),
+      ]);
     });
   });
 

@@ -67,6 +67,7 @@ import { ElementNotFoundError } from '../../utils/ErrorHandler.js';
 import { normalizeElementStorageIdentity } from '../../utils/filesystem.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
+import { ElementStatus } from '../../types/elements/IElement.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
@@ -118,6 +119,8 @@ type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) &
   content?: string;
 };
 
+type AgentActivationResult = { success: boolean; message: string; agent?: Agent };
+
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
@@ -127,8 +130,11 @@ export class AgentManager extends BaseElementManager<Agent> {
   private readonly metadataService: MetadataService;
   /** Per-agent tokens retained only while execution or recovery is in flight. */
   private readonly executionGenerations = new Map<string, ExecutionGenerationEntry>();
-  // Track active agents by name (stable identifier)
+  // Fallback identities for agents without attached storage metadata.
   private readonly activeAgentNames: Set<string> = new Set();
+  // Stable filename -> name used at activation. Filenames are authoritative;
+  // the retained name remains a valid deactivation alias after metadata edits.
+  private readonly activeAgentsByFilename: Map<string, string> = new Map();
 
   // Static resolver for element manager lookup (DI pattern)
   // This allows Agent instances to resolve managers without tight coupling
@@ -876,9 +882,13 @@ export class AgentManager extends BaseElementManager<Agent> {
   override async list(): Promise<Agent[]> {
     const agents = await super.list();
 
-    // Apply active status to agents that are in the active set (by name)
+    // Apply active status by display name or, when available, stable filename.
     for (const agent of agents) {
-      if (this.activeAgentNames.has(agent.metadata.name)) {
+      const filename = this.getStableFilename(agent);
+      if (
+        (filename && this.activeAgentsByFilename.has(filename)) ||
+        this.activeAgentNames.has(agent.metadata.name)
+      ) {
         // Activate the agent to set status to ACTIVE
         await agent.activate();
       }
@@ -894,10 +904,22 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    * Issue #24 (LOW PRIORITY): Cleanup trigger for memory leak prevention
    */
-  async activateAgent(identifier: string): Promise<{ success: boolean; message: string; agent?: Agent }> {
+  async activateAgent(identifier: string): Promise<AgentActivationResult> {
     // PERFORMANCE FIX: Use findByName() instead of list()
     const agent = await this.findByName(identifier);
+    return this.activateResolvedAgent(agent, identifier);
+  }
 
+  /**
+   * Activate an agent through its authoritative storage filename.
+   * Used for persisted activation restore when metadata.name may have changed.
+   */
+  async activateAgentByFilename(filename: string): Promise<AgentActivationResult> {
+    const agent = await this.findByFilename(filename);
+    return this.activateResolvedAgent(agent, filename);
+  }
+
+  private async activateResolvedAgent(agent: Agent | undefined, identifier: string): Promise<AgentActivationResult> {
     if (!agent) {
       return {
         success: false,
@@ -909,8 +931,14 @@ export class AgentManager extends BaseElementManager<Agent> {
     // MEMORY LEAK FIX: Check if cleanup is needed before adding
     this.checkAndCleanupActiveSet();
 
-    // Add to active set (by name, which is stable across reloads)
-    this.activeAgentNames.add(agent.metadata.name);
+    // Prefer stable storage identity so external display-name edits cannot
+    // collapse or orphan active agents.
+    const filename = this.getStableFilename(agent);
+    if (filename) {
+      this.activeAgentsByFilename.set(filename, agent.metadata.name);
+    } else {
+      this.activeAgentNames.add(agent.metadata.name);
+    }
 
     // Update agent status in memory
     await agent.activate();
@@ -941,14 +969,39 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
+   * Resolve the stable storage identity used to persist an agent activation.
+   * The filename remains unchanged when metadata.name is edited externally.
+   */
+  async getStableActivationFilename(identifier: string): Promise<string | undefined> {
+    const agent = await this.findByName(identifier);
+    return agent ? this.getStableFilename(agent) : undefined;
+  }
+
+  /**
    * Deactivate an agent by name or identifier
    *
    * Issue #24 (LOW PRIORITY): Performance optimization using findByName()
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    */
-  async deactivateAgent(identifier: string): Promise<{ success: boolean; message: string }> {
-    // PERFORMANCE FIX: Use findByName() instead of list()
-    const agent = await this.findByName(identifier);
+  async deactivateAgent(identifier: string): Promise<{ success: boolean; message: string; filename?: string }> {
+    // Deactivation is a security-sensitive lifecycle change. Refresh first,
+    // then fall back to stable active filenames when external metadata edits
+    // have made the current display name diverge from its storage path.
+    await this.scanAndEvict({ freshAfterInFlight: true });
+    let agent: Agent | undefined;
+    const normalizedIdentifier = identifier.toLowerCase();
+    for (const [filename, activationName] of this.activeAgentsByFilename) {
+      const candidate = await this.findByFilename(filename);
+      if (
+        filename.toLowerCase() === normalizedIdentifier ||
+        activationName.toLowerCase() === normalizedIdentifier ||
+        candidate?.metadata.name.toLowerCase() === normalizedIdentifier
+      ) {
+        agent = candidate;
+        if (agent) break;
+      }
+    }
+    agent ??= await this.findByName(identifier);
 
     if (!agent) {
       return {
@@ -958,8 +1011,12 @@ export class AgentManager extends BaseElementManager<Agent> {
       };
     }
 
-    // Remove from active set
-    this.activeAgentNames.delete(agent.metadata.name);
+    const filename = this.getStableFilename(agent);
+
+    // Remove the current display name and any pre-rename key that points at
+    // the same stable file, so explicit deactivation cannot be undone by a
+    // later policy refresh.
+    this.removeActiveAgentIdentity(agent, identifier);
 
     // Update agent status in memory
     await agent.deactivate();
@@ -982,16 +1039,64 @@ export class AgentManager extends BaseElementManager<Agent> {
     return {
       success: true,
       // CONSISTENCY FIX: Use standardized success message format
-      message: ElementMessages.deactivated(ElementType.AGENT, agent.metadata.name)
+      message: ElementMessages.deactivated(ElementType.AGENT, agent.metadata.name),
+      ...(filename ? { filename } : {}),
     };
   }
 
   /**
    * Get all active agents
    */
-  async getActiveAgents(): Promise<Agent[]> {
-    const agents = await this.list();
-    return agents.filter(a => this.activeAgentNames.has(a.metadata.name));
+  async getActiveAgents(options: { freshAfterInFlight?: boolean } = {}): Promise<Agent[]> {
+    await this.scanAndEvict(options);
+    const agents: Agent[] = [];
+    // Stable filenames remain distinct even if externally edited metadata
+    // names collide, so every active agent continues contributing policy.
+    for (const filename of Array.from(this.activeAgentsByFilename.keys())) {
+      const agent = await this.findByFilename(filename);
+      if (agent) {
+        // scanAndEvict() can discard an externally modified active agent. Its
+        // replacement starts inactive, so restore the lifecycle state once.
+        // Avoid reactivating unchanged instances: Agent.activate() advances
+        // session tracking and must not run on every policy/status poll.
+        if (agent.getStatus() !== ElementStatus.ACTIVE) {
+          await agent.activate();
+        }
+        agents.push(agent);
+      }
+    }
+
+    // Compatibility fallback for synthetic or legacy instances that did not
+    // have filename metadata when activated.
+    for (const name of Array.from(this.activeAgentNames)) {
+      const agent = await this.findByName(name);
+      if (!agent) continue;
+      if (agent.getStatus() !== ElementStatus.ACTIVE) {
+        await agent.activate();
+      }
+      agents.push(agent);
+    }
+    return agents;
+  }
+
+  private getStableFilename(agent: Agent): string | undefined {
+    const filename = (agent as Agent & { filename?: unknown }).filename;
+    return typeof filename === 'string' && filename.trim() !== ''
+      ? filename
+      : undefined;
+  }
+
+  private removeActiveAgentIdentity(agent: Agent, identifier: string): void {
+    const filename = this.getStableFilename(agent);
+    this.activeAgentNames.delete(agent.metadata.name);
+    this.activeAgentNames.delete(identifier);
+    if (filename) {
+      this.activeAgentsByFilename.delete(filename);
+    }
+  }
+
+  private getActiveAgentCount(): number {
+    return this.activeAgentsByFilename.size + this.activeAgentNames.size;
   }
 
   /**
@@ -1791,12 +1896,13 @@ export class AgentManager extends BaseElementManager<Agent> {
     const { max, cleanupThreshold } = getActiveElementLimitConfig('agents');
 
     // Below threshold — no action needed
-    if (this.activeAgentNames.size < cleanupThreshold) {
+    const activeCount = this.getActiveAgentCount();
+    if (activeCount < cleanupThreshold) {
       return;
     }
 
     // At or above max — warn before cleanup
-    if (this.activeAgentNames.size >= max) {
+    if (activeCount >= max) {
       logger.warn(
         `Active agents limit reached (${max}). ` +
         `Consider deactivating unused agents or setting DOLLHOUSE_MAX_ACTIVE_AGENTS to a higher value.`
@@ -1806,11 +1912,14 @@ export class AgentManager extends BaseElementManager<Agent> {
         type: 'AGENT_ACTIVATED',
         severity: 'MEDIUM',
         source: 'AgentManager.checkAndCleanupActiveSet',
-        details: `Active agents limit reached (${this.activeAgentNames.size}/${max})`,
+        details: `Active agents limit reached (${activeCount}/${max})`,
         additionalData: {
-          activeCount: this.activeAgentNames.size,
+          activeCount,
           maxAllowed: max,
-          activeAgentNames: Array.from(this.activeAgentNames),
+          activeAgentNames: [
+            ...this.activeAgentsByFilename.values(),
+            ...this.activeAgentNames,
+          ],
         }
       });
     }
@@ -1826,11 +1935,20 @@ export class AgentManager extends BaseElementManager<Agent> {
    */
   private async cleanupStaleActiveAgents(): Promise<void> {
     try {
-      const startSize = this.activeAgentNames.size;
+      const startSize = this.getActiveAgentCount();
       const agents = await this.list();
       const existingAgentNames = new Set(agents.map(a => a.metadata.name));
+      const existingAgentFilenames = new Set(
+        agents.map(agent => this.getStableFilename(agent)).filter((filename): filename is string => Boolean(filename)),
+      );
 
       const staleNames: string[] = [];
+      for (const [filename, activationName] of this.activeAgentsByFilename) {
+        if (!existingAgentFilenames.has(filename)) {
+          this.activeAgentsByFilename.delete(filename);
+          staleNames.push(activationName);
+        }
+      }
       for (const activeName of this.activeAgentNames) {
         if (!existingAgentNames.has(activeName)) {
           this.activeAgentNames.delete(activeName);
@@ -1838,7 +1956,7 @@ export class AgentManager extends BaseElementManager<Agent> {
         }
       }
 
-      const endSize = this.activeAgentNames.size;
+      const endSize = this.getActiveAgentCount();
       const removed = startSize - endSize;
 
       if (removed > 0) {

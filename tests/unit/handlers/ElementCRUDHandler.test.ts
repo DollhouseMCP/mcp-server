@@ -48,6 +48,7 @@ describe('ElementCRUDHandler (DI)', () => {
 
     agentManager = {
       create: jest.fn(),
+      getStableActivationFilename: jest.fn(),
       getActiveAgents: jest.fn().mockResolvedValue([]),
       deactivateAgent: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
       list: jest.fn().mockResolvedValue([]),
@@ -114,6 +115,136 @@ describe('ElementCRUDHandler (DI)', () => {
       indicatorService,
       fileOperations
     );
+  });
+
+  it('persists the stable filename when activating an agent', async () => {
+    const activationStore = {
+      recordActivation: jest.fn(),
+    } as unknown as jest.Mocked<ActivationStore>;
+    agentManager.activateAgent = jest.fn().mockResolvedValue({
+      success: true,
+      message: 'activated',
+      agent: {
+        metadata: { name: 'Renamed Agent' },
+        getState: jest.fn().mockReturnValue({ sessionCount: 1, goals: [] }),
+      },
+    } as any);
+    agentManager.persistState = jest.fn().mockResolvedValue(undefined);
+    agentManager.getStableActivationFilename.mockResolvedValue('stable-agent.md');
+    const handlerWithPersistence = new ElementCRUDHandler(
+      skillManager,
+      templateManager,
+      templateRenderer,
+      agentManager,
+      memoryManager,
+      ensembleManager,
+      personaHandler,
+      portfolioManager,
+      initService,
+      indicatorService,
+      fileOperations,
+      undefined as any,
+      undefined as any,
+      activationStore,
+    );
+
+    await handlerWithPersistence.activateElement('Renamed Agent', ElementType.AGENT);
+
+    expect(agentManager.getStableActivationFilename).toHaveBeenCalledWith('Renamed Agent');
+    expect(activationStore.recordActivation).toHaveBeenCalledWith(
+      ElementType.AGENT,
+      'Renamed Agent',
+      'stable-agent.md',
+    );
+  });
+
+  it('removes a renamed agent activation by stable filename', async () => {
+    const activationStore = {
+      recordDeactivation: jest.fn(),
+    } as unknown as jest.Mocked<ActivationStore>;
+    agentManager.deactivateAgent.mockResolvedValue({
+      success: true,
+      message: 'deactivated',
+      filename: 'stable-agent.md',
+    });
+    const handlerWithPersistence = new ElementCRUDHandler(
+      skillManager,
+      templateManager,
+      templateRenderer,
+      agentManager,
+      memoryManager,
+      ensembleManager,
+      personaHandler,
+      portfolioManager,
+      initService,
+      indicatorService,
+      fileOperations,
+      undefined as any,
+      undefined as any,
+      activationStore,
+    );
+
+    await handlerWithPersistence.deactivateElement('Renamed Agent', ElementType.AGENT);
+
+    expect(activationStore.recordDeactivation).toHaveBeenCalledWith(
+      ElementType.AGENT,
+      'Renamed Agent',
+      'stable-agent.md',
+    );
+    expect(agentManager.getStableActivationFilename).not.toHaveBeenCalled();
+  });
+
+  it('preserves stable identities for colliding persisted agent policies', async () => {
+    const activationStore = {
+      isEnabled: jest.fn().mockReturnValue(true),
+      getSessionId: jest.fn().mockReturnValue('leader-session'),
+      listPersistedActivationStates: jest.fn().mockResolvedValue([{
+        sessionId: 'session-other',
+        lastUpdated: new Date().toISOString(),
+        activations: {
+          agent: [
+            { name: 'First Agent', filename: 'first-agent.md', activatedAt: new Date().toISOString() },
+            { name: 'Second Agent', filename: 'second-agent.md', activatedAt: new Date().toISOString() },
+          ],
+        },
+      }]),
+    } as unknown as jest.Mocked<ActivationStore>;
+    agentManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+    agentManager.findByFilename = jest.fn(async (filename: string) => ({
+      metadata: {
+        name: 'Colliding Agent',
+        gatekeeper: {
+          externalRestrictions: filename === 'first-agent.md'
+            ? { denyPatterns: ['Bash:rm*'] }
+            : { confirmPatterns: ['Bash:git push*'] },
+        },
+      },
+    } as any));
+    const reportHandler = new ElementCRUDHandler(
+      skillManager,
+      templateManager,
+      templateRenderer,
+      agentManager,
+      memoryManager,
+      ensembleManager,
+      personaHandler,
+      portfolioManager,
+      initService,
+      indicatorService,
+      fileOperations,
+      undefined as any,
+      undefined as any,
+      activationStore,
+    );
+
+    const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+    expect(result).toHaveLength(2);
+    expect(result.map(element => element.metadata.gatekeeper)).toEqual([
+      { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+      { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+    ]);
+    expect(agentManager.findByFilename).toHaveBeenCalledTimes(2);
   });
 
   it('ensures initialization and delegates to skill manager for create', async () => {
@@ -252,6 +383,239 @@ describe('ElementCRUDHandler (DI)', () => {
       ]));
     });
 
+    it('preserves filename-distinct colliding agent policies in session reports', async () => {
+      agentManager.getActiveAgents.mockResolvedValue([
+        {
+          filename: 'first-agent.md',
+          metadata: {
+            name: 'colliding-name',
+            gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+          },
+        } as any,
+        {
+          filename: 'second-agent.md',
+          metadata: {
+            name: 'colliding-name',
+            gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+          },
+        } as any,
+      ]);
+
+      const result = await handler.getPolicyElementsForReport('session-demo');
+
+      expect(result).toHaveLength(2);
+      expect(result.map(element => element.metadata.gatekeeper)).toEqual([
+        { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+      ]);
+    });
+
+    it('indexes each ensemble-member type once without lifecycle-bearing list calls', async () => {
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: {
+          name: 'large-policy-team',
+          elements: [
+            { element_type: 'skill', element_name: 'policy-skill' },
+            { element_type: 'skills', element_name: 'policy-skill' },
+            { element_type: 'skill', element_name: 'ordinary-skill' },
+            { element_type: 'memory', element_name: 'policy-memory' },
+            { element_type: 'memories', element_name: 'policy-memory' },
+            { element_type: 'template', element_name: 'policy-template' },
+          ],
+        },
+      } as any]);
+      const skillsByName = new Map<string, any>([
+        ['policy-skill', {
+          metadata: {
+            name: 'policy-skill',
+            gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+          },
+        }],
+        ['ordinary-skill', { metadata: { name: 'ordinary-skill' } }],
+      ]);
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn(async (name: string) => skillsByName.get(name));
+      memoryManager.list = jest.fn();
+      memoryManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      memoryManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'policy-memory',
+          gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+        },
+      } as any);
+      templateManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      templateManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'policy-template',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Write:*'] } },
+        },
+      } as any);
+
+      const result = await handler.getActiveElementsForPolicy();
+
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(memoryManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(templateManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(2);
+      expect(memoryManager.findByName).toHaveBeenCalledTimes(1);
+      expect(templateManager.findByName).toHaveBeenCalledTimes(1);
+      expect(skillManager.list).not.toHaveBeenCalled();
+      expect(memoryManager.list).not.toHaveBeenCalled();
+      expect(result.filter((element) => element.name === 'policy-skill')).toHaveLength(1);
+      expect(result.filter((element) => element.name === 'policy-memory')).toHaveLength(1);
+      expect(result).toEqual(expect.arrayContaining([
+        expect.objectContaining({ type: 'template', name: 'policy-template' }),
+      ]));
+      expect(result).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'ordinary-skill' }),
+      ]));
+    });
+
+    it('coalesces concurrent active-policy snapshots', async () => {
+      let releaseEnsembles!: () => void;
+      const ensemblesBlocked = new Promise<void>((resolve) => {
+        releaseEnsembles = resolve;
+      });
+      ensembleManager.getActiveEnsembles.mockImplementation(async () => {
+        await ensemblesBlocked;
+        return [];
+      });
+
+      const snapshots = [
+        handler.getActiveElementsForPolicy(),
+        handler.getActiveElementsForPolicy(),
+        handler.getActiveElementsForPolicy(),
+      ];
+      releaseEnsembles();
+      await Promise.all(snapshots);
+
+      expect(personaHandler.getActivePersonas).toHaveBeenCalledTimes(1);
+      expect(skillManager.getActiveSkills).toHaveBeenCalledTimes(1);
+      expect(agentManager.getActiveAgents).toHaveBeenCalledTimes(1);
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not coalesce a security-critical policy read onto an in-flight dashboard snapshot', async () => {
+      let markDashboardStarted!: () => void;
+      let releaseDashboard!: () => void;
+      const dashboardStarted = new Promise<void>((resolve) => {
+        markDashboardStarted = resolve;
+      });
+      const dashboardBlocked = new Promise<void>((resolve) => {
+        releaseDashboard = resolve;
+      });
+      ensembleManager.getActiveEnsembles
+        .mockImplementationOnce(async () => {
+          markDashboardStarted();
+          await dashboardBlocked;
+          return [];
+        })
+        .mockResolvedValueOnce([]);
+
+      const dashboardSnapshot = handler.getActiveElementsForPolicy();
+      await dashboardStarted;
+      const enforcementSnapshot = handler.getActiveElementsForPolicy({ allowCoalescing: false });
+
+      await enforcementSnapshot;
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(2);
+      expect(agentManager.getActiveAgents).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      releaseDashboard();
+      await dashboardSnapshot;
+    });
+
+    it('does not reuse an in-flight snapshot after activation state changes', async () => {
+      let markFirstSnapshotStarted!: () => void;
+      let releaseFirstSnapshot!: () => void;
+      const firstSnapshotStarted = new Promise<void>((resolve) => {
+        markFirstSnapshotStarted = resolve;
+      });
+      const firstSnapshotBlocked = new Promise<void>((resolve) => {
+        releaseFirstSnapshot = resolve;
+      });
+      ensembleManager.getActiveEnsembles
+        .mockImplementationOnce(async () => {
+          markFirstSnapshotStarted();
+          await firstSnapshotBlocked;
+          return [];
+        })
+        .mockResolvedValueOnce([]);
+      skillManager.activateSkill = jest.fn().mockResolvedValue({
+        success: true,
+        message: 'activated',
+      });
+
+      const beforeActivation = handler.getActiveElementsForPolicy();
+      await firstSnapshotStarted;
+      await handler.activateElement('new-policy-skill', 'skill');
+      const afterActivation = handler.getActiveElementsForPolicy();
+
+      await afterActivation;
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(2);
+      releaseFirstSnapshot();
+      await beforeActivation;
+    });
+
+    it('keeps large ensemble policy scans linear in unique member count', async () => {
+      const members = Array.from({ length: 500 }, (_, index) => ({
+        element_type: index % 2 === 0 ? 'skill' : 'skills',
+        element_name: `member-${index % 250}`,
+      }));
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: { name: 'large-ensemble', elements: members },
+      } as any]);
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn().mockResolvedValue(undefined);
+
+      await handler.getActiveElementsForPolicy();
+
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(250);
+      expect(skillManager.list).not.toHaveBeenCalled();
+    });
+
+    it('resolves unique ensemble members concurrently with a bounded I/O ceiling', async () => {
+      const members = Array.from({ length: 20 }, (_, index) => ({
+        element_type: 'skill',
+        element_name: `member-${index}`,
+      }));
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: { name: 'concurrent-ensemble', elements: members },
+      } as any]);
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let releaseLookups!: () => void;
+      let markCeilingReached!: () => void;
+      const lookupsBlocked = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      const ceilingReached = new Promise<void>((resolve) => {
+        markCeilingReached = resolve;
+      });
+      skillManager.findByName = jest.fn(async () => {
+        inFlight++;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (maxInFlight === 8) markCeilingReached();
+        await lookupsBlocked;
+        inFlight--;
+        return undefined;
+      });
+
+      const snapshot = handler.getActiveElementsForPolicy();
+      await ceilingReached;
+
+      expect(skillManager.findByName).toHaveBeenCalledTimes(8);
+      expect(maxInFlight).toBe(8);
+      releaseLookups();
+      await snapshot;
+
+      expect(skillManager.findByName).toHaveBeenCalledTimes(20);
+      expect(maxInFlight).toBe(8);
+    });
+
     it('merges persisted activation snapshots into reportable policy elements', async () => {
       const activationStore = {
         isEnabled: jest.fn().mockReturnValue(true),
@@ -268,18 +632,18 @@ describe('ElementCRUDHandler (DI)', () => {
       } as unknown as jest.Mocked<ActivationStore>;
 
       skillManager.getActiveSkills = jest.fn().mockResolvedValue([]);
-      skillManager.list = jest.fn().mockResolvedValue([
-        {
-          metadata: {
-            name: 'audit-trace-demo',
-            gatekeeper: {
-              externalRestrictions: {
-                confirmPatterns: ['Bash:git push*'],
-              },
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'audit-trace-demo',
+          gatekeeper: {
+            externalRestrictions: {
+              confirmPatterns: ['Bash:git push*'],
             },
           },
-        } as any,
-      ]);
+        },
+      } as any);
 
       const reportHandler = new ElementCRUDHandler(
         skillManager,
@@ -308,6 +672,9 @@ describe('ElementCRUDHandler (DI)', () => {
         }),
       ]);
       expect(activationStore.listPersistedActivationStates).toHaveBeenCalledWith('session-other');
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledWith('audit-trace-demo');
+      expect(skillManager.list).not.toHaveBeenCalled();
     });
 
     it('does not leak the current session in-memory policies into another session report', async () => {
@@ -337,28 +704,33 @@ describe('ElementCRUDHandler (DI)', () => {
           },
         } as any,
       ]);
-      skillManager.list = jest.fn().mockResolvedValue([
-        {
-          metadata: {
-            name: 'audit-trace-demo',
-            gatekeeper: {
-              externalRestrictions: {
-                confirmPatterns: ['Bash:git push*'],
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn(async (name: string) => {
+        const elements = [
+          {
+            metadata: {
+              name: 'audit-trace-demo',
+              gatekeeper: {
+                externalRestrictions: {
+                  confirmPatterns: ['Bash:git push*'],
+                },
               },
             },
           },
-        } as any,
-        {
-          metadata: {
-            name: 'leader-only-skill',
-            gatekeeper: {
-              externalRestrictions: {
-                denyPatterns: ['Bash:rm*'],
+          {
+            metadata: {
+              name: 'leader-only-skill',
+              gatekeeper: {
+                externalRestrictions: {
+                  denyPatterns: ['Bash:rm*'],
+                },
               },
             },
           },
-        } as any,
-      ]);
+        ];
+        return elements.find((element) => element.metadata.name === name) as any;
+      });
 
       const reportHandler = new ElementCRUDHandler(
         skillManager,
@@ -382,6 +754,120 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(result).toEqual([
         expect.objectContaining({
           name: 'audit-trace-demo',
+          sessionIds: ['session-other'],
+        }),
+      ]);
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(1);
+      expect(skillManager.list).not.toHaveBeenCalled();
+    });
+
+    it('forces a trailing persisted-policy index scan for enforcement reports', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: {
+            skill: [{ name: 'fresh-policy', activatedAt: new Date().toISOString() }],
+          },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'fresh-policy',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport(
+        'session-other',
+        { allowCoalescing: false },
+      );
+
+      expect(skillManager.refreshIndex).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      expect(result).toEqual([
+        expect.objectContaining({ type: 'skill', name: 'fresh-policy' }),
+      ]);
+    });
+
+    it('uses a persisted persona stable filename before a reused display name', async () => {
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: {
+            persona: [{
+              name: 'Old Display Name',
+              filename: 'stable-persona.md',
+              activatedAt: new Date().toISOString(),
+            }],
+          },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      personaHandler.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      personaHandler.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'Old Display Name',
+          gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:rm*'] } },
+        },
+      } as any);
+      personaHandler.findByFilename = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'New Display Name',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+      expect(personaHandler.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(personaHandler.findByFilename).toHaveBeenCalledWith('stable-persona.md');
+      expect(personaHandler.findByName).not.toHaveBeenCalled();
+      expect(result).toEqual([
+        expect.objectContaining({
+          type: 'persona',
+          name: 'New Display Name',
           sessionIds: ['session-other'],
         }),
       ]);
@@ -461,6 +947,23 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(activationStore.clearAll).toHaveBeenCalled();
       expect(fileOperations.createDirectory).toHaveBeenCalled();
       expect(fileOperations.writeFile).toHaveBeenCalled();
+    });
+
+    it('deactivates filename-distinct agents even when their display names collide', async () => {
+      agentManager.getActiveAgents.mockResolvedValue([
+        { filename: 'first-agent.md', metadata: { name: 'colliding-name' } } as any,
+        { filename: 'second-agent.md', metadata: { name: 'colliding-name' } } as any,
+      ]);
+
+      const result = await handler.releaseDeadlock();
+
+      expect(agentManager.deactivateAgent).toHaveBeenNthCalledWith(1, 'first-agent.md');
+      expect(agentManager.deactivateAgent).toHaveBeenNthCalledWith(2, 'second-agent.md');
+      expect(result.activeBeforeReset).toEqual([
+        { type: ElementType.AGENT, name: 'colliding-name' },
+        { type: ElementType.AGENT, name: 'colliding-name' },
+      ]);
+      expect(result.deactivated).toHaveLength(2);
     });
   });
 });
