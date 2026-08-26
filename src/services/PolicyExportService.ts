@@ -34,11 +34,13 @@ interface ElementPolicyEntry {
 }
 
 export class PolicyExportService {
-  private deps: PolicyExportDeps;
+  private exportInFlight?: Promise<void>;
+  private exportQueued = false;
 
-  constructor(deps: PolicyExportDeps) {
-    this.deps = deps;
-  }
+  constructor(
+    private readonly deps: PolicyExportDeps,
+    private readonly policyDir: string = POLICY_DIR,
+  ) {}
 
   /**
    * Export current policy state to the bridge imports folder.
@@ -48,14 +50,45 @@ export class PolicyExportService {
    *
    * Skips silently if the bridge imports directory doesn't exist.
    */
-  async exportPolicies(): Promise<void> {
+  exportPolicies(): Promise<void> {
     if (!env.DOLLHOUSE_POLICY_EXPORT_ENABLED) {
-      return;
+      return Promise.resolve();
     }
 
+    this.exportQueued = true;
+    this.exportInFlight ??= this.runExportLoop();
+
+    return this.exportInFlight;
+  }
+
+  private async runExportLoop(): Promise<void> {
+    try {
+      await this.drainExports();
+    } finally {
+      this.exportInFlight = undefined;
+
+      // A request can arrive after drainExports() settles but before this
+      // continuation runs. Chain that trailing drain into the current promise
+      // so the request that queued it cannot resolve before its write finishes.
+      if (this.exportQueued) {
+        const trailing = this.runExportLoop();
+        this.exportInFlight = trailing;
+        await trailing;
+      }
+    }
+  }
+
+  private async drainExports(): Promise<void> {
+    while (this.exportQueued) {
+      this.exportQueued = false;
+      await this.performExport();
+    }
+  }
+
+  private async performExport(): Promise<void> {
     try {
       // Check if bridge imports directory exists — skip if not
-      await access(POLICY_DIR);
+      await access(this.policyDir);
     } catch {
       // Bridge not installed or imports dir not created — skip silently
       return;
@@ -89,7 +122,7 @@ export class PolicyExportService {
         risk_scores: staticRules.risk_scores,
       };
 
-      const filePath = join(POLICY_DIR, POLICY_FILENAME);
+      const filePath = join(this.policyDir, POLICY_FILENAME);
       await writeFile(filePath, JSON.stringify(policy, null, 2), 'utf-8');
       logger.info('[PolicyExportService] Policies exported', { filePath, elementCount: elementPolicies.active_element_count });
     } catch (err) {

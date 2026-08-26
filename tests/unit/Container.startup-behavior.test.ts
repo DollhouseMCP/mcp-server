@@ -238,20 +238,26 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       expect(removeStalespy).not.toHaveBeenCalledWith('skill', 'real-skill');
     });
 
-    it('should prune stale agent activations when activateAgent returns failure', async () => {
+    it('should prune filename-backed stale agent activations by stable identity', async () => {
       const agentManager = container.resolve<any>('AgentManager');
       const activationStore = container.resolve<any>('ActivationStore');
 
       jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
       jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
       jest.spyOn(activationStore, 'getActivations').mockImplementation((type: string) => {
-        if (type === 'agent') return [{ name: 'missing-agent', activatedAt: new Date().toISOString() }];
+        if (type === 'agent') {
+          return [{
+            name: 'Colliding Agent',
+            filename: 'missing-agent.md',
+            activatedAt: new Date().toISOString(),
+          }];
+        }
         return [];
       });
       const removeStaleSpy = jest.spyOn(activationStore, 'removeStaleActivation')
         .mockImplementation(() => {});
 
-      jest.spyOn(agentManager, 'activateAgent').mockResolvedValue({
+      jest.spyOn(agentManager, 'activateAgentByFilename').mockResolvedValue({
         success: false,
         message: 'Agent not found'
       });
@@ -259,7 +265,41 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       await container.preparePortfolio();
       await container.completeDeferredSetup();
 
-      expect(removeStaleSpy).toHaveBeenCalledWith('agent', 'missing-agent');
+      expect(removeStaleSpy).toHaveBeenCalledWith(
+        'agent',
+        'Colliding Agent',
+        'missing-agent.md',
+      );
+    });
+
+    it('should restore renamed agents by stable filename', async () => {
+      const agentManager = container.resolve<any>('AgentManager');
+      const activationStore = container.resolve<any>('ActivationStore');
+
+      jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
+      jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
+      jest.spyOn(activationStore, 'getActivations').mockImplementation((type: string) => {
+        if (type === 'agent') {
+          return [{
+            name: 'Pre-Rename Agent',
+            filename: 'stable-agent.md',
+            activatedAt: new Date().toISOString(),
+          }];
+        }
+        return [];
+      });
+      const activateAgentSpy = jest.spyOn(agentManager, 'activateAgentByFilename').mockResolvedValue({
+        success: true,
+        message: 'Activated renamed agent',
+      });
+      const removeStaleSpy = jest.spyOn(activationStore, 'removeStaleActivation')
+        .mockImplementation(() => {});
+
+      await container.preparePortfolio();
+      await container.completeDeferredSetup();
+
+      expect(activateAgentSpy).toHaveBeenCalledWith('stable-agent.md');
+      expect(removeStaleSpy).not.toHaveBeenCalledWith('agent', 'Pre-Rename Agent');
     });
 
     it('should prune stale persona activations when activatePersona returns failure', async () => {
@@ -283,7 +323,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       await container.preparePortfolio();
       await container.completeDeferredSetup();
 
-      expect(removeStaleSpy).toHaveBeenCalledWith('persona', 'deleted-persona');
+      expect(removeStaleSpy).toHaveBeenCalledWith('persona', 'deleted-persona', undefined);
     });
 
     it('should still prune on thrown exceptions (defensive)', async () => {
