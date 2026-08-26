@@ -79,7 +79,6 @@ type PolicyMemberElement = {
 type PolicyIndexOptions = { freshAfterInFlight?: boolean };
 type IndexedPolicyManagers = Map<string, Promise<BaseElementManager<any> | undefined>>;
 type PolicyMemberCandidate = { type: string; name: string; key: string };
-type PersistedPolicyElement = PolicyElement;
 
 type DeadlockReliefElement = {
   type: string;
@@ -692,12 +691,12 @@ export class ElementCRUDHandler {
     if (this.activationStore?.isEnabled()) {
       const persistedStates = await this.activationStore.listPersistedActivationStates(sessionId);
       const indexedManagers: IndexedPolicyManagers = new Map();
-      const persistedLookups = new Map<string, Promise<PersistedPolicyElement | null>>();
+      const persistedLookups = new Map<string, Promise<PolicyElement | null>>();
 
       const findPersistedElement = (
         type: string,
         activation: PersistedActivation,
-      ): Promise<PersistedPolicyElement | null> => {
+      ): Promise<PolicyElement | null> => {
         const normalizedType = this.normalizeElementType(type);
         const normalizedName = this.normalizeLookupValue(activation.name);
         const normalizedFilename = this.normalizeLookupValue(activation.filename);
@@ -938,7 +937,7 @@ export class ElementCRUDHandler {
   private async mergePersistedPolicyState(
     state: PersistedActivationStateSnapshot,
     addElement: (element: PolicyElement, sessionIds?: string[]) => void,
-    findPersistedElement: (type: string, activation: PersistedActivation) => Promise<PersistedPolicyElement | null>,
+    findPersistedElement: (type: string, activation: PersistedActivation) => Promise<PolicyElement | null>,
   ): Promise<void> {
     const pending: Promise<void>[] = [];
 
