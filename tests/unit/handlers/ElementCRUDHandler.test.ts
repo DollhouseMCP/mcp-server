@@ -35,6 +35,8 @@ describe('ElementCRUDHandler (DI)', () => {
       delete: jest.fn(),
       find: jest.fn(),
       getActiveSkills: jest.fn().mockResolvedValue([]),
+      refreshIndex: jest.fn().mockResolvedValue(undefined),
+      findByName: jest.fn().mockResolvedValue(undefined),
       deactivateSkill: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<SkillManager>;
 
@@ -51,23 +53,32 @@ describe('ElementCRUDHandler (DI)', () => {
       getActiveAgents: jest.fn().mockResolvedValue([]),
       deactivateAgent: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
       list: jest.fn().mockResolvedValue([]),
+      refreshIndex: jest.fn().mockResolvedValue(undefined),
+      findByName: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<AgentManager>;
 
     memoryManager = {
       save: jest.fn(),
       getActiveMemories: jest.fn().mockResolvedValue([]),
+      refreshIndex: jest.fn().mockResolvedValue(undefined),
+      findByName: jest.fn().mockResolvedValue(undefined),
       deactivateMemory: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<MemoryManager>;
 
     ensembleManager = {
       list: jest.fn(),
       getActiveEnsembles: jest.fn().mockResolvedValue([]),
+      refreshIndex: jest.fn().mockResolvedValue(undefined),
+      findByName: jest.fn().mockResolvedValue(undefined),
       deactivateEnsemble: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
     } as unknown as jest.Mocked<EnsembleManager>;
 
     personaHandler = {
       getActivePersona: jest.fn(),
       getActivePersonas: jest.fn().mockReturnValue([]),
+      resolveActivePersonas: jest.fn().mockResolvedValue([]),
+      refreshIndex: jest.fn().mockResolvedValue(undefined),
+      findByName: jest.fn().mockResolvedValue(undefined),
       deactivatePersona: jest.fn().mockReturnValue({ success: true, message: 'deactivated' }),
       findPersona: jest.fn(),
       list: jest.fn().mockReturnValue([]),
@@ -252,6 +263,205 @@ describe('ElementCRUDHandler (DI)', () => {
       ]));
     });
 
+    it('indexes each ensemble-member type once without full catalog loads', async () => {
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: {
+          name: 'policy-team',
+          elements: [
+            { element_type: 'skill', element_name: 'policy-skill' },
+            { element_type: 'skills', element_name: 'policy-skill' },
+            { element_type: 'skill', element_name: 'ordinary-skill' },
+            { element_type: 'memory', element_name: 'policy-memory' },
+          ],
+        },
+      } as any]);
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn(async (name: string) => name === 'policy-skill'
+        ? {
+          metadata: {
+            name,
+            gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+          },
+        } as any
+        : undefined);
+      memoryManager.list = jest.fn();
+      memoryManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      memoryManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'policy-memory',
+          gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+        },
+      } as any);
+
+      const result = await handler.getActiveElementsForPolicy();
+
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(memoryManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(2);
+      expect(memoryManager.findByName).toHaveBeenCalledTimes(1);
+      expect(skillManager.list).not.toHaveBeenCalled();
+      expect(memoryManager.list).not.toHaveBeenCalled();
+      expect(result.filter((element) => element.name === 'policy-skill')).toHaveLength(1);
+      expect(result.filter((element) => element.name === 'policy-memory')).toHaveLength(1);
+      expect(result).not.toEqual(expect.arrayContaining([
+        expect.objectContaining({ name: 'ordinary-skill' }),
+      ]));
+    });
+
+    it('keeps large ensemble policy scans linear in unique member count', async () => {
+      const members = Array.from({ length: 500 }, (_, index) => ({
+        element_type: index % 2 === 0 ? 'skill' : 'skills',
+        element_name: `member-${index % 250}`,
+      }));
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: { name: 'large-ensemble', elements: members },
+      } as any]);
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn().mockResolvedValue(undefined);
+
+      await handler.getActiveElementsForPolicy();
+
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(250);
+      expect(skillManager.list).not.toHaveBeenCalled();
+    });
+
+    it('bounds concurrent ensemble-member lookups at eight', async () => {
+      const members = Array.from({ length: 20 }, (_, index) => ({
+        element_type: 'skill',
+        element_name: `member-${index}`,
+      }));
+      ensembleManager.getActiveEnsembles.mockResolvedValue([{
+        metadata: { name: 'large-policy-team', elements: members },
+      } as any]);
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let releaseLookups!: () => void;
+      let markCeilingReached!: () => void;
+      const lookupsBlocked = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      const ceilingReached = new Promise<void>((resolve) => {
+        markCeilingReached = resolve;
+      });
+      skillManager.findByName = jest.fn(async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (maxInFlight === 8) markCeilingReached();
+        await lookupsBlocked;
+        inFlight -= 1;
+        return undefined;
+      });
+
+      const snapshot = handler.getActiveElementsForPolicy();
+      await ceilingReached;
+      expect(skillManager.findByName).toHaveBeenCalledTimes(8);
+      releaseLookups();
+      await snapshot;
+
+      expect(skillManager.findByName).toHaveBeenCalledTimes(20);
+      expect(maxInFlight).toBe(8);
+    });
+
+    it('coalesces overlapping reporting snapshots in the same session', async () => {
+      let releaseEnsembles!: () => void;
+      const ensemblesBlocked = new Promise<void>((resolve) => {
+        releaseEnsembles = resolve;
+      });
+      ensembleManager.getActiveEnsembles.mockImplementation(async () => {
+        await ensemblesBlocked;
+        return [];
+      });
+
+      const snapshots = [
+        handler.getActiveElementsForPolicy(),
+        handler.getActiveElementsForPolicy(),
+        handler.getActiveElementsForPolicy(),
+      ];
+      releaseEnsembles();
+      await Promise.all(snapshots);
+
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not share reporting snapshots across session scopes', async () => {
+      let currentSession = 'session-a';
+      const contextTracker = {
+        getSessionContext: jest.fn(() => ({ sessionId: currentSession })),
+      };
+      const scopedHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        contextTracker as any,
+      );
+      let releaseEnsembles!: () => void;
+      const ensemblesBlocked = new Promise<void>((resolve) => {
+        releaseEnsembles = resolve;
+      });
+      ensembleManager.getActiveEnsembles.mockImplementation(async () => {
+        await ensemblesBlocked;
+        return [];
+      });
+
+      const firstSessionSnapshot = scopedHandler.getActiveElementsForPolicy();
+      currentSession = 'session-b';
+      const secondSessionSnapshot = scopedHandler.getActiveElementsForPolicy();
+      releaseEnsembles();
+      await Promise.all([firstSessionSnapshot, secondSessionSnapshot]);
+
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not coalesce enforcement onto an in-flight reporting snapshot', async () => {
+      let markReportingStarted!: () => void;
+      let releaseReporting!: () => void;
+      const reportingStarted = new Promise<void>((resolve) => {
+        markReportingStarted = resolve;
+      });
+      const reportingBlocked = new Promise<void>((resolve) => {
+        releaseReporting = resolve;
+      });
+      ensembleManager.getActiveEnsembles
+        .mockImplementationOnce(async () => {
+          markReportingStarted();
+          await reportingBlocked;
+          return [];
+        })
+        .mockResolvedValueOnce([]);
+
+      const reportingSnapshot = handler.getActiveElementsForPolicy();
+      await reportingStarted;
+      await handler.getActiveElementsForPolicy({ allowCoalescing: false });
+
+      expect(ensembleManager.getActiveEnsembles).toHaveBeenCalledTimes(2);
+      expect(personaHandler.refreshIndex).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      expect(skillManager.refreshIndex).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      expect(ensembleManager.refreshIndex).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      expect(personaHandler.resolveActivePersonas).toHaveBeenCalledTimes(1);
+      expect(agentManager.getActiveAgents).toHaveBeenLastCalledWith({ freshAfterInFlight: true });
+      releaseReporting();
+      await reportingSnapshot;
+    });
+
     it('merges persisted activation snapshots into reportable policy elements', async () => {
       const activationStore = {
         isEnabled: jest.fn().mockReturnValue(true),
@@ -268,18 +478,18 @@ describe('ElementCRUDHandler (DI)', () => {
       } as unknown as jest.Mocked<ActivationStore>;
 
       skillManager.getActiveSkills = jest.fn().mockResolvedValue([]);
-      skillManager.list = jest.fn().mockResolvedValue([
-        {
-          metadata: {
-            name: 'audit-trace-demo',
-            gatekeeper: {
-              externalRestrictions: {
-                confirmPatterns: ['Bash:git push*'],
-              },
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn().mockResolvedValue({
+        metadata: {
+          name: 'audit-trace-demo',
+          gatekeeper: {
+            externalRestrictions: {
+              confirmPatterns: ['Bash:git push*'],
             },
           },
-        } as any,
-      ]);
+        },
+      } as any);
 
       const reportHandler = new ElementCRUDHandler(
         skillManager,
@@ -308,6 +518,79 @@ describe('ElementCRUDHandler (DI)', () => {
         }),
       ]);
       expect(activationStore.listPersistedActivationStates).toHaveBeenCalledWith('session-other');
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledWith('audit-trace-demo');
+      expect(skillManager.list).not.toHaveBeenCalled();
+    });
+
+    it('bounds persisted policy lookups at eight and preserves activation order', async () => {
+      const activations = Array.from({ length: 20 }, (_, index) => ({
+        name: `persisted-skill-${index}`,
+        activatedAt: new Date().toISOString(),
+      }));
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: { skill: activations },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      let inFlight = 0;
+      let maxInFlight = 0;
+      let releaseLookups!: () => void;
+      let markCeilingReached!: () => void;
+      const lookupsBlocked = new Promise<void>((resolve) => {
+        releaseLookups = resolve;
+      });
+      const ceilingReached = new Promise<void>((resolve) => {
+        markCeilingReached = resolve;
+      });
+      skillManager.findByName = jest.fn(async (name: string) => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        if (maxInFlight === 8) markCeilingReached();
+        await lookupsBlocked;
+        inFlight -= 1;
+        return {
+          metadata: {
+            name,
+            gatekeeper: { externalRestrictions: { confirmPatterns: ['Bash:git push*'] } },
+          },
+        } as any;
+      });
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const report = reportHandler.getPolicyElementsForReport('session-other');
+      await ceilingReached;
+      expect(skillManager.findByName).toHaveBeenCalledTimes(8);
+      releaseLookups();
+      const result = await report;
+
+      expect(skillManager.findByName).toHaveBeenCalledTimes(20);
+      expect(maxInFlight).toBe(8);
+      expect(result.map((element) => element.name)).toEqual(
+        activations.map((activation) => activation.name),
+      );
     });
 
     it('does not leak the current session in-memory policies into another session report', async () => {
@@ -337,28 +620,33 @@ describe('ElementCRUDHandler (DI)', () => {
           },
         } as any,
       ]);
-      skillManager.list = jest.fn().mockResolvedValue([
-        {
-          metadata: {
-            name: 'audit-trace-demo',
-            gatekeeper: {
-              externalRestrictions: {
-                confirmPatterns: ['Bash:git push*'],
+      skillManager.list = jest.fn();
+      skillManager.refreshIndex = jest.fn().mockResolvedValue(undefined);
+      skillManager.findByName = jest.fn(async (name: string) => {
+        const elements = [
+          {
+            metadata: {
+              name: 'audit-trace-demo',
+              gatekeeper: {
+                externalRestrictions: {
+                  confirmPatterns: ['Bash:git push*'],
+                },
               },
             },
           },
-        } as any,
-        {
-          metadata: {
-            name: 'leader-only-skill',
-            gatekeeper: {
-              externalRestrictions: {
-                denyPatterns: ['Bash:rm*'],
+          {
+            metadata: {
+              name: 'leader-only-skill',
+              gatekeeper: {
+                externalRestrictions: {
+                  denyPatterns: ['Bash:rm*'],
+                },
               },
             },
           },
-        } as any,
-      ]);
+        ];
+        return elements.find((element) => element.metadata.name === name) as any;
+      });
 
       const reportHandler = new ElementCRUDHandler(
         skillManager,
@@ -385,6 +673,9 @@ describe('ElementCRUDHandler (DI)', () => {
           sessionIds: ['session-other'],
         }),
       ]);
+      expect(skillManager.refreshIndex).toHaveBeenCalledTimes(1);
+      expect(skillManager.findByName).toHaveBeenCalledTimes(1);
+      expect(skillManager.list).not.toHaveBeenCalled();
     });
   });
 

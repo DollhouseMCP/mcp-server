@@ -19,7 +19,12 @@ import { elements, elementTags } from '../database/schema/elements.js';
 import type { UserIdResolver } from '../database/UserContext.js';
 import type { DrizzleTx } from '../database/db-utils.js';
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
-import type { IWritableStorageLayer, ElementWriteMetadata, WriteContentOptions } from './IStorageLayer.js';
+import type {
+  IWritableStorageLayer,
+  ElementWriteMetadata,
+  StorageScanOptions,
+  WriteContentOptions,
+} from './IStorageLayer.js';
 
 /**
  * Canonical key for case/format-insensitive name resolution: lowercase, with
@@ -71,7 +76,7 @@ export abstract class AbstractDatabaseStorageLayer implements IWritableStorageLa
 
   // ── IStorageLayer ─────────────────────────────────────────────────
 
-  async scan(): Promise<ManifestDiffResult> {
+  async scan(_options?: StorageScanOptions): Promise<ManifestDiffResult> {
     const result: ManifestDiffResult = {
       added: [],
       modified: [],

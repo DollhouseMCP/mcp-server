@@ -16,12 +16,21 @@
 
 import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
 
+export interface StorageScanOptions {
+  /**
+   * If this call joins an already-running scan, perform one serialized
+   * trailing scan before returning. This is used by freshness-critical reads
+   * so a change made after the joined scan began cannot be hidden by cooldown.
+   */
+  freshAfterInFlight?: boolean;
+}
+
 export interface IStorageLayer {
   /**
    * Scan the filesystem for changes relative to the last snapshot.
    * Implementations should enforce cooldown and deduplicate concurrent calls.
    */
-  scan(): Promise<ManifestDiffResult>;
+  scan(options?: StorageScanOptions): Promise<ManifestDiffResult>;
 
   /**
    * Trigger scan and return all indexed entries.

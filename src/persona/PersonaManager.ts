@@ -746,6 +746,20 @@ export class PersonaManager extends BaseElementManager<PersonaElement> {
   }
 
   /**
+   * Resolve active personas through the storage-backed lookup path.
+   * Used after a freshness scan, which may evict changed personas from the
+   * synchronous cache that getActivePersonas() intentionally relies on.
+   */
+  async resolveActivePersonas(): Promise<PersonaElement[]> {
+    const personas: PersonaElement[] = [];
+    for (const filename of this.getActivationSet()) {
+      const persona = await this.findPersonaAsync(filename);
+      if (persona) personas.push(persona);
+    }
+    return personas;
+  }
+
+  /**
    * Get identifier for the first active persona (filename).
    * Issue #281: For backward compatibility, returns first active persona ID
    */

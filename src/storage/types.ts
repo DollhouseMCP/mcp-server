@@ -83,3 +83,65 @@ export interface ManifestDiffResult {
   /** Files whose mtime matches the manifest (no change) */
   unchanged: string[];
 }
+
+type ManifestDiffCategory = keyof ManifestDiffResult;
+
+const DIFF_CATEGORIES: readonly ManifestDiffCategory[] = [
+  'added',
+  'modified',
+  'removed',
+  'unchanged',
+];
+
+/**
+ * Merge two consecutive manifest diffs into one coherent transition.
+ *
+ * A path appears in exactly one output category. Transitions preserve cache
+ * invalidations across a trailing scan: for example, modified -> unchanged
+ * remains modified, while removed -> added becomes modified. A transient
+ * added -> removed path is reported as removed so any object loaded between
+ * the two scans is evicted.
+ */
+export function mergeManifestDiffResults(
+  first: ManifestDiffResult,
+  second: ManifestDiffResult,
+): ManifestDiffResult {
+  const firstCategories = categorizeDiff(first);
+  const secondCategories = categorizeDiff(second);
+  const orderedPaths = new Set<string>();
+
+  for (const category of DIFF_CATEGORIES) {
+    for (const filePath of first[category]) orderedPaths.add(filePath);
+  }
+  for (const category of DIFF_CATEGORIES) {
+    for (const filePath of second[category]) orderedPaths.add(filePath);
+  }
+
+  const merged: ManifestDiffResult = { added: [], modified: [], removed: [], unchanged: [] };
+  for (const filePath of orderedPaths) {
+    const category = mergeDiffCategory(firstCategories.get(filePath), secondCategories.get(filePath));
+    if (category) merged[category].push(filePath);
+  }
+  return merged;
+}
+
+function categorizeDiff(diff: ManifestDiffResult): Map<string, ManifestDiffCategory> {
+  const categories = new Map<string, ManifestDiffCategory>();
+  for (const category of DIFF_CATEGORIES) {
+    for (const filePath of diff[category]) categories.set(filePath, category);
+  }
+  return categories;
+}
+
+function mergeDiffCategory(
+  first: ManifestDiffCategory | undefined,
+  second: ManifestDiffCategory | undefined,
+): ManifestDiffCategory | undefined {
+  if (!first) return second;
+  if (!second) return first;
+
+  if (second === 'removed') return 'removed';
+  if (first === 'added') return 'added';
+  if (first === 'unchanged' && second === 'unchanged') return 'unchanged';
+  return 'modified';
+}

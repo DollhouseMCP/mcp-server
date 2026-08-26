@@ -15,7 +15,11 @@ import { ElementType } from '../../portfolio/types.js';
 import { logger } from '../../utils/logger.js';
 import { PortfolioManager } from '../../portfolio/PortfolioManager.js';
 import { FileOperationsService } from '../../services/FileOperationsService.js';
-import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import {
+  type IStorageLayer,
+  type StorageScanOptions,
+  isWritableStorageLayer,
+} from '../../storage/IStorageLayer.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import type { ElementCache } from './ElementCache.js';
 import type { PublicElementDiscovery } from '../../collection/shared-pool/PublicElementDiscovery.js';
@@ -197,13 +201,15 @@ export class ElementListOperations<T extends IElement> {
    * Force a fresh disk scan and evict modified/removed cache entries.
    * Unlike list(), this does not load all elements — it only evicts stale ones.
    */
-  async scanAndEvict(): Promise<void> {
+  async scanAndEvict(options?: StorageScanOptions): Promise<void> {
     this.storageLayer.invalidate();
     try {
-      const diff = await this.storageLayer.scan();
+      const diff = await this.storageLayer.scan(options);
       for (const relPath of [...diff.modified, ...diff.removed]) {
-        const absPath = path.join(this.host.elementDir, relPath);
-        this.cache.uncacheByPath(absPath);
+        const cachePath = isWritableStorageLayer(this.storageLayer)
+          ? relPath
+          : path.join(this.host.elementDir, relPath);
+        this.cache.uncacheByPath(cachePath);
       }
     } catch { /* non-fatal — cache may be slightly stale, but activation proceeds */ }
   }

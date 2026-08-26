@@ -143,6 +143,23 @@ describe('AgentManager', () => {
     });
   });
 
+  describe('Active agents', () => {
+    it('resolves only active names without listing the full catalog', async () => {
+      const activeAgent = { metadata: { name: 'active-agent' } } as Agent;
+      (agentManager as any).getActivationSet().add('active-agent');
+      const refresh = jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      const findByName = jest.spyOn(agentManager, 'findByName').mockResolvedValue(activeAgent);
+      const list = jest.spyOn(agentManager, 'list');
+
+      const result = await agentManager.getActiveAgents({ freshAfterInFlight: true });
+
+      expect(result).toEqual([activeAgent]);
+      expect(refresh).toHaveBeenCalledWith({ freshAfterInFlight: true });
+      expect(findByName).toHaveBeenCalledWith('active-agent');
+      expect(list).not.toHaveBeenCalled();
+    });
+  });
+
   describe('Recovery state synchronization', () => {
     it('allows normal completion to shrink legacy oversized state', async () => {
       const agent = new Agent({ name: 'recovery-agent' }, metadataService);

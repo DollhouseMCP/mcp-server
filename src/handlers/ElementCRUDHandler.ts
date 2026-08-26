@@ -66,8 +66,44 @@ import {
   getGatekeeperDiagnostics,
 } from './mcp-aql/policies/ElementPolicies.js';
 
+type PolicyElement = {
+  type: string;
+  name: string;
+  metadata: Record<string, unknown>;
+};
+
+type PolicyMemberElement = {
+  metadata?: Record<string, unknown>;
+};
+
+type PolicyIndexOptions = { freshAfterInFlight?: boolean };
+type IndexedPolicyManagers = Map<string, Promise<BaseElementManager<any> | undefined>>;
+type PolicyMemberCandidate = { type: string; name: string; key: string };
+
+const ACTIVE_POLICY_LOOKUP_CONCURRENCY = 8;
+
+async function mapPolicyLookups<TInput, TOutput>(
+  candidates: readonly TInput[],
+  lookup: (candidate: TInput, index: number) => Promise<TOutput>,
+): Promise<TOutput[]> {
+  const resolved = new Array<TOutput>(candidates.length);
+  let nextCandidateIndex = 0;
+
+  const resolveNext = async (): Promise<void> => {
+    while (nextCandidateIndex < candidates.length) {
+      const candidateIndex = nextCandidateIndex++;
+      resolved[candidateIndex] = await lookup(candidates[candidateIndex], candidateIndex);
+    }
+  };
+
+  const workerCount = Math.min(ACTIVE_POLICY_LOOKUP_CONCURRENCY, candidates.length);
+  await Promise.all(Array.from({ length: workerCount }, () => resolveNext()));
+  return resolved;
+}
+
 export class ElementCRUDHandler {
   private readonly strategies: Map<string, ElementActivationStrategy>;
+  private readonly activePolicySnapshots = new Map<string, Promise<PolicyElement[]>>();
 
   constructor(
     private readonly skillManager: SkillManager,
@@ -186,6 +222,8 @@ export class ElementCRUDHandler {
         return 'persona';
       case 'skills':
         return 'skill';
+      case 'templates':
+        return 'template';
       case 'agents':
         return 'agent';
       case 'memories':
@@ -195,6 +233,20 @@ export class ElementCRUDHandler {
       default:
         return normalizedType;
     }
+  }
+
+  private policyElementKey(type: string, name: string): string {
+    return `${this.toPolicyElementType(this.normalizeElementType(type))}:${this.normalizeLookupValue(name)}`;
+  }
+
+  private getPolicySnapshotScope(): string {
+    return this.contextTracker?.getSessionContext()?.sessionId
+      ?? this.getSessionActivationStore()?.getSessionId()
+      ?? 'default';
+  }
+
+  private invalidateActivePolicySnapshot(): void {
+    this.activePolicySnapshots.delete(this.getPolicySnapshotScope());
   }
 
   /**
@@ -323,6 +375,7 @@ export class ElementCRUDHandler {
       }
 
       const result = await strategy.activate(name, context);
+      this.invalidateActivePolicySnapshot();
 
       // Issue #598, #1946: Persist activation state for session restore (per-session)
       const sessionStore = this.getSessionActivationStore();
@@ -386,48 +439,102 @@ export class ElementCRUDHandler {
    *
    * Issue #452: Provides active element context for enforce() policy checks.
    */
-  async getActiveElementsForPolicy(): Promise<Array<{ type: string; name: string; metadata: Record<string, unknown> }>> {
-    const result: Array<{ type: string; name: string; metadata: Record<string, unknown> }> = [];
-    const seen = new Set<string>();
+  async getActiveElementsForPolicy(
+    options: { allowCoalescing?: boolean } = {},
+  ): Promise<PolicyElement[]> {
+    // Enforcement reads cannot join work that may have started before an
+    // external policy edit. Reporting callers may share overlapping snapshots.
+    if (options.allowCoalescing === false) {
+      return this.collectActiveElementsForPolicy({ freshAfterInFlight: true });
+    }
+
+    const scope = this.getPolicySnapshotScope();
+    const existing = this.activePolicySnapshots.get(scope);
+    if (existing) return existing;
+
+    const snapshot = this.collectActiveElementsForPolicy();
+    this.activePolicySnapshots.set(scope, snapshot);
 
     try {
-      // Active personas (sync)
-      const personas = this.personaManager.getActivePersonas();
-      for (const p of personas) {
-        const key = `persona:${p.metadata.name}`;
-        seen.add(key);
+      return await snapshot;
+    } finally {
+      if (this.activePolicySnapshots.get(scope) === snapshot) {
+        this.activePolicySnapshots.delete(scope);
+      }
+    }
+  }
+
+  private async collectActiveElementsForPolicy(
+    indexOptions: PolicyIndexOptions = {},
+  ): Promise<PolicyElement[]> {
+    await this.ensureInitialized();
+
+    const result: PolicyElement[] = [];
+    const seen = new Set<string>();
+    const indexedManagers: IndexedPolicyManagers = new Map();
+    const requiresFreshIndex = indexOptions.freshAfterInFlight === true;
+
+    if (requiresFreshIndex) {
+      await Promise.all([
+        this.getIndexedPolicyManager(ElementType.PERSONA, indexedManagers, indexOptions),
+        this.getIndexedPolicyManager(ElementType.SKILL, indexedManagers, indexOptions),
+        this.getIndexedPolicyManager(ElementType.ENSEMBLE, indexedManagers, indexOptions),
+      ]);
+    }
+
+    await this.appendActivePersonas(result, seen, requiresFreshIndex);
+    await this.appendActiveSkills(result, seen);
+    await this.appendActiveAgents(result, seen, indexOptions);
+    await this.appendActiveEnsembles(result, seen, indexOptions, indexedManagers);
+
+    return result;
+  }
+
+  private async appendActivePersonas(
+    result: PolicyElement[],
+    seen: Set<string>,
+    resolveFromStorage: boolean,
+  ): Promise<void> {
+    try {
+      const personas = resolveFromStorage
+        ? await this.personaManager.resolveActivePersonas()
+        : this.personaManager.getActivePersonas();
+      for (const persona of personas) {
+        seen.add(this.policyElementKey('persona', persona.metadata.name));
         result.push({
           type: 'persona',
-          name: p.metadata.name,
-          metadata: p.metadata as unknown as Record<string, unknown>,
+          name: persona.metadata.name,
+          metadata: persona.metadata as unknown as Record<string, unknown>,
         });
       }
     } catch (error) {
       logger.warn('Failed to gather active personas for policy evaluation', { error });
     }
+  }
 
+  private async appendActiveSkills(result: PolicyElement[], seen: Set<string>): Promise<void> {
     try {
-      // Active skills (async)
-      const skills = await this.skillManager.getActiveSkills();
-      for (const s of skills) {
-        const key = `skill:${s.metadata.name}`;
-        seen.add(key);
+      for (const skill of await this.skillManager.getActiveSkills()) {
+        seen.add(this.policyElementKey('skill', skill.metadata.name));
         result.push({
           type: 'skill',
-          name: s.metadata.name,
-          metadata: s.metadata as unknown as Record<string, unknown>,
+          name: skill.metadata.name,
+          metadata: skill.metadata as unknown as Record<string, unknown>,
         });
       }
     } catch (error) {
       logger.warn('Failed to gather active skills for policy evaluation', { error });
     }
+  }
 
+  private async appendActiveAgents(
+    result: PolicyElement[],
+    seen: Set<string>,
+    indexOptions: PolicyIndexOptions,
+  ): Promise<void> {
     try {
-      // Active agents (async)
-      const agents = await this.agentManager.getActiveAgents();
-      for (const agent of agents) {
-        const key = `agent:${agent.metadata.name}`;
-        seen.add(key);
+      for (const agent of await this.agentManager.getActiveAgents(indexOptions)) {
+        seen.add(this.policyElementKey('agent', agent.metadata.name));
         result.push({
           type: 'agent',
           name: agent.metadata.name,
@@ -437,53 +544,138 @@ export class ElementCRUDHandler {
     } catch (error) {
       logger.warn('Failed to gather active agents for policy evaluation', { error });
     }
+  }
 
+  private async appendActiveEnsembles(
+    result: PolicyElement[],
+    seen: Set<string>,
+    indexOptions: PolicyIndexOptions,
+    indexedManagers: IndexedPolicyManagers,
+  ): Promise<void> {
     try {
-      // Active ensembles (async)
       const ensembles = await this.ensembleManager.getActiveEnsembles();
-      for (const e of ensembles) {
-        const ensembleKey = `ensemble:${e.metadata.name}`;
-        seen.add(ensembleKey);
-        result.push({
-          type: 'ensemble',
-          name: e.metadata.name,
-          metadata: e.metadata as unknown as Record<string, unknown>,
-        });
-
-        // Issue #625 Phase 4: Resolve ensemble member gatekeeper policies
-        const members = (e.metadata as unknown as Record<string, unknown>)?.elements as
-          Array<{ element_name: string; element_type: string }> | undefined;
-        if (Array.isArray(members)) {
-          for (const member of members) {
-            const memberKey = `${member.element_type}:${member.element_name}`;
-            if (seen.has(memberKey)) continue; // Already active individually
-            try {
-              const memberElements = await this.getElements(member.element_type);
-              const found = (memberElements as Array<{ metadata: Record<string, unknown> }>).find(
-                el => (el?.metadata as Record<string, unknown>)?.name === member.element_name
-              );
-              if (found?.metadata && (found.metadata as Record<string, unknown>)?.gatekeeper) {
-                seen.add(memberKey);
-                result.push({
-                  type: member.element_type,
-                  name: member.element_name,
-                  metadata: found.metadata as Record<string, unknown>,
-                });
-              }
-            } catch {
-              // Non-fatal: skip member if element type lookup fails
-            }
-          }
-        }
-      }
+      const candidates = this.appendEnsemblesAndCollectMembers(ensembles, result, seen);
+      const resolvedMembers = await this.resolvePolicyMembers(candidates, indexOptions, indexedManagers);
+      this.appendResolvedPolicyMembers(resolvedMembers, result, seen);
     } catch (error) {
       logger.warn('Failed to gather active ensembles for policy evaluation', { error });
     }
-
-    return result;
   }
 
-  async getPolicyElementsForReport(sessionId?: string): Promise<Array<{
+  private appendEnsemblesAndCollectMembers(
+    ensembles: Awaited<ReturnType<EnsembleManager['getActiveEnsembles']>>,
+    result: PolicyElement[],
+    seen: Set<string>,
+  ): PolicyMemberCandidate[] {
+    const candidates: PolicyMemberCandidate[] = [];
+    const queuedMemberKeys = new Set<string>();
+
+    for (const ensemble of ensembles) {
+      seen.add(this.policyElementKey('ensemble', ensemble.metadata.name));
+      result.push({
+        type: 'ensemble',
+        name: ensemble.metadata.name,
+        metadata: ensemble.metadata as unknown as Record<string, unknown>,
+      });
+
+      const members = (ensemble.metadata as unknown as Record<string, unknown>)?.elements as
+        Array<{ element_name: string; element_type: string }> | undefined;
+      if (!Array.isArray(members)) continue;
+
+      for (const member of members) {
+        const normalizedType = this.normalizeElementType(member.element_type);
+        const normalizedName = this.normalizeLookupValue(member.element_name);
+        if (normalizedType === '' || normalizedName === '') continue;
+
+        const key = this.policyElementKey(normalizedType, normalizedName);
+        if (seen.has(key) || queuedMemberKeys.has(key)) continue;
+        queuedMemberKeys.add(key);
+        candidates.push({ type: normalizedType, name: normalizedName, key });
+      }
+    }
+    return candidates;
+  }
+
+  private async resolvePolicyMembers(
+    candidates: PolicyMemberCandidate[],
+    indexOptions: PolicyIndexOptions,
+    indexedManagers: IndexedPolicyManagers,
+  ): Promise<Array<PolicyElement | undefined>> {
+    const memberLookups = new Map<string, Promise<PolicyMemberElement | undefined>>();
+    return mapPolicyLookups(candidates, async (candidate) => {
+      try {
+        const found = await this.findPolicyMember(
+          candidate,
+          indexedManagers,
+          memberLookups,
+          indexOptions,
+        );
+        if (found?.metadata?.['gatekeeper']) {
+          return {
+            type: this.toPolicyElementType(candidate.type),
+            name: candidate.name,
+            metadata: found.metadata,
+          };
+        }
+      } catch {
+        // A malformed or missing member must not break evaluation of others.
+      }
+      return undefined;
+    });
+  }
+
+  private appendResolvedPolicyMembers(
+    resolvedMembers: Array<PolicyElement | undefined>,
+    result: PolicyElement[],
+    seen: Set<string>,
+  ): void {
+    for (const resolved of resolvedMembers) {
+      if (!resolved) continue;
+      const key = this.policyElementKey(resolved.type, resolved.name);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(resolved);
+    }
+  }
+
+  private findPolicyMember(
+    candidate: PolicyMemberCandidate,
+    indexedManagers: IndexedPolicyManagers,
+    memberLookups: Map<string, Promise<PolicyMemberElement | undefined>>,
+    indexOptions: PolicyIndexOptions,
+  ): Promise<PolicyMemberElement | undefined> {
+    const existing = memberLookups.get(candidate.key);
+    if (existing) return existing;
+
+    const lookup = this.getIndexedPolicyManager(candidate.type, indexedManagers, indexOptions)
+      .then(async (manager) => manager
+        ? manager.findByName(candidate.name) as Promise<PolicyMemberElement | undefined>
+        : undefined);
+    memberLookups.set(candidate.key, lookup);
+    return lookup;
+  }
+
+  private getIndexedPolicyManager(
+    type: string,
+    indexedManagers: IndexedPolicyManagers,
+    indexOptions: PolicyIndexOptions,
+  ): Promise<BaseElementManager<any> | undefined> {
+    const normalizedType = this.normalizeElementType(type);
+    const existing = indexedManagers.get(normalizedType);
+    if (existing) return existing;
+
+    const manager = this.getManagerForType(normalizedType);
+    const indexed = manager
+      ? manager.refreshIndex(indexOptions).then(() => manager)
+      : Promise.resolve(undefined);
+    indexedManagers.set(normalizedType, indexed);
+    return indexed;
+  }
+
+  async getPolicyElementsForReport(
+    sessionId?: string,
+    options: { allowCoalescing?: boolean } = {},
+  ): Promise<Array<{
     type: string;
     name: string;
     metadata: Record<string, unknown>;
@@ -497,7 +689,7 @@ export class ElementCRUDHandler {
     }>();
 
     const addElement = (
-      element: { type: string; name: string; metadata: Record<string, unknown> },
+      element: PolicyElement,
       sessionIds: string[] = [],
     ): void => {
       if (!this.hasGatekeeperPolicy(element.metadata)) {
@@ -521,55 +713,55 @@ export class ElementCRUDHandler {
 
     const currentSessionId = this.activationStore?.getSessionId();
     const includeCurrentSession = !sessionId || !currentSessionId || currentSessionId === sessionId;
+    const indexOptions = options.allowCoalescing === false
+      ? { freshAfterInFlight: true }
+      : {};
 
     if (includeCurrentSession) {
-      for (const activeElement of await this.getActiveElementsForPolicy()) {
+      for (const activeElement of await this.getActiveElementsForPolicy(options)) {
         addElement(activeElement, currentSessionId ? [currentSessionId] : []);
       }
     }
 
     if (this.activationStore?.isEnabled()) {
       const persistedStates = await this.activationStore.listPersistedActivationStates(sessionId);
-      const catalogs = new Map<string, Array<{ metadata?: Record<string, unknown>; filename?: string }>>();
+      const indexedManagers: IndexedPolicyManagers = new Map();
+      const persistedLookups = new Map<string, Promise<PolicyElement | null>>();
 
-      const getCatalog = async (type: string) => {
-        const normalizedType = this.normalizeElementType(type);
-        if (!catalogs.has(normalizedType)) {
-          catalogs.set(
-            normalizedType,
-            (await this.getElements(normalizedType)) as Array<{ metadata?: Record<string, unknown>; filename?: string }>,
-          );
-        }
-        return catalogs.get(normalizedType) ?? [];
-      };
-
-      const findPersistedElement = async (
+      const findPersistedElement = (
         type: string,
         activation: PersistedActivation,
-      ): Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null> => {
-        const catalog = await getCatalog(type);
+      ): Promise<PolicyElement | null> => {
+        const normalizedType = this.normalizeElementType(type);
         const normalizedName = this.normalizeLookupValue(activation.name);
         const normalizedFilename = this.normalizeLookupValue(activation.filename);
+        const lookupKey = `${normalizedType}:${normalizedName}:${normalizedFilename}`;
+        const existing = persistedLookups.get(lookupKey);
+        if (existing) return existing;
 
-        const found = catalog.find((element) => {
-          const metadata = element.metadata ?? {};
-          const elementName = this.normalizeLookupValue(metadata['name']);
-          const elementFilename = this.normalizeLookupValue(
-            element.filename ?? metadata['filename'] ?? metadata['sourceFile'],
-          );
+        const lookup = this.getIndexedPolicyManager(normalizedType, indexedManagers, indexOptions)
+          .then(async (manager) => {
+            if (!manager) return null;
 
-          return elementName === normalizedName || (normalizedFilename !== '' && elementFilename === normalizedFilename);
-        });
+            let found = normalizedName !== ''
+              ? await manager.findByName(normalizedName) as PolicyMemberElement | undefined
+              : undefined;
+            if (!found && normalizedFilename !== '') {
+              found = await manager.findByName(normalizedFilename) as PolicyMemberElement | undefined;
+            }
 
-        if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
-          return null;
-        }
+            if (!found?.metadata || !this.hasGatekeeperPolicy(found.metadata)) {
+              return null;
+            }
 
-        return {
-          type: this.toPolicyElementType(type),
-          name: (found.metadata['name'] as string) ?? activation.name,
-          metadata: found.metadata,
-        };
+            return {
+              type: this.toPolicyElementType(normalizedType),
+              name: (found.metadata['name'] as string) ?? activation.name,
+              metadata: found.metadata,
+            };
+          });
+        persistedLookups.set(lookupKey, lookup);
+        return lookup;
       };
 
       for (const state of persistedStates) {
@@ -643,6 +835,7 @@ export class ElementCRUDHandler {
     });
 
     this.activationStore?.clearAll();
+    this.invalidateActivePolicySnapshot();
     this.policyExportService?.exportPolicies().catch(() => {});
 
     const failureSummary = failed.length > 0 ? ` with ${failed.length} failure(s)` : '';
@@ -769,24 +962,27 @@ export class ElementCRUDHandler {
     addElement: (element: { type: string; name: string; metadata: Record<string, unknown> }, sessionIds?: string[]) => void,
     findPersistedElement: (type: string, activation: PersistedActivation) => Promise<{ type: string; name: string; metadata: Record<string, unknown> } | null>,
   ): Promise<void> {
-    const pending: Promise<void>[] = [];
+    const candidates: Array<{ type: string; activation: PersistedActivation }> = [];
 
     for (const [type, activations] of Object.entries(state.activations)) {
       for (const activation of activations ?? []) {
-        pending.push((async () => {
-          const found = await findPersistedElement(type, activation);
-          if (found) {
-            addElement(found, [state.sessionId]);
-          }
-        })());
+        candidates.push({ type, activation });
       }
     }
 
-    if (pending.length === 0) {
-      return;
-    }
+    const resolved = await mapPolicyLookups(candidates, async (candidate) => {
+      try {
+        return await findPersistedElement(candidate.type, candidate.activation);
+      } catch {
+        // Match the previous allSettled behavior: one unreadable activation
+        // must not prevent other persisted policies from being reported.
+        return null;
+      }
+    });
 
-    await Promise.allSettled(pending);
+    for (const found of resolved) {
+      if (found) addElement(found, [state.sessionId]);
+    }
   }
 
   async deactivateElement(name: string, type: string) {
@@ -812,6 +1008,7 @@ export class ElementCRUDHandler {
       }
 
       const result = await strategy.deactivate(name);
+      this.invalidateActivePolicySnapshot();
 
       // Issue #598, #1946: Persist deactivation state for session restore (per-session)
       const sessionStore = this.getSessionActivationStore();
