@@ -1152,12 +1152,12 @@ export class DollhouseContainer {
           restoredCount++;
         } else {
           logger.debug(`[ActivationStore] Pruning missing persona '${activation.name}'`);
-          store.removeStaleActivation('persona', activation.name);
+          store.removeStaleActivation('persona', activation.name, activation.filename);
           skippedCount++;
         }
       } catch {
         logger.debug(`[ActivationStore] Skipping failed persona '${activation.name}'`);
-        store.removeStaleActivation('persona', activation.name);
+        store.removeStaleActivation('persona', activation.name, activation.filename);
         skippedCount++;
       }
     }
@@ -1192,12 +1192,12 @@ export class DollhouseContainer {
           restoredCount++;
         } else {
           logger.debug(`[ActivationStore] Pruning missing agent '${activation.name}'`);
-          store.removeStaleActivation('agent', activation.name);
+          store.removeStaleActivation('agent', activation.name, activation.filename);
           skippedCount++;
         }
       } catch {
         logger.debug(`[ActivationStore] Skipping failed agent '${activation.name}'`);
-        store.removeStaleActivation('agent', activation.name);
+        store.removeStaleActivation('agent', activation.name, activation.filename);
         skippedCount++;
       }
     }

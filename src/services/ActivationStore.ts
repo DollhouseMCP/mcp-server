@@ -304,10 +304,11 @@ export class ActivationStore {
   }
 
   /**
-   * Remove a specific activation by name (used during restore to prune stale entries).
+   * Remove a specific activation by stable identity when available.
+   * Used during restore to prune stale entries.
    */
-  removeStaleActivation(elementType: string, name: string): void {
-    this.recordDeactivation(elementType, name);
+  removeStaleActivation(elementType: string, name: string, filename?: string): void {
+    this.recordDeactivation(elementType, name, filename);
   }
 
   /**
