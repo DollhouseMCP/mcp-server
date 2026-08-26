@@ -36,6 +36,7 @@ import {
   AgentStateSizeLimitError,
 } from '../../../../src/storage/FileAgentStateStore.js';
 import { EVICT_TERMINAL_GOAL } from '../../../../src/elements/agents/constants.js';
+import { SessionActivationRegistry } from '../../../../src/state/SessionActivationState.js';
 
 const metadataService: MetadataService = createTestMetadataService();
 
@@ -157,6 +158,60 @@ describe('AgentManager', () => {
       expect(refresh).toHaveBeenCalledWith({ freshAfterInFlight: true });
       expect(findByName).toHaveBeenCalledWith('active-agent');
       expect(list).not.toHaveBeenCalled();
+    });
+
+    it('keeps an active agent addressable after its display name changes', async () => {
+      const agent = new Agent({ name: 'Original Name' }, metadataService);
+      Object.defineProperty(agent, 'filePath', { value: 'stable-agent.md', configurable: true });
+      jest.spyOn(agentManager, 'findByName').mockResolvedValue(agent);
+      const findByStorageIdentity = jest.spyOn(agentManager, 'findByStorageIdentity').mockResolvedValue(agent);
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+
+      const activated = await agentManager.activateAgent('Original Name');
+      agent.metadata.name = 'Renamed Agent';
+      const active = await agentManager.getActiveAgents({ freshAfterInFlight: true });
+
+      expect(activated.identity).toEqual({ kind: 'file', value: 'stable-agent.md' });
+      expect(findByStorageIdentity).toHaveBeenCalledWith('stable-agent.md');
+      expect(active).toEqual([agent]);
+      expect(active[0].metadata.name).toBe('Renamed Agent');
+    });
+
+    it('preserves same-name agents with distinct storage identities', async () => {
+      const first = new Agent({ name: 'Shared Name' }, metadataService);
+      const second = new Agent({ name: 'Shared Name' }, metadataService);
+      Object.defineProperty(first, 'filePath', { value: 'first.md', configurable: true });
+      Object.defineProperty(second, 'filePath', { value: 'second.md', configurable: true });
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager, 'findByStorageIdentity').mockImplementation(async (identity) =>
+        identity === 'first.md' ? first : identity === 'second.md' ? second : undefined
+      );
+
+      await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'first.md' }, 'Shared Name');
+      await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'second.md' }, 'Shared Name');
+
+      expect(await agentManager.getActiveAgents()).toEqual([first, second]);
+    });
+
+    it('keeps durable agent identities isolated between sessions', async () => {
+      const registry = new SessionActivationRegistry('session-a');
+      let sessionId = 'session-a';
+      (agentManager as any).activationRegistry = registry;
+      (agentManager as any).contextTracker = {
+        getSessionContext: () => ({ sessionId }),
+      };
+      const agent = new Agent({ name: 'Session Agent' }, metadataService);
+      Object.defineProperty(agent, 'filePath', { value: 'session-agent.md', configurable: true });
+      jest.spyOn(agentManager, 'findByName').mockResolvedValue(agent);
+      jest.spyOn(agentManager, 'findByStorageIdentity').mockResolvedValue(agent);
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+
+      await agentManager.activateAgent('Session Agent');
+      expect(registry.getOrCreate('session-a').agents).toEqual(new Set(['session-agent.md']));
+
+      sessionId = 'session-b';
+      expect(await agentManager.getActiveAgents()).toEqual([]);
+      expect(registry.getOrCreate('session-b').agents.size).toBe(0);
     });
   });
 

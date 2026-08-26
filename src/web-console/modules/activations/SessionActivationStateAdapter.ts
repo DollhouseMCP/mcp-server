@@ -41,8 +41,14 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
     const state = this.registry.getOrCreate(sessionId);
     const storeRecord = state.activationStore?.getActivations(type).find(record => record.name === name);
     const fallbackRecord = this.fallbackRecords.get(recordKey(sessionId, type, name));
-    const changed = !activationSet(state, type).has(name) && !storeRecord && !fallbackRecord;
-    activationSet(state, type).add(name);
+    const activationKey = type === 'agents' && storeRecord?.identity
+      ? storeRecord.identity.value
+      : name;
+    const changed = !activationSet(state, type).has(activationKey) && !storeRecord && !fallbackRecord;
+    activationSet(state, type).add(activationKey);
+    if (type === 'agents' && storeRecord?.identity) {
+      state.agentNamesByIdentity.set(activationKey, name);
+    }
     if (state.activationStore?.isEnabled()) {
       state.activationStore.recordActivation(type, name);
     } else if (!fallbackRecord) {
@@ -67,10 +73,21 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
     const state = this.registry.get(sessionId);
     if (!state) return Promise.resolve(false);
     const stateSet = activationSet(state, type);
-    const changed = stateSet.delete(name) ||
-      Boolean(state.activationStore?.getActivations(type).some(record => record.name === name)) ||
+    const storeRecord = state.activationStore?.getActivations(type).find(record =>
+      record.name === name || record.identity?.value === name
+    );
+    const agentKey = type === 'agents'
+      ? Array.from(state.agentNamesByIdentity.entries()).find(([identity, alias]) =>
+        identity === name || alias === name
+      )?.[0]
+      : undefined;
+    const changed = stateSet.delete(agentKey ?? name) ||
+      Boolean(storeRecord) ||
       this.fallbackRecords.delete(recordKey(sessionId, type, name));
-    if (changed && state.activationStore?.isEnabled()) state.activationStore.recordDeactivation(type, name);
+    if (agentKey) state.agentNamesByIdentity.delete(agentKey);
+    if (changed && state.activationStore?.isEnabled()) {
+      state.activationStore.recordDeactivation(type, name, storeRecord?.filename, storeRecord?.identity);
+    }
     return Promise.resolve(changed);
   }
 
@@ -126,7 +143,10 @@ function recordsFromStateSets(state: SessionActivationState): SessionActivationR
   const now = new Date();
   const records: SessionActivationRecord[] = [];
   for (const type of ACTIVATION_TYPES) {
-    for (const name of activationSet(state, type)) {
+    for (const activationKey of activationSet(state, type)) {
+      const name = type === 'agents'
+        ? state.agentNamesByIdentity.get(activationKey) ?? activationKey
+        : activationKey;
       records.push({ type, name, activatedAt: now });
     }
   }

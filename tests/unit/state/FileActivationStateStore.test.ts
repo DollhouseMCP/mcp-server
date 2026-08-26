@@ -91,9 +91,9 @@ describe('FileActivationStateStore', () => {
       expect(store.getSessionId()).toBe('test-session');
     });
 
-    it('should reject invalid sessionId and fall back to default', () => {
-      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '../evil-path');
-      expect(s.getSessionId()).toBe('default');
+    it('should reject an invalid externally supplied sessionId', () => {
+      expect(() => new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '../evil-path'))
+        .toThrow('Invalid external sessionId');
     });
 
     it('should generate unique session ID when env var not set and no param', () => {
@@ -125,10 +125,10 @@ describe('FileActivationStateStore', () => {
       expect(s.getSessionId()).toBe('claude-code_v2');
     });
 
-    it('should reject session IDs starting with a number', () => {
+    it('should accept session IDs starting with a number for UUID compatibility', () => {
       process.env.DOLLHOUSE_SESSION_ID = '123-session';
       const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
-      expect(s.getSessionId()).toBe('default');
+      expect(s.getSessionId()).toBe('123-session');
     });
 
     it('should prefer explicit sessionId over env var', () => {
@@ -137,9 +137,9 @@ describe('FileActivationStateStore', () => {
       expect(s.getSessionId()).toBe('from-param');
     });
 
-    it('should fall back to resolveSessionId when sessionId param is empty', () => {
-      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '');
-      expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
+    it('should reject an empty externally supplied sessionId', () => {
+      expect(() => new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, ''))
+        .toThrow('value must not be empty');
     });
 
     it('should trim whitespace from provided sessionId', () => {
@@ -147,9 +147,15 @@ describe('FileActivationStateStore', () => {
       expect(s.getSessionId()).toBe('valid-session');
     });
 
-    it('should reject param sessionId starting with number', () => {
+    it('should accept an externally supplied UUID-like sessionId starting with a number', () => {
       const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR, '123-bad');
-      expect(s.getSessionId()).toBe('default');
+      expect(s.getSessionId()).toBe('123-bad');
+    });
+
+    it('should reject traversal in a reporting session filter before path construction', async () => {
+      await expect(store.listPersistedActivationStates('../another-session'))
+        .rejects.toThrow('Invalid external sessionId');
+      expect(mockFileOps.readFile).not.toHaveBeenCalled();
     });
   });
 
@@ -350,6 +356,54 @@ describe('FileActivationStateStore', () => {
       expect(store.getActivations('skill')).toHaveLength(1);
     });
 
+    it('should upgrade a legacy name-only agent record with durable identity', () => {
+      store.recordActivation('agent', 'Research Agent');
+      store.recordActivation('agent', 'Research Agent', undefined, {
+        kind: 'file',
+        value: 'research-agent.md',
+      });
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'Research Agent',
+          identity: { kind: 'file', value: 'research-agent.md' },
+        }),
+      ]);
+    });
+
+    it('should update the display name without duplicating a durable identity', () => {
+      const identity = { kind: 'file' as const, value: 'research-agent.md' };
+      store.recordActivation('agent', 'Research Agent', undefined, identity);
+      store.recordActivation('agent', 'Renamed Research Agent', undefined, identity);
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({ name: 'Renamed Research Agent', identity }),
+      ]);
+    });
+
+    it('should migrate a legacy agent filename record after an external rename', () => {
+      store.recordActivation('agent', 'Old Name', 'stable-agent.md');
+      store.recordActivation('agent', 'New Name', undefined, {
+        kind: 'file',
+        value: 'stable-agent.md',
+      });
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'New Name',
+          identity: { kind: 'file', value: 'stable-agent.md' },
+        }),
+      ]);
+      expect(store.getActivations('agent')[0]).not.toHaveProperty('filename');
+    });
+
+    it('should preserve colliding display names with distinct durable identities', () => {
+      store.recordActivation('agent', 'Shared Name', undefined, { kind: 'file', value: 'first.md' });
+      store.recordActivation('agent', 'Shared Name', undefined, { kind: 'file', value: 'second.md' });
+
+      expect(store.getActivations('agent')).toHaveLength(2);
+    });
+
     it('should deduplicate canonical-equivalent Unicode names', () => {
       store.recordActivation('skill', 'Cafe\u0301 Skill');
       store.recordActivation('skill', 'Café Skill');
@@ -463,6 +517,28 @@ describe('FileActivationStateStore', () => {
 
       store.recordDeactivation('skill', 'Café Skill');
       expect(store.getActivations('skill')).toHaveLength(0);
+    });
+
+    it('should deactivate a renamed agent by durable identity', () => {
+      const identity = { kind: 'file' as const, value: 'research-agent.md' };
+      store.recordActivation('agent', 'Old Name', undefined, identity);
+
+      store.recordDeactivation('agent', 'New Name', undefined, identity);
+
+      expect(store.getActivations('agent')).toHaveLength(0);
+    });
+
+    it('should deactivate only the matching identity when display names collide', () => {
+      const firstIdentity = { kind: 'file' as const, value: 'first.md' };
+      const secondIdentity = { kind: 'file' as const, value: 'second.md' };
+      store.recordActivation('agent', 'Shared Name', undefined, firstIdentity);
+      store.recordActivation('agent', 'Shared Name', undefined, secondIdentity);
+
+      store.recordDeactivation('agent', 'Shared Name', undefined, firstIdentity);
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({ identity: secondIdentity }),
+      ]);
     });
 
     it('should log ELEMENT_DEACTIVATED security event', async () => {

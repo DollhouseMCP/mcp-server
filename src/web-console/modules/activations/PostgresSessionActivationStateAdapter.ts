@@ -2,6 +2,7 @@ import { and, asc, eq } from 'drizzle-orm';
 
 import { withSystemContext } from '../../../database/admin.js';
 import type { DatabaseInstance } from '../../../database/connection.js';
+import { validateDbSessionId } from '../../../state/db-persistence-utils.js';
 import {
   sessionActivationEvents,
   sessionActivationRecords,
@@ -21,6 +22,7 @@ export class PostgresSessionActivationStateAdapter implements ISessionActivation
   ) {}
 
   async list(sessionId: string): Promise<readonly SessionActivationRecord[]> {
+    validateDbSessionId(sessionId);
     const rows = await withSystemContext(this.db, tx =>
       tx.select().from(sessionActivationRecords)
         .where(eq(sessionActivationRecords.sessionId, sessionId))
@@ -34,6 +36,7 @@ export class PostgresSessionActivationStateAdapter implements ISessionActivation
     type: ConsoleActivatableElementType,
     name: string,
   ): Promise<SessionActivationChangeResult> {
+    validateDbSessionId(sessionId);
     const activatedAt = this.now();
     const rows = await withSystemContext(this.db, tx =>
       tx.insert(sessionActivationRecords).values({
@@ -63,6 +66,7 @@ export class PostgresSessionActivationStateAdapter implements ISessionActivation
   }
 
   async deactivate(sessionId: string, type: ConsoleActivatableElementType, name: string): Promise<boolean> {
+    validateDbSessionId(sessionId);
     const rows = await withSystemContext(this.db, tx =>
       tx.delete(sessionActivationRecords)
         .where(recordIdentity(sessionId, type, name))

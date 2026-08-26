@@ -28,11 +28,8 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0
 /**
  * Session ID: alphanumeric prefix + alphanumeric/hyphens/underscores, 1-64 chars.
  *
- * More permissive than FileActivationStateStore's equivalent pattern (which
- * requires a leading letter for filename safety). DB storage has no filename
- * concern, and HTTP sessions use `randomUUID()` — roughly 62% of v4 UUIDs
- * start with a digit (`0-9`). A letter-prefix rule would deterministically
- * reject those and manifest as an "Internal server error" at session init.
+ * HTTP sessions use `randomUUID()`, so digit-first identifiers must remain
+ * valid. FileActivationStateStore uses the same filename-safe character set.
  */
 const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
@@ -52,8 +49,16 @@ export function validateUserId(userId: string): void {
  */
 export function validateDbStoreParams(userId: string, sessionId: string): void {
   validateUserId(userId);
+  validateDbSessionId(sessionId);
+}
+
+/** Validate a session identifier at database query/reporting boundaries. */
+export function validateDbSessionId(sessionId: string): void {
   if (!SESSION_ID_PATTERN.test(sessionId)) {
-    throw new Error(`[db-persistence-utils] Invalid sessionId — must match [a-zA-Z][a-zA-Z0-9_-]{0,63}, got '${sessionId.slice(0, 40)}'`);
+    throw new Error(
+      `[db-persistence-utils] Invalid sessionId — must contain only letters, numbers, hyphens, or underscores ` +
+      `(1-64 characters), got '${sessionId.slice(0, 40)}'`,
+    );
   }
 }
 

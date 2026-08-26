@@ -23,14 +23,15 @@ import { normalizeMCPAQLElementType } from '../handlers/mcp-aql/types.js';
 import type {
   IActivationStateStore,
   PersistedActivation,
+  PersistedActivationIdentity,
   PersistedActivationState,
   PersistedActivationStateSnapshot,
 } from './IActivationStateStore.js';
 
 // ── Constants ───────────────────────────────────────────────────────
 
-/** Session ID validation: must start with a letter, then alphanumeric/hyphens/underscores, 1-64 chars */
-const SESSION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+/** Session ID validation: filename-safe alphanumeric/hyphen/underscore, 1-64 chars. */
+const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
 /** Store name for logging and security events. */
 const STORE_NAME = 'FileActivationStateStore';
@@ -67,7 +68,7 @@ function resolveSessionId(): string {
 
   if (!SESSION_ID_PATTERN.test(envValue)) {
     logger.warn(
-      `Invalid DOLLHOUSE_SESSION_ID '${envValue}' — must start with a letter, then alphanumeric/hyphens/underscores, 1-64 chars. Falling back to 'default'.`
+      `Invalid DOLLHOUSE_SESSION_ID '${envValue}' — must contain only letters, numbers, hyphens, or underscores, 1-64 chars. Falling back to 'default'.`
     );
     return 'default';
   }
@@ -81,16 +82,21 @@ function resolveSessionId(): string {
 export function validateExternalSessionId(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
-    logger.warn('[FileActivationStateStore] Empty sessionId provided — falling back to resolveSessionId()');
-    return resolveSessionId();
+    throw new Error('[FileActivationStateStore] Invalid external sessionId: value must not be empty');
   }
   if (!SESSION_ID_PATTERN.test(trimmed)) {
-    logger.warn(
-      `[FileActivationStateStore] Invalid external sessionId '${trimmed}' — falling back to 'default'`
+    throw new Error(
+      `[FileActivationStateStore] Invalid external sessionId '${trimmed.slice(0, 64)}' — ` +
+      'must contain only letters, numbers, hyphens, or underscores (1-64 characters)'
     );
-    return 'default';
   }
   return trimmed;
+}
+
+function normalizeIdentity(value: PersistedActivationIdentity | undefined): PersistedActivationIdentity | undefined {
+  if (!value || (value.kind !== 'file' && value.kind !== 'database')) return undefined;
+  const normalizedValue = normalizeActivationIdentifier(value.value);
+  return normalizedValue ? { kind: value.kind, value: normalizedValue } : undefined;
 }
 
 /**
@@ -157,11 +163,13 @@ export class FileActivationStateStore implements IActivationStateStore {
               const normalizedFilename = typeof a.filename === 'string'
                 ? normalizeActivationIdentifier(a.filename)
                 : undefined;
+              const normalizedIdentity = normalizeIdentity(a.identity);
 
               return [{
                 ...a,
                 name: normalizedName,
                 ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+                ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
               }];
             });
           }
@@ -190,7 +198,12 @@ export class FileActivationStateStore implements IActivationStateStore {
     }
   }
 
-  recordActivation(elementType: string, name: string, filename?: string): void {
+  recordActivation(
+    elementType: string,
+    name: string,
+    filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
     if (!this.enabled) return;
 
     const type = normalizeType(elementType);
@@ -200,19 +213,56 @@ export class FileActivationStateStore implements IActivationStateStore {
     const normalizedFilename = typeof filename === 'string'
       ? normalizeActivationIdentifier(filename)
       : undefined;
+    const normalizedIdentity = normalizeIdentity(identity);
 
     if (!this.state.activations[type]) {
       this.state.activations[type] = [];
     }
 
-    // Deduplicate — don't add if already present
+    // Deduplicate by durable identity first. A name-only match upgrades a
+    // legacy record so the next restart no longer depends on display metadata.
     const existing = this.state.activations[type];
-    const alreadyActive = existing.some(a => a.name === normalizedName);
-    if (alreadyActive) return;
+    let activeRecord = normalizedIdentity
+      ? existing.find(a => a.identity?.kind === normalizedIdentity.kind && a.identity.value === normalizedIdentity.value)
+      : undefined;
+    activeRecord ??= normalizedIdentity?.kind === 'file'
+      ? existing.find(a => !a.identity && a.filename === normalizedIdentity.value)
+      : undefined;
+    activeRecord ??= normalizedFilename
+      ? existing.find(a => a.filename === normalizedFilename)
+      : undefined;
+    activeRecord ??= existing.find(a =>
+      a.name === normalizedName && (!normalizedIdentity || !a.identity)
+    );
+    if (activeRecord) {
+      let changed = false;
+      if (activeRecord.name !== normalizedName) {
+        activeRecord.name = normalizedName;
+        changed = true;
+      }
+      if (normalizedFilename && activeRecord.filename !== normalizedFilename) {
+        activeRecord.filename = normalizedFilename;
+        changed = true;
+      }
+      if (normalizedIdentity && (
+        activeRecord.identity?.kind !== normalizedIdentity.kind ||
+        activeRecord.identity?.value !== normalizedIdentity.value
+      )) {
+        activeRecord.identity = normalizedIdentity;
+        changed = true;
+      }
+      if (type === 'agent' && normalizedIdentity && activeRecord.filename) {
+        delete activeRecord.filename;
+        changed = true;
+      }
+      if (changed) this.persistAsync();
+      return;
+    }
 
     existing.push({
       name: normalizedName,
       ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+      ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
       activatedAt: new Date().toISOString(),
     });
 
@@ -227,19 +277,39 @@ export class FileActivationStateStore implements IActivationStateStore {
     this.persistAsync();
   }
 
-  recordDeactivation(elementType: string, name: string): void {
+  recordDeactivation(
+    elementType: string,
+    name: string,
+    filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
     if (!this.enabled) return;
 
     const type = normalizeType(elementType);
     if (!type) return;
     const normalizedName = normalizeActivationIdentifier(name);
     if (!normalizedName) return;
+    const normalizedFilename = typeof filename === 'string'
+      ? normalizeActivationIdentifier(filename)
+      : undefined;
+    const normalizedIdentity = normalizeIdentity(identity);
 
     const activations = this.state.activations[type];
     if (!activations) return;
 
     const initialLength = activations.length;
-    this.state.activations[type] = activations.filter(a => a.name !== normalizedName);
+    this.state.activations[type] = activations.filter(a => {
+      if (normalizedIdentity) {
+        const identityMatches = a.identity?.kind === normalizedIdentity.kind &&
+          a.identity.value === normalizedIdentity.value;
+        const legacyNameMatches = !a.identity && a.name === normalizedName;
+        return !identityMatches && !legacyNameMatches;
+      }
+      if (normalizedFilename) {
+        return a.filename !== normalizedFilename && !(!a.filename && a.name === normalizedName);
+      }
+      return a.name !== normalizedName && a.filename !== normalizedName;
+    });
 
     if (this.state.activations[type].length !== initialLength) {
       SecurityMonitor.logSecurityEvent({
@@ -254,8 +324,13 @@ export class FileActivationStateStore implements IActivationStateStore {
     }
   }
 
-  removeStaleActivation(elementType: string, name: string): void {
-    this.recordDeactivation(elementType, name);
+  removeStaleActivation(
+    elementType: string,
+    name: string,
+    filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
+    this.recordDeactivation(elementType, name, filename, identity);
   }
 
   getActivations(elementType: string): PersistedActivation[] {
@@ -286,8 +361,8 @@ export class FileActivationStateStore implements IActivationStateStore {
       return [];
     }
 
-    const normalizedSessionId = typeof sessionId === 'string' && sessionId.trim()
-      ? normalizeActivationIdentifier(sessionId)
+    const normalizedSessionId = typeof sessionId === 'string'
+      ? validateExternalSessionId(sessionId)
       : undefined;
 
     try {
@@ -357,10 +432,12 @@ export class FileActivationStateStore implements IActivationStateStore {
         const normalizedFilename = typeof entry.filename === 'string'
           ? normalizeActivationIdentifier(entry.filename)
           : undefined;
+        const normalizedIdentity = normalizeIdentity(entry.identity);
         return [{
           ...entry,
           name: normalizedName,
           ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+          ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
         }];
       });
 

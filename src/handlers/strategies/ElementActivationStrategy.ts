@@ -6,6 +6,8 @@
  * implements this interface to provide custom activation logic.
  */
 
+import type { PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
+
 /**
  * Standard MCP response format
  */
@@ -14,6 +16,11 @@ export interface MCPResponse {
     type: string;
     text: string;
   }>;
+  /** Internal persistence metadata; not rendered into the MCP response body. */
+  activationRecord?: {
+    name: string;
+    identity?: PersistedActivationIdentity;
+  };
 }
 
 /**

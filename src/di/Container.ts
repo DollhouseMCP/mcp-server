@@ -922,6 +922,13 @@ export class DollhouseContainer {
       activateFn: (activation: PersistedActivation) => Promise<{ success: boolean }>,
       skip?: Set<string>,
     ): Promise<void> => {
+      const prune = (activation: PersistedActivation): void => {
+        if (activation.filename || activation.identity) {
+          store.removeStaleActivation(elementType, activation.name, activation.filename, activation.identity);
+        } else {
+          store.removeStaleActivation(elementType, activation.name);
+        }
+      };
       for (const activation of store.getActivations(elementType)) {
         if (skip?.has(activation.name)) {
           logger.debug(`[Container] ${elementType} '${activation.name}' already active (auto-loaded), skipping`);
@@ -933,12 +940,12 @@ export class DollhouseContainer {
             restoredCount++;
           } else {
             logger.debug(`[Container] Pruning missing ${elementType} '${activation.name}'`);
-            store.removeStaleActivation(elementType, activation.name);
+            prune(activation);
             skippedCount++;
           }
         } catch {
           logger.debug(`[Container] Skipping failed ${elementType} '${activation.name}'`);
-          store.removeStaleActivation(elementType, activation.name);
+          prune(activation);
           skippedCount++;
         }
       }
@@ -947,7 +954,29 @@ export class DollhouseContainer {
     // Personas use filename if available (Issue #843)
     await restoreType('persona', (a) => personaManager.activatePersona(a.filename || a.name));
     await restoreType('skill', (a) => skillManager.activateSkill(a.name));
-    await restoreType('agent', (a) => agentManager.activateAgent(a.name));
+    await restoreType('agent', async (activation) => {
+      const persistedIdentity = activation.identity ?? (activation.filename
+        ? { kind: 'file' as const, value: activation.filename }
+        : undefined);
+      const result = persistedIdentity
+        ? await agentManager.activateAgentByStorageIdentity(persistedIdentity, activation.name)
+        : await agentManager.activateAgent(activation.name);
+
+      // Upgrade a successful legacy name-only/filename record immediately.
+      // The next restart can then resolve the agent after a metadata rename.
+      if (result.success && result.agent && result.identity) {
+        if (
+          activation.identity && (
+            activation.identity.kind !== result.identity.kind ||
+            activation.identity.value !== result.identity.value
+          )
+        ) {
+          store.removeStaleActivation('agent', activation.name, activation.filename, activation.identity);
+        }
+        store.recordActivation('agent', result.agent.metadata.name, undefined, result.identity);
+      }
+      return result;
+    });
 
     // Memories: dedup against auto-loaded ones
     const activeMemories = await memoryManager.getActiveMemories();

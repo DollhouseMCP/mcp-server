@@ -266,6 +266,31 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
       expect(removeStaleSpy).toHaveBeenCalledWith('agent', 'missing-agent');
     });
 
+    it('should upgrade a successfully restored legacy agent record with durable identity', async () => {
+      const agentManager = container.resolve<any>('AgentManager');
+      const activationStore = container.resolve<IActivationStateStore>('ActivationStore');
+      const identity = { kind: 'file' as const, value: 'stable-agent.md' };
+
+      jest.spyOn(activationStore, 'isEnabled').mockReturnValue(true);
+      jest.spyOn(activationStore, 'initialize').mockResolvedValue(undefined);
+      jest.spyOn(activationStore, 'getActivations').mockImplementation((type: string) => {
+        if (type === 'agent') return [{ name: 'Legacy Agent', activatedAt: new Date().toISOString() }];
+        return [];
+      });
+      const recordSpy = jest.spyOn(activationStore, 'recordActivation').mockImplementation(() => {});
+      jest.spyOn(agentManager, 'activateAgent').mockResolvedValue({
+        success: true,
+        message: 'Activated',
+        agent: { metadata: { name: 'Current Agent' } },
+        identity,
+      });
+
+      await container.preparePortfolio();
+      await container.completeDeferredSetup();
+
+      expect(recordSpy).toHaveBeenCalledWith('agent', 'Current Agent', undefined, identity);
+    });
+
     it('should prune stale persona activations when activatePersona returns failure', async () => {
       const personaManager = container.resolve<any>('PersonaManager');
       const activationStore = container.resolve<IActivationStateStore>('ActivationStore');

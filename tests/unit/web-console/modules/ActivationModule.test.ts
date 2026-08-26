@@ -3,6 +3,7 @@ import { describe, expect, it } from '@jest/globals';
 import type {
   IActivationStateStore,
   PersistedActivation,
+  PersistedActivationIdentity,
   PersistedActivationStateSnapshot,
 } from '../../../../src/state/IActivationStateStore.js';
 import { SessionActivationRegistry } from '../../../../src/state/SessionActivationState.js';
@@ -406,6 +407,26 @@ describe('RegistrySessionActivationStateAdapter', () => {
     await expect(adapter.deactivate(SESSION_ID, SKILL_TYPE, SKILL_CANONICAL_NAME)).resolves.toBe(false);
     expect(store.getActivations(SKILL_TYPE)).toEqual([]);
   });
+
+  it('reports and deactivates agent identities through their display-name alias', async () => {
+    const registry = new SessionActivationRegistry('default-session');
+    const state = registry.getOrCreate(SESSION_ID);
+    const store = new FixtureActivationStateStore(SESSION_ID);
+    const identity = { kind: 'file' as const, value: 'stable-agent.md' };
+    store.recordActivation(AGENT_TYPE, 'Renamed Agent', undefined, identity);
+    state.activationStore = store;
+    state.agents.add(identity.value);
+    state.agentNamesByIdentity.set(identity.value, 'Renamed Agent');
+    const adapter = new RegistrySessionActivationStateAdapter(registry);
+
+    await expect(adapter.list(SESSION_ID)).resolves.toEqual([
+      expect.objectContaining({ type: AGENT_TYPE, name: 'Renamed Agent' }),
+    ]);
+    await expect(adapter.deactivate(SESSION_ID, AGENT_TYPE, 'Renamed Agent')).resolves.toBe(true);
+    expect(state.agents.size).toBe(0);
+    expect(state.agentNamesByIdentity.size).toBe(0);
+    expect(store.getActivations(AGENT_TYPE)).toEqual([]);
+  });
 });
 
 class FixtureActivationStateStore implements IActivationStateStore {
@@ -417,7 +438,12 @@ class FixtureActivationStateStore implements IActivationStateStore {
     return Promise.resolve();
   }
 
-  recordActivation(elementType: string, name: string, filename?: string): void {
+  recordActivation(
+    elementType: string,
+    name: string,
+    filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
     const existing = this.activations.get(elementType) ?? [];
     if (existing.some(activation => activation.name === name)) return;
     this.activations.set(elementType, [
@@ -425,15 +451,25 @@ class FixtureActivationStateStore implements IActivationStateStore {
       {
         name,
         ...(filename ? { filename } : {}),
+        ...(identity ? { identity } : {}),
         activatedAt: NOW.toISOString(),
       },
     ]);
   }
 
-  recordDeactivation(elementType: string, name: string): void {
+  recordDeactivation(
+    elementType: string,
+    name: string,
+    _filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
     this.activations.set(
       elementType,
-      (this.activations.get(elementType) ?? []).filter(activation => activation.name !== name),
+      (this.activations.get(elementType) ?? []).filter(activation =>
+        identity
+          ? activation.identity?.kind !== identity.kind || activation.identity.value !== identity.value
+          : activation.name !== name
+      ),
     );
   }
 

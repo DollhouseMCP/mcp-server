@@ -70,14 +70,22 @@ type PolicyElement = {
   type: string;
   name: string;
   metadata: Record<string, unknown>;
+  storageIdentity?: string;
 };
 
 type PolicyMemberElement = {
   metadata?: Record<string, unknown>;
+  filePath?: string;
+  filename?: string;
 };
 
 type PolicyIndexOptions = { freshAfterInFlight?: boolean };
 type IndexedPolicyManagers = Map<string, Promise<BaseElementManager<any> | undefined>>;
+type DeadlockReliefElement = {
+  type: string;
+  name: string;
+  activationIdentifier?: string;
+};
 type PolicyMemberCandidate = { type: string; name: string; key: string };
 
 const ACTIVE_POLICY_LOOKUP_CONCURRENCY = 8;
@@ -235,8 +243,12 @@ export class ElementCRUDHandler {
     }
   }
 
-  private policyElementKey(type: string, name: string): string {
-    return `${this.toPolicyElementType(this.normalizeElementType(type))}:${this.normalizeLookupValue(name)}`;
+  private policyElementKey(type: string, name: string, storageIdentity?: string): string {
+    const normalizedType = this.toPolicyElementType(this.normalizeElementType(type));
+    const identity = this.normalizeLookupValue(storageIdentity);
+    return identity
+      ? `${normalizedType}:identity:${identity}`
+      : `${normalizedType}:name:${this.normalizeLookupValue(name)}`;
   }
 
   private getPolicySnapshotScope(): string {
@@ -383,13 +395,18 @@ export class ElementCRUDHandler {
         const filename = normalizedType === ElementType.PERSONA
           ? this.personaManager.findPersona(name)?.filename
           : undefined;
-        sessionStore.recordActivation(normalizedType, name, filename);
+        sessionStore.recordActivation(
+          normalizedType,
+          result.activationRecord?.name ?? name,
+          filename,
+          result.activationRecord?.identity,
+        );
       }
 
       // Issue #762: Export policies to bridge after activation
       this.policyExportService?.exportPolicies().catch(() => {});
 
-      return result;
+      return { content: result.content };
     } catch (error) {
       logger.error(`Failed to activate element:`, { type, name, error });
       return {
@@ -500,11 +517,13 @@ export class ElementCRUDHandler {
         ? await this.personaManager.resolveActivePersonas()
         : this.personaManager.getActivePersonas();
       for (const persona of personas) {
-        seen.add(this.policyElementKey('persona', persona.metadata.name));
+        const storageIdentity = this.normalizeLookupValue(persona.filename) || undefined;
+        seen.add(this.policyElementKey('persona', persona.metadata.name, storageIdentity));
         result.push({
           type: 'persona',
           name: persona.metadata.name,
           metadata: persona.metadata as unknown as Record<string, unknown>,
+          ...(storageIdentity ? { storageIdentity } : {}),
         });
       }
     } catch (error) {
@@ -534,11 +553,13 @@ export class ElementCRUDHandler {
   ): Promise<void> {
     try {
       for (const agent of await this.agentManager.getActiveAgents(indexOptions)) {
-        seen.add(this.policyElementKey('agent', agent.metadata.name));
+        const storageIdentity = this.agentManager.getActivationIdentity(agent)?.value;
+        seen.add(this.policyElementKey('agent', agent.metadata.name, storageIdentity));
         result.push({
           type: 'agent',
           name: agent.metadata.name,
           metadata: agent.metadata as unknown as Record<string, unknown>,
+          ...(storageIdentity ? { storageIdentity } : {}),
         });
       }
     } catch (error) {
@@ -696,7 +717,7 @@ export class ElementCRUDHandler {
         return;
       }
 
-      const key = `${element.type}:${element.name}`;
+      const key = this.policyElementKey(element.type, element.name, element.storageIdentity);
       const existing = merged.get(key);
       if (existing) {
         sessionIds.forEach(id => existing.sessionIds.add(id));
@@ -735,7 +756,8 @@ export class ElementCRUDHandler {
         const normalizedType = this.normalizeElementType(type);
         const normalizedName = this.normalizeLookupValue(activation.name);
         const normalizedFilename = this.normalizeLookupValue(activation.filename);
-        const lookupKey = `${normalizedType}:${normalizedName}:${normalizedFilename}`;
+        const normalizedIdentity = this.normalizeLookupValue(activation.identity?.value);
+        const lookupKey = `${normalizedType}:${activation.identity?.kind ?? ''}:${normalizedIdentity}:${normalizedName}:${normalizedFilename}`;
         const existing = persistedLookups.get(lookupKey);
         if (existing) return existing;
 
@@ -743,9 +765,12 @@ export class ElementCRUDHandler {
           .then(async (manager) => {
             if (!manager) return null;
 
-            let found = normalizedName !== ''
-              ? await manager.findByName(normalizedName) as PolicyMemberElement | undefined
+            let found = normalizedIdentity !== ''
+              ? await manager.findByStorageIdentity(normalizedIdentity) as PolicyMemberElement | undefined
               : undefined;
+            if (!found && normalizedName !== '') {
+              found = await manager.findByName(normalizedName) as PolicyMemberElement | undefined;
+            }
             if (!found && normalizedFilename !== '') {
               found = await manager.findByName(normalizedFilename) as PolicyMemberElement | undefined;
             }
@@ -754,10 +779,17 @@ export class ElementCRUDHandler {
               return null;
             }
 
+            const foundStorageIdentity = normalizedType === ElementType.AGENT
+              ? found.filePath
+              : normalizedType === ElementType.PERSONA
+                ? found.filename ?? found.filePath ?? normalizedFilename
+                : undefined;
+
             return {
               type: this.toPolicyElementType(normalizedType),
               name: (found.metadata['name'] as string) ?? activation.name,
               metadata: found.metadata,
+              ...(foundStorageIdentity ? { storageIdentity: foundStorageIdentity } : {}),
             };
           });
         persistedLookups.set(lookupKey, lookup);
@@ -791,14 +823,15 @@ export class ElementCRUDHandler {
     };
     snapshotFile?: string;
   }> {
-    const activeElements = await this.collectActiveElementsForDeadlockRelief();
+    const activeElementTargets = await this.collectActiveElementsForDeadlockRelief();
+    const activeElements = activeElementTargets.map(({ type, name }) => ({ type, name }));
     const activePolicyElements = await this.getActiveElementsForPolicy();
     const sandboxingElement = findConfirmDenyingElement(activePolicyElements);
     const advisoryElements = findConfirmAdvisoryElements(activePolicyElements);
     const deactivated: Array<{ type: string; name: string }> = [];
     const failed: Array<{ type: string; name: string; error: string }> = [];
 
-    for (const element of activeElements) {
+    for (const element of activeElementTargets) {
       const strategy = this.strategies.get(element.type);
       if (!strategy) {
         failed.push({
@@ -810,8 +843,8 @@ export class ElementCRUDHandler {
       }
 
       try {
-        await strategy.deactivate(element.name);
-        deactivated.push(element);
+        await strategy.deactivate(element.activationIdentifier ?? element.name);
+        deactivated.push({ type: element.type, name: element.name });
       } catch (error) {
         failed.push({
           type: element.type,
@@ -875,8 +908,8 @@ export class ElementCRUDHandler {
     };
   }
 
-  private async collectActiveElementsForDeadlockRelief(): Promise<Array<{ type: string; name: string }>> {
-    const activeElements: Array<{ type: string; name: string }> = [];
+  private async collectActiveElementsForDeadlockRelief(): Promise<DeadlockReliefElement[]> {
+    const activeElements: DeadlockReliefElement[] = [];
 
     const activePersonas = this.personaManager.getActivePersonas();
     activeElements.push(...activePersonas.map((persona) => ({
@@ -891,10 +924,14 @@ export class ElementCRUDHandler {
     })));
 
     const activeAgents = await this.agentManager.getActiveAgents();
-    activeElements.push(...activeAgents.map((agent) => ({
-      type: ElementType.AGENT,
-      name: agent.metadata.name,
-    })));
+    activeElements.push(...activeAgents.map((agent) => {
+      const activationIdentifier = this.agentManager.getActivationIdentity(agent)?.value;
+      return {
+        type: ElementType.AGENT,
+        name: agent.metadata.name,
+        ...(activationIdentifier ? { activationIdentifier } : {}),
+      };
+    }));
 
     const activeMemories = await this.memoryManager.getActiveMemories();
     activeElements.push(...activeMemories.map((memory) => ({
@@ -910,7 +947,7 @@ export class ElementCRUDHandler {
 
     const seen = new Set<string>();
     return activeElements.filter((element) => {
-      const key = `${element.type}:${element.name}`;
+      const key = `${element.type}:${element.activationIdentifier ?? element.name}`;
       if (seen.has(key)) {
         return false;
       }
@@ -1013,13 +1050,18 @@ export class ElementCRUDHandler {
       // Issue #598, #1946: Persist deactivation state for session restore (per-session)
       const sessionStore = this.getSessionActivationStore();
       if (sessionStore) {
-        sessionStore.recordDeactivation(normalizedType, name);
+        sessionStore.recordDeactivation(
+          normalizedType,
+          result.activationRecord?.name ?? name,
+          undefined,
+          result.activationRecord?.identity,
+        );
       }
 
       // Issue #762: Export policies to bridge after deactivation
       this.policyExportService?.exportPolicies().catch(() => {});
 
-      return result;
+      return { content: result.content };
     } catch (error) {
       // Re-throw ElementNotFoundError to propagate to MCP-AQL layer
       // This ensures operations return success=false instead of success=true with error text

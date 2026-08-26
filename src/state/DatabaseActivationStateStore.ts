@@ -15,6 +15,7 @@ import { normalizeMCPAQLElementType } from '../handlers/mcp-aql/types.js';
 import type { DatabaseInstance } from '../database/connection.js';
 import {
   validateDbStoreParams,
+  validateDbSessionId,
   handleDbInitializeError,
   loadSessionRow,
   ensureSessionRow,
@@ -25,6 +26,7 @@ import { PersistQueue } from './PersistQueue.js';
 import type {
   IActivationStateStore,
   PersistedActivation,
+  PersistedActivationIdentity,
   PersistedActivationStateSnapshot,
 } from './IActivationStateStore.js';
 
@@ -40,6 +42,12 @@ function normalizeType(elementType: string): string | undefined {
 
 function normalizeIdentifier(value: string): string {
   return UnicodeValidator.normalize(value).normalizedContent.trim();
+}
+
+function normalizeIdentity(value: PersistedActivationIdentity | undefined): PersistedActivationIdentity | undefined {
+  if (!value || (value.kind !== 'file' && value.kind !== 'database')) return undefined;
+  const normalizedValue = normalizeIdentifier(value.value);
+  return normalizedValue ? { kind: value.kind, value: normalizedValue } : undefined;
 }
 
 // ── Implementation ──────────────────────────────────────────────────
@@ -92,10 +100,12 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
           const normalizedFilename = typeof a.filename === 'string'
             ? normalizeIdentifier(a.filename)
             : undefined;
+          const normalizedIdentity = normalizeIdentity(a.identity);
           return [{
             ...a,
             name: normalizedName,
             ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+            ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
           }];
         });
       }
@@ -122,7 +132,12 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     }
   }
 
-  recordActivation(elementType: string, name: string, filename?: string): void {
+  recordActivation(
+    elementType: string,
+    name: string,
+    filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
     const type = normalizeType(elementType);
     if (!type) return;
     const normalizedName = normalizeIdentifier(name);
@@ -130,17 +145,54 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     const normalizedFilename = typeof filename === 'string'
       ? normalizeIdentifier(filename)
       : undefined;
+    const normalizedIdentity = normalizeIdentity(identity);
 
     if (!this.activations[type]) {
       this.activations[type] = [];
     }
 
     const existing = this.activations[type];
-    if (existing.some(a => a.name === normalizedName)) return;
+    let activeRecord = normalizedIdentity
+      ? existing.find(a => a.identity?.kind === normalizedIdentity.kind && a.identity.value === normalizedIdentity.value)
+      : undefined;
+    activeRecord ??= normalizedIdentity?.kind === 'file'
+      ? existing.find(a => !a.identity && a.filename === normalizedIdentity.value)
+      : undefined;
+    activeRecord ??= normalizedFilename
+      ? existing.find(a => a.filename === normalizedFilename)
+      : undefined;
+    activeRecord ??= existing.find(a =>
+      a.name === normalizedName && (!normalizedIdentity || !a.identity)
+    );
+    if (activeRecord) {
+      let changed = false;
+      if (activeRecord.name !== normalizedName) {
+        activeRecord.name = normalizedName;
+        changed = true;
+      }
+      if (normalizedFilename && activeRecord.filename !== normalizedFilename) {
+        activeRecord.filename = normalizedFilename;
+        changed = true;
+      }
+      if (normalizedIdentity && (
+        activeRecord.identity?.kind !== normalizedIdentity.kind ||
+        activeRecord.identity?.value !== normalizedIdentity.value
+      )) {
+        activeRecord.identity = normalizedIdentity;
+        changed = true;
+      }
+      if (type === 'agent' && normalizedIdentity && activeRecord.filename) {
+        delete activeRecord.filename;
+        changed = true;
+      }
+      if (changed) this.persistAsync();
+      return;
+    }
 
     existing.push({
       name: normalizedName,
       ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+      ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
       activatedAt: new Date().toISOString(),
     });
 
@@ -155,17 +207,37 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     this.persistAsync();
   }
 
-  recordDeactivation(elementType: string, name: string): void {
+  recordDeactivation(
+    elementType: string,
+    name: string,
+    filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
     const type = normalizeType(elementType);
     if (!type) return;
     const normalizedName = normalizeIdentifier(name);
     if (!normalizedName) return;
+    const normalizedFilename = typeof filename === 'string'
+      ? normalizeIdentifier(filename)
+      : undefined;
+    const normalizedIdentity = normalizeIdentity(identity);
 
     const activations = this.activations[type];
     if (!activations) return;
 
     const initialLength = activations.length;
-    this.activations[type] = activations.filter(a => a.name !== normalizedName);
+    this.activations[type] = activations.filter(a => {
+      if (normalizedIdentity) {
+        const identityMatches = a.identity?.kind === normalizedIdentity.kind &&
+          a.identity.value === normalizedIdentity.value;
+        const legacyNameMatches = !a.identity && a.name === normalizedName;
+        return !identityMatches && !legacyNameMatches;
+      }
+      if (normalizedFilename) {
+        return a.filename !== normalizedFilename && !(!a.filename && a.name === normalizedName);
+      }
+      return a.name !== normalizedName && a.filename !== normalizedName;
+    });
 
     if (this.activations[type].length !== initialLength) {
       SecurityMonitor.logSecurityEvent({
@@ -180,8 +252,13 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     }
   }
 
-  removeStaleActivation(elementType: string, name: string): void {
-    this.recordDeactivation(elementType, name);
+  removeStaleActivation(
+    elementType: string,
+    name: string,
+    filename?: string,
+    identity?: PersistedActivationIdentity,
+  ): void {
+    this.recordDeactivation(elementType, name, filename, identity);
   }
 
   getActivations(elementType: string): PersistedActivation[] {
@@ -209,6 +286,7 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
   }
 
   async listPersistedActivationStates(sessionId?: string): Promise<PersistedActivationStateSnapshot[]> {
+    if (sessionId !== undefined) validateDbSessionId(sessionId);
     try {
       const normalizedSessionId = sessionId ? normalizeIdentifier(sessionId) : undefined;
       const rows = await queryUserSessions(this.db, this.userId, normalizedSessionId);
@@ -254,10 +332,12 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
         const normalizedFilename = typeof entry.filename === 'string'
           ? normalizeIdentifier(entry.filename)
           : undefined;
+        const normalizedIdentity = normalizeIdentity(entry.identity);
         return [{
           ...entry,
           name: normalizedName,
           ...(normalizedFilename ? { filename: normalizedFilename } : {}),
+          ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
         }];
       });
 
