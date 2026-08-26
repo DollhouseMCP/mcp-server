@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.41] - 2026-08-26
+
+- **Important update — strongly recommended for all users**, especially installations that use the Permissions dashboard, active agents or ensembles, Gatekeeper policy enforcement, or persisted activation restore.
+- Stop overlapping Permissions dashboard polls from expanding complete element catalogs and amplifying into sustained CPU, memory, parsing, activation, validation, and logging work. Active-policy reporting now uses lightweight indexed lookups, coalesces same-generation dashboard snapshots, deduplicates ensemble references, and bounds member resolution concurrency. (#2618, #2621)
+- Keep enforcement decisions fresh while safely merging invalidations from overlapping storage scans, so external policy edits are not hidden by dashboard snapshot reuse or stale in-flight scans. (#2618, #2621)
+- Preserve stable policy and agent identity across external metadata renames, filename collisions, deactivation, session-policy aggregation, deadlock relief, and server restart restoration; legacy name-only activation records are upgraded when they can be resolved safely. (#2618, #2621)
+- Serialize policy exports through their newest queued work and install OAuth helper shutdown handlers before readiness, eliminating the remaining export race and macOS/Node 22 compatibility failure found during hotfix validation. (#2618, #2621)
+
 ## [2.0.40] - 2026-08-05
 
 - Recover stale agent execution policies through a narrow, durable-state-verified path while preserving active restarts, DangerZone requirements, read restrictions, and independent agent executions. This resolves the documented abort-path failure and mitigates the broader interrupted-execution incident while automatic cleanup remains tracked separately. (#2427, #2428, #2441)
