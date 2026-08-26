@@ -270,6 +270,44 @@ describe('MemoryStorageLayer', () => {
       expect(d1).toBe(d2);
       expect(d2).toBe(d3);
     });
+
+    it('runs one trailing scan for freshness-sensitive callers', async () => {
+      await layer.scan();
+      (backend.directoryExists as jest.Mock<any>).mockClear();
+      layer.invalidate();
+
+      let markOlderScanStarted!: () => void;
+      let releaseOlderScan!: () => void;
+      const olderScanStarted = new Promise<void>((resolve) => {
+        markOlderScanStarted = resolve;
+      });
+      const olderScanBlocked = new Promise<void>((resolve) => {
+        releaseOlderScan = resolve;
+      });
+      (backend.directoryExists as jest.Mock<any>)
+        .mockImplementationOnce(async () => {
+          markOlderScanStarted();
+          await olderScanBlocked;
+          return true;
+        })
+        .mockResolvedValue(true);
+      (backend.statMany as jest.Mock<any>).mockResolvedValue(new Map([
+        ['system/baseline.yaml', makeMeta('system/baseline.yaml', 2000)],
+      ]));
+
+      const olderScan = layer.scan();
+      await olderScanStarted;
+      const freshScans = [
+        layer.scan({ freshAfterInFlight: true }),
+        layer.scan({ freshAfterInFlight: true }),
+      ];
+      releaseOlderScan();
+      const [, firstFreshDiff, secondFreshDiff] = await Promise.all([olderScan, ...freshScans]);
+
+      expect(backend.directoryExists).toHaveBeenCalledTimes(2);
+      expect(firstFreshDiff.modified).toContain('system/baseline.yaml');
+      expect(secondFreshDiff.modified).toContain('system/baseline.yaml');
+    });
   });
 
   // ----------------------------------------------------------------

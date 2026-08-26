@@ -481,7 +481,10 @@ describe('MCPAQLHandler', () => {
       });
 
       expect(result.success).toBe(true);
-      expect(mockRegistry.elementCRUD.getPolicyElementsForReport).toHaveBeenCalledWith('session-follower-1');
+      expect(mockRegistry.elementCRUD.getPolicyElementsForReport).toHaveBeenCalledWith(
+        'session-follower-1',
+        { allowCoalescing: false },
+      );
     });
   });
 
@@ -1778,6 +1781,8 @@ describe('MCPAQLHandler', () => {
       const result = await enforcingHandler.handleRead(input);
       // list_elements should be denied by the active persona's policy
       expect(result.success).toBe(false);
+      expect(enforcingRegistry.elementCRUD.getActiveElementsForPolicy)
+        .toHaveBeenCalledWith({ allowCoalescing: false });
     });
 
     it('confirm_operation should be auto-approved (no infinite loop)', async () => {

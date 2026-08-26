@@ -50,7 +50,7 @@ import {
   createExecutionContext,
 } from './safetyTierService.js';
 import { BaseElementManager, ElementManagerDeps } from '../base/BaseElementManager.js';
-import { isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import { isWritableStorageLayer, type StorageScanOptions } from '../../storage/IStorageLayer.js';
 import {
   AGENT_STATE_MAX_YAML_SIZE,
   AgentStateReductionRequiredError,
@@ -1020,9 +1020,14 @@ export class AgentManager extends BaseElementManager<Agent> {
   /**
    * Get all active agents
    */
-  async getActiveAgents(): Promise<Agent[]> {
-    const agents = await this.list();
-    return agents.filter(a => this.getActivationSet().has(a.metadata.name));
+  async getActiveAgents(options: StorageScanOptions = {}): Promise<Agent[]> {
+    await this.scanAndEvict(options);
+    const agents: Agent[] = [];
+    for (const name of this.getActivationSet()) {
+      const agent = await this.findByName(name);
+      if (agent) agents.push(agent);
+    }
+    return agents;
   }
 
   /**

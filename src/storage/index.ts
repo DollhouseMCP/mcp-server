@@ -8,10 +8,11 @@ export type {
   ElementIndexEntry,
   ManifestDiffResult,
 } from './types.js';
+export { mergeManifestDiffResults } from './types.js';
 
 // Interfaces
 export type { IStorageBackend } from './IStorageBackend.js';
-export type { IStorageLayer } from './IStorageLayer.js';
+export type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
 
 // Classes — Phase 1 (ElementStorageLayer for .md elements)
 export { FrontmatterParser } from './FrontmatterParser.js';

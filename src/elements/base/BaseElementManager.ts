@@ -38,7 +38,11 @@ import type { FileWatchService } from '../../services/FileWatchService.js';
 import type { FileOperationsService } from '../../services/FileOperationsService.js';
 import type { ValidationRegistry } from '../../services/validation/ValidationRegistry.js';
 import { type ElementValidator } from '../../services/validation/ElementValidator.js';
-import { type IStorageLayer, isWritableStorageLayer } from '../../storage/IStorageLayer.js';
+import {
+  type IStorageLayer,
+  type StorageScanOptions,
+  isWritableStorageLayer,
+} from '../../storage/IStorageLayer.js';
 import type { IStorageLayerFactory } from '../../storage/IStorageLayerFactory.js';
 import type { ElementIndexEntry } from '../../storage/types.js';
 import {
@@ -639,8 +643,13 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
    * Unlike list(), this does not load all elements — it only evicts stale ones.
    * Fixes #1895 (ensemble activation serving stale cached element list).
    */
-  protected async scanAndEvict(): Promise<void> {
-    return this._listOps.scanAndEvict();
+  protected async scanAndEvict(options?: StorageScanOptions): Promise<void> {
+    return this._listOps.scanAndEvict(options);
+  }
+
+  /** Refresh the storage index without loading the full element catalog. */
+  public async refreshIndex(options?: StorageScanOptions): Promise<void> {
+    return this._listOps.scanAndEvict(options);
   }
 
   // ============================================

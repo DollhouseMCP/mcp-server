@@ -14,9 +14,9 @@
 
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
-import type { IStorageLayer } from './IStorageLayer.js';
+import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
 import type { IStorageBackend } from './IStorageBackend.js';
-import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
+import { mergeManifestDiffResults, type ElementIndexEntry, type ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
 import { MetadataIndex } from './MetadataIndex.js';
 import { FileStorageBackend } from './FileStorageBackend.js';
@@ -93,9 +93,8 @@ export class MemoryStorageLayer implements IStorageLayer {
     return this.memoriesDirResolver ? this.memoriesDirResolver() : this.staticMemoriesDir;
   }
 
-  /** Get or create per-dir scan state. */
-  private getState(): MemoryDirScanState {
-    const dir = this.memoriesDir;
+  /** Get or create scan state for a pinned directory. */
+  private getState(dir = this.memoriesDir): MemoryDirScanState {
     let state = this.dirStates.get(dir);
     if (!state) {
       const indexPath = path.join(dir, '_index.json');
@@ -114,17 +113,35 @@ export class MemoryStorageLayer implements IStorageLayer {
 
   // ---- IStorageLayer implementation ----
 
-  async scan(): Promise<ManifestDiffResult> {
+  async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
     // Pin dir + state at the start — all async work below uses these
     // pinned references, not the resolver. This prevents cross-user
     // contamination when concurrent requests from different users hit
     // the same root-scoped MemoryStorageLayer.
     const dir = this.memoriesDir;
-    const state = this.getState();
+    const state = this.getState(dir);
+
+    const existingScan = state.scanInProgress;
+    if (existingScan) {
+      if (!options.freshAfterInFlight) return existingScan;
+
+      let initialDiff: ManifestDiffResult | undefined;
+      try {
+        initialDiff = await existingScan;
+      } catch {
+        // Give the trailing scan an independent chance to recover.
+      }
+
+      const successor = state.scanInProgress;
+      const trailingDiff = successor && successor !== existingScan
+        ? await successor
+        : await this.startScan(dir, state, false);
+      return initialDiff ? mergeManifestDiffResults(initialDiff, trailingDiff) : trailingDiff;
+    }
 
     if (!state.coldStartDone) {
       state.coldStartDone = true;
-      return this.coldStartForDir(dir, state);
+      return this.startScan(dir, state, true);
     }
 
     const now = Date.now();
@@ -132,15 +149,22 @@ export class MemoryStorageLayer implements IStorageLayer {
       return EMPTY_DIFF;
     }
 
-    if (state.scanInProgress) {
-      return state.scanInProgress;
-    }
+    return this.startScan(dir, state, false);
+  }
 
-    state.scanInProgress = this.performScanForDir(dir, state);
+  private async startScan(
+    dir: string,
+    state: MemoryDirScanState,
+    coldStart: boolean,
+  ): Promise<ManifestDiffResult> {
+    const scanPromise = coldStart
+      ? this.coldStartForDir(dir, state)
+      : this.performScanForDir(dir, state);
+    state.scanInProgress = scanPromise;
     try {
-      return await state.scanInProgress;
+      return await scanPromise;
     } finally {
-      state.scanInProgress = null;
+      if (state.scanInProgress === scanPromise) state.scanInProgress = null;
     }
   }
 

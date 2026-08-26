@@ -8,8 +8,8 @@
 import * as path from 'path';
 import { logger } from '../utils/logger.js';
 import type { IStorageBackend } from './IStorageBackend.js';
-import type { IStorageLayer } from './IStorageLayer.js';
-import type { ElementIndexEntry, ManifestDiffResult } from './types.js';
+import type { IStorageLayer, StorageScanOptions } from './IStorageLayer.js';
+import { mergeManifestDiffResults, type ElementIndexEntry, type ManifestDiffResult } from './types.js';
 import { StorageManifest } from './StorageManifest.js';
 import { MetadataIndex } from './MetadataIndex.js';
 import { FrontmatterParser } from './FrontmatterParser.js';
@@ -94,9 +94,8 @@ export class ElementStorageLayer implements IStorageLayer {
     return this.elementDirResolver ? this.elementDirResolver() : this.staticElementDir;
   }
 
-  /** Get or create the scan state for the current directory. */
-  private getState(): DirScanState {
-    const dir = this.elementDir;
+  /** Get or create the scan state for a pinned directory. */
+  private getState(dir = this.elementDir): DirScanState {
     let state = this.dirStates.get(dir);
     if (!state) {
       state = {
@@ -116,9 +115,27 @@ export class ElementStorageLayer implements IStorageLayer {
    * - Deduplicates concurrent calls (returns same promise)
    * - Updates index and manifest based on diff
    */
-  async scan(): Promise<ManifestDiffResult> {
-    const state = this.getState();
+  async scan(options: StorageScanOptions = {}): Promise<ManifestDiffResult> {
     const currentDir = this.elementDir;
+    const state = this.getState(currentDir);
+
+    const existingScan = state.scanInProgress;
+    if (existingScan) {
+      if (!options.freshAfterInFlight) return existingScan;
+
+      let initialDiff: ManifestDiffResult | undefined;
+      try {
+        initialDiff = await existingScan;
+      } catch {
+        // Give the trailing scan an independent chance to recover.
+      }
+
+      const successor = state.scanInProgress;
+      const trailingDiff = successor && successor !== existingScan
+        ? await successor
+        : await this.startScan(currentDir, state);
+      return initialDiff ? mergeManifestDiffResults(initialDiff, trailingDiff) : trailingDiff;
+    }
 
     const now = Date.now();
     if (now - state.lastScanTimestamp < this.scanCooldownMs) {
@@ -126,17 +143,16 @@ export class ElementStorageLayer implements IStorageLayer {
       return EMPTY_DIFF;
     }
 
-    // Deduplicate concurrent scans FOR THE SAME DIRECTORY.
-    // Each user's dir has its own scanInProgress promise — no cross-user leakage.
-    if (state.scanInProgress) {
-      return state.scanInProgress;
-    }
+    return this.startScan(currentDir, state);
+  }
 
-    state.scanInProgress = this.performScanForDir(currentDir, state);
+  private async startScan(currentDir: string, state: DirScanState): Promise<ManifestDiffResult> {
+    const scanPromise = this.performScanForDir(currentDir, state);
+    state.scanInProgress = scanPromise;
     try {
-      return await state.scanInProgress;
+      return await scanPromise;
     } finally {
-      state.scanInProgress = null;
+      if (state.scanInProgress === scanPromise) state.scanInProgress = null;
     }
   }
 
