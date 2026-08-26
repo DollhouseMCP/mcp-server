@@ -84,14 +84,7 @@ export class MemoryStorageLayer implements IStorageLayer {
         return existingScan;
       }
 
-      try {
-        drainedDiff = await existingScan;
-      } catch {
-        // The trailing scan gets an independent chance to recover.
-      }
-      if (this.scanInProgress === existingScan) {
-        this.scanInProgress = null;
-      }
+      drainedDiff = await this.drainInFlightScan(existingScan);
       this.invalidate();
     }
 
@@ -123,6 +116,21 @@ export class MemoryStorageLayer implements IStorageLayer {
         this.scanInProgress = null;
       }
     }
+  }
+
+  private async drainInFlightScan(
+    existingScan: Promise<ManifestDiffResult>,
+  ): Promise<ManifestDiffResult | undefined> {
+    let drainedDiff: ManifestDiffResult | undefined;
+    try {
+      drainedDiff = await existingScan;
+    } catch {
+      // The trailing scan gets an independent chance to recover.
+    }
+    if (this.scanInProgress === existingScan) {
+      this.scanInProgress = null;
+    }
+    return drainedDiff;
   }
 
   async listSummaries(): Promise<ElementIndexEntry[]> {

@@ -56,9 +56,7 @@ export class PolicyExportService {
     }
 
     this.exportQueued = true;
-    if (!this.exportInFlight) {
-      this.exportInFlight = this.runExportLoop();
-    }
+    this.exportInFlight ??= this.runExportLoop();
 
     return this.exportInFlight;
   }
