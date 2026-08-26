@@ -48,6 +48,7 @@ describe('ElementCRUDHandler (DI)', () => {
 
     agentManager = {
       create: jest.fn(),
+      getStableActivationFilename: jest.fn(),
       getActiveAgents: jest.fn().mockResolvedValue([]),
       deactivateAgent: jest.fn().mockResolvedValue({ success: true, message: 'deactivated' }),
       list: jest.fn().mockResolvedValue([]),
@@ -113,6 +114,47 @@ describe('ElementCRUDHandler (DI)', () => {
       initService,
       indicatorService,
       fileOperations
+    );
+  });
+
+  it('persists the stable filename when activating an agent', async () => {
+    const activationStore = {
+      recordActivation: jest.fn(),
+    } as unknown as jest.Mocked<ActivationStore>;
+    agentManager.activateAgent = jest.fn().mockResolvedValue({
+      success: true,
+      message: 'activated',
+      agent: {
+        metadata: { name: 'Renamed Agent' },
+        getState: jest.fn().mockReturnValue({ sessionCount: 1, goals: [] }),
+      },
+    } as any);
+    agentManager.persistState = jest.fn().mockResolvedValue(undefined);
+    agentManager.getStableActivationFilename.mockResolvedValue('stable-agent.md');
+    const handlerWithPersistence = new ElementCRUDHandler(
+      skillManager,
+      templateManager,
+      templateRenderer,
+      agentManager,
+      memoryManager,
+      ensembleManager,
+      personaHandler,
+      portfolioManager,
+      initService,
+      indicatorService,
+      fileOperations,
+      undefined as any,
+      undefined as any,
+      activationStore,
+    );
+
+    await handlerWithPersistence.activateElement('Renamed Agent', ElementType.AGENT);
+
+    expect(agentManager.getStableActivationFilename).toHaveBeenCalledWith('Renamed Agent');
+    expect(activationStore.recordActivation).toHaveBeenCalledWith(
+      ElementType.AGENT,
+      'Renamed Agent',
+      'stable-agent.md',
     );
   });
 

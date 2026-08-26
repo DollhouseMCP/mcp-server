@@ -118,6 +118,18 @@ describe('AgentManager', () => {
   });
 
   describe('Active agents', () => {
+    it('exposes the stable filename used for activation persistence', async () => {
+      const agent = {
+        metadata: { name: 'Renamed Agent' },
+        filename: 'stable-agent.md',
+      } as Agent;
+      const findByName = jest.spyOn(agentManager, 'findByName').mockResolvedValue(agent);
+
+      await expect(agentManager.getStableActivationFilename('Renamed Agent'))
+        .resolves.toBe('stable-agent.md');
+      expect(findByName).toHaveBeenCalledWith('Renamed Agent');
+    });
+
     it('resolves only active names without listing the full agent catalog', async () => {
       const activate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
       const activeAgent = {

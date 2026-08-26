@@ -1181,10 +1181,12 @@ export class DollhouseContainer {
       }
     }
 
-    // Restore agents
+    // Restore agents (uses stable filename when available so metadata renames
+    // cannot orphan a persisted activation between server processes)
     for (const activation of store.getActivations('agent')) {
       try {
-        const result = await agentManager.activateAgent(activation.name);
+        const identifier = activation.filename || activation.name;
+        const result = await agentManager.activateAgent(identifier);
         if (result.success) {
           restoredCount++;
         } else {

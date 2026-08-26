@@ -301,6 +301,29 @@ describe('ActivationStore', () => {
       expect(activations[0].filename).toBe('creative-dev-abc.md');
     });
 
+    it('should store stable filenames for agents', () => {
+      store.recordActivation('agent', 'Renamed Agent', 'stable-agent.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'Renamed Agent',
+          filename: 'stable-agent.md',
+        }),
+      ]);
+    });
+
+    it('should upgrade a legacy name-only activation with its stable filename', () => {
+      store.recordActivation('agent', 'Renamed Agent');
+      store.recordActivation('agent', 'Renamed Agent', 'stable-agent.md');
+
+      expect(store.getActivations('agent')).toEqual([
+        expect.objectContaining({
+          name: 'Renamed Agent',
+          filename: 'stable-agent.md',
+        }),
+      ]);
+    });
+
     it('should not include filename field for non-persona types', () => {
       store.recordActivation('skill', 'my-skill');
 

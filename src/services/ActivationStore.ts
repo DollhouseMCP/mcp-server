@@ -37,7 +37,7 @@ import {
 export interface PersistedActivation {
   /** Element name (human-readable, used for all types) */
   name: string;
-  /** For personas only: the filename key used by PersonaManager */
+  /** Stable filename for element types whose display names may change */
   filename?: string;
   /** ISO-8601 timestamp of when activation was persisted */
   activatedAt: string;
@@ -238,10 +238,17 @@ export class ActivationStore {
       this.state.activations[type] = [];
     }
 
-    // Deduplicate — don't add if already present
+    // Deduplicate. Upgrade legacy name-only records when a stable filename is
+    // now available so future restarts survive external metadata renames.
     const existing = this.state.activations[type]!;
-    const alreadyActive = existing.some(a => a.name === normalizedName);
-    if (alreadyActive) return;
+    const activeRecord = existing.find(a => a.name === normalizedName);
+    if (activeRecord) {
+      if (normalizedFilename && activeRecord.filename !== normalizedFilename) {
+        activeRecord.filename = normalizedFilename;
+        this.persistAsync();
+      }
+      return;
+    }
 
     existing.push({
       name: normalizedName,

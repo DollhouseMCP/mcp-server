@@ -349,9 +349,7 @@ export class ElementCRUDHandler {
 
       // Issue #598: Persist activation state for session restore
       if (this.activationStore) {
-        const filename = normalizedType === ElementType.PERSONA
-          ? this.personaManager.findPersona(name)?.filename
-          : undefined;
+        const filename = await this.getStableActivationFilename(normalizedType, name);
         this.activationStore.recordActivation(normalizedType, name, filename);
       }
 
@@ -963,6 +961,16 @@ export class ElementCRUDHandler {
     }
 
     await Promise.allSettled(pending);
+  }
+
+  private async getStableActivationFilename(type: string, name: string): Promise<string | undefined> {
+    if (type === ElementType.PERSONA) {
+      return this.personaManager.findPersona(name)?.filename;
+    }
+    if (type === ElementType.AGENT) {
+      return this.agentManager.getStableActivationFilename(name);
+    }
+    return undefined;
   }
 
   async deactivateElement(name: string, type: string) {

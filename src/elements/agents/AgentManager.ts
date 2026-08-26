@@ -955,6 +955,15 @@ export class AgentManager extends BaseElementManager<Agent> {
   }
 
   /**
+   * Resolve the stable storage identity used to persist an agent activation.
+   * The filename remains unchanged when metadata.name is edited externally.
+   */
+  async getStableActivationFilename(identifier: string): Promise<string | undefined> {
+    const agent = await this.findByName(identifier);
+    return agent ? this.getStableFilename(agent) : undefined;
+  }
+
+  /**
    * Deactivate an agent by name or identifier
    *
    * Issue #24 (LOW PRIORITY): Performance optimization using findByName()
