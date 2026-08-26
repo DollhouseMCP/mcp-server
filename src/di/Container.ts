@@ -1185,8 +1185,9 @@ export class DollhouseContainer {
     // cannot orphan a persisted activation between server processes)
     for (const activation of store.getActivations('agent')) {
       try {
-        const identifier = activation.filename || activation.name;
-        const result = await agentManager.activateAgent(identifier);
+        const result = activation.filename
+          ? await agentManager.activateAgentByFilename(activation.filename)
+          : await agentManager.activateAgent(activation.name);
         if (result.success) {
           restoredCount++;
         } else {

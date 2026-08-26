@@ -119,6 +119,8 @@ type AgentCreateMetadata = (Partial<AgentMetadata> & Partial<AgentMetadataV2>) &
   content?: string;
 };
 
+type AgentActivationResult = { success: boolean; message: string; agent?: Agent };
+
 export class AgentManager extends BaseElementManager<Agent> {
   private readonly stateDir: string;
   private readonly stateCache: Map<string, AgentState> = new Map();
@@ -902,10 +904,22 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    * Issue #24 (LOW PRIORITY): Cleanup trigger for memory leak prevention
    */
-  async activateAgent(identifier: string): Promise<{ success: boolean; message: string; agent?: Agent }> {
+  async activateAgent(identifier: string): Promise<AgentActivationResult> {
     // PERFORMANCE FIX: Use findByName() instead of list()
     const agent = await this.findByName(identifier);
+    return this.activateResolvedAgent(agent, identifier);
+  }
 
+  /**
+   * Activate an agent through its authoritative storage filename.
+   * Used for persisted activation restore when metadata.name may have changed.
+   */
+  async activateAgentByFilename(filename: string): Promise<AgentActivationResult> {
+    const agent = await this.findByFilename(filename);
+    return this.activateResolvedAgent(agent, filename);
+  }
+
+  private async activateResolvedAgent(agent: Agent | undefined, identifier: string): Promise<AgentActivationResult> {
     if (!agent) {
       return {
         success: false,

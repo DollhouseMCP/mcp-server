@@ -130,6 +130,26 @@ describe('AgentManager', () => {
       expect(findByName).toHaveBeenCalledWith('Renamed Agent');
     });
 
+    it('restores an externally renamed agent through its stable filename', async () => {
+      const activate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
+      const renamedAgent = {
+        id: 'renamed-agent-id',
+        metadata: { name: 'Renamed Agent', version: '1.0.0' },
+        filename: 'stable-agent.md',
+        activate,
+      } as unknown as Agent;
+      const findByFilename = jest.spyOn(agentManager, 'findByFilename').mockResolvedValue(renamedAgent);
+      const findByName = jest.spyOn(agentManager, 'findByName');
+
+      const result = await agentManager.activateAgentByFilename('stable-agent.md');
+
+      expect(result.success).toBe(true);
+      expect(result.agent).toBe(renamedAgent);
+      expect(findByFilename).toHaveBeenCalledWith('stable-agent.md');
+      expect(findByName).not.toHaveBeenCalled();
+      expect(activate).toHaveBeenCalledTimes(1);
+    });
+
     it('resolves only active names without listing the full agent catalog', async () => {
       const activate = jest.fn<() => Promise<void>>().mockResolvedValue(undefined);
       const activeAgent = {

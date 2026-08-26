@@ -158,6 +158,38 @@ describe('ElementCRUDHandler (DI)', () => {
     );
   });
 
+  it('removes a renamed agent activation by stable filename', async () => {
+    const activationStore = {
+      recordDeactivation: jest.fn(),
+    } as unknown as jest.Mocked<ActivationStore>;
+    agentManager.getStableActivationFilename.mockResolvedValue('stable-agent.md');
+    agentManager.deactivateAgent.mockResolvedValue({ success: true, message: 'deactivated' });
+    const handlerWithPersistence = new ElementCRUDHandler(
+      skillManager,
+      templateManager,
+      templateRenderer,
+      agentManager,
+      memoryManager,
+      ensembleManager,
+      personaHandler,
+      portfolioManager,
+      initService,
+      indicatorService,
+      fileOperations,
+      undefined as any,
+      undefined as any,
+      activationStore,
+    );
+
+    await handlerWithPersistence.deactivateElement('Renamed Agent', ElementType.AGENT);
+
+    expect(activationStore.recordDeactivation).toHaveBeenCalledWith(
+      ElementType.AGENT,
+      'Renamed Agent',
+      'stable-agent.md',
+    );
+  });
+
   it('ensures initialization and delegates to skill manager for create', async () => {
     skillManager.create.mockResolvedValue({ metadata: { name: 'created' } } as any);
 

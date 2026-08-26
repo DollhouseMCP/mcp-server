@@ -278,7 +278,7 @@ describe('Container Startup - Behavior (Non-Flaky)', () => {
         }
         return [];
       });
-      const activateAgentSpy = jest.spyOn(agentManager, 'activateAgent').mockResolvedValue({
+      const activateAgentSpy = jest.spyOn(agentManager, 'activateAgentByFilename').mockResolvedValue({
         success: true,
         message: 'Activated renamed agent',
       });

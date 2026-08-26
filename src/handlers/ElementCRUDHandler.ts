@@ -995,12 +995,15 @@ export class ElementCRUDHandler {
         };
       }
 
+      const filename = this.activationStore
+        ? await this.getStableActivationFilename(normalizedType, name)
+        : undefined;
       const result = await strategy.deactivate(name);
       this.invalidateActivePolicySnapshot();
 
       // Issue #598: Persist deactivation state for session restore
       if (this.activationStore) {
-        this.activationStore.recordDeactivation(normalizedType, name);
+        this.activationStore.recordDeactivation(normalizedType, name, filename);
       }
 
       // Issue #762: Export policies to bridge after deactivation

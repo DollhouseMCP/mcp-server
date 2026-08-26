@@ -241,10 +241,23 @@ export class ActivationStore {
     // Deduplicate. Upgrade legacy name-only records when a stable filename is
     // now available so future restarts survive external metadata renames.
     const existing = this.state.activations[type]!;
-    const activeRecord = existing.find(a => a.name === normalizedName);
+    let activeRecord = normalizedFilename
+      ? existing.find(a => a.filename === normalizedFilename)
+      : undefined;
+    activeRecord ??= existing.find(a =>
+      a.name === normalizedName && (!normalizedFilename || !a.filename)
+    );
     if (activeRecord) {
+      let changed = false;
+      if (activeRecord.name !== normalizedName) {
+        activeRecord.name = normalizedName;
+        changed = true;
+      }
       if (normalizedFilename && activeRecord.filename !== normalizedFilename) {
         activeRecord.filename = normalizedFilename;
+        changed = true;
+      }
+      if (changed) {
         this.persistAsync();
       }
       return;
@@ -262,19 +275,26 @@ export class ActivationStore {
   /**
    * Record an element deactivation. Fire-and-forget persist.
    */
-  recordDeactivation(elementType: string, name: string): void {
+  recordDeactivation(elementType: string, name: string, filename?: string): void {
     if (!this.enabled) return;
 
     const type = normalizeType(elementType);
     if (!ACTIVATABLE_TYPES.has(type)) return;
     const normalizedName = normalizeActivationIdentifier(name);
     if (!normalizedName) return;
+    const normalizedFilename = typeof filename === 'string'
+      ? normalizeActivationIdentifier(filename)
+      : undefined;
 
     const activations = this.state.activations[type];
     if (!activations) return;
 
     const initialLength = activations.length;
-    this.state.activations[type] = activations.filter(a => a.name !== normalizedName);
+    this.state.activations[type] = activations.filter(a =>
+      a.name !== normalizedName
+      && a.filename !== normalizedName
+      && (!normalizedFilename || a.filename !== normalizedFilename)
+    );
 
     // Only persist if something actually changed
     if (this.state.activations[type]!.length !== initialLength) {
