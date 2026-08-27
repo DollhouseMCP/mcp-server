@@ -197,40 +197,48 @@ function publishDoneSync(donePath) {
   }
 }
 
-function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath) {
-  let entries;
-  let publishedOwnerIds;
+function allocationIntentSnapshotSync(lockDirectory) {
   try {
-    entries = fs.readdirSync(lockDirectory, { withFileTypes: true });
-    publishedOwnerIds = new Set(
-      listTicketSlotsSync(lockDirectory)
-        .map(slot => parseSlotOwnerSync(slot.slotPath)?.id)
-        .filter(id => typeof id === 'string')
-    );
+    return {
+      entries: fs.readdirSync(lockDirectory, { withFileTypes: true }),
+      publishedOwnerIds: new Set(
+        listTicketSlotsSync(lockDirectory)
+          .map(slot => parseSlotOwnerSync(slot.slotPath)?.id)
+          .filter(id => typeof id === 'string')
+      )
+    };
   } catch {
-    return true;
+    return null;
   }
+}
 
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.slot.tmp')) continue;
-    const intentPath = `${lockDirectory}/${entry.name}`;
-    if (intentPath === ownStagedSlotPath) continue;
-    try {
-      const owner = parseSlotOwnerSync(intentPath);
-      if (owner && publishedOwnerIds.has(owner.id)) {
-        // The private inode was already linked to an immutable numbered slot.
-        // Retry a failed finally-cleanup without treating it as an allocator.
-        fs.unlinkSync(intentPath);
-        continue;
-      }
-      if (!slotIsStale(intentPath)) return true;
-      if (ownerIsStillActive(owner)) return true;
+function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds) {
+  try {
+    const owner = parseSlotOwnerSync(intentPath);
+    if (owner && publishedOwnerIds.has(owner.id)) {
+      // The private inode was already linked to an immutable numbered slot.
+      // Retry a failed finally-cleanup without treating it as an allocator.
       fs.unlinkSync(intentPath);
-    } catch (error) {
-      if (errorCode(error) !== 'ENOENT') return true;
+      return false;
     }
+    if (!slotIsStale(intentPath)) return true;
+    if (ownerIsStillActive(owner)) return true;
+    fs.unlinkSync(intentPath);
+    return false;
+  } catch (error) {
+    return errorCode(error) !== 'ENOENT';
   }
-  return false;
+}
+
+function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath) {
+  const snapshot = allocationIntentSnapshotSync(lockDirectory);
+  if (!snapshot) return true;
+  return snapshot.entries.some(entry => {
+    if (!entry.isFile() || !entry.name.endsWith('.slot.tmp')) return false;
+    const intentPath = `${lockDirectory}/${entry.name}`;
+    return intentPath !== ownStagedSlotPath &&
+      allocationIntentBlocksCompactionSync(intentPath, snapshot.publishedOwnerIds);
+  });
 }
 
 function compactCompletedTicketsSync(lockDirectory, preservedTicket, ownStagedSlotPath) {
