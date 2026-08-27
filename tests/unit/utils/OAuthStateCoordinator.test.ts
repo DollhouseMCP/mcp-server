@@ -75,7 +75,7 @@ describe('OAuthStateCoordinator', () => {
     await fs.writeFile(stateFile, JSON.stringify({ flowId: 'flow-a' }), 'utf8');
 
     const coordinatorUrl = pathToFileURL(
-      path.join(process.cwd(), 'dist', 'utils', 'OAuthStateCoordinator.js')
+      path.join(process.cwd(), 'oauth-state-coordinator.mjs')
     ).href;
     const childScript = `
       import fs from 'node:fs';
@@ -115,9 +115,12 @@ describe('OAuthStateCoordinator', () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
     const lockFile = `${stateFile}.lock`;
+    const recoveryFile = `${lockFile}.recovery`;
     await fs.writeFile(lockFile, '99999999:orphaned-lock', { encoding: 'utf8', mode: 0o600 });
+    await fs.writeFile(recoveryFile, '99999998:orphaned-recovery', { encoding: 'utf8', mode: 0o600 });
     const staleTime = new Date(Date.now() - 60_000);
     await fs.utimes(lockFile, staleTime, staleTime);
+    await fs.utimes(recoveryFile, staleTime, staleTime);
 
     await withOAuthStateLock(stateFile, async () => {
       await fs.writeFile(stateFile, JSON.stringify({ flowId: 'recovered-flow' }), 'utf8');
@@ -125,6 +128,6 @@ describe('OAuthStateCoordinator', () => {
 
     await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain('recovered-flow');
     await expect(fs.access(lockFile)).rejects.toMatchObject({ code: 'ENOENT' });
-    await expect(fs.access(`${lockFile}.recovery`)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.access(recoveryFile)).rejects.toMatchObject({ code: 'ENOENT' });
   });
 });

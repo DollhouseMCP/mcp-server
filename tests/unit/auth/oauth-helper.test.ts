@@ -214,7 +214,36 @@ describe('oauth-helper.mjs', () => {
     expect(helperSource).toContain('tokenManager.storeGitHubToken(');
     expect(helperSource).not.toMatch(/\bTokenManager\.storeGitHubToken\s*\(/);
     expect(helperSource).not.toContain('pending_token.txt');
+    expect(helperSource).toContain("from './oauth-state-coordinator.mjs'");
+    expect(helperSource).not.toContain("from './dist/utils/OAuthStateCoordinator.js'");
+    expect(helperSource).not.toContain('withOAuthStateLock,');
     expect(typeof TokenManager.prototype.storeGitHubToken).toBe('function');
+  });
+
+  it('starts from a clean source layout without compiled coordinator output', async () => {
+    const sourceDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-clean-source-'));
+    const helperPath = path.join(sourceDirectory, 'oauth-helper.mjs');
+    await fs.copyFile(path.join(process.cwd(), 'oauth-helper.mjs'), helperPath);
+    await fs.copyFile(
+      path.join(process.cwd(), 'oauth-state-coordinator.mjs'),
+      path.join(sourceDirectory, 'oauth-state-coordinator.mjs')
+    );
+
+    try {
+      const child = spawn(process.execPath, [helperPath], { stdio: ['ignore', 'pipe', 'pipe'] });
+      let stderr = '';
+      child.stderr?.on('data', chunk => { stderr += String(chunk); });
+      const code = await new Promise<number | null>((resolve, reject) => {
+        child.once('error', reject);
+        child.once('close', resolve);
+      });
+
+      expect(code).toBe(1);
+      expect(stderr).toContain('Usage: oauth-helper.mjs');
+      expect(stderr).not.toContain('ERR_MODULE_NOT_FOUND');
+    } finally {
+      await fs.rm(sourceDirectory, { recursive: true, force: true });
+    }
   });
 
   it('stores a device-flow token where TokenManager can read it and writes a terminal result', async () => {

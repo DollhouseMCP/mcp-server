@@ -18,10 +18,9 @@ import fs from 'fs/promises';
 import fsSync from 'fs';
 import { homedir } from 'os';
 import {
-  withOAuthStateLock,
   withOAuthStateLockSync,
   writeFileAtomicallySync
-} from './dist/utils/OAuthStateCoordinator.js';
+} from './oauth-state-coordinator.mjs';
 
 // Constants
 const DEFAULT_POLL_INTERVAL = 5;
@@ -220,11 +219,13 @@ function cleanupPidFileSync() {
 
 function cleanupStateFileSync() {
   try {
-    withOAuthStateLockSync(STATE_FILE, () => {
-      if (stateFileBelongsToThisHelperSync()) fsSync.unlinkSync(STATE_FILE);
+    return withOAuthStateLockSync(STATE_FILE, () => {
+      if (!stateFileBelongsToThisHelperSync()) return false;
+      fsSync.unlinkSync(STATE_FILE);
+      return true;
     });
   } catch {
-    // Ignore cleanup errors
+    return false;
   }
 }
 
@@ -236,23 +237,6 @@ async function cleanupPidFile() {
     } else {
       await log('PID file belongs to another helper flow; leaving it in place');
     }
-  } catch {
-    // Ignore cleanup errors
-  }
-}
-
-async function cleanupStateFile() {
-  try {
-    const cleaned = await withOAuthStateLock(STATE_FILE, async () => {
-      if (await stateFileBelongsToThisHelper()) {
-        await fs.unlink(STATE_FILE).catch(() => {});
-        return true;
-      }
-      return false;
-    });
-    await log(cleaned
-      ? 'OAuth helper state file cleaned up'
-      : 'OAuth helper state belongs to another flow; leaving it in place');
   } catch {
     // Ignore cleanup errors
   }
@@ -347,17 +331,6 @@ function pidFileBelongsToThisHelperSync() {
   }
 }
 
-async function stateFileBelongsToThisHelper() {
-  if (!FLOW_ID) return true;
-  try {
-    const state = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
-    return state?.flowId === FLOW_ID &&
-      (typeof state.pid !== 'number' || state.pid === process.pid);
-  } catch {
-    return false;
-  }
-}
-
 function stateFileBelongsToThisHelperSync() {
   if (!FLOW_ID) return fsSync.existsSync(STATE_FILE);
   try {
@@ -435,7 +408,10 @@ async function main() {
     if (outcome?.status === 'success' && POST_RESULT_TEST_DELAY_MS > 0) {
       await sleep(POST_RESULT_TEST_DELAY_MS);
     }
-    await cleanupStateFile();
+    const stateCleaned = cleanupStateFileSync();
+    await log(stateCleaned
+      ? 'OAuth helper state file cleaned up'
+      : 'OAuth helper state belongs to another flow; leaving it in place');
     await cleanupPidFile();
     process.exit(outcome?.exitCode ?? exitCode);
   }
