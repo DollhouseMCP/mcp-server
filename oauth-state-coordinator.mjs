@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { performance } from 'node:perf_hooks';
 
 // The OAuth parent and detached helper are separate processes. Monotonic,
 // never-reused ticket slots provide cross-process ordering without deleting
@@ -10,8 +11,10 @@ const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_RETRY_MS = 10;
 const CLAIM_STALE_MS = 30_000;
 const PROCESS_IDENTITY_COMMAND_TIMEOUT_MS = 5_000;
+const WINDOWS_START_TIME_TOLERANCE_MS = 2_000;
 const LOCK_WAIT_SIGNAL = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 let cachedCurrentProcessIdentity;
+const pendingDonePaths = new Set();
 
 function lockDirectoryFor(stateFile) {
   return `${stateFile}.lock`;
@@ -157,9 +160,28 @@ function processIdentity(pid, deadline) {
 
 function currentProcessIdentity(deadline) {
   if (typeof cachedCurrentProcessIdentity === 'string') return cachedCurrentProcessIdentity;
-  const identity = processIdentity(process.pid, deadline);
+  if (Date.now() >= deadline) return undefined;
+  // Starting a management shell in every Windows contender causes the probe
+  // processes themselves to exhaust the shared lock deadline. Node exposes
+  // its own high-resolution process time origin without spawning. Foreign
+  // stale owners still go through the independent OS-backed probes above.
+  const identity = process.platform === 'win32' && Number.isFinite(performance.timeOrigin)
+    ? `win32:${Math.trunc(performance.timeOrigin)}`
+    : processIdentity(process.pid, deadline);
   if (typeof identity === 'string') cachedCurrentProcessIdentity = identity;
   return identity;
+}
+
+function processIdentitiesMatch(recordedIdentity, currentIdentity) {
+  if (recordedIdentity === currentIdentity) return true;
+  const recordedWindowsStart = /^win32:(\d+)$/.exec(recordedIdentity)?.[1];
+  const currentWindowsStart = /^win32:(\d+)$/.exec(currentIdentity)?.[1];
+  if (!recordedWindowsStart || !currentWindowsStart) return false;
+  // performance.timeOrigin is a few milliseconds after the kernel's process
+  // creation timestamp. The tolerance can only retain a reused PID (fail
+  // closed); it can never reclaim a live owner whose identity probe succeeded.
+  return Math.abs(Number(recordedWindowsStart) - Number(currentWindowsStart)) <=
+    WINDOWS_START_TIME_TOLERANCE_MS;
 }
 
 function parseSlotOwnerSync(slotPath) {
@@ -180,7 +202,8 @@ function ownerIsStillActive(owner, deadline) {
     ? currentProcessIdentity(deadline)
     : processIdentity(owner.ownerPid, deadline);
   // An unavailable identity probe fails closed; a later scan can retry.
-  return currentIdentity === undefined || currentIdentity === owner.ownerIdentity;
+  return currentIdentity === undefined ||
+    (currentIdentity !== null && processIdentitiesMatch(owner.ownerIdentity, currentIdentity));
 }
 
 function slotIsStale(slotPath) {
@@ -217,8 +240,23 @@ function listTicketSlotsSync(lockDirectory) {
 function publishDoneSync(donePath) {
   try {
     fs.writeFileSync(donePath, '', { flag: 'wx', mode: 0o600 });
+    pendingDonePaths.delete(donePath);
   } catch (error) {
-    if (errorCode(error) !== 'EEXIST') throw error;
+    if (errorCode(error) === 'EEXIST') {
+      pendingDonePaths.delete(donePath);
+      return;
+    }
+    // Retain failed releases in memory so the next transaction in this
+    // process retries them before it can publish another ticket.
+    pendingDonePaths.add(donePath);
+    throw error;
+  }
+}
+
+function retryPendingDoneMarkersSync(lockDirectory) {
+  const directoryPrefix = `${lockDirectory}/`;
+  for (const donePath of pendingDonePaths) {
+    if (donePath.startsWith(directoryPrefix)) publishDoneSync(donePath);
   }
 }
 
@@ -243,6 +281,15 @@ function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds, dea
     if (owner && publishedOwnerIds.has(owner.id)) {
       // The private inode was already linked to an immutable numbered slot.
       // Retry a failed finally-cleanup without treating it as an allocator.
+      fs.unlinkSync(intentPath);
+      return false;
+    }
+    if (Number.isSafeInteger(owner?.allocationDeadline) &&
+        Date.now() >= owner.allocationDeadline) {
+      // Allocation checks this same deadline immediately before publishing.
+      // If cleanup lost a transient race, linkSync either already published
+      // the complete inode or will fail after this unlink; it cannot publish
+      // an expired intent later.
       fs.unlinkSync(intentPath);
       return false;
     }
@@ -353,6 +400,7 @@ function tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline) {
 
 function allocateTicketSync(lockDirectory, deadline) {
   ensureLockDirectorySync(lockDirectory);
+  retryPendingDoneMarkersSync(lockDirectory);
   if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
   const ownerIdentity = currentProcessIdentity(deadline);
   if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
@@ -364,7 +412,7 @@ function allocateTicketSync(lockDirectory, deadline) {
   const stagedSlotPath = `${lockDirectory}/.${process.pid}.${id}.slot.tmp`;
   fs.writeFileSync(
     stagedSlotPath,
-    JSON.stringify({ id, ownerPid: process.pid, ownerIdentity }),
+    JSON.stringify({ id, ownerPid: process.pid, ownerIdentity, allocationDeadline: deadline }),
     { encoding: 'utf8', flag: 'wx', mode: 0o600 }
   );
 

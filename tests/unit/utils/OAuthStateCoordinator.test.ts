@@ -117,6 +117,50 @@ describe('OAuthStateCoordinator', () => {
     expect(entries.sort()).toEqual(['3.done', '3.slot']);
   });
 
+  it('retries a failed completion marker before publishing another ticket', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const originalWriteFileSync = fsSync.writeFileSync;
+    let failDoneCreation = true;
+    jest.spyOn(fsSync, 'writeFileSync').mockImplementation(((filePath, data, options) => {
+      if (failDoneCreation && String(filePath).endsWith('.done')) {
+        failDoneCreation = false;
+        throw Object.assign(new Error('transient completion failure'), { code: 'EIO' });
+      }
+      return originalWriteFileSync(filePath, data, options as never);
+    }) as typeof fsSync.writeFileSync);
+
+    let firstOperationRan = false;
+    expect(() => withOAuthStateLockSync(stateFile, () => { firstOperationRan = true; }))
+      .toThrow('transient completion failure');
+    expect(firstOperationRan).toBe(true);
+
+    let secondOperationRan = false;
+    withOAuthStateLockSync(stateFile, () => { secondOperationRan = true; });
+    expect(secondOperationRan).toBe(true);
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('reclaims an expired unpublished intent even while its process is alive', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    const activeOwner = JSON.parse(
+      await fs.readFile(path.join(lockDirectory, '1.slot'), 'utf8')
+    ) as Record<string, unknown>;
+    activeOwner.id = '00000000-0000-4000-8000-000000000998';
+    activeOwner.allocationDeadline = Date.now() - 1;
+    const abandonedIntent = path.join(lockDirectory, '.expired-live-owner.slot.tmp');
+    await fs.writeFile(abandonedIntent, JSON.stringify(activeOwner), 'utf8');
+
+    await withOAuthStateLock(stateFile, async () => {});
+
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['2.done', '2.slot']);
+  });
+
   it('includes ticket allocation retries in the lock timeout', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');

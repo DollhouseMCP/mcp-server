@@ -248,6 +248,35 @@ describe('oauth-helper.mjs', () => {
     }
   });
 
+  it('exits without polling when it cannot claim its prepared flow', async () => {
+    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-claim-failure-'));
+    const authDir = path.join(tempHome, '.dollhouse', '.auth');
+    const stateFile = path.join(authDir, 'oauth-helper-state.json');
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(stateFile, JSON.stringify({ flowId: 'replacement-flow' }), 'utf8');
+
+    try {
+      const child = spawnHelper(
+        helperPath,
+        'http://127.0.0.1:1/token',
+        tempHome,
+        { DOLLHOUSE_OAUTH_HELPER_FLOW_ID: 'superseded-flow' }
+      );
+      const result = await waitForClose(child);
+
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('Unable to claim prepared OAuth flow state');
+      await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain('replacement-flow');
+      await expect(fs.access(path.join(authDir, 'oauth-helper.pid')))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(path.join(authDir, 'oauth-helper-result.json')))
+        .rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  });
+
   it('stores a device-flow token where TokenManager can read it and writes a terminal result', async () => {
     const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
     const distTokenManagerPath = path.join(process.cwd(), 'dist', 'security', 'tokenManager.js');
@@ -599,6 +628,17 @@ describe('oauth-helper.mjs', () => {
     const pidFile = path.join(authDir, 'oauth-helper.pid');
     const stateFile = path.join(authDir, 'oauth-helper-state.json');
     const resultFile = path.join(authDir, 'oauth-helper-result.json');
+    await fs.mkdir(authDir, { recursive: true });
+    await fs.writeFile(
+      stateFile,
+      JSON.stringify({
+        flowId: 'old-flow',
+        userCode: 'OLD-FLOW',
+        startTime: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 120_000).toISOString()
+      }),
+      'utf8'
+    );
 
     try {
       const child = spawnHelper(

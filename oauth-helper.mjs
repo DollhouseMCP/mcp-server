@@ -76,7 +76,10 @@ let terminalResultWritten = false;
 let terminalOutcome = null;
 
 installTerminationHandlers();
-claimPreparedStateSync();
+if (!claimPreparedStateSync()) {
+  console.error('OAUTH_HELPER_44: Unable to claim prepared OAuth flow state');
+  process.exit(1);
+}
 
 // Validate client ID is provided (no hardcoded fallback)
 if (!clientId || clientId === 'undefined') {
@@ -289,20 +292,21 @@ function commitTerminalResultSync(status, attempts, errorCode, exitCode) {
 }
 
 function claimPreparedStateSync() {
-  if (!FLOW_ID) return;
+  if (!FLOW_ID) return true;
 
   try {
-    withOAuthStateLockSync(STATE_FILE, () => {
+    return withOAuthStateLockSync(STATE_FILE, () => {
       const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
-      if (state?.flowId !== FLOW_ID) return;
+      if (state?.flowId !== FLOW_ID) return false;
 
       writeFileAtomicallySync(
         STATE_FILE,
         JSON.stringify({ ...state, pid: process.pid }, null, 2)
       );
+      return true;
     });
   } catch {
-    // Standalone or failed parent launches may not have prepared state.
+    return false;
   }
 }
 
