@@ -153,7 +153,7 @@ function allocateTicketSync(lockDirectory) {
   ensureLockDirectorySync(lockDirectory);
   const ownerIdentity = processIdentity(process.pid);
   if (typeof ownerIdentity !== 'string') {
-    throw new Error('Unable to determine process identity for OAuth state locking');
+    throw new TypeError('Unable to determine process identity for OAuth state locking');
   }
 
   while (true) {
