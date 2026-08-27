@@ -781,11 +781,12 @@ export class ElementCRUDHandler {
               return null;
             }
 
-            const foundStorageIdentity = normalizedType === ElementType.AGENT
-              ? found.filePath
-              : normalizedType === ElementType.PERSONA
-                ? found.filename ?? found.filePath ?? normalizedFilename
-                : undefined;
+            let foundStorageIdentity: string | undefined;
+            if (normalizedType === ElementType.AGENT) {
+              foundStorageIdentity = found.filePath;
+            } else if (normalizedType === ElementType.PERSONA) {
+              foundStorageIdentity = found.filename ?? found.filePath ?? normalizedFilename;
+            }
 
             return {
               type: this.toPolicyElementType(normalizedType),

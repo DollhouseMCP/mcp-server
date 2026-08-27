@@ -101,34 +101,21 @@ describe('FileActivationStateStore', () => {
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
     });
 
-    it('should use DOLLHOUSE_SESSION_ID when set and no param', () => {
-      process.env.DOLLHOUSE_SESSION_ID = 'my-session';
+    it.each([
+      ['a valid value', 'my-session', 'my-session'],
+      ['an invalid traversal value', '../evil-path', 'default'],
+      ['hyphens and underscores', 'claude-code_v2', 'claude-code_v2'],
+      ['a digit-first value', '123-session', '123-session'],
+    ])('should resolve DOLLHOUSE_SESSION_ID with %s', (_case, envValue, expected) => {
+      process.env.DOLLHOUSE_SESSION_ID = envValue;
       const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
-      expect(s.getSessionId()).toBe('my-session');
-    });
-
-    it('should fall back to default for invalid env session ID', () => {
-      process.env.DOLLHOUSE_SESSION_ID = '../evil-path';
-      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
-      expect(s.getSessionId()).toBe('default');
+      expect(s.getSessionId()).toBe(expected);
     });
 
     it('should generate unique session ID for empty env session ID', () => {
       process.env.DOLLHOUSE_SESSION_ID = '  ';
       const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
       expect(s.getSessionId()).toMatch(/^session-[a-z0-9]+-[a-f0-9]+$/);
-    });
-
-    it('should accept alphanumeric with hyphens and underscores', () => {
-      process.env.DOLLHOUSE_SESSION_ID = 'claude-code_v2';
-      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
-      expect(s.getSessionId()).toBe('claude-code_v2');
-    });
-
-    it('should accept session IDs starting with a number for UUID compatibility', () => {
-      process.env.DOLLHOUSE_SESSION_ID = '123-session';
-      const s = new FileActivationStateStore(mockFileOps, TEST_STATE_DIR);
-      expect(s.getSessionId()).toBe('123-session');
     });
 
     it('should prefer explicit sessionId over env var', () => {
