@@ -181,10 +181,18 @@ export class GitHubAuthHandler {
           helperPath = await this.findOAuthHelperPath();
           this.logSpawningOAuthHelper(helperPath, clientId, deviceResponse);
           const flowId = randomUUID();
-          const helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId, flowId);
+          await this.prepareOAuthHelperState(deviceResponse, flowId);
+
+          let helper: child_process.ChildProcess;
+          try {
+            helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId, flowId);
+          } catch (spawnError) {
+            await this.cleanupPreparedOAuthHelperState(flowId);
+            throw spawnError;
+          }
+
           helper.unref();
           this.logOAuthHelperSpawned(helper.pid, deviceResponse);
-          await this.writeOAuthHelperState(helper.pid, deviceResponse, flowId);
           return null;
         } catch (spawnError) {
           return this.oauthHelperLaunchFailedResponse(spawnError, helperPath, clientId);
@@ -235,15 +243,17 @@ export class GitHubAuthHandler {
         });
     }
 
-    private async writeOAuthHelperState(pid: number | undefined, deviceResponse: DeviceCodeResponse, flowId: string): Promise<void> {
+    private async prepareOAuthHelperState(deviceResponse: DeviceCodeResponse, flowId: string): Promise<void> {
         const stateFile = this.getOAuthHelperStateFile();
         const resultFile = this.getOAuthHelperResultFile();
         const stateDir = path.dirname(stateFile);
         await this.fileOperations.createDirectory(stateDir);
         await this.fileOperations.deleteFile(resultFile).catch(() => {});
 
+        // Publish the flow before spawning. The helper synchronously claims this
+        // state with its PID before its first await, so an early signal can never
+        // race a later parent-side result deletion or state write.
         const state = {
-          pid,
           flowId,
           userCode: deviceResponse.user_code,
           startTime: new Date().toISOString(),
@@ -253,6 +263,21 @@ export class GitHubAuthHandler {
         await this.fileOperations.writeFile(stateFile, JSON.stringify(state, null, 2), {
           source: 'GitHubAuthHandler.setupGitHubAuth'
         });
+    }
+
+    private async cleanupPreparedOAuthHelperState(flowId: string): Promise<void> {
+        const stateFile = this.getOAuthHelperStateFile();
+        try {
+          const stateData = await this.fileOperations.readFile(stateFile, {
+            source: 'GitHubAuthHandler.startOAuthHelper'
+          });
+          const state = JSON.parse(stateData);
+          if (this.isRecord(state) && state.flowId === flowId) {
+            await this.fileOperations.deleteFile(stateFile).catch(() => {});
+          }
+        } catch {
+          // Best-effort cleanup after a spawn failure.
+        }
     }
 
     private oauthHelperLaunchFailedResponse(spawnError: unknown, helperPath: string | null, clientId: string) {

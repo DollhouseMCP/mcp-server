@@ -68,9 +68,11 @@ const pollIntervalSeconds = Number.parseInt(intervalStr, 10) || DEFAULT_POLL_INT
 const expiresIn = Number.parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
 let attempts = 0;
 let terminalWriteAttempted = false;
+let terminalResultWritten = false;
 let terminalOutcome = null;
 
 installTerminationHandlers();
+claimPreparedStateSync();
 
 // Validate client ID is provided (no hardcoded fallback)
 if (!clientId || clientId === 'undefined') {
@@ -269,20 +271,50 @@ function buildTerminalResult(status, attempts, errorCode = '') {
 }
 
 function commitTerminalResultSync(status, attempts, errorCode, exitCode) {
+  if (!terminalOutcome) {
+    const { result, safeErrorCode } = buildTerminalResult(status, attempts, errorCode);
+    terminalOutcome = { status, safeErrorCode, exitCode, result };
+  }
+
   if (terminalWriteAttempted) return terminalOutcome;
   terminalWriteAttempted = true;
 
   try {
     fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
-    const { result, safeErrorCode } = buildTerminalResult(status, attempts, errorCode);
-
-    fsSync.writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
-    terminalOutcome = { status, safeErrorCode, exitCode };
+    fsSync.writeFileSync(RESULT_FILE, JSON.stringify(terminalOutcome.result, null, 2), { mode: 0o600 });
+    terminalResultWritten = true;
   } catch {
     // Preserve the existing best-effort terminal-reporting contract.
   }
 
   return terminalOutcome;
+}
+
+function claimPreparedStateSync() {
+  if (!FLOW_ID) return;
+
+  try {
+    const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+    if (state?.flowId !== FLOW_ID) return;
+
+    fsSync.writeFileSync(
+      STATE_FILE,
+      JSON.stringify({ ...state, pid: process.pid }, null, 2),
+      { mode: 0o600 }
+    );
+  } catch {
+    // Standalone or failed parent launches may not have prepared state.
+  }
+}
+
+async function logTerminalCommit(outcome) {
+  if (!terminalResultWritten) {
+    await log('Failed to write terminal result');
+    return;
+  }
+
+  const resultSuffix = outcome.status === 'success' ? '' : `/${outcome.safeErrorCode}`;
+  await log(`Terminal result written: ${outcome.status}${resultSuffix}`);
 }
 
 async function pidFileBelongsToThisHelper() {
@@ -389,12 +421,7 @@ async function main() {
   async function finish(status, errorCode, exitCode) {
     clearInterval(heartbeatInterval);
     const outcome = commitTerminalResultSync(status, attempts, errorCode, exitCode);
-    if (outcome) {
-      const resultSuffix = outcome.status === 'success' ? '' : `/${outcome.safeErrorCode}`;
-      await log(`Terminal result written: ${outcome.status}${resultSuffix}`);
-    } else {
-      await log('Failed to write terminal result');
-    }
+    await logTerminalCommit(outcome);
     if (outcome?.status === 'success' && POST_RESULT_TEST_DELAY_MS > 0) {
       await sleep(POST_RESULT_TEST_DELAY_MS);
     }
@@ -514,11 +541,7 @@ main().catch(async (error) => {
   await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
   const outcome = commitTerminalResultSync('failed', attempts, 'fatal_error', 1);
-  if (outcome) {
-    await log(`Terminal result written: failed/${outcome.safeErrorCode}`);
-  } else {
-    await log('Failed to write terminal result');
-  }
+  await logTerminalCommit(outcome);
   await cleanupStateFile();
   await cleanupPidFile();
   process.exit(outcome?.exitCode ?? 1);

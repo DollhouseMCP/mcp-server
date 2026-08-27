@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, jest } from '@jest/globals';
+import * as fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
@@ -283,6 +284,103 @@ describe('GitHubAuthHandler (DI)', () => {
         delete process.env.DOLLHOUSE_HOME_DIR;
       }
       spawnSpy.mockRestore();
+    });
+
+    it('preserves an early helper result without republishing state for the dead process', async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-early-result-'));
+      const authDir = path.join(tempRoot, 'auth');
+      const helperPath = path.join(tempRoot, 'oauth-helper.mjs');
+      const stateFile = path.join(authDir, 'oauth-helper-state.json');
+      const resultFile = path.join(authDir, 'oauth-helper-result.json');
+      await fs.writeFile(helperPath, 'console.log("helper");', 'utf-8');
+      await fs.mkdir(authDir, { recursive: true });
+      await fs.writeFile(resultFile, JSON.stringify({ status: 'failed', flowId: 'stale-flow' }), 'utf-8');
+
+      const originalHelper = process.env.DOLLHOUSE_OAUTH_HELPER;
+      process.env.DOLLHOUSE_OAUTH_HELPER = helperPath;
+      const scopedHandler = handlerWithAuthDir(authDir);
+      const unref = jest.fn();
+      const spawnSpy = jest.spyOn(scopedHandler as any, 'spawnHelperProcess').mockImplementation(
+        (_path: string, _response: unknown, _clientId: string, flowId: string) => {
+          const preparedState = JSON.parse(fsSync.readFileSync(stateFile, 'utf-8')) as Record<string, unknown>;
+          expect(preparedState.flowId).toBe(flowId);
+          expect(preparedState.pid).toBeUndefined();
+          expect(fsSync.existsSync(resultFile)).toBe(false);
+
+          fsSync.writeFileSync(resultFile, JSON.stringify({
+            status: 'failed',
+            flowId,
+            pid: 4242,
+            errorCode: 'interrupted'
+          }));
+          fsSync.unlinkSync(stateFile);
+          return { pid: 4242, unref } as any;
+        }
+      );
+
+      try {
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false } as any);
+        authManager.resolveClientId.mockResolvedValue('Ov23liClient');
+        authManager.initiateDeviceFlow.mockResolvedValue({
+          device_code: 'device-code',
+          user_code: 'EARLY-1234',
+          verification_uri: 'https://github.com/login/device',
+          expires_in: 900,
+          interval: 5
+        } as any);
+
+        const response = await scopedHandler.setupGitHubAuth();
+
+        expect(response.content[0].text).toContain('EARLY-1234');
+        expect(unref).toHaveBeenCalledTimes(1);
+        await expect(fs.access(stateFile)).rejects.toMatchObject({ code: 'ENOENT' });
+        const terminalResult = JSON.parse(await fs.readFile(resultFile, 'utf-8')) as Record<string, unknown>;
+        expect(terminalResult.status).toBe('failed');
+        expect(terminalResult.errorCode).toBe('interrupted');
+        expect(terminalResult.pid).toBe(4242);
+      } finally {
+        spawnSpy.mockRestore();
+        if (originalHelper === undefined) delete process.env.DOLLHOUSE_OAUTH_HELPER;
+        else process.env.DOLLHOUSE_OAUTH_HELPER = originalHelper;
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
+    });
+
+    it('removes prepared state when spawning the helper fails', async () => {
+      const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-spawn-failure-state-'));
+      const authDir = path.join(tempRoot, 'auth');
+      const helperPath = path.join(tempRoot, 'oauth-helper.mjs');
+      const stateFile = path.join(authDir, 'oauth-helper-state.json');
+      await fs.writeFile(helperPath, 'console.log("helper");', 'utf-8');
+
+      const originalHelper = process.env.DOLLHOUSE_OAUTH_HELPER;
+      process.env.DOLLHOUSE_OAUTH_HELPER = helperPath;
+      const scopedHandler = handlerWithAuthDir(authDir);
+      const spawnSpy = jest.spyOn(scopedHandler as any, 'spawnHelperProcess').mockImplementation(() => {
+        throw Object.assign(new Error('spawn failed'), { code: 'ENOENT' });
+      });
+
+      try {
+        authManager.getAuthStatus.mockResolvedValue({ isAuthenticated: false } as any);
+        authManager.resolveClientId.mockResolvedValue('Ov23liClient');
+        authManager.initiateDeviceFlow.mockResolvedValue({
+          device_code: 'device-code',
+          user_code: 'FAILED-SPAWN',
+          verification_uri: 'https://github.com/login/device',
+          expires_in: 900,
+          interval: 5
+        } as any);
+
+        const response = await scopedHandler.setupGitHubAuth();
+
+        expect(response.content[0].text).toContain('OAuth Helper Launch Failed');
+        await expect(fs.access(stateFile)).rejects.toMatchObject({ code: 'ENOENT' });
+      } finally {
+        spawnSpy.mockRestore();
+        if (originalHelper === undefined) delete process.env.DOLLHOUSE_OAUTH_HELPER;
+        else process.env.DOLLHOUSE_OAUTH_HELPER = originalHelper;
+        await fs.rm(tempRoot, { recursive: true, force: true });
+      }
     });
 
     it('writes OAuth helper state under each session auth dir when PathService is injected', async () => {

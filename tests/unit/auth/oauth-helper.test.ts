@@ -186,7 +186,7 @@ async function waitForFileContent(filePath: string, expected: string, timeoutMs 
   throw new Error(`Timed out waiting for ${expected} in ${filePath}`);
 }
 
-async function expectInterruptedArtifacts(authDir: string): Promise<void> {
+async function expectInterruptedArtifacts(authDir: string): Promise<Record<string, unknown>> {
   const terminalResult = JSON.parse(
     await fs.readFile(path.join(authDir, 'oauth-helper-result.json'), 'utf-8')
   ) as Record<string, unknown>;
@@ -196,6 +196,7 @@ async function expectInterruptedArtifacts(authDir: string): Promise<void> {
 
   await expect(fs.access(path.join(authDir, 'oauth-helper-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+  return terminalResult;
 }
 
 const TERMINATION_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
@@ -356,8 +357,18 @@ describe('oauth-helper.mjs', () => {
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-early-interrupt-'));
     const authDir = path.join(tempHome, '.dollhouse', '.auth');
     const logFile = path.join(tempHome, '.dollhouse', 'oauth-helper.log');
+    const flowId = 'prepared-early-flow';
     await fs.mkdir(authDir, { recursive: true });
-    await fs.writeFile(path.join(authDir, 'oauth-helper-state.json'), JSON.stringify({ stale: true }), 'utf-8');
+    await fs.writeFile(
+      path.join(authDir, 'oauth-helper-state.json'),
+      JSON.stringify({
+        flowId,
+        userCode: 'EARLY-CODE',
+        startTime: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 120_000).toISOString()
+      }),
+      'utf-8'
+    );
 
     try {
       const child = spawnHelper(
@@ -366,10 +377,16 @@ describe('oauth-helper.mjs', () => {
         tempHome,
         {
           NODE_ENV: 'test',
+          DOLLHOUSE_OAUTH_HELPER_FLOW_ID: flowId,
           DOLLHOUSE_OAUTH_HELPER_TEST_PRE_READY_DELAY_MS: '2000'
         }
       );
       await waitForFileContent(logFile, '[START] OAuth helper started');
+      const claimedState = JSON.parse(
+        await fs.readFile(path.join(authDir, 'oauth-helper-state.json'), 'utf-8')
+      ) as Record<string, unknown>;
+      expect(claimedState.flowId).toBe(flowId);
+      expect(claimedState.pid).toBe(child.pid);
       await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
 
       expect(child.kill(signal)).toBe(true);
@@ -377,8 +394,64 @@ describe('oauth-helper.mjs', () => {
 
       expect(result.code).toBe(1);
       expect(result.signal).toBeNull();
-      await expectInterruptedArtifacts(authDir);
+      const terminalResult = await expectInterruptedArtifacts(authDir);
+      expect(terminalResult.flowId).toBe(flowId);
+      expect(terminalResult.pid).toBe(child.pid);
     } finally {
+      await fs.rm(tempHome, { recursive: true, force: true });
+    }
+  }, 15_000);
+
+  it('preserves selected success and exit code when its result write fails', async () => {
+    if (process.platform === 'win32') {
+      return;
+    }
+
+    const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
+    const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-result-write-failure-'));
+    const authDir = path.join(tempHome, '.dollhouse', '.auth');
+    const resultFile = path.join(authDir, 'oauth-helper-result.json');
+    const logFile = path.join(tempHome, '.dollhouse', 'oauth-helper.log');
+    const server = createServer((_req, res) => {
+      json(res, 200, {
+        access_token: 'gho_test_result_write_failure_1234567890',
+        token_type: 'bearer',
+        scope: 'read:user'
+      });
+    });
+
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+      throw new Error('OAuth helper test server did not bind to a TCP port');
+    }
+
+    await fs.mkdir(resultFile, { recursive: true });
+    await fs.writeFile(path.join(authDir, 'oauth-helper-state.json'), JSON.stringify({ stale: true }), 'utf-8');
+
+    try {
+      const child = spawnHelper(
+        helperPath,
+        `http://127.0.0.1:${address.port}/token`,
+        tempHome,
+        {
+          NODE_ENV: 'test',
+          DOLLHOUSE_OAUTH_HELPER_TEST_POST_RESULT_DELAY_MS: '2000'
+        }
+      );
+      await waitForFileContent(logFile, 'Failed to write terminal result');
+
+      expect(child.kill('SIGTERM')).toBe(true);
+      const result = await waitForClose(child);
+
+      expect(result.code).toBe(0);
+      expect(result.signal).toBeNull();
+      const resultPathStat = await fs.stat(resultFile);
+      expect(resultPathStat.isDirectory()).toBe(true);
+      await expect(fs.access(path.join(authDir, 'oauth-helper-state.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+      await expect(fs.access(path.join(authDir, 'oauth-helper.pid'))).rejects.toMatchObject({ code: 'ENOENT' });
+    } finally {
+      await closeServer(server);
       await fs.rm(tempHome, { recursive: true, force: true });
     }
   }, 15_000);
