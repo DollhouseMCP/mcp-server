@@ -18,8 +18,14 @@ import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { fireAndForgetPersist, handleInitializeError } from './persistence-utils.js';
 import type { FileOperationsService } from '../services/FileOperationsService.js';
-import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { normalizeMCPAQLElementType } from '../handlers/mcp-aql/types.js';
+import {
+  ACTIVATION_SESSION_ID_PATTERN,
+  normalizeActivationInput,
+  normalizeActivationType,
+  normalizePersistedActivationMap,
+  removeActivationRecords,
+  upsertActivationRecord,
+} from './activation-record-utils.js';
 import type {
   IActivationStateStore,
   PersistedActivation,
@@ -31,8 +37,6 @@ import type {
 // ── Constants ───────────────────────────────────────────────────────
 
 /** Session ID validation: filename-safe alphanumeric/hyphen/underscore, 1-64 chars. */
-const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
-
 /** Store name for logging and security events. */
 const STORE_NAME = 'FileActivationStateStore';
 
@@ -45,15 +49,10 @@ const STORE_NAME = 'FileActivationStateStore';
  * Returns undefined for unrecognized types.
  */
 export function normalizeType(elementType: string): string | undefined {
-  return normalizeMCPAQLElementType(elementType);
+  return normalizeActivationType(elementType);
 }
 
-/**
- * Normalize an activation identifier (name or filename) for safe storage.
- */
-export function normalizeActivationIdentifier(value: string): string {
-  return UnicodeValidator.normalize(value).normalizedContent.trim();
-}
+export { normalizeActivationIdentifier } from './activation-record-utils.js';
 
 /**
  * Validates and returns the session ID from environment or default.
@@ -66,7 +65,7 @@ function resolveSessionId(): string {
     return id;
   }
 
-  if (!SESSION_ID_PATTERN.test(envValue)) {
+  if (!ACTIVATION_SESSION_ID_PATTERN.test(envValue)) {
     logger.warn(
       `Invalid DOLLHOUSE_SESSION_ID '${envValue}' — must contain only letters, numbers, hyphens, or underscores, 1-64 chars. Falling back to 'default'.`
     );
@@ -84,19 +83,13 @@ export function validateExternalSessionId(value: string): string {
   if (!trimmed) {
     throw new Error('[FileActivationStateStore] Invalid external sessionId: value must not be empty');
   }
-  if (!SESSION_ID_PATTERN.test(trimmed)) {
+  if (!ACTIVATION_SESSION_ID_PATTERN.test(trimmed)) {
     throw new Error(
       `[FileActivationStateStore] Invalid external sessionId '${trimmed.slice(0, 64)}' — ` +
       'must contain only letters, numbers, hyphens, or underscores (1-64 characters)'
     );
   }
   return trimmed;
-}
-
-function normalizeIdentity(value: PersistedActivationIdentity | undefined): PersistedActivationIdentity | undefined {
-  if (!value || (value.kind !== 'file' && value.kind !== 'database')) return undefined;
-  const normalizedValue = normalizeActivationIdentifier(value.value);
-  return normalizedValue ? { kind: value.kind, value: normalizedValue } : undefined;
 }
 
 /**
@@ -151,29 +144,7 @@ export class FileActivationStateStore implements IActivationStateStore {
       const data = JSON.parse(content) as PersistedActivationState;
 
       if (data.version === 1 && data.activations && typeof data.activations === 'object') {
-        for (const [rawType, activations] of Object.entries(data.activations)) {
-          const type = normalizeType(rawType);
-          if (type && Array.isArray(activations)) {
-            this.state.activations[type] = activations.flatMap((a) => {
-              if (!a || typeof a.name !== 'string') return [];
-
-              const normalizedName = normalizeActivationIdentifier(a.name);
-              if (!normalizedName) return [];
-
-              const normalizedFilename = typeof a.filename === 'string'
-                ? normalizeActivationIdentifier(a.filename)
-                : undefined;
-              const normalizedIdentity = normalizeIdentity(a.identity);
-
-              return [{
-                ...a,
-                name: normalizedName,
-                ...(normalizedFilename ? { filename: normalizedFilename } : {}),
-                ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
-              }];
-            });
-          }
-        }
+        this.state.activations = normalizePersistedActivationMap(data.activations);
 
         const totalCount = this.getTotalActivationCount();
         if (totalCount > 0) {
@@ -208,70 +179,31 @@ export class FileActivationStateStore implements IActivationStateStore {
 
     const type = normalizeType(elementType);
     if (!type) return;
-    const normalizedName = normalizeActivationIdentifier(name);
-    if (!normalizedName) return;
-    const normalizedFilename = typeof filename === 'string'
-      ? normalizeActivationIdentifier(filename)
-      : undefined;
-    const normalizedIdentity = normalizeIdentity(identity);
+    const input = normalizeActivationInput(name, filename, identity);
+    if (!input) return;
 
     if (!this.state.activations[type]) {
       this.state.activations[type] = [];
     }
 
-    // Deduplicate by durable identity first. A name-only match upgrades a
-    // legacy record so the next restart no longer depends on display metadata.
-    const existing = this.state.activations[type];
-    let activeRecord = normalizedIdentity
-      ? existing.find(a => a.identity?.kind === normalizedIdentity.kind && a.identity.value === normalizedIdentity.value)
-      : undefined;
-    activeRecord ??= normalizedIdentity?.kind === 'file'
-      ? existing.find(a => !a.identity && a.filename === normalizedIdentity.value)
-      : undefined;
-    activeRecord ??= normalizedFilename
-      ? existing.find(a => a.filename === normalizedFilename)
-      : undefined;
-    activeRecord ??= existing.find(a =>
-      a.name === normalizedName && (!normalizedIdentity || !a.identity)
+    const mutation = upsertActivationRecord(
+      this.state.activations[type],
+      type,
+      input,
+      new Date().toISOString(),
     );
-    if (activeRecord) {
-      let changed = false;
-      if (activeRecord.name !== normalizedName) {
-        activeRecord.name = normalizedName;
-        changed = true;
-      }
-      if (normalizedFilename && activeRecord.filename !== normalizedFilename) {
-        activeRecord.filename = normalizedFilename;
-        changed = true;
-      }
-      if (normalizedIdentity && (
-        activeRecord.identity?.kind !== normalizedIdentity.kind ||
-        activeRecord.identity?.value !== normalizedIdentity.value
-      )) {
-        activeRecord.identity = normalizedIdentity;
-        changed = true;
-      }
-      if (type === 'agent' && normalizedIdentity && activeRecord.filename) {
-        delete activeRecord.filename;
-        changed = true;
-      }
-      if (changed) this.persistAsync();
+    if (mutation === 'unchanged') return;
+    if (mutation === 'updated') {
+      this.persistAsync();
       return;
     }
-
-    existing.push({
-      name: normalizedName,
-      ...(normalizedFilename ? { filename: normalizedFilename } : {}),
-      ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
-      activatedAt: new Date().toISOString(),
-    });
 
     SecurityMonitor.logSecurityEvent({
       type: 'ELEMENT_ACTIVATED',
       severity: 'LOW',
       source: 'FileActivationStateStore.recordActivation',
-      details: `Activation recorded: ${type}/${normalizedName}`,
-      additionalData: { sessionId: this.sessionId, elementType: type, name: normalizedName },
+      details: `Activation recorded: ${type}/${input.name}`,
+      additionalData: { sessionId: this.sessionId, elementType: type, name: input.name },
     });
 
     this.persistAsync();
@@ -287,37 +219,22 @@ export class FileActivationStateStore implements IActivationStateStore {
 
     const type = normalizeType(elementType);
     if (!type) return;
-    const normalizedName = normalizeActivationIdentifier(name);
-    if (!normalizedName) return;
-    const normalizedFilename = typeof filename === 'string'
-      ? normalizeActivationIdentifier(filename)
-      : undefined;
-    const normalizedIdentity = normalizeIdentity(identity);
+    const input = normalizeActivationInput(name, filename, identity);
+    if (!input) return;
 
     const activations = this.state.activations[type];
     if (!activations) return;
 
-    const initialLength = activations.length;
-    this.state.activations[type] = activations.filter(a => {
-      if (normalizedIdentity) {
-        const identityMatches = a.identity?.kind === normalizedIdentity.kind &&
-          a.identity.value === normalizedIdentity.value;
-        const legacyNameMatches = !a.identity && a.name === normalizedName;
-        return !identityMatches && !legacyNameMatches;
-      }
-      if (normalizedFilename) {
-        return a.filename !== normalizedFilename && !(!a.filename && a.name === normalizedName);
-      }
-      return a.name !== normalizedName && a.filename !== normalizedName;
-    });
+    const removal = removeActivationRecords(activations, input);
+    this.state.activations[type] = removal.records;
 
-    if (this.state.activations[type].length !== initialLength) {
+    if (removal.removed) {
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_DEACTIVATED',
         severity: 'LOW',
         source: 'FileActivationStateStore.recordDeactivation',
-        details: `Deactivation recorded: ${type}/${normalizedName}`,
-        additionalData: { sessionId: this.sessionId, elementType: type, name: normalizedName },
+        details: `Deactivation recorded: ${type}/${input.name}`,
+        additionalData: { sessionId: this.sessionId, elementType: type, name: input.name },
       });
 
       this.persistAsync();
@@ -420,32 +337,7 @@ export class FileActivationStateStore implements IActivationStateStore {
   private normalizePersistedActivationsForSnapshot(
     activations: PersistedActivationState['activations']
   ): Record<string, PersistedActivation[]> {
-    const normalized: Record<string, PersistedActivation[]> = {};
-    for (const [rawType, entries] of Object.entries(activations)) {
-      const type = normalizeType(rawType);
-      if (!type || !Array.isArray(entries)) continue;
-
-      const normalizedEntries = entries.flatMap((entry) => {
-        if (!entry || typeof entry.name !== 'string') return [];
-        const normalizedName = normalizeActivationIdentifier(entry.name);
-        if (!normalizedName) return [];
-        const normalizedFilename = typeof entry.filename === 'string'
-          ? normalizeActivationIdentifier(entry.filename)
-          : undefined;
-        const normalizedIdentity = normalizeIdentity(entry.identity);
-        return [{
-          ...entry,
-          name: normalizedName,
-          ...(normalizedFilename ? { filename: normalizedFilename } : {}),
-          ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
-        }];
-      });
-
-      if (normalizedEntries.length > 0) {
-        normalized[type] = normalizedEntries;
-      }
-    }
-    return normalized;
+    return normalizePersistedActivationMap(activations);
   }
 
   // ── Private persistence methods ───────────────────────────────────

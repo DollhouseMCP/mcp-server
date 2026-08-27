@@ -392,9 +392,11 @@ export class ElementCRUDHandler {
       // Issue #598, #1946: Persist activation state for session restore (per-session)
       const sessionStore = this.getSessionActivationStore();
       if (sessionStore) {
-        const filename = normalizedType === ElementType.PERSONA
-          ? this.personaManager.findPersona(name)?.filename
-          : undefined;
+        const filename = result.activationRecord?.filename ?? (
+          normalizedType === ElementType.PERSONA
+            ? this.personaManager.findPersona(name)?.filename
+            : undefined
+        );
         sessionStore.recordActivation(
           normalizedType,
           result.activationRecord?.name ?? name,
@@ -1053,7 +1055,7 @@ export class ElementCRUDHandler {
         sessionStore.recordDeactivation(
           normalizedType,
           result.activationRecord?.name ?? name,
-          undefined,
+          result.activationRecord?.filename,
           result.activationRecord?.identity,
         );
       }

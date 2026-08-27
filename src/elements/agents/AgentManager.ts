@@ -1066,10 +1066,7 @@ export class AgentManager extends BaseElementManager<Agent> {
     const identity = this.getActivationIdentity(agent);
     const key = activeKey ?? identity?.value ?? agent.metadata.name;
     this.getActivationSet().delete(key);
-    this.getActivationSet().delete(agent.metadata.name);
-    this.getActivationSet().delete(identifier);
     this.getActivationNameMap().delete(key);
-    if (identity) this.getActivationNameMap().delete(identity.value);
 
     // Update agent status in memory
     await agent.deactivate();

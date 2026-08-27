@@ -19,6 +19,7 @@ export interface MCPResponse {
   /** Internal persistence metadata; not rendered into the MCP response body. */
   activationRecord?: {
     name: string;
+    filename?: string;
     identity?: PersistedActivationIdentity;
   };
 }

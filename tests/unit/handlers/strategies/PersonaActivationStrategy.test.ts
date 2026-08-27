@@ -31,6 +31,7 @@ describe('PersonaActivationStrategy', () => {
   describe('activate', () => {
     it('should activate persona successfully', async () => {
       const mockPersona = {
+        filename: 'test-persona.md',
         metadata: {
           name: 'test-persona',
           description: 'A test persona'
@@ -51,6 +52,10 @@ describe('PersonaActivationStrategy', () => {
       expect(result.content[0].text).toContain('test-persona');
       expect(result.content[0].text).toContain('A test persona');
       expect(result.content[0].text).toContain('Persona instructions here');
+      expect(result.activationRecord).toEqual({
+        name: 'test-persona',
+        filename: 'test-persona.md',
+      });
       expect(mockPersonaManager.activatePersona).toHaveBeenCalledWith('test-persona');
     });
 
@@ -148,6 +153,7 @@ describe('PersonaActivationStrategy', () => {
 
   describe('deactivate', () => {
     const mockPersona = {
+      filename: 'test-persona.md',
       metadata: { name: 'test-persona', description: 'Test' },
       content: 'Content',
       unique_id: 'test-id'
@@ -165,6 +171,10 @@ describe('PersonaActivationStrategy', () => {
       expect(result.content[0].text).toContain('>>');
       expect(result.content[0].text).toContain('✅');
       expect(result.content[0].text).toContain('Persona deactivated');
+      expect(result.activationRecord).toEqual({
+        name: 'test-persona',
+        filename: 'test-persona.md',
+      });
       expect(mockPersonaManager.deactivatePersona).toHaveBeenCalled();
     });
 

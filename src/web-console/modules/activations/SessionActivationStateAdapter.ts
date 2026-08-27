@@ -39,18 +39,34 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
     name: string,
   ): Promise<SessionActivationChangeResult> {
     const state = this.registry.getOrCreate(sessionId);
-    const storeRecord = state.activationStore?.getActivations(type).find(record => record.name === name);
+    const agentEntry = type === 'agents'
+      ? Array.from(state.agentNamesByIdentity.entries()).find(([identity, alias]) =>
+        identity === name || alias === name
+      )
+      : undefined;
+    const storeRecord = state.activationStore?.getActivations(type).find(record =>
+      record.name === name || (
+        type === 'agents' &&
+        (record.identity?.value === name || record.identity?.value === agentEntry?.[0])
+      )
+    );
     const fallbackRecord = this.fallbackRecords.get(recordKey(sessionId, type, name));
-    const activationKey = type === 'agents' && storeRecord?.identity
-      ? storeRecord.identity.value
+    const activationKey = type === 'agents'
+      ? storeRecord?.identity?.value ?? agentEntry?.[0] ?? name
       : name;
+    const displayName = agentEntry?.[1] ?? storeRecord?.name ?? name;
     const changed = !activationSet(state, type).has(activationKey) && !storeRecord && !fallbackRecord;
     activationSet(state, type).add(activationKey);
     if (type === 'agents' && storeRecord?.identity) {
-      state.agentNamesByIdentity.set(activationKey, name);
+      state.agentNamesByIdentity.set(activationKey, displayName);
     }
     if (state.activationStore?.isEnabled()) {
-      state.activationStore.recordActivation(type, name);
+      state.activationStore.recordActivation(
+        type,
+        displayName,
+        storeRecord?.filename,
+        storeRecord?.identity,
+      );
     } else if (!fallbackRecord) {
       this.fallbackRecords.set(recordKey(sessionId, type, name), {
         type,
@@ -58,10 +74,12 @@ export class RegistrySessionActivationStateAdapter implements ISessionActivation
         activatedAt: new Date(),
       });
     }
-    const persistedRecord = state.activationStore?.getActivations(type).find(record => record.name === name);
+    const persistedRecord = state.activationStore?.getActivations(type).find(record =>
+      record.name === displayName || record.identity?.value === activationKey
+    );
     const record = {
       type,
-      name,
+      name: displayName,
       activatedAt: persistedRecord
         ? parseActivationDate(persistedRecord.activatedAt)
         : this.fallbackRecords.get(recordKey(sessionId, type, name))?.activatedAt ?? new Date(),

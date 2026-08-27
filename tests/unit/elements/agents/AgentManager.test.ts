@@ -193,6 +193,24 @@ describe('AgentManager', () => {
       expect(await agentManager.getActiveAgents()).toEqual([first, second]);
     });
 
+    it('deactivates only the resolved identity when another identity matches its display name', async () => {
+      const first = new Agent({ name: 'second.md' }, metadataService);
+      const second = new Agent({ name: 'Other Agent' }, metadataService);
+      Object.defineProperty(first, 'filePath', { value: 'first.md', configurable: true });
+      Object.defineProperty(second, 'filePath', { value: 'second.md', configurable: true });
+      jest.spyOn(agentManager as any, 'scanAndEvict').mockResolvedValue(undefined);
+      jest.spyOn(agentManager, 'findByStorageIdentity').mockImplementation(async (identity) =>
+        identity === 'first.md' ? first : identity === 'second.md' ? second : undefined
+      );
+
+      await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'first.md' });
+      await agentManager.activateAgentByStorageIdentity({ kind: 'file', value: 'second.md' });
+      await agentManager.deactivateAgent('first.md');
+
+      expect((agentManager as any).getActivationSet()).toEqual(new Set(['second.md']));
+      expect(await agentManager.getActiveAgents()).toEqual([second]);
+    });
+
     it('keeps durable agent identities isolated between sessions', async () => {
       const registry = new SessionActivationRegistry('session-a');
       let sessionId = 'session-a';

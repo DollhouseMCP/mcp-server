@@ -66,7 +66,11 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
       content: [{
         type: "text",
         text
-      }]
+      }],
+      activationRecord: {
+        name: persona.metadata.name,
+        filename: persona.filename,
+      },
     };
   }
 
@@ -107,7 +111,11 @@ export class PersonaActivationStrategy extends BaseActivationStrategy implements
       content: [{
         type: "text",
         text: `${indicator}✅ ${result.message}`
-      }]
+      }],
+      activationRecord: {
+        name: persona.metadata.name,
+        filename: persona.filename,
+      },
     };
   }
 

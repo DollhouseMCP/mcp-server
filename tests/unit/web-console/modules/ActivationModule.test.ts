@@ -427,6 +427,32 @@ describe('RegistrySessionActivationStateAdapter', () => {
     expect(state.agentNamesByIdentity.size).toBe(0);
     expect(store.getActivations(AGENT_TYPE)).toEqual([]);
   });
+
+  it('re-activates a renamed agent through its durable identity without duplicating persistence', async () => {
+    const registry = new SessionActivationRegistry('default-session');
+    const state = registry.getOrCreate(SESSION_ID);
+    const store = new FixtureActivationStateStore(SESSION_ID);
+    const identity = { kind: 'file' as const, value: 'stable-agent.md' };
+    store.recordActivation(AGENT_TYPE, 'Original Agent', undefined, identity);
+    state.activationStore = store;
+    state.agents.add(identity.value);
+    state.agentNamesByIdentity.set(identity.value, 'Renamed Agent');
+    const adapter = new RegistrySessionActivationStateAdapter(registry);
+
+    await expect(adapter.activate(SESSION_ID, AGENT_TYPE, 'Renamed Agent')).resolves.toEqual({
+      changed: false,
+      record: {
+        type: AGENT_TYPE,
+        name: 'Renamed Agent',
+        activatedAt: NOW,
+      },
+    });
+    expect(store.getActivations(AGENT_TYPE)).toEqual([{
+      name: 'Renamed Agent',
+      identity,
+      activatedAt: NOW.toISOString(),
+    }]);
+  });
 });
 
 class FixtureActivationStateStore implements IActivationStateStore {
@@ -445,6 +471,15 @@ class FixtureActivationStateStore implements IActivationStateStore {
     identity?: PersistedActivationIdentity,
   ): void {
     const existing = this.activations.get(elementType) ?? [];
+    const identityMatch = identity
+      ? existing.find(activation =>
+        activation.identity?.kind === identity.kind && activation.identity.value === identity.value
+      )
+      : undefined;
+    if (identityMatch) {
+      identityMatch.name = name;
+      return;
+    }
     if (existing.some(activation => activation.name === name)) return;
     this.activations.set(elementType, [
       ...existing,

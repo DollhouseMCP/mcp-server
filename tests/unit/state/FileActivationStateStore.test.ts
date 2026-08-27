@@ -541,6 +541,17 @@ describe('FileActivationStateStore', () => {
       ]);
     });
 
+    it('should not treat another record filename as a name-only deactivation match', () => {
+      store.recordActivation('persona', 'First Persona', 'Shared Name');
+      store.recordActivation('persona', 'Shared Name', 'second-persona.md');
+
+      store.recordDeactivation('persona', 'Shared Name');
+
+      expect(store.getActivations('persona')).toEqual([
+        expect.objectContaining({ name: 'First Persona', filename: 'Shared Name' }),
+      ]);
+    });
+
     it('should log ELEMENT_DEACTIVATED security event', async () => {
       // Re-import SecurityMonitor mock to verify it's wired up
       const { SecurityMonitor } = await import('../../../src/security/securityMonitor.js');

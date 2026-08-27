@@ -10,9 +10,15 @@
 
 import { logger } from '../utils/logger.js';
 import { SecurityMonitor } from '../security/securityMonitor.js';
-import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { normalizeMCPAQLElementType } from '../handlers/mcp-aql/types.js';
 import type { DatabaseInstance } from '../database/connection.js';
+import {
+  normalizeActivationIdentifier,
+  normalizeActivationInput,
+  normalizeActivationType,
+  normalizePersistedActivationMap,
+  removeActivationRecords,
+  upsertActivationRecord,
+} from './activation-record-utils.js';
 import {
   validateDbStoreParams,
   validateDbSessionId,
@@ -35,20 +41,6 @@ import type {
 const STORE_NAME = 'DatabaseActivationStateStore';
 
 // ── Helpers ─────────────────────────────────────────────────────────
-
-function normalizeType(elementType: string): string | undefined {
-  return normalizeMCPAQLElementType(elementType);
-}
-
-function normalizeIdentifier(value: string): string {
-  return UnicodeValidator.normalize(value).normalizedContent.trim();
-}
-
-function normalizeIdentity(value: PersistedActivationIdentity | undefined): PersistedActivationIdentity | undefined {
-  if (!value || (value.kind !== 'file' && value.kind !== 'database')) return undefined;
-  const normalizedValue = normalizeIdentifier(value.value);
-  return normalizedValue ? { kind: value.kind, value: normalizedValue } : undefined;
-}
 
 // ── Implementation ──────────────────────────────────────────────────
 
@@ -89,26 +81,7 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
       const raw = row.activations as Record<string, PersistedActivation[]> | null;
       if (!raw || typeof raw !== 'object') return;
 
-      for (const [rawType, entries] of Object.entries(raw)) {
-        const type = normalizeType(rawType);
-        if (!type || !Array.isArray(entries)) continue;
-
-        this.activations[type] = entries.flatMap((a) => {
-          if (!a || typeof a.name !== 'string') return [];
-          const normalizedName = normalizeIdentifier(a.name);
-          if (!normalizedName) return [];
-          const normalizedFilename = typeof a.filename === 'string'
-            ? normalizeIdentifier(a.filename)
-            : undefined;
-          const normalizedIdentity = normalizeIdentity(a.identity);
-          return [{
-            ...a,
-            name: normalizedName,
-            ...(normalizedFilename ? { filename: normalizedFilename } : {}),
-            ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
-          }];
-        });
-      }
+      this.activations = normalizePersistedActivationMap(raw);
 
       const totalCount = this.getTotalActivationCount();
       if (totalCount > 0) {
@@ -138,70 +111,33 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     filename?: string,
     identity?: PersistedActivationIdentity,
   ): void {
-    const type = normalizeType(elementType);
+    const type = normalizeActivationType(elementType);
     if (!type) return;
-    const normalizedName = normalizeIdentifier(name);
-    if (!normalizedName) return;
-    const normalizedFilename = typeof filename === 'string'
-      ? normalizeIdentifier(filename)
-      : undefined;
-    const normalizedIdentity = normalizeIdentity(identity);
+    const input = normalizeActivationInput(name, filename, identity);
+    if (!input) return;
 
     if (!this.activations[type]) {
       this.activations[type] = [];
     }
 
-    const existing = this.activations[type];
-    let activeRecord = normalizedIdentity
-      ? existing.find(a => a.identity?.kind === normalizedIdentity.kind && a.identity.value === normalizedIdentity.value)
-      : undefined;
-    activeRecord ??= normalizedIdentity?.kind === 'file'
-      ? existing.find(a => !a.identity && a.filename === normalizedIdentity.value)
-      : undefined;
-    activeRecord ??= normalizedFilename
-      ? existing.find(a => a.filename === normalizedFilename)
-      : undefined;
-    activeRecord ??= existing.find(a =>
-      a.name === normalizedName && (!normalizedIdentity || !a.identity)
+    const mutation = upsertActivationRecord(
+      this.activations[type],
+      type,
+      input,
+      new Date().toISOString(),
     );
-    if (activeRecord) {
-      let changed = false;
-      if (activeRecord.name !== normalizedName) {
-        activeRecord.name = normalizedName;
-        changed = true;
-      }
-      if (normalizedFilename && activeRecord.filename !== normalizedFilename) {
-        activeRecord.filename = normalizedFilename;
-        changed = true;
-      }
-      if (normalizedIdentity && (
-        activeRecord.identity?.kind !== normalizedIdentity.kind ||
-        activeRecord.identity?.value !== normalizedIdentity.value
-      )) {
-        activeRecord.identity = normalizedIdentity;
-        changed = true;
-      }
-      if (type === 'agent' && normalizedIdentity && activeRecord.filename) {
-        delete activeRecord.filename;
-        changed = true;
-      }
-      if (changed) this.persistAsync();
+    if (mutation === 'unchanged') return;
+    if (mutation === 'updated') {
+      this.persistAsync();
       return;
     }
-
-    existing.push({
-      name: normalizedName,
-      ...(normalizedFilename ? { filename: normalizedFilename } : {}),
-      ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
-      activatedAt: new Date().toISOString(),
-    });
 
     SecurityMonitor.logSecurityEvent({
       type: 'ELEMENT_ACTIVATED',
       severity: 'LOW',
       source: `${STORE_NAME}.recordActivation`,
-      details: `Activation recorded: ${type}/${normalizedName}`,
-      additionalData: { sessionId: this.sessionId, elementType: type, name: normalizedName },
+      details: `Activation recorded: ${type}/${input.name}`,
+      additionalData: { sessionId: this.sessionId, elementType: type, name: input.name },
     });
 
     this.persistAsync();
@@ -213,39 +149,24 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
     filename?: string,
     identity?: PersistedActivationIdentity,
   ): void {
-    const type = normalizeType(elementType);
+    const type = normalizeActivationType(elementType);
     if (!type) return;
-    const normalizedName = normalizeIdentifier(name);
-    if (!normalizedName) return;
-    const normalizedFilename = typeof filename === 'string'
-      ? normalizeIdentifier(filename)
-      : undefined;
-    const normalizedIdentity = normalizeIdentity(identity);
+    const input = normalizeActivationInput(name, filename, identity);
+    if (!input) return;
 
     const activations = this.activations[type];
     if (!activations) return;
 
-    const initialLength = activations.length;
-    this.activations[type] = activations.filter(a => {
-      if (normalizedIdentity) {
-        const identityMatches = a.identity?.kind === normalizedIdentity.kind &&
-          a.identity.value === normalizedIdentity.value;
-        const legacyNameMatches = !a.identity && a.name === normalizedName;
-        return !identityMatches && !legacyNameMatches;
-      }
-      if (normalizedFilename) {
-        return a.filename !== normalizedFilename && !(!a.filename && a.name === normalizedName);
-      }
-      return a.name !== normalizedName && a.filename !== normalizedName;
-    });
+    const removal = removeActivationRecords(activations, input);
+    this.activations[type] = removal.records;
 
-    if (this.activations[type].length !== initialLength) {
+    if (removal.removed) {
       SecurityMonitor.logSecurityEvent({
         type: 'ELEMENT_DEACTIVATED',
         severity: 'LOW',
         source: `${STORE_NAME}.recordDeactivation`,
-        details: `Deactivation recorded: ${type}/${normalizedName}`,
-        additionalData: { sessionId: this.sessionId, elementType: type, name: normalizedName },
+        details: `Deactivation recorded: ${type}/${input.name}`,
+        additionalData: { sessionId: this.sessionId, elementType: type, name: input.name },
       });
 
       this.persistAsync();
@@ -262,7 +183,7 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
   }
 
   getActivations(elementType: string): PersistedActivation[] {
-    const type = normalizeType(elementType);
+    const type = normalizeActivationType(elementType);
     if (!type) return [];
     return this.activations[type] ? [...this.activations[type]] : [];
   }
@@ -288,7 +209,7 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
   async listPersistedActivationStates(sessionId?: string): Promise<PersistedActivationStateSnapshot[]> {
     if (sessionId !== undefined) validateDbSessionId(sessionId);
     try {
-      const normalizedSessionId = sessionId ? normalizeIdentifier(sessionId) : undefined;
+      const normalizedSessionId = sessionId ? normalizeActivationIdentifier(sessionId) : undefined;
       const rows = await queryUserSessions(this.db, this.userId, normalizedSessionId);
 
       return rows
@@ -320,32 +241,7 @@ export class DatabaseActivationStateStore implements IActivationStateStore {
   private normalizeActivationsForSnapshot(
     raw: Record<string, PersistedActivation[]>,
   ): Record<string, PersistedActivation[]> {
-    const normalized: Record<string, PersistedActivation[]> = {};
-    for (const [rawType, entries] of Object.entries(raw)) {
-      const type = normalizeType(rawType);
-      if (!type || !Array.isArray(entries)) continue;
-
-      const normalizedEntries = entries.flatMap((entry) => {
-        if (!entry || typeof entry.name !== 'string') return [];
-        const normalizedName = normalizeIdentifier(entry.name);
-        if (!normalizedName) return [];
-        const normalizedFilename = typeof entry.filename === 'string'
-          ? normalizeIdentifier(entry.filename)
-          : undefined;
-        const normalizedIdentity = normalizeIdentity(entry.identity);
-        return [{
-          ...entry,
-          name: normalizedName,
-          ...(normalizedFilename ? { filename: normalizedFilename } : {}),
-          ...(normalizedIdentity ? { identity: normalizedIdentity } : {}),
-        }];
-      });
-
-      if (normalizedEntries.length > 0) {
-        normalized[type] = normalizedEntries;
-      }
-    }
-    return normalized;
+    return normalizePersistedActivationMap(raw);
   }
 
   private persistAsync(): void {
