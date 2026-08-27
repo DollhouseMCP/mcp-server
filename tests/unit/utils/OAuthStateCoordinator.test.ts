@@ -4,6 +4,7 @@ import fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import { pathToFileURL } from 'node:url';
 import {
   withOAuthStateLock,
@@ -165,10 +166,15 @@ describe('OAuthStateCoordinator', () => {
   it('includes ticket allocation retries in the lock timeout', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
-    let now = 0;
+    let monotonicNow = 0;
+    let wallNow = 1_000_000;
+    jest.spyOn(performance, 'now').mockImplementation(() => {
+      monotonicNow += 1_000;
+      return monotonicNow;
+    });
     jest.spyOn(Date, 'now').mockImplementation(() => {
-      now += 1_000;
-      return now;
+      wallNow -= 60_000;
+      return wallNow;
     });
     jest.spyOn(fsSync, 'linkSync').mockImplementation(() => {
       throw Object.assign(new Error('ticket already exists'), { code: 'EEXIST' });
@@ -359,7 +365,7 @@ describe('OAuthStateCoordinator', () => {
     await fs.writeFile(instrumentedPath, instrumentedSource, 'utf8');
     const instrumentedModule = await import(pathToFileURL(instrumentedPath).href) as {
       staleMarkerStillBelongsToProcess: (
-        marker: { identity: string; mtimeMs: number },
+        marker: { identity: string; writtenAt: number; mtimeMs: number },
         ownerIdentity: string,
         currentIdentity: string
       ) => boolean;
@@ -370,12 +376,12 @@ describe('OAuthStateCoordinator', () => {
     // rollback. The original OS identity is retained within the known Node /
     // kernel timestamp skew, while a materially different reused PID is not.
     expect(instrumentedModule.staleMarkerStillBelongsToProcess(
-      { identity: markerIdentity, mtimeMs: 9_000 },
+      { identity: markerIdentity, writtenAt: 9_000, mtimeMs: 0 },
       markerIdentity,
       'win32:10001'
     )).toBe(true);
     expect(instrumentedModule.staleMarkerStillBelongsToProcess(
-      { identity: markerIdentity, mtimeMs: 9_000 },
+      { identity: markerIdentity, writtenAt: 9_000, mtimeMs: 0 },
       markerIdentity,
       'win32:13000'
     )).toBe(false);
@@ -383,9 +389,18 @@ describe('OAuthStateCoordinator', () => {
     // Without rollback evidence, exact marker ordering remains strict even
     // when the two process-start identities happen to be close.
     expect(instrumentedModule.staleMarkerStillBelongsToProcess(
-      { identity: markerIdentity, mtimeMs: 10_500 },
+      { identity: markerIdentity, writtenAt: 10_500, mtimeMs: 0 },
       markerIdentity,
       'win32:10501'
+    )).toBe(false);
+
+    // Rollback after marker publication can make a reused PID's start appear
+    // older than the marker, but it still cannot agree with the recorded owner
+    // start. The filesystem mtime is intentionally irrelevant here.
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, writtenAt: 20_000, mtimeMs: 99_999_999 },
+      markerIdentity,
+      'win32:5000'
     )).toBe(false);
   });
 

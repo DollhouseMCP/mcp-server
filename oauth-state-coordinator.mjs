@@ -32,6 +32,21 @@ function waitSync(milliseconds) {
   Atomics.wait(LOCK_WAIT_SIGNAL, 0, 0, milliseconds);
 }
 
+function createLockDeadline() {
+  return {
+    monotonic: performance.now() + LOCK_TIMEOUT_MS,
+    epoch: Date.now() + LOCK_TIMEOUT_MS
+  };
+}
+
+function remainingLockTime(deadline) {
+  return deadline.monotonic - performance.now();
+}
+
+function lockDeadlineExpired(deadline) {
+  return remainingLockTime(deadline) <= 0;
+}
+
 function ensureLockDirectorySync(lockDirectory) {
   fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o700 });
 }
@@ -55,7 +70,7 @@ function linuxProcessIdentity(pid) {
 }
 
 function commandProcessIdentity(executable, args, prefix, deadline, remainingProviders = 1) {
-  const remainingTime = deadline - Date.now();
+  const remainingTime = remainingLockTime(deadline);
   if (remainingTime <= 0) return undefined;
   const providerBudget = Math.max(1, Math.floor(remainingTime / remainingProviders));
   const output = execFileSync(executable, args, {
@@ -78,7 +93,7 @@ function windowsSystemExecutables() {
 }
 
 function windowsWmicIdentity(pid, executable, deadline, remainingProviders) {
-  const remainingTime = deadline - Date.now();
+  const remainingTime = remainingLockTime(deadline);
   if (remainingTime <= 0) return undefined;
   const providerBudget = Math.max(1, Math.floor(remainingTime / remainingProviders));
   try {
@@ -146,7 +161,7 @@ function windowsManagementIdentity(pid, deadline) {
 }
 
 function processIdentity(pid, deadline) {
-  if (Date.now() >= deadline) return undefined;
+  if (lockDeadlineExpired(deadline)) return undefined;
   if (!Number.isSafeInteger(pid) || pid <= 0 || !processExists(pid)) return null;
   try {
     if (process.platform === 'linux') return linuxProcessIdentity(pid);
@@ -162,7 +177,7 @@ function processIdentity(pid, deadline) {
 
 function currentProcessIdentity(deadline) {
   if (typeof cachedCurrentProcessIdentity === 'string') return cachedCurrentProcessIdentity;
-  if (Date.now() >= deadline) return undefined;
+  if (lockDeadlineExpired(deadline)) return undefined;
   // Starting a management shell in every Windows contender causes the probe
   // processes themselves to exhaust the shared lock deadline. Node exposes
   // its own high-resolution process time origin without spawning. Foreign
@@ -182,8 +197,20 @@ function readProcessIdentityMarkerSync(lockDirectory, pid) {
   try {
     const markerPath = processIdentityMarkerPath(lockDirectory, pid);
     const mtimeMs = fs.statSync(markerPath).mtimeMs;
-    const identity = fs.readFileSync(markerPath, 'utf8').trim();
-    return identity ? { identity, mtimeMs } : null;
+    const serializedMarker = fs.readFileSync(markerPath, 'utf8').trim();
+    if (!serializedMarker) return null;
+    try {
+      const marker = JSON.parse(serializedMarker);
+      return typeof marker?.identity === 'string' && marker.identity.length > 0 &&
+        Number.isFinite(marker.writtenAt)
+        ? { identity: marker.identity, writtenAt: marker.writtenAt, mtimeMs }
+        : null;
+    } catch {
+      // Markers written by the immediately preceding implementation contain
+      // only the identity. They are short-lived and retain mtime fallback
+      // compatibility across an in-place beta update.
+      return { identity: serializedMarker, writtenAt: mtimeMs, mtimeMs };
+    }
   } catch {
     return null;
   }
@@ -191,7 +218,7 @@ function readProcessIdentityMarkerSync(lockDirectory, pid) {
 
 function retainCurrentProcessIdentityMarkerSync(lockDirectory, identity) {
   const markerPath = processIdentityMarkerPath(lockDirectory, process.pid);
-  writeFileAtomicallySync(markerPath, identity);
+  writeFileAtomicallySync(markerPath, JSON.stringify({ identity, writtenAt: Date.now() }));
   currentProcessMarkerReferences.set(
     markerPath,
     (currentProcessMarkerReferences.get(markerPath) ?? 0) + 1
@@ -233,20 +260,23 @@ function staleMarkerStillBelongsToProcess(marker, ownerIdentity, currentIdentity
   if (!ownerWindowsStart || !currentWindowsStart) return false;
   const ownerStart = Number(ownerWindowsStart);
   const currentStart = Number(currentWindowsStart);
-  if (marker.mtimeMs < ownerStart) {
+  const identitiesAgree = Math.abs(currentStart - ownerStart) <=
+    WINDOWS_START_TIME_TOLERANCE_MS;
+  if (marker.writtenAt < ownerStart) {
     // The wall clock moved backward between this process starting and writing
     // its marker, so marker ordering cannot distinguish the original process
     // from PID reuse. In that explicitly ambiguous case, retain only an OS
     // identity that agrees with the recorded performance time origin. This is
     // fail-closed for an extremely close reuse and cannot admit a contender
     // while the original process is still in its critical section.
-    return Math.abs(currentStart - ownerStart) <= WINDOWS_START_TIME_TOLERANCE_MS;
+    return identitiesAgree;
   }
   // The marker is written after its process starts. If the currently live
   // process started after this matching marker was written, the PID was
-  // reused. The exact ordering path has no fuzzy PID-reuse window; tolerance
-  // is used only above when the marker itself proves the clock moved backward.
-  return currentStart <= marker.mtimeMs;
+  // reused. Exact ordering rejects ordinary PID reuse regardless of tolerance;
+  // identity agreement also prevents a rollback after marker publication from
+  // making a materially different replacement start look older than the marker.
+  return identitiesAgree && currentStart <= marker.writtenAt;
 }
 
 function parseSlotOwnerSync(slotPath) {
@@ -270,8 +300,9 @@ function ownerIsStillActive(owner, deadline, lockDirectory) {
   }
   if (!processExists(owner.ownerPid)) return false;
   const marker = readProcessIdentityMarkerSync(lockDirectory, owner.ownerPid);
-  if (marker?.identity === owner.ownerIdentity &&
-      Date.now() - marker.mtimeMs < LOCK_TIMEOUT_MS) return true;
+  const markerAgeMs = marker === null ? null : Date.now() - marker.writtenAt;
+  if (marker?.identity === owner.ownerIdentity && markerAgeMs >= 0 &&
+      markerAgeMs < LOCK_TIMEOUT_MS) return true;
   if (marker !== null && marker.identity !== owner.ownerIdentity) return false;
   const currentIdentity = processIdentity(owner.ownerPid, deadline);
   // An unavailable identity probe fails closed; a later scan can retry.
@@ -494,7 +525,7 @@ function slotIsOutstandingSync(slot, deadline) {
 
 function tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline) {
   const slots = listTicketSlotsSync(lockDirectory);
-  if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+  if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
   const highestTicket = slots.reduce((highest, slot) => Math.max(highest, slot.ticket), 0);
   const ticket = highestTicket + 1;
   if (!Number.isSafeInteger(ticket)) throw new Error('OAuth state lock ticket space exhausted');
@@ -513,9 +544,9 @@ function tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline) {
 function allocateTicketSync(lockDirectory, deadline) {
   ensureLockDirectorySync(lockDirectory);
   retryPendingDoneMarkersSync(lockDirectory);
-  if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+  if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
   const ownerIdentity = currentProcessIdentity(deadline);
-  if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+  if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
   if (typeof ownerIdentity !== 'string') {
     throw new TypeError('Unable to determine process identity for OAuth state locking');
   }
@@ -526,13 +557,13 @@ function allocateTicketSync(lockDirectory, deadline) {
     const stagedSlotPath = `${lockDirectory}/.${process.pid}.${id}.slot.tmp`;
     fs.writeFileSync(
       stagedSlotPath,
-      JSON.stringify({ id, ownerPid: process.pid, ownerIdentity, allocationDeadline: deadline }),
+      JSON.stringify({ id, ownerPid: process.pid, ownerIdentity, allocationDeadline: deadline.epoch }),
       { encoding: 'utf8', flag: 'wx', mode: 0o600 }
     );
 
     try {
       while (true) {
-        if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+        if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
         const claim = tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline);
         if (!claim) continue;
         compactCompletedTicketsSync(lockDirectory, claim.ticket, stagedSlotPath, deadline);
@@ -561,15 +592,15 @@ function lockTimeoutError(lockDirectory) {
 }
 
 function acquireLockSync(lockDirectory) {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const deadline = createLockDeadline();
   const claim = allocateTicketSync(lockDirectory, deadline);
   try {
     while (true) {
-      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+      if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
       const earlierSlotIsOutstanding = earlierOutstandingSlotExistsSync(claim, deadline);
-      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+      if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
       if (!earlierSlotIsOutstanding) return claim;
-      waitSync(Math.min(LOCK_RETRY_MS, deadline - Date.now()));
+      waitSync(Math.min(LOCK_RETRY_MS, remainingLockTime(deadline)));
     }
   } catch (error) {
     try {
@@ -582,17 +613,17 @@ function acquireLockSync(lockDirectory) {
 }
 
 async function acquireLock(lockDirectory) {
-  const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const deadline = createLockDeadline();
   const claim = allocateTicketSync(lockDirectory, deadline);
   try {
     while (true) {
-      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+      if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
       const earlierSlotIsOutstanding = earlierOutstandingSlotExistsSync(claim, deadline);
-      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+      if (lockDeadlineExpired(deadline)) throw lockTimeoutError(lockDirectory);
       if (!earlierSlotIsOutstanding) return claim;
       await new Promise(resolve => setTimeout(
         resolve,
-        Math.min(LOCK_RETRY_MS, deadline - Date.now())
+        Math.min(LOCK_RETRY_MS, remainingLockTime(deadline))
       ));
     }
   } catch (error) {
