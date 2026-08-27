@@ -72,43 +72,18 @@ function windowsSystemExecutables() {
   };
 }
 
-function windowsManagementIdentity(pid, deadline) {
-  const executables = windowsSystemExecutables();
-  if (!executables) return undefined;
-  const powershellArgs = [
-    '-NoProfile',
-    '-NonInteractive',
-    '-Command',
-    `$started = [DateTimeOffset]((Get-Process -Id ${pid}).StartTime); $started.ToUnixTimeMilliseconds()`
-  ];
-  const powershellProviders = [executables.pwsh, executables.powershell];
-  for (const [index, executable] of powershellProviders.entries()) {
-    try {
-      // Reserve a share of the common deadline for every remaining provider,
-      // including WMIC, so one slow executable cannot starve all fallbacks.
-      const identity = commandProcessIdentity(
-        executable,
-        powershellArgs,
-        'win32',
-        deadline,
-        powershellProviders.length - index + 1
-      );
-      if (identity) return identity;
-    } catch {
-      // Try the next independent Windows process-management interface.
-    }
-  }
-
+function windowsWmicIdentity(pid, executable, deadline, remainingProviders) {
   const remainingTime = deadline - Date.now();
   if (remainingTime <= 0) return undefined;
+  const providerBudget = Math.max(1, Math.floor(remainingTime / remainingProviders));
   try {
     const output = execFileSync(
-      executables.wmic,
+      executable,
       ['process', 'where', `ProcessId=${pid}`, 'get', 'CreationDate', '/value'],
       {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: Math.min(PROCESS_IDENTITY_COMMAND_TIMEOUT_MS, remainingTime)
+        timeout: Math.min(PROCESS_IDENTITY_COMMAND_TIMEOUT_MS, providerBudget)
       }
     );
     const match = /CreationDate=(\d{14})\.(\d{6})([+-]\d{3})/.exec(output);
@@ -128,6 +103,41 @@ function windowsManagementIdentity(pid, deadline) {
   } catch {
     return undefined;
   }
+}
+
+function windowsManagementIdentity(pid, deadline) {
+  const executables = windowsSystemExecutables();
+  if (!executables) return undefined;
+  // WMIC is substantially lighter than starting a PowerShell runtime. On
+  // systems where it has been removed, ENOENT returns immediately and leaves
+  // nearly the full common deadline for the two PowerShell fallbacks.
+  const wmicIdentity = windowsWmicIdentity(pid, executables.wmic, deadline, 3);
+  if (wmicIdentity) return wmicIdentity;
+  const powershellArgs = [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    `$started = [DateTimeOffset]((Get-Process -Id ${pid}).StartTime); $started.ToUnixTimeMilliseconds()`
+  ];
+  const powershellProviders = [executables.pwsh, executables.powershell];
+  for (const [index, executable] of powershellProviders.entries()) {
+    try {
+      // Reserve a share of the common deadline for every remaining provider,
+      // including WMIC, so one slow executable cannot starve all fallbacks.
+      const identity = commandProcessIdentity(
+        executable,
+        powershellArgs,
+        'win32',
+        deadline,
+        powershellProviders.length - index
+      );
+      if (identity) return identity;
+    } catch {
+      // Try the next independent Windows process-management interface.
+    }
+  }
+
+  return undefined;
 }
 
 function processIdentity(pid, deadline) {
