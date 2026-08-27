@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_RETRY_MS = 10;
 const CLAIM_STALE_MS = 30_000;
+const PROCESS_IDENTITY_COMMAND_TIMEOUT_MS = 5_000;
 const LOCK_WAIT_SIGNAL = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 function lockDirectoryFor(stateFile) {
@@ -51,7 +52,7 @@ function commandProcessIdentity(executable, args, prefix) {
   const output = execFileSync(executable, args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: 1_000
+    timeout: PROCESS_IDENTITY_COMMAND_TIMEOUT_MS
   }).trim();
   return output ? `${prefix}:${output}` : undefined;
 }
