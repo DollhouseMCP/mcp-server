@@ -28,6 +28,7 @@ describe('createSessionActivationState', () => {
     expect(state.personas.size).toBe(0);
     expect(state.skills.size).toBe(0);
     expect(state.agents.size).toBe(0);
+    expect(state.agentNamesByIdentity.size).toBe(0);
     expect(state.memories.size).toBe(0);
     expect(state.ensembles.size).toBe(0);
     expect(state.userIdentity).toBeUndefined();
@@ -128,6 +129,7 @@ describe('SessionActivationRegistry', () => {
       sessionA.personas.add('persona-a.md');
       sessionA.skills.add('skill-a');
       sessionA.agents.add('agent-a');
+      sessionA.agentNamesByIdentity.set('agent-a.md', 'Agent A');
       sessionA.memories.add('memory-a');
       sessionA.ensembles.add('ensemble-a');
 
@@ -144,6 +146,7 @@ describe('SessionActivationRegistry', () => {
       expect(sessionB.personas.has('persona-b.md')).toBe(true);
       expect(sessionB.personas.has('persona-a.md')).toBe(false);
       expect(sessionB.agents.size).toBe(0);
+      expect(sessionB.agentNamesByIdentity.size).toBe(0);
       expect(sessionB.memories.size).toBe(0);
     });
 

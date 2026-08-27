@@ -72,6 +72,30 @@ describe('DatabaseActivationStateStore', () => {
     expect(store.getActivations('skill')).toHaveLength(1);
   });
 
+  it('should persist distinct row identities and upgrade legacy agent records', async () => {
+    if (!dbAvailable) return;
+    const userId = await ensureTestUser();
+    const store = new DatabaseActivationStateStore(getTestDb(), userId, TEST_SESSION_ID);
+    await store.initialize();
+
+    const firstIdentity = { kind: 'database' as const, value: '11111111-1111-4111-8111-111111111111' };
+    const secondIdentity = { kind: 'database' as const, value: '22222222-2222-4222-8222-222222222222' };
+    store.recordActivation('agent', 'Legacy Agent');
+    store.recordActivation('agent', 'Legacy Agent', undefined, firstIdentity);
+    store.recordActivation('agent', 'Renamed Agent', undefined, firstIdentity);
+    store.recordActivation('agent', 'Renamed Agent', undefined, secondIdentity);
+
+    expect(store.getActivations('agent')).toEqual([
+      expect.objectContaining({ name: 'Renamed Agent', identity: firstIdentity }),
+      expect.objectContaining({ name: 'Renamed Agent', identity: secondIdentity }),
+    ]);
+
+    await store.awaitPendingWrites();
+    const restored = new DatabaseActivationStateStore(getTestDb(), userId, TEST_SESSION_ID);
+    await restored.initialize();
+    expect(restored.getActivations('agent')).toHaveLength(2);
+  });
+
   it('should record deactivation', async () => {
     if (!dbAvailable) return;
     const userId = await ensureTestUser();

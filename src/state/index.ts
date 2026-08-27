@@ -11,7 +11,12 @@
 
 // Interfaces
 export type { IActivationStateStore } from './IActivationStateStore.js';
-export type { PersistedActivation, PersistedActivationState, PersistedActivationStateSnapshot } from './IActivationStateStore.js';
+export type {
+  PersistedActivation,
+  PersistedActivationIdentity,
+  PersistedActivationState,
+  PersistedActivationStateSnapshot,
+} from './IActivationStateStore.js';
 export type { IConfirmationStore } from './IConfirmationStore.js';
 export type { IChallengeStore } from './IChallengeStore.js';
 

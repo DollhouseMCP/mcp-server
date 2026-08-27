@@ -33,6 +33,7 @@ export interface SessionUserIdentity {
  * Each Set tracks which elements of that type are active in this session.
  * Key conventions match the existing manager patterns:
  * - personas: keyed by **filename** (e.g., 'creative-dev.md')
+ * - agents: keyed by backend durable storage identity (filename/path or row UUID)
  * - all others: keyed by **metadata.name**
  */
 export interface SessionActivationState {
@@ -40,6 +41,8 @@ export interface SessionActivationState {
   readonly personas: Set<string>;
   readonly skills: Set<string>;
   readonly agents: Set<string>;
+  /** Display-name alias captured when each durable agent identity was activated. */
+  readonly agentNamesByIdentity: Map<string, string>;
   readonly memories: Set<string>;
   readonly ensembles: Set<string>;
 
@@ -67,6 +70,7 @@ export function createSessionActivationState(sessionId: string): SessionActivati
     personas: new Set(),
     skills: new Set(),
     agents: new Set(),
+    agentNamesByIdentity: new Map(),
     memories: new Set(),
     ensembles: new Set(),
     userIdentity: undefined,

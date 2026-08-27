@@ -506,6 +506,28 @@ export abstract class BaseElementManager<T extends IElement> implements IElement
     return this._resolver.findByName(identifier);
   }
 
+  /**
+   * Resolve an element by its backend-owned durable key. File-backed managers
+   * accept the indexed relative path; database-backed managers accept a row
+   * UUID. Unlike findByName(), this never interprets the key as display text.
+   */
+  async findByStorageIdentity(identity: string): Promise<T | undefined> {
+    if (typeof identity !== 'string' || identity.trim() === '') return undefined;
+    const normalizedIdentity = identity.trim();
+    if (
+      isWritableStorageLayer(this.storageLayer) &&
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(normalizedIdentity)
+    ) {
+      return undefined;
+    }
+    try {
+      return await this.load(normalizedIdentity);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
+      throw error;
+    }
+  }
+
   // ============================================
   // INVALID ELEMENT TRACKING (Issue #708)
   // ============================================

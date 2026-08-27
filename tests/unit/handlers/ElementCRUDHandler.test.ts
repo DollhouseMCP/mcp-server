@@ -55,6 +55,7 @@ describe('ElementCRUDHandler (DI)', () => {
       list: jest.fn().mockResolvedValue([]),
       refreshIndex: jest.fn().mockResolvedValue(undefined),
       findByName: jest.fn().mockResolvedValue(undefined),
+      getActivationIdentity: jest.fn().mockReturnValue(undefined),
     } as unknown as jest.Mocked<AgentManager>;
 
     memoryManager = {
@@ -523,6 +524,170 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(skillManager.list).not.toHaveBeenCalled();
     });
 
+    it('deduplicates live and persisted agent policy by durable identity after rename', async () => {
+      const identity = { kind: 'file' as const, value: 'stable-agent.md' };
+      const policyAgent = {
+        filePath: identity.value,
+        metadata: {
+          name: 'Renamed Agent',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any;
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: {
+            agent: [{ name: 'Original Agent', identity, activatedAt: new Date().toISOString() }],
+          },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+      agentManager.getActiveAgents.mockResolvedValue([policyAgent]);
+      agentManager.getActivationIdentity.mockReturnValue(identity);
+      agentManager.refreshIndex.mockResolvedValue(undefined);
+      agentManager.findByStorageIdentity = jest.fn().mockResolvedValue(policyAgent);
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager,
+        templateManager,
+        templateRenderer,
+        agentManager,
+        memoryManager,
+        ensembleManager,
+        personaHandler,
+        portfolioManager,
+        initService,
+        indicatorService,
+        fileOperations,
+        undefined as any,
+        undefined as any,
+        activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport();
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          type: 'agent',
+          name: 'Renamed Agent',
+          sessionIds: ['leader-session', 'session-other'],
+        }),
+      ]);
+      expect(agentManager.findByStorageIdentity).toHaveBeenCalledWith(identity.value);
+      expect(agentManager.findByName).not.toHaveBeenCalledWith('Original Agent');
+    });
+
+    it('reports a live-only persona by stable filename identity', async () => {
+      personaHandler.getActivePersonas.mockReturnValue([{
+        filename: 'policy-persona.md',
+        metadata: {
+          name: 'Policy Persona',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any]);
+
+      const result = await handler.getPolicyElementsForReport();
+
+      expect(result).toEqual([
+        expect.objectContaining({ type: 'persona', name: 'Policy Persona' }),
+      ]);
+    });
+
+    it('reports a persisted-only persona through its stable filename', async () => {
+      const persistedPersona = {
+        filename: 'policy-persona.md',
+        filePath: 'policy-persona.md',
+        metadata: {
+          name: 'Renamed Policy Persona',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any;
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: {
+            persona: [{
+              name: 'Original Policy Persona',
+              filename: 'policy-persona.md',
+              activatedAt: new Date().toISOString(),
+            }],
+          },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+      personaHandler.findByName.mockImplementation(async (identifier: string) =>
+        identifier === 'policy-persona.md' ? persistedPersona : undefined
+      );
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager, templateManager, templateRenderer, agentManager, memoryManager,
+        ensembleManager, personaHandler, portfolioManager, initService, indicatorService,
+        fileOperations, undefined as any, undefined as any, activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport('session-other');
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          type: 'persona',
+          name: 'Renamed Policy Persona',
+          sessionIds: ['session-other'],
+        }),
+      ]);
+      expect(personaHandler.findByName).toHaveBeenCalledWith('Original Policy Persona');
+      expect(personaHandler.findByName).toHaveBeenCalledWith('policy-persona.md');
+    });
+
+    it('deduplicates combined live and persisted persona policy by stable filename', async () => {
+      const policyPersona = {
+        filename: 'policy-persona.md',
+        filePath: 'policy-persona.md',
+        metadata: {
+          name: 'Renamed Policy Persona',
+          gatekeeper: { externalRestrictions: { denyPatterns: ['Bash:rm*'] } },
+        },
+      } as any;
+      const activationStore = {
+        isEnabled: jest.fn().mockReturnValue(true),
+        getSessionId: jest.fn().mockReturnValue('leader-session'),
+        listPersistedActivationStates: jest.fn().mockResolvedValue([{
+          sessionId: 'session-other',
+          lastUpdated: new Date().toISOString(),
+          activations: {
+            persona: [{
+              name: 'Original Policy Persona',
+              filename: 'policy-persona.md',
+              activatedAt: new Date().toISOString(),
+            }],
+          },
+        }]),
+      } as unknown as jest.Mocked<ActivationStore>;
+      personaHandler.getActivePersonas.mockReturnValue([policyPersona]);
+      personaHandler.findByName.mockImplementation(async (identifier: string) =>
+        identifier === 'policy-persona.md' ? policyPersona : undefined
+      );
+
+      const reportHandler = new ElementCRUDHandler(
+        skillManager, templateManager, templateRenderer, agentManager, memoryManager,
+        ensembleManager, personaHandler, portfolioManager, initService, indicatorService,
+        fileOperations, undefined as any, undefined as any, activationStore,
+      );
+
+      const result = await reportHandler.getPolicyElementsForReport();
+
+      expect(result).toEqual([
+        expect.objectContaining({
+          type: 'persona',
+          name: 'Renamed Policy Persona',
+          sessionIds: ['leader-session', 'session-other'],
+        }),
+      ]);
+    });
+
     it('bounds persisted policy lookups at eight and preserves activation order', async () => {
       const activations = Array.from({ length: 20 }, (_, index) => ({
         name: `persisted-skill-${index}`,
@@ -752,6 +917,25 @@ describe('ElementCRUDHandler (DI)', () => {
       expect(activationStore.clearAll).toHaveBeenCalled();
       expect(fileOperations.createDirectory).toHaveBeenCalled();
       expect(fileOperations.writeFile).toHaveBeenCalled();
+    });
+
+    it('deactivates colliding agent names by durable identity during deadlock relief', async () => {
+      const firstAgent = { filePath: 'first.md', metadata: { name: 'Shared Agent' } } as any;
+      const secondAgent = { filePath: 'second.md', metadata: { name: 'Shared Agent' } } as any;
+      agentManager.getActiveAgents.mockResolvedValue([firstAgent, secondAgent]);
+      agentManager.getActivationIdentity.mockImplementation((agent) => ({
+        kind: 'file',
+        value: agent.filePath,
+      }));
+
+      const result = await handler.releaseDeadlock();
+
+      expect(agentManager.deactivateAgent).toHaveBeenCalledWith('first.md');
+      expect(agentManager.deactivateAgent).toHaveBeenCalledWith('second.md');
+      expect(result.deactivated).toEqual([
+        { type: ElementType.AGENT, name: 'Shared Agent' },
+        { type: ElementType.AGENT, name: 'Shared Agent' },
+      ]);
     });
   });
 });

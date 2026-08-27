@@ -109,6 +109,8 @@ import { ElementNotFoundError, ErrorCategory, ErrorHandler } from '../../utils/E
 import { ValidationErrorCodes } from '../../utils/errorCodes.js';
 import { sanitizeGatekeeperPolicy } from '../../handlers/mcp-aql/policies/ElementPolicies.js';
 import { SECURITY_LIMITS } from '../../security/constants.js';
+import { ElementStatus } from '../../types/elements/IElement.js';
+import type { PersistedActivationIdentity } from '../../state/IActivationStateStore.js';
 
 const AGENT_FILE_EXTENSION = '.md';
 const STATE_DIRECTORY = '.state';
@@ -150,6 +152,13 @@ interface ExecutionGenerationEntry {
   observers: number;
 }
 
+export interface AgentActivationResult {
+  success: boolean;
+  message: string;
+  agent?: Agent;
+  identity?: PersistedActivationIdentity;
+}
+
 export interface ExecutionGenerationObservation {
   token: object;
   release: () => void;
@@ -169,6 +178,7 @@ export class AgentManager extends BaseElementManager<Agent> {
   private metadataService: MetadataService;
   // Fallback for tests/callers that don't inject the registry
   private readonly _localActiveAgentNames: Set<string> = new Set();
+  private readonly _localAgentNamesByIdentity = new Map<string, string>();
 
   // Issue #1948: Instance-injected dependencies (replaces static resolvers)
   private _elementManagerResolver?: (managerName: string) => ResolvedElementManager | null;
@@ -231,6 +241,13 @@ export class AgentManager extends BaseElementManager<Agent> {
   /** Issue #1946: Per-session activation state via base class helper. */
   private getActivationSet(): Set<string> {
     return this.resolveActivationSet('agents', this._localActiveAgentNames);
+  }
+
+  private getActivationNameMap(): Map<string, string> {
+    if (!this.activationRegistry) return this._localAgentNamesByIdentity;
+    const sessionId = this.contextTracker?.getSessionContext()?.sessionId
+      ?? this.activationRegistry.getDefaultSessionId();
+    return this.activationRegistry.getOrCreate(sessionId).agentNamesByIdentity;
   }
 
   protected override getElementLabel(): string {
@@ -901,17 +918,19 @@ export class AgentManager extends BaseElementManager<Agent> {
     return AGENT_FILE_EXTENSION;
   }
 
-  /**
-   * Override list to apply active status based on activeAgentNames set
-   */
+  /** Apply per-session active status using durable storage identity. */
   override async list(options?: { includePublic?: boolean }): Promise<Agent[]> {
     const agents = await super.list(options);
 
-    // Apply active status to agents that are in the active set (by name)
     for (const agent of agents) {
-      if (this.getActivationSet().has(agent.metadata.name)) {
-        // Activate the agent to set status to ACTIVE
-        await agent.activate();
+      const identity = this.getActivationIdentity(agent);
+      if (
+        (identity && this.getActivationSet().has(identity.value)) ||
+        this.getActivationSet().has(agent.metadata.name)
+      ) {
+        if (typeof agent.getStatus !== 'function' || agent.getStatus() !== ElementStatus.ACTIVE) {
+          await agent.activate();
+        }
       }
     }
 
@@ -925,23 +944,48 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    * Issue #24 (LOW PRIORITY): Cleanup trigger for memory leak prevention
    */
-  async activateAgent(identifier: string): Promise<{ success: boolean; message: string; agent?: Agent }> {
-    // PERFORMANCE FIX: Use findByName() instead of list()
+  async activateAgent(identifier: string): Promise<AgentActivationResult> {
     const agent = await this.findByName(identifier);
+    return this.activateResolvedAgent(agent, identifier);
+  }
 
+  /** Restore or address an agent through its backend-owned durable key. */
+  async activateAgentByStorageIdentity(
+    identity: PersistedActivationIdentity,
+    legacyName?: string,
+  ): Promise<AgentActivationResult> {
+    await this.scanAndEvict({ freshAfterInFlight: true });
+    const expectedKind = isWritableStorageLayer(this.storageLayer) ? 'database' : 'file';
+    const agent = identity.kind === expectedKind
+      ? await this.findByStorageIdentity(identity.value)
+      : undefined;
+    if (agent) return this.activateResolvedAgent(agent, legacyName ?? agent.metadata.name);
+    if (legacyName) return this.activateAgent(legacyName);
+    return this.activateResolvedAgent(undefined, identity.value);
+  }
+
+  private async activateResolvedAgent(
+    agent: Agent | undefined,
+    activationName: string,
+  ): Promise<AgentActivationResult> {
     if (!agent) {
       return {
         success: false,
         // CONSISTENCY FIX: Use standardized error message format
-        message: ElementMessages.notFound(ElementType.AGENT, identifier)
+        message: ElementMessages.notFound(ElementType.AGENT, activationName)
       };
     }
 
     // MEMORY LEAK FIX: Check if cleanup is needed before adding
     this.checkAndCleanupActiveSet();
 
-    // Add to active set (by name, which is stable across reloads)
-    this.getActivationSet().add(agent.metadata.name);
+    const identity = this.getActivationIdentity(agent);
+    if (identity) {
+      this.getActivationSet().add(identity.value);
+      this.getActivationNameMap().set(identity.value, agent.metadata.name);
+    } else {
+      this.getActivationSet().add(agent.metadata.name);
+    }
 
     // Update agent status in memory
     await agent.activate();
@@ -967,7 +1011,18 @@ export class AgentManager extends BaseElementManager<Agent> {
       success: true,
       // CONSISTENCY FIX: Use standardized success message format
       message: ElementMessages.activated(ElementType.AGENT, agent.metadata.name),
-      agent
+      agent,
+      ...(identity ? { identity } : {}),
+    };
+  }
+
+  /** Return the durable key attached by the cache/storage pipeline. */
+  getActivationIdentity(agent: Agent): PersistedActivationIdentity | undefined {
+    const storagePath = (agent as Agent & { filePath?: unknown }).filePath;
+    if (typeof storagePath !== 'string' || storagePath.trim() === '') return undefined;
+    return {
+      kind: isWritableStorageLayer(this.storageLayer) ? 'database' : 'file',
+      value: storagePath,
     };
   }
 
@@ -977,9 +1032,28 @@ export class AgentManager extends BaseElementManager<Agent> {
    * Issue #24 (LOW PRIORITY): Performance optimization using findByName()
    * Issue #24 (LOW PRIORITY): Consistent error messages using ElementMessages
    */
-  async deactivateAgent(identifier: string): Promise<{ success: boolean; message: string }> {
-    // PERFORMANCE FIX: Use findByName() instead of list()
-    const agent = await this.findByName(identifier);
+  async deactivateAgent(identifier: string): Promise<AgentActivationResult> {
+    await this.scanAndEvict({ freshAfterInFlight: true });
+    const normalizedIdentifier = identifier.toLowerCase();
+    let agent: Agent | undefined;
+    let activeKey: string | undefined;
+
+    for (const key of this.getActivationSet()) {
+      const alias = this.getActivationNameMap().get(key);
+      const candidate = alias === undefined
+        ? await this.findByName(key)
+        : await this.findByStorageIdentity(key);
+      if (
+        key.toLowerCase() === normalizedIdentifier ||
+        alias?.toLowerCase() === normalizedIdentifier ||
+        candidate?.metadata.name.toLowerCase() === normalizedIdentifier
+      ) {
+        agent = candidate;
+        activeKey = key;
+        if (agent) break;
+      }
+    }
+    agent ??= await this.findByName(identifier);
 
     if (!agent) {
       return {
@@ -989,8 +1063,10 @@ export class AgentManager extends BaseElementManager<Agent> {
       };
     }
 
-    // Remove from active set
-    this.getActivationSet().delete(agent.metadata.name);
+    const identity = this.getActivationIdentity(agent);
+    const key = activeKey ?? identity?.value ?? agent.metadata.name;
+    this.getActivationSet().delete(key);
+    this.getActivationNameMap().delete(key);
 
     // Update agent status in memory
     await agent.deactivate();
@@ -1013,7 +1089,9 @@ export class AgentManager extends BaseElementManager<Agent> {
     return {
       success: true,
       // CONSISTENCY FIX: Use standardized success message format
-      message: ElementMessages.deactivated(ElementType.AGENT, agent.metadata.name)
+      message: ElementMessages.deactivated(ElementType.AGENT, agent.metadata.name),
+      agent,
+      ...(identity ? { identity } : {}),
     };
   }
 
@@ -1023,9 +1101,15 @@ export class AgentManager extends BaseElementManager<Agent> {
   async getActiveAgents(options: StorageScanOptions = {}): Promise<Agent[]> {
     await this.scanAndEvict(options);
     const agents: Agent[] = [];
-    for (const name of this.getActivationSet()) {
-      const agent = await this.findByName(name);
-      if (agent) agents.push(agent);
+    for (const key of this.getActivationSet()) {
+      const agent = this.getActivationNameMap().has(key)
+        ? await this.findByStorageIdentity(key)
+        : await this.findByName(key);
+      if (!agent) continue;
+      if (typeof agent.getStatus === 'function' && agent.getStatus() !== ElementStatus.ACTIVE) {
+        await agent.activate();
+      }
+      agents.push(agent);
     }
     return agents;
   }
@@ -2044,14 +2128,16 @@ export class AgentManager extends BaseElementManager<Agent> {
   private async cleanupStaleActiveAgents(): Promise<void> {
     try {
       const startSize = this.getActivationSet().size;
-      const agents = await this.list();
-      const existingAgentNames = new Set(agents.map(a => a.metadata.name));
-
       const staleNames: string[] = [];
-      for (const activeName of this.getActivationSet()) {
-        if (!existingAgentNames.has(activeName)) {
-          this.getActivationSet().delete(activeName);
-          staleNames.push(activeName);
+      for (const activeKey of this.getActivationSet()) {
+        const alias = this.getActivationNameMap().get(activeKey);
+        const agent = alias === undefined
+          ? await this.findByName(activeKey)
+          : await this.findByStorageIdentity(activeKey);
+        if (!agent) {
+          this.getActivationSet().delete(activeKey);
+          this.getActivationNameMap().delete(activeKey);
+          staleNames.push(alias ?? activeKey);
         }
       }
 

@@ -211,7 +211,11 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
       content: [{
         type: "text",
         text: parts.join('\n')
-      }]
+      }],
+      activationRecord: {
+        name: agent.metadata.name,
+        ...(result.identity ? { identity: result.identity } : {}),
+      },
     };
   }
 
@@ -228,7 +232,13 @@ export class AgentActivationStrategy extends BaseActivationStrategy implements E
       this.throwNotFoundError(name, 'Agent');
     }
 
-    return this.createSuccessResponse(result.message);
+    return {
+      ...this.createSuccessResponse(result.message),
+      activationRecord: {
+        name: result.agent?.metadata.name ?? name,
+        ...(result.identity ? { identity: result.identity } : {}),
+      },
+    };
   }
 
   /**
