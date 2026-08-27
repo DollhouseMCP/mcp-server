@@ -205,11 +205,9 @@ function releaseCurrentProcessIdentityMarkerSync(markerPath) {
   currentProcessMarkerReferences.delete(markerPath);
   try {
     fs.unlinkSync(markerPath);
-  } catch (error) {
-    if (errorCode(error) !== 'ENOENT') {
-      // A leftover marker is safe: a later process reusing the PID replaces
-      // it atomically before publishing a ticket.
-    }
+  } catch {
+    // A leftover marker is safe: a later process reusing the PID replaces it
+    // atomically before publishing a ticket.
   }
 }
 
