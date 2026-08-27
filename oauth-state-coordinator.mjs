@@ -167,21 +167,35 @@ function allocateTicketSync(lockDirectory) {
     throw new TypeError('Unable to determine process identity for OAuth state locking');
   }
 
-  while (true) {
-    const slots = listTicketSlotsSync(lockDirectory);
-    const highestTicket = slots.reduce((highest, slot) => Math.max(highest, slot.ticket), 0);
-    const ticket = highestTicket + 1;
-    if (!Number.isSafeInteger(ticket)) throw new Error('OAuth state lock ticket space exhausted');
-    const slotPath = `${lockDirectory}/${ticket}.slot`;
+  const id = randomUUID();
+  const stagedSlotPath = `${lockDirectory}/.${process.pid}.${id}.slot.tmp`;
+  fs.writeFileSync(
+    stagedSlotPath,
+    JSON.stringify({ id, ownerPid: process.pid, ownerIdentity }),
+    { encoding: 'utf8', flag: 'wx', mode: 0o600 }
+  );
+
+  try {
+    while (true) {
+      const slots = listTicketSlotsSync(lockDirectory);
+      const highestTicket = slots.reduce((highest, slot) => Math.max(highest, slot.ticket), 0);
+      const ticket = highestTicket + 1;
+      if (!Number.isSafeInteger(ticket)) throw new Error('OAuth state lock ticket space exhausted');
+      const slotPath = `${lockDirectory}/${ticket}.slot`;
+      try {
+        // Linking a complete private file publishes both the ticket and its
+        // owner record atomically. A contender can never observe partial JSON.
+        fs.linkSync(stagedSlotPath, slotPath);
+        return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
+      } catch (error) {
+        if (errorCode(error) !== 'EEXIST') throw error;
+      }
+    }
+  } finally {
     try {
-      fs.writeFileSync(
-        slotPath,
-        JSON.stringify({ id: randomUUID(), ownerPid: process.pid, ownerIdentity }),
-        { encoding: 'utf8', flag: 'wx', mode: 0o600 }
-      );
-      return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
-    } catch (error) {
-      if (errorCode(error) !== 'EEXIST') throw error;
+      fs.unlinkSync(stagedSlotPath);
+    } catch {
+      // The published hard link owns the record; staging cleanup is best-effort.
     }
   }
 }
