@@ -172,6 +172,23 @@ function currentProcessIdentity(deadline) {
   return identity;
 }
 
+function processIdentityMarkerPath(lockDirectory, pid) {
+  return `${lockDirectory}.process-${pid}.identity`;
+}
+
+function readProcessIdentityMarkerSync(lockDirectory, pid) {
+  try {
+    const identity = fs.readFileSync(processIdentityMarkerPath(lockDirectory, pid), 'utf8').trim();
+    return identity || null;
+  } catch {
+    return null;
+  }
+}
+
+function publishCurrentProcessIdentityMarkerSync(lockDirectory, identity) {
+  writeFileAtomicallySync(processIdentityMarkerPath(lockDirectory, process.pid), identity);
+}
+
 function processIdentitiesMatch(recordedIdentity, currentIdentity) {
   if (recordedIdentity === currentIdentity) return true;
   const recordedWindowsStart = /^win32:(\d+)$/.exec(recordedIdentity)?.[1];
@@ -196,11 +213,19 @@ function parseSlotOwnerSync(slotPath) {
   }
 }
 
-function ownerIsStillActive(owner, deadline) {
+function ownerIsStillActive(owner, deadline, lockDirectory) {
   if (!owner) return false;
-  const currentIdentity = owner.ownerPid === process.pid
-    ? currentProcessIdentity(deadline)
-    : processIdentity(owner.ownerPid, deadline);
+  let currentIdentity;
+  if (owner.ownerPid === process.pid) {
+    currentIdentity = currentProcessIdentity(deadline);
+  } else if (!processExists(owner.ownerPid)) {
+    return false;
+  } else {
+    const participantIdentity = readProcessIdentityMarkerSync(lockDirectory, owner.ownerPid);
+    if (participantIdentity === owner.ownerIdentity) return true;
+    if (participantIdentity !== null) return false;
+    currentIdentity = processIdentity(owner.ownerPid, deadline);
+  }
   // An unavailable identity probe fails closed; a later scan can retry.
   return currentIdentity === undefined ||
     (currentIdentity !== null && processIdentitiesMatch(owner.ownerIdentity, currentIdentity));
@@ -233,7 +258,8 @@ function listTicketSlotsSync(lockDirectory) {
     .map(item => ({
       ticket: item.ticket,
       slotPath: `${lockDirectory}/${item.entry.name}`,
-      donePath: `${lockDirectory}/${item.ticket}.done`
+      donePath: `${lockDirectory}/${item.ticket}.done`,
+      lockDirectory
     }));
 }
 
@@ -275,7 +301,12 @@ function allocationIntentSnapshotSync(lockDirectory) {
   }
 }
 
-function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds, deadline) {
+function allocationIntentBlocksCompactionSync(
+  intentPath,
+  publishedOwnerIds,
+  deadline,
+  lockDirectory
+) {
   try {
     const owner = parseSlotOwnerSync(intentPath);
     if (owner && publishedOwnerIds.has(owner.id)) {
@@ -294,7 +325,7 @@ function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds, dea
       return false;
     }
     if (!slotIsStale(intentPath)) return true;
-    if (ownerIsStillActive(owner, deadline)) return true;
+    if (ownerIsStillActive(owner, deadline, lockDirectory)) return true;
     fs.unlinkSync(intentPath);
     return false;
   } catch (error) {
@@ -309,7 +340,12 @@ function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath, deadl
     if (!entry.isFile() || !entry.name.endsWith('.slot.tmp')) return false;
     const intentPath = `${lockDirectory}/${entry.name}`;
     return intentPath !== ownStagedSlotPath &&
-      allocationIntentBlocksCompactionSync(intentPath, snapshot.publishedOwnerIds, deadline);
+      allocationIntentBlocksCompactionSync(
+        intentPath,
+        snapshot.publishedOwnerIds,
+        deadline,
+        lockDirectory
+      );
   });
 }
 
@@ -370,7 +406,7 @@ function slotIsOutstandingSync(slot, deadline) {
   try {
     if (!slotIsStale(slot.slotPath)) return true;
     const owner = parseSlotOwnerSync(slot.slotPath);
-    if (ownerIsStillActive(owner, deadline)) return true;
+    if (ownerIsStillActive(owner, deadline, slot.lockDirectory)) return true;
     // Completion is an atomic create. The immutable slot remains as the
     // high-water mark, so its ticket can never be allocated again.
     publishDoneSync(slot.donePath);
@@ -407,6 +443,7 @@ function allocateTicketSync(lockDirectory, deadline) {
   if (typeof ownerIdentity !== 'string') {
     throw new TypeError('Unable to determine process identity for OAuth state locking');
   }
+  publishCurrentProcessIdentityMarkerSync(lockDirectory, ownerIdentity);
 
   const id = randomUUID();
   const stagedSlotPath = `${lockDirectory}/.${process.pid}.${id}.slot.tmp`;
