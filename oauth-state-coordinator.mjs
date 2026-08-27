@@ -49,13 +49,14 @@ function linuxProcessIdentity(pid) {
   return `linux:${bootId}:${startTicks}`;
 }
 
-function commandProcessIdentity(executable, args, prefix, deadline) {
+function commandProcessIdentity(executable, args, prefix, deadline, remainingProviders = 1) {
   const remainingTime = deadline - Date.now();
   if (remainingTime <= 0) return undefined;
+  const providerBudget = Math.max(1, Math.floor(remainingTime / remainingProviders));
   const output = execFileSync(executable, args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: Math.min(PROCESS_IDENTITY_COMMAND_TIMEOUT_MS, remainingTime)
+    timeout: Math.min(PROCESS_IDENTITY_COMMAND_TIMEOUT_MS, providerBudget)
   }).trim();
   return output ? `${prefix}:${output}` : undefined;
 }
@@ -80,9 +81,18 @@ function windowsManagementIdentity(pid, deadline) {
     '-Command',
     `$started = [DateTimeOffset]((Get-Process -Id ${pid}).StartTime); $started.ToUnixTimeMilliseconds()`
   ];
-  for (const executable of [executables.powershell, executables.pwsh]) {
+  const powershellProviders = [executables.pwsh, executables.powershell];
+  for (const [index, executable] of powershellProviders.entries()) {
     try {
-      const identity = commandProcessIdentity(executable, powershellArgs, 'win32', deadline);
+      // Reserve a share of the common deadline for every remaining provider,
+      // including WMIC, so one slow executable cannot starve all fallbacks.
+      const identity = commandProcessIdentity(
+        executable,
+        powershellArgs,
+        'win32',
+        deadline,
+        powershellProviders.length - index + 1
+      );
       if (identity) return identity;
     } catch {
       // Try the next independent Windows process-management interface.
