@@ -191,6 +191,7 @@ export class GitHubAuthHandler {
             throw spawnError;
           }
 
+          this.monitorOAuthHelperLifecycle(helper, flowId);
           helper.unref();
           this.logOAuthHelperSpawned(helper.pid, deviceResponse);
           return null;
@@ -278,6 +279,18 @@ export class GitHubAuthHandler {
         } catch {
           // Best-effort cleanup after a spawn failure.
         }
+    }
+
+    private monitorOAuthHelperLifecycle(helper: child_process.ChildProcess, flowId: string): void {
+        const cleanupFlowState = () => {
+          // A successful helper removes its own state before exiting. This
+          // parent-side fallback covers asynchronous spawn errors and exits
+          // before the helper can claim or clean the prepared state.
+          void this.cleanupPreparedOAuthHelperState(flowId);
+        };
+
+        helper.once('error', cleanupFlowState);
+        helper.once('exit', cleanupFlowState);
     }
 
     private oauthHelperLaunchFailedResponse(spawnError: unknown, helperPath: string | null, clientId: string) {
