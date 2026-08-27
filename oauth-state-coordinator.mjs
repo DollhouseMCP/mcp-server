@@ -228,13 +228,25 @@ function processIdentitiesMatch(recordedIdentity, currentIdentity) {
 
 function staleMarkerStillBelongsToProcess(marker, ownerIdentity, currentIdentity) {
   if (currentIdentity === ownerIdentity) return true;
+  const ownerWindowsStart = /^win32:(\d+)$/.exec(ownerIdentity)?.[1];
   const currentWindowsStart = /^win32:(\d+)$/.exec(currentIdentity)?.[1];
-  if (!currentWindowsStart) return false;
+  if (!ownerWindowsStart || !currentWindowsStart) return false;
+  const ownerStart = Number(ownerWindowsStart);
+  const currentStart = Number(currentWindowsStart);
+  if (marker.mtimeMs < ownerStart) {
+    // The wall clock moved backward between this process starting and writing
+    // its marker, so marker ordering cannot distinguish the original process
+    // from PID reuse. In that explicitly ambiguous case, retain only an OS
+    // identity that agrees with the recorded performance time origin. This is
+    // fail-closed for an extremely close reuse and cannot admit a contender
+    // while the original process is still in its critical section.
+    return Math.abs(currentStart - ownerStart) <= WINDOWS_START_TIME_TOLERANCE_MS;
+  }
   // The marker is written after its process starts. If the currently live
   // process started after this matching marker was written, the PID was
-  // reused. Both timestamps are Unix milliseconds on Windows, so ordering is
-  // sufficient and does not create a fuzzy PID-reuse window.
-  return Number(currentWindowsStart) <= marker.mtimeMs;
+  // reused. The exact ordering path has no fuzzy PID-reuse window; tolerance
+  // is used only above when the marker itself proves the clock moved backward.
+  return currentStart <= marker.mtimeMs;
 }
 
 function parseSlotOwnerSync(slotPath) {
@@ -271,7 +283,12 @@ function ownerIsStillActive(owner, deadline, lockDirectory) {
 }
 
 function slotIsStale(slotPath) {
-  return Date.now() - fs.statSync(slotPath).mtimeMs >= CLAIM_STALE_MS;
+  const ageMs = Date.now() - fs.statSync(slotPath).mtimeMs;
+  // A future mtime proves the wall clock moved backward after publication.
+  // Treat it as requiring an ownership check now: a live owner still fails
+  // closed in ownerIsStillActive, while a dead owner can be recovered without
+  // waiting for wall time to catch up.
+  return ageMs < 0 || ageMs >= CLAIM_STALE_MS;
 }
 
 function ticketFromSlotName(name) {

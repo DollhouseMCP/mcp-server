@@ -317,6 +317,78 @@ describe('OAuthStateCoordinator', () => {
     await expectAllTicketsCompleted(stateFile);
   });
 
+  it('recovers a dead-owner slot whose mtime is in the future after clock rollback', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+    const orphanedSlot = path.join(lockDirectory, '1.slot');
+    await fs.mkdir(lockDirectory, { recursive: true });
+    await fs.writeFile(
+      orphanedSlot,
+      JSON.stringify({
+        id: '00000000-0000-4000-8000-000000000003',
+        ownerPid: 99_999_999,
+        ownerIdentity: 'dead-owner-before-clock-rollback'
+      }),
+      'utf8'
+    );
+    const futureTime = new Date(Date.now() + 60 * 60_000);
+    await fs.utimes(orphanedSlot, futureTime, futureTime);
+
+    await withOAuthStateLock(stateFile, async () => {
+      await fs.writeFile(stateFile, JSON.stringify({ flowId: 'clock-recovered-flow' }), 'utf8');
+    });
+
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain('clock-recovered-flow');
+    await expect(fs.access(path.join(lockDirectory, '1.done'))).resolves.toBeUndefined();
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('fails closed for marker ordering only when the marker proves a backward clock step', async () => {
+    const directory = await createTemporaryDirectory();
+    const coordinatorSource = await fs.readFile(
+      path.join(process.cwd(), 'oauth-state-coordinator.mjs'),
+      'utf8'
+    );
+    const instrumentedSource = coordinatorSource.replace(
+      'function staleMarkerStillBelongsToProcess(',
+      'export function staleMarkerStillBelongsToProcess('
+    );
+    expect(instrumentedSource).not.toBe(coordinatorSource);
+    const instrumentedPath = path.join(directory, 'instrumented-coordinator.mjs');
+    await fs.writeFile(instrumentedPath, instrumentedSource, 'utf8');
+    const instrumentedModule = await import(pathToFileURL(instrumentedPath).href) as {
+      staleMarkerStillBelongsToProcess: (
+        marker: { identity: string; mtimeMs: number },
+        ownerIdentity: string,
+        currentIdentity: string
+      ) => boolean;
+    };
+    const markerIdentity = 'win32:10000';
+
+    // The marker timestamp precedes its own recorded process start, proving
+    // rollback. The original OS identity is retained within the known Node /
+    // kernel timestamp skew, while a materially different reused PID is not.
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, mtimeMs: 9_000 },
+      markerIdentity,
+      'win32:10001'
+    )).toBe(true);
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, mtimeMs: 9_000 },
+      markerIdentity,
+      'win32:13000'
+    )).toBe(false);
+
+    // Without rollback evidence, exact marker ordering remains strict even
+    // when the two process-start identities happen to be close.
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, mtimeMs: 10_500 },
+      markerIdentity,
+      'win32:10501'
+    )).toBe(false);
+  });
+
   it('does not reclaim a stale-aged ticket while its original process is alive', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
