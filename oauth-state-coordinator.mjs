@@ -58,6 +58,51 @@ function commandProcessIdentity(executable, args, prefix) {
   return output ? `${prefix}:${output}` : undefined;
 }
 
+function windowsManagementIdentity(pid) {
+  const powershellArgs = [
+    '-NoProfile',
+    '-NonInteractive',
+    '-Command',
+    `$started = [DateTimeOffset]((Get-Process -Id ${pid}).StartTime); $started.ToUnixTimeMilliseconds()`
+  ];
+  for (const executable of ['powershell.exe', 'pwsh.exe']) {
+    try {
+      const identity = commandProcessIdentity(executable, powershellArgs, 'win32');
+      if (identity) return identity;
+    } catch {
+      // Try the next independent Windows process-management interface.
+    }
+  }
+
+  try {
+    const output = execFileSync(
+      'wmic.exe',
+      ['process', 'where', `ProcessId=${pid}`, 'get', 'CreationDate', '/value'],
+      {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'ignore'],
+        timeout: PROCESS_IDENTITY_COMMAND_TIMEOUT_MS
+      }
+    );
+    const match = /CreationDate=(\d{14})\.(\d{6})([+-]\d{3})/.exec(output);
+    if (!match) return undefined;
+    const timestamp = match[1];
+    const localMilliseconds = Date.UTC(
+      Number.parseInt(timestamp.slice(0, 4), 10),
+      Number.parseInt(timestamp.slice(4, 6), 10) - 1,
+      Number.parseInt(timestamp.slice(6, 8), 10),
+      Number.parseInt(timestamp.slice(8, 10), 10),
+      Number.parseInt(timestamp.slice(10, 12), 10),
+      Number.parseInt(timestamp.slice(12, 14), 10),
+      Number.parseInt(match[2].slice(0, 3), 10)
+    );
+    const utcMilliseconds = localMilliseconds - Number.parseInt(match[3], 10) * 60_000;
+    return Number.isFinite(utcMilliseconds) ? `win32:${utcMilliseconds}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function processIdentity(pid) {
   if (!Number.isSafeInteger(pid) || pid <= 0 || !processExists(pid)) return null;
   try {
@@ -65,13 +110,7 @@ function processIdentity(pid) {
     if (process.platform === 'darwin') {
       return commandProcessIdentity('/bin/ps', ['-p', String(pid), '-o', 'lstart='], 'darwin');
     }
-    if (process.platform === 'win32') {
-      return commandProcessIdentity(
-        'powershell.exe',
-        ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks`],
-        'win32'
-      );
-    }
+    if (process.platform === 'win32') return windowsManagementIdentity(pid);
   } catch {
     // The process may exit between the liveness probe and identity lookup.
   }
@@ -145,6 +184,30 @@ function publishDoneSync(donePath) {
   }
 }
 
+function compactCompletedTicketsSync(lockDirectory, preservedTicket) {
+  let slots;
+  try {
+    slots = listTicketSlotsSync(lockDirectory);
+  } catch {
+    return;
+  }
+  for (const slot of slots) {
+    if (slot.ticket >= preservedTicket || !fs.existsSync(slot.donePath)) continue;
+    try {
+      // Remove the slot first. If this fails, retaining .done keeps the slot
+      // completed. The preserved newer slot prevents ticket-number reuse.
+      fs.unlinkSync(slot.slotPath);
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') continue;
+    }
+    try {
+      fs.unlinkSync(slot.donePath);
+    } catch {
+      // A leftover marker is ignored by allocation and is safe to retry later.
+    }
+  }
+}
+
 function slotIsOutstandingSync(slot) {
   if (fs.existsSync(slot.donePath)) return false;
   try {
@@ -186,6 +249,7 @@ function allocateTicketSync(lockDirectory) {
         // Linking a complete private file publishes both the ticket and its
         // owner record atomically. A contender can never observe partial JSON.
         fs.linkSync(stagedSlotPath, slotPath);
+        compactCompletedTicketsSync(lockDirectory, ticket);
         return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
       } catch (error) {
         if (errorCode(error) !== 'EEXIST') throw error;

@@ -46,6 +46,18 @@ afterEach(async () => {
 });
 
 describe('OAuthStateCoordinator', () => {
+  it('compacts completed prefixes while retaining the allocation high-water mark', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+
+    for (let acquisition = 0; acquisition < 3; acquisition++) {
+      await withOAuthStateLock(stateFile, async () => {});
+    }
+
+    const entries = await fs.readdir(`${stateFile}.lock`);
+    expect(entries.sort()).toEqual(['3.done', '3.slot']);
+  });
+
   it('serializes a flow cleanup and a replacement state write', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
@@ -261,8 +273,6 @@ describe('OAuthStateCoordinator', () => {
     await Promise.all(children);
 
     await expect(fs.readFile(counterFile, 'utf8')).resolves.toBe('8');
-    await expect(fs.access(orphanedSlot)).resolves.toBeUndefined();
-    await expect(fs.access(path.join(lockDirectory, '1.done'))).resolves.toBeUndefined();
     await expectAllTicketsCompleted(stateFile);
   });
 });
