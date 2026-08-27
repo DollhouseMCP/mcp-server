@@ -153,7 +153,7 @@ describe('OAuthStateCoordinator', () => {
       await fs.readFile(path.join(lockDirectory, '1.slot'), 'utf8')
     ) as Record<string, unknown>;
     activeOwner.id = '00000000-0000-4000-8000-000000000998';
-    activeOwner.allocationDeadline = Date.now() - 1;
+    activeOwner.allocationDeadlineUptime = os.uptime() * 1_000 - 1;
     const abandonedIntent = path.join(lockDirectory, '.expired-live-owner.slot.tmp');
     await fs.writeFile(abandonedIntent, JSON.stringify(activeOwner), 'utf8');
 
@@ -161,6 +161,24 @@ describe('OAuthStateCoordinator', () => {
 
     const entries = await fs.readdir(lockDirectory);
     expect(entries.sort()).toEqual(['2.done', '2.slot']);
+  });
+
+  it('publishes an exclusive ticket when the filesystem does not support hard links', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    jest.spyOn(fsSync, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('hard links unsupported'), { code: 'ENOTSUP' });
+    });
+
+    let operationRan = false;
+    withOAuthStateLockSync(stateFile, () => { operationRan = true; });
+
+    expect(operationRan).toBe(true);
+    const slot = JSON.parse(
+      await fs.readFile(path.join(`${stateFile}.lock`, '1.slot'), 'utf8')
+    ) as Record<string, unknown>;
+    expect(slot.ownerPid).toBe(process.pid);
+    await expectAllTicketsCompleted(stateFile);
   });
 
   it('includes ticket allocation retries in the lock timeout', async () => {

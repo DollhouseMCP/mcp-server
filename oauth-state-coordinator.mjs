@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
+import { uptime as systemUptime } from 'node:os';
 import { performance } from 'node:perf_hooks';
 
 // The OAuth parent and detached helper are separate processes. Monotonic,
@@ -35,7 +36,7 @@ function waitSync(milliseconds) {
 function createLockDeadline() {
   return {
     monotonic: performance.now() + LOCK_TIMEOUT_MS,
-    epoch: Date.now() + LOCK_TIMEOUT_MS
+    systemUptime: systemUptime() * 1_000 + LOCK_TIMEOUT_MS
   };
 }
 
@@ -44,7 +45,8 @@ function remainingLockTime(deadline) {
 }
 
 function lockDeadlineExpired(deadline) {
-  return remainingLockTime(deadline) <= 0;
+  return remainingLockTime(deadline) <= 0 ||
+    systemUptime() * 1_000 >= deadline.systemUptime;
 }
 
 function ensureLockDirectorySync(lockDirectory) {
@@ -422,9 +424,10 @@ function allocationIntentBlocksCompactionSync(
       fs.unlinkSync(intentPath);
       return false;
     }
-    if (Number.isSafeInteger(owner?.allocationDeadline) &&
-        Date.now() >= owner.allocationDeadline) {
-      // Allocation checks this same deadline immediately before publishing.
+    if (Number.isFinite(owner?.allocationDeadlineUptime) &&
+        systemUptime() * 1_000 >= owner.allocationDeadlineUptime) {
+      // Allocation checks the same process-shared monotonic deadline
+      // immediately before publishing.
       // If cleanup lost a transient race, linkSync either already published
       // the complete inode or will fail after this unlink; it cannot publish
       // an expired intent later.
@@ -537,6 +540,19 @@ function tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline) {
     return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
   } catch (error) {
     if (errorCode(error) === 'EEXIST') return null;
+    if (!['EPERM', 'ENOTSUP', 'EOPNOTSUPP', 'ENOSYS', 'EXDEV'].includes(errorCode(error))) {
+      throw error;
+    }
+  }
+  try {
+    // FAT/exFAT and some network shares do not support hard links. Exclusive
+    // copy still allocates one immutable ticket without overwriting a winner.
+    // A reader may briefly see an incomplete record, but fresh malformed slots
+    // are conservatively outstanding and are recoverable if this process dies.
+    fs.copyFileSync(stagedSlotPath, slotPath, fs.constants.COPYFILE_EXCL);
+    return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') return null;
     throw error;
   }
 }
@@ -557,7 +573,12 @@ function allocateTicketSync(lockDirectory, deadline) {
     const stagedSlotPath = `${lockDirectory}/.${process.pid}.${id}.slot.tmp`;
     fs.writeFileSync(
       stagedSlotPath,
-      JSON.stringify({ id, ownerPid: process.pid, ownerIdentity, allocationDeadline: deadline.epoch }),
+      JSON.stringify({
+        id,
+        ownerPid: process.pid,
+        ownerIdentity,
+        allocationDeadlineUptime: deadline.systemUptime
+      }),
       { encoding: 'utf8', flag: 'wx', mode: 0o600 }
     );
 
