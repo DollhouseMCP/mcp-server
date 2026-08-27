@@ -1,16 +1,14 @@
 import fs from 'node:fs';
-import fsPromises from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
 
-// The OAuth parent and detached helper are separate processes, so the
-// repository's in-process FileLockManager cannot serialize their state-file
-// transactions. This coordinator uses Lamport bakery-style ticket claims:
-// every contender owns a UUID-named file that is never reused, which makes
-// stale cleanup safe even when several processes recover concurrently.
+// The OAuth parent and detached helper are separate processes. Monotonic,
+// never-reused ticket slots provide cross-process ordering without deleting
+// or replacing another owner's lock artifact. A matching .done marker releases
+// a slot; abandoned slots are completed only after process-start verification.
 const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_RETRY_MS = 10;
 const CLAIM_STALE_MS = 30_000;
-const CLAIM_HEARTBEAT_MS = 10_000;
 const LOCK_WAIT_SIGNAL = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 function lockDirectoryFor(stateFile) {
@@ -31,34 +29,84 @@ function ensureLockDirectorySync(lockDirectory) {
   fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o700 });
 }
 
-function claimIsStale(claimPath) {
-  return Date.now() - fs.statSync(claimPath).mtimeMs >= CLAIM_STALE_MS;
-}
-
-function removeStaleClaimSync(claimPath) {
+function processExists(pid) {
   try {
-    if (!claimIsStale(claimPath)) return false;
-    // Claim paths contain a UUID and are never reused. Removing this exact
-    // path therefore cannot unlink a replacement claim from another owner.
-    fs.unlinkSync(claimPath);
+    process.kill(pid, 0);
     return true;
   } catch (error) {
-    return errorCode(error) === 'ENOENT';
+    return errorCode(error) === 'EPERM';
   }
 }
 
-function parseClaimSync(claimPath, fallbackId) {
+function linuxProcessIdentity(pid) {
+  const stat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8');
+  const fieldsAfterCommand = stat.slice(stat.lastIndexOf(') ') + 2).trim().split(/\s+/);
+  const startTicks = fieldsAfterCommand[19];
+  const bootId = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
+  if (!startTicks || !bootId) return undefined;
+  return `linux:${bootId}:${startTicks}`;
+}
+
+function commandProcessIdentity(executable, args, prefix) {
+  const output = execFileSync(executable, args, {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    timeout: 1_000
+  }).trim();
+  return output ? `${prefix}:${output}` : undefined;
+}
+
+function processIdentity(pid) {
+  if (!Number.isSafeInteger(pid) || pid <= 0 || !processExists(pid)) return null;
   try {
-    const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
-    if (claim?.id !== fallbackId || typeof claim.choosing !== 'boolean') return null;
-    if (!Number.isSafeInteger(claim.ticket) || claim.ticket < 0) return null;
-    return { ...claim, path: claimPath };
+    if (process.platform === 'linux') return linuxProcessIdentity(pid);
+    if (process.platform === 'darwin') {
+      return commandProcessIdentity('/bin/ps', ['-p', String(pid), '-o', 'lstart='], 'darwin');
+    }
+    if (process.platform === 'win32') {
+      return commandProcessIdentity(
+        'powershell.exe',
+        ['-NoProfile', '-NonInteractive', '-Command', `(Get-Process -Id ${pid}).StartTime.ToUniversalTime().Ticks`],
+        'win32'
+      );
+    }
+  } catch {
+    // The process may exit between the liveness probe and identity lookup.
+  }
+  return processExists(pid) ? undefined : null;
+}
+
+function parseSlotOwnerSync(slotPath) {
+  try {
+    const owner = JSON.parse(fs.readFileSync(slotPath, 'utf8'));
+    if (typeof owner?.id !== 'string' || owner.id.length === 0) return null;
+    if (!Number.isSafeInteger(owner.ownerPid) || owner.ownerPid <= 0) return null;
+    if (typeof owner.ownerIdentity !== 'string' || owner.ownerIdentity.length === 0) return null;
+    return owner;
   } catch {
     return null;
   }
 }
 
-function listActiveClaimsSync(lockDirectory, ownPath) {
+function ownerIsStillActive(owner) {
+  if (!owner) return false;
+  const currentIdentity = processIdentity(owner.ownerPid);
+  // An unavailable identity probe fails closed; a later scan can retry.
+  return currentIdentity === undefined || currentIdentity === owner.ownerIdentity;
+}
+
+function slotIsStale(slotPath) {
+  return Date.now() - fs.statSync(slotPath).mtimeMs >= CLAIM_STALE_MS;
+}
+
+function ticketFromSlotName(name) {
+  const match = /^(\d+)\.slot$/.exec(name);
+  if (!match) return null;
+  const ticket = Number.parseInt(match[1], 10);
+  return Number.isSafeInteger(ticket) && ticket > 0 ? ticket : null;
+}
+
+function listTicketSlotsSync(lockDirectory) {
   let entries;
   try {
     entries = fs.readdirSync(lockDirectory, { withFileTypes: true });
@@ -67,111 +115,103 @@ function listActiveClaimsSync(lockDirectory, ownPath) {
     throw error;
   }
 
-  const claims = [];
-  for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith('.claim')) continue;
-    const claimPath = `${lockDirectory}/${entry.name}`;
-    if (claimPath !== ownPath && removeStaleClaimSync(claimPath)) continue;
+  return entries
+    .filter(entry => entry.isFile())
+    .map(entry => ({ entry, ticket: ticketFromSlotName(entry.name) }))
+    .filter(item => item.ticket !== null)
+    .map(item => ({
+      ticket: item.ticket,
+      slotPath: `${lockDirectory}/${item.entry.name}`,
+      donePath: `${lockDirectory}/${item.ticket}.done`
+    }));
+}
 
-    const id = entry.name.slice(0, -'.claim'.length);
-    const claim = parseClaimSync(claimPath, id);
-    // A fresh partial or malformed claim is conservatively treated as a
-    // choosing contender until its owner completes it or it becomes stale.
-    claims.push(claim ?? { id, choosing: true, ticket: 0, path: claimPath });
+function publishDoneSync(donePath) {
+  try {
+    fs.writeFileSync(donePath, '', { flag: 'wx', mode: 0o600 });
+  } catch (error) {
+    if (errorCode(error) !== 'EEXIST') throw error;
   }
-  return claims;
 }
 
-function createClaimSync(lockDirectory) {
+function slotIsOutstandingSync(slot) {
+  if (fs.existsSync(slot.donePath)) return false;
+  try {
+    if (!slotIsStale(slot.slotPath)) return true;
+    const owner = parseSlotOwnerSync(slot.slotPath);
+    if (ownerIsStillActive(owner)) return true;
+    // Completion is an atomic create. The immutable slot remains as the
+    // high-water mark, so its ticket can never be allocated again.
+    publishDoneSync(slot.donePath);
+    return false;
+  } catch (error) {
+    return errorCode(error) !== 'ENOENT';
+  }
+}
+
+function allocateTicketSync(lockDirectory) {
   ensureLockDirectorySync(lockDirectory);
-  const id = randomUUID();
-  const claimPath = `${lockDirectory}/${id}.claim`;
-  fs.writeFileSync(
-    claimPath,
-    JSON.stringify({ id, choosing: true, ticket: 0 }),
-    { encoding: 'utf8', flag: 'wx', mode: 0o600 }
-  );
+  const ownerIdentity = processIdentity(process.pid);
+  if (typeof ownerIdentity !== 'string') {
+    throw new Error('Unable to determine process identity for OAuth state locking');
+  }
 
-  const observedClaims = listActiveClaimsSync(lockDirectory, claimPath);
-  const highestTicket = observedClaims.reduce(
-    (highest, claim) => claim.choosing ? highest : Math.max(highest, claim.ticket),
-    0
-  );
-  const ticket = highestTicket + 1;
-  fs.writeFileSync(
-    claimPath,
-    JSON.stringify({ id, choosing: false, ticket }),
-    { encoding: 'utf8', mode: 0o600 }
-  );
-  return { id, ticket, path: claimPath, lockDirectory };
+  while (true) {
+    const slots = listTicketSlotsSync(lockDirectory);
+    const highestTicket = slots.reduce((highest, slot) => Math.max(highest, slot.ticket), 0);
+    const ticket = highestTicket + 1;
+    if (!Number.isSafeInteger(ticket)) throw new Error('OAuth state lock ticket space exhausted');
+    const slotPath = `${lockDirectory}/${ticket}.slot`;
+    try {
+      fs.writeFileSync(
+        slotPath,
+        JSON.stringify({ id: randomUUID(), ownerPid: process.pid, ownerIdentity }),
+        { encoding: 'utf8', flag: 'wx', mode: 0o600 }
+      );
+      return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
+    } catch (error) {
+      if (errorCode(error) !== 'EEXIST') throw error;
+    }
+  }
 }
 
-function claimPrecedes(claim, ownClaim) {
-  if (claim.path === ownClaim.path) return false;
-  if (claim.choosing) return true;
-  return claim.ticket < ownClaim.ticket ||
-    (claim.ticket === ownClaim.ticket && claim.id < ownClaim.id);
+function earlierOutstandingSlotExistsSync(claim) {
+  return listTicketSlotsSync(claim.lockDirectory)
+    .some(slot => slot.ticket < claim.ticket && slotIsOutstandingSync(slot));
 }
 
 function lockTimeoutError(lockDirectory) {
   return new Error(`Timed out waiting for OAuth state lock: ${lockDirectory}`);
 }
 
-function releaseClaimSync(claim) {
-  try {
-    fs.unlinkSync(claim.path);
-  } catch {
-    // The claim may already have been cleaned after an abnormal delay.
-  }
-}
-
-async function releaseClaim(claim) {
-  try {
-    await fsPromises.unlink(claim.path);
-  } catch {
-    // The claim may already have been cleaned after an abnormal delay.
-  }
-}
-
 function acquireLockSync(lockDirectory) {
-  const claim = createClaimSync(lockDirectory);
+  const claim = allocateTicketSync(lockDirectory);
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
-
   try {
-    while (listActiveClaimsSync(lockDirectory, claim.path).some(other => claimPrecedes(other, claim))) {
+    while (earlierOutstandingSlotExistsSync(claim)) {
       if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
       waitSync(LOCK_RETRY_MS);
     }
     return claim;
   } catch (error) {
-    releaseClaimSync(claim);
+    publishDoneSync(claim.donePath);
     throw error;
   }
 }
 
 async function acquireLock(lockDirectory) {
-  const claim = createClaimSync(lockDirectory);
+  const claim = allocateTicketSync(lockDirectory);
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
-
   try {
-    while (listActiveClaimsSync(lockDirectory, claim.path).some(other => claimPrecedes(other, claim))) {
+    while (earlierOutstandingSlotExistsSync(claim)) {
       if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
       await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_MS));
     }
     return claim;
   } catch (error) {
-    await releaseClaim(claim);
+    publishDoneSync(claim.donePath);
     throw error;
   }
-}
-
-function startClaimHeartbeat(claim) {
-  const heartbeat = setInterval(() => {
-    const now = new Date();
-    fsPromises.utimes(claim.path, now, now).catch(() => {});
-  }, CLAIM_HEARTBEAT_MS);
-  heartbeat.unref();
-  return heartbeat;
 }
 
 export function withOAuthStateLockSync(stateFile, operation) {
@@ -179,18 +219,16 @@ export function withOAuthStateLockSync(stateFile, operation) {
   try {
     return operation();
   } finally {
-    releaseClaimSync(claim);
+    publishDoneSync(claim.donePath);
   }
 }
 
 export async function withOAuthStateLock(stateFile, operation) {
   const claim = await acquireLock(lockDirectoryFor(stateFile));
-  const heartbeat = startClaimHeartbeat(claim);
   try {
     return await operation();
   } finally {
-    clearInterval(heartbeat);
-    await releaseClaim(claim);
+    publishDoneSync(claim.donePath);
   }
 }
 
