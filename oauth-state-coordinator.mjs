@@ -15,6 +15,7 @@ const WINDOWS_START_TIME_TOLERANCE_MS = 2_000;
 const LOCK_WAIT_SIGNAL = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 let cachedCurrentProcessIdentity;
 const pendingDonePaths = new Set();
+const pendingDoneRetryTimers = new Map();
 const currentProcessMarkerReferences = new Map();
 
 function lockDirectoryFor(stateFile) {
@@ -179,8 +180,10 @@ function processIdentityMarkerPath(lockDirectory, pid) {
 
 function readProcessIdentityMarkerSync(lockDirectory, pid) {
   try {
-    const identity = fs.readFileSync(processIdentityMarkerPath(lockDirectory, pid), 'utf8').trim();
-    return identity || null;
+    const markerPath = processIdentityMarkerPath(lockDirectory, pid);
+    const mtimeMs = fs.statSync(markerPath).mtimeMs;
+    const identity = fs.readFileSync(markerPath, 'utf8').trim();
+    return identity ? { identity, mtimeMs } : null;
   } catch {
     return null;
   }
@@ -223,6 +226,16 @@ function processIdentitiesMatch(recordedIdentity, currentIdentity) {
     WINDOWS_START_TIME_TOLERANCE_MS;
 }
 
+function staleMarkerStillBelongsToProcess(marker, ownerIdentity, currentIdentity) {
+  if (currentIdentity === ownerIdentity) return true;
+  const currentWindowsStart = /^win32:(\d+)$/.exec(currentIdentity)?.[1];
+  if (!currentWindowsStart) return false;
+  // The marker is written after its process starts. If the currently live
+  // process started after this matching marker was written, the PID was
+  // reused. Timestamp tolerance covers filesystem timestamp precision only.
+  return Number(currentWindowsStart) <= marker.mtimeMs + WINDOWS_START_TIME_TOLERANCE_MS;
+}
+
 function parseSlotOwnerSync(slotPath) {
   try {
     const owner = JSON.parse(fs.readFileSync(slotPath, 'utf8'));
@@ -243,12 +256,17 @@ function ownerIsStillActive(owner, deadline, lockDirectory) {
       (currentIdentity !== null && processIdentitiesMatch(owner.ownerIdentity, currentIdentity));
   }
   if (!processExists(owner.ownerPid)) return false;
-  const participantIdentity = readProcessIdentityMarkerSync(lockDirectory, owner.ownerPid);
-  if (participantIdentity === owner.ownerIdentity) return true;
-  if (participantIdentity !== null) return false;
+  const marker = readProcessIdentityMarkerSync(lockDirectory, owner.ownerPid);
+  if (marker?.identity === owner.ownerIdentity &&
+      Date.now() - marker.mtimeMs < CLAIM_STALE_MS) return true;
+  if (marker !== null && marker.identity !== owner.ownerIdentity) return false;
   const currentIdentity = processIdentity(owner.ownerPid, deadline);
   // An unavailable identity probe fails closed; a later scan can retry.
-  return currentIdentity === undefined || currentIdentity === owner.ownerIdentity;
+  return currentIdentity === undefined ||
+    (currentIdentity !== null &&
+      (currentIdentity === owner.ownerIdentity ||
+        (marker !== null &&
+          staleMarkerStillBelongsToProcess(marker, owner.ownerIdentity, currentIdentity))));
 }
 
 function slotIsStale(slotPath) {
@@ -287,16 +305,36 @@ function publishDoneSync(donePath) {
   try {
     fs.writeFileSync(donePath, '', { flag: 'wx', mode: 0o600 });
     pendingDonePaths.delete(donePath);
+    const retryTimer = pendingDoneRetryTimers.get(donePath);
+    if (retryTimer) clearTimeout(retryTimer);
+    pendingDoneRetryTimers.delete(donePath);
   } catch (error) {
     if (errorCode(error) === 'EEXIST') {
       pendingDonePaths.delete(donePath);
       return;
     }
     // Retain failed releases in memory so the next transaction in this
-    // process retries them before it can publish another ticket.
+    // process retries them before it can publish another ticket. An unref'd
+    // timer also retries independently when no later local transaction occurs.
     pendingDonePaths.add(donePath);
+    schedulePendingDoneRetry(donePath);
     throw error;
   }
+}
+
+function schedulePendingDoneRetry(donePath) {
+  if (pendingDoneRetryTimers.has(donePath)) return;
+  const timer = setTimeout(() => {
+    pendingDoneRetryTimers.delete(donePath);
+    if (!pendingDonePaths.has(donePath)) return;
+    try {
+      publishDoneSync(donePath);
+    } catch {
+      // publishDoneSync retained the path and scheduled the next retry.
+    }
+  }, LOCK_RETRY_MS);
+  timer.unref?.();
+  pendingDoneRetryTimers.set(donePath, timer);
 }
 
 function retryPendingDoneMarkersSync(lockDirectory) {

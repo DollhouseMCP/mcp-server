@@ -77,6 +77,10 @@ let terminalOutcome = null;
 
 installTerminationHandlers();
 if (!claimPreparedStateSync()) {
+  // A failed lock/identity claim can outlive the parent process that prepared
+  // the generation. Retry one flow-checked transaction so a PID-less state
+  // cannot remain indefinitely; a superseding flow is never removed.
+  cleanupStateFileSync();
   console.error('OAUTH_HELPER_44: Unable to claim prepared OAuth flow state');
   process.exit(1);
 }

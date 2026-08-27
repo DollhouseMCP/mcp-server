@@ -134,6 +134,7 @@ describe('OAuthStateCoordinator', () => {
     expect(() => withOAuthStateLockSync(stateFile, () => { firstOperationRan = true; }))
       .toThrow('transient completion failure');
     expect(firstOperationRan).toBe(true);
+    await waitForFile(path.join(`${stateFile}.lock`, '1.done'));
 
     let secondOperationRan = false;
     withOAuthStateLockSync(stateFile, () => { secondOperationRan = true; });
