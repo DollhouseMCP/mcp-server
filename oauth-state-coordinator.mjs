@@ -11,6 +11,7 @@ const LOCK_RETRY_MS = 10;
 const CLAIM_STALE_MS = 30_000;
 const PROCESS_IDENTITY_COMMAND_TIMEOUT_MS = 5_000;
 const LOCK_WAIT_SIGNAL = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+let cachedCurrentProcessIdentity;
 
 function lockDirectoryFor(stateFile) {
   return `${stateFile}.lock`;
@@ -77,6 +78,13 @@ function processIdentity(pid) {
   return processExists(pid) ? undefined : null;
 }
 
+function currentProcessIdentity() {
+  if (typeof cachedCurrentProcessIdentity === 'string') return cachedCurrentProcessIdentity;
+  const identity = processIdentity(process.pid);
+  if (typeof identity === 'string') cachedCurrentProcessIdentity = identity;
+  return identity;
+}
+
 function parseSlotOwnerSync(slotPath) {
   try {
     const owner = JSON.parse(fs.readFileSync(slotPath, 'utf8'));
@@ -91,7 +99,9 @@ function parseSlotOwnerSync(slotPath) {
 
 function ownerIsStillActive(owner) {
   if (!owner) return false;
-  const currentIdentity = processIdentity(owner.ownerPid);
+  const currentIdentity = owner.ownerPid === process.pid
+    ? currentProcessIdentity()
+    : processIdentity(owner.ownerPid);
   // An unavailable identity probe fails closed; a later scan can retry.
   return currentIdentity === undefined || currentIdentity === owner.ownerIdentity;
 }
@@ -152,7 +162,7 @@ function slotIsOutstandingSync(slot) {
 
 function allocateTicketSync(lockDirectory) {
   ensureLockDirectorySync(lockDirectory);
-  const ownerIdentity = processIdentity(process.pid);
+  const ownerIdentity = currentProcessIdentity();
   if (typeof ownerIdentity !== 'string') {
     throw new TypeError('Unable to determine process identity for OAuth state locking');
   }
