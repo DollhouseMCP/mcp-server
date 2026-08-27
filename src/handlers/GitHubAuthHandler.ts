@@ -19,6 +19,7 @@ import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js'
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
 import type { PathService } from '../paths/PathService.js';
+import { withOAuthStateLock } from '../utils/OAuthStateCoordinator.js';
 
 const UNKNOWN_ERROR = 'Unknown error';
 
@@ -261,21 +262,25 @@ export class GitHubAuthHandler {
           expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
         };
 
-        await this.fileOperations.writeFile(stateFile, JSON.stringify(state, null, 2), {
-          source: 'GitHubAuthHandler.setupGitHubAuth'
+        await withOAuthStateLock(stateFile, async () => {
+          await this.fileOperations.writeFile(stateFile, JSON.stringify(state, null, 2), {
+            source: 'GitHubAuthHandler.setupGitHubAuth'
+          });
         });
     }
 
     private async cleanupPreparedOAuthHelperState(flowId: string): Promise<void> {
         const stateFile = this.getOAuthHelperStateFile();
         try {
-          const stateData = await this.fileOperations.readFile(stateFile, {
-            source: 'GitHubAuthHandler.startOAuthHelper'
+          await withOAuthStateLock(stateFile, async () => {
+            const stateData = await this.fileOperations.readFile(stateFile, {
+              source: 'GitHubAuthHandler.startOAuthHelper'
+            });
+            const state = JSON.parse(stateData);
+            if (this.isRecord(state) && state.flowId === flowId) {
+              await this.fileOperations.deleteFile(stateFile).catch(() => {});
+            }
           });
-          const state = JSON.parse(stateData);
-          if (this.isRecord(state) && state.flowId === flowId) {
-            await this.fileOperations.deleteFile(stateFile).catch(() => {});
-          }
         } catch {
           // Best-effort cleanup after a spawn failure.
         }

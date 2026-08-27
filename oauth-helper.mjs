@@ -17,6 +17,11 @@ import { dirname, join } from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import { homedir } from 'os';
+import {
+  withOAuthStateLock,
+  withOAuthStateLockSync,
+  writeFileAtomicallySync
+} from './dist/utils/OAuthStateCoordinator.js';
 
 // Constants
 const DEFAULT_POLL_INTERVAL = 5;
@@ -215,9 +220,9 @@ function cleanupPidFileSync() {
 
 function cleanupStateFileSync() {
   try {
-    if (stateFileBelongsToThisHelperSync()) {
-      fsSync.unlinkSync(STATE_FILE);
-    }
+    withOAuthStateLockSync(STATE_FILE, () => {
+      if (stateFileBelongsToThisHelperSync()) fsSync.unlinkSync(STATE_FILE);
+    });
   } catch {
     // Ignore cleanup errors
   }
@@ -238,12 +243,16 @@ async function cleanupPidFile() {
 
 async function cleanupStateFile() {
   try {
-    if (await stateFileBelongsToThisHelper()) {
-      await fs.unlink(STATE_FILE).catch(() => {});
-      await log('OAuth helper state file cleaned up');
-    } else {
-      await log('OAuth helper state belongs to another flow; leaving it in place');
-    }
+    const cleaned = await withOAuthStateLock(STATE_FILE, async () => {
+      if (await stateFileBelongsToThisHelper()) {
+        await fs.unlink(STATE_FILE).catch(() => {});
+        return true;
+      }
+      return false;
+    });
+    await log(cleaned
+      ? 'OAuth helper state file cleaned up'
+      : 'OAuth helper state belongs to another flow; leaving it in place');
   } catch {
     // Ignore cleanup errors
   }
@@ -294,14 +303,15 @@ function claimPreparedStateSync() {
   if (!FLOW_ID) return;
 
   try {
-    const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
-    if (state?.flowId !== FLOW_ID) return;
+    withOAuthStateLockSync(STATE_FILE, () => {
+      const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+      if (state?.flowId !== FLOW_ID) return;
 
-    fsSync.writeFileSync(
-      STATE_FILE,
-      JSON.stringify({ ...state, pid: process.pid }, null, 2),
-      { mode: 0o600 }
-    );
+      writeFileAtomicallySync(
+        STATE_FILE,
+        JSON.stringify({ ...state, pid: process.pid }, null, 2)
+      );
+    });
   } catch {
     // Standalone or failed parent launches may not have prepared state.
   }
