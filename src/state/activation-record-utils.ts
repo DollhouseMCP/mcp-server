@@ -1,13 +1,12 @@
 import { normalizeMCPAQLElementType } from '../handlers/mcp-aql/types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
-import { SESSION_ID_PATTERN } from '../services/sessionIdentity.js';
 import type {
   PersistedActivation,
   PersistedActivationIdentity,
 } from './IActivationStateStore.js';
 
 /** Shared alias retained for activation-store call sites. */
-export const ACTIVATION_SESSION_ID_PATTERN = SESSION_ID_PATTERN;
+export { SESSION_ID_PATTERN as ACTIVATION_SESSION_ID_PATTERN } from '../services/sessionIdentity.js';
 
 export interface NormalizedActivationInput {
   name: string;
