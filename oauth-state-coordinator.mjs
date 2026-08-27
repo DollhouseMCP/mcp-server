@@ -232,8 +232,9 @@ function staleMarkerStillBelongsToProcess(marker, ownerIdentity, currentIdentity
   if (!currentWindowsStart) return false;
   // The marker is written after its process starts. If the currently live
   // process started after this matching marker was written, the PID was
-  // reused. Timestamp tolerance covers filesystem timestamp precision only.
-  return Number(currentWindowsStart) <= marker.mtimeMs + WINDOWS_START_TIME_TOLERANCE_MS;
+  // reused. Both timestamps are Unix milliseconds on Windows, so ordering is
+  // sufficient and does not create a fuzzy PID-reuse window.
+  return Number(currentWindowsStart) <= marker.mtimeMs;
 }
 
 function parseSlotOwnerSync(slotPath) {
@@ -258,7 +259,7 @@ function ownerIsStillActive(owner, deadline, lockDirectory) {
   if (!processExists(owner.ownerPid)) return false;
   const marker = readProcessIdentityMarkerSync(lockDirectory, owner.ownerPid);
   if (marker?.identity === owner.ownerIdentity &&
-      Date.now() - marker.mtimeMs < CLAIM_STALE_MS) return true;
+      Date.now() - marker.mtimeMs < LOCK_TIMEOUT_MS) return true;
   if (marker !== null && marker.identity !== owner.ownerIdentity) return false;
   const currentIdentity = processIdentity(owner.ownerPid, deadline);
   // An unavailable identity probe fails closed; a later scan can retry.
