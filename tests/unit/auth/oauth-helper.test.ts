@@ -217,6 +217,8 @@ describe('oauth-helper.mjs', () => {
     expect(helperSource).toContain("from './oauth-state-coordinator.mjs'");
     expect(helperSource).not.toContain("from './dist/utils/OAuthStateCoordinator.js'");
     expect(helperSource).not.toContain('withOAuthStateLock,');
+    expect(helperSource).not.toMatch(/\bcleanupStateFile\s*\(/);
+    expect(helperSource).toMatch(/main\(\)\.catch[\s\S]*cleanupStateFileSync\(\)/);
     expect(typeof TokenManager.prototype.storeGitHubToken).toBe('function');
   });
 

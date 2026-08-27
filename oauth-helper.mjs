@@ -528,7 +528,7 @@ main().catch(async (error) => {
   console.error('Fatal error in OAuth helper');
   const outcome = commitTerminalResultSync('failed', attempts, 'fatal_error', 1);
   await logTerminalCommit(outcome);
-  await cleanupStateFile();
+  cleanupStateFileSync();
   await cleanupPidFile();
   process.exit(outcome?.exitCode ?? 1);
 });

@@ -57,35 +57,43 @@ function releaseOwnedFileSync(filePath, token) {
   }
 }
 
+function createOwnedFileSync(filePath, token) {
+  const descriptor = fs.openSync(filePath, 'wx', 0o600);
+  let initialized = false;
+  try {
+    fs.writeFileSync(descriptor, token, 'utf8');
+    initialized = true;
+  } finally {
+    try {
+      fs.closeSync(descriptor);
+    } finally {
+      if (!initialized) fs.unlinkSync(filePath);
+    }
+  }
+}
+
+function recoverAbandonedRecoveryGateSync(recoveryPath) {
+  try {
+    if (!staleLockCanBeRecovered(recoveryPath)) return false;
+    const observedToken = fs.readFileSync(recoveryPath, 'utf8');
+    if (!lockOwnerIsDead(recoveryPath)) return false;
+    if (fs.readFileSync(recoveryPath, 'utf8') !== observedToken) return false;
+    fs.unlinkSync(recoveryPath);
+    return true;
+  } catch (error) {
+    return errorCode(error) === 'ENOENT';
+  }
+}
+
 function acquireRecoveryGateSync(recoveryPath) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     const token = lockToken();
     try {
-      const descriptor = fs.openSync(recoveryPath, 'wx', 0o600);
-      let initialized = false;
-      try {
-        fs.writeFileSync(descriptor, token, 'utf8');
-        initialized = true;
-      } finally {
-        try {
-          fs.closeSync(descriptor);
-        } finally {
-          if (!initialized) fs.unlinkSync(recoveryPath);
-        }
-      }
+      createOwnedFileSync(recoveryPath, token);
       return token;
     } catch (error) {
       if (errorCode(error) !== 'EEXIST') return null;
-      try {
-        if (!staleLockCanBeRecovered(recoveryPath)) return null;
-        const observedToken = fs.readFileSync(recoveryPath, 'utf8');
-        if (lockOwnerIsDead(recoveryPath) && fs.readFileSync(recoveryPath, 'utf8') === observedToken) {
-          fs.unlinkSync(recoveryPath);
-          continue;
-        }
-      } catch {
-        continue;
-      }
+      if (!recoverAbandonedRecoveryGateSync(recoveryPath)) return null;
     }
   }
   return null;
@@ -121,18 +129,7 @@ function acquireLockSync(lockPath) {
 
   while (true) {
     try {
-      const descriptor = fs.openSync(lockPath, 'wx', 0o600);
-      let initialized = false;
-      try {
-        fs.writeFileSync(descriptor, token, 'utf8');
-        initialized = true;
-      } finally {
-        try {
-          fs.closeSync(descriptor);
-        } finally {
-          if (!initialized) fs.unlinkSync(lockPath);
-        }
-      }
+      createOwnedFileSync(lockPath, token);
       return token;
     } catch (error) {
       if (errorCode(error) !== 'EEXIST') throw error;
