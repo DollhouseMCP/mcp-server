@@ -211,6 +211,39 @@ describe('OAuthStateCoordinator', () => {
     await expectAllTicketsCompleted(stateFile);
   });
 
+  it('retains one process marker across overlapping local lock claims', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const markerPath = `${stateFile}.lock.process-${process.pid}.identity`;
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let firstEntered!: () => void;
+    const firstHasEntered = new Promise<void>(resolve => { firstEntered = resolve; });
+    let releaseSecond!: () => void;
+    const secondCanFinish = new Promise<void>(resolve => { releaseSecond = resolve; });
+    let secondEntered!: () => void;
+    const secondHasEntered = new Promise<void>(resolve => { secondEntered = resolve; });
+
+    const first = withOAuthStateLock(stateFile, async () => {
+      firstEntered();
+      await firstCanFinish;
+    });
+    await firstHasEntered;
+    const second = withOAuthStateLock(stateFile, async () => {
+      secondEntered();
+      await secondCanFinish;
+    });
+
+    await expect(fs.access(markerPath)).resolves.toBeUndefined();
+    releaseFirst();
+    await Promise.all([first, secondHasEntered]);
+    await expect(fs.access(markerPath)).resolves.toBeUndefined();
+    releaseSecond();
+    await second;
+    await expect(fs.access(markerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expectAllTicketsCompleted(stateFile);
+  });
+
   it('prevents a helper claim from overwriting a replacement flow across processes', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
@@ -321,6 +354,8 @@ describe('OAuthStateCoordinator', () => {
     });
 
     await waitForFile(ownerEnteredFile);
+    const ownerIdentityMarker = `${stateFile}.lock.process-${owner.pid}.identity`;
+    await expect(fs.access(ownerIdentityMarker)).resolves.toBeUndefined();
     const ownerSlot = path.join(`${stateFile}.lock`, '1.slot');
     const staleTime = new Date(Date.now() - 60_000);
     await fs.utimes(ownerSlot, staleTime, staleTime);
@@ -341,6 +376,7 @@ describe('OAuthStateCoordinator', () => {
     await Promise.all([ownerExit, contenderExit]);
 
     await expect(fs.access(contenderEnteredFile)).resolves.toBeUndefined();
+    await expect(fs.access(ownerIdentityMarker)).rejects.toMatchObject({ code: 'ENOENT' });
     await expectAllTicketsCompleted(stateFile);
   });
 

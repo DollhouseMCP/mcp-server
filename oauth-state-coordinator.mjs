@@ -15,6 +15,7 @@ const WINDOWS_START_TIME_TOLERANCE_MS = 2_000;
 const LOCK_WAIT_SIGNAL = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 let cachedCurrentProcessIdentity;
 const pendingDonePaths = new Set();
+const currentProcessMarkerReferences = new Map();
 
 function lockDirectoryFor(stateFile) {
   return `${stateFile}.lock`;
@@ -185,8 +186,31 @@ function readProcessIdentityMarkerSync(lockDirectory, pid) {
   }
 }
 
-function publishCurrentProcessIdentityMarkerSync(lockDirectory, identity) {
-  writeFileAtomicallySync(processIdentityMarkerPath(lockDirectory, process.pid), identity);
+function retainCurrentProcessIdentityMarkerSync(lockDirectory, identity) {
+  const markerPath = processIdentityMarkerPath(lockDirectory, process.pid);
+  writeFileAtomicallySync(markerPath, identity);
+  currentProcessMarkerReferences.set(
+    markerPath,
+    (currentProcessMarkerReferences.get(markerPath) ?? 0) + 1
+  );
+  return markerPath;
+}
+
+function releaseCurrentProcessIdentityMarkerSync(markerPath) {
+  const references = currentProcessMarkerReferences.get(markerPath) ?? 0;
+  if (references > 1) {
+    currentProcessMarkerReferences.set(markerPath, references - 1);
+    return;
+  }
+  currentProcessMarkerReferences.delete(markerPath);
+  try {
+    fs.unlinkSync(markerPath);
+  } catch (error) {
+    if (errorCode(error) !== 'ENOENT') {
+      // A leftover marker is safe: a later process reusing the PID replaces
+      // it atomically before publishing a ticket.
+    }
+  }
 }
 
 function processIdentitiesMatch(recordedIdentity, currentIdentity) {
@@ -215,20 +239,18 @@ function parseSlotOwnerSync(slotPath) {
 
 function ownerIsStillActive(owner, deadline, lockDirectory) {
   if (!owner) return false;
-  let currentIdentity;
   if (owner.ownerPid === process.pid) {
-    currentIdentity = currentProcessIdentity(deadline);
-  } else if (!processExists(owner.ownerPid)) {
-    return false;
-  } else {
-    const participantIdentity = readProcessIdentityMarkerSync(lockDirectory, owner.ownerPid);
-    if (participantIdentity === owner.ownerIdentity) return true;
-    if (participantIdentity !== null) return false;
-    currentIdentity = processIdentity(owner.ownerPid, deadline);
+    const currentIdentity = currentProcessIdentity(deadline);
+    return currentIdentity === undefined ||
+      (currentIdentity !== null && processIdentitiesMatch(owner.ownerIdentity, currentIdentity));
   }
+  if (!processExists(owner.ownerPid)) return false;
+  const participantIdentity = readProcessIdentityMarkerSync(lockDirectory, owner.ownerPid);
+  if (participantIdentity === owner.ownerIdentity) return true;
+  if (participantIdentity !== null) return false;
+  const currentIdentity = processIdentity(owner.ownerPid, deadline);
   // An unavailable identity probe fails closed; a later scan can retry.
-  return currentIdentity === undefined ||
-    (currentIdentity !== null && processIdentitiesMatch(owner.ownerIdentity, currentIdentity));
+  return currentIdentity === undefined || currentIdentity === owner.ownerIdentity;
 }
 
 function slotIsStale(slotPath) {
@@ -443,30 +465,35 @@ function allocateTicketSync(lockDirectory, deadline) {
   if (typeof ownerIdentity !== 'string') {
     throw new TypeError('Unable to determine process identity for OAuth state locking');
   }
-  publishCurrentProcessIdentityMarkerSync(lockDirectory, ownerIdentity);
-
-  const id = randomUUID();
-  const stagedSlotPath = `${lockDirectory}/.${process.pid}.${id}.slot.tmp`;
-  fs.writeFileSync(
-    stagedSlotPath,
-    JSON.stringify({ id, ownerPid: process.pid, ownerIdentity, allocationDeadline: deadline }),
-    { encoding: 'utf8', flag: 'wx', mode: 0o600 }
-  );
+  const markerPath = retainCurrentProcessIdentityMarkerSync(lockDirectory, ownerIdentity);
 
   try {
-    while (true) {
-      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
-      const claim = tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline);
-      if (!claim) continue;
-      compactCompletedTicketsSync(lockDirectory, claim.ticket, stagedSlotPath, deadline);
-      return claim;
-    }
-  } finally {
+    const id = randomUUID();
+    const stagedSlotPath = `${lockDirectory}/.${process.pid}.${id}.slot.tmp`;
+    fs.writeFileSync(
+      stagedSlotPath,
+      JSON.stringify({ id, ownerPid: process.pid, ownerIdentity, allocationDeadline: deadline }),
+      { encoding: 'utf8', flag: 'wx', mode: 0o600 }
+    );
+
     try {
-      fs.unlinkSync(stagedSlotPath);
-    } catch {
-      // The published hard link owns the record; staging cleanup is best-effort.
+      while (true) {
+        if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+        const claim = tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline);
+        if (!claim) continue;
+        compactCompletedTicketsSync(lockDirectory, claim.ticket, stagedSlotPath, deadline);
+        return { ...claim, markerPath };
+      }
+    } finally {
+      try {
+        fs.unlinkSync(stagedSlotPath);
+      } catch {
+        // The published hard link owns the record; staging cleanup is best-effort.
+      }
     }
+  } catch (error) {
+    releaseCurrentProcessIdentityMarkerSync(markerPath);
+    throw error;
   }
 }
 
@@ -491,7 +518,11 @@ function acquireLockSync(lockDirectory) {
       waitSync(Math.min(LOCK_RETRY_MS, deadline - Date.now()));
     }
   } catch (error) {
-    publishDoneSync(claim.donePath);
+    try {
+      publishDoneSync(claim.donePath);
+    } finally {
+      releaseCurrentProcessIdentityMarkerSync(claim.markerPath);
+    }
     throw error;
   }
 }
@@ -511,7 +542,11 @@ async function acquireLock(lockDirectory) {
       ));
     }
   } catch (error) {
-    publishDoneSync(claim.donePath);
+    try {
+      publishDoneSync(claim.donePath);
+    } finally {
+      releaseCurrentProcessIdentityMarkerSync(claim.markerPath);
+    }
     throw error;
   }
 }
@@ -521,7 +556,11 @@ export function withOAuthStateLockSync(stateFile, operation) {
   try {
     return operation();
   } finally {
-    publishDoneSync(claim.donePath);
+    try {
+      publishDoneSync(claim.donePath);
+    } finally {
+      releaseCurrentProcessIdentityMarkerSync(claim.markerPath);
+    }
   }
 }
 
@@ -530,7 +569,11 @@ export async function withOAuthStateLock(stateFile, operation) {
   try {
     return await operation();
   } finally {
-    publishDoneSync(claim.donePath);
+    try {
+      publishDoneSync(claim.donePath);
+    } finally {
+      releaseCurrentProcessIdentityMarkerSync(claim.markerPath);
+    }
   }
 }
 
