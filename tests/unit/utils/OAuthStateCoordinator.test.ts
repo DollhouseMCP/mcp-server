@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from '@jest/globals';
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
 import { spawn } from 'node:child_process';
+import fsSync from 'node:fs';
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { withOAuthStateLock } from '../../../src/utils/OAuthStateCoordinator.js';
+import {
+  withOAuthStateLock,
+  withOAuthStateLockSync
+} from '../../../src/utils/OAuthStateCoordinator.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -40,6 +44,7 @@ async function expectAllTicketsCompleted(stateFile: string): Promise<void> {
 }
 
 afterEach(async () => {
+  jest.restoreAllMocks();
   await Promise.all(temporaryDirectories.splice(0).map(directory =>
     fs.rm(directory, { recursive: true, force: true })
   ));
@@ -95,6 +100,37 @@ describe('OAuthStateCoordinator', () => {
 
     const entries = await fs.readdir(lockDirectory);
     expect(entries.sort()).toEqual(['2.done', '2.slot']);
+  });
+
+  it('retries cleanup of done markers whose slots were already removed', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    await withOAuthStateLock(stateFile, async () => {});
+    await fs.writeFile(path.join(lockDirectory, '1.done'), '', 'utf8');
+
+    await withOAuthStateLock(stateFile, async () => {});
+
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['3.done', '3.slot']);
+  });
+
+  it('includes ticket allocation retries in the lock timeout', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    let now = 0;
+    jest.spyOn(Date, 'now').mockImplementation(() => {
+      now += 1_000;
+      return now;
+    });
+    jest.spyOn(fsSync, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('ticket already exists'), { code: 'EEXIST' });
+    });
+
+    expect(() => withOAuthStateLockSync(stateFile, () => {}))
+      .toThrow('Timed out waiting for OAuth state lock');
   });
 
   it('serializes a flow cleanup and a replacement state write', async () => {

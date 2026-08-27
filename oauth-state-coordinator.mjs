@@ -49,11 +49,13 @@ function linuxProcessIdentity(pid) {
   return `linux:${bootId}:${startTicks}`;
 }
 
-function commandProcessIdentity(executable, args, prefix) {
+function commandProcessIdentity(executable, args, prefix, deadline) {
+  const remainingTime = deadline - Date.now();
+  if (remainingTime <= 0) return undefined;
   const output = execFileSync(executable, args, {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
-    timeout: PROCESS_IDENTITY_COMMAND_TIMEOUT_MS
+    timeout: Math.min(PROCESS_IDENTITY_COMMAND_TIMEOUT_MS, remainingTime)
   }).trim();
   return output ? `${prefix}:${output}` : undefined;
 }
@@ -69,7 +71,7 @@ function windowsSystemExecutables() {
   };
 }
 
-function windowsManagementIdentity(pid) {
+function windowsManagementIdentity(pid, deadline) {
   const executables = windowsSystemExecutables();
   if (!executables) return undefined;
   const powershellArgs = [
@@ -80,13 +82,15 @@ function windowsManagementIdentity(pid) {
   ];
   for (const executable of [executables.powershell, executables.pwsh]) {
     try {
-      const identity = commandProcessIdentity(executable, powershellArgs, 'win32');
+      const identity = commandProcessIdentity(executable, powershellArgs, 'win32', deadline);
       if (identity) return identity;
     } catch {
       // Try the next independent Windows process-management interface.
     }
   }
 
+  const remainingTime = deadline - Date.now();
+  if (remainingTime <= 0) return undefined;
   try {
     const output = execFileSync(
       executables.wmic,
@@ -94,7 +98,7 @@ function windowsManagementIdentity(pid) {
       {
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
-        timeout: PROCESS_IDENTITY_COMMAND_TIMEOUT_MS
+        timeout: Math.min(PROCESS_IDENTITY_COMMAND_TIMEOUT_MS, remainingTime)
       }
     );
     const match = /CreationDate=(\d{14})\.(\d{6})([+-]\d{3})/.exec(output);
@@ -116,23 +120,24 @@ function windowsManagementIdentity(pid) {
   }
 }
 
-function processIdentity(pid) {
+function processIdentity(pid, deadline) {
+  if (Date.now() >= deadline) return undefined;
   if (!Number.isSafeInteger(pid) || pid <= 0 || !processExists(pid)) return null;
   try {
     if (process.platform === 'linux') return linuxProcessIdentity(pid);
     if (process.platform === 'darwin') {
-      return commandProcessIdentity('/bin/ps', ['-p', String(pid), '-o', 'lstart='], 'darwin');
+      return commandProcessIdentity('/bin/ps', ['-p', String(pid), '-o', 'lstart='], 'darwin', deadline);
     }
-    if (process.platform === 'win32') return windowsManagementIdentity(pid);
+    if (process.platform === 'win32') return windowsManagementIdentity(pid, deadline);
   } catch {
     // The process may exit between the liveness probe and identity lookup.
   }
   return processExists(pid) ? undefined : null;
 }
 
-function currentProcessIdentity() {
+function currentProcessIdentity(deadline) {
   if (typeof cachedCurrentProcessIdentity === 'string') return cachedCurrentProcessIdentity;
-  const identity = processIdentity(process.pid);
+  const identity = processIdentity(process.pid, deadline);
   if (typeof identity === 'string') cachedCurrentProcessIdentity = identity;
   return identity;
 }
@@ -149,11 +154,11 @@ function parseSlotOwnerSync(slotPath) {
   }
 }
 
-function ownerIsStillActive(owner) {
+function ownerIsStillActive(owner, deadline) {
   if (!owner) return false;
   const currentIdentity = owner.ownerPid === process.pid
-    ? currentProcessIdentity()
-    : processIdentity(owner.ownerPid);
+    ? currentProcessIdentity(deadline)
+    : processIdentity(owner.ownerPid, deadline);
   // An unavailable identity probe fails closed; a later scan can retry.
   return currentIdentity === undefined || currentIdentity === owner.ownerIdentity;
 }
@@ -212,7 +217,7 @@ function allocationIntentSnapshotSync(lockDirectory) {
   }
 }
 
-function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds) {
+function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds, deadline) {
   try {
     const owner = parseSlotOwnerSync(intentPath);
     if (owner && publishedOwnerIds.has(owner.id)) {
@@ -222,7 +227,7 @@ function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds) {
       return false;
     }
     if (!slotIsStale(intentPath)) return true;
-    if (ownerIsStillActive(owner)) return true;
+    if (ownerIsStillActive(owner, deadline)) return true;
     fs.unlinkSync(intentPath);
     return false;
   } catch (error) {
@@ -230,22 +235,45 @@ function allocationIntentBlocksCompactionSync(intentPath, publishedOwnerIds) {
   }
 }
 
-function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath) {
+function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath, deadline) {
   const snapshot = allocationIntentSnapshotSync(lockDirectory);
   if (!snapshot) return true;
   return snapshot.entries.some(entry => {
     if (!entry.isFile() || !entry.name.endsWith('.slot.tmp')) return false;
     const intentPath = `${lockDirectory}/${entry.name}`;
     return intentPath !== ownStagedSlotPath &&
-      allocationIntentBlocksCompactionSync(intentPath, snapshot.publishedOwnerIds);
+      allocationIntentBlocksCompactionSync(intentPath, snapshot.publishedOwnerIds, deadline);
   });
 }
 
-function compactCompletedTicketsSync(lockDirectory, preservedTicket, ownStagedSlotPath) {
+function cleanupOrphanedDoneMarkersSync(lockDirectory, preservedTicket) {
+  let entries;
+  try {
+    entries = fs.readdirSync(lockDirectory, { withFileTypes: true });
+  } catch {
+    return;
+  }
+  for (const entry of entries) {
+    const match = /^(\d+)\.done$/.exec(entry.name);
+    const ticket = match ? Number.parseInt(match[1], 10) : null;
+    if (!entry.isFile() || !Number.isSafeInteger(ticket) || ticket <= 0 || ticket >= preservedTicket) {
+      continue;
+    }
+    const slotPath = `${lockDirectory}/${ticket}.slot`;
+    if (fs.existsSync(slotPath)) continue;
+    try {
+      fs.unlinkSync(`${lockDirectory}/${entry.name}`);
+    } catch {
+      // Best-effort cleanup is retried by the next allocation.
+    }
+  }
+}
+
+function compactCompletedTicketsSync(lockDirectory, preservedTicket, ownStagedSlotPath, deadline) {
   // A competing allocator may already have selected a lower path but not yet
   // linked it. Its private staging file fences that path against compaction.
   // An intent created after this check will observe preservedTicket instead.
-  if (otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath)) return;
+  if (otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath, deadline)) return;
   let slots;
   try {
     slots = listTicketSlotsSync(lockDirectory);
@@ -267,14 +295,15 @@ function compactCompletedTicketsSync(lockDirectory, preservedTicket, ownStagedSl
       // A leftover marker is ignored by allocation and is safe to retry later.
     }
   }
+  cleanupOrphanedDoneMarkersSync(lockDirectory, preservedTicket);
 }
 
-function slotIsOutstandingSync(slot) {
+function slotIsOutstandingSync(slot, deadline) {
   if (fs.existsSync(slot.donePath)) return false;
   try {
     if (!slotIsStale(slot.slotPath)) return true;
     const owner = parseSlotOwnerSync(slot.slotPath);
-    if (ownerIsStillActive(owner)) return true;
+    if (ownerIsStillActive(owner, deadline)) return true;
     // Completion is an atomic create. The immutable slot remains as the
     // high-water mark, so its ticket can never be allocated again.
     publishDoneSync(slot.donePath);
@@ -284,9 +313,11 @@ function slotIsOutstandingSync(slot) {
   }
 }
 
-function allocateTicketSync(lockDirectory) {
+function allocateTicketSync(lockDirectory, deadline) {
   ensureLockDirectorySync(lockDirectory);
-  const ownerIdentity = currentProcessIdentity();
+  if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+  const ownerIdentity = currentProcessIdentity(deadline);
+  if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
   if (typeof ownerIdentity !== 'string') {
     throw new TypeError('Unable to determine process identity for OAuth state locking');
   }
@@ -301,7 +332,9 @@ function allocateTicketSync(lockDirectory) {
 
   try {
     while (true) {
+      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
       const slots = listTicketSlotsSync(lockDirectory);
+      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
       const highestTicket = slots.reduce((highest, slot) => Math.max(highest, slot.ticket), 0);
       const ticket = highestTicket + 1;
       if (!Number.isSafeInteger(ticket)) throw new Error('OAuth state lock ticket space exhausted');
@@ -310,7 +343,7 @@ function allocateTicketSync(lockDirectory) {
         // Linking a complete private file publishes both the ticket and its
         // owner record atomically. A contender can never observe partial JSON.
         fs.linkSync(stagedSlotPath, slotPath);
-        compactCompletedTicketsSync(lockDirectory, ticket, stagedSlotPath);
+        compactCompletedTicketsSync(lockDirectory, ticket, stagedSlotPath, deadline);
         return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
       } catch (error) {
         if (errorCode(error) !== 'EEXIST') throw error;
@@ -325,9 +358,9 @@ function allocateTicketSync(lockDirectory) {
   }
 }
 
-function earlierOutstandingSlotExistsSync(claim) {
+function earlierOutstandingSlotExistsSync(claim, deadline) {
   return listTicketSlotsSync(claim.lockDirectory)
-    .some(slot => slot.ticket < claim.ticket && slotIsOutstandingSync(slot));
+    .some(slot => slot.ticket < claim.ticket && slotIsOutstandingSync(slot, deadline));
 }
 
 function lockTimeoutError(lockDirectory) {
@@ -335,14 +368,16 @@ function lockTimeoutError(lockDirectory) {
 }
 
 function acquireLockSync(lockDirectory) {
-  const claim = allocateTicketSync(lockDirectory);
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const claim = allocateTicketSync(lockDirectory, deadline);
   try {
-    while (earlierOutstandingSlotExistsSync(claim)) {
+    while (true) {
       if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
-      waitSync(LOCK_RETRY_MS);
+      const earlierSlotIsOutstanding = earlierOutstandingSlotExistsSync(claim, deadline);
+      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+      if (!earlierSlotIsOutstanding) return claim;
+      waitSync(Math.min(LOCK_RETRY_MS, deadline - Date.now()));
     }
-    return claim;
   } catch (error) {
     publishDoneSync(claim.donePath);
     throw error;
@@ -350,14 +385,19 @@ function acquireLockSync(lockDirectory) {
 }
 
 async function acquireLock(lockDirectory) {
-  const claim = allocateTicketSync(lockDirectory);
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
+  const claim = allocateTicketSync(lockDirectory, deadline);
   try {
-    while (earlierOutstandingSlotExistsSync(claim)) {
+    while (true) {
       if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
-      await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_MS));
+      const earlierSlotIsOutstanding = earlierOutstandingSlotExistsSync(claim, deadline);
+      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+      if (!earlierSlotIsOutstanding) return claim;
+      await new Promise(resolve => setTimeout(
+        resolve,
+        Math.min(LOCK_RETRY_MS, deadline - Date.now())
+      ));
     }
-    return claim;
   } catch (error) {
     publishDoneSync(claim.donePath);
     throw error;
