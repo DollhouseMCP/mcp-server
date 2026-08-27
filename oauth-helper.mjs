@@ -274,8 +274,13 @@ function commitTerminalResultSync(status, attempts, errorCode, exitCode) {
 
   try {
     fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
-    fsSync.writeFileSync(RESULT_FILE, JSON.stringify(terminalOutcome.result, null, 2), { mode: 0o600 });
-    terminalResultWritten = true;
+    terminalResultWritten = withOAuthStateLockSync(STATE_FILE, () => {
+      // Flow-scoped helpers may publish only while their own generation is
+      // current. This serializes against replacement state/result cleanup.
+      if (FLOW_ID && !stateFileBelongsToThisHelperSync()) return false;
+      writeFileAtomicallySync(RESULT_FILE, JSON.stringify(terminalOutcome.result, null, 2));
+      return true;
+    });
   } catch {
     // Preserve the existing best-effort terminal-reporting contract.
   }

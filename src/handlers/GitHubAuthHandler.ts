@@ -250,7 +250,6 @@ export class GitHubAuthHandler {
         const resultFile = this.getOAuthHelperResultFile();
         const stateDir = path.dirname(stateFile);
         await this.fileOperations.createDirectory(stateDir);
-        await this.fileOperations.deleteFile(resultFile).catch(() => {});
 
         // Publish the flow before spawning. The helper synchronously claims this
         // state with its PID before its first await, so an early signal can never
@@ -263,6 +262,13 @@ export class GitHubAuthHandler {
         };
 
         await withOAuthStateLock(stateFile, async () => {
+          // Result deletion and generation publication are one transaction, so
+          // a superseded helper cannot repopulate the shared result afterward.
+          try {
+            await this.fileOperations.deleteFile(resultFile);
+          } catch (error) {
+            if (!this.isFileNotFoundError(error)) throw error;
+          }
           await this.fileOperations.writeFile(stateFile, JSON.stringify(state, null, 2), {
             source: 'GitHubAuthHandler.setupGitHubAuth'
           });

@@ -64,9 +64,12 @@ describe('OAuthStateCoordinator', () => {
     const lockDirectory = `${stateFile}.lock`;
 
     await withOAuthStateLock(stateFile, async () => {});
-    const activeOwner = await fs.readFile(path.join(lockDirectory, '1.slot'), 'utf8');
+    const activeOwner = JSON.parse(
+      await fs.readFile(path.join(lockDirectory, '1.slot'), 'utf8')
+    ) as Record<string, unknown>;
+    activeOwner.id = '00000000-0000-4000-8000-000000000999';
     const competingIntent = path.join(lockDirectory, '.999.competing.slot.tmp');
-    await fs.writeFile(competingIntent, activeOwner, 'utf8');
+    await fs.writeFile(competingIntent, JSON.stringify(activeOwner), 'utf8');
     const staleTime = new Date(Date.now() - 60_000);
     await fs.utimes(competingIntent, staleTime, staleTime);
 
@@ -77,6 +80,21 @@ describe('OAuthStateCoordinator', () => {
     await withOAuthStateLock(stateFile, async () => {});
     const entries = await fs.readdir(lockDirectory);
     expect(entries.sort()).toEqual(['3.done', '3.slot']);
+  });
+
+  it('retries cleanup of an intent that already published its numbered slot', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    const leakedIntent = path.join(lockDirectory, '.published-but-not-cleaned.slot.tmp');
+    await fs.link(path.join(lockDirectory, '1.slot'), leakedIntent);
+
+    await withOAuthStateLock(stateFile, async () => {});
+
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['2.done', '2.slot']);
   });
 
   it('serializes a flow cleanup and a replacement state write', async () => {

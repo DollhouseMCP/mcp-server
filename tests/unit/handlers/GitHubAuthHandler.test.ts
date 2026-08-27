@@ -242,6 +242,28 @@ describe('GitHubAuthHandler (DI)', () => {
   });
 
   describe('setupGitHubAuth helper orchestration', () => {
+    it('does not publish a replacement flow when its stale result cannot be removed', async () => {
+      const authDir = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-result-delete-failure-'));
+      const scopedHandler = handlerWithAuthDir(authDir);
+      const stateFile = path.join(authDir, 'oauth-helper-state.json');
+      const resultFile = path.join(authDir, 'oauth-helper-result.json');
+      await fs.writeFile(resultFile, JSON.stringify({ status: 'failed', flowId: 'old-flow' }));
+      fileOperations.deleteFile.mockRejectedValueOnce(
+        Object.assign(new Error('result is busy'), { code: 'EBUSY' })
+      );
+
+      try {
+        await expect((scopedHandler as any).prepareOAuthHelperState({
+          user_code: 'NEW-FLOW',
+          expires_in: 900
+        }, 'new-flow')).rejects.toThrow('result is busy');
+        await expect(fs.access(stateFile)).rejects.toMatchObject({ code: 'ENOENT' });
+        await expect(fs.access(resultFile)).resolves.toBeUndefined();
+      } finally {
+        await fs.rm(authDir, { recursive: true, force: true });
+      }
+    });
+
     it('spawns helper and writes state file without persisting the device code', async () => {
       const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-home-'));
       const originalHome = process.env.HOME;

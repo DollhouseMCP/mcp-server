@@ -580,7 +580,7 @@ describe('oauth-helper.mjs', () => {
     }
   }, 15_000);
 
-  it('does not remove state or pid files owned by a newer helper flow', async () => {
+  it('does not publish a result or remove files owned by a newer helper flow', async () => {
     const helperPath = path.join(process.cwd(), 'oauth-helper.mjs');
     const tempHome = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-helper-flow-race-'));
     let releaseOldFlow = false;
@@ -631,9 +631,7 @@ describe('oauth-helper.mjs', () => {
       expect(state.flowId).toBe('new-flow');
       expect(state.pid).toBe(999999);
 
-      const terminalResult = JSON.parse(await fs.readFile(resultFile, 'utf-8')) as Record<string, unknown>;
-      expect(terminalResult.status).toBe('expired');
-      expect(terminalResult.flowId).toBe('old-flow');
+      await expect(fs.access(resultFile)).rejects.toMatchObject({ code: 'ENOENT' });
     } finally {
       await closeServer(server);
       await fs.rm(tempHome, { recursive: true, force: true });

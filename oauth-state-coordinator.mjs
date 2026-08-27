@@ -199,8 +199,14 @@ function publishDoneSync(donePath) {
 
 function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath) {
   let entries;
+  let publishedOwnerIds;
   try {
     entries = fs.readdirSync(lockDirectory, { withFileTypes: true });
+    publishedOwnerIds = new Set(
+      listTicketSlotsSync(lockDirectory)
+        .map(slot => parseSlotOwnerSync(slot.slotPath)?.id)
+        .filter(id => typeof id === 'string')
+    );
   } catch {
     return true;
   }
@@ -210,8 +216,15 @@ function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath) {
     const intentPath = `${lockDirectory}/${entry.name}`;
     if (intentPath === ownStagedSlotPath) continue;
     try {
+      const owner = parseSlotOwnerSync(intentPath);
+      if (owner && publishedOwnerIds.has(owner.id)) {
+        // The private inode was already linked to an immutable numbered slot.
+        // Retry a failed finally-cleanup without treating it as an allocator.
+        fs.unlinkSync(intentPath);
+        continue;
+      }
       if (!slotIsStale(intentPath)) return true;
-      if (ownerIsStillActive(parseSlotOwnerSync(intentPath))) return true;
+      if (ownerIsStillActive(owner)) return true;
       fs.unlinkSync(intentPath);
     } catch (error) {
       if (errorCode(error) !== 'ENOENT') return true;
