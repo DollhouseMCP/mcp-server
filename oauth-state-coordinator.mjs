@@ -60,12 +60,12 @@ function commandProcessIdentity(executable, args, prefix) {
 
 function windowsSystemExecutables() {
   const windowsRoot = process.env.SystemRoot;
-  const rootMatch = /^([A-Za-z]:)\\Windows$/i.exec(windowsRoot ?? '');
+  const rootMatch = /^([A-Z]:)\\Windows$/i.exec(windowsRoot ?? '');
   if (!rootMatch) return null;
   return {
-    powershell: `${windowsRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
-    pwsh: `${rootMatch[1]}\\Program Files\\PowerShell\\7\\pwsh.exe`,
-    wmic: `${windowsRoot}\\System32\\wbem\\WMIC.exe`
+    powershell: String.raw`${windowsRoot}\System32\WindowsPowerShell\v1.0\powershell.exe`,
+    pwsh: String.raw`${rootMatch[1]}\Program Files\PowerShell\7\pwsh.exe`,
+    wmic: String.raw`${windowsRoot}\System32\wbem\WMIC.exe`
   };
 }
 
