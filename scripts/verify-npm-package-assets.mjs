@@ -21,6 +21,9 @@ const REQUIRED_PACKAGE_ENTRIES = [
   'scripts/permission-port-discovery.sh',
   'scripts/permission-hook-config.sh',
   'server.json',
+  'oauth-helper.mjs',
+  'oauth-state-coordinator.mjs',
+  'oauth-state-coordinator.d.mts',
 ];
 
 function run(command, args, cwd) {

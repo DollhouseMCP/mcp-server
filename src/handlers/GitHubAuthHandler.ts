@@ -19,6 +19,7 @@ import { PersonaIndicatorService } from '../services/PersonaIndicatorService.js'
 import { SecurityMonitor } from '../security/securityMonitor.js';
 import { FileOperationsService } from '../services/FileOperationsService.js';
 import type { PathService } from '../paths/PathService.js';
+import { withOAuthStateLock } from '../utils/OAuthStateCoordinator.js';
 
 const UNKNOWN_ERROR = 'Unknown error';
 
@@ -181,10 +182,19 @@ export class GitHubAuthHandler {
           helperPath = await this.findOAuthHelperPath();
           this.logSpawningOAuthHelper(helperPath, clientId, deviceResponse);
           const flowId = randomUUID();
-          const helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId, flowId);
+          await this.prepareOAuthHelperState(deviceResponse, flowId);
+
+          let helper: child_process.ChildProcess;
+          try {
+            helper = this.spawnHelperProcess(helperPath, deviceResponse, clientId, flowId);
+          } catch (spawnError) {
+            await this.cleanupPreparedOAuthHelperState(flowId);
+            throw spawnError;
+          }
+
+          this.monitorOAuthHelperLifecycle(helper, flowId);
           helper.unref();
           this.logOAuthHelperSpawned(helper.pid, deviceResponse);
-          await this.writeOAuthHelperState(helper.pid, deviceResponse, flowId);
           return null;
         } catch (spawnError) {
           return this.oauthHelperLaunchFailedResponse(spawnError, helperPath, clientId);
@@ -235,24 +245,63 @@ export class GitHubAuthHandler {
         });
     }
 
-    private async writeOAuthHelperState(pid: number | undefined, deviceResponse: DeviceCodeResponse, flowId: string): Promise<void> {
+    private async prepareOAuthHelperState(deviceResponse: DeviceCodeResponse, flowId: string): Promise<void> {
         const stateFile = this.getOAuthHelperStateFile();
         const resultFile = this.getOAuthHelperResultFile();
         const stateDir = path.dirname(stateFile);
         await this.fileOperations.createDirectory(stateDir);
-        await this.fileOperations.deleteFile(resultFile).catch(() => {});
 
+        // Publish the flow before spawning. The helper synchronously claims this
+        // state with its PID before its first await, so an early signal can never
+        // race a later parent-side result deletion or state write.
         const state = {
-          pid,
           flowId,
           userCode: deviceResponse.user_code,
           startTime: new Date().toISOString(),
           expiresAt: new Date(Date.now() + deviceResponse.expires_in * 1000).toISOString()
         };
 
-        await this.fileOperations.writeFile(stateFile, JSON.stringify(state, null, 2), {
-          source: 'GitHubAuthHandler.setupGitHubAuth'
+        await withOAuthStateLock(stateFile, async () => {
+          // Result deletion and generation publication are one transaction, so
+          // a superseded helper cannot repopulate the shared result afterward.
+          try {
+            await this.fileOperations.deleteFile(resultFile);
+          } catch (error) {
+            if (!this.isFileNotFoundError(error)) throw error;
+          }
+          await this.fileOperations.writeFile(stateFile, JSON.stringify(state, null, 2), {
+            source: 'GitHubAuthHandler.setupGitHubAuth'
+          });
         });
+    }
+
+    private async cleanupPreparedOAuthHelperState(flowId: string): Promise<void> {
+        const stateFile = this.getOAuthHelperStateFile();
+        try {
+          await withOAuthStateLock(stateFile, async () => {
+            const stateData = await this.fileOperations.readFile(stateFile, {
+              source: 'GitHubAuthHandler.startOAuthHelper'
+            });
+            const state = JSON.parse(stateData);
+            if (this.isRecord(state) && state.flowId === flowId) {
+              await this.fileOperations.deleteFile(stateFile).catch(() => {});
+            }
+          });
+        } catch {
+          // Best-effort cleanup after a spawn failure.
+        }
+    }
+
+    private monitorOAuthHelperLifecycle(helper: child_process.ChildProcess, flowId: string): void {
+        const cleanupFlowState = () => {
+          // A successful helper removes its own state before exiting. This
+          // parent-side fallback covers asynchronous spawn errors and exits
+          // before the helper can claim or clean the prepared state.
+          void this.cleanupPreparedOAuthHelperState(flowId);
+        };
+
+        helper.once('error', cleanupFlowState);
+        helper.once('exit', cleanupFlowState);
     }
 
     private oauthHelperLaunchFailedResponse(spawnError: unknown, helperPath: string | null, clientId: string) {

@@ -28,6 +28,7 @@ COPY src/ ./src/
 COPY data/personas/ ./data/personas/
 COPY scripts/ ./scripts/
 COPY tests/ ./tests/
+COPY oauth-helper.mjs oauth-state-coordinator.mjs oauth-state-coordinator.d.mts ./
 
 # Build the application
 RUN npm run build

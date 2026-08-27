@@ -1,0 +1,542 @@
+import { afterEach, describe, expect, it, jest } from '@jest/globals';
+import { spawn } from 'node:child_process';
+import fsSync from 'node:fs';
+import * as fs from 'node:fs/promises';
+import * as os from 'node:os';
+import * as path from 'node:path';
+import { performance } from 'node:perf_hooks';
+import { pathToFileURL } from 'node:url';
+import {
+  withOAuthStateLock,
+  withOAuthStateLockSync
+} from '../../../src/utils/OAuthStateCoordinator.js';
+
+const temporaryDirectories: string[] = [];
+
+async function createTemporaryDirectory(): Promise<string> {
+  const directory = await fs.mkdtemp(path.join(os.tmpdir(), 'oauth-state-coordinator-'));
+  temporaryDirectories.push(directory);
+  return directory;
+}
+
+async function waitForFile(filePath: string, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      await fs.access(filePath);
+      return;
+    } catch {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error(`Timed out waiting for file: ${filePath}`);
+}
+
+async function expectAllTicketsCompleted(stateFile: string): Promise<void> {
+  const entries = await fs.readdir(`${stateFile}.lock`);
+  const slots = entries.filter(entry => /^\d+\.slot$/.test(entry));
+  const doneMarkers = new Set(entries.filter(entry => /^\d+\.done$/.test(entry)));
+
+  expect(slots.length).toBeGreaterThan(0);
+  expect(entries).toHaveLength(slots.length * 2);
+  for (const slot of slots) {
+    expect(doneMarkers.has(slot.replace(/\.slot$/, '.done'))).toBe(true);
+  }
+}
+
+afterEach(async () => {
+  jest.restoreAllMocks();
+  await Promise.all(temporaryDirectories.splice(0).map(directory =>
+    fs.rm(directory, { recursive: true, force: true })
+  ));
+});
+
+describe('OAuthStateCoordinator', () => {
+  it('compacts completed prefixes while retaining the allocation high-water mark', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+
+    for (let acquisition = 0; acquisition < 3; acquisition++) {
+      await withOAuthStateLock(stateFile, async () => {});
+    }
+
+    const entries = await fs.readdir(`${stateFile}.lock`);
+    expect(entries.sort()).toEqual(['3.done', '3.slot']);
+  });
+
+  it('does not compact completed tickets beneath another allocation intent', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    const activeOwner = JSON.parse(
+      await fs.readFile(path.join(lockDirectory, '1.slot'), 'utf8')
+    ) as Record<string, unknown>;
+    activeOwner.id = '00000000-0000-4000-8000-000000000999';
+    const competingIntent = path.join(lockDirectory, '.999.competing.slot.tmp');
+    await fs.writeFile(competingIntent, JSON.stringify(activeOwner), 'utf8');
+    const staleTime = new Date(Date.now() - 60_000);
+    await fs.utimes(competingIntent, staleTime, staleTime);
+
+    await withOAuthStateLock(stateFile, async () => {});
+    await expect(fs.access(path.join(lockDirectory, '1.slot'))).resolves.toBeUndefined();
+
+    await fs.unlink(competingIntent);
+    await withOAuthStateLock(stateFile, async () => {});
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['3.done', '3.slot']);
+  });
+
+  it('retries cleanup of an intent that already published its numbered slot', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    const leakedIntent = path.join(lockDirectory, '.published-but-not-cleaned.slot.tmp');
+    await fs.link(path.join(lockDirectory, '1.slot'), leakedIntent);
+
+    await withOAuthStateLock(stateFile, async () => {});
+
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['2.done', '2.slot']);
+  });
+
+  it('retries cleanup of done markers whose slots were already removed', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    await withOAuthStateLock(stateFile, async () => {});
+    await fs.writeFile(path.join(lockDirectory, '1.done'), '', 'utf8');
+
+    await withOAuthStateLock(stateFile, async () => {});
+
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['3.done', '3.slot']);
+  });
+
+  it('retries a failed completion marker before publishing another ticket', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const originalWriteFileSync = fsSync.writeFileSync;
+    let failDoneCreation = true;
+    jest.spyOn(fsSync, 'writeFileSync').mockImplementation(((filePath, data, options) => {
+      if (failDoneCreation && String(filePath).endsWith('.done')) {
+        failDoneCreation = false;
+        throw Object.assign(new Error('transient completion failure'), { code: 'EIO' });
+      }
+      return originalWriteFileSync(filePath, data, options as never);
+    }) as typeof fsSync.writeFileSync);
+
+    let firstOperationRan = false;
+    expect(() => withOAuthStateLockSync(stateFile, () => { firstOperationRan = true; }))
+      .toThrow('transient completion failure');
+    expect(firstOperationRan).toBe(true);
+    await waitForFile(path.join(`${stateFile}.lock`, '1.done'));
+
+    let secondOperationRan = false;
+    withOAuthStateLockSync(stateFile, () => { secondOperationRan = true; });
+    expect(secondOperationRan).toBe(true);
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('reclaims an expired unpublished intent even while its process is alive', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    const activeOwner = JSON.parse(
+      await fs.readFile(path.join(lockDirectory, '1.slot'), 'utf8')
+    ) as Record<string, unknown>;
+    activeOwner.id = '00000000-0000-4000-8000-000000000998';
+    activeOwner.allocationDeadlineUptime = os.uptime() * 1_000 - 1;
+    const abandonedIntent = path.join(lockDirectory, '.expired-live-owner.slot.tmp');
+    await fs.writeFile(abandonedIntent, JSON.stringify(activeOwner), 'utf8');
+
+    await withOAuthStateLock(stateFile, async () => {});
+
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['2.done', '2.slot']);
+  });
+
+  it('atomically publishes a complete directory ticket when hard links are unsupported', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    jest.spyOn(fsSync, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('hard links unsupported'), { code: 'ENOTSUP' });
+    });
+
+    let operationsRun = 0;
+    for (let acquisition = 0; acquisition < 3; acquisition++) {
+      withOAuthStateLockSync(stateFile, () => { operationsRun += 1; });
+    }
+
+    expect(operationsRun).toBe(3);
+    const slot = JSON.parse(
+      await fs.readFile(path.join(`${stateFile}.lock`, '3.slot', 'owner.json'), 'utf8')
+    ) as Record<string, unknown>;
+    expect(slot.ownerPid).toBe(process.pid);
+    expect((await fs.readdir(`${stateFile}.lock`)).sort()).toEqual(['3.done', '3.slot']);
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('includes ticket allocation retries in the lock timeout', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    let monotonicNow = 0;
+    let wallNow = 1_000_000;
+    jest.spyOn(performance, 'now').mockImplementation(() => {
+      monotonicNow += 1_000;
+      return monotonicNow;
+    });
+    jest.spyOn(Date, 'now').mockImplementation(() => {
+      wallNow -= 60_000;
+      return wallNow;
+    });
+    jest.spyOn(fsSync, 'linkSync').mockImplementation(() => {
+      throw Object.assign(new Error('ticket already exists'), { code: 'EEXIST' });
+    });
+
+    expect(() => withOAuthStateLockSync(stateFile, () => {}))
+      .toThrow('Timed out waiting for OAuth state lock');
+  });
+
+  it('serializes a flow cleanup and a replacement state write', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    await fs.writeFile(stateFile, JSON.stringify({ flowId: 'flow-a' }), 'utf8');
+
+    let releaseCleanup!: () => void;
+    const cleanupCanFinish = new Promise<void>(resolve => { releaseCleanup = resolve; });
+    let cleanupHasRead!: () => void;
+    const cleanupRead = new Promise<void>(resolve => { cleanupHasRead = resolve; });
+
+    const cleanup = withOAuthStateLock(stateFile, async () => {
+      const state = JSON.parse(await fs.readFile(stateFile, 'utf8')) as { flowId?: string };
+      expect(state.flowId).toBe('flow-a');
+      cleanupHasRead();
+      await cleanupCanFinish;
+      await fs.unlink(stateFile);
+    });
+
+    await cleanupRead;
+    let replacementEntered = false;
+    const replacement = withOAuthStateLock(stateFile, async () => {
+      replacementEntered = true;
+      await fs.writeFile(stateFile, JSON.stringify({ flowId: 'flow-b' }), 'utf8');
+    });
+
+    await new Promise(resolve => setImmediate(resolve));
+    expect(replacementEntered).toBe(false);
+    releaseCleanup();
+    await Promise.all([cleanup, replacement]);
+
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain('flow-b');
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('retains one process marker across overlapping local lock claims', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const markerPath = `${stateFile}.lock.process-${process.pid}.identity`;
+    let releaseFirst!: () => void;
+    const firstCanFinish = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let firstEntered!: () => void;
+    const firstHasEntered = new Promise<void>(resolve => { firstEntered = resolve; });
+    let releaseSecond!: () => void;
+    const secondCanFinish = new Promise<void>(resolve => { releaseSecond = resolve; });
+    let secondEntered!: () => void;
+    const secondHasEntered = new Promise<void>(resolve => { secondEntered = resolve; });
+
+    const first = withOAuthStateLock(stateFile, async () => {
+      firstEntered();
+      await firstCanFinish;
+    });
+    await firstHasEntered;
+    const second = withOAuthStateLock(stateFile, async () => {
+      secondEntered();
+      await secondCanFinish;
+    });
+
+    await expect(fs.access(markerPath)).resolves.toBeUndefined();
+    releaseFirst();
+    await Promise.all([first, secondHasEntered]);
+    await expect(fs.access(markerPath)).resolves.toBeUndefined();
+    releaseSecond();
+    await second;
+    await expect(fs.access(markerPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('prevents a helper claim from overwriting a replacement flow across processes', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const claimStartedFile = path.join(directory, 'claim-started');
+    await fs.writeFile(stateFile, JSON.stringify({ flowId: 'flow-a' }), 'utf8');
+
+    const coordinatorUrl = pathToFileURL(
+      path.join(process.cwd(), 'oauth-state-coordinator.mjs')
+    ).href;
+    const childScript = `
+      import fs from 'node:fs';
+      import { withOAuthStateLockSync, writeFileAtomicallySync } from ${JSON.stringify(coordinatorUrl)};
+      const [stateFile, claimStartedFile] = process.argv.slice(1);
+      withOAuthStateLockSync(stateFile, () => {
+        const state = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+        fs.writeFileSync(claimStartedFile, 'ready');
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 250);
+        writeFileAtomicallySync(stateFile, JSON.stringify({ ...state, pid: process.pid }));
+      });
+    `;
+    const child = spawn(process.execPath, [
+      '--input-type=module',
+      '--eval',
+      childScript,
+      stateFile,
+      claimStartedFile
+    ], { stdio: 'ignore' });
+    const childExit = new Promise<void>((resolve, reject) => {
+      child.once('error', reject);
+      child.once('exit', code => code === 0 ? resolve() : reject(new Error(`Claim child exited ${code}`)));
+    });
+
+    await waitForFile(claimStartedFile);
+    await withOAuthStateLock(stateFile, async () => {
+      await fs.writeFile(stateFile, JSON.stringify({ flowId: 'flow-b' }), 'utf8');
+    });
+    await childExit;
+
+    const finalState = JSON.parse(await fs.readFile(stateFile, 'utf8')) as Record<string, unknown>;
+    expect(finalState).toEqual({ flowId: 'flow-b' });
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('completes an abandoned ticket even when its slot contains a live reused PID', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+    const orphanedId = '00000000-0000-4000-8000-000000000001';
+    const orphanedSlot = path.join(lockDirectory, '1.slot');
+    await fs.mkdir(lockDirectory, { recursive: true });
+    await fs.writeFile(
+      orphanedSlot,
+      JSON.stringify({
+        id: orphanedId,
+        ownerPid: process.pid,
+        ownerIdentity: 'identity-from-the-previous-process-that-used-this-pid'
+      }),
+      { encoding: 'utf8', mode: 0o600 }
+    );
+    const staleTime = new Date(Date.now() - 60_000);
+    await fs.utimes(orphanedSlot, staleTime, staleTime);
+
+    await withOAuthStateLock(stateFile, async () => {
+      await fs.writeFile(stateFile, JSON.stringify({ flowId: 'recovered-flow' }), 'utf8');
+    });
+
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain('recovered-flow');
+    await expect(fs.access(orphanedSlot)).resolves.toBeUndefined();
+    await expect(fs.access(path.join(lockDirectory, '1.done'))).resolves.toBeUndefined();
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('recovers a dead-owner slot whose mtime is in the future after clock rollback', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+    const orphanedSlot = path.join(lockDirectory, '1.slot');
+    await fs.mkdir(lockDirectory, { recursive: true });
+    await fs.writeFile(
+      orphanedSlot,
+      JSON.stringify({
+        id: '00000000-0000-4000-8000-000000000003',
+        ownerPid: 99_999_999,
+        ownerIdentity: 'dead-owner-before-clock-rollback'
+      }),
+      'utf8'
+    );
+    const futureTime = new Date(Date.now() + 60 * 60_000);
+    await fs.utimes(orphanedSlot, futureTime, futureTime);
+
+    await withOAuthStateLock(stateFile, async () => {
+      await fs.writeFile(stateFile, JSON.stringify({ flowId: 'clock-recovered-flow' }), 'utf8');
+    });
+
+    await expect(fs.readFile(stateFile, 'utf8')).resolves.toContain('clock-recovered-flow');
+    await expect(fs.access(path.join(lockDirectory, '1.done'))).resolves.toBeUndefined();
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('fails closed for marker ordering only when the marker proves a backward clock step', async () => {
+    const directory = await createTemporaryDirectory();
+    const coordinatorSource = await fs.readFile(
+      path.join(process.cwd(), 'oauth-state-coordinator.mjs'),
+      'utf8'
+    );
+    const instrumentedSource = coordinatorSource.replace(
+      'function staleMarkerStillBelongsToProcess(',
+      'export function staleMarkerStillBelongsToProcess('
+    );
+    expect(instrumentedSource).not.toBe(coordinatorSource);
+    const instrumentedPath = path.join(directory, 'instrumented-coordinator.mjs');
+    await fs.writeFile(instrumentedPath, instrumentedSource, 'utf8');
+    const instrumentedModule = await import(pathToFileURL(instrumentedPath).href) as {
+      staleMarkerStillBelongsToProcess: (
+        marker: { identity: string; writtenAt: number; mtimeMs: number },
+        ownerIdentity: string,
+        currentIdentity: string
+      ) => boolean;
+    };
+    const markerIdentity = 'win32:10000';
+
+    // The marker timestamp precedes its own recorded process start, proving
+    // rollback. The original OS identity is retained within the known Node /
+    // kernel timestamp skew, while a materially different reused PID is not.
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, writtenAt: 9_000, mtimeMs: 0 },
+      markerIdentity,
+      'win32:10001'
+    )).toBe(true);
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, writtenAt: 9_000, mtimeMs: 0 },
+      markerIdentity,
+      'win32:13000'
+    )).toBe(false);
+
+    // Without rollback evidence, exact marker ordering remains strict even
+    // when the two process-start identities happen to be close.
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, writtenAt: 10_500, mtimeMs: 0 },
+      markerIdentity,
+      'win32:10501'
+    )).toBe(false);
+
+    // Rollback after marker publication can make a reused PID's start appear
+    // older than the marker, but it still cannot agree with the recorded owner
+    // start. The filesystem mtime is intentionally irrelevant here.
+    expect(instrumentedModule.staleMarkerStillBelongsToProcess(
+      { identity: markerIdentity, writtenAt: 20_000, mtimeMs: 99_999_999 },
+      markerIdentity,
+      'win32:5000'
+    )).toBe(false);
+  });
+
+  it('does not reclaim a stale-aged ticket while its original process is alive', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const ownerEnteredFile = path.join(directory, 'owner-entered');
+    const releaseOwnerFile = path.join(directory, 'release-owner');
+    const contenderEnteredFile = path.join(directory, 'contender-entered');
+    const coordinatorUrl = pathToFileURL(
+      path.join(process.cwd(), 'oauth-state-coordinator.mjs')
+    ).href;
+    const ownerScript = `
+      import fs from 'node:fs';
+      import { withOAuthStateLockSync } from ${JSON.stringify(coordinatorUrl)};
+      const [stateFile, ownerEnteredFile, releaseOwnerFile] = process.argv.slice(1);
+      withOAuthStateLockSync(stateFile, () => {
+        fs.writeFileSync(ownerEnteredFile, 'ready');
+        while (!fs.existsSync(releaseOwnerFile)) {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+        }
+      });
+    `;
+    const contenderScript = `
+      import fs from 'node:fs';
+      import { withOAuthStateLockSync } from ${JSON.stringify(coordinatorUrl)};
+      const [stateFile, contenderEnteredFile] = process.argv.slice(1);
+      withOAuthStateLockSync(stateFile, () => {
+        fs.writeFileSync(contenderEnteredFile, 'entered');
+      });
+    `;
+
+    const owner = spawn(process.execPath, [
+      '--input-type=module', '--eval', ownerScript, stateFile, ownerEnteredFile, releaseOwnerFile
+    ], { stdio: 'ignore' });
+    const ownerExit = new Promise<void>((resolve, reject) => {
+      owner.once('error', reject);
+      owner.once('exit', code => code === 0 ? resolve() : reject(new Error(`Owner child exited ${code}`)));
+    });
+
+    await waitForFile(ownerEnteredFile);
+    const ownerIdentityMarker = `${stateFile}.lock.process-${owner.pid}.identity`;
+    await expect(fs.access(ownerIdentityMarker)).resolves.toBeUndefined();
+    const ownerSlot = path.join(`${stateFile}.lock`, '1.slot');
+    const staleTime = new Date(Date.now() - 60_000);
+    await fs.utimes(ownerSlot, staleTime, staleTime);
+
+    const contender = spawn(process.execPath, [
+      '--input-type=module', '--eval', contenderScript, stateFile, contenderEnteredFile
+    ], { stdio: 'ignore' });
+    const contenderExit = new Promise<void>((resolve, reject) => {
+      contender.once('error', reject);
+      contender.once('exit', code => code === 0
+        ? resolve()
+        : reject(new Error(`Contender child exited ${code}`)));
+    });
+
+    await new Promise(resolve => setTimeout(resolve, 150));
+    await expect(fs.access(contenderEnteredFile)).rejects.toMatchObject({ code: 'ENOENT' });
+    await fs.writeFile(releaseOwnerFile, 'release', 'utf8');
+    await Promise.all([ownerExit, contenderExit]);
+
+    await expect(fs.access(contenderEnteredFile)).resolves.toBeUndefined();
+    await expect(fs.access(ownerIdentityMarker)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expectAllTicketsCompleted(stateFile);
+  });
+
+  it('serializes concurrent processes while they complete the same abandoned ticket', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const counterFile = path.join(directory, 'counter.txt');
+    const lockDirectory = `${stateFile}.lock`;
+    const orphanedId = '00000000-0000-4000-8000-000000000002';
+    const orphanedSlot = path.join(lockDirectory, '1.slot');
+    await fs.mkdir(lockDirectory, { recursive: true });
+    await fs.writeFile(
+      orphanedSlot,
+      JSON.stringify({ id: orphanedId, ownerPid: 99_999_999, ownerIdentity: 'dead-owner' }),
+      'utf8'
+    );
+    const staleTime = new Date(Date.now() - 60_000);
+    await fs.utimes(orphanedSlot, staleTime, staleTime);
+    await fs.writeFile(counterFile, '0', 'utf8');
+
+    const coordinatorUrl = pathToFileURL(
+      path.join(process.cwd(), 'oauth-state-coordinator.mjs')
+    ).href;
+    const childScript = `
+      import fs from 'node:fs';
+      import { withOAuthStateLockSync } from ${JSON.stringify(coordinatorUrl)};
+      const [stateFile, counterFile] = process.argv.slice(1);
+      withOAuthStateLockSync(stateFile, () => {
+        const value = Number.parseInt(fs.readFileSync(counterFile, 'utf8'), 10);
+        Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 25);
+        fs.writeFileSync(counterFile, String(value + 1));
+      });
+    `;
+
+    const children = Array.from({ length: 8 }, () => new Promise<void>((resolve, reject) => {
+      const child = spawn(process.execPath, [
+        '--input-type=module',
+        '--eval',
+        childScript,
+        stateFile,
+        counterFile
+      ], { stdio: 'ignore' });
+      child.once('error', reject);
+      child.once('exit', code => code === 0
+        ? resolve()
+        : reject(new Error(`Recovery child exited ${code}`)));
+    }));
+
+    await Promise.all(children);
+
+    await expect(fs.readFile(counterFile, 'utf8')).resolves.toBe('8');
+    await expectAllTicketsCompleted(stateFile);
+  });
+});

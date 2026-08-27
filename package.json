@@ -187,6 +187,8 @@
     "!dist/**/*.test.*",
     "server.json",
     "oauth-helper.mjs",
+    "oauth-state-coordinator.mjs",
+    "oauth-state-coordinator.d.mts",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

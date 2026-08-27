@@ -31,6 +31,7 @@ RUN npm ci --ignore-scripts \
 COPY src/ ./src/
 COPY data/personas/ ./data/personas/
 COPY scripts/ ./scripts/
+COPY oauth-state-coordinator.mjs oauth-state-coordinator.d.mts ./
 
 # Build the application
 RUN npm run build
@@ -75,6 +76,8 @@ RUN npm ci --omit=dev --ignore-scripts \
 # Copy built application from builder stage (excluding test files)
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/data/personas ./data/personas
+COPY --from=builder /app/oauth-state-coordinator.mjs ./oauth-state-coordinator.mjs
+COPY oauth-helper.mjs ./oauth-helper.mjs
 # Copy built workspace packages (required for local file: dependencies)
 COPY --from=builder /app/packages ./packages
 

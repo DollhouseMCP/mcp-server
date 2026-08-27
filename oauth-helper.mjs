@@ -17,6 +17,10 @@ import { dirname, join } from 'path';
 import fs from 'fs/promises';
 import fsSync from 'fs';
 import { homedir } from 'os';
+import {
+  withOAuthStateLockSync,
+  writeFileAtomicallySync
+} from './oauth-state-coordinator.mjs';
 
 // Constants
 const DEFAULT_POLL_INTERVAL = 5;
@@ -35,6 +39,12 @@ const LOG_FILE = process.env.DOLLHOUSE_OAUTH_HELPER_LOG_FILE || join(DOLLHOUSE_H
 const FLOW_ID = process.env.DOLLHOUSE_OAUTH_HELPER_FLOW_ID || '';
 const TOKEN_URL = process.env.DOLLHOUSE_OAUTH_TOKEN_URL || 'https://github.com/login/oauth/access_token';
 const LOG_ENABLED = process.env.DOLLHOUSE_OAUTH_DEBUG === 'true';
+const PRE_READY_TEST_DELAY_MS = process.env.NODE_ENV === 'test'
+  ? Number.parseInt(process.env.DOLLHOUSE_OAUTH_HELPER_TEST_PRE_READY_DELAY_MS || '0', 10)
+  : 0;
+const POST_RESULT_TEST_DELAY_MS = process.env.NODE_ENV === 'test'
+  ? Number.parseInt(process.env.DOLLHOUSE_OAUTH_HELPER_TEST_POST_RESULT_DELAY_MS || '0', 10)
+  : 0;
 
 const RESULT_MESSAGES = {
   success: 'OAuth helper completed successfully.',
@@ -60,6 +70,20 @@ if (args.length < 4) {
 const [deviceCode, intervalStr, expiresInStr, clientId] = args;
 const pollIntervalSeconds = Number.parseInt(intervalStr, 10) || DEFAULT_POLL_INTERVAL;
 const expiresIn = Number.parseInt(expiresInStr, 10) || DEFAULT_EXPIRES_IN;
+let attempts = 0;
+let terminalWriteAttempted = false;
+let terminalResultWritten = false;
+let terminalOutcome = null;
+
+installTerminationHandlers();
+if (!claimPreparedStateSync()) {
+  // A failed lock/identity claim can outlive the parent process that prepared
+  // the generation. Retry one flow-checked transaction so a PID-less state
+  // cannot remain indefinitely; a superseding flow is never removed.
+  cleanupStateFileSync();
+  console.error('OAUTH_HELPER_44: Unable to claim prepared OAuth flow state');
+  process.exit(1);
+}
 
 // Validate client ID is provided (no hardcoded fallback)
 if (!clientId || clientId === 'undefined') {
@@ -202,11 +226,13 @@ function cleanupPidFileSync() {
 
 function cleanupStateFileSync() {
   try {
-    if (stateFileBelongsToThisHelperSync()) {
+    return withOAuthStateLockSync(STATE_FILE, () => {
+      if (!stateFileBelongsToThisHelperSync()) return false;
       fsSync.unlinkSync(STATE_FILE);
-    }
+      return true;
+    });
   } catch {
-    // Ignore cleanup errors
+    return false;
   }
 }
 
@@ -217,19 +243,6 @@ async function cleanupPidFile() {
       await log('PID file cleaned up');
     } else {
       await log('PID file belongs to another helper flow; leaving it in place');
-    }
-  } catch {
-    // Ignore cleanup errors
-  }
-}
-
-async function cleanupStateFile() {
-  try {
-    if (await stateFileBelongsToThisHelper()) {
-      await fs.unlink(STATE_FILE).catch(() => {});
-      await log('OAuth helper state file cleaned up');
-    } else {
-      await log('OAuth helper state belongs to another flow; leaving it in place');
     }
   } catch {
     // Ignore cleanup errors
@@ -257,28 +270,58 @@ function buildTerminalResult(status, attempts, errorCode = '') {
   return { result, safeErrorCode };
 }
 
-async function writeTerminalResult(status, attempts, errorCode = '') {
-  try {
-    await fs.mkdir(AUTH_DIR, { recursive: true, mode: 0o700 });
+function commitTerminalResultSync(status, attempts, errorCode, exitCode) {
+  if (!terminalOutcome) {
     const { result, safeErrorCode } = buildTerminalResult(status, attempts, errorCode);
+    terminalOutcome = { status, safeErrorCode, exitCode, result };
+  }
 
-    await fs.writeFile(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
-    const resultSuffix = status === 'success' ? '' : `/${safeErrorCode}`;
-    await log(`Terminal result written: ${status}${resultSuffix}`);
+  if (terminalWriteAttempted) return terminalOutcome;
+  terminalWriteAttempted = true;
+
+  try {
+    fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
+    terminalResultWritten = withOAuthStateLockSync(STATE_FILE, () => {
+      // Flow-scoped helpers may publish only while their own generation is
+      // current. This serializes against replacement state/result cleanup.
+      if (FLOW_ID && !stateFileBelongsToThisHelperSync()) return false;
+      writeFileAtomicallySync(RESULT_FILE, JSON.stringify(terminalOutcome.result, null, 2));
+      return true;
+    });
   } catch {
-    await log('Failed to write terminal result');
+    // Preserve the existing best-effort terminal-reporting contract.
+  }
+
+  return terminalOutcome;
+}
+
+function claimPreparedStateSync() {
+  if (!FLOW_ID) return true;
+
+  try {
+    return withOAuthStateLockSync(STATE_FILE, () => {
+      const state = JSON.parse(fsSync.readFileSync(STATE_FILE, 'utf8'));
+      if (state?.flowId !== FLOW_ID) return false;
+
+      writeFileAtomicallySync(
+        STATE_FILE,
+        JSON.stringify({ ...state, pid: process.pid }, null, 2)
+      );
+      return true;
+    });
+  } catch {
+    return false;
   }
 }
 
-function writeTerminalResultSync(status, attempts, errorCode = '') {
-  try {
-    fsSync.mkdirSync(AUTH_DIR, { recursive: true, mode: 0o700 });
-    const { result } = buildTerminalResult(status, attempts, errorCode);
-
-    fsSync.writeFileSync(RESULT_FILE, JSON.stringify(result, null, 2), { mode: 0o600 });
-  } catch {
-    // Ignore cleanup/status errors during process termination
+async function logTerminalCommit(outcome) {
+  if (!terminalResultWritten) {
+    await log('Failed to write terminal result');
+    return;
   }
+
+  const resultSuffix = outcome.status === 'success' ? '' : `/${outcome.safeErrorCode}`;
+  await log(`Terminal result written: ${outcome.status}${resultSuffix}`);
 }
 
 async function pidFileBelongsToThisHelper() {
@@ -296,17 +339,6 @@ function pidFileBelongsToThisHelperSync() {
   try {
     const pid = fsSync.readFileSync(PID_FILE, 'utf8').trim();
     return pid === String(process.pid);
-  } catch {
-    return false;
-  }
-}
-
-async function stateFileBelongsToThisHelper() {
-  if (!FLOW_ID) return true;
-  try {
-    const state = JSON.parse(await fs.readFile(STATE_FILE, 'utf8'));
-    return state?.flowId === FLOW_ID &&
-      (typeof state.pid !== 'number' || state.pid === process.pid);
   } catch {
     return false;
   }
@@ -333,6 +365,27 @@ async function writePidFile() {
   }
 }
 
+function installTerminationHandlers() {
+  // Install handlers before the first startup await and before publishing the
+  // PID file. The PID file is the parent process's readiness signal.
+  process.once('exit', cleanupPidFileSync);
+  process.once('beforeExit', async () => {
+    await log('OAuth helper completing cleanup');
+    await cleanupPidFile();
+  });
+
+  const handleInterruption = () => {
+    const outcome = terminalOutcome ??
+      commitTerminalResultSync('failed', attempts, 'interrupted', 1);
+    cleanupStateFileSync();
+    cleanupPidFileSync();
+    process.exit(outcome?.exitCode ?? 1);
+  };
+
+  process.once('SIGINT', handleInterruption);
+  process.once('SIGTERM', handleInterruption);
+}
+
 async function main() {
   await log(`[START] OAuth helper started - PID: ${process.pid}`);
   await log('[CONFIG] Device code received');
@@ -340,6 +393,10 @@ async function main() {
   await log(`[CONFIG] Node version: ${process.version}`);
   await log(`[CONFIG] Platform: ${process.platform}`);
   // Never log client ID
+
+  if (PRE_READY_TEST_DELAY_MS > 0) {
+    await sleep(PRE_READY_TEST_DELAY_MS);
+  }
   
   // Write PID file for tracking
   await writePidFile();
@@ -353,42 +410,23 @@ async function main() {
   
   const startTime = Date.now();
   const timeout = startTime + (expiresIn * 1000);
-  let attempts = 0;
   let consecutiveErrors = 0;
   let currentPollIntervalMs = pollIntervalSeconds * 1000;
   const MAX_CONSECUTIVE_ERRORS = 5;
-  
-  // Set up cleanup on exit - use synchronous cleanup for exit event
-  process.on('exit', () => {
-    cleanupPidFileSync();
-  });
-  
-  // Use beforeExit for async cleanup when possible
-  process.on('beforeExit', async () => {
-    await log('OAuth helper completing cleanup');
-    await cleanupPidFile();
-  });
-  
-  process.on('SIGINT', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
-    cleanupPidFileSync();
-    process.exit(1);
-  });
-  
-  process.on('SIGTERM', () => {
-    writeTerminalResultSync('failed', attempts, 'interrupted');
-    cleanupStateFileSync();
-    cleanupPidFileSync();
-    process.exit(1);
-  });
 
   async function finish(status, errorCode, exitCode) {
     clearInterval(heartbeatInterval);
-    await writeTerminalResult(status, attempts, errorCode);
-    await cleanupStateFile();
+    const outcome = commitTerminalResultSync(status, attempts, errorCode, exitCode);
+    await logTerminalCommit(outcome);
+    if (outcome?.status === 'success' && POST_RESULT_TEST_DELAY_MS > 0) {
+      await sleep(POST_RESULT_TEST_DELAY_MS);
+    }
+    const stateCleaned = cleanupStateFileSync();
+    await log(stateCleaned
+      ? 'OAuth helper state file cleaned up'
+      : 'OAuth helper state belongs to another flow; leaving it in place');
     await cleanupPidFile();
-    process.exit(exitCode);
+    process.exit(outcome?.exitCode ?? exitCode);
   }
   
   while (Date.now() < timeout) {
@@ -501,8 +539,9 @@ async function main() {
 main().catch(async (error) => {
   await log(`Fatal error: ${sanitizeDiagnostic(error instanceof Error ? error.message : 'Unknown error')}`);
   console.error('Fatal error in OAuth helper');
-  await writeTerminalResult('failed', 0, 'fatal_error');
-  await cleanupStateFile();
+  const outcome = commitTerminalResultSync('failed', attempts, 'fatal_error', 1);
+  await logTerminalCommit(outcome);
+  cleanupStateFileSync();
   await cleanupPidFile();
-  process.exit(1);
+  process.exit(outcome?.exitCode ?? 1);
 });

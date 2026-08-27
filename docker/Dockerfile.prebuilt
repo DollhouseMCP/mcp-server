@@ -36,6 +36,7 @@ RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
 # Copy pre-built application (dist/ must exist locally)
 COPY dist ./dist
 COPY data/personas ./data/personas
+COPY oauth-helper.mjs oauth-state-coordinator.mjs ./
 
 # Remove test files that shouldn't be in production image
 # These files can cause Docker build to hang due to large pathological test datasets

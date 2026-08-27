@@ -17,6 +17,7 @@ RUN npm ci --ignore-scripts
 COPY src ./src
 COPY scripts ./scripts
 COPY data ./data
+COPY oauth-state-coordinator.mjs oauth-state-coordinator.d.mts ./
 
 # Build the application
 RUN npm run build
@@ -55,6 +56,8 @@ RUN npm ci --omit=dev --ignore-scripts
 COPY --from=builder /build/dist ./dist
 COPY --from=builder /build/data ./data
 COPY --from=builder /build/packages ./packages
+COPY --from=builder /build/oauth-state-coordinator.mjs ./oauth-state-coordinator.mjs
+COPY oauth-helper.mjs ./oauth-helper.mjs
 
 # Create MCP configuration template
 RUN echo '{\n\

@@ -28,6 +28,7 @@ RUN npm ci --ignore-scripts
 COPY src/ ./src/
 COPY data/ ./data/
 COPY scripts/ ./scripts/
+COPY oauth-helper.mjs oauth-state-coordinator.mjs oauth-state-coordinator.d.mts ./
 
 # Build the application and create test user
 # FIX (SonarCloud S7031): Merge consecutive RUN instructions to reduce Docker layers
