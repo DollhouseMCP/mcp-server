@@ -4,19 +4,17 @@ import { randomUUID } from 'node:crypto';
 
 // The OAuth parent and detached helper are separate processes, so the
 // repository's in-process FileLockManager cannot serialize their state-file
-// transactions. This lock is deployed beside oauth-helper.mjs and is shared
-// by source, development, and packaged execution paths.
+// transactions. This coordinator uses Lamport bakery-style ticket claims:
+// every contender owns a UUID-named file that is never reused, which makes
+// stale cleanup safe even when several processes recover concurrently.
 const LOCK_TIMEOUT_MS = 5_000;
 const LOCK_RETRY_MS = 10;
-const LOCK_STALE_MS = 30_000;
+const CLAIM_STALE_MS = 30_000;
+const CLAIM_HEARTBEAT_MS = 10_000;
 const LOCK_WAIT_SIGNAL = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
-function lockPathFor(stateFile) {
+function lockDirectoryFor(stateFile) {
   return `${stateFile}.lock`;
-}
-
-function lockToken() {
-  return `${process.pid}:${randomUUID()}`;
 }
 
 function errorCode(error) {
@@ -29,172 +27,170 @@ function waitSync(milliseconds) {
   Atomics.wait(LOCK_WAIT_SIGNAL, 0, 0, milliseconds);
 }
 
-function processIsAlive(pid) {
+function ensureLockDirectorySync(lockDirectory) {
+  fs.mkdirSync(lockDirectory, { recursive: true, mode: 0o700 });
+}
+
+function claimIsStale(claimPath) {
+  return Date.now() - fs.statSync(claimPath).mtimeMs >= CLAIM_STALE_MS;
+}
+
+function removeStaleClaimSync(claimPath) {
   try {
-    process.kill(pid, 0);
+    if (!claimIsStale(claimPath)) return false;
+    // Claim paths contain a UUID and are never reused. Removing this exact
+    // path therefore cannot unlink a replacement claim from another owner.
+    fs.unlinkSync(claimPath);
     return true;
   } catch (error) {
-    return errorCode(error) === 'EPERM';
+    return errorCode(error) === 'ENOENT';
   }
 }
 
-function lockOwnerIsDead(lockPath) {
-  const token = fs.readFileSync(lockPath, 'utf8');
-  const ownerPid = Number.parseInt(token.split(':', 1)[0] ?? '', 10);
-  return !Number.isSafeInteger(ownerPid) || ownerPid <= 0 || !processIsAlive(ownerPid);
-}
-
-function staleLockCanBeRecovered(lockPath) {
-  return Date.now() - fs.statSync(lockPath).mtimeMs >= LOCK_STALE_MS &&
-    lockOwnerIsDead(lockPath);
-}
-
-function releaseOwnedFileSync(filePath, token) {
+function parseClaimSync(claimPath, fallbackId) {
   try {
-    if (fs.readFileSync(filePath, 'utf8') === token) fs.unlinkSync(filePath);
+    const claim = JSON.parse(fs.readFileSync(claimPath, 'utf8'));
+    if (claim?.id !== fallbackId || typeof claim.choosing !== 'boolean') return null;
+    if (!Number.isSafeInteger(claim.ticket) || claim.ticket < 0) return null;
+    return { ...claim, path: claimPath };
   } catch {
-    // A missing or differently owned file is never removed.
+    return null;
   }
 }
 
-function createOwnedFileSync(filePath, token) {
-  const descriptor = fs.openSync(filePath, 'wx', 0o600);
-  let initialized = false;
+function listActiveClaimsSync(lockDirectory, ownPath) {
+  let entries;
   try {
-    fs.writeFileSync(descriptor, token, 'utf8');
-    initialized = true;
-  } finally {
-    try {
-      fs.closeSync(descriptor);
-    } finally {
-      if (!initialized) fs.unlinkSync(filePath);
-    }
-  }
-}
-
-function recoverAbandonedRecoveryGateSync(recoveryPath) {
-  try {
-    if (!staleLockCanBeRecovered(recoveryPath)) return false;
-    const observedToken = fs.readFileSync(recoveryPath, 'utf8');
-    if (!lockOwnerIsDead(recoveryPath)) return false;
-    if (fs.readFileSync(recoveryPath, 'utf8') !== observedToken) return false;
-    fs.unlinkSync(recoveryPath);
-    return true;
+    entries = fs.readdirSync(lockDirectory, { withFileTypes: true });
   } catch (error) {
-    return errorCode(error) === 'ENOENT';
+    if (errorCode(error) === 'ENOENT') return [];
+    throw error;
   }
+
+  const claims = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.claim')) continue;
+    const claimPath = `${lockDirectory}/${entry.name}`;
+    if (claimPath !== ownPath && removeStaleClaimSync(claimPath)) continue;
+
+    const id = entry.name.slice(0, -'.claim'.length);
+    const claim = parseClaimSync(claimPath, id);
+    // A fresh partial or malformed claim is conservatively treated as a
+    // choosing contender until its owner completes it or it becomes stale.
+    claims.push(claim ?? { id, choosing: true, ticket: 0, path: claimPath });
+  }
+  return claims;
 }
 
-function acquireRecoveryGateSync(recoveryPath) {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    const token = lockToken();
-    try {
-      createOwnedFileSync(recoveryPath, token);
-      return token;
-    } catch (error) {
-      if (errorCode(error) !== 'EEXIST') return null;
-      if (!recoverAbandonedRecoveryGateSync(recoveryPath)) return null;
-    }
-  }
-  return null;
+function createClaimSync(lockDirectory) {
+  ensureLockDirectorySync(lockDirectory);
+  const id = randomUUID();
+  const claimPath = `${lockDirectory}/${id}.claim`;
+  fs.writeFileSync(
+    claimPath,
+    JSON.stringify({ id, choosing: true, ticket: 0 }),
+    { encoding: 'utf8', flag: 'wx', mode: 0o600 }
+  );
+
+  const observedClaims = listActiveClaimsSync(lockDirectory, claimPath);
+  const highestTicket = observedClaims.reduce(
+    (highest, claim) => claim.choosing ? highest : Math.max(highest, claim.ticket),
+    0
+  );
+  const ticket = highestTicket + 1;
+  fs.writeFileSync(
+    claimPath,
+    JSON.stringify({ id, choosing: false, ticket }),
+    { encoding: 'utf8', mode: 0o600 }
+  );
+  return { id, ticket, path: claimPath, lockDirectory };
 }
 
-function tryRecoverStaleLockSync(lockPath) {
-  const recoveryPath = `${lockPath}.recovery`;
-  const recoveryToken = acquireRecoveryGateSync(recoveryPath);
-  if (!recoveryToken) return false;
+function claimPrecedes(claim, ownClaim) {
+  if (claim.path === ownClaim.path) return false;
+  if (claim.choosing) return true;
+  return claim.ticket < ownClaim.ticket ||
+    (claim.ticket === ownClaim.ticket && claim.id < ownClaim.id);
+}
 
+function lockTimeoutError(lockDirectory) {
+  return new Error(`Timed out waiting for OAuth state lock: ${lockDirectory}`);
+}
+
+function releaseClaimSync(claim) {
   try {
-    if (!staleLockCanBeRecovered(lockPath)) return false;
-    const observedToken = fs.readFileSync(lockPath, 'utf8');
-    if (lockOwnerIsDead(lockPath) && fs.readFileSync(lockPath, 'utf8') === observedToken) {
-      fs.unlinkSync(lockPath);
-      return true;
-    }
-    return false;
-  } catch (error) {
-    return errorCode(error) === 'ENOENT';
-  } finally {
-    releaseOwnedFileSync(recoveryPath, recoveryToken);
+    fs.unlinkSync(claim.path);
+  } catch {
+    // The claim may already have been cleaned after an abnormal delay.
   }
 }
 
-function lockTimeoutError(lockPath) {
-  return new Error(`Timed out waiting for OAuth state lock: ${lockPath}`);
+async function releaseClaim(claim) {
+  try {
+    await fsPromises.unlink(claim.path);
+  } catch {
+    // The claim may already have been cleaned after an abnormal delay.
+  }
 }
 
-function acquireLockSync(lockPath) {
-  const token = lockToken();
+function acquireLockSync(lockDirectory) {
+  const claim = createClaimSync(lockDirectory);
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
 
-  while (true) {
-    try {
-      createOwnedFileSync(lockPath, token);
-      return token;
-    } catch (error) {
-      if (errorCode(error) !== 'EEXIST') throw error;
-      if (tryRecoverStaleLockSync(lockPath)) continue;
-      if (Date.now() >= deadline) throw lockTimeoutError(lockPath);
+  try {
+    while (listActiveClaimsSync(lockDirectory, claim.path).some(other => claimPrecedes(other, claim))) {
+      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
       waitSync(LOCK_RETRY_MS);
     }
+    return claim;
+  } catch (error) {
+    releaseClaimSync(claim);
+    throw error;
   }
 }
 
-async function acquireLock(lockPath) {
-  const token = lockToken();
+async function acquireLock(lockDirectory) {
+  const claim = createClaimSync(lockDirectory);
   const deadline = Date.now() + LOCK_TIMEOUT_MS;
 
-  while (true) {
-    try {
-      const handle = await fsPromises.open(lockPath, 'wx', 0o600);
-      let initialized = false;
-      try {
-        await handle.writeFile(token, 'utf8');
-        initialized = true;
-      } finally {
-        try {
-          await handle.close();
-        } finally {
-          if (!initialized) await fsPromises.unlink(lockPath);
-        }
-      }
-      return token;
-    } catch (error) {
-      if (errorCode(error) !== 'EEXIST') throw error;
-      if (tryRecoverStaleLockSync(lockPath)) continue;
-      if (Date.now() >= deadline) throw lockTimeoutError(lockPath);
+  try {
+    while (listActiveClaimsSync(lockDirectory, claim.path).some(other => claimPrecedes(other, claim))) {
+      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
       await new Promise(resolve => setTimeout(resolve, LOCK_RETRY_MS));
     }
+    return claim;
+  } catch (error) {
+    await releaseClaim(claim);
+    throw error;
   }
 }
 
-async function releaseLock(lockPath, token) {
-  try {
-    if (await fsPromises.readFile(lockPath, 'utf8') === token) {
-      await fsPromises.unlink(lockPath);
-    }
-  } catch {
-    // A missing or differently owned lock is never removed.
-  }
+function startClaimHeartbeat(claim) {
+  const heartbeat = setInterval(() => {
+    const now = new Date();
+    fsPromises.utimes(claim.path, now, now).catch(() => {});
+  }, CLAIM_HEARTBEAT_MS);
+  heartbeat.unref();
+  return heartbeat;
 }
 
 export function withOAuthStateLockSync(stateFile, operation) {
-  const lockPath = lockPathFor(stateFile);
-  const token = acquireLockSync(lockPath);
+  const claim = acquireLockSync(lockDirectoryFor(stateFile));
   try {
     return operation();
   } finally {
-    releaseOwnedFileSync(lockPath, token);
+    releaseClaimSync(claim);
   }
 }
 
 export async function withOAuthStateLock(stateFile, operation) {
-  const lockPath = lockPathFor(stateFile);
-  const token = await acquireLock(lockPath);
+  const claim = await acquireLock(lockDirectoryFor(stateFile));
+  const heartbeat = startClaimHeartbeat(claim);
   try {
     return await operation();
   } finally {
-    await releaseLock(lockPath, token);
+    clearInterval(heartbeat);
+    await releaseClaim(claim);
   }
 }
 
