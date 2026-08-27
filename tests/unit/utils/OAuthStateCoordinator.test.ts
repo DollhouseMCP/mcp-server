@@ -58,6 +58,27 @@ describe('OAuthStateCoordinator', () => {
     expect(entries.sort()).toEqual(['3.done', '3.slot']);
   });
 
+  it('does not compact completed tickets beneath another allocation intent', async () => {
+    const directory = await createTemporaryDirectory();
+    const stateFile = path.join(directory, 'oauth-helper-state.json');
+    const lockDirectory = `${stateFile}.lock`;
+
+    await withOAuthStateLock(stateFile, async () => {});
+    const activeOwner = await fs.readFile(path.join(lockDirectory, '1.slot'), 'utf8');
+    const competingIntent = path.join(lockDirectory, '.999.competing.slot.tmp');
+    await fs.writeFile(competingIntent, activeOwner, 'utf8');
+    const staleTime = new Date(Date.now() - 60_000);
+    await fs.utimes(competingIntent, staleTime, staleTime);
+
+    await withOAuthStateLock(stateFile, async () => {});
+    await expect(fs.access(path.join(lockDirectory, '1.slot'))).resolves.toBeUndefined();
+
+    await fs.unlink(competingIntent);
+    await withOAuthStateLock(stateFile, async () => {});
+    const entries = await fs.readdir(lockDirectory);
+    expect(entries.sort()).toEqual(['3.done', '3.slot']);
+  });
+
   it('serializes a flow cleanup and a replacement state write', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');

@@ -58,14 +58,27 @@ function commandProcessIdentity(executable, args, prefix) {
   return output ? `${prefix}:${output}` : undefined;
 }
 
+function windowsSystemExecutables() {
+  const windowsRoot = process.env.SystemRoot;
+  const rootMatch = /^([A-Za-z]:)\\Windows$/i.exec(windowsRoot ?? '');
+  if (!rootMatch) return null;
+  return {
+    powershell: `${windowsRoot}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`,
+    pwsh: `${rootMatch[1]}\\Program Files\\PowerShell\\7\\pwsh.exe`,
+    wmic: `${windowsRoot}\\System32\\wbem\\WMIC.exe`
+  };
+}
+
 function windowsManagementIdentity(pid) {
+  const executables = windowsSystemExecutables();
+  if (!executables) return undefined;
   const powershellArgs = [
     '-NoProfile',
     '-NonInteractive',
     '-Command',
     `$started = [DateTimeOffset]((Get-Process -Id ${pid}).StartTime); $started.ToUnixTimeMilliseconds()`
   ];
-  for (const executable of ['powershell.exe', 'pwsh.exe']) {
+  for (const executable of [executables.powershell, executables.pwsh]) {
     try {
       const identity = commandProcessIdentity(executable, powershellArgs, 'win32');
       if (identity) return identity;
@@ -76,7 +89,7 @@ function windowsManagementIdentity(pid) {
 
   try {
     const output = execFileSync(
-      'wmic.exe',
+      executables.wmic,
       ['process', 'where', `ProcessId=${pid}`, 'get', 'CreationDate', '/value'],
       {
         encoding: 'utf8',
@@ -184,7 +197,34 @@ function publishDoneSync(donePath) {
   }
 }
 
-function compactCompletedTicketsSync(lockDirectory, preservedTicket) {
+function otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath) {
+  let entries;
+  try {
+    entries = fs.readdirSync(lockDirectory, { withFileTypes: true });
+  } catch {
+    return true;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.slot.tmp')) continue;
+    const intentPath = `${lockDirectory}/${entry.name}`;
+    if (intentPath === ownStagedSlotPath) continue;
+    try {
+      if (!slotIsStale(intentPath)) return true;
+      if (ownerIsStillActive(parseSlotOwnerSync(intentPath))) return true;
+      fs.unlinkSync(intentPath);
+    } catch (error) {
+      if (errorCode(error) !== 'ENOENT') return true;
+    }
+  }
+  return false;
+}
+
+function compactCompletedTicketsSync(lockDirectory, preservedTicket, ownStagedSlotPath) {
+  // A competing allocator may already have selected a lower path but not yet
+  // linked it. Its private staging file fences that path against compaction.
+  // An intent created after this check will observe preservedTicket instead.
+  if (otherAllocationIntentExistsSync(lockDirectory, ownStagedSlotPath)) return;
   let slots;
   try {
     slots = listTicketSlotsSync(lockDirectory);
@@ -249,7 +289,7 @@ function allocateTicketSync(lockDirectory) {
         // Linking a complete private file publishes both the ticket and its
         // owner record atomically. A contender can never observe partial JSON.
         fs.linkSync(stagedSlotPath, slotPath);
-        compactCompletedTicketsSync(lockDirectory, ticket);
+        compactCompletedTicketsSync(lockDirectory, ticket, stagedSlotPath);
         return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
       } catch (error) {
         if (errorCode(error) !== 'EEXIST') throw error;
