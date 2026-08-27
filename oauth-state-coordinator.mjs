@@ -283,7 +283,10 @@ function staleMarkerStillBelongsToProcess(marker, ownerIdentity, currentIdentity
 
 function parseSlotOwnerSync(slotPath) {
   try {
-    const owner = JSON.parse(fs.readFileSync(slotPath, 'utf8'));
+    const ownerPath = fs.statSync(slotPath).isDirectory()
+      ? `${slotPath}/owner.json`
+      : slotPath;
+    const owner = JSON.parse(fs.readFileSync(ownerPath, 'utf8'));
     if (typeof owner?.id !== 'string' || owner.id.length === 0) return null;
     if (!Number.isSafeInteger(owner.ownerPid) || owner.ownerPid <= 0) return null;
     if (typeof owner.ownerIdentity !== 'string' || owner.ownerIdentity.length === 0) return null;
@@ -341,7 +344,7 @@ function listTicketSlotsSync(lockDirectory) {
   }
 
   return entries
-    .filter(entry => entry.isFile())
+    .filter(entry => entry.isFile() || entry.isDirectory())
     .map(entry => ({ entry, ticket: ticketFromSlotName(entry.name) }))
     .filter(item => item.ticket !== null)
     .map(item => ({
@@ -397,8 +400,20 @@ function retryPendingDoneMarkersSync(lockDirectory) {
 
 function allocationIntentSnapshotSync(lockDirectory) {
   try {
+    const entries = fs.readdirSync(lockDirectory, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory() || !entry.name.endsWith('.slot.tmp.publish')) continue;
+      const fallbackDirectory = `${lockDirectory}/${entry.name}`;
+      const stagedSlotPath = fallbackDirectory.slice(0, -'.publish'.length);
+      if (fs.existsSync(stagedSlotPath)) continue;
+      try {
+        fs.rmSync(fallbackDirectory, { recursive: true });
+      } catch {
+        // Best-effort orphan cleanup is retried by the next allocation.
+      }
+    }
     return {
-      entries: fs.readdirSync(lockDirectory, { withFileTypes: true }),
+      entries,
       publishedOwnerIds: new Set(
         listTicketSlotsSync(lockDirectory)
           .map(slot => parseSlotOwnerSync(slot.slotPath)?.id)
@@ -498,7 +513,7 @@ function compactCompletedTicketsSync(lockDirectory, preservedTicket, ownStagedSl
     try {
       // Remove the slot first. If this fails, retaining .done keeps the slot
       // completed. The preserved newer slot prevents ticket-number reuse.
-      fs.unlinkSync(slot.slotPath);
+      fs.rmSync(slot.slotPath, { recursive: true });
     } catch (error) {
       if (errorCode(error) !== 'ENOENT') continue;
     }
@@ -544,15 +559,24 @@ function tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline) {
       throw error;
     }
   }
+  const fallbackDirectory = `${stagedSlotPath}.publish`;
   try {
-    // FAT/exFAT and some network shares do not support hard links. Exclusive
-    // copy still allocates one immutable ticket without overwriting a winner.
-    // A reader may briefly see an incomplete record, but fresh malformed slots
-    // are conservatively outstanding and are recoverable if this process dies.
-    fs.copyFileSync(stagedSlotPath, slotPath, fs.constants.COPYFILE_EXCL);
+    // FAT/exFAT and some network shares do not support hard links. Publish a
+    // private non-empty directory instead: its owner record is complete before
+    // rename, and atomic rename cannot replace a competing non-empty directory.
+    // Mixed file/directory slots share the same numeric ticket namespace.
+    if (!fs.existsSync(fallbackDirectory)) {
+      fs.mkdirSync(fallbackDirectory, { mode: 0o700 });
+      fs.copyFileSync(
+        stagedSlotPath,
+        `${fallbackDirectory}/owner.json`,
+        fs.constants.COPYFILE_EXCL
+      );
+    }
+    fs.renameSync(fallbackDirectory, slotPath);
     return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
   } catch (error) {
-    if (errorCode(error) === 'EEXIST') return null;
+    if (fs.existsSync(slotPath)) return null;
     throw error;
   }
 }
@@ -595,6 +619,11 @@ function allocateTicketSync(lockDirectory, deadline) {
         fs.unlinkSync(stagedSlotPath);
       } catch {
         // The published hard link owns the record; staging cleanup is best-effort.
+      }
+      try {
+        fs.rmSync(`${stagedSlotPath}.publish`, { recursive: true });
+      } catch {
+        // Atomic rename consumed the fallback directory, or cleanup is best-effort.
       }
     }
   } catch (error) {

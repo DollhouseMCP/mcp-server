@@ -163,21 +163,24 @@ describe('OAuthStateCoordinator', () => {
     expect(entries.sort()).toEqual(['2.done', '2.slot']);
   });
 
-  it('publishes an exclusive ticket when the filesystem does not support hard links', async () => {
+  it('atomically publishes a complete directory ticket when hard links are unsupported', async () => {
     const directory = await createTemporaryDirectory();
     const stateFile = path.join(directory, 'oauth-helper-state.json');
     jest.spyOn(fsSync, 'linkSync').mockImplementation(() => {
       throw Object.assign(new Error('hard links unsupported'), { code: 'ENOTSUP' });
     });
 
-    let operationRan = false;
-    withOAuthStateLockSync(stateFile, () => { operationRan = true; });
+    let operationsRun = 0;
+    for (let acquisition = 0; acquisition < 3; acquisition++) {
+      withOAuthStateLockSync(stateFile, () => { operationsRun += 1; });
+    }
 
-    expect(operationRan).toBe(true);
+    expect(operationsRun).toBe(3);
     const slot = JSON.parse(
-      await fs.readFile(path.join(`${stateFile}.lock`, '1.slot'), 'utf8')
+      await fs.readFile(path.join(`${stateFile}.lock`, '3.slot', 'owner.json'), 'utf8')
     ) as Record<string, unknown>;
     expect(slot.ownerPid).toBe(process.pid);
+    expect((await fs.readdir(`${stateFile}.lock`)).sort()).toEqual(['3.done', '3.slot']);
     await expectAllTicketsCompleted(stateFile);
   });
 
