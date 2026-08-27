@@ -2,8 +2,8 @@ import { createHash } from 'node:crypto';
 import os from 'node:os';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
 
-/** Session ID validation: must start with a letter, then alphanumeric/hyphens/underscores, 1-64 chars */
-export const SESSION_ID_PATTERN = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
+/** Filename- and query-safe session identifiers, including digit-first UUIDs. */
+export const SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 const DERIVED_SESSION_PREFIX = 'local';
 const DERIVED_SESSION_HASH_LENGTH = 10;
 

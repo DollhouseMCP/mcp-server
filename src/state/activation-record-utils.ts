@@ -1,12 +1,13 @@
 import { normalizeMCPAQLElementType } from '../handlers/mcp-aql/types.js';
 import { UnicodeValidator } from '../security/validators/unicodeValidator.js';
+import { SESSION_ID_PATTERN } from '../services/sessionIdentity.js';
 import type {
   PersistedActivation,
   PersistedActivationIdentity,
 } from './IActivationStateStore.js';
 
-/** Filename- and query-safe session identifiers, including digit-first UUIDs. */
-export const ACTIVATION_SESSION_ID_PATTERN = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+/** Shared alias retained for activation-store call sites. */
+export const ACTIVATION_SESSION_ID_PATTERN = SESSION_ID_PATTERN;
 
 export interface NormalizedActivationInput {
   name: string;

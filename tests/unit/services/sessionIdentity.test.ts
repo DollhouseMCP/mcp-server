@@ -17,6 +17,22 @@ describe('sessionIdentity', () => {
     });
   });
 
+  it('accepts digit-first UUID session identities', () => {
+    const sessionId = '7d444840-9dc0-4f1a-8f5c-07f4f97b6abc';
+    const identity = resolveSessionIdentity({
+      envValue: sessionId,
+      cwd: '/Users/example/project',
+      homeDir: '/Users/example',
+      pid: 1234,
+    });
+
+    expect(identity).toEqual({
+      sessionId,
+      runtimeSessionId: sessionId,
+      source: 'env',
+    });
+  });
+
   it('derives a restart-stable session identity from workspace context', () => {
     const identityA = resolveSessionIdentity({
       cwd: '/Users/mick/project-a',
