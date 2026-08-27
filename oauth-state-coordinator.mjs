@@ -313,6 +313,24 @@ function slotIsOutstandingSync(slot, deadline) {
   }
 }
 
+function tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline) {
+  const slots = listTicketSlotsSync(lockDirectory);
+  if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
+  const highestTicket = slots.reduce((highest, slot) => Math.max(highest, slot.ticket), 0);
+  const ticket = highestTicket + 1;
+  if (!Number.isSafeInteger(ticket)) throw new Error('OAuth state lock ticket space exhausted');
+  const slotPath = `${lockDirectory}/${ticket}.slot`;
+  try {
+    // Linking a complete private file publishes both the ticket and its
+    // owner record atomically. A contender can never observe partial JSON.
+    fs.linkSync(stagedSlotPath, slotPath);
+    return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
+  } catch (error) {
+    if (errorCode(error) === 'EEXIST') return null;
+    throw error;
+  }
+}
+
 function allocateTicketSync(lockDirectory, deadline) {
   ensureLockDirectorySync(lockDirectory);
   if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
@@ -333,21 +351,10 @@ function allocateTicketSync(lockDirectory, deadline) {
   try {
     while (true) {
       if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
-      const slots = listTicketSlotsSync(lockDirectory);
-      if (Date.now() >= deadline) throw lockTimeoutError(lockDirectory);
-      const highestTicket = slots.reduce((highest, slot) => Math.max(highest, slot.ticket), 0);
-      const ticket = highestTicket + 1;
-      if (!Number.isSafeInteger(ticket)) throw new Error('OAuth state lock ticket space exhausted');
-      const slotPath = `${lockDirectory}/${ticket}.slot`;
-      try {
-        // Linking a complete private file publishes both the ticket and its
-        // owner record atomically. A contender can never observe partial JSON.
-        fs.linkSync(stagedSlotPath, slotPath);
-        compactCompletedTicketsSync(lockDirectory, ticket, stagedSlotPath, deadline);
-        return { ticket, slotPath, donePath: `${lockDirectory}/${ticket}.done`, lockDirectory };
-      } catch (error) {
-        if (errorCode(error) !== 'EEXIST') throw error;
-      }
+      const claim = tryPublishNextTicketSync(lockDirectory, stagedSlotPath, deadline);
+      if (!claim) continue;
+      compactCompletedTicketsSync(lockDirectory, claim.ticket, stagedSlotPath, deadline);
+      return claim;
     }
   } finally {
     try {
